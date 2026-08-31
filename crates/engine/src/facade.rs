@@ -2312,6 +2312,10 @@ fn surface_drain_report(
     }
 }
 
+/// The refusal [`Engine::vault_root_scope`] carries: the held write scope seed
+/// does not derive the root's current `ipnsName`.
+const HELD_SEED_NOT_AT_CURRENT_ROOT: &str = "held-write-seed-does-not-name-the-current-root";
+
 /// Deposit a recovered scope write seed, but only if it derives the very name
 /// the scope root publishes under. A write-capable grantee can commit an
 /// owner-write-blob wrapping a seed of its choosing; holding it would make the
@@ -2792,6 +2796,18 @@ pub struct Engine<T: SeamTypes> {
     /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
     /// node's `ipnsName` and its narrow per-name signer from them.
     scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
+    /// The `ipnsName` the vault root scope currently publishes under: adopted at
+    /// cold start, minted by a first run, moved by a write wave this session
+    /// drove, and re-read from the vault pointer on every consult. `None` until
+    /// one of those lands.
+    ///
+    /// A write wave moves the root and leaves the predecessor name **dead to
+    /// survivors but live to the revokee**, who still holds its write-name key
+    /// (blueprint/engine.md "Residuals"). The cached write scope seed lags the
+    /// wave until an adopt re-deposits it, so an owner action that re-derived
+    /// its target would name the dead root. This cell is what the derivation is
+    /// proved against ([`vault_root_scope`](Self::vault_root_scope)).
+    current_root_name: Rc<RefCell<Option<IpnsName>>>,
     /// The vault-pointer index this session adopted at cold start, or minted —
     /// the index a root write rotation must re-point
     /// ([`resolve_vault_pointer`](crate::sync::pointer::resolve_vault_pointer)
@@ -2949,6 +2965,7 @@ impl<T: SeamTypes> Engine<T> {
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+                current_root_name: Rc::new(RefCell::new(None)),
                 vault_pointer_index: Cell::new(None),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3160,6 +3177,7 @@ impl<T: SeamTypes> Engine<T> {
             .vault_pointer
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
+        *self.current_root_name.borrow_mut() = root_name.clone();
         // The same adopt recovered the scope write seed: the drain derives every
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
@@ -3195,6 +3213,7 @@ impl<T: SeamTypes> Engine<T> {
             Some(&vault.root_name),
             Some(vault.repoint.write_epoch),
         );
+        *self.current_root_name.borrow_mut() = Some(vault.root_name.clone());
         vault.root_name
     }
 
@@ -3748,6 +3767,7 @@ where {
         let alive = self.alive.clone();
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
+        let current_root_name = self.current_root_name.clone();
         let focus = self.focus.clone();
         let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
@@ -3773,6 +3793,11 @@ where {
                         return TickControl::Stop;
                     }
                     let mode = resolve_mode(cause);
+                    // The session cell is the root's current name; a wave this
+                    // session drove between passes has already moved it there.
+                    if let Some(current) = current_root_name.borrow().clone() {
+                        root_name = current;
+                    }
                     // The pass owns a copy for exactly its own duration; the engine
                     // emptied the cell if it is already gone.
                     let enc_subkey = tick_enc_subkey.borrow().clone();
@@ -3816,6 +3841,7 @@ where {
                     .await
                     {
                         root_name = current_root;
+                        *current_root_name.borrow_mut() = Some(root_name.clone());
                     }
                     // Before the steady-state hold consults them: a floor raised
                     // since the last pass revokes the seeds this pass would
@@ -4302,7 +4328,14 @@ where {
     }
 
     /// The vault root's scope reference: its scope id and the `ipnsName` the
-    /// session's write scope seed derives it at.
+    /// root currently publishes under.
+    ///
+    /// Every owner action anchors here, so the derivation is proved against the
+    /// name this session holds rather than trusted — the read-side twin of
+    /// [`deposit_write_seed`]'s deposit-time proof. A seed that does not name
+    /// the current root is the post-wave lag, and the action it would target is
+    /// the superseded root the revokee still authors at: refuse until an adopt
+    /// re-deposits.
     fn vault_root_scope(&self) -> Result<ChildScopeRef, EngineError> {
         let scope_id = self.snapshot.borrow().root.0;
         let write_scope_seed = cached_seed(&self.scope_write_seeds, &scope_id).ok_or(
@@ -4310,12 +4343,17 @@ where {
                 message: "no write scope seed is held for the vault root".to_owned(),
             },
         )?;
+        let root_name = self
+            .current_root_name
+            .borrow()
+            .clone()
+            .filter(|name| derive_write_name(&write_scope_seed, &scope_id) == *name)
+            .ok_or(EngineError::MalformedInput {
+                check: HELD_SEED_NOT_AT_CURRENT_ROOT,
+            })?;
         Ok(ChildScopeRef::new(
             scope_id,
-            derive_write_name(&write_scope_seed, &scope_id)
-                .as_str()
-                .as_bytes()
-                .to_vec(),
+            root_name.as_str().as_bytes().to_vec(),
         ))
     }
 
@@ -4778,10 +4816,13 @@ where {
             .await
             .map_err(EngineError::from_seam)?;
             // Every wave moves the root, so every wave owes the index the same
-            // repoint — the vault root excepted, which no index names.
+            // repoint — the vault root excepted, whose name no index carries and
+            // which the session cell tracks instead.
             if node.0 != self.snapshot.borrow().root.0 {
                 self.repoint_child_scope_index(node, &write.new_root_name)
                     .await?;
+            } else {
+                *self.current_root_name.borrow_mut() = Some(write.new_root_name.clone());
             }
         }
         Ok(report)

@@ -401,6 +401,29 @@ fn sequence_at(world: &FakeWorld, name: &IpnsName) -> u64 {
         .sequence
 }
 
+/// The re-point object the vault root scope's own pointer record carries — the
+/// owner-signed authority for where a write wave moved the root to.
+fn root_scope_repoint(world: &FakeWorld) -> RepointObject {
+    let owner_pointer_seed = kdf::owner_pointer_seed(&SECRET);
+    let pointer_name = scope_pointer_name(owner_pointer_seed.as_bytes(), &SCOPE);
+    let bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], pointer_name.as_str())
+        .expect("the write wave published the scope pointer");
+    let block = IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(&pointer_name))
+        .expect("the pointer record verifies under its own name")
+        .value;
+    open_repoint(
+        kdf::pointer_read_key(owner_pointer_seed.as_bytes(), &SCOPE).as_bytes(),
+        POINTER_PAYLOAD_VERSION,
+        &SCOPE,
+        &owner_identity().verifying_key(),
+        &block,
+    )
+    .expect("the re-point object opens under the scope's own pointer read key")
+}
+
 // ---------------------------------------------------------------------------
 // The recipient: a second account on the same world.
 // ---------------------------------------------------------------------------
@@ -429,6 +452,21 @@ fn recipient_row_at_root() -> GrantRow {
         &SCOPE,
         write_name(ROOT).as_str().as_bytes(),
         CorePermission::Read,
+    )
+    .expect("a contributory recipient key")
+}
+
+/// The same recipient committed at the vault root with write permission, so a
+/// downgrade of it drives a write wave over the root's own scope.
+fn write_row_at_root() -> GrantRow {
+    mint_grant_row(
+        &owner_identity(),
+        &kdf::enc_subkey(&SECRET),
+        recipient_identity().verifying_key().to_sec1(),
+        &kdf::enc_subkey(&RECIPIENT_SECRET).public(),
+        &SCOPE,
+        write_name(ROOT).as_str().as_bytes(),
+        CorePermission::Write,
     )
     .expect("a contributory recipient key")
 }
@@ -945,6 +983,56 @@ fn a_downgrade_publishes_the_demoted_commitment_and_moves_the_scope() {
         fx.granted_blob_carries_write_seed(&after.current_root),
         Some(false),
         "and their blob no longer conveys a write scope seed"
+    );
+}
+
+/// A wave over the vault root's own scope opens a window: the root moves, and
+/// the session's cached write scope seed still derives the name it moved off —
+/// a name the demoted party keeps the write-name key for. The next
+/// owner action must refuse rather than drive a cut nobody reads, and must
+/// recover once a tick adopts at the moved root.
+#[test]
+fn an_owner_action_refuses_while_the_cached_seed_names_the_superseded_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let seeded_root = seed_vault(&world, &blocks, vec![write_row_at_root()]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+
+    assert_eq!(
+        block_on(engine.command(Command::Downgrade {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    let moved = root_scope_repoint(&world).current_root;
+    assert_ne!(
+        moved, seeded_root,
+        "the wave moved the vault root off the name the cached seed derives"
+    );
+    let superseded_sequence = sequence_at(&world, &seeded_root);
+
+    assert_eq!(
+        block_on(engine.command(Command::RotateNow { node: ROOT })),
+        Err(EngineError::MalformedInput {
+            check: "held-write-seed-does-not-name-the-current-root",
+        }),
+        "the next owner action refuses rather than cutting the superseded root"
+    );
+    assert_eq!(
+        sequence_at(&world, &seeded_root),
+        superseded_sequence,
+        "and published nothing at the name the demoted party still authors at"
+    );
+
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        block_on(engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done),
+        "a tick that adopts at the moved root clears the refusal"
     );
 }
 
