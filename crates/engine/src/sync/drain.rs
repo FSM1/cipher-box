@@ -41,6 +41,7 @@ use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::bin_index::{BinIndexKeys, BinIndexPublishError, load_bin_index, publish_bin_index};
+use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::{
     ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError, RootPlacement,
     SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
@@ -145,6 +146,22 @@ pub fn owner_scoped_key(prefix: &[u8], enc_secret: &X25519Secret) -> Vec<u8> {
 #[must_use]
 pub fn owner_tag(enc_secret: &X25519Secret) -> [u8; 32] {
     RecordReader::new(enc_secret).owner_tag()
+}
+
+/// One staged block, admitted on the read path's two checks in the read path's
+/// order.
+///
+/// The cap comes first because hash work is linear in the byte count. The
+/// address then binds the bytes to the key the sealed op record names, so a
+/// rewritten staging sidecar can neither publish other plaintext under this
+/// version's content key nor hand the upload a block this build's own reader
+/// would refuse (AGENTS.md rule 8).
+fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> {
+    if block.len() > MAX_RESOLVED_RECORD_BYTES {
+        return Err(CONTENT_LOST);
+    }
+    verify_cid(key, &block).map_err(|_| CONTENT_LOST)?;
+    Ok(block)
 }
 
 /// Whether `child` publishes under the name this scope's write seed derives.
@@ -3020,16 +3037,12 @@ where
             .map_err(seam)
     }
 
-    /// The staged bytes at `key`, CID-verified fail-closed. The read path hard-
-    /// rejects a block whose bytes do not address to its CID, so an unverified
-    /// upload would turn host bit-rot into a permanently unreadable published
-    /// version.
+    /// The staged bytes at `key`, admitted by [`admissible_staged_block`].
     async fn staged_block(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Halt> {
         let Some(block) = self.staging.staged_bytes(key).await.map_err(seam)? else {
             return Ok(None);
         };
-        verify_cid(key, &block).map_err(|_| CONTENT_LOST)?;
-        Ok(Some(block))
+        admissible_staged_block(key, block).map(Some)
     }
 
     /// Upload one block to every leg `placement` names, under `cid` — its
@@ -3976,7 +3989,41 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
+
     use crate::settings::PlacementRefusal;
+
+    /// The publish leg admits exactly what the read path admits. A block past
+    /// the ceiling is refused even though it addresses to its own key, so a
+    /// rewritten sidecar buys no hash work and no upload of bytes this build's
+    /// own reader rejects.
+    #[test]
+    fn a_staged_block_past_the_block_ceiling_is_refused_although_it_addresses_to_its_key() {
+        let past = vec![7u8; MAX_RESOLVED_RECORD_BYTES + 1];
+        let key = compute_cid(CONTENT_CID_CODEC, &past);
+        assert_eq!(admissible_staged_block(&key, past), Err(CONTENT_LOST));
+    }
+
+    /// The ceiling is inclusive, so the refusal is of blocks past it and not of
+    /// the largest block the plane carries.
+    #[test]
+    fn a_staged_block_at_the_block_ceiling_is_admitted() {
+        let at = vec![7u8; MAX_RESOLVED_RECORD_BYTES];
+        let key = compute_cid(CONTENT_CID_CODEC, &at);
+        assert_eq!(admissible_staged_block(&key, at.clone()), Ok(at));
+    }
+
+    /// The address half: bytes the sidecar rewrote no longer answer to the key
+    /// the sealed op record names.
+    #[test]
+    fn staged_bytes_that_do_not_address_to_their_key_are_refused() {
+        let block = b"the bytes the op staged".to_vec();
+        let key = compute_cid(CONTENT_CID_CODEC, &block);
+        assert_eq!(
+            admissible_staged_block(&key, b"other bytes entirely".to_vec()),
+            Err(CONTENT_LOST)
+        );
+    }
 
     fn attempts(pairs: &[(u64, u32)]) -> Attempts {
         let mut attempts = Attempts::default();
