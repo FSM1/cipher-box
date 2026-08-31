@@ -594,8 +594,6 @@ impl GrantScenario {
         }))
     }
 
-    /// The re-point object the granted scope's own pointer record carries — the
-    /// owner-signed authority for where a write-scope cut moved the root to.
     fn granted_scope_repoint(&self) -> RepointObject {
         scope_repoint(&self.world, &self.folder.0)
     }
@@ -992,8 +990,8 @@ fn an_owner_action_refuses_while_the_cached_seed_names_the_superseded_root() {
 
     assert_eq!(
         block_on(engine.command(Command::RotateNow { node: ROOT })),
-        Err(EngineError::MalformedInput {
-            check: "held-write-seed-does-not-name-the-current-root",
+        Err(EngineError::ContentUnavailable {
+            message: "held-write-seed-does-not-name-the-current-root".to_owned(),
         }),
         "the next owner action refuses rather than cutting the superseded root"
     );
@@ -1048,8 +1046,8 @@ fn a_cut_whose_floor_raise_fails_still_refuses_the_next_owner_action() {
 
     assert_eq!(
         block_on(engine.command(Command::RotateNow { node: ROOT })),
-        Err(EngineError::MalformedInput {
-            check: "held-write-seed-does-not-name-the-current-root",
+        Err(EngineError::ContentUnavailable {
+            message: "held-write-seed-does-not-name-the-current-root".to_owned(),
         }),
         "so the next owner action still refuses the superseded root"
     );

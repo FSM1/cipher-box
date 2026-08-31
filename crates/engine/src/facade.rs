@@ -4347,7 +4347,9 @@ where {
     /// [`deposit_write_seed`]'s deposit-time proof. A seed that does not name
     /// the current root is the post-wave lag, and the action it would target is
     /// the superseded root the revokee still authors at: refuse until an adopt
-    /// re-deposits.
+    /// re-deposits. The lag is session-local staleness, not host-supplied bytes,
+    /// so the verdict is the retryable [`EngineError::ContentUnavailable`] the
+    /// absent-seed refusal above already answers.
     fn vault_root_scope(&self) -> Result<ChildScopeRef, EngineError> {
         let scope_id = self.snapshot.borrow().root.0;
         let write_scope_seed = cached_seed(&self.scope_write_seeds, &scope_id).ok_or(
@@ -4357,8 +4359,8 @@ where {
         )?;
         let held = self.current_root_name.borrow();
         if !seed_names(&write_scope_seed, &scope_id, held.as_ref()) {
-            return Err(EngineError::MalformedInput {
-                check: HELD_SEED_NOT_AT_CURRENT_ROOT,
+            return Err(EngineError::ContentUnavailable {
+                message: HELD_SEED_NOT_AT_CURRENT_ROOT.to_owned(),
             });
         }
         let root_name = held.as_ref().expect("seed_names refuses an absent name");
