@@ -99,6 +99,10 @@ test('@full the contact import refuses what it cannot read, and leaving retires 
 
   await share.openImport();
 
+  // An exchange needs both codes, so the step hands this member's own code over
+  // beside the paste field.
+  await expect(share.ownContactCode).toBeVisible();
+
   // Not hex at all: the form itself will not submit it.
   await share.contactCode.fill('not a contact code');
   await expect(share.importUnreadable).toBeVisible();

@@ -137,8 +137,17 @@ export class SharePage {
     return this.page.getByTestId('import-contact-form');
   }
 
+  /**
+   * The paste field. Exact, because the step also offers this member's own code
+   * and `copy your contact code` answers a loose match on the same words.
+   */
   get contactCode(): Locator {
-    return this.page.getByLabel('contact code');
+    return this.page.getByLabel('their contact code', { exact: true });
+  }
+
+  /** The code this member hands over, which the step shows beside the paste. */
+  get ownContactCode(): Locator {
+    return this.page.getByTestId('own-contact-code');
   }
 
   get importUnreadable(): Locator {
