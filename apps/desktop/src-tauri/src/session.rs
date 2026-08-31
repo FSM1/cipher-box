@@ -19,8 +19,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 use crate::engine::{
-    EngineConfig, EngineHost, LOGIN_SECRET_LEN, NOT_A_SCALAR, OsEntropy, SessionEnv, Shell,
-    VaultStatus,
+    EngineConfig, EngineHost, HostCredentialStore, LOGIN_SECRET_LEN, NOT_A_SCALAR, OsEntropy,
+    SessionEnv, Shell, VaultStatus,
 };
 use crate::tray;
 
@@ -66,16 +66,30 @@ fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(secret)
 }
 
+/// The session's credential store, as this build holds it: the app's one
+/// keyring handle.
+#[cfg(not(feature = "e2e-hook"))]
+fn session_credentials(app: &AppHandle) -> HostCredentialStore {
+    app.state::<KeyringCredentialStore>().inner().clone()
+}
+
+/// The `e2e-hook` build's store, which holds the token in memory: a headless
+/// runner has no OS keyring.
+#[cfg(feature = "e2e-hook")]
+fn session_credentials(_app: &AppHandle) -> HostCredentialStore {
+    HostCredentialStore::default()
+}
+
 /// Where this session's stores live and how the window and tray hear about
 /// changes.
-fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
+pub(crate) fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
     let painting = app.clone();
     let repainting = app.clone();
     Ok(SessionEnv {
         config: EngineConfig::compiled()?,
         data_local_dir: local_data_dir(app)?,
         home_dir: app.path().home_dir().ok(),
-        credentials: app.state::<KeyringCredentialStore>().inner().clone(),
+        credentials: session_credentials(app),
         shell: Shell {
             changed: Box::new(move || {
                 let _ = repainting.emit(VAULT_CHANGED, ());

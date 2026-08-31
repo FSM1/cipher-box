@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
-use cipherbox_desktop_seams::{KeyringCredentialStore, account_data_dir, measured_storage_policy};
+use cipherbox_desktop_seams::{account_data_dir, measured_storage_policy};
 use cipherbox_engine::facade::{Command, Engine, Event, EventStream, LoginSecret};
 use cipherbox_engine::{ChallengeSigner, ContentProfile, IdentityChallengeSigner, Staleness};
 use serde::Serialize;
@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 use crate::mount::{FromMount, MountStatus, Projection};
 
 pub use config::EngineConfig;
-pub use seams::{DesktopSeamTypes, OsEntropy};
+pub use seams::{DesktopSeamTypes, HostCredentialStore, OsEntropy};
 
 /// The secp256k1 scalar length `crates/engine/src/session.rs` requires.
 pub const LOGIN_SECRET_LEN: usize = 32;
@@ -412,8 +412,8 @@ pub struct SessionEnv {
     /// `None` on a device that reports none, which refuses the mount and not
     /// the session (blueprint/desktop.md "Lifecycle").
     pub home_dir: Option<PathBuf>,
-    /// The app's one OS-keyring handle.
-    pub credentials: KeyringCredentialStore,
+    /// Where this session's refresh token lives.
+    pub credentials: HostCredentialStore,
     /// What the session paints when its state moves.
     pub shell: Shell,
 }
@@ -566,7 +566,7 @@ enum Woke {
 /// stop the engine.
 async fn serve(
     mut projection: Projection,
-    credentials: KeyringCredentialStore,
+    credentials: HostCredentialStore,
     mut inbox: mpsc::UnboundedReceiver<Request>,
     mut events: EventStream,
     shell: Shell,
@@ -728,7 +728,7 @@ mod tests {
     struct Counted {
         shell: Shell,
         painted: Arc<AtomicUsize>,
-        credentials: KeyringCredentialStore,
+        credentials: HostCredentialStore,
         requests: mpsc::UnboundedSender<Request>,
         inbox: mpsc::UnboundedReceiver<Request>,
     }
@@ -771,8 +771,7 @@ mod tests {
             .expect("a configured build parses"),
             data_local_dir: data_local_dir.to_path_buf(),
             home_dir: Some(data_local_dir.join("home")),
-            credentials: KeyringCredentialStore::new("com.cipherbox.desktop.test")
-                .expect("a credential store"),
+            credentials: seams::test_credentials(),
             shell: Shell {
                 changed: Box::new(|| {}),
                 tray: Box::new(|_| {}),

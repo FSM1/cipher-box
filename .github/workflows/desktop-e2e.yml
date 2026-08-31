@@ -1,6 +1,16 @@
-# DORMANT during the v2 build: tests/desktop-e2e was demolished with the v1
-# layout; the v2 mounted-desktop matrix lands per blueprint/testing.md and
-# this reusable workflow gets rewired to it then.
+# The desktop mounted e2e suite (blueprint/testing.md): the real Tauri binary
+# on a real mount, driven through the filesystem and the vault it projects.
+#
+# The binary is built with the `e2e-hook` feature, which adds the dev-key
+# headless entry and a loopback control endpoint. A shipping build compiles
+# neither, and the default-feature cargo job asserts that.
+#
+# The suite needs no test credential: a dev key is a fresh 32-byte scalar, and
+# challenge-signature login mints the account on first contact. So this
+# workflow reads no secret, and `secrets: inherit` from a caller buys nothing.
+#
+# Job names are the contract (blueprint/deploy.md freeze step 4). `ci-e2e.yml`
+# and `tag-staging.yml` call this workflow and read the `ref` input.
 name: Desktop E2E Tests
 
 on:
@@ -27,16 +37,36 @@ jobs:
         include:
           - platform: macos
             os: macos-latest
-            fuse-feature: fuse
-            binary-name: cipherbox-desktop
-          - platform: windows
-            os: windows-latest
-            fuse-feature: winfsp
-            binary-name: cipherbox-desktop.exe
           - platform: linux
-            os: ubuntu-22.04
-            fuse-feature: fuse
-            binary-name: cipherbox-desktop
+            os: ubuntu-latest
+
+    env:
+      # The desktop binary reads these at compile time (`option_env!` in
+      # `apps/desktop/src-tauri/src/engine/config.rs`), so they must be set for
+      # the cargo build rather than for the run.
+      VITE_API_URL: http://localhost:3000
+      VITE_ROUTING_ENDPOINTS: http://localhost:3001
+      # Kubo's gateway by address: it serves `localhost` as a subdomain gateway
+      # and redirects every path request to a name that resolves nowhere.
+      VITE_READ_ACCELERATOR_URL: http://127.0.0.1:8080
+      # The only value that selects the compressed CI sync timing profile and
+      # the small CI storage budget.
+      VITE_ENVIRONMENT: ci
+      # The API under test.
+      NODE_ENV: test
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: cipherbox_test
+      JWT_SECRET: desktop-e2e-jwt-secret
+      KUBO_API_URL: http://localhost:5001
+      # Two instances cold-start the same account from one runner address, and
+      # the per-address auth bucket would otherwise cap the scenarios.
+      THROTTLE_AUTH_LIMIT: '200'
+      # The headless binary holds one access token for a whole scenario and has
+      # no window to re-authenticate in.
+      ACCESS_TOKEN_TTL: 2h
 
     steps:
       - name: Checkout
@@ -44,14 +74,16 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
-      # --- Install FUSE driver (needed for both build and test) ---
-
       - uses: ./.github/actions/setup-fuse-t
         if: runner.os == 'macOS'
 
-      - name: Install system dependencies (Linux)
+      # `fuse3` supplies the `fusermount3` binary the vendored fuser mounts
+      # through. The webkit and appindicator packages are the Tauri shell's own
+      # link dependencies.
+      - name: Provision the Linux mount and shell dependencies
         if: runner.os == 'Linux'
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
@@ -59,35 +91,11 @@ jobs:
             librsvg2-dev \
             libssl-dev \
             libxdo-dev \
-            libfuse3-dev \
             fuse3 \
             pkg-config \
-            build-essential
-          sudo modprobe fuse || true
-
-      - name: Install WinFsp (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          $out = "winfsp.msi"
-          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
-          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
-          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
-          # Verify WinFsp installed and add bin to PATH for DLL discovery
-          $winfspDir = (Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -ErrorAction SilentlyContinue).InstallDir
-          if ($winfspDir) {
-            Write-Host "WinFsp installed at: $winfspDir"
-            $binDir = Join-Path $winfspDir "bin"
-            Write-Host "Adding to PATH: $binDir"
-            echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          } else {
-            Write-Host "WARNING: WinFsp registry key not found after install"
-          }
-
-      # --- Setup Node.js + pnpm (needed for frontend build before cargo) ---
+            build-essential \
+            xvfb
+          sudo modprobe fuse
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
@@ -99,28 +107,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # --- Build debug binary ---
-
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ matrix.platform }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ matrix.platform }}-cargo-
+          key: desktop-e2e-${{ matrix.platform }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: desktop-e2e-${{ matrix.platform }}-cargo-
 
-      - name: Create WinFsp MSI placeholder for resource glob (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
+      # `tauri-build` embeds the frontend, so the bundle must exist before cargo
+      # runs. The headless entry never loads it, but the build still reads it.
+      - name: Build the desktop frontend
+        run: pnpm --filter "@cipherbox/desktop..." run build
 
-      - name: Build debug binary
-        run: cargo build -p cipherbox-desktop --no-default-features --features ${{ matrix.fuse-feature }}
-        env:
-          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
-
-      # --- Install backend services ---
+      - name: Build the desktop binary with the e2e hook
+        run: cargo build -p cipherbox-desktop --features e2e-hook
 
       - name: Setup PostgreSQL
         uses: ikalnytskyi/action-setup-postgres@c4dda34aae1c821e3a771b68b73b13af3198a7ee # v8
@@ -129,308 +131,64 @@ jobs:
           password: postgres
           database: cipherbox_test
           postgres-version: '16'
-        id: postgres
 
-      - name: Install Kubo (IPFS) (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install kubo
-          ipfs init
-          ipfs daemon &
-          for i in $(seq 1 30); do
-            if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
-              echo "IPFS daemon ready"
-              break
-            fi
-            sleep 1
-          done
-
-      - name: Install Kubo (IPFS) (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          KUBO_VERSION="v0.34.0"
-          curl -fsSL "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_linux-amd64.tar.gz" | tar -xz
-          sudo ./kubo/install.sh
-          ipfs init
-          ipfs daemon &
-          for i in $(seq 1 30); do
-            if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
-              echo "IPFS daemon ready"
-              break
-            fi
-            sleep 1
-          done
-
-      - name: Install Kubo (IPFS) (Windows)
-        if: runner.os == 'Windows'
+      - name: Start Kubo
         shell: bash
         run: |
-          KUBO_VERSION="v0.34.0"
-          curl -fsSL --retry 3 --retry-delay 5 \
-            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_windows-amd64.zip" \
-            -o kubo.zip
-          unzip -q kubo.zip
-          echo "$PWD/kubo" >> "$GITHUB_PATH"
-          export PATH="$PWD/kubo:$PATH"
-          ipfs init
-          ipfs daemon &
-          for i in $(seq 1 30); do
-            if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
-              echo "IPFS daemon ready"
-              break
-            fi
-            sleep 1
-          done
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install kubo
+          else
+            KUBO_VERSION=v0.34.0
+            curl -fsSL --retry 3 \
+              "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_linux-amd64.tar.gz" \
+              | tar -xz
+            sudo ./kubo/install.sh
+          fi
+          ipfs init --profile server
+          ipfs daemon > "$RUNNER_TEMP/kubo.log" 2>&1 &
+          curl -fsS --retry 60 --retry-connrefused --retry-delay 1 \
+            -X POST http://localhost:5001/api/v0/id > /dev/null \
+            || { echo '--- kubo log ---'; cat "$RUNNER_TEMP/kubo.log"; exit 1; }
 
-      # --- Build backend packages ---
+      - uses: ./.github/actions/mock-ipns-routing
 
-      - name: Build mock-ipns-routing
-        run: cd tools/mock-ipns-routing && npm install && npm run build
+      - name: Apply migrations to a fresh database
+        run: pnpm --filter @cipherbox/api migration:run
 
-      - name: Build API
+      - name: Build the API
         run: pnpm --filter @cipherbox/api build
 
-      # --- Configuration ---
-
-      - name: Create API .env
+      # The orchestrator owns the API process, so the offline-replay scenario
+      # can take the API away and give it back.
+      - name: Run the mounted suite
         shell: bash
         run: |
-          cat > apps/api/.env << 'ENVEOF'
-          NODE_ENV=test
-          DB_HOST=localhost
-          DB_PORT=5432
-          DB_USERNAME=postgres
-          DB_PASSWORD=postgres
-          DB_DATABASE=cipherbox_test
-          JWT_SECRET=desktop-e2e-jwt-secret-key
-          CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:1420
-          KUBO_API_URL=http://localhost:5001
-          ROUTING_V1_URL=http://localhost:3001
-          TEST_LOGIN_SECRET=e2e-test-secret-ci-only
-          ACCESS_TOKEN_TTL=2h
-          ENVEOF
-          echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
-
-      - name: Create desktop .env
-        shell: bash
-        run: |
-          cat > apps/desktop/.env << 'ENVEOF'
-          VITE_API_URL=http://localhost:3000
-          VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
-          ENVEOF
-
-      # --- Database + API startup ---
-
-      - name: Run migrations
-        run: pnpm --filter @cipherbox/api migration:run
-        env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          NODE_ENV: test
-
-      - name: Start mock IPNS routing
-        shell: bash
-        run: node tools/mock-ipns-routing/dist/index.js &
-
-      - name: Start API server
-        if: runner.os != 'Windows'
-        run: |
-          cd apps/api
-          node dist/main.js > "$RUNNER_TEMP/api.log" 2>&1 &
-          # Wait for API readiness
-          READY=0
-          for i in $(seq 1 30); do
-            if curl -s http://localhost:3000/health > /dev/null 2>&1; then
-              echo "API ready"
-              READY=1
-              break
-            fi
-            sleep 1
-          done
-          if [ "$READY" -ne 1 ]; then
-            echo "API did not become ready in time." >&2
-            exit 1
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            Xvfb :99 -screen 0 1024x768x24 > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+            export DISPLAY=:99
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
           fi
+          pnpm --filter @cipherbox/desktop-e2e run test:e2e
         env:
-          NODE_ENV: test
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          JWT_SECRET: desktop-e2e-jwt-secret-key
-          CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:1420
-          KUBO_API_URL: http://localhost:5001
-          ROUTING_V1_URL: http://localhost:3001
-          TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-          # Long TTL: the headless desktop binary holds one token for the whole
-          # suite and cannot silently refresh; 15m expires mid-run on macOS.
-          ACCESS_TOKEN_TTL: 2h
-          IDENTITY_JWT_PRIVATE_KEY: ${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
-
-      - name: Start API server (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cd apps/api
-          node dist/main.js > "$RUNNER_TEMP/api.log" 2>&1 &
-          # Wait for API readiness
-          READY=0
-          for i in $(seq 1 30); do
-            if curl -s http://localhost:3000/health > /dev/null 2>&1; then
-              echo "API ready"
-              READY=1
-              break
-            fi
-            sleep 1
-          done
-          if [ "$READY" -ne 1 ]; then
-            echo "API did not become ready in time." >&2
-            exit 1
-          fi
-        env:
-          NODE_ENV: test
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          JWT_SECRET: desktop-e2e-jwt-secret-key
-          CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:1420
-          KUBO_API_URL: http://localhost:5001
-          ROUTING_V1_URL: http://localhost:3001
-          TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-          IDENTITY_JWT_PRIVATE_KEY: ${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
-
-      # --- Desktop launch + test execution ---
-
-      - name: Start frontend dev server
-        if: runner.os != 'Windows'
-        run: |
-          cd apps/desktop
-          pnpm vite preview --port 1420 &
-          # Wait for dev server
-          for i in $(seq 1 15); do
-            if curl -sf http://localhost:1420 > /dev/null 2>&1; then
-              echo "Frontend dev server ready on :1420"
-              break
-            fi
-            sleep 1
-          done
-        env:
-          VITE_API_URL: http://localhost:3000
-          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-
-      - name: Run desktop E2E tests (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          export CIPHERBOX_API_URL=http://localhost:3000
-          export VITE_API_URL=http://localhost:3000
-          export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
-          export RUST_LOG=info
-          BINARY=target/debug/${{ matrix.binary-name }}
-          chmod +x "$BINARY"
-          DEV_KEY=$(openssl rand -hex 32)
-          "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
-          DESKTOP_PID=$!
-          set +e
-          bash tests/desktop-e2e/scripts/run-all.sh
-          TEST_EXIT=$?
-          set -e
-          if [ "$TEST_EXIT" -ne 0 ]; then
-            echo "=== Desktop binary log ==="
-            cat /tmp/cipherbox-desktop.log 2>/dev/null || echo "(no log file)"
-          fi
-          kill $DESKTOP_PID 2>/dev/null || true
-          diskutil unmount force $HOME/CipherBox 2>/dev/null || true
-          exit $TEST_EXIT
-
-      - name: Run desktop E2E tests (Linux)
-        if: runner.os == 'Linux'
-        env:
+          CIPHERBOX_DESKTOP_BINARY: ${{ github.workspace }}/target/debug/cipherbox-desktop
+          CIPHERBOX_API_ENTRY: ${{ github.workspace }}/apps/api/dist/main.js
+          CIPHERBOX_E2E_WORKDIR: ${{ runner.temp }}/desktop-e2e
           CIPHERBOX_API_URL: http://localhost:3000
-          VITE_API_URL: http://localhost:3000
-          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-          RUST_LOG: info
-          DISPLAY: ':99'
-          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
-        run: |
-          Xvfb :99 -screen 0 1024x768x24 &
-          sleep 1
-          BINARY=target/debug/${{ matrix.binary-name }}
-          chmod +x "$BINARY"
-          DEV_KEY=$(openssl rand -hex 32)
-          "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
-          DESKTOP_PID=$!
-          set +e
-          bash tests/desktop-e2e/scripts/run-all.sh
-          TEST_EXIT=$?
-          set -e
-          if [ "$TEST_EXIT" -ne 0 ]; then
-            echo "=== Desktop binary log ==="
-            cat /tmp/cipherbox-desktop.log 2>/dev/null || echo "(no log file)"
-          fi
-          kill $DESKTOP_PID 2>/dev/null || true
-          fusermount3 -u $HOME/CipherBox 2>/dev/null || true
-          exit $TEST_EXIT
 
-      - name: Start frontend dev server (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cd apps/desktop
-          npx vite preview --port 1420 &
-          for i in $(seq 1 15); do
-            if curl -sf http://localhost:1420 > /dev/null 2>&1; then
-              echo "Frontend dev server ready on :1420"
-              break
-            fi
-            sleep 1
-          done
-        env:
-          VITE_API_URL: http://localhost:3000
-          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-
-      - name: Run desktop E2E tests (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          BINARY="target/debug/${{ matrix.binary-name }}"
-          DEV_KEY=$(openssl rand -hex 32)
-          LOGFILE="$RUNNER_TEMP/cipherbox-desktop.log"
-          export DESKTOP_LOG="$LOGFILE"
-          "$BINARY" --dev-key "$DEV_KEY" > "$LOGFILE" 2>&1 &
-          DESKTOP_PID=$!
-          set +e
-          powershell -File "$PWD/tests/desktop-e2e/scripts/run-all.ps1"
-          TEST_EXIT=$?
-          set -e
-          echo "=== Desktop binary log ==="
-          cat "$LOGFILE" 2>/dev/null || echo "(no log file)"
-          kill $DESKTOP_PID 2>/dev/null || true
-          exit $TEST_EXIT
-        env:
-          CIPHERBOX_API_URL: http://localhost:3000
-          VITE_API_URL: http://localhost:3000
-          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-          RUST_LOG: info
-
-      # --- Failure artifacts ---
-
-      - name: Collect logs on failure
+      - name: Collect the logs a failure leaves
         if: failure()
         shell: bash
         run: |
           mkdir -p failure-logs
-          cp /tmp/cipherbox-desktop.log failure-logs/ 2>/dev/null || true
-          cp "$RUNNER_TEMP/cipherbox-desktop.log" failure-logs/ 2>/dev/null || true
+          cp -R "${RUNNER_TEMP}/desktop-e2e"/*.log failure-logs/ 2>/dev/null || true
+          cp "${RUNNER_TEMP}/kubo.log" failure-logs/ 2>/dev/null || true
+          cp "${RUNNER_TEMP}/xvfb.log" failure-logs/ 2>/dev/null || true
+          cp /tmp/mock-ipns-routing.log failure-logs/ 2>/dev/null || true
           cp ~/Library/Logs/fuse-t/fuse-t.log failure-logs/ 2>/dev/null || true
-          cp "$RUNNER_TEMP/api.log" failure-logs/ 2>/dev/null || true
 
-      - name: Upload logs on failure
+      - name: Upload the logs a failure leaves
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

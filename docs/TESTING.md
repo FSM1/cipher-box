@@ -18,7 +18,7 @@ the test landscape, shows how to run each suite, and maps tests to CI gates.
 | `@cipherbox/api-client` unit | `packages/api-client/` | Vitest           | PR to `main`    |
 | SDK E2E                      | `tests/sdk-e2e/`       | Vitest           | PR to `main`    |
 | Web E2E                      | `tests/web-e2e/`       | Playwright       | Push to `main`  |
-| Desktop E2E                  | `tests/desktop-e2e/`   | Bash scripts     | Push to `main`  |
+| Desktop mounted E2E          | `tests/desktop-e2e/`   | tsx orchestrator | Push to `main`  |
 | Load tests                   | `tests/load/`          | Vitest (Node.js) | Manual dispatch |
 | Cross-language vectors       | `tests/vectors/`       | JSON fixtures    | PR to `main`    |
 | Rust crate tests             | `crates/`              | `cargo test`     | PR to `main`    |
@@ -130,18 +130,29 @@ to HTML, disallows `.only`, and always starts a fresh dev server.
 
 ## Running Desktop E2E Tests
 
-Desktop E2E tests exercise the Tauri binary through the FUSE/WinFsp virtual
-filesystem. They are shell-script based and run via `tests/desktop-e2e/scripts/`.
+The desktop mounted suite drives the real Tauri binary through the mount it
+projects. One TypeScript orchestrator serves every platform; the v1 pair of
+shell and PowerShell scripts is gone.
+
+The binary must carry the `e2e-hook` cargo feature. That feature adds the
+dev-key headless entry and a loopback control endpoint, and a shipping build
+compiles neither.
 
 ```bash
-# After building the debug binary and starting all backend services:
-bash tests/desktop-e2e/scripts/run-all.sh
+pnpm --filter @cipherbox/desktop-e2e run test:e2e
 ```
 
-Individual scripts: `test-fuse-operations.sh`, `test-round-trip.sh`,
-`test-recycle-bin.sh`, `test-cross-client-sync.sh`, `test-conflict-detection.sh`.
-Windows equivalents use `.ps1` extensions. The binary must be started with
-`--dev-key <hex>` before invoking the test scripts.
+The orchestrator starts the API and the desktop instances itself, so the
+offline-replay scenario can take the API away and give it back. Postgres, Kubo
+and the mock `/routing/v1` record store must already run. See
+`tests/desktop-e2e/README.md` for the full local recipe.
+
+The suite needs no test credential. A dev key is a fresh 32-byte scalar, and
+challenge-signature login mints the account on first contact. The key crosses
+on standard input, never in a process argument.
+
+The unit suite over the orchestrator's pure helpers runs under `pnpm test` and
+needs no stack.
 
 ## Running Load Tests
 
@@ -222,7 +233,7 @@ Runs after merge to `main`. Detects which surface areas changed and invokes:
 
 - `web-e2e.yml` — if `apps/web/`, `apps/api/`, `packages/`, or `tests/web-e2e/`
   changed
-- `desktop-e2e.yml` — if `apps/desktop/src-tauri/` or `crates/` changed
+- `desktop-e2e.yml` — if `apps/desktop/`, `crates/` or `tests/desktop-e2e/` changed
 
 ### `web-e2e.yml`
 
@@ -233,9 +244,14 @@ failure.
 
 ### `desktop-e2e.yml`
 
-Matrix build across macOS, Linux, and Windows (45-minute timeout per platform).
-Builds the debug Tauri binary, starts all backend services, mounts the virtual
-filesystem, and runs the shell-script test suite.
+A matrix over macOS and Linux, 45 minutes per leg. Each leg builds the debug
+Tauri binary with the `e2e-hook` feature, provisions the stack, and runs the
+mounted suite. The job name is `Desktop E2E (<platform>)`, and that name is the
+branch-protection contract.
+
+Windows joins the matrix once the Tauri shell projects the vault through the
+WinFsp adapter. `apps/desktop/src-tauri/src/mount` builds the detached
+projection on Windows today, so a Windows build makes no mount.
 
 ### `load-test.yml`
 

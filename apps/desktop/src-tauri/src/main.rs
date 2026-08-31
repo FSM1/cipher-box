@@ -9,6 +9,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// The headless entry the mounted e2e suite drives. A shipping build carries
+// none of it.
+#[cfg(feature = "e2e-hook")]
+mod e2e;
 mod engine;
 mod mount;
 mod oauth;
@@ -21,6 +25,15 @@ use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 const MAIN_WINDOW: &str = "main";
 
 fn main() {
+    #[cfg(feature = "e2e-hook")]
+    let headless = match e2e::headless() {
+        Ok(headless) => headless,
+        Err(refusal) => {
+            eprintln!("{refusal}");
+            std::process::exit(2);
+        }
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
@@ -35,7 +48,7 @@ fn main() {
             session::core_kit_set_item,
             session::core_kit_purge
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Menu-bar app: no Dock icon on macOS.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -43,6 +56,13 @@ fn main() {
             // After the tray: this opens a directory with an fsync barrier, and
             // nothing before the menu-bar icon should wait on a disk.
             tray::build(app.handle())?;
+
+            #[cfg(feature = "e2e-hook")]
+            if let Some(headless) = headless {
+                e2e::arm(app.handle(), headless)?;
+                return Ok(());
+            }
+
             session::open_key_custody(app.handle())?;
             Ok(())
         })
@@ -81,5 +101,17 @@ pub fn show_main_window(app: &AppHandle) {
         if let Err(error) = window.set_focus() {
             eprintln!("failed to focus the main window: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The headless entry is a test hook. A shipping build carries no control
+    /// endpoint and no dev-key start path. The default cargo job is where this
+    /// test counts; the hook build ignores it.
+    #[test]
+    #[cfg_attr(feature = "e2e-hook", ignore = "this build is the hook")]
+    fn the_shipping_build_carries_no_headless_entry() {
+        assert!(!cfg!(feature = "e2e-hook"));
     }
 }
