@@ -8,20 +8,20 @@ the test landscape, shows how to run each suite, and maps tests to CI gates.
 
 ## Test Landscape
 
-| Suite                        | Location               | Framework        | Trigger         |
-| ---------------------------- | ---------------------- | ---------------- | --------------- |
-| API unit tests               | `apps/api/`            | Jest             | PR to `main`    |
-| `@cipherbox/crypto` unit     | `packages/crypto/`     | Vitest           | PR to `main`    |
-| `@cipherbox/core` unit       | `packages/core/`       | Vitest           | PR to `main`    |
-| `@cipherbox/sdk-core` unit   | `packages/sdk-core/`   | Vitest           | PR to `main`    |
-| `@cipherbox/sdk` unit        | `packages/sdk/`        | Vitest           | PR to `main`    |
-| `@cipherbox/api-client` unit | `packages/api-client/` | Vitest           | PR to `main`    |
-| SDK E2E                      | `tests/sdk-e2e/`       | Vitest           | PR to `main`    |
-| Web E2E                      | `tests/web-e2e/`       | Playwright       | Push to `main`  |
-| Desktop E2E                  | `tests/desktop-e2e/`   | Bash scripts     | Push to `main`  |
-| Load tests                   | `tests/load/`          | Vitest (Node.js) | Manual dispatch |
-| Cross-language vectors       | `tests/vectors/`       | JSON fixtures    | PR to `main`    |
-| Rust crate tests             | `crates/`              | `cargo test`     | PR to `main`    |
+| Suite                        | Location               | Framework        | Trigger                             |
+| ---------------------------- | ---------------------- | ---------------- | ----------------------------------- |
+| API unit tests               | `apps/api/`            | Jest             | PR to `main`                        |
+| `@cipherbox/crypto` unit     | `packages/crypto/`     | Vitest           | PR to `main`                        |
+| `@cipherbox/core` unit       | `packages/core/`       | Vitest           | PR to `main`                        |
+| `@cipherbox/sdk-core` unit   | `packages/sdk-core/`   | Vitest           | PR to `main`                        |
+| `@cipherbox/sdk` unit        | `packages/sdk/`        | Vitest           | PR to `main`                        |
+| `@cipherbox/api-client` unit | `packages/api-client/` | Vitest           | PR to `main`                        |
+| SDK E2E                      | `tests/sdk-e2e/`       | Vitest           | PR to `main`                        |
+| Web E2E                      | `tests/web-e2e/`       | Playwright       | Push to `main`                      |
+| Desktop mounted E2E          | `tests/desktop-e2e/`   | tsx orchestrator | Manual dispatch, or a workflow call |
+| Load tests                   | `tests/load/`          | Vitest (Node.js) | Manual dispatch                     |
+| Cross-language vectors       | `tests/vectors/`       | JSON fixtures    | PR to `main`                        |
+| Rust crate tests             | `crates/`              | `cargo test`     | PR to `main`                        |
 
 ## Running Unit Tests
 
@@ -130,18 +130,17 @@ to HTML, disallows `.only`, and always starts a fresh dev server.
 
 ## Running Desktop E2E Tests
 
-Desktop E2E tests exercise the Tauri binary through the FUSE/WinFsp virtual
-filesystem. They are shell-script based and run via `tests/desktop-e2e/scripts/`.
+One TypeScript orchestrator drives the real Tauri binary through the mount it
+projects. The binary must carry the `e2e-hook` cargo feature. The orchestrator
+owns the API process, so a scenario can take the API away and give it back.
+Postgres, Kubo and the mock `/routing/v1` record store must already run.
 
 ```bash
-# After building the debug binary and starting all backend services:
-bash tests/desktop-e2e/scripts/run-all.sh
+pnpm --filter @cipherbox/desktop-e2e run test:e2e
 ```
 
-Individual scripts: `test-fuse-operations.sh`, `test-round-trip.sh`,
-`test-recycle-bin.sh`, `test-cross-client-sync.sh`, `test-conflict-detection.sh`.
-Windows equivalents use `.ps1` extensions. The binary must be started with
-`--dev-key <hex>` before invoking the test scripts.
+[`tests/desktop-e2e/README.md`](../tests/desktop-e2e/README.md) holds the full
+local recipe, the scenario list, and the login mechanics.
 
 ## Running Load Tests
 
@@ -222,7 +221,7 @@ Runs after merge to `main`. Detects which surface areas changed and invokes:
 
 - `web-e2e.yml` — if `apps/web/`, `apps/api/`, `packages/`, or `tests/web-e2e/`
   changed
-- `desktop-e2e.yml` — if `apps/desktop/src-tauri/` or `crates/` changed
+- `desktop-e2e.yml` — if `apps/desktop/`, `crates/` or `tests/desktop-e2e/` changed
 
 ### `web-e2e.yml`
 
@@ -233,9 +232,15 @@ failure.
 
 ### `desktop-e2e.yml`
 
-Matrix build across macOS, Linux, and Windows (45-minute timeout per platform).
-Builds the debug Tauri binary, starts all backend services, mounts the virtual
-filesystem, and runs the shell-script test suite.
+A matrix, 45 minutes per leg. Each leg builds the debug Tauri binary with the
+`e2e-hook` feature, provisions the stack, and runs the mounted suite. The job
+name is `Desktop E2E (<platform>)`, and that name is the branch-protection
+contract.
+
+The matrix runs the macOS leg alone today. The Linux shell reaches GTK and then
+never runs its setup hook, so it arms no control endpoint. The Windows shell
+builds the detached projection, so it makes no mount. Each leg joins the matrix
+when its host starts headless.
 
 ### `load-test.yml`
 

@@ -9,6 +9,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// The headless entry the mounted e2e suite drives.
+#[cfg(feature = "e2e-hook")]
+mod e2e;
 mod engine;
 mod mount;
 mod oauth;
@@ -20,7 +23,21 @@ use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 /// Label of the one (hidden-by-default) main window.
 const MAIN_WINDOW: &str = "main";
 
+/// Exit code for an argument this build refuses. Distinct from a panic and
+/// from an ordinary quit, so a harness can tell them apart.
+#[cfg(feature = "e2e-hook")]
+const BAD_ARGUMENT: i32 = 2;
+
 fn main() {
+    #[cfg(feature = "e2e-hook")]
+    let headless = match e2e::headless() {
+        Ok(headless) => headless,
+        Err(refusal) => {
+            eprintln!("{refusal}");
+            std::process::exit(BAD_ARGUMENT);
+        }
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
@@ -35,14 +52,22 @@ fn main() {
             session::core_kit_set_item,
             session::core_kit_purge
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Menu-bar app: no Dock icon on macOS.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // Ahead of the tray: a headless runner has no status-notifier
+            // host, and the tray waits on one that never answers.
+            #[cfg(feature = "e2e-hook")]
+            if let Some(headless) = headless {
+                e2e::arm(app.handle(), headless)?;
+                return Ok(());
+            }
+
+            tray::build(app.handle())?;
             // After the tray: this opens a directory with an fsync barrier, and
             // nothing before the menu-bar icon should wait on a disk.
-            tray::build(app.handle())?;
             session::open_key_custody(app.handle())?;
             Ok(())
         })

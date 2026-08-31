@@ -1122,6 +1122,33 @@ jobs:
       - name: Cargo test (desktop shell)
         run: cargo test -p cipherbox-desktop
 
+      # The `e2e-hook` build carries the control endpoint's token compare, its
+      # refusal parity and its byte ceilings. The mounted suite runs on the main
+      # gate only, so those would otherwise reach main unlinted and untested.
+      - name: Cargo clippy and test with the e2e hook
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy -p cipherbox-desktop --all-targets --features e2e-hook -- -D warnings
+          cargo test -p cipherbox-desktop --features e2e-hook
+
+      # The hook must never ship. A default feature set that pulled it in would
+      # put a control endpoint in a member's build.
+      - name: The e2e hook is off by default
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --no-deps --format-version 1 \
+            | node -e '
+              const meta = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              const shell = meta.packages.find((p) => p.name === "cipherbox-desktop");
+              const enabled = shell.features.default ?? [];
+              if (enabled.includes("e2e-hook")) {
+                console.error("cipherbox-desktop enables e2e-hook by default");
+                process.exit(1);
+              }
+            '
+
       # Builds the frontend too, through `beforeBuildCommand`.
       - name: Tauri build (unsigned, no bundle)
         run: pnpm --filter @cipherbox/desktop tauri build --no-bundle

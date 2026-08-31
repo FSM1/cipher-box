@@ -12,6 +12,11 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+# The headless e2e entry: a dev-key start and a loopback control endpoint. Off
+# by default, so a shipping build holds neither.
+[features]
+e2e-hook = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # Reads FUSE-T's libdir back out of `fuse-t.pc` for the macOS rpath.
