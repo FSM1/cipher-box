@@ -9,7 +9,7 @@
     "condition": "B",
     "annotations": {
       "summary": "Test login rate exceeds 100/hour on staging",
-      "description": "The POST /auth/test-login endpoint is being called more than 100 times per hour. This may indicate unauthorized access attempts or misconfigured test automation. Verify the TEST_LOGIN_SECRET is not leaked and check request source IPs."
+      "description": "The POST /auth/test-login endpoint returns success more than 100 times per hour. This may indicate unauthorized access attempts or misconfigured test automation. Verify the TEST_LOGIN_SECRET is not leaked and check request source IPs."
     },
     "labels": {
       "severity": "warning",
@@ -23,7 +23,7 @@
         "relativeTimeRange": { "from": 3600, "to": 0 },
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
-          "expr": "increase(cipherbox_auth_logins_total{method=\"test\"}[1h])",
+          "expr": "sum(increase(auth_attempts_total{route=\"/auth/test-login\", outcome=\"success\"}[1h]))",
           "intervalMs": 60000,
           "maxDataPoints": 43200,
           "refId": "A"

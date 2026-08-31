@@ -73,6 +73,10 @@ const CLIENT_IP_HEADER = 'CF-Connecting-IP';
 const MAX_PUBLISH_EVENTS = 600;
 /** The limiter's own namespace — it logs refusals whether or not `log_key` is on. */
 const RATE_LIMIT_LOG = 'http.handlers.rate_limit';
+/** The zone's own origin-pull CA. Cloudflare's shared one is presented by every tenant. */
+const ORIGIN_PULL_CA = '/etc/caddy/certs/cloudflare-zone-origin-pull-ca.pem';
+/** `verify_if_given` admits a caller that presents no certificate at all. */
+const CLIENT_AUTH_MODE = 'require_and_verify';
 /** cloudflare.com/ips — a hand-mirrored snapshot, so the set is pinned, not counted. */
 const CLOUDFLARE_RANGES = [
   '173.245.48.0/20',
@@ -334,6 +338,29 @@ for (const [name, server] of servers) {
   check(
     sameSet(server.client_ip_headers ?? [], [CLIENT_IP_HEADER]),
     `server ${name}: {client_ip} does not come from ${CLIENT_IP_HEADER}, so a caller behind the same proxy can prepend its own`
+  );
+}
+
+// Caddy routes on Host and not on SNI, and it appends a matcher-less policy of
+// its own when a config leaves the fallback unwritten — so every policy is
+// held, not the fronted vhosts' own (blueprint/deploy.md).
+const sniOf = (policy) =>
+  (policy.match?.sni ?? []).length > 0
+    ? ` for ${policy.match.sni.join(', ')}`
+    : ' matching any other SNI';
+const policies = servers.flatMap(([name, server]) =>
+  (server.tls_connection_policies ?? []).map((policy) => ({ name, policy }))
+);
+check(policies.length > 0, 'no TLS connection policy in the adapted config');
+for (const { name, policy } of policies) {
+  const auth = policy.client_authentication;
+  check(
+    auth?.mode === CLIENT_AUTH_MODE,
+    `server ${name}: the policy${sniOf(policy)} does not ${CLIENT_AUTH_MODE} a client certificate, so an unauthenticated caller reaches the origin`
+  );
+  check(
+    auth?.ca?.provider === 'file' && sameSet(auth.ca.pem_files ?? [], [ORIGIN_PULL_CA]),
+    `server ${name}: the policy${sniOf(policy)} does not verify against exactly ${ORIGIN_PULL_CA}, so a certificate issued to another Cloudflare tenant passes`
   );
 }
 

@@ -1,20 +1,20 @@
 [
   {
-    "title": "IPNS DB Fallback Rate High",
-    "ruleGroup": "CipherBox Performance",
+    "title": "Accelerator Upstream Down",
+    "ruleGroup": "CipherBox Infrastructure",
     "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
+    "noDataState": "NoData",
+    "execErrState": "Error",
     "for": "5m",
     "condition": "B",
     "annotations": {
-      "summary": "IPNS DB fallback rate exceeds 20%",
-      "description": "More than 20% of IPNS resolutions are falling back to database cache. Indicates Someguy or DHT health degradation. Check Someguy container, Kubo connectivity."
+      "summary": "A read-accelerator upstream is down: {{ $labels.job }}",
+      "description": "The Alloy scrape of kubo or someguy fails for 5 minutes, so the upstream behind the fronted vhost is down or unreachable. Caddy denies on any non-204 forward_auth answer and logs nothing for these two vhosts, so this metric is the only signal. Check the container: docker compose ps ipfs someguy, then docker compose logs."
     },
     "labels": {
-      "severity": "warning",
+      "severity": "critical",
       "service": "cipherbox",
-      "operation": "ipns-db-fallback"
+      "operation": "accelerator-upstream"
     },
     "data": [
       {
@@ -23,8 +23,8 @@
         "relativeTimeRange": { "from": 600, "to": 0 },
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
-          "expr": "sum(rate(cipherbox_ipns_resolves_total{source=\"db_cache\"}[10m])) / sum(rate(cipherbox_ipns_resolves_total[10m]))",
-          "intervalMs": 15000,
+          "expr": "min by (job) (up{job=~\"kubo|someguy\"})",
+          "intervalMs": 30000,
           "maxDataPoints": 43200,
           "refId": "A"
         }
@@ -39,7 +39,7 @@
           "expression": "A",
           "conditions": [
             {
-              "evaluator": { "type": "gt", "params": [0.2] },
+              "evaluator": { "type": "lt", "params": [1] },
               "operator": { "type": "and" },
               "query": { "params": ["A"] },
               "reducer": { "type": "last" }

@@ -1,6 +1,6 @@
 [
   {
-    "title": "API Upload p95 Warning",
+    "title": "API Login p95 Warning",
     "ruleGroup": "CipherBox Performance",
     "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
     "noDataState": "OK",
@@ -8,13 +8,13 @@
     "for": "5m",
     "condition": "B",
     "annotations": {
-      "summary": "POST /ipfs/upload p95 latency exceeds threshold (>100ms)",
-      "description": "Upload endpoint p95 latency (5m window) has exceeded the baseline threshold. Check Kubo pin performance, disk I/O, and upload payload sizes."
+      "summary": "/auth/login p95 latency exceeds threshold (>1s)",
+      "description": "Login endpoint p95 latency (5m window) exceeds the baseline threshold. Check database connection pool health and signature verification cost on the 2-vCPU staging box."
     },
     "labels": {
       "severity": "warning",
       "service": "cipherbox",
-      "operation": "api-upload"
+      "operation": "api-auth-login"
     },
     "data": [
       {
@@ -23,7 +23,7 @@
         "relativeTimeRange": { "from": 600, "to": 0 },
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"POST\", route=\"/ipfs/upload\", status_code=\"201\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/auth/login\"}[5m])) by (le))",
           "intervalMs": 15000,
           "maxDataPoints": 43200,
           "refId": "A"
@@ -39,7 +39,7 @@
           "expression": "A",
           "conditions": [
             {
-              "evaluator": { "type": "gt", "params": [0.1] },
+              "evaluator": { "type": "gt", "params": [1] },
               "operator": { "type": "and" },
               "query": { "params": ["A"] },
               "reducer": { "type": "last" }
@@ -51,7 +51,7 @@
     ]
   },
   {
-    "title": "API Upload p99 Critical",
+    "title": "API Login p99 Critical",
     "ruleGroup": "CipherBox Performance",
     "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
     "noDataState": "OK",
@@ -59,13 +59,13 @@
     "for": "5m",
     "condition": "B",
     "annotations": {
-      "summary": "POST /ipfs/upload p99 latency exceeds critical threshold (>250ms)",
-      "description": "Upload endpoint p99 latency (5m window) has exceeded the critical threshold. Immediate investigation required: check Kubo pin performance, disk I/O, and upload payload sizes."
+      "summary": "/auth/login p99 latency exceeds critical threshold (>2s)",
+      "description": "Login endpoint p99 latency (5m window) exceeds the critical threshold. Investigate immediately: check database connection pool health and API container CPU saturation."
     },
     "labels": {
       "severity": "critical",
       "service": "cipherbox",
-      "operation": "api-upload"
+      "operation": "api-auth-login"
     },
     "data": [
       {
@@ -74,7 +74,109 @@
         "relativeTimeRange": { "from": 600, "to": 0 },
         "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
         "model": {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"POST\", route=\"/ipfs/upload\", status_code=\"201\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{route=\"/auth/login\"}[5m])) by (le))",
+          "intervalMs": 15000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "type": "threshold",
+          "expression": "A",
+          "conditions": [
+            {
+              "evaluator": { "type": "gt", "params": [2] },
+              "operator": { "type": "and" },
+              "query": { "params": ["A"] },
+              "reducer": { "type": "last" }
+            }
+          ],
+          "refId": "B"
+        }
+      }
+    ]
+  },
+  {
+    "title": "API Refresh p95 Warning",
+    "ruleGroup": "CipherBox Performance",
+    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
+    "noDataState": "OK",
+    "execErrState": "OK",
+    "for": "5m",
+    "condition": "B",
+    "annotations": {
+      "summary": "/auth/refresh p95 latency exceeds threshold (>500ms)",
+      "description": "Token refresh p95 latency (5m window) exceeds the baseline threshold. Every client session renews through this route, so a slow refresh degrades all clients. Check database write latency and connection pool health."
+    },
+    "labels": {
+      "severity": "warning",
+      "service": "cipherbox",
+      "operation": "api-auth-refresh"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
+        "model": {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/auth/refresh\"}[5m])) by (le))",
+          "intervalMs": 15000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "type": "threshold",
+          "expression": "A",
+          "conditions": [
+            {
+              "evaluator": { "type": "gt", "params": [0.5] },
+              "operator": { "type": "and" },
+              "query": { "params": ["A"] },
+              "reducer": { "type": "last" }
+            }
+          ],
+          "refId": "B"
+        }
+      }
+    ]
+  },
+  {
+    "title": "API Gateway Verify p95 Warning",
+    "ruleGroup": "CipherBox Performance",
+    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
+    "noDataState": "OK",
+    "execErrState": "OK",
+    "for": "5m",
+    "condition": "B",
+    "annotations": {
+      "summary": "/auth/gateway/verify p95 latency exceeds threshold (>250ms)",
+      "description": "The forward_auth verify leg p95 latency (5m window) exceeds the baseline threshold. Caddy calls this route before every request on the two fronted vhosts, so its latency adds to every accelerator read. Check API container CPU saturation."
+    },
+    "labels": {
+      "severity": "warning",
+      "service": "cipherbox",
+      "operation": "api-gateway-verify"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
+        "model": {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{route=\"/auth/gateway/verify\"}[5m])) by (le))",
           "intervalMs": 15000,
           "maxDataPoints": 43200,
           "refId": "A"
@@ -91,414 +193,6 @@
           "conditions": [
             {
               "evaluator": { "type": "gt", "params": [0.25] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API Download p95 Warning",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "GET /ipfs/:cid p95 latency exceeds threshold (>25ms)",
-      "description": "Download endpoint p95 latency (5m window) has exceeded the baseline threshold. Check Kubo cat performance and content cache status."
-    },
-    "labels": {
-      "severity": "warning",
-      "service": "cipherbox",
-      "operation": "api-download"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"GET\", route=\"/ipfs/:cid\", status_code=\"200\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [0.025] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API Download p99 Critical",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "GET /ipfs/:cid p99 latency exceeds critical threshold (>50ms)",
-      "description": "Download endpoint p99 latency (5m window) has exceeded the critical threshold. Immediate investigation required: check Kubo cat performance and content cache status."
-    },
-    "labels": {
-      "severity": "critical",
-      "service": "cipherbox",
-      "operation": "api-download"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"GET\", route=\"/ipfs/:cid\", status_code=\"200\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [0.05] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API IPNS Resolve p95 Warning",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "GET /ipns/resolve p95 latency exceeds threshold (>300ms)",
-      "description": "IPNS resolve API endpoint p95 latency (5m window) has exceeded the baseline threshold. Check Someguy health, Kubo DHT connectivity, and DB fallback rate."
-    },
-    "labels": {
-      "severity": "warning",
-      "service": "cipherbox",
-      "operation": "api-ipns-resolve"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"GET\", route=\"/ipns/resolve\", status_code=\"200\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [0.3] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API IPNS Resolve p99 Critical",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "GET /ipns/resolve p99 latency exceeds critical threshold (>600ms)",
-      "description": "IPNS resolve API endpoint p99 latency (5m window) has exceeded the critical threshold. Immediate investigation required: check Someguy health, Kubo DHT connectivity, and DB fallback rate."
-    },
-    "labels": {
-      "severity": "critical",
-      "service": "cipherbox",
-      "operation": "api-ipns-resolve"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"GET\", route=\"/ipns/resolve\", status_code=\"200\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [0.6] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API IPNS Publish p95 Warning",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "POST /ipns/publish p95 latency exceeds threshold (>600ms)",
-      "description": "IPNS publish API endpoint p95 latency (5m window) has exceeded the baseline threshold. Check Kubo daemon health and DHT connectivity."
-    },
-    "labels": {
-      "severity": "warning",
-      "service": "cipherbox",
-      "operation": "api-ipns-publish"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"POST\", route=\"/ipns/publish\", status_code=\"201\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [0.6] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API IPNS Publish p99 Critical",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "POST /ipns/publish p99 latency exceeds critical threshold (>1200ms)",
-      "description": "IPNS publish API endpoint p99 latency (5m window) has exceeded the critical threshold. Immediate investigation required: check Kubo daemon health and DHT connectivity."
-    },
-    "labels": {
-      "severity": "critical",
-      "service": "cipherbox",
-      "operation": "api-ipns-publish"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"POST\", route=\"/ipns/publish\", status_code=\"201\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [1.2] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API Vault Load p95 Warning",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "GET /vault p95 latency exceeds threshold (>25ms)",
-      "description": "Vault load endpoint p95 latency (5m window) has exceeded the baseline threshold. Check database query performance and connection pool health."
-    },
-    "labels": {
-      "severity": "warning",
-      "service": "cipherbox",
-      "operation": "api-vault"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"GET\", route=\"/vault\", status_code=\"200\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [0.025] },
-              "operator": { "type": "and" },
-              "query": { "params": ["A"] },
-              "reducer": { "type": "last" }
-            }
-          ],
-          "refId": "B"
-        }
-      }
-    ]
-  },
-  {
-    "title": "API Vault Load p99 Critical",
-    "ruleGroup": "CipherBox Performance",
-    "folderUID": "GRAFANA_ALERTS_FOLDER_UID",
-    "noDataState": "OK",
-    "execErrState": "OK",
-    "for": "5m",
-    "condition": "B",
-    "annotations": {
-      "summary": "GET /vault p99 latency exceeds critical threshold (>50ms)",
-      "description": "Vault load endpoint p99 latency (5m window) has exceeded the critical threshold. Immediate investigation required: check database query performance and connection pool health."
-    },
-    "labels": {
-      "severity": "critical",
-      "service": "cipherbox",
-      "operation": "api-vault"
-    },
-    "data": [
-      {
-        "refId": "A",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "GRAFANA_CLOUD_DATASOURCE_UID",
-        "model": {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_http_request_duration_seconds_bucket{method=\"GET\", route=\"/vault\", status_code=\"200\"}[5m])) by (le))",
-          "intervalMs": 15000,
-          "maxDataPoints": 43200,
-          "refId": "A"
-        }
-      },
-      {
-        "refId": "B",
-        "queryType": "",
-        "relativeTimeRange": { "from": 600, "to": 0 },
-        "datasourceUid": "__expr__",
-        "model": {
-          "type": "threshold",
-          "expression": "A",
-          "conditions": [
-            {
-              "evaluator": { "type": "gt", "params": [0.05] },
               "operator": { "type": "and" },
               "query": { "params": ["A"] },
               "reducer": { "type": "last" }

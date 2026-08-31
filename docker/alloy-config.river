@@ -55,11 +55,16 @@ loki.write "grafana_cloud" {
 // PROMETHEUS METRICS SCRAPING
 // ============================================================
 
+// `job` defaults to the component id, which reads as `prometheus.scrape.kubo` in
+// every dashboard expression; naming it keeps the queries and the alert rules
+// short and stable across a component rename.
+
 // Scrape CipherBox API /metrics endpoint every 30 seconds
 prometheus.scrape "cipherbox_api" {
   targets = [{
     __address__ = "api:3000",
   }]
+  job_name = "api"
   metrics_path = "/metrics"
   scrape_interval = "30s"
 
@@ -69,12 +74,20 @@ prometheus.scrape "cipherbox_api" {
 // Filter Kubo/Someguy metrics to only those used by dashboards.
 // Without filtering, Kubo alone exports 10k+ series (DHT, bitswap,
 // per-peer stats) which exceeds Grafana Cloud free tier limits.
+//
+// `up` rides the same pipeline, so it must be kept by name: the two fronted
+// vhosts deny on any non-204 and log nothing, which leaves an upstream-down
+// condition visible in metrics alone (blueprint/api.md, Egress).
+//
+// Verified against ipfs/kubo:v0.42.0 and ghcr.io/ipfs/someguy:v0.11.1:
+// neither emits `libp2p_network_in_bytes_total` or its out counterpart, so
+// process-level counters carry bandwidth instead.
 prometheus.relabel "keep_infra_metrics" {
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 
   rule {
     source_labels = ["__name__"]
-    regex         = "go_goroutines|go_memstats_alloc_bytes|libp2p_swarm_connections_opened_total|libp2p_swarm_connections_closed_total|libp2p_network_in_bytes_total|libp2p_network_out_bytes_total"
+    regex         = "up|go_goroutines|go_memstats_alloc_bytes|process_network_receive_bytes_total|process_network_transmit_bytes_total|libp2p_rcmgr_connections|libp2p_swarm_connections_opened_total|libp2p_swarm_connections_closed_total|ipfs_http_requests_total"
     action        = "keep"
   }
 }
@@ -84,6 +97,7 @@ prometheus.scrape "kubo" {
   targets = [{
     __address__ = "ipfs:5001",
   }]
+  job_name = "kubo"
   metrics_path = "/debug/metrics/prometheus"
   scrape_interval = "30s"
 
@@ -95,6 +109,7 @@ prometheus.scrape "someguy" {
   targets = [{
     __address__ = "someguy:8190",
   }]
+  job_name = "someguy"
   metrics_path = "/debug/metrics/prometheus"
   scrape_interval = "30s"
 
