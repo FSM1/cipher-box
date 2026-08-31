@@ -64,7 +64,21 @@ pub struct VaultSettings {
     pub byo: Option<ByoIpfsConfig>,
     /// The content-version retention policy.
     pub retention: RetentionPolicy,
+    /// How long a soft-deleted node stays in the bin index. `0` keeps the hard
+    /// delete (CONTEXT.md "Soft delete").
+    pub bin_retention_days: u32,
 }
+
+/// The longest bin retention the settings record admits, ten years in days.
+///
+/// It bounds the expiry instant a retention evaluation derives from
+/// `deletedAt`, and it is the same bar on both sides of the codec: the wasm
+/// boundary, the encode path, and the decode path all refuse above it
+/// (AGENTS.md rule 8).
+pub const MAX_BIN_RETENTION_DAYS: u32 = 3650;
+
+/// The retention a vault gets before its owner chooses one (ADR 0010 item 6).
+pub const DEFAULT_BIN_RETENTION_DAYS: u32 = 30;
 
 impl Default for VaultSettings {
     fn default() -> Self {
@@ -72,6 +86,7 @@ impl Default for VaultSettings {
             pin_mode: PinMode::Hosted,
             byo: None,
             retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         }
     }
 }
@@ -93,6 +108,7 @@ impl VaultSettings {
                 .as_ref()
                 .is_some_and(|byo| byo.access_token.is_some()),
             retention: self.retention,
+            bin_retention_days: self.bin_retention_days,
             origin,
         }
     }
@@ -112,6 +128,9 @@ pub struct VaultSettingsSummary {
     pub byo_credential_stored: bool,
     /// The content-version retention policy.
     pub retention: RetentionPolicy,
+    /// How long a soft-deleted node stays in the bin index. `0` keeps the hard
+    /// delete.
+    pub bin_retention_days: u32,
     /// Whose choice this summary reports.
     pub origin: SettingsOrigin,
 }
@@ -474,6 +493,9 @@ pub fn placement_of(settings: &VaultSettings) -> Result<Placement, PlacementRefu
 pub enum SettingsPublishError {
     /// The BYO config is not one the Http seam may be pointed at.
     Byo(ProviderError),
+    /// The bin retention is above [`MAX_BIN_RETENTION_DAYS`], which the reader
+    /// refuses, so the writer refuses it too (AGENTS.md rule 8).
+    BinRetention,
     /// The settings name a mode no reader could place bytes under, so
     /// publishing them would strand every device on the account.
     Placement(PlacementRefusal),
@@ -640,6 +662,9 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     validate(settings).map_err(SettingsPublishError::Byo)?;
+    if settings.bin_retention_days > MAX_BIN_RETENTION_DAYS {
+        return Err(SettingsPublishError::BinRetention);
+    }
     // Rule 8, one layer out from the codec: `decide_placement` hard-refuses a
     // mode with no usable byte destination, so a record carrying one would be a
     // durable, account-wide refusal of every content write. Release-active, and
@@ -970,6 +995,8 @@ enum BodyError {
     /// the live version along with its history. Unrepresentable on the encode
     /// side ([`RetentionPolicy::KeepLatest`] takes a [`NonZeroU64`]).
     RetainsNoVersions,
+    /// A bin retention above [`MAX_BIN_RETENTION_DAYS`].
+    BinRetentionTooLong,
     /// A BYO config the Http seam may not be pointed at. A resolved record is
     /// network input naming a host the engine will later talk to, so it clears
     /// the same bar as a member-typed config (AGENTS.md rule 8: the encode
@@ -1015,6 +1042,10 @@ fn encode_settings_body(
     revision: u64,
 ) -> Result<Zeroizing<Vec<u8>>, CodecError> {
     let mut m = Map::new();
+    m.insert(
+        "binRetentionDays",
+        Value::Unsigned(u64::from(settings.bin_retention_days)),
+    );
     m.insert(
         "byo",
         settings.byo.as_ref().map_or(Value::Null, |config| {
@@ -1063,7 +1094,13 @@ fn decode_settings_body(bytes: &[u8]) -> Result<SettingsBody, BodyError> {
 
 /// The body's keys, exhaustive at this version — a body carrying any other key
 /// was written by a build this one does not share a schema with.
-const BODY_KEYS: [&str; 4] = ["byo", "keepLatest", "pinMode", "revision"];
+const BODY_KEYS: [&str; 5] = [
+    "binRetentionDays",
+    "byo",
+    "keepLatest",
+    "pinMode",
+    "revision",
+];
 const BYO_KEYS: [&str; 3] = ["accessToken", "endpoint", "kind"];
 
 fn read_settings_map(tree: &mut Value) -> Result<SettingsBody, BodyError> {
@@ -1083,6 +1120,7 @@ fn read_settings_map(tree: &mut Value) -> Result<SettingsBody, BodyError> {
             NonZeroU64::new(other.as_unsigned()?).ok_or(BodyError::RetainsNoVersions)?,
         ),
     };
+    let bin_retention_days = read_bin_retention(req(map, "binRetentionDays")?.as_unsigned()?)?;
     let revision = req(map, "revision")?.as_unsigned()?;
     let byo = read_byo(map.get_mut("byo"))?;
     Ok(SettingsBody {
@@ -1090,9 +1128,18 @@ fn read_settings_map(tree: &mut Value) -> Result<SettingsBody, BodyError> {
             pin_mode,
             byo,
             retention,
+            bin_retention_days,
         },
         revision,
     })
+}
+
+/// The bin retention as the body carries it, refused above the frozen bar.
+fn read_bin_retention(days: u64) -> Result<u32, BodyError> {
+    u32::try_from(days)
+        .ok()
+        .filter(|days| *days <= MAX_BIN_RETENTION_DAYS)
+        .ok_or(BodyError::BinRetentionTooLong)
 }
 
 /// Read the BYO config in place, leaving the subtree attached to its owner so a
@@ -1204,6 +1251,7 @@ mod tests {
                         pin_mode,
                         byo: Some(byo("https://node.example", kind, Some("tok"))),
                         retention,
+                        ..VaultSettings::default()
                     };
                     assert_eq!(round_trip(&settings), settings);
                 }
@@ -1250,6 +1298,7 @@ mod tests {
     #[test]
     fn a_discriminant_outside_its_set_is_refused() {
         let mut m = Map::new();
+        m.insert("binRetentionDays", Value::Unsigned(30));
         m.insert("byo", Value::Null);
         m.insert("keepLatest", Value::Null);
         m.insert("pinMode", Value::Text("everywhere".to_owned()));
@@ -1266,6 +1315,7 @@ mod tests {
     #[test]
     fn a_wire_retention_of_zero_versions_is_refused() {
         let mut m = Map::new();
+        m.insert("binRetentionDays", Value::Unsigned(30));
         m.insert("byo", Value::Null);
         m.insert("keepLatest", Value::Unsigned(0));
         m.insert("pinMode", Value::Text("hosted".to_owned()));
@@ -1276,11 +1326,66 @@ mod tests {
         );
     }
 
+    /// AGENTS.md rule 8, the bin-retention half: the decode side refuses a
+    /// retention past the frozen bar, and `publish_settings` refuses the same
+    /// value release-active, so no build signs a body its own reader rejects.
+    #[test]
+    fn a_wire_bin_retention_past_the_bar_is_refused() {
+        for days in [
+            u64::from(MAX_BIN_RETENTION_DAYS) + 1,
+            u64::from(u32::MAX) + 1,
+        ] {
+            let mut m = Map::new();
+            m.insert("binRetentionDays", Value::Unsigned(days));
+            m.insert("byo", Value::Null);
+            m.insert("keepLatest", Value::Null);
+            m.insert("pinMode", Value::Text("hosted".to_owned()));
+            m.insert("revision", Value::Unsigned(1));
+            assert_eq!(
+                decode_settings_body(&encode(&Value::Map(m)).expect("encode")).unwrap_err(),
+                BodyError::BinRetentionTooLong,
+            );
+        }
+    }
+
+    /// The bar itself is admitted, so the refusal is of values past it and not
+    /// of the longest retention the catalog offers.
+    #[test]
+    fn a_wire_bin_retention_at_the_bar_is_admitted() {
+        let settings = VaultSettings {
+            bin_retention_days: MAX_BIN_RETENTION_DAYS,
+            ..VaultSettings::default()
+        };
+        assert_eq!(round_trip(&settings), settings);
+    }
+
+    /// A body from a build that predates the bin is not a body this one can
+    /// hold to a retention, so it is refused rather than read as zero — which
+    /// would silently turn every delete back into a hard one.
+    #[test]
+    fn a_body_without_a_bin_retention_is_refused() {
+        let mut m = Map::new();
+        m.insert("byo", Value::Null);
+        m.insert("keepLatest", Value::Null);
+        m.insert("pinMode", Value::Text("hosted".to_owned()));
+        m.insert("revision", Value::Unsigned(1));
+        assert_eq!(
+            decode_settings_body(&encode(&Value::Map(m)).expect("encode")).unwrap_err(),
+            BodyError::Codec(
+                Malformed::MissingField {
+                    field: "binRetentionDays"
+                }
+                .into()
+            ),
+        );
+    }
+
     /// A body from a build that predates the revision is not a body this one
     /// can hold to a monotonic bar, so it is refused rather than read as zero.
     #[test]
     fn a_body_without_a_revision_is_refused() {
         let mut m = Map::new();
+        m.insert("binRetentionDays", Value::Unsigned(30));
         m.insert("byo", Value::Null);
         m.insert("keepLatest", Value::Null);
         m.insert("pinMode", Value::Text("hosted".to_owned()));

@@ -7,7 +7,7 @@
  * No interpretation, no crypto — the engine below the facade owns all of that.
  */
 
-import { MAX_FRAGMENT_CHARS } from './protocol.js';
+import { MAX_BIN_RETENTION_DAYS, MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
@@ -174,6 +174,16 @@ function retentionCap(value: unknown, field: string): number {
   return cap;
 }
 
+/**
+ * A bin retention in days. Bounded here as well as in the engine so the refusal
+ * names the field, and so a wrapping `u32` cannot arrive as an unrelated span.
+ */
+function binRetentionDays(value: unknown, field: string): number {
+  const days = count(value, field);
+  if (days > MAX_BIN_RETENTION_DAYS) throw invalidField(field, value);
+  return days;
+}
+
 function byoConfig(
   wasm: EngineWasm,
   value: unknown,
@@ -214,11 +224,15 @@ function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
     const rawKeep = settings.keepLatestVersions ?? undefined;
     const keep =
       rawKeep === undefined ? undefined : retentionCap(rawKeep, 'settings.keepLatestVersions');
+    const rawBin = settings.binRetentionDays ?? undefined;
+    const bin =
+      rawBin === undefined ? undefined : binRetentionDays(rawBin, 'settings.binRetentionDays');
     const byo = settings.byo ?? undefined;
     return new wasm.VaultSettings(
       mode,
       byo === undefined ? undefined : byoConfig(wasm, byo, token),
-      keep
+      keep,
+      bin
     );
   } finally {
     token?.fill(0);
@@ -613,6 +627,7 @@ export function readVaultStorage(
       byoKind: byoKindFrom(wasm, settings.byoKind),
       byoCredentialStored: settings.byoCredentialStored,
       keepLatestVersions: settings.keepLatestVersions ?? null,
+      binRetentionDays: settings.binRetentionDays,
       origin: settingsOriginFrom(wasm, settings.origin),
     },
     quota:

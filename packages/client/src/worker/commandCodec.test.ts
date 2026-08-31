@@ -374,6 +374,49 @@ describe('buildCommand', () => {
       expect(settings[0][2]).toBeUndefined();
     });
 
+    it('leaves an unstated bin retention to the engine default', () => {
+      const { wasm, settings } = spyWasm();
+
+      buildCommand(wasm, {
+        kind: 'saveVaultSettings',
+        settings: { pinMode: 'hosted', byo: null, keepLatestVersions: null },
+      });
+
+      expect(settings[0][3]).toBeUndefined();
+    });
+
+    it('carries a stated bin retention through', () => {
+      const { wasm, settings } = spyWasm();
+
+      buildCommand(wasm, {
+        kind: 'saveVaultSettings',
+        settings: {
+          pinMode: 'hosted',
+          byo: null,
+          keepLatestVersions: null,
+          binRetentionDays: 90,
+        },
+      });
+
+      expect(settings[0][3]).toBe(90);
+    });
+
+    it.each([
+      ['a retention past the engine bar', 3651],
+      ['a negative retention', -1],
+      ['a fractional retention', 1.5],
+    ])('refuses %s', (_name, binRetentionDays) => {
+      const { wasm, settings } = spyWasm();
+
+      expect(() =>
+        buildCommand(wasm, {
+          kind: 'saveVaultSettings',
+          settings: { pinMode: 'hosted', byo: null, keepLatestVersions: null, binRetentionDays },
+        })
+      ).toThrow('invalid request field settings.binRetentionDays: number');
+      expect(settings).toEqual([]);
+    });
+
     it('spells a null credential as absent, never as the string "null"', () => {
       const { wasm, byo } = spyWasm();
 
@@ -971,6 +1014,7 @@ describe('readVaultStorage', () => {
       byoKind: fakeWasmEnums.ByoKind.Psa,
       byoCredentialStored: true,
       keepLatestVersions: 5,
+      binRetentionDays: 30,
       origin: fakeWasmEnums.SettingsOrigin.Stale,
     },
     quota: { usedBytes: 512n, limitBytes: 2048n, advisory: true },
@@ -992,6 +1036,7 @@ describe('readVaultStorage', () => {
         byoKind: 'psa',
         byoCredentialStored: true,
         keepLatestVersions: 5,
+        binRetentionDays: 30,
         origin: 'stale',
       },
       quota: { usedBytes: 512, limitBytes: 2048, advisory: true },
@@ -1011,6 +1056,7 @@ describe('readVaultStorage', () => {
         byoKind: undefined,
         byoCredentialStored: false,
         keepLatestVersions: undefined,
+        binRetentionDays: 0,
         origin: fakeWasmEnums.SettingsOrigin.Defaults,
       },
       quota: undefined,

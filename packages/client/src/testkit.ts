@@ -131,6 +131,7 @@ export function emptyVaultStorage(): VaultStorageDescriptor {
       byoKind: null,
       byoCredentialStored: false,
       keepLatestVersions: null,
+      binRetentionDays: 30,
       origin: 'resolved',
     },
     quota: { usedBytes: 0, limitBytes: 0, advisory: false },

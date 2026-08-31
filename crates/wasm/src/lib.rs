@@ -31,6 +31,7 @@
 use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind};
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::{UnixMillis, check_bearer};
+use cipherbox_engine::settings::{DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS};
 use cipherbox_engine::{
     AcceptOutcome, Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy,
 };
@@ -302,11 +303,14 @@ impl VaultSettings {
     /// runs no provider of their own; `keepLatestVersions` is `undefined` to
     /// keep every version, and `0` is refused rather than read as "keep none",
     /// which would retire the live version of every file.
+    /// `binRetentionDays` is how long a soft-deleted node stays in the bin —
+    /// `undefined` takes the documented default, and `0` keeps the hard delete.
     #[wasm_bindgen(constructor)]
     pub fn new(
         pin_mode: PinMode,
         byo: Option<ByoIpfsConfig>,
         keep_latest_versions: Option<u32>,
+        bin_retention_days: Option<u32>,
     ) -> Result<VaultSettings, JsError> {
         let retention = match keep_latest_versions {
             None => RetentionPolicy::KeepAll,
@@ -315,11 +319,18 @@ impl VaultSettings {
                     .ok_or_else(|| JsError::new("keepLatestVersions must be > 0"))?,
             ),
         };
+        let bin_retention_days = bin_retention_days.unwrap_or(DEFAULT_BIN_RETENTION_DAYS);
+        if bin_retention_days > MAX_BIN_RETENTION_DAYS {
+            return Err(JsError::new(&format!(
+                "binRetentionDays must be <= {MAX_BIN_RETENTION_DAYS}"
+            )));
+        }
         Ok(Self {
             inner: cipherbox_engine::VaultSettings {
                 pin_mode: pin_mode.into(),
                 byo: byo.map(|config| config.inner),
                 retention,
+                bin_retention_days,
             },
         })
     }
@@ -1187,6 +1198,12 @@ impl VaultSettingsSummary {
             RetentionPolicy::KeepAll => None,
             RetentionPolicy::KeepLatest(n) => Some(u32::try_from(n.get()).unwrap_or(u32::MAX)),
         }
+    }
+
+    /// How long a soft-deleted node stays in the bin. `0` keeps the hard delete.
+    #[wasm_bindgen(getter, js_name = binRetentionDays)]
+    pub fn bin_retention_days(&self) -> u32 {
+        self.inner.bin_retention_days
     }
 
     /// Whose choice this summary reports.

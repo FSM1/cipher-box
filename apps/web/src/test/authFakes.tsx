@@ -67,6 +67,7 @@ export const FAKE_VAULT_STORAGE: VaultStorageDescriptor = {
     byoKind: null,
     byoCredentialStored: false,
     keepLatestVersions: null,
+    binRetentionDays: 30,
     origin: 'resolved',
   },
   quota: { usedBytes: 1024, limitBytes: 4096, advisory: false },

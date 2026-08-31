@@ -21,6 +21,7 @@ function summary(
     byoKind: null,
     byoCredentialStored: false,
     keepLatestVersions: null,
+    binRetentionDays: 30,
     origin: 'resolved',
     ...overrides,
   };

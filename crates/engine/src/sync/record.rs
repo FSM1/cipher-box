@@ -323,7 +323,7 @@ mod tests {
             &[32; 32],
             cipherbox_core::seal::op_record::OP_RECORD_HPKE_INFO,
             &cipherbox_core::seal::op_record::op_record_aad(&header),
-            &Op::delete(NodeId([9; 16]), 1, UnixMillis(1), 1).encode_body(),
+            &Op::delete(NodeId([9; 16]), 1, UnixMillis(1), 1, false).encode_body(),
         );
         let mut map = codec::Map::new();
         map.insert("ciphertext", codec::Value::Bytes(forged.ciphertext));

@@ -27,6 +27,9 @@ import { isBuffer } from '../buffers.js';
  */
 export const MAX_FRAGMENT_CHARS = 4096;
 
+/** The longest bin retention the settings record admits: mirrors the engine bar. */
+export const MAX_BIN_RETENTION_DAYS = 3650;
+
 /** Grant permission level (mirrors the facade `Permission`). */
 export type Permission = 'read' | 'write';
 
@@ -242,6 +245,11 @@ export interface VaultSettingsDescriptor {
   byo: ByoIpfsConfigDescriptor | null;
   /** Newest-n retention; `null` keeps every version within quota. */
   keepLatestVersions: number | null;
+  /**
+   * Days a soft-deleted node stays in the bin; `0` keeps the hard delete.
+   * Absent takes the engine's documented default.
+   */
+  binRetentionDays?: number | null;
 }
 
 /** Whose choice a settings summary reports (mirrors the facade `SettingsOrigin`). */
@@ -260,6 +268,8 @@ export interface VaultSettingsSummaryDescriptor {
   byoCredentialStored: boolean;
   /** `null` keeps every version within quota. */
   keepLatestVersions: number | null;
+  /** Days a soft-deleted node stays in the bin; `0` keeps the hard delete. */
+  binRetentionDays: number;
   origin: SettingsOrigin;
 }
 

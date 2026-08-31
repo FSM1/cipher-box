@@ -101,7 +101,12 @@ fn race_1_delete_vs_concurrent_edit_edit_wins() {
     base.node_mut(id(1)).unwrap().record_sequence = 6;
     let local = base.clone();
 
-    let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
+    let res = rebase_one(
+        &mut base,
+        &local,
+        &Op::delete(id(1), 1, AT, 3, false),
+        SCOPE_ROOTS,
+    );
     assert_eq!(res, OpResolution::dropped(DropReason::TargetAdvanced));
     assert!(
         base.contains(id(1)),
@@ -859,7 +864,7 @@ fn create_delete_rename_and_content_edits_rotate_nothing() {
                 AT,
             ),
         ),
-        ("delete", Op::delete(id(12), 1, AT, 1)),
+        ("delete", Op::delete(id(12), 1, AT, 1, false)),
         ("rename", Op::rename(id(12), "renamed", 1, AT)),
         (
             "update-content",

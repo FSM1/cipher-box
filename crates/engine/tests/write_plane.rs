@@ -67,11 +67,12 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
-    DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError,
-    Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
-    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal,
-    PrevEpochSeed, RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
-    WriteHistory, WriteTarget, reseal_scope_root, stage_op,
+    DEFAULT_BIN_RETENTION_DAYS, DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError,
+    Entropy, EntropyError, Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES,
+    MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpKind, OpPhase, OverBudgetCause,
+    Placement, PlacementRefusal, PrevEpochSeed, RecordReader, RecordSeal, ResealSeeds,
+    ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget, decode_queue,
+    reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -3386,6 +3387,97 @@ fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
     assert_eq!(names, ["photos"], "device B resolves the delete");
 }
 
+/// Seed a zero bin retention, so this session's deletes take the hard path —
+/// unlink, retire, reclaim — that the narratives below assert
+/// (CONTEXT.md "Soft delete").
+fn seed_hard_delete(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) {
+    seed_vault_settings(
+        world,
+        device,
+        blocks,
+        &VaultSettings {
+            bin_retention_days: 0,
+            ..VaultSettings::default()
+        },
+    );
+}
+
+/// Whether the delete queued on `device` is soft, read off the durable op
+/// journal under the owner's own `enc-subkey` — the way a replay reads it.
+fn journaled_delete_to_bin(device: &FakeDevice) -> bool {
+    let enc_secret = kdf::enc_subkey(&SECRET);
+    let raw = block_on(device.staging_store.queued_ops()).expect("the journal reads");
+    decode_queue(&RecordReader::new(&enc_secret), &raw)
+        .mine
+        .iter()
+        .find_map(|(_, op)| match &op.kind {
+            OpKind::Delete { to_bin, .. } => Some(*to_bin),
+            _ => None,
+        })
+        .expect("the journal holds a delete")
+}
+
+/// A zero retention is the owner asking for the delete to destroy the node, so
+/// the op must carry the hard delete rather than a bin entry that never expires.
+#[test]
+fn a_delete_under_a_zero_bin_retention_is_journaled_hard() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_vault_settings(
+        &world,
+        &alice,
+        &blocks,
+        &VaultSettings {
+            bin_retention_days: 0,
+            ..VaultSettings::default()
+        },
+    );
+
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    create(&mut engine, "doomed");
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "doomed");
+    block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
+
+    assert!(
+        !journaled_delete_to_bin(&alice),
+        "a zero retention journals the hard delete",
+    );
+}
+
+/// The retention the session loaded decides the branch, and it is journaled on
+/// the op: a settings save between staging and publish must not change what an
+/// already-queued delete does.
+#[test]
+fn a_delete_under_a_positive_bin_retention_is_journaled_soft() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_vault_settings(
+        &world,
+        &alice,
+        &blocks,
+        &VaultSettings {
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+            ..VaultSettings::default()
+        },
+    );
+
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    create(&mut engine, "doomed");
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "doomed");
+    block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
+
+    assert!(
+        journaled_delete_to_bin(&alice),
+        "a retention window journals the soft delete",
+    );
+}
+
 /// A delete is also the reclamation: the deleted record leaves the republisher
 /// inventory and its pinned bytes leave the account, or a vault pays quota for
 /// content nothing can reach and a revoked grantee holding the old seed keeps
@@ -3397,6 +3489,7 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let plaintext: Vec<u8> = (0..200u8).collect();
     write_file(
@@ -3445,6 +3538,7 @@ fn a_folder_delete_quarantines_a_descendant_for_a_converged_tick() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -3671,6 +3765,7 @@ fn a_descendant_no_pass_can_establish_drops_out_of_the_quarantine() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -3750,6 +3845,7 @@ fn a_delete_never_reclaims_a_descendant_a_surviving_parent_still_names() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -3891,6 +3987,7 @@ fn a_delete_whose_confirm_never_landed_settles_from_the_journal_after_a_restart(
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 42);
     block_on(engine.start(secret())).unwrap();
@@ -3969,6 +4066,7 @@ fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 42);
     block_on(engine.start(secret())).unwrap();
@@ -4035,6 +4133,7 @@ fn a_delete_refuses_to_unlink_above_a_folder_it_cannot_enumerate() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -7984,6 +8083,27 @@ fn member_node(kind: ByoKind) -> ByoIpfsConfig {
 /// it decides placement from the member's own choice rather than the first-run
 /// defaults.
 fn seed_settings(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, mode: PinMode) {
+    seed_vault_settings(
+        world,
+        device,
+        blocks,
+        &VaultSettings {
+            pin_mode: mode,
+            byo: Some(member_node(ByoKind::Kubo)),
+            retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+        },
+    );
+}
+
+/// [`seed_settings`] over a whole settings shape, for the fields a cold start
+/// carries into the session beyond the placement decision.
+fn seed_vault_settings(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    settings: &VaultSettings,
+) {
     serve_http(device, blocks, 8);
     let api = ApiClient::new(
         device.http.clone(),
@@ -8000,11 +8120,7 @@ fn seed_settings(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, mode: 
         &mut SeededEntropy::new(9),
         &OrphanHeads::default(),
         &SECRET,
-        &VaultSettings {
-            pin_mode: mode,
-            byo: Some(member_node(ByoKind::Kubo)),
-            retention: RetentionPolicy::KeepAll,
-        },
+        settings,
     ))
     .expect("the settings record publishes");
 }
@@ -8829,6 +8945,10 @@ fn seed_settings_naming_no_provider(world: &FakeWorld, blocks: &Blocks) {
     use cipherbox_core::codec::{Map, Value, encode};
 
     let mut m = Map::new();
+    m.insert(
+        "binRetentionDays",
+        Value::Unsigned(u64::from(DEFAULT_BIN_RETENTION_DAYS)),
+    );
     m.insert("byo", Value::Null);
     m.insert("keepLatest", Value::Null);
     m.insert("pinMode", Value::Text("external".to_owned()));
@@ -9500,6 +9620,7 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
             pin_mode: PinMode::External,
             byo: Some(member_node(ByoKind::Kubo)),
             retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         },
     ))
     .expect_err("the save does not reach the network");

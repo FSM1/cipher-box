@@ -10,6 +10,7 @@
 
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
+use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_wasm::{
     ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase,
     PendingClass, Permission, PinMode, SnapshotView, Staleness, VaultSettings,
@@ -430,13 +431,35 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
 #[wasm_bindgen_test]
 fn a_zero_retention_cap_is_refused_rather_than_defaulted() {
     assert!(
-        VaultSettings::new(PinMode::Hosted, None, Some(0)).is_err(),
+        VaultSettings::new(PinMode::Hosted, None, Some(0), None).is_err(),
         "0 must not be read as a retention policy"
     );
-    assert!(VaultSettings::new(PinMode::Hosted, None, Some(1)).is_ok());
+    assert!(VaultSettings::new(PinMode::Hosted, None, Some(1), None).is_ok());
     assert!(
-        VaultSettings::new(PinMode::Hosted, None, None).is_ok(),
+        VaultSettings::new(PinMode::Hosted, None, None, None).is_ok(),
         "no cap keeps every version"
+    );
+}
+
+/// The boundary refuses a bin retention the engine would refuse to publish, so
+/// the host learns which field it must change rather than a save that cannot
+/// land.
+#[wasm_bindgen_test]
+fn a_bin_retention_past_the_bar_is_refused_at_the_boundary() {
+    assert!(
+        VaultSettings::new(
+            PinMode::Hosted,
+            None,
+            None,
+            Some(MAX_BIN_RETENTION_DAYS + 1)
+        )
+        .is_err(),
+        "a retention past the bar must not build"
+    );
+    assert!(VaultSettings::new(PinMode::Hosted, None, None, Some(MAX_BIN_RETENTION_DAYS)).is_ok());
+    assert!(
+        VaultSettings::new(PinMode::Hosted, None, None, Some(0)).is_ok(),
+        "0 keeps the hard delete"
     );
 }
 
@@ -454,6 +477,7 @@ fn a_vault_settings_command_carries_the_stable_builder_name() {
             .expect("UTF-8 token bytes build"),
         ),
         Some(3),
+        Some(30),
     )
     .expect("a positive cap builds");
 

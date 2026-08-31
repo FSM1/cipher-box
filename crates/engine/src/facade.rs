@@ -38,6 +38,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner};
+use crate::bin_index::BinIndexKeys;
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
@@ -95,9 +96,10 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
-    PlacementRefusal, PlacementSource, SessionPlacement, SettingsOrigin, SettingsPublishError,
-    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, load_settings_at,
-    placement_of, publish_settings, redecide_placement, settings_name, summarize_settings,
+    DEFAULT_BIN_RETENTION_DAYS, PlacementRefusal, PlacementSource, SessionPlacement,
+    SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary, decide_placement,
+    load_settings, load_settings_at, placement_of, publish_settings, redecide_placement,
+    settings_name, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -1553,6 +1555,9 @@ impl EngineError {
         match err {
             SettingsPublishError::Placement(refusal) => EngineError::NoPlacement { refusal },
             SettingsPublishError::Byo(e) => EngineError::MalformedInput { check: e.check() },
+            SettingsPublishError::BinRetention => EngineError::MalformedInput {
+                check: "bin-retention-too-long",
+            },
             SettingsPublishError::Codec(e) => EngineError::MalformedInput { check: e.check() },
             // The sealed record does not reopen under the key its own reader
             // re-derives, or is past the block ceiling: an encoder verdict on
@@ -2854,20 +2859,20 @@ impl From<Refused> for EngineError {
 /// Map a content-sealing failure onto the facade error: entropy is fail-closed
 /// availability, and an assembly refusal is a version this build's own reader
 /// would reject.
-/// The settings record this session published, unless the record plane now
-/// serves a different one.
+/// The account-level record in `slot` — the vault settings or the bin index —
+/// unless the record plane now serves a different one.
 ///
 /// The resolve tick replaces each held record in place, so nothing in that map
-/// can go stale under the renewal; the settings slot has no such refresher. A
-/// second device that saved after this session did leaves this record
+/// can go stale under the renewal; these slots have no such refresher. A
+/// second device that published after this session did leaves this record
 /// superseded, and a sub-EOL renewal would re-sign it at `floor + 1` with a
 /// fresh validity — which wins record selection and rolls the account back to
-/// the body this session published, credentials and placement included.
+/// the body this session published.
 ///
 /// Only a positively observed *different* record supersedes: a plane this pass
 /// cannot read is availability, and the renewal itself refuses to renew what it
 /// cannot resolve.
-async fn live_settings_record<R: RecordTransport>(
+async fn live_account_record<R: RecordTransport>(
     transport: &R,
     slot: &RefCell<Option<HeldRecord>>,
 ) -> Option<HeldRecord> {
@@ -2903,7 +2908,7 @@ async fn live_settings_record<R: RecordTransport>(
 /// higher sequence and roll the scope back to a root name that no longer holds.
 ///
 /// Only a positively observed *different* record supersedes, on the same terms
-/// as [`live_settings_record`]: a plane this pass cannot read is availability.
+/// as [`live_account_record`]: a plane this pass cannot read is availability.
 async fn drop_superseded_pointers<R: RecordTransport>(transport: &R, held: &RefCell<HeldRecords>) {
     let pointers: Vec<(HeldKey, HeldRecord)> = held
         .borrow()
@@ -3146,6 +3151,10 @@ pub struct Engine<T: SeamTypes> {
     /// id and the settings record has none, so a synthetic id would put it in a
     /// slot a resolved record could claim and evict its renewal.
     settings_record: Rc<RefCell<Option<HeldRecord>>>,
+    /// The bin index record this session published, in its own slot for the
+    /// same reason the settings record has one, and shared with the drain,
+    /// which is what writes a bin entry.
+    bin_index_record: Rc<RefCell<Option<HeldRecord>>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](Self::snapshot)
     /// classifies at read time off the same cell.
@@ -3259,6 +3268,11 @@ pub struct Engine<T: SeamTypes> {
     /// resident for up to that wake past the engine (security rules 1/7); every
     /// shared cell below carrying key material is cleared the same way.
     tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
+    /// The bin index's own signer and seal key, derived at
+    /// [`start`](Self::start) and shared with the drain on the same terms as
+    /// [`tick_enc_subkey`](Self::tick_enc_subkey): a spawned task holds the two
+    /// edges the bin index needs, never the login secret they came from.
+    tick_bin_keys: Rc<RefCell<Option<Rc<BinIndexKeys>>>>,
     /// Built at [`start`](Self::start), where the seam bounds its task needs
     /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
@@ -3340,6 +3354,7 @@ impl<T: SeamTypes> Engine<T> {
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 settings_record: Rc::new(RefCell::new(None)),
+                bin_index_record: Rc::new(RefCell::new(None)),
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3363,6 +3378,7 @@ impl<T: SeamTypes> Engine<T> {
                 manual_refresh: ManualRefresh::default(),
                 session: None,
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
+                tick_bin_keys: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
                 sweep_tasks: RefCell::new(None),
                 sweep_keys: Rc::new(RefCell::new(None)),
@@ -3625,6 +3641,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
             *enc_subkey = None;
         }
+        if let Ok(mut bin_keys) = self.tick_bin_keys.try_borrow_mut() {
+            *bin_keys = None;
+        }
         if let Ok(mut spawner) = self.tick_loop_spawner.try_borrow_mut() {
             *spawner = None;
         }
@@ -3645,6 +3664,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut settings) = self.settings_record.try_borrow_mut() {
             *settings = None;
+        }
+        if let Ok(mut bin_index) = self.bin_index_record.try_borrow_mut() {
+            *bin_index = None;
         }
         // Each open stream pins a version's content key; releasing the table's
         // `Rc`s here is what makes this the terminal owner (security rule 7).
@@ -4067,6 +4089,7 @@ where {
         let profile = self.profile;
         let held = self.held_records.clone();
         let settings_record = self.settings_record.clone();
+        let bin_index_record = self.bin_index_record.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
         let gateway = self.gateway.clone();
@@ -4079,7 +4102,8 @@ where {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                let settings = live_settings_record(&transport, &settings_record).await;
+                let settings = live_account_record(&transport, &settings_record).await;
+                let bin_index = live_account_record(&transport, &bin_index_record).await;
                 drop_superseded_pointers(&transport, &held).await;
                 // The flip is the only other producer of a held scope pointer,
                 // so a session that runs no rotation must re-enrol what it owns
@@ -4104,8 +4128,13 @@ where {
                     })
                     .await;
                 }
-                let records: Vec<HeldRecord> =
-                    held.borrow().values().cloned().chain(settings).collect();
+                let records: Vec<HeldRecord> = held
+                    .borrow()
+                    .values()
+                    .cloned()
+                    .chain(settings)
+                    .chain(bin_index)
+                    .collect();
                 keyless_re_put(&transport, &records).await;
                 // Surface every renewal that did not land (LostRace/PublishError)
                 // as an Event — never a silent failure (blueprint/engine.md).
@@ -4145,6 +4174,8 @@ where {
     {
         let session = self.session.as_ref()?;
         let tick_enc_subkey = self.tick_enc_subkey.clone();
+        let tick_bin_keys = self.tick_bin_keys.clone();
+        let bin_index_record = self.bin_index_record.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
         let entropy = self.entropy.clone();
@@ -4215,6 +4246,10 @@ where {
                     // emptied the cell if it is already gone.
                     let enc_subkey = tick_enc_subkey.borrow().clone();
                     let Some(enc_subkey) = enc_subkey else {
+                        return TickControl::Stop;
+                    };
+                    let bin_keys = tick_bin_keys.borrow().clone();
+                    let Some(bin_keys) = bin_keys else {
                         return TickControl::Stop;
                     };
                     let now = scheduler.now();
@@ -4488,6 +4523,8 @@ where {
                             orphan_heads: &orphan_heads,
                             cancels: &cancels,
                             events: &events,
+                            bin_keys: &bin_keys,
+                            bin_index_record: &bin_index_record,
                         }
                         .run(&DrainScope {
                             root: NodeId(root_id),
@@ -4587,9 +4624,12 @@ where {
             return;
         };
         // Least privilege, drawn no earlier than the loop that reads it: the
-        // pass needs the enc subkey and the (public) owner verifier, never the
-        // login secret or the pointer seeds beside them.
+        // pass needs the enc subkey, the bin index's own two edges, and the
+        // (public) owner verifier, never the login secret or the pointer seeds
+        // beside them.
         *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
+        *self.tick_bin_keys.borrow_mut() =
+            Some(Rc::new(BinIndexKeys::derive(session.login_secret())));
         spawn();
     }
 
@@ -4642,7 +4682,8 @@ where {
                 // Both anchors snapshot the target's own sequence for the
                 // conditional-delete rebase rule.
                 let seq = self.base_sequence_for(node).await?;
-                self.stage_and_notify(&Op::delete(node, seq, authored_at, seq))
+                let to_bin = self.bin_retention_days() > 0;
+                self.stage_and_notify(&Op::delete(node, seq, authored_at, seq, to_bin))
                     .await
             }
             Command::Rename { node, new_name } => {
@@ -7976,6 +8017,22 @@ where {
         Ok(rendered.record_sequence(node).unwrap_or(1))
     }
 
+    /// The bin retention this session loaded, which decides whether a delete is
+    /// soft (ADR 0010 item 2).
+    ///
+    /// A session with no settings summary yet takes the documented default, and
+    /// so does one whose load degraded. The two errors are not equal: a soft
+    /// delete reclaims nothing and stays reversible, while a hard delete the
+    /// owner did not ask for destroys the node.
+    fn bin_retention_days(&self) -> u32 {
+        self.settings_summary
+            .borrow()
+            .as_ref()
+            .map_or(DEFAULT_BIN_RETENTION_DAYS, |summary| {
+                summary.bin_retention_days
+            })
+    }
+
     /// Mint a fresh random 16-byte node id from the injected entropy seam
     /// (id16, non-secret; blueprint/core.md). Fails closed on entropy failure —
     /// never a predictable id.
@@ -8459,7 +8516,7 @@ mod tests {
             slot: Rc::clone(&slot),
             saved,
         };
-        assert!(block_on(live_settings_record(&transport, &slot)).is_none());
+        assert!(block_on(live_account_record(&transport, &slot)).is_none());
         slot.borrow().clone()
     }
 
@@ -9189,6 +9246,7 @@ mod tests {
                 access_token: Some(Zeroizing::new(BEARER.to_owned())),
             }),
             retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         };
         let (key, block) = cached_settings_block(&[7u8; 32], &settings, &mut SeededEntropy::new(9));
         block_on(device.snapshot_cache.put(&key, &block)).expect("seed last-known-good");
@@ -9210,6 +9268,7 @@ mod tests {
                 byo_kind: Some(ByoKind::Kubo),
                 byo_credential_stored: true,
                 retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
+                bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
                 origin: SettingsOrigin::Stale,
             },
         );

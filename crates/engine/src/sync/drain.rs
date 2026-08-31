@@ -31,7 +31,8 @@ use cipherbox_core::content::{
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildRef, NodeKind, PreservedFields, ReadBody, Version, open_content_key, open_read_body,
+    BinEntry, ChildRef, NodeKind, PreservedFields, ReadBody, Version, open_content_key,
+    open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -39,12 +40,13 @@ use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
+use crate::bin_index::{BinIndexKeys, BinIndexPublishError, load_bin_index, publish_bin_index};
 use crate::content::{
     ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError, RootPlacement,
     SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
     read_block, validate_byo_config, version_cids,
 };
-use crate::entropy::{Entropy, fresh_nonce};
+use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase, emit_trust_violation};
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
@@ -70,7 +72,9 @@ use crate::seams::{
     RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore,
 };
 use crate::session::SessionIdentity;
-use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
+use crate::settings::{
+    DefaultsReason, Destinations, Placement, PlacementDecision, SettingsRefusal,
+};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
@@ -141,6 +145,51 @@ pub fn owner_scoped_key(prefix: &[u8], enc_secret: &X25519Secret) -> Vec<u8> {
 #[must_use]
 pub fn owner_tag(enc_secret: &X25519Secret) -> [u8; 32] {
     RecordReader::new(enc_secret).owner_tag()
+}
+
+/// Whether `child` publishes under the name this scope's write seed derives.
+///
+/// A child that does not is a scope root. Its subtree is sealed under a
+/// grantee's own seed, and cutting that grantee needs a re-key the bin does not
+/// carry, so a delete of it stays hard (ADR 0010 item 3).
+fn names_this_scope(scope: &DrainScope<'_>, node: NodeId, child: &ChildRef) -> bool {
+    derive_write_name(scope.write_scope_seed, &node.0)
+        .as_str()
+        .as_bytes()
+        == child.ipns_name
+}
+
+/// A bin index load that did not establish the current index.
+///
+/// A plane this pass could not read is availability and waits uncharged. A
+/// refusal of bytes the plane actually served is charged, so a jammed bin index
+/// cannot hold the queue head for good.
+fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
+    match reason {
+        DefaultsReason::RolledBack { .. }
+        | DefaultsReason::RevisionRolledBack { .. }
+        | DefaultsReason::Unreadable => Halt::Attempt,
+        DefaultsReason::UnprovenFirstRun
+        | DefaultsReason::Suppressed
+        | DefaultsReason::Expired
+        | DefaultsReason::TimedOut
+        | DefaultsReason::FloorUnreadable => Halt::Unclassified,
+    }
+}
+
+/// A bin index publish that did not land, on the same split as
+/// [`halt_for_bin_load`]: a seam or plane failure retries uncharged, and a body
+/// or a confirm this build authored itself is charged.
+fn halt_for_bin_publish(error: &BinIndexPublishError) -> Halt {
+    match error {
+        BinIndexPublishError::Codec(_)
+        | BinIndexPublishError::Preflight(_)
+        | BinIndexPublishError::Unconfirmed
+        | BinIndexPublishError::Revision => Halt::Attempt,
+        BinIndexPublishError::Entropy(_)
+        | BinIndexPublishError::Publish(_)
+        | BinIndexPublishError::Floor(_) => Halt::Unclassified,
+    }
 }
 
 /// What one drain pass did.
@@ -451,6 +500,12 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) cancels: &'a RefCell<UploadCancels>,
     /// The facade's outbound event stream, for upload progress.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
+    /// The bin index's own signer and seal key. The pass holds these two edges
+    /// rather than the login secret they derive from.
+    pub(crate) bin_keys: &'a BinIndexKeys,
+    /// The bin index record this session published, shared with the facade's
+    /// renewal slot.
+    pub(crate) bin_index_record: &'a RefCell<Option<HeldRecord>>,
 }
 
 /// One folder's current published state, carried across the ops of one pass so
@@ -1277,7 +1332,9 @@ where
                 self.publish_ref_move(scope, pass, applied, rebased, plan)
                     .await
             }
-            OpKind::Delete { .. } => self.publish_delete(scope, pass, applied).await,
+            OpKind::Delete { to_bin, .. } => {
+                self.publish_delete(scope, pass, applied, *to_bin).await
+            }
             OpKind::Relink {
                 from_parent,
                 new_parent,
@@ -1467,20 +1524,44 @@ where
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         applied: &AppliedOp,
+        to_bin: bool,
     ) -> Result<(), Halt> {
         let target = applied.op.target;
         let parent = self.published_parent(target)?;
         self.ensure_folder(scope, pass, parent).await?;
         // Removing an absent ref is the op already satisfied, never a publish.
-        let Some(kind) = pass
+        let Some(child) = pass
             .folder(parent)?
             .children
             .iter()
             .find(|child| child.id == target.0)
-            .map(|child| child.kind)
+            .cloned()
         else {
             return Ok(());
         };
+        let kind = child.kind;
+
+        if to_bin && names_this_scope(scope, target, &child) {
+            // The entry lands before the unlink: a crash between the two leaves
+            // a node that is both binned and still linked, which the retry
+            // settles. The reverse order leaves one that no folder names and no
+            // bin entry finds.
+            self.record_bin_entry(scope, parent, &child, applied.op.authored_at.0)
+                .await?;
+            pass.folder_mut(parent)?
+                .children
+                .retain(|entry| entry.id != target.0);
+            self.publish_folder(
+                scope,
+                pass,
+                parent,
+                applied.op.authored_at.0,
+                Some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+            return Ok(());
+        }
 
         let doomed = self
             .enumerate_doomed(scope, pass.epoch, parent, target, kind)
@@ -1716,6 +1797,66 @@ where
             });
         }
         Ok(doomed)
+    }
+
+    /// Add one soft-deleted node to the owner's bin index.
+    ///
+    /// The index is rewritten whole, so only a load that established the
+    /// current index may be written over (blueprint/engine.md "Bin index
+    /// record"); every other outcome holds the op for a later tick.
+    async fn record_bin_entry(
+        &self,
+        scope: &DrainScope<'_>,
+        parent: NodeId,
+        child: &ChildRef,
+        deleted_at: u64,
+    ) -> Result<(), Halt> {
+        let mut index = load_bin_index(
+            self.transport,
+            self.gateway,
+            self.http,
+            self.floors,
+            self.snapshot_cache,
+            self.scheduler,
+            self.profile,
+            self.bin_keys,
+        )
+        .await
+        .writable()
+        .map_err(halt_for_bin_load)?;
+        // A duplicate node id is a hard reject at encode, so a retry whose
+        // entry already landed publishes nothing.
+        if index.entries.iter().any(|entry| entry.node_id == child.id) {
+            return Ok(());
+        }
+        index.entries.push(BinEntry::new(
+            child.id,
+            child.ipns_name.clone(),
+            child.kind,
+            parent.0,
+            child.name.clone(),
+            deleted_at,
+            scope.root.0,
+            // A scope that needs the re-key takes the hard path, so this entry
+            // holds no key of its own.
+            None,
+        ));
+        let held = publish_bin_index(
+            self.transport,
+            self.api,
+            self.floors,
+            self.snapshot_cache,
+            self.scheduler,
+            self.profile,
+            &mut SharedEntropy(self.entropy),
+            self.orphan_heads,
+            self.bin_keys,
+            &index,
+        )
+        .await
+        .map_err(|error| halt_for_bin_publish(&error))?;
+        *self.bin_index_record.borrow_mut() = Some(held);
+        Ok(())
     }
 
     /// The owner-authored doomed manifest this delete just earned: the target's
@@ -3835,7 +3976,7 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{DefaultsReason, PlacementRefusal};
+    use crate::settings::PlacementRefusal;
 
     fn attempts(pairs: &[(u64, u32)]) -> Attempts {
         let mut attempts = Attempts::default();
