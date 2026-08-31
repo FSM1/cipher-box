@@ -1005,6 +1005,81 @@ fn a_sequence_replay_for_an_unheld_scope_stays_rejected() {
     );
 }
 
+/// The ack-only short-circuit needs durable proof of prior adoption **under
+/// this sharer**. A bookmark for the same scope id granted by somebody else is
+/// no such proof, so the strict-sequence reject propagates un-acked instead of
+/// acking a share this contact never got past the gate.
+#[test]
+fn a_sequence_replay_is_not_reacked_off_another_sharers_bookmark() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let contact = import_contact(&fx.owner_contact).unwrap();
+
+    // A second sharer grants the recipient a scope carrying the SAME scope id.
+    // Accepting it bookmarks that id under the other identity.
+    let other = GrantFixture::under_owner(1, 1);
+    let other_item = deliver_pointer(
+        &other,
+        &recipient,
+        &poster,
+        &other.owner_identity,
+        &other.share_pointer(),
+    );
+    let mut received = ReceivedSharesList::new();
+    block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &other_item,
+        &import_contact(&other.owner_contact).unwrap(),
+        &other.recipient_enc,
+        &other.candidate(),
+        &other.grant_blobs(),
+        &mut received,
+    ))
+    .expect("the other sharer's grant of the same scope id is accepted on its own terms");
+
+    block_on(
+        recipient
+            .floor_store
+            .raise_sequence_floor(fx.name.as_str().as_bytes(), 1),
+    )
+    .unwrap();
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+
+    let rejection = match &err {
+        AcceptError::Gate(e) => e.rejection().expect("a fail-closed gate rejection"),
+        other => panic!("expected a gate rejection, got {other}"),
+    };
+    assert_eq!(rejection.check(), "sequence-not-newer");
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        1,
+        "un-acked: another sharer's bookmark proves nothing about this one"
+    );
+}
+
 /// The permanent third-party lockout the sharer-scoped floor exists to stop: a
 /// contact grants a scope whose `scopeId` collides with one the recipient holds
 /// from somebody else, at a far higher epoch. The floors are filed per granting

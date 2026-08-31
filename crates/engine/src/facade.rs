@@ -1131,9 +1131,11 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
-    /// A fail-closed trust violation on the read path — a rejected child
-    /// record, or a CID/manifest/unseal disagreement. Never retried, never
-    /// rendered (rule 6).
+    /// A fail-closed verdict no retry can clear: a rejected child record, a
+    /// CID/manifest/unseal disagreement, or a local rotation refusal on this
+    /// vault's own material ([`from_rotation`](EngineError::from_rotation)).
+    /// Never retried, never rendered (rule 6), and never an accusation against
+    /// a peer — a host cannot tell the two sources apart.
     TrustViolation {
         /// The verdict classification; never carries key material.
         message: String,
@@ -1235,8 +1237,11 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
-    /// A host seam failed (durable op-queue I/O). Availability, never a trust
-    /// decision — trust classification happens below the facade.
+    /// Retry later: a host seam failed (durable op-queue I/O), or a rotation
+    /// stalled on something a later pass repairs
+    /// ([`from_rotation`](EngineError::from_rotation), the cross-parent
+    /// child-label conflict included). Never a trust decision — trust
+    /// classification happens below the facade.
     Seam {
         /// Diagnostic message; never carries key material.
         message: String,
