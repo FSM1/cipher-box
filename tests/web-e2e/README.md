@@ -22,7 +22,20 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - a session end — a sign-out or a forget-this-device — reaches every tab of the
   origin, and no promoted sibling re-exports a secret to cold-start a
   replacement engine with
+- a folder's share dialog reads the engine's grant list, and the invite link it
+  mints names the claim route, is shown once, and leaves a scope behind that
+  the engine then refuses a second link on
+- the contact import refuses what it cannot read, and leaving the step retires
+  the refusal
+- an invite link minted by one vault is claimed by a second account in its own
+  browser context, and the minter converts that claim into a read grant
+- a saved settings record reads back off the vault field by field, with the
+  provider credential offered for clearing rather than shown
 - the shipping bundle exposes no introspection hook
+
+The slices split on the `@full` tag. The smoke slice keeps login, CRUD, the
+session-end pair and one share-dialog spec — the bounded-minutes budget the PR
+gate holds. Everything above that lands `@full`, in the main gate's whole suite.
 
 ## How the suite logs in
 

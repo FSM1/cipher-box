@@ -43,12 +43,32 @@ export class SettingsPage {
     return this.page.getByTestId('settings-error');
   }
 
-  async setProvider(endpoint: string): Promise<void> {
-    await this.page.getByLabel('your ipfs provider').fill(endpoint);
+  get provider(): Locator {
+    return this.page.getByLabel('your ipfs provider');
   }
 
-  async setPinMode(mode: string): Promise<void> {
-    await this.page.getByLabel('where versions are pinned').selectOption(mode);
+  get pinMode(): Locator {
+    return this.page.getByLabel('where versions are pinned');
+  }
+
+  get providerKind(): Locator {
+    return this.page.getByLabel('provider api');
+  }
+
+  get accessToken(): Locator {
+    return this.page.getByLabel('provider access token');
+  }
+
+  get retention(): Locator {
+    return this.page.getByLabel('keep newest versions');
+  }
+
+  /**
+   * Offered only once the read says a provider credential is stored, so its
+   * presence is the engine reporting a bearer it will never read back out.
+   */
+  get clearCredential(): Locator {
+    return this.page.getByTestId('settings-clear-credential');
   }
 
   /** Raises the forget dialog, acknowledges what it takes, and confirms. */

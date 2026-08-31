@@ -25,16 +25,37 @@ async function sibling(page: Page, accountId: string): Promise<VaultPage> {
   return vault;
 }
 
-test('@full a byo endpoint round-trips through the settings save', async ({ page }) => {
+test('@full a saved settings record reads back off the vault, without its credential', async ({
+  page,
+}) => {
   await coldStart(page);
   const settings = new SettingsPage(page);
   await settings.open();
 
-  await settings.setPinMode('dual');
-  await settings.setProvider('https://ipfs.example');
+  await settings.pinMode.selectOption('dual');
+  await settings.provider.fill('https://ipfs.example');
+  await settings.providerKind.selectOption('psa');
+  await settings.accessToken.fill('not-a-real-bearer');
+  await settings.retention.fill('3');
   await settings.save();
-
   await expect(settings.savedMark).toBeVisible();
+
+  // Away and back through the sidebar, so the form is filled from a fresh read
+  // of the vault rather than from what was typed at it. Through the sidebar
+  // because a document load would end this suite's in-memory session.
+  await page.getByTestId('nav-item-files').click();
+  await expect(new FilesPage(page).browser).toBeVisible();
+  await settings.open();
+
+  await expect(settings.pinMode).toHaveValue('dual');
+  await expect(settings.provider).toHaveValue('https://ipfs.example');
+  await expect(settings.providerKind).toHaveValue('psa');
+  await expect(settings.retention).toHaveValue('3');
+  // The one field no read carries back: the engine keeps the bearer write-only,
+  // so the round trip proves it is stored by offering to clear it, never by
+  // showing it.
+  await expect(settings.accessToken).toHaveValue('');
+  await expect(settings.clearCredential).toBeVisible();
   await expect(settings.saveError).toHaveCount(0);
 });
 
@@ -46,7 +67,7 @@ test('@full the engine refuses an endpoint it will not talk to, in its own words
   await settings.open();
 
   // Plaintext to a non-loopback host, which `validate_byo_config` refuses.
-  await settings.setProvider('http://ipfs.example');
+  await settings.provider.fill('http://ipfs.example');
   await settings.save();
 
   await expect(settings.saveError).toBeVisible();
