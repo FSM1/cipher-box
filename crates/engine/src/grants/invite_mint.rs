@@ -71,7 +71,10 @@ impl fmt::Debug for PendingInviteLink {
 }
 
 impl PendingInviteLink {
-    /// Seal the bearer capability over the name the scope root answers at.
+    /// Seal the bearer capability over the name the scope root answers at
+    /// **now**: the name wave's own outcome after a cut, and the plan's derived
+    /// name where the mint ran none. A claim compares that name against the
+    /// commitment byte for byte, so any other value mints a link nobody claims.
     pub fn seal(&self, scope_root_name: &IpnsName) -> Result<MintedInviteLink, InviteMintError> {
         InviteFragment {
             invite_secret: self.invitee.secret().clone(),
@@ -115,9 +118,10 @@ pub enum InviteMintError {
     /// the scope-root publish; past it the record is live and
     /// [`CreateGrantError`] states what stayed behind.
     Create(CreateGrantError),
-    /// Sealing the bearer fragment failed. Post-publish: the scope is minted and
-    /// the owner records the row, so the link is live and revocable — but no
-    /// capability is handed out, and nobody can claim it.
+    /// Sealing the bearer fragment failed. [`mint_invite_link`] probes the same
+    /// bound before anything publishes, so this is fail-closed there; a caller
+    /// that seals at a name of its own reaches it past the publish, with a live
+    /// link the owner can revoke and no capability in any hand.
     Fragment(InviteError),
 }
 
@@ -170,6 +174,16 @@ where
     )
     .map_err(InviteMintError::Mint)?;
 
+    let pending = PendingInviteLink {
+        invitee,
+        owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
+            .encode(),
+    };
+    // Every scope root name is one Ed25519 IPNS name, so a probe seal at the
+    // mint's own name settles the bound the post-cut seal will meet. Refused
+    // here, nothing is recorded and nothing publishes.
+    pending.seal(&plan.grantee.ipns_name())?;
+
     // Ahead of the record, so a subtree the gate cannot prove converged costs no
     // durable slot.
     let converged = converge_grant_subtree(resolver, publisher, plan.grantee, plan.parent)
@@ -189,11 +203,7 @@ where
         .await
         .map_err(InviteMintError::Create)?;
 
-    Ok(PendingInviteLink {
-        invitee,
-        owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
-            .encode(),
-    })
+    Ok(pending)
 }
 
 #[cfg(test)]

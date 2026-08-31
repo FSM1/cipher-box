@@ -1917,8 +1917,7 @@ fn bound_scope<'a>(
     commitment_sig: &'a EcdsaSignature,
 ) -> Result<CommittedScope<'a>, EngineError> {
     CommittedScope::bind(
-        &target.scope.scope_id,
-        &current.write_scope_seed,
+        &target.scope,
         &current.commitment,
         commitment_sig,
         &current.grant_ledger,
@@ -5682,11 +5681,14 @@ where {
             .await
             .map_err(|e| target.resolve_error(check, e))?;
 
+        // Bound like every other invite read: a record set is destroyed against
+        // the commitment this scope's own gated reference names, never a pair a
+        // caller assembled.
+        let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
         let dead = partition_scope_links(
             session.enc_subkey(),
             &records.links,
-            &current.commitment,
-            &target.scope.scope_id,
+            &bound_scope(&target, &current, &commitment_sig)?,
         )
         .spent;
         if dead.is_empty() {
@@ -7094,14 +7096,10 @@ where {
         // A link store this could not open is absence, not "no links": the grant
         // half of the read still stands.
         let records = self.invite_store(session).load().await.ok();
-        let split = records.as_ref().map(|records| {
-            partition_scope_links(
-                session.enc_subkey(),
-                &records.links,
-                &current.commitment,
-                &target.scope.scope_id,
-            )
-        });
+        let scope = bound_scope(&target, &current, &commitment_sig).ok()?;
+        let split = records
+            .as_ref()
+            .map(|records| partition_scope_links(session.enc_subkey(), &records.links, &scope));
         // One committed record is the live link; two have no defined cut, so the
         // read reports none — the same rule `locate_invite_link` revokes under.
         let live = split

@@ -38,7 +38,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as FRAGMENT_B64;
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::seal::{
-    GrantLedgerEntry, GrantSetCommitment, MAX_GRANT_BLOBS, Permission, verify_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, MAX_GRANT_BLOBS, Permission,
+    verify_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN,
@@ -110,9 +111,8 @@ pub enum InviteError {
     /// The claim names a different scope root than the committed set it is
     /// converted against.
     ScopeMismatch,
-    /// The scope id offered with a commitment is not the one whose write
-    /// material derives the scope root name that commitment carries
-    /// ([`CommittedScope::bind`]).
+    /// The commitment offered for a scope does not name the scope root that
+    /// scope answers at ([`CommittedScope::bind`]).
     ScopeUnbound,
     /// The caller's identity key did not sign the committed set it is acting on,
     /// so it is not this scope's owner. Minting, converting and revoking are all
@@ -171,7 +171,7 @@ impl InviteError {
             Self::MalformedFragment => "malformed-invite-fragment",
             Self::FragmentTooLarge => "invite-fragment-too-large",
             Self::ScopeMismatch => "claim-scope-mismatch",
-            Self::ScopeUnbound => "scope-not-bound-to-the-commitment",
+            Self::ScopeUnbound => "commitment-names-another-scope-root",
             Self::NotOwner => "not-owner",
             Self::LinkNotCommitted => "link-not-committed",
             Self::LinkExpired => "link-expired",
@@ -574,10 +574,10 @@ pub struct OwnerAuthority<'a> {
 /// served-stale record out.
 ///
 /// No field of the commitment carries a scope id, so [`bind`](Self::bind) is the
-/// only constructor: it derives the scope root's name from the scope's own write
-/// material and refuses a pair the commitment does not name. Without that an
-/// owner-authentic commitment for one scope could be presented under another
-/// scope's id, and every gate over it would pass.
+/// only constructor: the scope id is read off the gated scope reference the
+/// commitment was resolved under, never taken beside it. An owner-authentic
+/// commitment for one scope can therefore not be presented under another scope's
+/// id.
 pub struct CommittedScope<'a> {
     scope_id: &'a [u8; 16],
     commitment: &'a GrantSetCommitment,
@@ -586,28 +586,23 @@ pub struct CommittedScope<'a> {
 }
 
 impl<'a> CommittedScope<'a> {
-    /// Bind `scope_id` to `commitment`, or fail closed.
+    /// Bind `commitment` to the scope `scope` names, or fail closed.
     ///
-    /// `write_scope_seed` is the scope's current write-scope seed, which with
-    /// the scope id derives the name the scope root answers at
-    /// ([`derive_write_name`]). The commitment carries that name, so only the
-    /// pair that derives it is admitted.
+    /// `scope` must be the reference the adoption gate proved the commitment's
+    /// own record under, which is what makes its scope id the record's
+    /// (`rotation/cascade.rs` — the resolver's binding contract). The refusal
+    /// is the backstop for a reference no gate produced.
     pub fn bind(
-        scope_id: &'a [u8; 16],
-        write_scope_seed: &[u8; SECRET_LEN],
+        scope: &'a ChildScopeRef,
         commitment: &'a GrantSetCommitment,
         commitment_sig: &'a EcdsaSignature,
         ledger: &'a [GrantLedgerEntry],
     ) -> Result<Self, InviteError> {
-        if derive_write_name(write_scope_seed, scope_id)
-            .as_str()
-            .as_bytes()
-            != commitment.ipns_name
-        {
+        if commitment.ipns_name != scope.ipns_name {
             return Err(InviteError::ScopeUnbound);
         }
         Ok(Self {
-            scope_id,
+            scope_id: &scope.scope_id,
             commitment,
             commitment_sig,
             ledger,
@@ -722,10 +717,14 @@ pub fn convert_invite_claim(
     }
 
     // The seal's inner sender signature is already verified; binding it to a link
-    // the owner recorded is what makes it a claim rather than a re-share.
-    // Ambiguity is refused rather than resolved to the first match.
+    // the owner recorded **at this scope** is what makes it a claim rather than a
+    // re-share. Attribution is the recorded scope id, the epoch-stable half, as
+    // [`partition_scope_links`] decides it. Ambiguity is refused rather than
+    // resolved to the first match.
     let sender = item.sender_identity.to_sec1();
-    let mut matches = links.iter().filter(|l| l.ephemeral_identity_pk == sender);
+    let mut matches = links
+        .iter()
+        .filter(|l| l.scope_id == *scope.scope_id && l.ephemeral_identity_pk == sender);
     let link = matches.next().ok_or(InviteError::LinkNotCommitted)?;
     if matches.next().is_some() {
         return Err(InviteError::LinkNotCommitted);
@@ -734,9 +733,7 @@ pub fn convert_invite_claim(
         return Err(InviteError::LinkExpired);
     }
     // The tag the set carries for this link, which a write wave re-mints at the
-    // name it moves the scope root to. Deriving it at `name` is what binds the
-    // record to this scope root: a record made against another one derives a tag
-    // this commitment does not carry.
+    // name it moves the scope root to.
     let link_tag =
         derived_tag(owner.enc_secret, link, name).ok_or(InviteError::LinkNotCommitted)?;
     // Bound to a link the owner recorded, so the spent set can be consulted.
@@ -896,11 +893,15 @@ pub struct ScopeLinks {
 pub fn partition_scope_links(
     owner_enc_secret: &X25519Secret,
     links: &[RecordedInvite],
-    commitment: &GrantSetCommitment,
-    scope_id: &[u8; 16],
+    scope: &CommittedScope<'_>,
 ) -> ScopeLinks {
-    let name = commitment.ipns_name.as_slice();
-    let carried: BTreeSet<[u8; 32]> = commitment.entries.iter().map(|entry| entry.tag).collect();
+    let name = scope.commitment.ipns_name.as_slice();
+    let carried: BTreeSet<[u8; 32]> = scope
+        .commitment
+        .entries
+        .iter()
+        .map(|entry| entry.tag)
+        .collect();
     let mut split = ScopeLinks {
         committed: Vec::new(),
         spent: BTreeSet::new(),
@@ -909,7 +910,7 @@ pub fn partition_scope_links(
     // the ECDH — and both halves are decided against the tag the record derives
     // at the name the set names, never the stored one, which a write wave
     // supersedes.
-    for link in links.iter().filter(|link| link.scope_id == *scope_id) {
+    for link in links.iter().filter(|link| link.scope_id == *scope.scope_id) {
         match derived_tag(owner_enc_secret, link, name) {
             Some(tag) if carried.contains(&tag) => {
                 split.committed.push(CommittedLink { record: *link, tag })
@@ -938,8 +939,7 @@ pub fn locate_invite_link(
     links: &[RecordedInvite],
 ) -> Result<CommittedLink, InviteError> {
     owner.authorise(scope)?;
-    let live =
-        partition_scope_links(owner.enc_secret, links, scope.commitment, scope.scope_id).committed;
+    let live = partition_scope_links(owner.enc_secret, links, scope).committed;
     match live.as_slice() {
         [link] => Ok(*link),
         _ => Err(InviteError::LinkNotCommitted),
@@ -988,6 +988,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::{IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN};
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
     use cipherbox_core::suite::secret::ct_eq;
+    use std::sync::OnceLock;
 
     const V: u64 = 2;
     const SCOPE: [u8; 16] = [0x5c; 16];
@@ -1506,23 +1507,29 @@ mod tests {
         }
     }
 
+    /// The gated reference a resolve of `SCOPE` at its current name hands back.
+    fn scope_ref() -> &'static ChildScopeRef {
+        static REF: OnceLock<ChildScopeRef> = OnceLock::new();
+        REF.get_or_init(|| ChildScopeRef::new(SCOPE, scope_name()))
+    }
+
     fn committed_scope<'a>(
         commitment: &'a GrantSetCommitment,
         commitment_sig: &'a EcdsaSignature,
         ledger: &'a [GrantLedgerEntry],
     ) -> CommittedScope<'a> {
-        committed_scope_under(&WRITE_SCOPE_SEED, commitment, commitment_sig, ledger)
+        committed_scope_at(scope_ref(), commitment, commitment_sig, ledger)
     }
 
-    /// The same, at the scope root `write_scope_seed` derives.
-    fn committed_scope_under<'a>(
-        write_scope_seed: &[u8; 32],
+    /// The same, at a scope root reference other than the current one.
+    fn committed_scope_at<'a>(
+        scope: &'a ChildScopeRef,
         commitment: &'a GrantSetCommitment,
         commitment_sig: &'a EcdsaSignature,
         ledger: &'a [GrantLedgerEntry],
     ) -> CommittedScope<'a> {
-        CommittedScope::bind(&SCOPE, write_scope_seed, commitment, commitment_sig, ledger)
-            .expect("the scope's own write seed derives the name the set carries")
+        CommittedScope::bind(scope, commitment, commitment_sig, ledger)
+            .expect("the gated reference names the scope root the set carries")
     }
 
     /// A minted link over `SCOPE`, keyed by its fragment secret.
@@ -1948,27 +1955,21 @@ mod tests {
     #[test]
     fn a_commitment_authorises_nothing_under_a_scope_it_does_not_name() {
         const OTHER_SCOPE: [u8; 16] = [0xa1; 16];
-        const OTHER_SEED: [u8; 32] = [0x5b; 32];
         let l = link(0x71, Permission::Read, None);
         let (commitment, sig, ledger) = committed(&[l.row.clone()]);
 
-        let refusal = |scope_id: &[u8; 16], seed: &[u8; 32]| {
-            CommittedScope::bind(scope_id, seed, &commitment, &sig, &ledger)
+        // The scope id is read off the reference, so the pair is what a caller
+        // offers and the name is what refuses one the commitment does not carry.
+        let elsewhere = ChildScopeRef::new(OTHER_SCOPE, b"another-scope-root-name".to_vec());
+        assert_eq!(
+            CommittedScope::bind(&elsewhere, &commitment, &sig, &ledger)
                 .err()
-                .map(|e| e.check())
-        };
-        assert_eq!(
-            refusal(&OTHER_SCOPE, &WRITE_SCOPE_SEED),
-            Some("scope-not-bound-to-the-commitment"),
-        );
-        assert_eq!(
-            refusal(&SCOPE, &OTHER_SEED),
-            Some("scope-not-bound-to-the-commitment"),
-            "and the scope's write material is half of the pair, not a formality"
+                .map(|e| e.check()),
+            Some("commitment-names-another-scope-root"),
         );
         assert!(
-            CommittedScope::bind(&SCOPE, &WRITE_SCOPE_SEED, &commitment, &sig, &ledger).is_ok(),
-            "only the pair that derives the name the commitment carries is admitted"
+            CommittedScope::bind(scope_ref(), &commitment, &sig, &ledger).is_ok(),
+            "only the reference the commitment names is admitted"
         );
     }
 
@@ -2038,7 +2039,7 @@ mod tests {
             ..l.link
         };
 
-        let split = partition_scope_links(owner.enc_secret, &[elsewhere], &commitment, &SCOPE);
+        let split = partition_scope_links(owner.enc_secret, &[elsewhere], &scope);
         assert!(split.committed.is_empty() && split.spent.is_empty());
         assert_eq!(
             locate_invite_link(&owner, &scope, &[elsewhere])
@@ -2048,7 +2049,7 @@ mod tests {
         );
 
         // Only the recorded id differs, so it is what decided the refusal.
-        let split = partition_scope_links(owner.enc_secret, &[l.link], &commitment, &SCOPE);
+        let split = partition_scope_links(owner.enc_secret, &[l.link], &scope);
         assert_eq!(committed_records(&split), vec![l.link]);
     }
 
@@ -2058,14 +2059,10 @@ mod tests {
     fn a_record_the_commitment_dropped_is_spent() {
         let live = link(0x71, Permission::Read, None);
         let dropped = link(0x73, Permission::Read, None);
-        let (commitment, ..) = committed(&[live.row.clone()]);
+        let (commitment, sig, ledger) = committed(&[live.row.clone()]);
+        let scope = committed_scope(&commitment, &sig, &ledger);
 
-        let split = partition_scope_links(
-            &owner_enc(),
-            &[live.link, dropped.link],
-            &commitment,
-            &SCOPE,
-        );
+        let split = partition_scope_links(&owner_enc(), &[live.link, dropped.link], &scope);
         assert_eq!(split.spent, BTreeSet::from([dropped.link.tag]));
         assert_eq!(committed_records(&split), vec![live.link]);
     }
@@ -2089,9 +2086,11 @@ mod tests {
             .as_str()
             .as_bytes()
             .to_vec();
-        let (commitment, ..) = committed_at(moved, &[after.row.clone()]);
+        let (commitment, sig, ledger) = committed_at(moved.clone(), &[after.row.clone()]);
+        let moved_ref = ChildScopeRef::new(SCOPE, moved);
+        let scope = committed_scope_at(&moved_ref, &commitment, &sig, &ledger);
 
-        let split = partition_scope_links(&owner_enc(), &[before.link], &commitment, &SCOPE);
+        let split = partition_scope_links(&owner_enc(), &[before.link], &scope);
         assert!(
             split.spent.is_empty(),
             "the link's row is live at the moved name"
@@ -2103,6 +2102,48 @@ mod tests {
                 tag: after.link.tag,
             }],
             "and a cut names the tag the moved set carries, not the stored one"
+        );
+    }
+
+    /// A record the owner made at another scope converts nothing here, even
+    /// where this scope's commitment carries the tag that record derives at this
+    /// name. Attribution is the recorded scope id, which the gate binds
+    /// ([`CommittedScope::bind`]) — without it a bearer who gets one link's
+    /// ephemeral key committed here would drive the owner into signing grants
+    /// for identities the owner never approved.
+    #[test]
+    fn a_record_from_another_scope_converts_no_claim_here() {
+        let l = link(0x4e, Permission::Read, None);
+        let elsewhere = RecordedInvite {
+            scope_id: [0xa1; 16],
+            ..l.link
+        };
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
+        let keys = Owner::new();
+        let (id, enc) = claimant(0x67);
+
+        let refused = convert_invite_claim(
+            &keys.authority(),
+            &committed_scope(&commitment, &sig, &ledger),
+            &[elsewhere],
+            &[],
+            &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
+            UnixMillis(0),
+        )
+        .expect_err("a record made elsewhere is not this scope's to convert");
+        assert_eq!(refused.check(), "link-not-committed");
+
+        // Only the recorded scope id differs, so it is what decided the refusal.
+        assert!(
+            convert_invite_claim(
+                &keys.authority(),
+                &committed_scope(&commitment, &sig, &ledger),
+                &[l.link],
+                &[],
+                &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
+                UnixMillis(0),
+            )
+            .is_ok()
         );
     }
 
@@ -2124,9 +2165,10 @@ mod tests {
         let keys = Owner::new();
         let (id, enc) = claimant(0x67);
 
+        let moved_ref = ChildScopeRef::new(SCOPE, moved.clone());
         let converted = convert_invite_claim(
             &keys.authority(),
-            &committed_scope_under(&MOVED_WRITE_SEED, &commitment, &sig, &ledger),
+            &committed_scope_at(&moved_ref, &commitment, &sig, &ledger),
             &[before.link],
             &[],
             &claim_item_for(&link_signer(0x4e), contact_code(&id, &enc), moved),
