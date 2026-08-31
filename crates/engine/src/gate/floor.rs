@@ -144,8 +144,10 @@ const WRITE_EPOCH_SUFFIX: &[u8] = b"/write-epoch";
 /// back onto an abandoned index ([`vault_pointer_index_floor`]).
 const VAULT_POINTER_INDEX_SUFFIX: &[u8] = b"/vault-pointer-index";
 
-/// `scope_id` under a fixed suffix. Every suffix is distinct and none is a
-/// prefix of another, so no two keys here can spell one stored key.
+/// `scope_id` under a fixed suffix. The store matches keys exactly and the
+/// scope id is fixed-width, so two keys collide only if their suffixes are
+/// equal; the suffixes here are distinct literals and nothing appends past
+/// them.
 fn suffixed(scope_id: &[u8; 16], suffix: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(scope_id.len() + suffix.len());
     key.extend_from_slice(scope_id);
@@ -397,18 +399,11 @@ pub async fn mint_revision<F: FloorStore>(
 /// floor, so a partial seam failure leaves the fail-closed state (or none at
 /// all, on a backing with an atomic [`FloorStore::commit_floors`]).
 ///
-/// **The sequence namespace is left alone, deliberately.** [`RepointObject`]
-/// carries no sequence, so the owner vouches no per-name high-water mark and
-/// there is nothing here to anchor one from. A cold device therefore meets a
-/// long-lived name with a sequence bar of 0, and a resolver that chooses which
-/// owner-signed record to serve can pin an older record from the vouched epoch.
-/// That is the accepted within-epoch staleness of blueprint/engine.md's floor
-/// law, not an oversight: the record is still Ed25519-verified against the key
-/// the name encodes, still at or above the cold-seeded read-epoch floor, and
-/// still AAD-confirmed at unseal, so a chosen-record adversary replays bytes
-/// the owner signed inside a boundary it cannot roll back. Closing it needs the
-/// owner to vouch a sequence the way it vouches the epochs, which is a
-/// [`RepointObject`] wire change.
+/// **The two epoch floors only.** [`RepointObject`] vouches no sequence, so
+/// nothing here anchors the sequence namespace and a cold device meets a
+/// long-lived name with a bar of 0 — the within-epoch staleness
+/// blueprint/engine.md's floor law accepts. Closing it needs the owner to vouch
+/// a sequence the way it vouches the epochs, which is a wire change.
 pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> SeamResult<()> {
     // Revocation floor first (fail-safe ordering).
     floors
@@ -436,16 +431,10 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 /// The write-epoch stage is narrowed on the other axis: only the scope pointer
 /// authors that clock ([`PointerPlane::VaultPointer`]).
 ///
-/// What guards the exempt plane instead: the read-epoch stage above, which does
-/// run at the vault anchor and is where a rolled-back revocation boundary is
-/// caught; the durable vault-pointer index floor
-/// ([`vault_pointer_index_floor`]), which refuses a walk steered back onto an
-/// abandoned index; and the scope-pointer consult, which is clock-checked and
-/// which a cold start cannot be steered away from now that an unreadable
-/// pointer plane refuses instead of reporting a scope that was never
-/// re-pointed. Those three, and not a bound on the lag, are the whole guard —
-/// a wave that stops at the anchor and is never resumed leaves a gap no
-/// constant bounds.
+/// The exempt plane is guarded instead by the read-epoch stage above, the
+/// durable [`vault_pointer_index_floor`], and the clock-checked scope-pointer
+/// consult — not by a bound on the lag, which a wave that stops at the anchor
+/// and is never resumed leaves unbounded.
 pub async fn repoint_regression<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,

@@ -35,13 +35,9 @@ pub struct ChildAdopter<'a, H, F> {
     gateway: &'a Gateway,
     /// The HTTP seam the head-block fetch rides.
     http: &'a H,
-    /// The durable floor store the child floors read and advance. For a scope
-    /// this device holds by grant it must arrive already filed under the
-    /// granting identity, the way [`RootAdopter::for_grantee`] takes it — the
-    /// read-epoch floor this reads is that scope's, and a `scopeId` names no
-    /// authority on its own.
-    ///
-    /// [`RootAdopter::for_grantee`]: super::RootAdopter::for_grantee
+    /// The durable floor store the child floors read and advance. A scope held
+    /// by grant must arrive filed under its granting identity, as
+    /// [`RootAdopter::for_grantee`](super::RootAdopter::for_grantee) takes it.
     floors: &'a F,
     /// The scope the child must be sealed under (the AAD scope binding and the
     /// read-epoch floor key). A foreign scope is a transplant, fail-closed.

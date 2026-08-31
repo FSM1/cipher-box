@@ -1067,7 +1067,7 @@ pub struct GranteeRotationKeys<'a> {
 /// root's name — that derivation runs off the write scope seed only the record
 /// itself conveys — so the pairing is caller-held, from the accept flow that
 /// adopted the share.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct GrantedScopeRoot {
     /// The scope id, which is also its scope root's node id.
     pub scope_id: [u8; 16],
@@ -1078,6 +1078,19 @@ pub struct GrantedScopeRoot {
     /// scope's epoch floors under the party entitled to move them
     /// ([`SharerScopedFloorStore`]).
     pub sharer_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
+}
+
+/// Redacted: the granting identity names a contact, and this type is `pub`, so
+/// a `{:?}` in a host log or a panic message would put a third party's
+/// identifier there.
+impl core::fmt::Debug for GrantedScopeRoot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("GrantedScopeRoot")
+            .field("scope_id", &self.scope_id)
+            .field("ipns_name", &self.ipns_name)
+            .field("sharer_identity_pk", &"<redacted>")
+            .finish()
+    }
 }
 
 /// The grantee-arm rotation seams over the live net plane.
@@ -1152,12 +1165,22 @@ where
 {
     /// The scope root `scope` names, from the caller-held inventory. A trigger
     /// naming a scope this device holds no grant for is refused rather than read
-    /// under an unheld label.
+    /// under an unheld label, and an id two entries claim answers for neither:
+    /// the lookup also selects the identity this scope's floors file under, so
+    /// first-match-wins would file one grant's ratchet under another sharer's
+    /// authority. Release-active, because the uniqueness it rests on is enforced
+    /// two modules away
+    /// ([`ReceivedSharesList::granted_scope_roots`](crate::grants::ReceivedSharesList::granted_scope_roots)).
     fn granted_root(&self, scope: NodeId) -> Result<&GrantedScopeRoot, ResolveFailure> {
-        self.granted
+        let mut claimants = self
+            .granted
             .iter()
-            .find(|granted| granted.scope_id == scope.0)
-            .ok_or(ResolveFailure::Rejected)
+            .filter(|granted| granted.scope_id == scope.0);
+        let granted = claimants.next().ok_or(ResolveFailure::Rejected)?;
+        if claimants.next().is_some() {
+            return Err(ResolveFailure::Rejected);
+        }
+        Ok(granted)
     }
 
     /// The floors every epoch-namespace read and raise on a granted scope goes

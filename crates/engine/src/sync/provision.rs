@@ -469,11 +469,7 @@ where
     //     own read key opens. Nothing here is authorised by a server answer — a
     //     withheld or lying one reaches the indeterminate arm, which refuses. An
     //     outage and a vacant name are that one arm: neither decides a mint.
-    let served = match pointer_fetch.fetch(&pointer_name).await {
-        Ok(PointerRecord::Found(block)) => Some(block),
-        _ => None,
-    };
-    let Some(served) = served else {
+    let Ok(PointerRecord::Found(served)) = pointer_fetch.fetch(&pointer_name).await else {
         return Err(match publish_refusal {
             Some(error) => ProvisionError::Publish {
                 stage: "vault-pointer",

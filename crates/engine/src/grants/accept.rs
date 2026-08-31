@@ -254,11 +254,6 @@ impl ReceivedSharesList {
     /// re-seals and republishes, so it is "runnable by any write-capable client"
     /// (blueprint/engine.md "sweep"); sweeping a read-only share could only fail
     /// to publish, once per cadence, forever.
-    ///
-    /// The granting identity rides out with each root, not just the id and the
-    /// name: it is what files the scope's epoch floors under the party entitled
-    /// to move them ([`SharerScopedFloorStore`](crate::seams::SharerScopedFloorStore)),
-    /// and a round that reduced this to a bare scope reference could not.
     pub fn writable_scope_refs(&self) -> Vec<GrantedScopeRoot> {
         self.paired(|share| share.permission == Permission::Write)
     }

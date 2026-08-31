@@ -88,23 +88,23 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
 /// What a fan-out GET found at a name, on rule 6's axis: [`Absent`] is a
 /// statement about the name, [`Unavailable`] is a statement about the endpoints.
 ///
-/// `Absent` is not authoritative — an endpoint can answer "no record" about a
-/// name it simply never held — so a caller that must not be steered by one
-/// still needs a durable bar of its own. What this separation buys is the other
-/// direction: a plane nobody could read is never *reported* as a name that does
-/// not exist.
+/// `Absent` needs the endpoint set to be **unanimous**: every endpoint answered,
+/// and every answer was "no record". One endpoint's word against a set of
+/// failures is not evidence about a name, and treating it as such is how a
+/// single hostile accelerator truncates a chain. Even unanimity is not proof —
+/// endpoints can be wrong together — so a caller that must not be steered by an
+/// absence still needs a durable bar of its own.
 ///
 /// [`Absent`]: FanoutRecord::Absent
 /// [`Unavailable`]: FanoutRecord::Unavailable
 pub enum FanoutRecord {
     /// The freshest verifiable record an endpoint served, with its bytes.
     Found(VerifiedRecord, Vec<u8>),
-    /// No endpoint served a verifiable record, and at least one answered that
-    /// it holds none.
+    /// Every endpoint answered, and every answer was "no record".
     Absent,
-    /// No endpoint served a verifiable record and none answered cleanly:
-    /// every one errored, broke the size cap, or served unverifiable bytes.
-    /// Availability, never a verdict about the name.
+    /// No endpoint served a verifiable record and the set did not agree the
+    /// name is vacant: one errored, broke the size cap, or served unverifiable
+    /// bytes. Availability, never a verdict about the name.
     Unavailable,
 }
 
@@ -134,28 +134,28 @@ pub async fn fanout_get_verify<T: RecordTransport>(
 /// [`fanout_get_verify`] with the two answers it collapses kept apart
 /// ([`FanoutRecord`]).
 ///
-/// An empty endpoint set is `Unavailable`: zero answers is the degenerate form
-/// of inferring vacancy from silence, so the guard is release-active rather
-/// than an assumption about the seam.
+/// An empty endpoint set falls out as `Unavailable` for the same reason:
+/// zero answers is silence, not vacancy.
 pub async fn fanout_get_classified<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> FanoutRecord {
     let key = name.as_str();
     let mut best: Option<(VerifiedRecord, Vec<u8>)> = None;
-    let mut answered_vacant = false;
+    let mut vacant = 0usize;
+    let mut asked = 0usize;
     for endpoint in transport.endpoints() {
+        asked += 1;
         let bytes = match transport.get_record(&endpoint, key, MAX_RECORD_BYTES).await {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
-                answered_vacant = true;
+                vacant += 1;
                 continue;
             }
             Err(_) => continue,
         };
         // Release-active backstop: a transport that ignores its cap must not
         // talk the engine past it (mirrors the WASM bridge's `send_capped`).
-        // Bytes that exist but do not verify say nothing about vacancy.
         if bytes.len() > MAX_RECORD_BYTES {
             continue;
         }
@@ -172,10 +172,10 @@ pub async fn fanout_get_classified<T: RecordTransport>(
             best = Some((verified, bytes));
         }
     }
-    match (best, answered_vacant) {
-        (Some((verified, bytes)), _) => FanoutRecord::Found(verified, bytes),
-        (None, true) => FanoutRecord::Absent,
-        (None, false) => FanoutRecord::Unavailable,
+    match best {
+        Some((verified, bytes)) => FanoutRecord::Found(verified, bytes),
+        None if asked > 0 && vacant == asked => FanoutRecord::Absent,
+        None => FanoutRecord::Unavailable,
     }
 }
 
@@ -277,6 +277,31 @@ mod tests {
                 FanoutRecord::Unavailable
             ),
             "no endpoint answered at all, so nothing is known about the name"
+        );
+    }
+
+    /// One endpoint's "no record" against a set of failures is not evidence
+    /// about a name. Reading it as one lets a single hostile accelerator
+    /// truncate a chain while its peers are made to fail.
+    #[test]
+    fn one_vacant_answer_beside_a_failure_is_unavailable_not_absent() {
+        let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([5u8; 32]).verifying_key());
+        let eps = vec![EndpointId::new("honest"), EndpointId::new("down")];
+        let store = InMemoryRecordStore::new(eps.clone());
+        store.fail_endpoint(&eps[1]);
+
+        assert!(matches!(
+            block_on(fanout_get_classified(&store, &name)),
+            FanoutRecord::Unavailable
+        ));
+
+        store.heal_endpoint(&eps[1]);
+        assert!(
+            matches!(
+                block_on(fanout_get_classified(&store, &name)),
+                FanoutRecord::Absent
+            ),
+            "unanimity is what makes an absence an answer"
         );
     }
 }

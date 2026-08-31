@@ -32,40 +32,12 @@ impl<'a, T> RecordPointerFetch<'a, T> {
     }
 }
 
-impl<'a, T: RecordTransport> RecordPointerFetch<'a, T> {
-    /// The record at `name` with its marshalled bytes, so a caller that seats it
-    /// in the held set holds the very record this fetch authenticated. Fetching
-    /// twice would let an endpoint set that serves fresh then stale seat a
-    /// record the first read never validated.
-    async fn fetch_record(&self, name: &IpnsName) -> FetchedPointer {
-        match fanout_get_classified(self.transport, name).await {
-            FanoutRecord::Found(verified, record_bytes) => FetchedPointer::Found {
-                value: verified.value,
-                record_bytes,
-            },
-            FanoutRecord::Absent => FetchedPointer::Absent,
-            FanoutRecord::Unavailable => FetchedPointer::Unavailable,
-        }
-    }
-}
-
-/// [`RecordPointerFetch::fetch_record`]'s answer: [`PointerRecord`] plus the
-/// marshalled record behind it.
-enum FetchedPointer {
-    Found {
-        value: Vec<u8>,
-        record_bytes: Vec<u8>,
-    },
-    Absent,
-    Unavailable,
-}
-
 impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
     async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
-        Ok(match self.fetch_record(name).await {
-            FetchedPointer::Found { value, .. } => PointerRecord::Found(value),
-            FetchedPointer::Absent => PointerRecord::Absent,
-            FetchedPointer::Unavailable => PointerRecord::Unavailable,
+        Ok(match fanout_get_classified(self.transport, name).await {
+            FanoutRecord::Found(verified, _) => PointerRecord::Found(verified.value),
+            FanoutRecord::Absent => PointerRecord::Absent,
+            FanoutRecord::Unavailable => PointerRecord::Unavailable,
         })
     }
 }
@@ -102,8 +74,10 @@ pub(crate) struct PointerConsult<'a> {
 pub(crate) struct ConsultedPointer {
     /// The owner-vouched current root name.
     pub(crate) current_root: IpnsName,
-    /// The pointer record this consult authenticated, for the caller that seats
-    /// it in the held set.
+    /// The record this consult authenticated. It rides out so the caller that
+    /// seats it holds those exact bytes: a second read of the same name lets an
+    /// endpoint set that serves fresh then stale seat a record no consult
+    /// validated.
     pub(crate) record_bytes: Vec<u8>,
     /// That record's authenticated inline value — the sealed re-point block.
     pub(crate) value: Vec<u8>,
@@ -120,16 +94,10 @@ impl PointerConsult<'_> {
         scope_id: &[u8; 16],
     ) -> Result<Option<ConsultedPointer>, PointerConsultError> {
         let pointer = self.scope_keys.pointer_name(scope_id);
-        let (block, record_bytes) = match RecordPointerFetch::new(transport)
-            .fetch_record(&pointer)
-            .await
-        {
-            FetchedPointer::Found {
-                value,
-                record_bytes,
-            } => (value, record_bytes),
-            FetchedPointer::Absent => return Ok(None),
-            FetchedPointer::Unavailable => return Err(PointerConsultError::Unavailable),
+        let (block, record_bytes) = match fanout_get_classified(transport, &pointer).await {
+            FanoutRecord::Found(verified, record_bytes) => (verified.value, record_bytes),
+            FanoutRecord::Absent => return Ok(None),
+            FanoutRecord::Unavailable => return Err(PointerConsultError::Unavailable),
         };
         let pointer_read_key = self.scope_keys.pointer_read_key(scope_id);
         let repoint = open_repoint(
