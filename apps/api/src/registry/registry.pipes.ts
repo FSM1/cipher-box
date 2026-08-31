@@ -32,8 +32,14 @@ class BatchSizePipe implements PipeTransform {
     private readonly noun: string
   ) {}
 
-  transform(value: unknown): unknown {
-    if (Array.isArray(value) && value.length > this.max) {
+  transform(value: unknown): unknown[] {
+    // A batch body is a JSON array. `ParseArrayPipe` instead SPLITS a bare JSON
+    // string on commas and parses each piece, so anything else reaching it
+    // becomes a batch of unbounded length past every guard here. Fail closed.
+    if (!Array.isArray(value)) {
+      throw refuse('Batch must be a JSON array');
+    }
+    if (value.length > this.max) {
       throw refuse(`Batch exceeds ${this.max} ${this.noun}`);
     }
     return value;
@@ -47,10 +53,7 @@ class BatchSizePipe implements PipeTransform {
 class TargetCountPipe implements PipeTransform {
   constructor(private readonly max: number) {}
 
-  transform(value: unknown): unknown {
-    if (!Array.isArray(value)) {
-      return value;
-    }
+  transform(value: unknown[]): unknown[] {
     let total = 0;
     for (const entry of value) {
       const targets = (entry as { targets?: unknown })?.targets;

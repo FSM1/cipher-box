@@ -24,11 +24,9 @@ export class PinReference {
   @Column({ name: 'account_id', type: 'uuid' })
   accountId: string;
 
-  /** The referencing record's IPNS name. */
   @Column({ name: 'ipns_name', type: 'varchar', length: 128 })
   ipnsName: string;
 
-  /** The CID that record names. */
   @Column({ name: 'cid', type: 'varchar', length: 256 })
   cid: string;
 

@@ -282,10 +282,12 @@ export class ContentService {
   }
 
   /**
-   * Undo a failed durable pin. For a row THIS upload inserted, retire it,
-   * unpinning at global refcount zero — same per-CID lock discipline as the
-   * registry. For a PROMOTED row (a pre-existing registry-only registration),
-   * revert only the size charge back to 0: the registration must survive a
+   * Undo a failed durable pin. For a row THIS upload inserted that no record
+   * references, retire it, unpinning at global refcount zero — same per-CID
+   * lock discipline as the registry. For a row a registration holds — PROMOTED
+   * from a pre-existing registry-only row, or claimed by a register that
+   * committed inside the upload window — revert only the size charge back to 0:
+   * the registration must survive a
    * transient pin failure, and nothing was durably pinned, so no unpin fires. A
    * compensation failure is logged, never surfaced: a stranded charge/row is
    * only a registered orphan the republisher GCs, and it must not mask the pin
@@ -296,13 +298,16 @@ export class ContentService {
       const unpin = await runLockGuardedTransaction(this.dataSource, async (manager) => {
         await boundedAcquire(manager, [advisoryLockKey(cid)], this.lockTimeoutMs);
         const pinRepo = manager.getRepository(PinnedCid);
-        if (promoted) {
+        // registerPin commits its row before the pin call, so a register can
+        // claim this CID under its own record while that call runs. Recount the
+        // edges under the lock: deleting the row would drop a live claim.
+        const registered =
+          promoted || (await manager.getRepository(PinReference).countBy({ accountId, cid })) > 0;
+        if (registered) {
           await pinRepo.update({ accountId, cid }, { size: '0' });
           return false;
         }
         await pinRepo.delete({ accountId, cid });
-        // An edge without its pin row would hold a later unpin open forever.
-        await manager.getRepository(PinReference).delete({ accountId, cid });
         const survivors = await pinRepo.find({ where: { cid } });
         return survivors.length === 0;
       });

@@ -6,7 +6,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
 import { pinDurabilityLockKey, withSessionAdvisoryLock } from '../../common/advisory-lock';
 import { fakeConfig } from '../../testing/fakes';
-import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
+import {
+  createIntegrationDatabase,
+  IntegrationDatabase,
+  waitForAdvisoryLockWait,
+} from '../../testing/integration-db';
 import { PinReference } from '../entities/pin-reference.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
@@ -490,7 +494,9 @@ describe('RegistryService concurrency (real Postgres)', () => {
           return result;
         });
 
-      await delay(200);
+      // Park on the CID's advisory lock, an observable signal the retire really
+      // reached it — a fixed delay only assumes it did.
+      await waitForAdvisoryLockWait(db.dataSource);
       expect(retireDone).toBe(false);
 
       gate.release();

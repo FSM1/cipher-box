@@ -73,6 +73,7 @@ export const RETIRE_TARGET_MAX_LENGTH = 256;
 export class RetireEntryDto {
   @ApiProperty({
     required: false,
+    maxLength: 128,
     description:
       'The record that drops the reference. Present: only this record stops naming the targets, so a target another live record still names stays pinned. Absent: every record of the account stops naming them, and a target may also name a record to retire.',
   })
@@ -85,7 +86,9 @@ export class RetireEntryDto {
 
   @ApiProperty({
     type: [String],
-    description: 'The `[ipnsName | cid]` targets this entry retires.',
+    maxItems: MAX_BATCH,
+    maxLength: RETIRE_TARGET_MAX_LENGTH,
+    description: `The \`[ipnsName | cid]\` targets this entry retires. The batch caps the TOTAL target count across its entries at ${MAX_BATCH}.`,
   })
   @IsArray()
   @ArrayMaxSize(MAX_BATCH)
