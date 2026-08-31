@@ -47,9 +47,9 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, PUBLISHED_OP_MARK_PREFIX, ResolveMode,
-    StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key, encode_upload_mark, owner_scoped_key,
-    owner_tag, record_content_root_cid, upload_mark_key,
+    DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX,
+    ResolveMode, StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key, encode_upload_mark,
+    owner_scoped_key, owner_tag, record_content_root_cid, upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -3158,16 +3158,15 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
     }
 }
 
-/// A folder delete retires every record it detaches and leaves no parentless
-/// node behind.
+/// A folder delete reclaims its whole subtree, and leaves no parentless node
+/// behind — but a descendant's half waits out the quarantine.
 ///
-/// It does **not** unpin a descendant's content. A descendant is reached
-/// through a `ChildRef` — wire data — and nothing binds a node to the folder
-/// naming it, so this walk cannot prove the descendant is reachable only from
-/// here. A charged pin row is a leak; unpinning one a live listing still names
-/// is loss (blueprint/engine.md "Retirement").
+/// The delete's own target is detached by a record this pass resolved and
+/// republished. A descendant's name and pins wait for the proof: one converged
+/// poll tick, then its own resolved record re-checked against the owner's
+/// manifest (blueprint/engine.md "Retirement").
 #[test]
-fn a_folder_delete_retires_its_whole_subtree_without_unpinning_a_descendant() {
+fn a_folder_delete_quarantines_a_descendant_for_a_converged_tick() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -3206,16 +3205,18 @@ fn a_folder_delete_retires_its_whole_subtree_without_unpinning_a_descendant() {
     tick(&world, &engine, &mut tasks);
 
     let retired = retired_since(&alice, mark);
-    for name in [write_name(photos), deep_name] {
-        assert!(
-            retired.contains(&name.as_str().to_owned()),
-            "every record in the detached subtree leaves the inventory"
-        );
-    }
+    assert!(
+        retired.contains(&write_name(photos).as_str().to_owned()),
+        "the delete's own target leaves the inventory the republisher walks"
+    );
+    assert!(
+        !retired.contains(&deep_name.as_str().to_owned()),
+        "the descendant's name stays registered through the quarantine"
+    );
     for cid in &content {
         assert!(
             !retired.contains(cid),
-            "a descendant's pins are a leak this walk cannot prove safe to unpin"
+            "and so do its pins — nothing irreversible fires on the delete's own pass"
         );
     }
     let view = block_on(engine.view()).unwrap();
@@ -3223,6 +3224,23 @@ fn a_folder_delete_retires_its_whole_subtree_without_unpinning_a_descendant() {
         view.attrs(deep).is_none(),
         "no descendant is left behind as a parentless node"
     );
+
+    // The tick converges the snapshot, the next pass proves the descendant, and
+    // the pass after that spends the debt the proof owed.
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&deep_name.as_str().to_owned()),
+        "the proof holds, so the descendant's record leaves the inventory too"
+    );
+    for cid in &content {
+        assert!(
+            retired.contains(cid),
+            "and every block its version pinned is reclaimed"
+        );
+    }
 }
 
 /// The pending half of the same law: a queued folder delete renders its whole
@@ -3370,12 +3388,162 @@ fn a_delete_leaves_a_node_the_surviving_parent_still_names() {
     );
 }
 
-/// Two prunes reach a reclaimed subtree — the shortened parent's own repaint,
-/// and the reclamation's own loop — and one invariant binds both: no node may
-/// survive in the snapshot that no walk reaches, or a host holds a live inode on
-/// a path nothing can spell. A diamond is what breaks an order-dependent prune,
-/// because the doomed walk is preorder over wire child refs and puts the shared
-/// child ahead of one of its parents.
+/// The quarantine is bounded on both axes. An unlinked node joins no eager set,
+/// so a rotation can leave a doomed descendant sealed at an epoch the gate
+/// refuses, for good. Without a ceiling that one entry holds its journal entry
+/// open and spends a proof slot on every pass, which starves every entry sorting
+/// behind it. Past the ceiling it drops unspent: the name stays registered and
+/// the content stays pinned, which is where the delete path stood before the
+/// proof existed.
+#[test]
+fn a_descendant_no_pass_can_establish_drops_out_of_the_quarantine() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let deep = child_id(&engine, photos, "deep.bin");
+    let deep_name = write_name(deep);
+    let content: Vec<String> = registration_entries(&alice, &deep_name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the descendant published a version");
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let journal = doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), photos);
+    assert!(
+        block_on(alice.staging_store.staged_bytes(&journal))
+            .unwrap()
+            .is_some(),
+        "the delete journals its quarantine"
+    );
+
+    // The descendant's own record goes dark, which is what a rotation past an
+    // unlinked node leaves behind.
+    world.record_store.fail_get_for(deep_name.as_str());
+    block_on(alice.snapshot_cache.remove(deep_name.as_str().as_bytes())).unwrap();
+    for _ in 0..MAX_QUARANTINE_ATTEMPTS {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert!(
+        block_on(alice.staging_store.staged_bytes(&journal))
+            .unwrap()
+            .is_none(),
+        "the entry leaves rather than spend a proof slot on every pass for good"
+    );
+    let retired = retired_since(&alice, mark);
+    assert!(
+        !retired.contains(&deep_name.as_str().to_owned()),
+        "an unproven descendant keeps its registration"
+    );
+    for cid in &content {
+        assert!(
+            !retired.contains(cid),
+            "and every block it pins stays pinned"
+        );
+    }
+}
+
+/// The adversarial half of the same law. A co-writer plants a `ChildRef` naming
+/// a node that lives elsewhere, the owner deletes the folder holding it, and the
+/// walk enumerates a node it has no business reclaiming. The proof refuses it:
+/// the converged snapshot still reaches the node, so neither its name nor its
+/// pins are this delete's to spend, and unpinning is the half no retry undoes.
+#[test]
+fn a_delete_never_reclaims_a_descendant_a_surviving_parent_still_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let deep = child_id(&engine, photos, "deep.bin");
+    let deep_name = write_name(deep);
+    let content: Vec<String> = registration_entries(&alice, &deep_name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the descendant published a version");
+
+    // The plant: another writer names the same node under the root.
+    concurrent_root_add(&world.record_store, &blocks, file_ref(deep.0, "deep.bin"));
+    tick(&world, &engine, &mut tasks);
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    for _ in 0..3 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&write_name(photos).as_str().to_owned()),
+        "the delete's own target still reclaims"
+    );
+    assert!(
+        !retired.contains(&deep_name.as_str().to_owned()),
+        "a node a surviving parent names keeps its registration"
+    );
+    for cid in &content {
+        assert!(
+            !retired.contains(cid),
+            "and every block it pins stays pinned"
+        );
+    }
+    assert!(
+        block_on(engine.view()).unwrap().attrs(deep).is_some(),
+        "the node is still rendered under the parent that survived"
+    );
+}
+
+/// Two prunes reach a reclaimed subtree: the shortened parent's repaint, and the
+/// reclamation's own loop. One invariant binds both — no node survives in the
+/// snapshot that no walk reaches, or a host holds a live inode on a path nothing
+/// can spell. A diamond is what breaks an order-dependent prune.
 #[test]
 fn a_reclamation_over_a_diamond_strands_no_child_in_the_snapshot() {
     let world = FakeWorld::new();

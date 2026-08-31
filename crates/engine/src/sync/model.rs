@@ -231,8 +231,7 @@ impl Snapshot {
     /// Shallow, and private for it: a node going away for good wants
     /// [`remove_deleted`](Self::remove_deleted) or
     /// [`remove_unreachable`](Self::remove_unreachable), which take the subtree
-    /// too. Neither leaves a node behind that no walk reaches, and a caller
-    /// outside this model has no way to hold the difference right.
+    /// too. Neither leaves a node behind that no walk reaches.
     fn remove_node(&mut self, id: NodeId) -> bool {
         let present = self.nodes.remove(&id).is_some();
         self.links.retain(|l| l.parent != id && l.child != id);
@@ -244,10 +243,8 @@ impl Snapshot {
     /// no walk can reach. A node another link still names is kept, and so is
     /// everything under it.
     ///
-    /// Reports the ids that actually left, in removal order. A caller pruning
-    /// state keyed by node — the drain's held-record set — owes that state to
-    /// what the snapshot lost, never to what the caller meant to remove: the
-    /// cascade both keeps nodes the caller named and takes nodes it did not.
+    /// Reports the ids that actually left, in removal order: the cascade keeps
+    /// nodes the caller named, and takes nodes it did not.
     ///
     /// Call it where the node is already unlinked.
     pub fn remove_unreachable(&mut self, id: NodeId) -> Vec<NodeId> {
