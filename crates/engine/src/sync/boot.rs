@@ -234,17 +234,24 @@ where
     )
     .await
     .map_err(ColdStartError::Seam)?;
-    // Project the gate-passing root read-body to its direct children (E7); an
-    // availability-stale current record leaves the base at the anchored root.
+    // Project the gate-passing root read-body to its direct children (E7). An
+    // own current record at the floor paints from the read-body the recovery
+    // unsealed, so a restart whose root never advanced still renders the vault.
     let (root_resolve, base) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let mut base = base;
             project_root(&mut base, params.root, &adopted);
             (RootResolve::Adopted, base)
         }
-        // Cold start paints, it does not hold: our own current record at the
-        // floor is availability staleness here, same as nothing newer fetched.
-        ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => (RootResolve::NoUpdate, base),
+        // A current record is availability staleness here, same as nothing
+        // newer fetched, so it paints without claiming an adoption.
+        ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
+            let mut base = base;
+            if let Some(at_floor) = &resolved.current_at_floor {
+                project_root(&mut base, params.root, at_floor);
+            }
+            (RootResolve::NoUpdate, base)
+        }
         ResolveOutcome::TrustViolation(rejection) => {
             return Err(ColdStartError::RootAdoption(rejection));
         }
@@ -279,7 +286,7 @@ mod tests {
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
     use cipherbox_core::kdf;
     use cipherbox_core::payload::RepointObject;
-    use cipherbox_core::seal::{PreservedFields, ReadBody};
+    use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
@@ -341,6 +348,9 @@ mod tests {
     #[derive(Clone)]
     struct ScriptedAdopter {
         verdict: Arc<Mutex<Result<Adopted, GateError>>>,
+        /// The child the floor recovery's read-body names, when the adopter
+        /// scripts an own record at the floor.
+        recovered: Option<[u8; 16]>,
     }
 
     impl ScriptedAdopter {
@@ -356,6 +366,7 @@ mod tests {
                     sequence: 1,
                     epoch: 1,
                 }))),
+                recovered: None,
             }
         }
 
@@ -365,6 +376,22 @@ mod tests {
                     stage: GateStage::Unseal,
                     reason: RejectionReason::EpochBelowFloor { floor: 9, epoch: 1 },
                 })))),
+                recovered: None,
+            }
+        }
+
+        /// Our own record back at exactly the sequence floor, whose recovery
+        /// yields the read-body naming `child`.
+        fn current_at_floor(child: [u8; 16]) -> Self {
+            Self {
+                verdict: Arc::new(Mutex::new(Err(GateError::Rejected(GateRejection {
+                    stage: GateStage::Sequence,
+                    reason: RejectionReason::SequenceNotNewer {
+                        floor: 1,
+                        sequence: 1,
+                    },
+                })))),
+                recovered: Some(child),
             }
         }
     }
@@ -385,6 +412,35 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                 })
+        }
+
+        async fn recover_own_scope_material(
+            &self,
+            _name: &IpnsName,
+            _record_bytes: &[u8],
+        ) -> Result<Option<crate::net::OwnScopeMaterial>, crate::seams::SeamError> {
+            Ok(self.recovered.map(|child| crate::net::OwnScopeMaterial {
+                node_id: [0u8; 16],
+                read_scope_seed: zeroize::Zeroizing::new([0u8; 32]),
+                write_scope_seed: None,
+                at_floor: Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: vec![ChildRef {
+                            id: child,
+                            name: "kept.txt".to_string(),
+                            ipns_name: vec![1],
+                            kind: CoreNodeKind::File,
+                            link_counter: 1,
+                            unknown: PreservedFields::new(),
+                        }],
+                        unknown: PreservedFields::new(),
+                    },
+                    sequence: 1,
+                    epoch: 1,
+                },
+            }))
         }
     }
 
@@ -647,6 +703,43 @@ mod tests {
                 ))
             );
             assert!(events.is_empty(), "a trust violation never paints");
+        });
+    }
+
+    /// A restart whose root never advanced resolves `Current`, and the base
+    /// must still hold what the plane serves: the quarantine proof reads an
+    /// absence from it, and an absence no poll established decides nothing
+    /// (blueprint/engine.md "Retirement").
+    #[test]
+    fn a_current_root_paints_the_base_from_the_record_it_re_fetched() {
+        block_on(async {
+            let pointers = ScriptedPointers::default();
+            let root_name = IpnsName::from_public_key(&root_signer().verifying_key());
+            pointers.seal_index(&owner(), 0, &repoint(root_name.clone(), 1, 1));
+            let child = [0x5A; 16];
+
+            let (out, events) = run(
+                &pointers,
+                &ScriptedAdopter::current_at_floor(child),
+                &InMemoryFloorStore::default(),
+                &transport_with_root_record(&root_name),
+                &InMemorySnapshotCache::default(),
+                &[],
+            )
+            .await;
+
+            let out = out.expect("a current record is availability staleness, never a refusal");
+            assert_eq!(
+                out.root_resolve,
+                Some(RootResolve::NoUpdate),
+                "a current record claims no adoption"
+            );
+            assert!(
+                out.base.contains(NodeId(child)),
+                "the root's child is in the base the pass reads"
+            );
+            assert_eq!(out.rendered.children(root_id()).len(), 1);
+            assert_eq!(events, vec![Event::SnapshotUpdated]);
         });
     }
 

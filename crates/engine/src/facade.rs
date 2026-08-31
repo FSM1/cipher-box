@@ -78,7 +78,7 @@ use crate::net::{
     PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
     RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
     VaultProvisionNet, assemble_candidate, enrol_owned_scope_pointers, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
+    fanout_get_verify, keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child,
     run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
@@ -4416,7 +4416,7 @@ where {
                         if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
                             emit_trust_violation(&events, root_name.as_str(), rejection);
                         }
-                        if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
+                        if refresh_base_from_resolved(&base, NodeId(root_id), resolved) {
                             let _ = events.unbounded_send(Event::SnapshotUpdated);
                         }
                     }
@@ -10602,7 +10602,7 @@ mod tests {
         use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody};
 
         use crate::gate::Adopted;
-        use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+        use crate::net::{ResolveOutcome, Resolved, refresh_base_from_resolved};
 
         /// A gate-passing adopted root folder with the given children, mirroring
         /// what a live resolve repaints the base with.
@@ -10634,13 +10634,13 @@ mod tests {
         fn snapshot_lists_base_children_with_no_pending_flags() {
             let (engine, _events) = started();
             let root = engine.root();
-            refresh_base_from_outcome(
+            refresh_base_from_resolved(
                 &engine.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_folder(vec![
+                &Resolved::just(ResolveOutcome::Adopted(adopted_folder(vec![
                     child_ref(1, "a", CoreNodeKind::Folder),
                     child_ref(2, "b.txt", CoreNodeKind::File),
-                ])),
+                ]))),
             );
 
             let view = block_on(engine.snapshot(root)).unwrap();
@@ -11078,17 +11078,19 @@ mod tests {
 
         #[test]
         fn a_newer_adopted_tick_repaints_the_view_and_emits() {
-            use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+            use crate::net::{ResolveOutcome, Resolved, refresh_base_from_resolved};
 
             let (engine, mut events, _pointers) = started_at(UnixMillis(123_456));
             let root = engine.root();
 
             // One resolve-tick pass over a gate-passing newer `Adopted`: fold it
             // into the shared base cell and emit, exactly as the tick loop does.
-            assert!(refresh_base_from_outcome(
+            assert!(refresh_base_from_resolved(
                 &engine.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_child([0xC1; 16], "live.txt")),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
+                    [0xC1; 16], "live.txt"
+                ))),
             ));
             let _ = engine.events.unbounded_send(Event::SnapshotUpdated);
 
@@ -11103,22 +11105,26 @@ mod tests {
 
         #[test]
         fn tick_repaint_is_clock_independent() {
-            use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+            use crate::net::{ResolveOutcome, Resolved, refresh_base_from_resolved};
 
             let (a, _ea, _pa) = started_at(UnixMillis(0));
             let (b, _eb, _pb) = started_at(UnixMillis(5_000_000));
             let root = a.root();
             assert_eq!(root, b.root());
 
-            refresh_base_from_outcome(
+            refresh_base_from_resolved(
                 &a.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_child([0xD2; 16], "clk.txt")),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
+                    [0xD2; 16], "clk.txt",
+                ))),
             );
-            refresh_base_from_outcome(
+            refresh_base_from_resolved(
                 &b.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_child([0xD2; 16], "clk.txt")),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
+                    [0xD2; 16], "clk.txt",
+                ))),
             );
 
             // Clock-independent: the two repainted bases are byte-identical, and

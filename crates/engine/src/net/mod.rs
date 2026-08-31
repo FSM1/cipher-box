@@ -60,7 +60,7 @@ pub use record_publish::{PreflightError, RecordPublishError};
 pub use register::register;
 pub use resolve::{AdoptOutcome, Adopter, OwnScopeMaterial, ResolveOutcome, Resolved, resolve};
 pub(crate) use resolve::{
-    GatedResolve, HeldMaterial, refresh_base_from_outcome, resolve_and_hold, resolve_gated,
+    GatedResolve, HeldMaterial, refresh_base_from_resolved, resolve_and_hold, resolve_gated,
 };
 pub use retire::{
     OrphanHeads, RETIRE_LEDGER_PREFIX, ReclaimPass, ReclaimStall, ReclaimStallReason,

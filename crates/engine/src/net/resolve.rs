@@ -69,6 +69,9 @@ pub struct OwnScopeMaterial {
     /// The scope write seed, `None` when the root is held keyless (no
     /// owner-write-blob, or it will not open under the durable write floor).
     pub write_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The read-body the recovery unsealed, at the floor sequence and epoch it
+    /// re-imposed. The same authentication an adopt gives, so it projects.
+    pub at_floor: Adopted,
 }
 
 /// A gate pass plus the transient write material a write-capable holder needs to
@@ -126,6 +129,26 @@ pub struct Resolved {
     pub last_known_good: Option<Vec<u8>>,
     /// The gate verdict on the freshest fetched record.
     pub outcome: ResolveOutcome,
+    /// The read-body an own [`ResolveOutcome::Current`] root carries, recovered
+    /// at the floor by the same stages an adopt runs. A quarantine release rests
+    /// on an absence a poll of this session established, so a root that resolves
+    /// `Current` must still paint the base
+    /// ([ADR 0011](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0011-quarantine-release-rests-on-the-doomed-manifest.md)
+    /// D4).
+    pub current_at_floor: Option<Adopted>,
+}
+
+#[cfg(test)]
+impl Resolved {
+    /// A resolve carrying `outcome` alone: no cached bytes and no
+    /// floor-recovered read-body.
+    pub(crate) fn just(outcome: ResolveOutcome) -> Self {
+        Self {
+            last_known_good: None,
+            outcome,
+            current_at_floor: None,
+        }
+    }
 }
 
 /// Resolve `name`: return last-known-good immediately, fan-out GET + core
@@ -200,9 +223,9 @@ where
         ResolveMode::NoCache => None,
     };
 
-    let (outcome, hold, held_record, read_scope_seed) =
+    let (outcome, hold, held_record, read_scope_seed, current_at_floor) =
         match fanout_get_verify(transport, name).await {
-            None => (ResolveOutcome::NoUpdate, None, None, None),
+            None => (ResolveOutcome::NoUpdate, None, None, None, None),
             Some((verified, bytes)) => match adopter.adopt(name, &bytes).await {
                 Ok(AdoptOutcome {
                     adopted,
@@ -219,6 +242,7 @@ where
                         hold,
                         Some((verified, bytes)),
                         read_scope_seed,
+                        None,
                     )
                 }
                 // A record at exactly the durable sequence floor is our own current
@@ -234,14 +258,15 @@ where
                         // plane keeps the keys it seals under across a session
                         // that adopts nothing. A non-owner record yields neither.
                         let material = adopter.recover_own_scope_material(name, &bytes).await?;
-                        let (hold, read_scope_seed) = match material {
+                        let (hold, read_scope_seed, at_floor) = match material {
                             Some(material) => (
                                 material
                                     .write_scope_seed
                                     .map(|seed| (material.node_id, seed)),
                                 Some(material.read_scope_seed),
+                                Some(material.at_floor),
                             ),
-                            None => (None, None),
+                            None => (None, None, None),
                         };
                         (
                             ResolveOutcome::Current {
@@ -250,9 +275,16 @@ where
                             hold,
                             Some((verified, bytes)),
                             read_scope_seed,
+                            at_floor,
                         )
                     }
-                    _ => (ResolveOutcome::TrustViolation(rejection), None, None, None),
+                    _ => (
+                        ResolveOutcome::TrustViolation(rejection),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
                 },
                 Err(GateError::Seam(error)) => return Err(error),
             },
@@ -262,6 +294,7 @@ where
         resolved: Resolved {
             last_known_good,
             outcome,
+            current_at_floor,
         },
         hold,
         held_record,
@@ -395,18 +428,22 @@ where
 /// Fold a completed resolve's verdict into the shared base cell. A gate-passing
 /// `Adopted` re-projects ([`project_root`], merging over the current base) and
 /// returns whether the merge changed anything (the caller emits
-/// `SnapshotUpdated`); `Current`/`NoUpdate`/`TrustViolation` leave
+/// `SnapshotUpdated`). An own `Current` root re-projects from the read-body the
+/// recovery unsealed at the floor, so a session whose root never advances still
+/// renders what the plane serves; `NoUpdate`/`TrustViolation` leave
 /// last-known-good intact and return false. Non-await by construction — the
 /// short borrows never span an `.await` (facade single-threaded executor rule).
-pub(crate) fn refresh_base_from_outcome(
+pub(crate) fn refresh_base_from_resolved(
     base: &RefCell<Snapshot>,
     root: NodeId,
-    outcome: &ResolveOutcome,
+    resolved: &Resolved,
 ) -> bool {
-    match outcome {
-        ResolveOutcome::Adopted(adopted) => project_root(&mut base.borrow_mut(), root, adopted),
-        _ => false,
-    }
+    let adopted = match (&resolved.outcome, &resolved.current_at_floor) {
+        (ResolveOutcome::Adopted(adopted), _) => adopted,
+        (ResolveOutcome::Current { .. }, Some(at_floor)) => at_floor,
+        _ => return false,
+    };
+    project_root(&mut base.borrow_mut(), root, adopted)
 }
 
 #[cfg(test)]
@@ -529,6 +566,16 @@ mod tests {
                 node_id,
                 read_scope_seed: Zeroizing::new([0u8; 32]),
                 write_scope_seed: Some(Zeroizing::new(seed)),
+                at_floor: Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: PreservedFields::new(),
+                    },
+                    sequence: 1,
+                    epoch: 0,
+                },
             }))
         }
     }
@@ -1104,7 +1151,8 @@ mod tests {
     }
 
     mod refresh_base {
-        use super::super::refresh_base_from_outcome;
+        use super::super::{Resolved, refresh_base_from_resolved};
+
         use super::{GateRejection, GateStage, RejectionReason, ResolveOutcome};
 
         use core::cell::RefCell;
@@ -1144,10 +1192,10 @@ mod tests {
             let cell = RefCell::new(Snapshot::new(root));
             let child_id = [7u8; 16];
 
-            assert!(refresh_base_from_outcome(
+            assert!(refresh_base_from_resolved(
                 &cell,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
             ));
 
             let base = cell.borrow();
@@ -1163,10 +1211,10 @@ mod tests {
             let child_id = [7u8; 16];
             let cell = RefCell::new(Snapshot::new(root));
 
-            assert!(refresh_base_from_outcome(
+            assert!(refresh_base_from_resolved(
                 &cell,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
             ));
             // A verified head-version read folds the child's plaintext facts in.
             assert!(project_child_version(
@@ -1179,10 +1227,10 @@ mod tests {
             ));
 
             assert!(
-                !refresh_base_from_outcome(
+                !refresh_base_from_resolved(
                     &cell,
                     root,
-                    &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
+                    &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
                 ),
                 "re-projecting the same body repaints nothing"
             );
@@ -1195,6 +1243,33 @@ mod tests {
                 child.content_version,
                 Some(2),
                 "the version count survives the re-projection"
+            );
+        }
+
+        /// The tick's own half of the same rule the cold start holds: a root
+        /// this session re-fetched at the floor still paints, so a later pass
+        /// reads a base some poll of this session established.
+        #[test]
+        fn a_current_root_paints_the_base_from_its_floor_recovery() {
+            let root = NodeId([0u8; 16]);
+            let cell = RefCell::new(Snapshot::new(root));
+            let child_id = [0x3C; 16];
+
+            assert!(refresh_base_from_resolved(
+                &cell,
+                root,
+                &Resolved {
+                    last_known_good: None,
+                    outcome: ResolveOutcome::Current {
+                        record_bytes: vec![9, 9, 9],
+                    },
+                    current_at_floor: Some(adopted_with_one_child(child_id)),
+                },
+            ));
+
+            assert!(
+                cell.borrow().contains(NodeId(child_id)),
+                "the root's child is in the base the quarantine proof reads"
             );
         }
 
@@ -1215,7 +1290,7 @@ mod tests {
             ] {
                 let cell = RefCell::new(before.clone());
                 assert!(
-                    !refresh_base_from_outcome(&cell, root, &outcome),
+                    !refresh_base_from_resolved(&cell, root, &Resolved::just(outcome.clone())),
                     "{outcome:?} must not repaint the base"
                 );
                 assert_eq!(
