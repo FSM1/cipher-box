@@ -361,8 +361,7 @@ pub trait LocalBlocks {
     async fn block(&self, cid: &[u8]) -> Option<Vec<u8>>;
 }
 
-/// The read plane's default source set: no local blocks, every block fetched.
-#[derive(Debug, Clone, Copy)]
+/// No local blocks: every block of the read comes from a gateway.
 pub struct GatewayOnly;
 
 impl LocalBlocks for GatewayOnly {
@@ -374,11 +373,9 @@ impl LocalBlocks for GatewayOnly {
 /// [`read_block`] with a local-first leg: a block `local` holds is returned
 /// without a fetch, and anything else falls through to the gateway.
 ///
-/// A locally-held block clears exactly the bars a fetched one clears — the
-/// plane anchor before it is consulted, then [`verify_cid`] against the same
-/// binary anchor — and a mismatch is the same terminal
-/// [`ReadError::TrustViolation`]. The staging store is a nearer source, never a
-/// more trusted one.
+/// A local hit is nearer, never more trusted. It clears the same bars a fetched
+/// block clears, and a mismatch is terminal rather than a rotation to the
+/// gateway (blueprint/engine.md "Content plane").
 pub async fn read_block_local_first<L: LocalBlocks, H: Http>(
     local: &L,
     gateway: &Gateway,
@@ -393,10 +390,12 @@ pub async fn read_block_local_first<L: LocalBlocks, H: Http>(
         ));
     }
     match local.block(expected_cid).await {
-        Some(block) => verify_cid(expected_cid, &block)
+        Some(block) if block.len() <= MAX_RESOLVED_RECORD_BYTES => verify_cid(expected_cid, &block)
             .map(|()| block)
             .map_err(ReadError::TrustViolation),
-        None => read_block(gateway, http, cid_str, expected_cid, plane).await,
+        // No block the engine frames exceeds the cap, so an over-cap value is a
+        // miss — never something to hash.
+        _ => read_block(gateway, http, cid_str, expected_cid, plane).await,
     }
 }
 
@@ -1220,6 +1219,28 @@ mod tests {
             http.requests().is_empty(),
             "a local mismatch does not rotate to the gateway"
         );
+    }
+
+    #[test]
+    fn an_over_cap_local_block_is_skipped_before_it_is_hashed() {
+        let leaf = one_leaf();
+        // Over-cap and addressing to nothing: the gateway serves the real block,
+        // so reaching it proves the size gate fired ahead of `verify_cid`.
+        let local = OneBlock(leaf.cid.clone(), vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let out = block_on(read_block_local_first(
+            &local,
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+        assert_eq!(http.requests().len(), 1, "the over-cap value rotated");
     }
 
     #[test]

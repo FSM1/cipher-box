@@ -144,17 +144,16 @@ impl PreservedBounds {
 /// The staging store as a read-plane block source: a version the drain has not
 /// finished uploading reaches no gateway, so its blocks are served from here.
 ///
-/// Every block a staging key holds is addressed by its own `contentCid`
-/// ([`stage_op`]'s companion write path), so the key is the anchor the read
-/// verifies against — a wrong or corrupted value fails closed at
-/// [`read_block_local_first`](crate::content::read_block_local_first) exactly as
-/// a fetched one does.
+/// A version's blocks stage under their own `contentCid`, so the lookup key is
+/// the trust anchor the read verifies the value against
+/// ([`read_block_local_first`](crate::content::read_block_local_first)). Every
+/// other key this store holds carries an ASCII prefix, which no CIDv1 collides
+/// with.
 pub(crate) struct StagedBlocks<'a, S>(pub(crate) &'a S);
 
 impl<S: StagingStore> LocalBlocks for StagedBlocks<'_, S> {
     async fn block(&self, cid: &[u8]) -> Option<Vec<u8>> {
-        // A store that cannot answer holds nothing this read may use; the
-        // gateway leg still runs.
+        // A store error is a miss; the gateway leg still runs.
         self.0.staged_bytes(cid).await.ok().flatten()
     }
 }

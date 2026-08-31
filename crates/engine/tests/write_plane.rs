@@ -1352,6 +1352,31 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     engine_b.close_stream(stream);
 }
 
+/// A node whose first version is published and whose second is staged and not
+/// drained, with the durable id of the op that owes the staged one.
+fn a_staged_second_version(
+    world: &FakeWorld,
+    alice: &FakeDevice,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, OpId) {
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the first version commits");
+    tick(world, engine, tasks);
+    let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
+    write_file(engine, WriteTarget::Version { node }, &vec![0xBB; 323])
+        .expect("the second version commits");
+    let op_id = block_on(alice.staging_store.queued_ops()).unwrap()[0].0;
+    (node, op_id)
+}
+
 /// The bytes a read serves and the length the rendered view reports must come
 /// from one version, on both readers: the stream a mount composes over and the
 /// whole-file read the web download takes. A staged version pairs them off the
@@ -1365,23 +1390,7 @@ fn both_readers_serve_the_staged_version_the_rendered_size_names() {
 
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<_>>(),
-    )
-    .expect("the first version commits");
-    tick(&world, &engine, &mut tasks);
-    let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
-    let published = block_on(engine.open_content_stream(node)).expect("the published head opens");
-    engine.close_stream(published);
-
-    // A second version, journaled and not yet drained.
-    write_file(&mut engine, WriteTarget::Version { node }, &vec![0xBB; 323])
-        .expect("the second version commits");
+    let (node, _) = a_staged_second_version(&world, &alice, &mut engine, &mut tasks);
 
     assert_eq!(
         block_on(engine.view()).unwrap().attrs(node).unwrap().size,
@@ -1435,23 +1444,8 @@ fn a_staged_version_missing_a_block_refuses_and_names_the_queued_op() {
 
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<_>>(),
-    )
-    .expect("the first version commits");
-    tick(&world, &engine, &mut tasks);
-    let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
-
-    // A second version, journaled and not drained, then one of its leaves lost:
-    // no gateway serves what no drain has uploaded.
-    write_file(&mut engine, WriteTarget::Version { node }, &vec![0xBB; 323])
-        .expect("the second version commits");
-    let op_id = block_on(alice.staging_store.queued_ops()).unwrap()[0].0;
+    let (node, op_id) = a_staged_second_version(&world, &alice, &mut engine, &mut tasks);
+    // One leaf lost: no gateway serves what no drain has uploaded.
     evict_leaf(&alice, |_| 0);
 
     // The root manifest is still staged, so the stream opens on the version the
@@ -1470,6 +1464,42 @@ fn a_staged_version_missing_a_block_refuses_and_names_the_queued_op() {
         }
     }
     engine.close_stream(stream);
+}
+
+/// A staged block that does not content-address is a trust violation, and it is
+/// terminal: the nearer source is not the more trusted one, so the read never
+/// asks a gateway for what its own store got wrong. The verdict names the op,
+/// because every byte a staged read judges came from that one op.
+#[test]
+fn a_staged_block_that_does_not_address_is_terminal_and_names_the_queued_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, op_id) = a_staged_second_version(&world, &alice, &mut engine, &mut tasks);
+    let (root_cid, _) = staged_version(&alice);
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(&root_cid, b"not the root this cid names"),
+    )
+    .expect("the store takes it");
+
+    let before = alice.http.requests().len();
+    match block_on(engine.read_content(node)) {
+        Err(EngineError::TrustViolation { message }) => assert!(
+            message.contains(&format!("queued op {}", op_id.0)),
+            "the verdict names the op whose staged bytes disagree: {message}"
+        ),
+        other => panic!("expected a trust violation, got {other:?}"),
+    }
+    assert_eq!(
+        alice.http.requests().len(),
+        before,
+        "a local mismatch is terminal: it never rotates to a gateway"
+    );
 }
 
 /// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a

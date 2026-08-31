@@ -873,10 +873,18 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
     The leg is safe because the staging key **is** the block's own
     `contentCid`: a local hit is byte-identical to what a gateway would serve
     for that address, and a version half-uploaded reads across both legs. A
-    locally held block clears exactly the bars a fetched one clears — the
-    plane anchor, then the CID verify against the same binary anchor — and a
-    mismatch is the same terminal trust violation, never a rotation to the
-    gateway. The nearer source is not the more trusted one.
+    locally held block clears exactly the bars a fetched one clears, in the
+    same order — the plane anchor, the block-size cap before anything is
+    hashed, then the CID verify against the same binary anchor. A mismatch is
+    the same terminal trust violation, never a rotation to the gateway: the
+    nearer source is not the more trusted one. An over-cap value rotates,
+    exactly as an over-cap body does, because no block the engine frames can
+    exceed the cap.
+    Residual: a local miss on a staged version asks the gateway for the
+    address of ciphertext no drain has uploaded, so a version the member later
+    cancels can leak its `contentCid` — a ciphertext hash, never bytes — to
+    the accelerator. Bounding the gateway leg by the durable upload mark would
+    close it; stated, not closed.
 - **Chunking and retention** — owned here per core.md's hand-off, resolved as
   engineering judgment: the engine frames content into fixed-size chunks,
   seals each with core's content-seal primitive (fresh random per-version
