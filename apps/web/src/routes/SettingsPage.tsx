@@ -27,8 +27,8 @@ export function SettingsPage() {
 
   return (
     <AppShell>
-      <div className="settings-page" data-testid="settings-page">
-        <h2 className="settings-heading">settings</h2>
+      <div className="route-page" data-testid="settings-page">
+        <h2 className="route-heading">settings</h2>
 
         <section className="settings-section" data-testid="settings-account">
           <h3>account</h3>

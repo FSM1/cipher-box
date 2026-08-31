@@ -11,6 +11,7 @@ import './styles/modal.css';
 import './styles/dialogs.css';
 import './styles/context-menu.css';
 import './styles/settings.css';
+import './styles/shared.css';
 import './styles/responsive.css';
 
 import { StrictMode } from 'react';

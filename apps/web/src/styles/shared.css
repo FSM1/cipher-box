@@ -1,0 +1,30 @@
+/* The /shared route, over the sharing list chrome `dialogs.css` already sets. */
+
+/* The verdict takes its own line, so a long one never squeezes the row. */
+.sharing-row--shared {
+  flex-wrap: wrap;
+}
+
+.shared-name {
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.shared-standing {
+  flex-basis: 100%;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.shared-standing[data-tone='ok'] {
+  color: var(--color-text-secondary);
+}
+
+.shared-standing[data-tone='pending'] {
+  color: var(--color-text-dim);
+}
+
+/* The trust class, kept off the staleness ladder's palette by design. */
+.shared-standing[data-tone='warning'] {
+  color: var(--color-warning);
+}

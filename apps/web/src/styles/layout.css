@@ -411,3 +411,18 @@
 .notification-toast-dismiss:focus-visible {
   text-decoration: underline;
 }
+
+/* One stacked column for a route that fills the shell main area. */
+.route-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  max-width: 736px;
+  padding: var(--spacing-md);
+}
+
+.route-heading {
+  margin: 0;
+  color: var(--color-text-primary);
+  text-transform: lowercase;
+}
