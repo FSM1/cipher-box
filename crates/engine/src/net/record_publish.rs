@@ -10,7 +10,8 @@
 
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{decode_envelope, open_read_body, open_settings_record};
+use cipherbox_core::seal::{decode_envelope, open_bin_index, open_read_body, open_settings_record};
+use cipherbox_core::suite::aead::KEY_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
@@ -141,6 +142,16 @@ pub fn preflight_settings(
     block: Vec<u8>,
 ) -> Result<PreflightedHead, PreflightError> {
     open_settings_record(enc_secret, &block).map_err(PreflightError::Unseal)?;
+    PreflightedHead::new(block)
+}
+
+/// Bin-index dry run: the record is a self-sealed blob under the owner's
+/// `bin-index-seal-key`, so the reopen is the whole check.
+pub fn preflight_bin_index(
+    seal_key: &[u8; KEY_LEN],
+    block: Vec<u8>,
+) -> Result<PreflightedHead, PreflightError> {
+    open_bin_index(seal_key, &block).map_err(PreflightError::Unseal)?;
     PreflightedHead::new(block)
 }
 

@@ -24,6 +24,7 @@
 #![allow(async_fn_in_trait)]
 
 pub mod api;
+pub mod bin_index;
 pub mod content;
 pub mod entropy;
 pub mod facade;
@@ -46,6 +47,9 @@ pub use api::{
     ApiClient, ApiError, AuthMethod, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,
     LoginOutcome, MailboxItem, NameRegistration, QUOTA_EXCEEDED, Quota, RetireResult, SiweNonce,
     TestLoginOutcome, UPLOAD_TOO_LARGE, UploadResult,
+};
+pub use bin_index::{
+    BinIndexLoad, BinIndexPublishError, bin_index_name, load_bin_index, publish_bin_index,
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
