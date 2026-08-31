@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type {
   AuthMethodDescriptor,
   EngineClient,
+  SiweIntent,
   VaultSettingsDescriptor,
   VaultStorageDescriptor,
 } from '@cipherbox/client';
@@ -46,6 +47,8 @@ export interface EngineCalls {
   /** The wallet links, kept apart from `siwe`: a link is not a login. */
   siweLinks: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
+  /** The intent each nonce mint named; a link must never mint from the sign-in pool. */
+  siweChallengeIntents: SiweIntent[];
   logouts: number;
   /** How many times this tab announced the session end to the origin. */
   originSessionEnds: number;
@@ -93,6 +96,7 @@ export function fakeEngineClient(
     siwe: [],
     siweLinks: [],
     siweChallenges: 0,
+    siweChallengeIntents: [],
     originSessionEnds: 0,
     vaultSettings: [],
     unlinked: [],
@@ -126,8 +130,9 @@ export function fakeEngineClient(
         await (overrides.start?.() ?? Promise.resolve());
         holds(accountId);
       },
-      siweChallenge() {
+      siweChallenge(intent: SiweIntent) {
         calls.siweChallenges += 1;
+        calls.siweChallengeIntents.push(intent);
         return Promise.resolve(FAKE_NONCE);
       },
       siweLogin(message: string, signature: Uint8Array) {

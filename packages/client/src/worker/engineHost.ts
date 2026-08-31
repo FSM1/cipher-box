@@ -14,6 +14,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -64,7 +65,7 @@ export interface EngineHostLike {
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
   vaultStorage(): Promise<VaultStorageDescriptor>;
   authMethods(): Promise<AuthMethodDescriptor[]>;
-  siweChallenge(): Promise<string>;
+  siweChallenge(intent: SiweIntent): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /**
    * Opens a read stream pinned to the node's current head content version,
@@ -280,8 +281,8 @@ export class EngineHost implements EngineHostLike {
     return readAuthMethods(this.wasm, await this.handle.authMethods());
   }
 
-  siweChallenge(): Promise<string> {
-    return this.handle.siweChallenge();
+  siweChallenge(intent: SiweIntent): Promise<string> {
+    return this.handle.siweChallenge(intent);
   }
 
   async download(node: Uint8Array): Promise<ArrayBuffer> {

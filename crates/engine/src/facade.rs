@@ -184,6 +184,17 @@ pub enum NodeKind {
     Folder,
 }
 
+/// Which SIWE surface a nonce is minted for. The API keeps one pool per intent
+/// and refuses a cross-intent spend, so a signature the host collects under one
+/// prompt can never serve the other operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiweIntent {
+    /// A wallet sign-in.
+    Login,
+    /// Linking a wallet to the signed-in account.
+    Link,
+}
+
 /// What the op queue holds for a node, strongest class first: a queued content
 /// write outranks a queued metadata mutation. The variant order **is** the rank
 /// (a node with both queued reports `Content`).
@@ -5910,10 +5921,16 @@ where {
     /// `NotStarted` before [`start`](Self::start), like the
     /// [`Command::SiweLogin`] that spends the nonce — SIWE is a secondary
     /// method (blueprint/engine.md "API client").
-    pub async fn siwe_challenge(&self) -> Result<String, EngineError> {
+    ///
+    /// The intent picks the pool ([`SiweIntent`]).
+    pub async fn siwe_challenge(&self, intent: SiweIntent) -> Result<String, EngineError> {
         self.live_session()?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let nonce = api.siwe_challenge().await.map_err(EngineError::from_api)?;
+        let nonce = match intent {
+            SiweIntent::Login => api.siwe_challenge().await,
+            SiweIntent::Link => api.siwe_link_challenge().await,
+        }
+        .map_err(EngineError::from_api)?;
         Ok(nonce.nonce)
     }
 
@@ -7187,6 +7204,11 @@ mod tests {
     /// Shaped as the API issues one; the engine signs nothing else.
     const LOGIN_CHALLENGE_FIXTURE: &str =
         "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    /// The two step-up tags, each admitted only by the operation that names it.
+    const LINK_CHALLENGE_FIXTURE: &str =
+        "cipherbox-link:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const UNLINK_CHALLENGE_FIXTURE: &str =
+        "cipherbox-unlink:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     /// A JSON HTTP response the scripted client decodes as a Nest body.
     fn json_response(status: u16, body: Value) -> HttpResponse {
@@ -7630,7 +7652,7 @@ mod tests {
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
-            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE }),
+            json!({ "challenge": LINK_CHALLENGE_FIXTURE }),
         ));
         device
             .http
@@ -7665,7 +7687,7 @@ mod tests {
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
-            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE }),
+            json!({ "challenge": LINK_CHALLENGE_FIXTURE }),
         ));
         device
             .http
@@ -7683,13 +7705,15 @@ mod tests {
         let requests = device.http.requests();
         let sent = &requests[before..];
         assert_eq!(sent.len(), 2, "one challenge, then one link");
-        assert_eq!(sent[0].url, "/auth/challenge");
+        assert_eq!(sent[0].url, "/auth/challenge/step-up");
+        let mint: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
+        assert_eq!(mint["operation"], "link");
         assert_eq!(sent[1].url, "/auth/siwe/link");
         let body: Value = serde_json::from_slice(sent[1].body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["challenge"], LOGIN_CHALLENGE_FIXTURE);
+        assert_eq!(body["challenge"], LINK_CHALLENGE_FIXTURE);
         assert_eq!(
             body["challengeSignature"],
-            signer.sign_challenge(LOGIN_CHALLENGE_FIXTURE),
+            signer.sign_challenge(LINK_CHALLENGE_FIXTURE),
             "the account identity key signed the challenge the server issued"
         );
     }
@@ -7701,7 +7725,7 @@ mod tests {
         let before = device.http.requests().len();
         device.http.enqueue_response(json_response(
             200,
-            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE }),
+            json!({ "challenge": UNLINK_CHALLENGE_FIXTURE }),
         ));
         device
             .http
@@ -7718,18 +7742,88 @@ mod tests {
         let requests = device.http.requests();
         let sent = &requests[before..];
         assert_eq!(sent.len(), 2, "one challenge, then one unlink");
-        assert_eq!(sent[0].url, "/auth/challenge");
+        assert_eq!(sent[0].url, "/auth/challenge/step-up");
         let challenge_body: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
-        assert_eq!(challenge_body["publicKey"], signer.public_key_hex());
+        assert_eq!(challenge_body["operation"], "unlink");
+        assert_eq!(challenge_body["methodId"], "method-1");
+        assert!(
+            challenge_body.get("publicKey").is_none(),
+            "the mint reads the key off the token, never the body"
+        );
         assert_eq!(sent[1].url, "/auth/unlink");
         let body: Value = serde_json::from_slice(sent[1].body.as_ref().unwrap()).unwrap();
         assert_eq!(body["methodId"], "method-1");
-        assert_eq!(body["challenge"], LOGIN_CHALLENGE_FIXTURE);
+        assert_eq!(body["challenge"], UNLINK_CHALLENGE_FIXTURE);
         assert_eq!(
             body["signature"],
-            signer.sign_challenge(LOGIN_CHALLENGE_FIXTURE),
+            signer.sign_challenge(UNLINK_CHALLENGE_FIXTURE),
             "the account identity key signed the challenge the server issued"
         );
+    }
+
+    /// The engine holds each operation to its own tag, so a challenge minted
+    /// for a different operation never reaches the identity key at all.
+    #[test]
+    fn a_step_up_challenge_for_another_operation_is_never_signed() {
+        for (command, wrong) in [
+            (
+                Command::UnlinkAuthMethod {
+                    method_id: "method-1".to_owned(),
+                },
+                LINK_CHALLENGE_FIXTURE,
+            ),
+            (
+                Command::SiweLink {
+                    message: "siwe-link-message".to_owned(),
+                    signature: WALLET_SIGNATURE_FIXTURE.to_vec(),
+                },
+                UNLINK_CHALLENGE_FIXTURE,
+            ),
+        ] {
+            let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            let before = device.http.requests().len();
+            device
+                .http
+                .enqueue_response(json_response(200, json!({ "challenge": wrong })));
+
+            let error = block_on(engine.command(command)).unwrap_err();
+            assert!(
+                matches!(&error, EngineError::Auth { message } if message.contains("step-up")),
+                "{error:?} for {wrong}"
+            );
+            let requests = device.http.requests();
+            assert_eq!(
+                requests[before..].len(),
+                1,
+                "the mint was the only request for {wrong}"
+            );
+        }
+    }
+
+    /// The two nonce pools reach two routes, and the link pool is
+    /// owner-authenticated.
+    #[test]
+    fn a_siwe_challenge_reaches_the_route_its_intent_names() {
+        for (intent, path) in [
+            (SiweIntent::Login, "/auth/siwe/challenge"),
+            (SiweIntent::Link, "/auth/siwe/link-challenge"),
+        ] {
+            let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+            block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+            let before = device.http.requests().len();
+            device.http.enqueue_response(json_response(
+                200,
+                json!({ "nonce": "a1b2c3d4e5f60718", "expiresAt": "2099-01-01T00:00:00Z" }),
+            ));
+
+            assert_eq!(
+                block_on(engine.siwe_challenge(intent)),
+                Ok("a1b2c3d4e5f60718".to_owned())
+            );
+            let requests = device.http.requests();
+            assert_eq!(requests[before..].last().expect("a mint").url, path);
+        }
     }
 
     /// The bearer the member typed is in the record this device read back, and
@@ -8529,7 +8623,7 @@ mod tests {
                 Err(EngineError::Forgotten)
             ));
             assert!(matches!(
-                block_on(engine.siwe_challenge()),
+                block_on(engine.siwe_challenge(SiweIntent::Login)),
                 Err(EngineError::Forgotten)
             ));
             assert_eq!(

@@ -21,6 +21,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -146,7 +147,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract receivedShares(): Promise<ReceivedShareDescriptor[]>;
   abstract vaultStorage(): Promise<VaultStorageDescriptor>;
   abstract authMethods(): Promise<AuthMethodDescriptor[]>;
-  abstract siweChallenge(): Promise<string>;
+  abstract siweChallenge(intent: SiweIntent): Promise<string>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
   abstract openContentStream(node: Uint8Array): Promise<OpenedStream>;
   abstract readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;

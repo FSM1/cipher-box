@@ -34,6 +34,7 @@ import {
   SiweChallengeResponseDto,
   SiweLinkRequestDto,
   SiweLoginRequestDto,
+  StepUpChallengeRequestDto,
   TestLoginRequestDto,
   TestLoginResponseDto,
   TokenResponseDto,
@@ -45,6 +46,19 @@ import { TestAuthService } from './services/test-auth.service';
 import { TokenService } from './services/token.service';
 
 const REFRESH_COOKIE = 'refreshToken';
+
+/**
+ * The account identity key the session already proved. Every route that mints
+ * or spends an account-management challenge reads the key here, never from the
+ * request body, so a caller cannot aim one at another account.
+ */
+function accountKey(request: AuthenticatedRequest): string {
+  const { publicKey } = request.user;
+  if (!publicKey) {
+    throw new ForbiddenException('Insufficient token scope');
+  }
+  return publicKey;
+}
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -66,11 +80,34 @@ export class AuthController {
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
   @ApiOperation({
-    summary: 'Issue a single-use login challenge bound to an identity publicKey',
+    summary:
+      'Issue a single-use login challenge bound to an identity publicKey; POST /auth/login is the only route that accepts it',
   })
   @ApiOkResponse({ type: ChallengeResponseDto })
   challenge(@Body() body: ChallengeRequestDto): ChallengeResponseDto {
     const { challenge, expiresAt } = this.authService.issueIdentityChallenge(body.publicKey);
+    return { challenge, expiresAt: expiresAt.toISOString() };
+  }
+
+  @Post('challenge/step-up')
+  @HttpCode(200)
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Issue a single-use challenge that authorises one account-management operation and no other',
+  })
+  @ApiOkResponse({ type: ChallengeResponseDto })
+  stepUpChallenge(
+    @Body() body: StepUpChallengeRequestDto,
+    @Req() request: AuthenticatedRequest
+  ): ChallengeResponseDto {
+    const { challenge, expiresAt } = this.authService.issueStepUpChallenge(
+      accountKey(request),
+      body.operation,
+      body.methodId
+    );
     return { challenge, expiresAt: expiresAt.toISOString() };
   }
 
@@ -100,10 +137,26 @@ export class AuthController {
   @UseInterceptors(AuthMetricsInterceptor)
   @HttpCode(200)
   @Throttle(THROTTLE_SURFACES.auth)
-  @ApiOperation({ summary: 'Issue a single-use SIWE nonce' })
+  @ApiOperation({
+    summary: 'Issue a single-use SIWE nonce for a wallet sign-in; the link route refuses it',
+  })
   @ApiOkResponse({ type: SiweChallengeResponseDto })
   siweChallenge(): SiweChallengeResponseDto {
-    const { nonce, expiresAt } = this.authService.issueSiweNonce();
+    const { nonce, expiresAt } = this.authService.issueSiweNonce('siwe-login');
+    return { nonce, expiresAt: expiresAt.toISOString() };
+  }
+
+  @Post('siwe/link-challenge')
+  @HttpCode(200)
+  @Throttle(THROTTLE_SURFACES.auth)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Issue a single-use SIWE nonce that only POST /auth/siwe/link will accept',
+  })
+  @ApiOkResponse({ type: SiweChallengeResponseDto })
+  siweLinkChallenge(@Req() request: AuthenticatedRequest): SiweChallengeResponseDto {
+    const { nonce, expiresAt } = this.authService.issueSiweNonce('siwe-link', accountKey(request));
     return { nonce, expiresAt: expiresAt.toISOString() };
   }
 
@@ -136,12 +189,9 @@ export class AuthController {
     @Body() body: SiweLinkRequestDto,
     @Req() request: AuthenticatedRequest
   ): Promise<LogoutResponseDto> {
-    const { userId, publicKey } = request.user;
-    if (!publicKey) {
-      throw new ForbiddenException('Insufficient token scope');
-    }
+    const publicKey = accountKey(request);
     await this.authService.siweLink(
-      userId,
+      request.user.userId,
       publicKey,
       body.message,
       body.signature,
@@ -176,15 +226,9 @@ export class AuthController {
     @Body() body: UnlinkMethodRequestDto,
     @Req() request: AuthenticatedRequest
   ): Promise<LogoutResponseDto> {
-    const { userId, publicKey } = request.user;
-    // The re-proof runs against the key the session already proved, never one
-    // the body names.
-    if (!publicKey) {
-      throw new ForbiddenException('Insufficient token scope');
-    }
     await this.authService.unlinkAuthMethod(
-      userId,
-      publicKey,
+      request.user.userId,
+      accountKey(request),
       body.methodId,
       body.challenge,
       body.signature

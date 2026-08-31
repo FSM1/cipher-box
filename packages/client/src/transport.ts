@@ -19,6 +19,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -73,7 +74,7 @@ export interface EngineTransport {
   /** Reads the login methods on this account, in the display form the API serves. */
   authMethods(): Promise<AuthMethodDescriptor[]>;
   /** Issues the single-use nonce an EIP-4361 message must embed. */
-  siweChallenge(): Promise<string>;
+  siweChallenge(intent: SiweIntent): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /**
@@ -220,9 +221,9 @@ export class LocalTransport extends CorrelatedTransport {
     );
   }
 
-  siweChallenge(): Promise<string> {
+  siweChallenge(intent: SiweIntent): Promise<string> {
     return this.request<string>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'siweChallenge', id }, [])
+      this.worker.postMessage({ type: 'siweChallenge', id, intent }, [])
     );
   }
 

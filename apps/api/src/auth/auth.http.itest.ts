@@ -26,7 +26,7 @@ import { User } from './entities/user.entity';
 import { GatewayController } from './gateway.controller';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
-import { ChallengeService } from './services/challenge.service';
+import { ChallengeService, type StepUpOperation } from './services/challenge.service';
 import { AcceleratorTokenService } from './services/accelerator-token.service';
 import { IdentityService } from './services/identity.service';
 import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './services/siwe.service';
@@ -120,11 +120,32 @@ describe('auth HTTP flows (real Postgres)', () => {
     return res.body.challenge;
   }
 
-  /** The account key's answer to a fresh challenge, as link and unlink demand. */
+  /** A step-up challenge, minted against the caller's own session. */
+  function stepUpRequest(accessToken: string, body: Record<string, string>) {
+    return request(http())
+      .post('/auth/challenge/step-up')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send(body);
+  }
+
+  async function stepUpChallenge(
+    accessToken: string,
+    operation: StepUpOperation,
+    methodId?: string
+  ): Promise<string> {
+    const body: Record<string, string> = { operation };
+    if (methodId !== undefined) body.methodId = methodId;
+    return (await stepUpRequest(accessToken, body).expect(200)).body.challenge;
+  }
+
+  /** The account key's answer to a fresh step-up challenge, as link and unlink demand. */
   async function identityReproof(
-    identity: ReturnType<typeof newIdentity>
+    identity: ReturnType<typeof newIdentity>,
+    accessToken: string,
+    operation: StepUpOperation = 'link',
+    methodId?: string
   ): Promise<{ challenge: string; challengeSignature: string }> {
-    const challenge = await freshChallenge(identity);
+    const challenge = await stepUpChallenge(accessToken, operation, methodId);
     return { challenge, challengeSignature: signChallenge(challenge, identity.privateKey) };
   }
 
@@ -364,17 +385,31 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
   });
 
+  /**
+   * A nonce from the pool the intent names: the sign-in pool is
+   * unauthenticated, the link pool is owner-authenticated and serves no other
+   * route.
+   */
+  async function siweNonce(linkAccessToken?: string): Promise<string> {
+    const pending = linkAccessToken
+      ? request(http())
+          .post('/auth/siwe/link-challenge')
+          .set('Authorization', `Bearer ${linkAccessToken}`)
+      : request(http()).post('/auth/siwe/challenge');
+    return (await pending.send({}).expect(200)).body.nonce;
+  }
+
   async function siweSign(
     account: ReturnType<typeof privateKeyToAccount>,
     statement: string,
-    signer: ReturnType<typeof privateKeyToAccount> = account
+    signer: ReturnType<typeof privateKeyToAccount> = account,
+    linkAccessToken?: string
   ) {
-    const nonceRes = await request(http()).post('/auth/siwe/challenge').send({}).expect(200);
     const message = createSiweMessage({
       address: account.address,
       chainId: 1,
       domain: 'localhost:5173',
-      nonce: nonceRes.body.nonce,
+      nonce: await siweNonce(linkAccessToken),
       uri: 'http://localhost:5173',
       version: '1',
       statement,
@@ -386,10 +421,15 @@ describe('auth HTTP flows (real Postgres)', () => {
   /** A complete `/auth/siwe/link` body: the SIWE pair plus the identity re-proof. */
   async function siweLinkBody(
     identity: ReturnType<typeof newIdentity>,
+    accessToken: string,
     account: ReturnType<typeof privateKeyToAccount>,
     statement: string = SIWE_LINK_STATEMENT
   ) {
-    return { ...(await siweSign(account, statement)), ...(await identityReproof(identity)) };
+    const [siwe, reproof] = await Promise.all([
+      siweSign(account, statement, account, accessToken),
+      identityReproof(identity, accessToken),
+    ]);
+    return { ...siwe, ...reproof };
   }
 
   function link(accessToken: string, body: Record<string, string>) {
@@ -398,6 +438,88 @@ describe('auth HTTP flows (real Postgres)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send(body);
   }
+
+  /**
+   * A challenge names the operation it authorises, so possession of a live
+   * one buys exactly that operation. The mint that issues the two
+   * account-management challenges is owner-authenticated, so an attacker
+   * cannot mint one at all.
+   */
+  describe('operation-bound step-up challenges', () => {
+    it.each(['link', 'unlink'] as const)(
+      'refuses an unauthenticated %s mint',
+      async (operation) => {
+        await request(http()).post('/auth/challenge/step-up').send({ operation }).expect(401);
+      }
+    );
+
+    it('refuses an unauthenticated SIWE link-nonce mint', async () => {
+      await request(http()).post('/auth/siwe/link-challenge').send({}).expect(401);
+    });
+
+    it('refuses an operation it mints no pool for', async () => {
+      const { loginRes } = await identityLogin();
+      await stepUpRequest(loginRes.body.accessToken, { operation: 'login' }).expect(400);
+    });
+
+    /**
+     * The signed bytes name the operation, never the row. An unlink therefore
+     * names its row at the mint, and no other operation may name one.
+     */
+    it('refuses an unlink mint with no row, and a link mint that names one', async () => {
+      const { loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      await stepUpRequest(accessToken, { operation: 'unlink' }).expect(400);
+      await stepUpRequest(accessToken, {
+        operation: 'link',
+        methodId: '11111111-1111-4111-8111-111111111111',
+      }).expect(400);
+    });
+
+    it('refuses a scoped token that carries no account key', async () => {
+      const { identity, loginRes } = await identityLogin();
+      const scoped = await ctx.app.get(JwtService).signAsync({
+        sub: jwtPayload(loginRes.body.accessToken).sub,
+        publicKey: identity.publicKeyCompressed,
+        scope: 'device-approval',
+      });
+      const refused = await stepUpRequest(scoped, {
+        operation: 'unlink',
+        methodId: '11111111-1111-4111-8111-111111111111',
+      }).expect(403);
+      expect(refused.body.message).toBe('Insufficient token scope');
+    });
+
+    it('mints a distinct domain tag per operation, and never the login tag', async () => {
+      const { loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      const tags = await Promise.all([
+        stepUpChallenge(accessToken, 'link'),
+        stepUpChallenge(accessToken, 'unlink', '11111111-1111-4111-8111-111111111111'),
+      ]);
+      expect(new Set(tags.map((tag) => tag.split(':')[0])).size).toBe(2);
+      for (const tag of tags) {
+        expect(tag.startsWith('cipherbox-login:')).toBe(false);
+      }
+    });
+
+    it('refuses a step-up challenge at the login route', async () => {
+      const { identity, loginRes } = await identityLogin();
+      const challenge = await stepUpChallenge(
+        loginRes.body.accessToken,
+        'unlink',
+        '11111111-1111-4111-8111-111111111111'
+      );
+      await request(http())
+        .post('/auth/login')
+        .send({
+          publicKey: identity.publicKeyCompressed,
+          challenge,
+          signature: signChallenge(challenge, identity.privateKey),
+        })
+        .expect(401);
+    });
+  });
 
   describe('SIWE secondary auth', () => {
     it('refuses login for an unlinked wallet — no implicit creation through SIWE', async () => {
@@ -410,7 +532,10 @@ describe('auth HTTP flows (real Postgres)', () => {
       const { identity, loginRes } = await identityLogin();
       const account = privateKeyToAccount(generatePrivateKey());
 
-      await link(loginRes.body.accessToken, await siweLinkBody(identity, account)).expect(201);
+      await link(
+        loginRes.body.accessToken,
+        await siweLinkBody(identity, loginRes.body.accessToken, account)
+      ).expect(201);
 
       const login = await siweSign(account, SIWE_LOGIN_STATEMENT);
       const siweLoginRes = await request(http()).post('/auth/siwe/login').send(login).expect(200);
@@ -426,11 +551,11 @@ describe('auth HTTP flows (real Postgres)', () => {
 
       await link(
         first.loginRes.body.accessToken,
-        await siweLinkBody(first.identity, account)
+        await siweLinkBody(first.identity, first.loginRes.body.accessToken, account)
       ).expect(201);
       await link(
         second.loginRes.body.accessToken,
-        await siweLinkBody(second.identity, account)
+        await siweLinkBody(second.identity, second.loginRes.body.accessToken, account)
       ).expect(409);
     });
 
@@ -454,7 +579,7 @@ describe('auth HTTP flows (real Postgres)', () => {
 
       await link(
         loginRes.body.accessToken,
-        await siweLinkBody(identity, account, SIWE_LOGIN_STATEMENT)
+        await siweLinkBody(identity, loginRes.body.accessToken, account, SIWE_LOGIN_STATEMENT)
       ).expect(401);
 
       expect(
@@ -465,18 +590,24 @@ describe('auth HTTP flows (real Postgres)', () => {
     it('refuses a link signature replayed as a sign-in', async () => {
       const { identity, loginRes } = await identityLogin();
       const account = privateKeyToAccount(generatePrivateKey());
-      await link(loginRes.body.accessToken, await siweLinkBody(identity, account)).expect(201);
+      await link(
+        loginRes.body.accessToken,
+        await siweLinkBody(identity, loginRes.body.accessToken, account)
+      ).expect(201);
 
       const replayed = await siweSign(account, SIWE_LINK_STATEMENT);
       await request(http()).post('/auth/siwe/login').send(replayed).expect(401);
     });
 
-    it('refuses a link whose challenge was issued to another key, and links nothing', async () => {
+    it('refuses a link whose challenge was signed by another key, and links nothing', async () => {
       const { loginRes } = await identityLogin();
       const account = privateKeyToAccount(generatePrivateKey());
       const userId = jwtPayload(loginRes.body.accessToken).sub;
 
-      await link(loginRes.body.accessToken, await siweLinkBody(newIdentity(), account)).expect(401);
+      await link(
+        loginRes.body.accessToken,
+        await siweLinkBody(newIdentity(), loginRes.body.accessToken, account)
+      ).expect(401);
 
       expect(
         await db.dataSource.getRepository(AuthMethod).count({ where: { userId, kind: 'wallet' } })
@@ -486,7 +617,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     it('refuses a link whose challenge was already spent', async () => {
       const { identity, loginRes } = await identityLogin();
       const first = privateKeyToAccount(generatePrivateKey());
-      const body = await siweLinkBody(identity, first);
+      const body = await siweLinkBody(identity, loginRes.body.accessToken, first);
       await link(loginRes.body.accessToken, body).expect(201);
 
       const second = privateKeyToAccount(generatePrivateKey());
@@ -494,6 +625,61 @@ describe('auth HTTP flows (real Postgres)', () => {
         ...body,
         ...(await siweSign(second, SIWE_LINK_STATEMENT)),
       }).expect(401);
+    });
+
+    /**
+     * The structural half of the binding. Every message here carries the statement
+     * the target route expects and a re-proof the account key really made, so
+     * only the pool a challenge was minted from can refuse it.
+     */
+    it('refuses a sign-in nonce spent as a link, statement notwithstanding', async () => {
+      const { identity, loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      const account = privateKeyToAccount(generatePrivateKey());
+      const userId = jwtPayload(accessToken).sub;
+
+      await link(accessToken, {
+        // A sign-in nonce: `siweSign` with no bearer reaches the open pool.
+        ...(await siweSign(account, SIWE_LINK_STATEMENT)),
+        ...(await identityReproof(identity, accessToken)),
+      }).expect(401);
+
+      expect(
+        await db.dataSource.getRepository(AuthMethod).count({ where: { userId, kind: 'wallet' } })
+      ).toBe(0);
+    });
+
+    it('refuses a link nonce spent as a wallet sign-in', async () => {
+      const { identity, loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      const account = privateKeyToAccount(generatePrivateKey());
+      await link(accessToken, await siweLinkBody(identity, accessToken, account)).expect(201);
+
+      const linkNonced = await siweSign(account, SIWE_LOGIN_STATEMENT, account, accessToken);
+      await request(http()).post('/auth/siwe/login').send(linkNonced).expect(401);
+
+      // The same wallet and statement over a sign-in nonce still signs in, so
+      // the pool is what refused the first attempt.
+      const loginNonced = await siweSign(account, SIWE_LOGIN_STATEMENT);
+      await request(http()).post('/auth/siwe/login').send(loginNonced).expect(200);
+    });
+
+    it('refuses a link re-proved with a login challenge, and links nothing', async () => {
+      const { identity, loginRes } = await identityLogin();
+      const accessToken = loginRes.body.accessToken as string;
+      const account = privateKeyToAccount(generatePrivateKey());
+      const userId = jwtPayload(accessToken).sub;
+      const challenge = await freshChallenge(identity);
+
+      await link(accessToken, {
+        ...(await siweSign(account, SIWE_LINK_STATEMENT, account, accessToken)),
+        challenge,
+        challengeSignature: signChallenge(challenge, identity.privateKey),
+      }).expect(401);
+
+      expect(
+        await db.dataSource.getRepository(AuthMethod).count({ where: { userId, kind: 'wallet' } })
+      ).toBe(0);
     });
 
     it('refuses a scoped token on the link route', async () => {
@@ -505,7 +691,10 @@ describe('auth HTTP flows (real Postgres)', () => {
         scope: 'device-approval',
       });
 
-      const refused = await link(scoped, await siweLinkBody(identity, account)).expect(403);
+      const refused = await link(
+        scoped,
+        await siweLinkBody(identity, loginRes.body.accessToken, account)
+      ).expect(403);
       expect(refused.body.message).toBe('Insufficient token scope');
     });
   });
@@ -584,7 +773,7 @@ describe('auth HTTP flows (real Postgres)', () => {
       const { identity, loginRes } = await identityLogin();
       const accessToken = loginRes.body.accessToken as string;
       const wallet = privateKeyToAccount(generatePrivateKey());
-      await link(accessToken, await siweLinkBody(identity, wallet)).expect(201);
+      await link(accessToken, await siweLinkBody(identity, accessToken, wallet)).expect(201);
       return { identity, accessToken, userId: jwtPayload(accessToken).sub };
     }
 
@@ -599,7 +788,7 @@ describe('auth HTTP flows (real Postgres)', () => {
       const accessToken = loginRes.body.accessToken as string;
       for (let i = 0; i < wallets; i += 1) {
         const wallet = privateKeyToAccount(generatePrivateKey());
-        await link(accessToken, await siweLinkBody(identity, wallet)).expect(201);
+        await link(accessToken, await siweLinkBody(identity, accessToken, wallet)).expect(201);
       }
       const userId = jwtPayload(accessToken).sub;
       await authMethods().delete({ userId, kind: 'identity' });
@@ -619,9 +808,10 @@ describe('auth HTTP flows (real Postgres)', () => {
 
     async function signedUnlink(
       identity: ReturnType<typeof newIdentity>,
+      accessToken: string,
       methodId: string
     ): Promise<Record<string, string>> {
-      const challenge = await freshChallenge(identity);
+      const challenge = await stepUpChallenge(accessToken, 'unlink', methodId);
       return { methodId, challenge, signature: signChallenge(challenge, identity.privateKey) };
     }
 
@@ -672,16 +862,60 @@ describe('auth HTTP flows (real Postgres)', () => {
       const { identity, accessToken, userId } = await accountWithTwoMethods();
       const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
 
-      const res = await unlink(accessToken, await signedUnlink(identity, wallet)).expect(200);
+      const res = await unlink(
+        accessToken,
+        await signedUnlink(identity, accessToken, wallet)
+      ).expect(200);
       expect(res.body).toEqual({ success: true });
       expect(await authMethods().count({ where: { userId } })).toBe(1);
+    });
+
+    it.each(['link', 'login'] as const)(
+      'refuses an unlink re-proved with a %s challenge, and keeps the row',
+      async (source) => {
+        const { identity, accessToken, userId } = await accountWithTwoMethods();
+        const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } }))
+          .id;
+        const challenge =
+          source === 'login'
+            ? await freshChallenge(identity)
+            : await stepUpChallenge(accessToken, 'link');
+
+        await unlink(accessToken, {
+          methodId: wallet,
+          challenge,
+          signature: signChallenge(challenge, identity.privateKey),
+        }).expect(401);
+
+        expect(await authMethods().count({ where: { userId } })).toBe(2);
+      }
+    );
+
+    /**
+     * A stolen bearer plus one captured proof must not choose a different row:
+     * the mint names the row, so the proof buys that removal and no other.
+     */
+    it('refuses an unlink redirected onto another row, and keeps both', async () => {
+      const { identity, accessToken, userId } = await accountWithWalletsOnly(2);
+      const rows = await authMethods().find({ where: { userId } });
+      const challenge = await stepUpChallenge(accessToken, 'unlink', rows[0].id);
+
+      await unlink(accessToken, {
+        methodId: rows[1].id,
+        challenge,
+        signature: signChallenge(challenge, identity.privateKey),
+      }).expect(401);
+
+      expect(await authMethods().count({ where: { userId } })).toBe(2);
     });
 
     it('refuses to unlink the last remaining method and keeps the row', async () => {
       const { identity, accessToken, userId } = await accountWithWalletsOnly(1);
       const only = (await authMethods().findOneOrFail({ where: { userId } })).id;
 
-      const res = await unlink(accessToken, await signedUnlink(identity, only)).expect(409);
+      const res = await unlink(accessToken, await signedUnlink(identity, accessToken, only)).expect(
+        409
+      );
       expect(res.body.message).toBe('An account must keep at least one login method');
       expect(await authMethods().count({ where: { userId } })).toBe(1);
     });
@@ -700,7 +934,10 @@ describe('auth HTTP flows (real Postgres)', () => {
         }
         const target = (await authMethods().findOneOrFail({ where: { userId, kind } })).id;
 
-        const res = await unlink(accessToken, await signedUnlink(identity, target)).expect(409);
+        const res = await unlink(
+          accessToken,
+          await signedUnlink(identity, accessToken, target)
+        ).expect(409);
         expect(res.body.message).toContain('cannot be unlinked');
         expect(await authMethods().count({ where: { userId } })).toBe(2);
       }
@@ -709,7 +946,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     it('refuses a replayed challenge and keeps the row', async () => {
       const { identity, accessToken, userId } = await accountWithWalletsOnly(2);
       const methods = await authMethods().find({ where: { userId } });
-      const body = await signedUnlink(identity, methods[0].id);
+      const body = await signedUnlink(identity, accessToken, methods[0].id);
 
       await unlink(accessToken, body).expect(200);
       // The same challenge again, now aimed at the survivor.
@@ -745,7 +982,7 @@ describe('auth HTTP flows (real Postgres)', () => {
     });
 
     it('refuses a scoped token on both routes', async () => {
-      const { identity, userId } = await accountWithTwoMethods();
+      const { identity, accessToken, userId } = await accountWithTwoMethods();
       const scoped = await ctx.app.get(JwtService).signAsync({
         sub: userId,
         publicKey: identity.publicKeyCompressed,
@@ -754,17 +991,23 @@ describe('auth HTTP flows (real Postgres)', () => {
       const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
 
       await listMethods(scoped).expect(403);
-      const refused = await unlink(scoped, await signedUnlink(identity, wallet)).expect(403);
+      const refused = await unlink(
+        scoped,
+        await signedUnlink(identity, accessToken, wallet)
+      ).expect(403);
       expect(refused.body.message).toBe('Insufficient token scope');
       expect(await authMethods().count({ where: { userId } })).toBe(2);
     });
 
     it('refuses a token that carries no account key', async () => {
-      const { identity, userId } = await accountWithTwoMethods();
+      const { identity, accessToken, userId } = await accountWithTwoMethods();
       const keyless = await ctx.app.get(JwtService).signAsync({ sub: userId });
       const wallet = (await authMethods().findOneOrFail({ where: { userId, kind: 'wallet' } })).id;
 
-      const refused = await unlink(keyless, await signedUnlink(identity, wallet)).expect(403);
+      const refused = await unlink(
+        keyless,
+        await signedUnlink(identity, accessToken, wallet)
+      ).expect(403);
       expect(refused.body.message).toBe('Insufficient token scope');
       expect(await authMethods().count({ where: { userId } })).toBe(2);
     });
@@ -778,7 +1021,7 @@ describe('auth HTTP flows (real Postgres)', () => {
 
       const res = await unlink(
         mine.accessToken,
-        await signedUnlink(mine.identity, theirWallet)
+        await signedUnlink(mine.identity, mine.accessToken, theirWallet)
       ).expect(404);
       expect(res.body.message).toBe('Unknown login method');
       expect(await authMethods().count({ where: { userId: theirs.userId } })).toBe(2);
@@ -790,8 +1033,8 @@ describe('auth HTTP flows (real Postgres)', () => {
       const methods = await authMethods().find({ where: { userId } });
       // Both bodies are signed up front: a challenge is single-use, so the race
       // has to be between two independently valid unlinks.
-      const first = await signedUnlink(identity, methods[0].id);
-      const second = await signedUnlink(identity, methods[1].id);
+      const first = await signedUnlink(identity, accessToken, methods[0].id);
+      const second = await signedUnlink(identity, accessToken, methods[1].id);
 
       const statuses = (
         await Promise.all([unlink(accessToken, first), unlink(accessToken, second)])
@@ -814,10 +1057,12 @@ describe('auth HTTP flows (real Postgres)', () => {
         ]);
 
         let settled = false;
-        const pending = unlink(accessToken, await signedUnlink(identity, wallet)).then((res) => {
-          settled = true;
-          return res;
-        });
+        const pending = unlink(accessToken, await signedUnlink(identity, accessToken, wallet)).then(
+          (res) => {
+            settled = true;
+            return res;
+          }
+        );
         await waitForAdvisoryLockWait(db.dataSource);
         expect(settled).toBe(false);
         expect(await authMethods().count({ where: { userId } })).toBe(2);

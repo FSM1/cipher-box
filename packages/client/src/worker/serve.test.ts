@@ -15,6 +15,7 @@ import type {
   CommandOutcomeDescriptor,
   EventDescriptor,
   OpenedStream,
+  SiweIntent,
   SnapshotDescriptor,
   WorkerMessage,
   WorkerRequest,
@@ -84,6 +85,7 @@ class ReadHost extends StubEngineHost {
   respondReadStream: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([5, 4]).buffer);
   siweChallenges = 0;
+  siweChallengeIntents: SiweIntent[] = [];
 
   start(): Promise<void> {
     return Promise.resolve();
@@ -122,8 +124,9 @@ class ReadHost extends StubEngineHost {
     return this.respondSnapshot();
   }
 
-  siweChallenge(): Promise<string> {
+  siweChallenge(intent: SiweIntent): Promise<string> {
     this.siweChallenges += 1;
+    this.siweChallengeIntents.push(intent);
     return Promise.resolve(FAKE_SIWE_NONCE);
   }
 
@@ -209,8 +212,9 @@ describe('serveEngine read requests', () => {
     serveEngine(scope, host);
     const transport = new LocalTransport(worker);
 
-    await expect(transport.siweChallenge()).resolves.toBe(FAKE_SIWE_NONCE);
+    await expect(transport.siweChallenge('link')).resolves.toBe(FAKE_SIWE_NONCE);
     expect(host.siweChallenges).toBe(1);
+    expect(host.siweChallengeIntents).toEqual(['link']);
   });
 
   it('maps a rejected read to a correlated error response with the stable code', async () => {

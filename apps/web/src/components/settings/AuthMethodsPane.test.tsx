@@ -120,6 +120,7 @@ describe('the login methods pane', () => {
     await act(async () => void fireEvent.click(wallets[0]!));
 
     expect(engine.calls.siweChallenges).toBe(1);
+    expect(engine.calls.siweChallengeIntents).toEqual(['link']);
     expect(engine.calls.siweLinks).toHaveLength(1);
     expect(engine.calls.siweLinks[0]!.message).toContain('Link wallet to CipherBox account');
     // CipherBox needs the wallet for one signature, never a standing session.

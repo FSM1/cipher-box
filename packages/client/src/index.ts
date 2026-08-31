@@ -90,6 +90,7 @@ export type {
   VaultStorageDescriptor,
   AuthMethodKind,
   AuthMethodDescriptor,
+  SiweIntent,
 } from './worker/protocol.js';
 
 export {

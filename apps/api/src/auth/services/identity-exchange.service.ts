@@ -56,7 +56,7 @@ export class IdentityExchangeService {
     if (!nonce) {
       throw new UnauthorizedException('Invalid SIWE message: missing nonce');
     }
-    this.challenges.consume(nonce, 'siwe');
+    this.challenges.consume(nonce, 'siwe-login');
     const address = await this.siwe.verifySiweMessage(
       message,
       signature,

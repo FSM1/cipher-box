@@ -39,7 +39,7 @@ export function useAuthMethods(): AuthMethodsRead {
   // rather than through the command runner.
   const challenge = useCallback(() => {
     if (client === null) return Promise.reject(new Error('the engine is not ready yet'));
-    return client.facade.siweChallenge();
+    return client.facade.siweChallenge('link');
   }, [client]);
 
   const link = useCallback(

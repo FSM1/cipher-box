@@ -15,7 +15,7 @@ use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, Engine, EngineError, EventStream,
-    GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, NodeKind, Permission,
+    GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, NodeKind, Permission, SiweIntent,
     StoragePolicy, SyncTimingProfile,
 };
 
@@ -167,7 +167,7 @@ fn a_siwe_challenge_before_start_is_rejected_not_started() {
     let (engine, _events) = new_engine(&device);
 
     assert_eq!(
-        block_on(engine.siwe_challenge()),
+        block_on(engine.siwe_challenge(SiweIntent::Login)),
         Err(EngineError::NotStarted)
     );
 }
@@ -186,7 +186,7 @@ fn a_started_engine_serves_the_nonce_from_its_api_client() {
     });
 
     assert_eq!(
-        block_on(engine.siwe_challenge()),
+        block_on(engine.siwe_challenge(SiweIntent::Login)),
         Ok("a1b2c3d4e5f60718".to_owned())
     );
     let request = device.http.requests().pop().expect("one request");

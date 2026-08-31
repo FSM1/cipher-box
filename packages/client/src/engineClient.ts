@@ -41,6 +41,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultStorageDescriptor,
@@ -474,8 +475,8 @@ export class EngineClient implements EngineTransport {
     return this.current.authMethods();
   }
 
-  siweChallenge(): Promise<string> {
-    return this.current.siweChallenge();
+  siweChallenge(intent: SiweIntent): Promise<string> {
+    return this.current.siweChallenge(intent);
   }
 
   download(node: Uint8Array): Promise<ArrayBuffer> {

@@ -653,8 +653,9 @@ describe('broadcast transport ↔ leader relay', () => {
     const { engine, follower } = wire();
     engine.respondSiweChallenge = () => Promise.resolve('leaderNonce12345');
 
-    await expect(follower.siweChallenge()).resolves.toBe('leaderNonce12345');
+    await expect(follower.siweChallenge('link')).resolves.toBe('leaderNonce12345');
     expect(engine.siweChallenges).toBe(1);
+    expect(engine.siweChallengeIntents).toEqual(['link']);
   });
 
   it('serves a follower stream window over the private port and rebuilds the window bytes', async () => {
@@ -1669,7 +1670,11 @@ describe('leader relay write handles', () => {
     for (const junk of [null, undefined, 'a string', 42]) leaderPort.receive(junk);
     await tick();
 
-    leaderPort.receive({ type: 'cb:portRead', requestId: 1, read: { kind: 'siweChallenge' } });
+    leaderPort.receive({
+      type: 'cb:portRead',
+      requestId: 1,
+      read: { kind: 'siweChallenge', intent: 'login' },
+    });
     await tick();
     expect(engine.siweChallenges).toBe(1);
   });

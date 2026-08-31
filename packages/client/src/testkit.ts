@@ -21,6 +21,7 @@ import type {
   OpenedStream,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultSettingsDescriptor,
@@ -190,7 +191,7 @@ export class StubEngineHost implements EngineHostLike {
     return notStubbed('authMethods');
   }
 
-  siweChallenge(): Promise<string> {
+  siweChallenge(_intent: SiweIntent): Promise<string> {
     return notStubbed('siweChallenge');
   }
 
@@ -503,6 +504,7 @@ export class FakeEngineTransport implements EngineTransport {
   authMethodReads = 0;
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
+  readonly siweChallengeIntents: SiweIntent[] = [];
   readonly opened: Uint8Array[] = [];
   readonly reads: Array<{ handle: StreamHandle; offset: number; length: number }> = [];
   readonly closedStreams: StreamHandle[] = [];
@@ -603,8 +605,9 @@ export class FakeEngineTransport implements EngineTransport {
     return this.respondAuthMethods();
   }
 
-  siweChallenge(): Promise<string> {
+  siweChallenge(intent: SiweIntent): Promise<string> {
     this.siweChallenges += 1;
+    this.siweChallengeIntents.push(intent);
     return this.respondSiweChallenge();
   }
 

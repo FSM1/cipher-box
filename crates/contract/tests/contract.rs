@@ -361,6 +361,15 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
     );
 }
 
+/// A link message the live API's DTO and SIWE parser both accept.
+fn link_message(nonce: &str) -> String {
+    format!(
+        "localhost:5173 wants you to sign in with your Ethereum account:\n\
+         0x0000000000000000000000000000000000000000\n\n\
+         Link wallet to CipherBox account\n\nNonce: {nonce}\n"
+    )
+}
+
 /// The engine formats a wallet signature once, at the facade, and a mocked
 /// transport will certify whatever it is handed — so the shape only becomes a
 /// fact here, where the DTO's `HEX_ETH_SIGNATURE` answers 400 for anything else
@@ -370,13 +379,8 @@ async fn siwe_link_sends_a_body_the_login_dto_accepts() {
     let base = require_stack!("siwe_link_sends_a_body_the_login_dto_accepts");
     let (client, signer) = fresh_account_with_signer(&base).await;
 
-    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
-    let message = format!(
-        "localhost:5173 wants you to sign in with your Ethereum account:\n\
-         0x0000000000000000000000000000000000000000\n\n\
-         Link wallet to CipherBox account\n\nNonce: {}\n",
-        nonce.nonce
-    );
+    let nonce = expect_auth("link nonce", client.siwe_link_challenge().await);
+    let message = link_message(&nonce.nonce);
     // The exact string `Command::SiweLink` builds from 65 signature bytes.
     let signature = format!("0x{}", "ab".repeat(65));
 
@@ -401,13 +405,8 @@ async fn siwe_link_without_a_fresh_challenge_is_refused() {
     let base = require_stack!("siwe_link_without_a_fresh_challenge_is_refused");
     let (client, _signer) = fresh_account_with_signer(&base).await;
 
-    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
-    let message = format!(
-        "localhost:5173 wants you to sign in with your Ethereum account:\n\
-         0x0000000000000000000000000000000000000000\n\n\
-         Link wallet to CipherBox account\n\nNonce: {}\n",
-        nonce.nonce
-    );
+    let nonce = expect_auth("link nonce", client.siwe_link_challenge().await);
+    let message = link_message(&nonce.nonce);
     let signature = format!("0x{}", "ab".repeat(65));
 
     let error = client

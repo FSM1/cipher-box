@@ -23,6 +23,7 @@ import type {
   Permission,
   ReceivedShareDescriptor,
   SharingDescriptor,
+  SiweIntent,
   SnapshotDescriptor,
   StreamHandle,
   VaultSettingsDescriptor,
@@ -332,9 +333,9 @@ export class EngineFacade {
     return this.command({ kind: 'saveVaultSettings', settings });
   }
 
-  /** Issues the single-use nonce an EIP-4361 message must embed. */
-  siweChallenge(): Promise<string> {
-    return this.transport.siweChallenge();
+  /** Issues the single-use nonce an EIP-4361 message must embed, for `intent`. */
+  siweChallenge(intent: SiweIntent): Promise<string> {
+    return this.transport.siweChallenge(intent);
   }
 
   siweLogin(message: string, signature: Uint8Array): Promise<CommandOutcomeDescriptor> {
