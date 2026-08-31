@@ -65,10 +65,10 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
     DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError,
-    Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_OPEN_STREAMS, NodeId,
-    NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordSeal,
-    ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget,
-    reseal_scope_root, stage_op,
+    Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
+    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal,
+    PrevEpochSeed, RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
+    WriteHistory, WriteTarget, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -1899,63 +1899,80 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
     );
 }
 
-/// A head over the block ceiling is refused identically on every retry: a fresh
-/// nonce moves the sealed bytes and never their count, so no re-author shrinks
-/// it. Uncharged it would hold the strict-FIFO queue head forever with nothing
-/// reported anywhere, so it spends the budget and every op behind it drains —
-/// but only the record was over the ceiling, so ending it keeps the version it
-/// would have named rather than unpinning and erasing it, and owes back only the
-/// child name no parent record ever reached. It ends under its own reason: the
-/// remedy is to split the listing, which a transport outage's "try again" never
-/// reaches.
+/// The child ceiling is what keeps a folder this device authors inside the IPFS
+/// block ceiling, and a peer decides how many children a folder already holds.
+/// So the refusal is driven against a *published* over-full listing: the ceiling
+/// has to bite on a record this device adopted from the network, and it has to
+/// bite at the boundary rather than as a dead letter, because a queued op no
+/// re-author can shrink spends a staging reservation and reports a failure where
+/// the remedy is to split the folder.
 #[test]
-fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact() {
+fn a_peer_overfilled_folder_refuses_a_further_child_and_stages_nothing() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
-    // A child ref carries its name verbatim, so a name past the 2 MiB IPFS
-    // block ceiling is a parent folder record this engine can author and its
-    // own ingress can never hold.
-    let name = "n".repeat(2 * 1024 * 1024 + 4096);
-    let op_id = write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: name.clone(),
-        },
-        &(0..200u8).collect::<Vec<u8>>(),
-    )
-    .expect("the write commits");
-    let doomed = child_id(&engine, ROOT, &name);
+    let planted: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN)
+        .map(|i| {
+            let mut id = [0u8; 16];
+            id[..8].copy_from_slice(&(i as u64 + 1).to_be_bytes());
+            // One folder among them, so the last assertion has a parent with room.
+            if i == 0 {
+                child_ref(id, "planted-folder", CoreNodeKind::Folder)
+            } else {
+                file_ref(id, &format!("planted-{i}.bin"))
+            }
+        })
+        .collect();
+    concurrent_root_extend(&world.record_store, &blocks, planted);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        block_on(engine.view()).unwrap().children(ROOT).len(),
+        MAX_FOLDER_CHILDREN,
+        "the peer's listing is in gate-passing state"
+    );
 
-    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
-    assert!(
-        passes > 1,
-        "a size refusal is charged against the budget, not permanent on sight"
+    assert_eq!(
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: "one-too-many.bin".into(),
+            kind: NodeKind::File,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        }),
+        "the boundary refuses, so the caller learns the folder is full"
     );
     assert_eq!(
-        dead_letters,
-        vec![DeadLetter {
-            op_id,
-            reason: DeadLetterReason::HeadTooLarge
-        }]
+        block_on(engine.begin_write(
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "one-too-many.bin".into(),
+            },
+            8,
+        ))
+        .err(),
+        Some(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        }),
+        "a write handle creates a child too, and it reserves staging bytes first"
     );
     assert!(
         block_on(StagingStore::queued_ops(&alice.staging_store))
             .unwrap()
             .is_empty(),
-        "the head no retry could publish leaves the queue"
+        "a refusal at the boundary queues nothing for the drain to end"
     );
-    assert_eq!(
-        retire_targets(&alice),
-        vec![write_name(doomed).as_str().to_owned()],
-        "the version the oversized record would have named stays pinned — unpinning \
-         it is loss no retry undoes — while the child name the parent never came to \
-         reference is owed back like any abandoned create's"
-    );
+
+    // The ceiling bounds the folder, never the vault.
+    block_on(engine.command(Command::Create {
+        parent: child_id(&engine, ROOT, "planted-folder"),
+        name: "under-a-sibling.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a folder with room still takes a child");
 }
 
 /// Cache a scope root whose carried grant section is committed to a different
@@ -7685,9 +7702,14 @@ fn stage(device: &FakeDevice, op: &Op, upload: Option<&[u8]>) {
 /// top of whatever the root currently carries. The root carries a grant section,
 /// so it re-authors through the owner-root fixture rather than the child path.
 fn concurrent_root_add(records: &InMemoryRecordStore, blocks: &Blocks, extra: ChildRef) {
+    concurrent_root_extend(records, blocks, vec![extra]);
+}
+
+/// The same, for a listing one call has to plant whole.
+fn concurrent_root_extend(records: &InMemoryRecordStore, blocks: &Blocks, extra: Vec<ChildRef>) {
     let (sequence, _) = published(records, ROOT);
     let mut children = published_children(records, blocks, ROOT);
-    children.push(extra);
+    children.extend(extra);
     let fixture = owner_root_fixture(OwnerRootSpec {
         owner_identity: &owner_identity(),
         owner_enc: &kdf::enc_subkey(&SECRET).public(),

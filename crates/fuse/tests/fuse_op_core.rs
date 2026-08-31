@@ -1474,19 +1474,11 @@ fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
 
 #[test]
 fn a_name_no_kernel_could_carry_never_reaches_a_listing() {
-    // Nothing below the facade validates names: a peer on any client can
-    // commit whatever text string it likes, and this crate is the only
-    // enforcement point in the stack.
-    let hostile = [
-        "a/b",
-        "a\\b",
-        "..",
-        ".",
-        "",
-        "a\0b",
-        "a\nb",
-        &"x".repeat(MAX_NAME_BYTES + 1),
-    ];
+    // A peer on any client can commit whatever text string it likes, and this
+    // crate is what keeps one out of a listing. The over-long case is covered at
+    // `is_emittable`, which this seeding route cannot reach: the facade refuses
+    // to author a name past its own bound.
+    let hostile = ["a/b", "a\\b", "..", ".", "", "a\0b", "a\nb"];
     let seed: Vec<(&str, NodeKind)> = hostile
         .iter()
         .map(|name| (*name, NodeKind::File))

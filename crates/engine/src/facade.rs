@@ -27,8 +27,8 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, ReadBody, Version,
-    open_content_key, seal_content_key, sign_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, MAX_READ_SEALED_BYTES,
+    ReadBody, Version, open_content_key, seal_content_key, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
@@ -763,6 +763,34 @@ impl fmt::Display for BlankApiBaseUrl {
 }
 
 impl std::error::Error for BlankApiBaseUrl {}
+
+/// The longest node name a command may carry, in bytes.
+///
+/// Bounded here rather than at a host: the projection's own limit runs above the
+/// facade, so a web caller reaches this boundary with no bound in front of it.
+/// A name a *peer* committed is not held to this — it stays listable and
+/// removable, the same two-tier rule `crates/fuse/src/name.rs` states.
+pub const MAX_NODE_NAME_BYTES: usize = 255;
+
+/// The det-CBOR cost of one `ChildRef` this device authors, at worst: its five
+/// known keys, a name at [`MAX_NODE_NAME_BYTES`], a base36 `ipnsName`, and a
+/// `linkCounter` at `u64::MAX`. Pinned by
+/// `a_full_folder_of_worst_case_children_still_seals`.
+const MAX_AUTHORED_CHILD_REF_BYTES: usize = 512;
+
+/// The most children a folder this device authors may hold.
+///
+/// A folder's read-body seals into one block, so `MAX_READ_SEALED_BYTES` is the
+/// real budget and the ceiling is derived from it rather than picked. A picked
+/// number sits either above that budget, which makes this refusal unreachable,
+/// or far below it, which refuses folders that seal.
+///
+/// The derivation covers the children this device authors. Nothing budgets a
+/// child's carried unknown fields inside the read body — the frozen
+/// `MAX_CRITICAL_CARRIED_BYTES` truncation budget is charged at the envelope,
+/// one level up — so a folder that re-emits a peer's carried fields can still
+/// exceed the seal bound, and that refusal stays the backstop.
+pub const MAX_FOLDER_CHILDREN: usize = MAX_READ_SEALED_BYTES / MAX_AUTHORED_CHILD_REF_BYTES;
 
 /// Every command a host can issue — the intent ops, grant/rotation/share
 /// actions, auth, and manual refresh (blueprint/engine.md "Facade").
@@ -1955,6 +1983,38 @@ type OwnerNet<'a, T> = OwnerRotationNet<
     <T as SeamTypes>::Scheduler,
     Box<dyn Entropy>,
 >;
+
+/// A node name a command carries, held to [`MAX_NODE_NAME_BYTES`].
+fn refuse_over_bound_name(name: &str) -> Result<(), EngineError> {
+    if name.len() > MAX_NODE_NAME_BYTES {
+        return Err(EngineError::MalformedInput {
+            check: "node-name-too-long",
+        });
+    }
+    Ok(())
+}
+
+/// A folder gaining a child, held to [`MAX_FOLDER_CHILDREN`].
+///
+/// Refused before the op is queued: a queued op the drain can only halt on costs
+/// a staging reservation and surfaces as a dead letter, where the ceiling reads
+/// as a failure rather than as a limit the caller can act on. `arriving` names
+/// the node being placed, so a relink inside its own parent is not refused for a
+/// child the folder already holds.
+fn refuse_full_parent(
+    rendered: &Snapshot,
+    parent: NodeId,
+    arriving: Option<NodeId>,
+) -> Result<(), EngineError> {
+    let children = rendered.children(parent);
+    let held = arriving.is_some_and(|node| children.iter().any(|child| child.id == node));
+    if !held && children.len() >= MAX_FOLDER_CHILDREN {
+        return Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        });
+    }
+    Ok(())
+}
 
 /// The label a share pointer carries for `node`.
 ///
@@ -4445,8 +4505,12 @@ where {
         let authored_at = self.seams.scheduler.now();
         match command {
             Command::Create { parent, name, kind } => {
+                refuse_over_bound_name(&name)?;
+                let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, parent)?;
+                refuse_full_parent(&rendered, parent, None)?;
                 let target = self.mint_node_id()?;
-                let base_sequence = self.base_sequence_for(parent).await?;
+                let base_sequence = rendered.record_sequence(parent).unwrap_or(1);
                 let node = match kind {
                     NodeKind::Folder => NewNode::Folder,
                     NodeKind::File => NewNode::File { content: None },
@@ -4462,6 +4526,7 @@ where {
                     .await
             }
             Command::Rename { node, new_name } => {
+                refuse_over_bound_name(&new_name)?;
                 let seq = self.base_sequence_for(node).await?;
                 self.stage_and_notify(&Op::rename(node, new_name, seq, authored_at))
                     .await
@@ -4471,6 +4536,7 @@ where {
                 refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
+                refuse_full_parent(&rendered, new_parent, Some(node))?;
                 let op = Op::relink(
                     node,
                     from_parent,
@@ -4487,10 +4553,12 @@ where {
                 new_name,
                 replacing,
             } => {
+                refuse_over_bound_name(&new_name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
+                refuse_full_parent(&rendered, new_parent, Some(node))?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
                     // The conditional-delete anchor: a concurrent edit that
@@ -6428,8 +6496,11 @@ where {
         // no file for would journal an `updateContent` the drain can only halt
         // on, after a whole upload's worth of staging, entropy and budget.
         let base_version_cid = match &target {
-            WriteTarget::NewFile { parent, .. } => {
-                refuse_outside_vault(&self.render().await?, *parent)?;
+            WriteTarget::NewFile { parent, name } => {
+                refuse_over_bound_name(name)?;
+                let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, *parent)?;
+                refuse_full_parent(&rendered, *parent, None)?;
                 None
             }
             WriteTarget::Version { node } => {
@@ -9156,6 +9227,134 @@ mod tests {
                 },
             ],
             "only the lost race and the publish failure surface; success is silent",
+        );
+    }
+
+    /// The bound is release-active and it sits at the facade, because the
+    /// projection's own name check runs above it and a web caller reaches the
+    /// commands with nothing in front of them.
+    #[test]
+    fn an_over_bound_name_is_refused_at_every_command_that_carries_one() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        let too_long = "n".repeat(MAX_NODE_NAME_BYTES + 1);
+        let refusal = Err(EngineError::MalformedInput {
+            check: "node-name-too-long",
+        });
+
+        assert_eq!(
+            block_on(engine.command(Command::Create {
+                parent: root,
+                name: too_long.clone(),
+                kind: NodeKind::File,
+            })),
+            refusal
+        );
+        assert_eq!(
+            block_on(engine.command(Command::Rename {
+                node: root,
+                new_name: too_long.clone(),
+            })),
+            refusal
+        );
+        assert_eq!(
+            block_on(engine.command(Command::Move {
+                node: root,
+                new_parent: root,
+                new_name: too_long.clone(),
+                replacing: None,
+            })),
+            refusal
+        );
+        assert_eq!(
+            block_on(engine.begin_write(
+                WriteTarget::NewFile {
+                    parent: root,
+                    name: too_long,
+                },
+                4,
+            ))
+            .err(),
+            refusal.err()
+        );
+
+        // The bound itself is admitted: an off-by-one here would refuse a name
+        // the mount advertises as creatable.
+        create(
+            &mut engine,
+            root,
+            &"n".repeat(MAX_NODE_NAME_BYTES),
+            NodeKind::File,
+        );
+    }
+
+    /// The ceiling is derived from the seal budget, so the derivation has to
+    /// hold against a real encode rather than against arithmetic on paper: a
+    /// full folder of the worst names this device admits must still seal.
+    #[test]
+    fn a_full_folder_of_worst_case_children_still_seals() {
+        use cipherbox_core::seal::{ChildRef, PreservedFields, encode_read_body};
+
+        let children: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN)
+            .map(|i| ChildRef {
+                id: (i as u128).to_be_bytes(),
+                name: format!("{i:0>MAX_NODE_NAME_BYTES$}"),
+                // The base36 CIDv1 text of an Ed25519 key, which is what the
+                // author path writes into a `ChildRef`, and distinct per child
+                // because the encoder refuses a duplicate.
+                ipns_name: {
+                    let mut name = vec![b'k'; 64];
+                    name[..16].copy_from_slice(&(i as u128).to_be_bytes());
+                    name
+                },
+                kind: cipherbox_core::seal::NodeKind::File,
+                link_counter: u64::MAX,
+                unknown: PreservedFields::new(),
+            })
+            .collect();
+        let body = ReadBody::Folder {
+            created_at: u64::MAX,
+            modified_at: u64::MAX,
+            children,
+            unknown: PreservedFields::new(),
+        };
+
+        let encoded = encode_read_body(&body).expect("a full folder encodes");
+        assert!(
+            encoded.len() <= MAX_READ_SEALED_BYTES,
+            "{} children of {MAX_AUTHORED_CHILD_REF_BYTES} bytes encode to {}, over {MAX_READ_SEALED_BYTES}",
+            MAX_FOLDER_CHILDREN,
+            encoded.len()
+        );
+    }
+
+    /// A folder at its ceiling refuses another child at the boundary. A node
+    /// the folder already holds is not a new child, so a relink inside its own
+    /// parent is not refused by a count it does not change.
+    #[test]
+    fn a_folder_at_its_ceiling_refuses_a_new_child_but_not_one_it_holds() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        for i in 0..MAX_FOLDER_CHILDREN {
+            let child = NodeId((i as u128 + 1).to_be_bytes());
+            rendered.upsert_node(NodeMeta::new(child, "n", NodeKind::File));
+            rendered.link(root, child, 1);
+        }
+        let held = NodeId(1u128.to_be_bytes());
+
+        assert_eq!(
+            refuse_full_parent(&rendered, root, None),
+            Err(EngineError::MalformedInput {
+                check: "folder-child-ceiling",
+            })
+        );
+        assert_eq!(refuse_full_parent(&rendered, root, Some(held)), Ok(()));
+
+        rendered.unlink(root, held);
+        assert_eq!(
+            refuse_full_parent(&rendered, root, None),
+            Ok(()),
+            "one place freed admits one new child"
         );
     }
 

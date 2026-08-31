@@ -17,8 +17,10 @@
 use cipherbox_engine::sync::case_fold;
 
 /// The longest name the projection admits, in bytes. `statfs` advertises this
-/// same constant, so what is advertised is what is enforced.
-pub const MAX_NAME_BYTES: usize = 255;
+/// same constant, so what is advertised is what is enforced. Aliased from the
+/// engine's own command boundary rather than restated, so the mount cannot
+/// admit a name the facade then refuses.
+pub const MAX_NAME_BYTES: usize = cipherbox_engine::MAX_NODE_NAME_BYTES;
 
 /// Why a name was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +218,15 @@ mod tests {
             validate_name(&"a".repeat(MAX_NAME_BYTES + 1)),
             Err(NameError::TooLong)
         );
+    }
+
+    /// The narrow tier holds the same length, because a peer commits names this
+    /// device's own command boundary would refuse, and an over-long one is a
+    /// dirent no host protocol carries.
+    #[test]
+    fn an_over_long_name_is_not_even_emittable() {
+        assert!(is_emittable(&"a".repeat(MAX_NAME_BYTES)));
+        assert!(!is_emittable(&"a".repeat(MAX_NAME_BYTES + 1)));
     }
 
     #[test]
