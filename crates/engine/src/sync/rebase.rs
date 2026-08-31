@@ -175,6 +175,11 @@ pub enum DeadLetterReason {
     /// re-author a node the account may since have deleted, so the op is
     /// abandoned with its staged version kept.
     AlreadyPublished,
+    /// A purge named a node gate-passing state still reaches through a live
+    /// parent. The bin entry alone does not prove a node unlinked — a soft
+    /// delete whose parent publish dead-lettered leaves one standing for a node
+    /// the user still sees — so the purge refuses rather than destroying it.
+    TargetStillLinked,
 }
 
 /// One applied op, resolved for republish.
@@ -447,8 +452,60 @@ pub fn rebase_one(
         OpKind::UpdateContent {
             base_version_cid, ..
         } => rebase_update_content(working, local, op, base_version_cid.as_deref()),
+        OpKind::Restore { into, name, kind } => rebase_restore(working, op, *into, name, *kind),
+        OpKind::Purge { .. } => rebase_purge(working, op),
         OpKind::Prune { keep_latest } => rebase_prune(working, op, *keep_latest),
     }
+}
+
+/// Restore: materialize a binned node at the destination the command resolved.
+///
+/// The destination rules are a move's, because the op is a relocation into a
+/// tree location: a destination gate-passing state no longer holds is
+/// [`DeadLetterReason::DestinationGone`], and a colliding name auto-suffixes on
+/// the one comparator. A target the base already holds is a restore that landed.
+fn rebase_restore(
+    working: &mut Snapshot,
+    op: &Op,
+    into: crate::facade::NodeId,
+    name: &str,
+    kind: crate::facade::NodeKind,
+) -> OpResolution {
+    if working.contains(op.target) {
+        // The relink landed and the entry drop did not, so the op is not
+        // satisfied: dropping it here would strand the entry for a linked node,
+        // and the next delete of that node would inherit its `deletedAt` and
+        // expire at once. The drain finds the node linked and drops the entry.
+        return OpResolution::applied(None);
+    }
+    if !working.contains(into) {
+        return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
+    }
+    let Some((effective, suffixed)) = resolve_name(working, into, name, &[op.target]) else {
+        return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted);
+    };
+    working.upsert_node(NodeMeta::new(op.target, effective.clone(), kind));
+    working.link_next(into, op.target);
+    OpResolution::Applied {
+        effective_name: Some(Zeroizing::new(effective)),
+        suffixed,
+        scope_exit_trigger: None,
+    }
+}
+
+/// Purge: the rebase half of the proof a purge destroys nothing live.
+///
+/// A soft delete writes the bin entry, then unlinks, then republishes the
+/// parent. A parent publish that exhausts the attempt budget leaves the entry
+/// standing for a node the user still sees in its folder, so the entry alone is
+/// not evidence the node is unlinked. Gate-passing state that still holds the
+/// node refuses the purge outright; the drain then re-checks the destination
+/// parent's own record before it reclaims anything.
+fn rebase_purge(working: &Snapshot, op: &Op) -> OpResolution {
+    if working.contains(op.target) {
+        return OpResolution::DeadLetter(DeadLetterReason::TargetStillLinked);
+    }
+    OpResolution::applied(None)
 }
 
 /// A prune anchors on no version: it keeps the newest `keep_latest` whatever
@@ -995,6 +1052,75 @@ mod tests {
     fn with_node(snap: &mut Snapshot, parent: NodeId, node: NodeId, name: &str, kind: NodeKind) {
         snap.upsert_node(NodeMeta::new(node, name, kind));
         snap.link(parent, node, 1);
+    }
+
+    /// The bin entry alone never licenses a purge. A soft delete whose parent
+    /// republish dead-lettered leaves one standing for a node the user still
+    /// sees in its folder, so gate-passing state decides ahead of the entry.
+    #[test]
+    fn a_purge_refuses_a_node_gate_passing_state_still_holds() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "notes.txt", NodeKind::File);
+        let local = base.clone();
+        assert_eq!(
+            rebase_one(&mut base, &local, &Op::purge(id(1), 7, 1, AT), SCOPE_ROOTS),
+            OpResolution::DeadLetter(DeadLetterReason::TargetStillLinked),
+        );
+        assert!(base.contains(id(1)), "and the node is left where it is");
+    }
+
+    /// A binned node is in no folder, so nothing in gate-passing state names it
+    /// and the drain decides the rest.
+    #[test]
+    fn a_purge_of_an_unlinked_node_reaches_the_drain() {
+        let mut base = tree();
+        let local = base.clone();
+        assert!(matches!(
+            rebase_one(&mut base, &local, &Op::purge(id(1), 7, 1, AT), SCOPE_ROOTS),
+            OpResolution::Applied { .. },
+        ));
+    }
+
+    /// A restore materializes a node absent from every folder, so it is held to
+    /// a move's destination rules and to the one name comparator.
+    #[test]
+    fn a_restore_lands_at_its_destination_and_auto_suffixes_a_taken_name() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "box", NodeKind::Folder);
+        with_node(&mut base, id(1), id(2), "notes.txt", NodeKind::File);
+        let local = base.clone();
+        let resolved = rebase_one(
+            &mut base,
+            &local,
+            &Op::restore(id(3), id(1), "notes.txt", NodeKind::File, 1, AT),
+            SCOPE_ROOTS,
+        );
+        let OpResolution::Applied { effective_name, .. } = resolved else {
+            panic!("a restore into a live folder applies");
+        };
+        assert_ne!(
+            effective_name.as_deref().map(String::as_str),
+            Some("notes.txt"),
+            "the name the destination already holds is suffixed rather than duplicated",
+        );
+        assert_eq!(base.parent_of(id(3)), Some(id(1)));
+    }
+
+    /// A destination gate-passing state no longer holds is the same refusal a
+    /// move gets, so the host is told the destination is what is missing.
+    #[test]
+    fn a_restore_into_a_destination_the_vault_lost_dead_letters() {
+        let mut base = tree();
+        let local = base.clone();
+        assert_eq!(
+            rebase_one(
+                &mut base,
+                &local,
+                &Op::restore(id(3), id(9), "notes.txt", NodeKind::File, 1, AT),
+                SCOPE_ROOTS,
+            ),
+            OpResolution::DeadLetter(DeadLetterReason::DestinationGone),
+        );
     }
 
     #[test]

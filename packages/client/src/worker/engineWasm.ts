@@ -345,5 +345,6 @@ export interface EngineWasm {
     readonly HeadTooLarge: number;
     readonly PreservationRefused: number;
     readonly AlreadyPublished: number;
+    readonly TargetStillLinked: number;
   };
 }

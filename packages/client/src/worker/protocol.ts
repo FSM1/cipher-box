@@ -74,7 +74,8 @@ export type DeadLetterReason =
   | 'baseSuperseded'
   | 'headTooLarge'
   | 'preservationRefused'
-  | 'alreadyPublished';
+  | 'alreadyPublished'
+  | 'targetStillLinked';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {

@@ -38,7 +38,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner};
-use crate::bin_index::BinIndexKeys;
+use crate::bin_index::{BinIndexKeys, BinIndexLoad, BinnedNode, load_bin_index};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
@@ -104,12 +104,14 @@ use crate::settings::{
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{Drain, DrainReport, DrainScope, hold_captures, published_op_mark};
+use crate::sync::drain::{
+    Drain, DrainReport, DrainScope, bin_load_is_a_verdict, hold_captures, published_op_mark,
+};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
-use crate::sync::project::{UnlinkedChild, project_child_version};
+use crate::sync::project::{UnlinkedChild, map_kind, project_child_version};
 use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
     VaultPointerProbe, provision_vault,
@@ -843,6 +845,24 @@ pub enum Command {
         /// Target node.
         node: NodeId,
     },
+    /// Put a soft-deleted node back into the tree (ADR 0010 item 4). The
+    /// destination re-seals the node at its own scope's current epoch, so the
+    /// bin-held key stops opening it and the destination's grantees read it
+    /// again by scope membership.
+    Restore {
+        /// The binned node, as the bin index names it.
+        node: NodeId,
+        /// Where to put it back, or `None` for the folder its bin entry names.
+        /// A destination the vault no longer holds is
+        /// [`EngineError::RestoreTargetGone`], so a host can offer another.
+        into: Option<NodeId>,
+    },
+    /// Destroy a soft-deleted node: reclaim what its subtree owes and drop its
+    /// bin entry (ADR 0010 item 7). Irreversible.
+    Purge {
+        /// The binned node, as the bin index names it.
+        node: NodeId,
+    },
     /// Rename a node in place.
     Rename {
         /// Target node.
@@ -1036,6 +1056,8 @@ impl Command {
         match self {
             Command::Create { .. } => "create",
             Command::Delete { .. } => "delete",
+            Command::Restore { .. } => "restore",
+            Command::Purge { .. } => "purge",
             Command::Rename { .. } => "rename",
             Command::Relink { .. } => "relink",
             Command::Move { .. } => "move",
@@ -1471,6 +1493,15 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
+    /// [`Command::Restore`] named a destination the vault no longer holds, or
+    /// resolved one from a bin entry whose `originParent` is gone. Reported
+    /// apart from every other refusal so a host can offer another folder rather
+    /// than say the restore failed.
+    RestoreTargetGone,
+    /// [`Command::Restore`] or [`Command::Purge`] named a node the owner's bin
+    /// index holds no entry for. Neither node nor bin is at fault: the entry
+    /// left, most often because another device already acted on it.
+    NotBinned,
     /// A command named a node this build cannot act on. Neither a refusal of
     /// the bytes that named it ([`MalformedInput`](EngineError::MalformedInput))
     /// nor of the whole command ([`Unimplemented`](EngineError::Unimplemented)):
@@ -1785,6 +1816,10 @@ impl fmt::Display for EngineError {
                 f.write_str("login secret is not a valid identity scalar")
             }
             EngineError::UnknownNode => f.write_str("unknown node"),
+            EngineError::RestoreTargetGone => {
+                f.write_str("the folder this item came from is gone; choose another")
+            }
+            EngineError::NotBinned => f.write_str("this item is not in the bin"),
             EngineError::NotAFolder => f.write_str("not a folder"),
             EngineError::NotAFile => f.write_str("not a file"),
             EngineError::ContentUnavailable { message } => {
@@ -2602,6 +2637,20 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     anchor_root
 }
 
+/// The bin retention the owner actually chose, or `None` when this device's
+/// settings load carried no member choice.
+///
+/// The delete branch takes the documented default because binning is the
+/// reversible error ([`bin_retention_days`]); expiry destroys, so it acts only
+/// on a retention this device can show is the owner's.
+fn owner_bin_retention_days(summary: &RefCell<Option<VaultSettingsSummary>>) -> Option<u32> {
+    let summary = summary.borrow();
+    summary
+        .as_ref()
+        .filter(|summary| summary.origin != SettingsOrigin::Defaults)
+        .map(|summary| summary.bin_retention_days)
+}
+
 /// The bin retention a session loaded, which decides whether a delete is soft
 /// and whether the poll leg's observed unlinks are captured
 /// (blueprint/engine.md "Delete branch"). A session with no settings summary
@@ -2863,7 +2912,7 @@ fn cached_seed(cell: &RefCell<ScopeSeeds>, scope_id: &[u8; 16]) -> Option<Zeroiz
 /// Retained dead letters: op id → its target node when known (`None` for an
 /// undecodable queue entry, which never decoded far enough to name one) and why
 /// it dead-lettered.
-type RetainedDeadLetters = BTreeMap<OpId, (Option<NodeId>, DeadLetterReason)>;
+pub(crate) type RetainedDeadLetters = BTreeMap<OpId, (Option<NodeId>, DeadLetterReason)>;
 
 impl From<Refused> for EngineError {
     fn from(
@@ -4614,6 +4663,8 @@ where {
                             cancels: &cancels,
                             events: &events,
                             bin_keys: &bin_keys,
+                            bin_retention_days: owner_bin_retention_days(&tick_settings),
+                            dead_letters: &dead_letters,
                             bin_index_record: &bin_index_record,
                             observed_unlinks: &observed_unlinks,
                         }
@@ -4777,6 +4828,39 @@ where {
                 let to_bin = self.bin_retention_days() > 0;
                 self.stage_and_notify(&Op::delete(node, seq, authored_at, seq, to_bin))
                     .await
+            }
+            Command::Restore { node, into } => {
+                let entry = self.binned_node(node).await?;
+                refuse_over_bound_name(&entry.origin_name)?;
+                let into = into.unwrap_or(NodeId(entry.origin_parent));
+                let rendered = self.render().await?;
+                if !rendered.contains(into) {
+                    return Err(EngineError::RestoreTargetGone);
+                }
+                refuse_outside_vault(&rendered, into)?;
+                refuse_full_parent(&rendered, into, None, None)?;
+                let base_sequence = rendered.record_sequence(into).unwrap_or(1);
+                let op = Op::restore(
+                    node,
+                    into,
+                    entry.origin_name.clone(),
+                    map_kind(entry.kind),
+                    base_sequence,
+                    authored_at,
+                );
+                self.stage_and_notify(&op).await
+            }
+            Command::Purge { node } => {
+                let entry = self.binned_node(node).await?;
+                // A node the rendered view still holds is one the user still
+                // sees in its folder: the entry alone never licenses a purge.
+                if self.render().await?.contains(node) {
+                    return Err(EngineError::UnsupportedTarget {
+                        check: "purge-target-still-linked",
+                    });
+                }
+                let op = Op::purge(node, entry.deleted_at, 1, authored_at);
+                self.stage_and_notify(&op).await
             }
             Command::Rename { node, new_name } => {
                 refuse_over_bound_name(&new_name)?;
@@ -8168,6 +8252,47 @@ where {
             .map_err(EngineError::from_seam)?;
         self.dead_letters.borrow_mut().remove(&op_id);
         Ok(outcome)
+    }
+
+    /// What the owner's bin index says about `node`, for the command that acts
+    /// on it.
+    ///
+    /// A cached index answers as readily as a resolved one: the drain re-reads
+    /// the entry before it publishes anything, and a purge is conditional on the
+    /// `deletedAt` this read produced.
+    async fn binned_node(&self, node: NodeId) -> Result<BinnedNode, EngineError> {
+        let keys = self
+            .tick_bin_keys
+            .borrow()
+            .clone()
+            .ok_or(EngineError::NotStarted)?;
+        let index = match load_bin_index(
+            &self.seams.record_transport,
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            &keys,
+        )
+        .await
+        {
+            BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => index,
+            // A refusal of bytes the plane actually served is a trust verdict,
+            // never the availability a caller retries on (AGENTS.md rule 6).
+            BinIndexLoad::Empty(reason) if bin_load_is_a_verdict(reason) => {
+                let message = format!("bin index refused: {reason:?}");
+                emit_trust_violation(&self.events, keys.name().as_str(), message.clone());
+                return Err(EngineError::TrustViolation { message });
+            }
+            BinIndexLoad::Empty(reason) => {
+                return Err(EngineError::Seam {
+                    message: format!("bin index unresolved: {reason:?}"),
+                });
+            }
+        };
+        BinnedNode::of(&index, &node.0).ok_or(EngineError::NotBinned)
     }
 
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,

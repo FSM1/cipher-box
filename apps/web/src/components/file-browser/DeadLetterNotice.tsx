@@ -17,6 +17,8 @@ const REASONS: Record<DeadLetterReason, string> = {
     'this device holds parked changes another version of CipherBox wrote, so this one could not be parked beside them',
   alreadyPublished:
     'this device already created this item once; the queued copy is older than what is online, so it was not created again',
+  targetStillLinked:
+    'this item is still in one of your folders, so it was not permanently deleted from the bin',
 };
 
 /**

@@ -49,6 +49,9 @@ Glossary only. Design detail lives in `blueprint/`; the as-built v1 spec corpus,
 - **Bin entry** — one soft-deleted node in the bin index: `nodeId`, `ipnsName`, `kind`, `originParent`, `originName`, `deletedAt`, `scopeId`, and an optional bin-held key. The `ipnsName` is the only remaining route to a record no folder names; `originParent` and `originName` are what a restore puts back.
 - **Soft delete** — a delete that unlinks the node and writes a bin entry instead of retiring the record. The owner's bin retention setting chooses it; retention 0 keeps the hard delete.
 - **Bin-held key** — the key a soft delete re-keys the doomed subtree under, from the `bin-held-key` edge. It sits outside every scope's derivation, which is the access cut key regression cannot give. Scope-seed shaped: every node of the subtree keys at `readKey(nodeSeed(held, nodeId))`, so the one key the entry carries opens the whole subtree.
+- **Restore** — putting a soft-deleted node back into the tree. It re-seals the whole subtree at the destination scope's current epoch, which both returns the node to that scope's grantees and ends the bin-held key's hold on it, then relinks the node and drops the bin entry.
+- **Purge** — destroying a soft-deleted node: the reclamation the soft delete deferred, then the bin entry. Irreversible, and refused unless the node is proven unlinked.
+- **Bin expiry** — the poll tick queueing a purge for every entry whose `deletedAt` is older than the owner's bin retention, measured on the injected clock. It is what makes retention enforced rather than advisory, and the only thing that frees space under the bin index body's ceiling.
 - **Owner capture** — the owner's engine binding an unlink it observes on the poll tick but did not author, and re-keying the node at that adoption. Without it a grantee who unlinks a node in the owner's scope leaves the owner nothing to restore, and keeps the node's read key.
 
 ## Sync and refresh

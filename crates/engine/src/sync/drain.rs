@@ -40,16 +40,20 @@ use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
-use crate::bin_index::{BinIndexKeys, BinIndexPublishError, load_bin_index, publish_bin_index};
+use crate::bin_index::{
+    BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinnedNode, cached_bin_index, load_bin_index,
+    publish_bin_index,
+};
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::{
     ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError, RootPlacement,
     SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
     read_block, validate_byo_config, version_cids,
 };
-use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
+use crate::entropy::{Entropy, SharedEntropy, fresh_ephemeral, fresh_nonce};
 use crate::facade::{
-    BlockProgress, Event, MAX_NODE_NAME_BYTES, NodeId, OpPhase, emit_trust_violation,
+    BlockProgress, Event, MAX_NODE_NAME_BYTES, NodeId, OpPhase, RetainedDeadLetters,
+    emit_trust_violation,
 };
 use crate::gate::GateStage;
 use crate::gate::floor;
@@ -73,7 +77,7 @@ use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
-    RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore,
+    RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -92,10 +96,10 @@ use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::{UnlinkedChild, project_child_version, project_folder};
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
-use crate::sync::record::RecordReader;
+use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::{
     LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter, reconcile_staging_over,
-    release_version_blocks, version_leaf_cids,
+    release_version_blocks, stage_op, version_leaf_cids,
 };
 use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
@@ -188,15 +192,26 @@ fn names_this_scope(scope: &DrainScope<'_>, child: &ChildRef) -> bool {
 /// refusal of bytes the plane actually served is charged, so a jammed bin index
 /// cannot hold the queue head for good.
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
+    if bin_load_is_a_verdict(reason) {
+        Halt::Attempt
+    } else {
+        Halt::Unclassified
+    }
+}
+
+/// Whether a bin index load refused bytes the plane actually served, rather
+/// than failing to reach it (blueprint/engine.md "Bin index record"). A caller
+/// that retries on availability must not retry on a verdict.
+pub(crate) fn bin_load_is_a_verdict(reason: DefaultsReason) -> bool {
     match reason {
         DefaultsReason::RolledBack { .. }
         | DefaultsReason::RevisionRolledBack { .. }
-        | DefaultsReason::Unreadable => Halt::Attempt,
+        | DefaultsReason::Unreadable => true,
         DefaultsReason::UnprovenFirstRun
         | DefaultsReason::Suppressed
         | DefaultsReason::Expired
         | DefaultsReason::TimedOut
-        | DefaultsReason::FloorUnreadable => Halt::Unclassified,
+        | DefaultsReason::FloorUnreadable => false,
     }
 }
 
@@ -467,6 +482,41 @@ const MAX_BIN_ADOPTIONS: usize = 32;
 /// fill, so it is bounded like every other per-session set.
 const MAX_HELD_CAPTURES: usize = 4096;
 
+/// Purges one pass queues for expired bin entries. A retention deadline can
+/// come due for a whole bin at once, and a purge is an op like any other: the
+/// queue takes a bounded share per pass and the rest waits for the next tick.
+const MAX_BIN_EXPIRIES: usize = 32;
+
+/// Milliseconds in one day, the unit the owner's bin retention is set in.
+const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
+
+/// The `deletedAt` at or below which an entry has outlived `retention_days`,
+/// measured from `now`.
+///
+/// `None` turns expiry off: a retention this device cannot show is the owner's,
+/// and a retention of `0`, which means the bin takes no new nodes rather than
+/// that the entries already in it are destroyed. A deadline that has not yet
+/// elapsed since the epoch also expires nothing.
+fn bin_expiry_cutoff(now: UnixMillis, retention_days: Option<u32>) -> Option<u64> {
+    let days = retention_days.filter(|days| *days > 0)?;
+    now.0.checked_sub(u64::from(days) * DAY_MILLIS)
+}
+
+/// Charge a bin path's read of a record it cannot re-author.
+///
+/// A binned subtree takes no ordinary write and joins no eager set, so a scope
+/// rotation can leave it sealed at an epoch the gate refuses for good
+/// (FSM1/cipher-box-next ADR 0011). Unclassified, such a read would hold the
+/// strict-FIFO head for every pass thereafter, and the expiry sweep queues these
+/// ops without an owner command. Charged, the op spends its attempt budget and
+/// dead-letters, which keeps the entry and its content — a leak, never a loss.
+fn charge_bin_read(halt: Halt) -> Halt {
+    match halt {
+        Halt::Unclassified => Halt::UploadAttempt,
+        other => other,
+    }
+}
+
 /// Add what a read leg observed to the session's unadopted set, up to
 /// [`MAX_HELD_CAPTURES`].
 pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<UnlinkedChild>) {
@@ -551,6 +601,17 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The bin's own key material. The pass holds these derived edges rather
     /// than the login secret they come from.
     pub(crate) bin_keys: &'a BinIndexKeys,
+    /// The owner's bin retention in days, or `None` when the settings load
+    /// carried no member choice.
+    ///
+    /// Expiry is irreversible, so it acts only on a retention the owner set. A
+    /// documented default is the right answer for the delete branch, which
+    /// bins rather than destroys; here it would destroy on a settings record
+    /// this device merely failed to read (blueprint/engine.md "Delete branch").
+    pub(crate) bin_retention_days: Option<u32>,
+    /// The dead letters this session has surfaced, so the expiry sweep does not
+    /// re-queue a purge for an entry whose own purge is already terminal.
+    pub(crate) dead_letters: &'a RefCell<RetainedDeadLetters>,
     /// Unlinks the poll leg observed and this device did not author, shared
     /// with the tick loop that fills it. A capture leaves the set only once its
     /// bin entry has landed: the merge that saw it has already dropped the node
@@ -626,6 +687,28 @@ enum Settle<'a> {
     Hold,
     /// A later pass, with the proof budget it has left to spend.
     Decide(&'a mut usize),
+}
+
+/// Where a doomed walk stops descending.
+#[derive(Clone, Copy)]
+enum Boundary {
+    /// Every child ref is walked. A descendant this pass cannot read is unknown
+    /// structure and refuses the whole operation.
+    None,
+    /// A child that does not publish under a name this scope's write seed
+    /// derives is a scope root, and the bin re-keyed no such child: its record
+    /// does not open under the bin-held key, so it is not this purge's to
+    /// reclaim ([`Drain::rekey_subtree`]).
+    ScopeRoots,
+}
+
+impl Boundary {
+    fn admits(self, scope: &DrainScope<'_>, child: &ChildRef) -> bool {
+        match self {
+            Self::None => true,
+            Self::ScopeRoots => names_this_scope(scope, child),
+        }
+    }
 }
 
 /// One node a delete detaches: the name its record publishes under, and the
@@ -770,8 +853,13 @@ where
     /// applied op it can, stopping at the first it cannot, then clear what the
     /// pass orphaned.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
-        let report = self.drain_queue(scope).await;
+        let (report, queued_purges) = self.drain_queue(scope).await;
         self.adopt_observed_unlinks(scope).await;
+        // A queue this pass could not read cannot say which purges are already
+        // queued, and the sweep stages ops: it waits rather than duplicating.
+        if let Some(queued) = queued_purges {
+            self.expire_bin_entries(scope, &queued).await;
+        }
         self.orphan_heads.retire_pending(self.api).await;
         // One enumeration serves every consumer below. A desktop vault stages
         // on the order of ten thousand keys, and each of these was listing the
@@ -813,24 +901,31 @@ where
         report
     }
 
-    async fn drain_queue(&self, scope: &DrainScope<'_>) -> DrainReport {
+    /// The queue loop, reporting the purge targets it saw so the expiry leg does
+    /// not queue a second purge for an entry one already names.
+    async fn drain_queue(&self, scope: &DrainScope<'_>) -> (DrainReport, Option<Vec<NodeId>>) {
         let mut report = DrainReport::default();
         let Ok(Queue { mine, all_ids }) = self.queued_ops(scope, &mut report).await else {
-            return report;
+            return (report, None);
         };
         let queued = mine;
         if queued.is_empty() {
             self.clear_block();
             self.clear_settings_hold();
-            return report;
+            return (report, Some(Vec::new()));
         }
+        let purges = queued
+            .iter()
+            .filter(|(_, op)| matches!(op.kind, OpKind::Purge { .. }))
+            .map(|(_, op)| op.target)
+            .collect();
         let Ok(mut attempts) = self.load_attempts(&all_ids).await else {
-            return report;
+            return (report, Some(purges));
         };
         let _ = self.pass(scope, &queued, &mut report, &mut attempts).await;
         let _ = self.store_attempts(&attempts).await;
         let _ = self.mark_drained(scope, &queued, &report).await;
-        report
+        (report, Some(purges))
     }
 
     async fn pass(
@@ -1389,6 +1484,13 @@ where
             OpKind::Delete { to_bin, .. } => {
                 self.publish_delete(scope, pass, applied, *to_bin).await
             }
+            OpKind::Restore { into, .. } => {
+                self.publish_restore(scope, pass, applied, rebased, *into)
+                    .await
+            }
+            OpKind::Purge { deleted_at } => {
+                self.publish_purge(scope, pass, applied, *deleted_at).await
+            }
             OpKind::Relink {
                 from_parent,
                 new_parent,
@@ -1623,8 +1725,15 @@ where
             None
         } else {
             Some(
-                self.enumerate_doomed(scope, pass.epoch, parent, target, child.kind)
-                    .await?,
+                self.enumerate_doomed(
+                    scope,
+                    pass.epoch,
+                    parent,
+                    target,
+                    child.kind,
+                    Boundary::None,
+                )
+                .await?,
             )
         };
         pass.folder_mut(parent)?
@@ -1642,7 +1751,7 @@ where
         let Some(doomed) = doomed else {
             return Ok(());
         };
-        let reclamation = self.owed_by_delete(target, &doomed);
+        let reclamation = self.owed_by_delete(target, &doomed, None);
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
         let key = doomed_journal_key(&owner, target);
@@ -1668,6 +1777,240 @@ where
             (false, None) => {}
         }
         Ok(())
+    }
+
+    /// Restore: re-key the subtree out of the bin, relink it, then drop the
+    /// entry (ADR 0010 item 4).
+    ///
+    /// The re-key is what the destination's grantees read the node by again, and
+    /// what ends the bin-held key's hold on it: every node of the subtree is
+    /// re-sealed at the destination scope's current epoch, which is also the
+    /// fresh key an unshared destination gets.
+    ///
+    /// The entry goes last. A pass that stops between the relink and the drop
+    /// leaves a node that is both linked and binned, and the retry settles it;
+    /// the reverse order leaves a node no folder names and no entry finds.
+    async fn publish_restore(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        rebased: &Snapshot,
+        into: NodeId,
+    ) -> Result<(), Halt> {
+        let target = applied.op.target;
+        let Some(entry) = self.bin_entry(scope, target).await? else {
+            // The entry left with an attempt that got past the drop below.
+            return Ok(());
+        };
+        // A node some folder already links is one an earlier attempt of this op
+        // relinked, or another device restored. Only the entry is left.
+        if !self.base.borrow().links_to(target).is_empty() {
+            return self.drop_bin_entry(target).await;
+        }
+        let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
+        self.ensure_folder(scope, pass, into).await?;
+        let held = self.bin_keys.held_key(&target.0, entry.deleted_at);
+        let binned = DrainScope {
+            read_scope_seed: &held,
+            ..*scope
+        };
+        self.rekey_subtree(&binned, scope, pass.epoch, target)
+            .await
+            .map_err(charge_bin_read)?;
+        let child = ChildRef {
+            id: target.0,
+            name: name.to_string(),
+            ipns_name: entry.ipns_name.clone(),
+            kind: entry.kind,
+            link_counter: rebased.max_link_counter(target),
+            unknown: PreservedFields::new(),
+        };
+        let into_children = &mut pass.folder_mut(into)?.children;
+        // The base is the focus window's, so a destination that already names
+        // the target is reachable — an earlier attempt whose folder publish
+        // landed and whose entry drop did not; a second ref would sign a
+        // listing `author_child_envelope` rejects, wedging every retry.
+        match into_children.iter_mut().find(|child| child.id == target.0) {
+            Some(existing) => *existing = child,
+            None => into_children.push(child),
+        }
+        self.publish_folder(
+            scope,
+            pass,
+            into,
+            applied.op.authored_at.0,
+            // The entry drop below is this plan's last act, not the relink: a
+            // mark raised here would drop the op on the next pass and leave the
+            // entry standing for a node the vault links again.
+            None,
+        )
+        .await
+        .map_err(Halt::from)?;
+        self.drop_bin_entry(target).await
+    }
+
+    /// Purge: prove the node unlinked, journal what its subtree owes, drop the
+    /// entry, then settle (ADR 0010 item 7).
+    ///
+    /// `deleted_at` is the entry this purge was formed against. An entry stamped
+    /// otherwise is one this op never saw, and its subtree is sealed under
+    /// another key, so the purge refuses rather than reclaiming the wrong thing.
+    ///
+    /// The journal lands before the entry does, so a pass that stops between the
+    /// two retries over records nothing has retired yet. The entry drop is what
+    /// completes the op; the settle replays off the journal on any later pass.
+    async fn publish_purge(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        deleted_at: u64,
+    ) -> Result<(), Halt> {
+        let target = applied.op.target;
+        let Some(entry) = self.bin_entry(scope, target).await? else {
+            return Ok(());
+        };
+        if entry.deleted_at != deleted_at {
+            return Err(Halt::Permanent(DeadLetterReason::TargetGone));
+        }
+        if !self
+            .purge_target_is_unlinked(scope, pass, target, NodeId(entry.origin_parent))
+            .await?
+        {
+            return Err(Halt::Permanent(DeadLetterReason::TargetStillLinked));
+        }
+        let held = self.bin_keys.held_key(&target.0, deleted_at);
+        let binned = DrainScope {
+            read_scope_seed: &held,
+            ..*scope
+        };
+        // The walk runs under the held key because that is what seals the whole
+        // doomed subtree, and it stops at a scope root, which the bin never
+        // re-keyed.
+        let doomed = self
+            .enumerate_doomed(
+                &binned,
+                pass.epoch,
+                NodeId(entry.origin_parent),
+                target,
+                entry.kind,
+                Boundary::ScopeRoots,
+            )
+            .await
+            .map_err(charge_bin_read)?;
+        let reclamation = self.owed_by_delete(target, &doomed, Some(deleted_at));
+        let owner = owner_tag(scope.enc_secret);
+        let seal = self.bookkeeping_seal(scope);
+        let key = doomed_journal_key(&owner, target);
+        // Nothing is reclaimed yet, so the entry is still the whole retry.
+        // Dropping it over an unwritten journal would strand the subtree's names
+        // and its pins with no durable handle to finish from.
+        if !self.journal_doomed(seal, &key, target, &reclamation).await {
+            return Err(Halt::Unclassified);
+        }
+        // Marked before the drop below, so a pass that halts there does not
+        // settle the quarantine it has just journaled ([`Settle`]).
+        pass.journalled.push(target);
+        self.drop_bin_entry(target).await?;
+        let residue = self
+            .settle_reclamation(scope, seal, &owner, &reclamation, Settle::Hold)
+            .await;
+        self.update_journal(seal, &key, target, &reclamation, residue)
+            .await;
+        Ok(())
+    }
+
+    /// Whether any link this device knows still names the node.
+    ///
+    /// The rebase refused a target gate-passing state holds; this is the half
+    /// the entry alone cannot supply. A soft delete writes the entry, unlinks,
+    /// then republishes the parent, so a parent publish that spent its attempt
+    /// budget leaves an entry standing for a node its folder still names.
+    ///
+    /// Two sources, because neither is complete on its own. The base carries
+    /// every link this session rendered, including one from a folder the entry
+    /// does not name, and it moves under the pass. The entry's own folder is
+    /// read as a record, because the base is populated by the focus window and
+    /// absence from it says only that this session never rendered that folder.
+    /// A record this pass cannot establish decides nothing, and the read is
+    /// charged so a folder that is gone for good dead-letters the purge rather
+    /// than holding the queue head.
+    async fn purge_target_is_unlinked(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &Pass,
+        target: NodeId,
+        origin: NodeId,
+    ) -> Result<bool, Halt> {
+        // A node can carry a link from a folder other than the one it was
+        // binned from, and the entry names only that one. Every link this
+        // device knows is checked at the moment of action: the pass republishes
+        // folders and repaints the base as it runs, so the rebase's own verdict
+        // is already behind by here.
+        if !self.base.borrow().links_to(target).is_empty() {
+            return Ok(false);
+        }
+        // The scope root is the record the pass opened on, and it publishes
+        // under the scope's own name rather than a derived child name.
+        let named = if origin == scope.root {
+            pass.folder(scope.root)?
+                .children
+                .iter()
+                .any(|child| child.id == target.0)
+        } else {
+            self.load_child_folder(scope, pass.epoch, origin)
+                .await
+                .map_err(charge_bin_read)?
+                .children
+                .iter()
+                .any(|child| child.id == target.0)
+        };
+        Ok(!named)
+    }
+
+    /// What the standing bin entry for `node` says, or `None` when the bin holds
+    /// no entry for it. The index is resolved fresh: only an established index
+    /// may be published over, and both bin op plans publish one before they end.
+    ///
+    /// The bin is vault-level, so an entry may name a scope this pass does not
+    /// hold, and its `ipnsName` is whatever the writer that binned the node put
+    /// there. Both are refused: re-keying under the wrong scope's seed would
+    /// seal a node to a key its readers never derive, and a name this write seed
+    /// does not derive belongs to a scope root, which no bin path re-keys.
+    async fn bin_entry(
+        &self,
+        scope: &DrainScope<'_>,
+        node: NodeId,
+    ) -> Result<Option<BinnedNode>, Halt> {
+        let index = self.writable_bin_index().await?;
+        let Some(entry) = BinnedNode::of(&index, &node.0) else {
+            return Ok(None);
+        };
+        if entry.scope_id != scope.root.0
+            || derive_write_name(scope.write_scope_seed, &node.0)
+                .as_str()
+                .as_bytes()
+                != entry.ipns_name
+        {
+            return Err(Halt::Permanent(DeadLetterReason::TargetGone));
+        }
+        Ok(Some(entry))
+    }
+
+    /// Drop `node`'s bin entry and publish the index.
+    ///
+    /// The index is re-resolved rather than carried across the re-key and the
+    /// publishes above: the record is rewritten whole, so a copy read before
+    /// them would drop every entry another device added since.
+    async fn drop_bin_entry(&self, node: NodeId) -> Result<(), Halt> {
+        let mut index = self.writable_bin_index().await?;
+        let before = index.entries.len();
+        index.entries.retain(|entry| entry.node_id != node.0);
+        if index.entries.len() == before {
+            return Ok(());
+        }
+        self.publish_bin(&index).await
     }
 
     /// Write what the unlink just earned to the doomed-name journal, reporting
@@ -1798,6 +2141,7 @@ where
         parent: NodeId,
         target: NodeId,
         kind: NodeKind,
+        boundary: Boundary,
     ) -> Result<Vec<Doomed>, Halt> {
         let mut doomed = Vec::new();
         let mut seen = BTreeSet::from([parent.0]);
@@ -1818,7 +2162,10 @@ where
                     let versions = match loaded.body {
                         ReadBody::Folder { children, .. } => {
                             pending.extend(
-                                children.iter().map(|child| (NodeId(child.id), child.kind)),
+                                children
+                                    .iter()
+                                    .filter(|child| boundary.admits(scope, child))
+                                    .map(|child| (NodeId(child.id), child.kind)),
                             );
                             Vec::new()
                         }
@@ -1976,6 +2323,93 @@ where
         self.return_captures(unfinished);
     }
 
+    /// Queue a purge for every entry past the owner's bin retention, so
+    /// retention is enforced rather than advisory (ADR 0010 item 6).
+    ///
+    /// The clock is the scheduler seam's and the verdict rides a journaled op,
+    /// so a replay of the queue reproduces the same purge and the same
+    /// reclamation. This is also the only thing that frees space in the bin
+    /// index, whose body has a frozen ceiling.
+    ///
+    /// Reads the index rather than writing it, so a degraded load costs a tick
+    /// and never an entry.
+    async fn expire_bin_entries(&self, scope: &DrainScope<'_>, queued: &[NodeId]) {
+        let now = self.scheduler.now();
+        let Some(cutoff) = bin_expiry_cutoff(now, self.bin_retention_days) else {
+            return;
+        };
+        let Some(index) = self.expiry_bin_index().await else {
+            return;
+        };
+        let expired: Vec<(NodeId, u64)> = {
+            let base = self.base.borrow();
+            let terminal = self.dead_letters.borrow();
+            index
+                .entries
+                .iter()
+                .filter(|entry| entry.deleted_at <= cutoff)
+                // Every refusal the publish makes for good, applied here too: an
+                // entry the sweep queues on every tick and the pass refuses on
+                // every tick is an endless stream of dead letters
+                // ([`Self::bin_entry`], `rebase_purge`).
+                .filter(|entry| {
+                    let node = NodeId(entry.node_id);
+                    entry.scope_id == scope.root.0
+                        && !base.contains(node)
+                        && derive_write_name(scope.write_scope_seed, &entry.node_id)
+                            .as_str()
+                            .as_bytes()
+                            == entry.ipns_name()
+                        && !terminal.values().any(|(target, _)| *target == Some(node))
+                })
+                .map(|entry| (NodeId(entry.node_id), entry.deleted_at))
+                .filter(|(node, _)| !queued.contains(node))
+                .take(MAX_BIN_EXPIRIES)
+                .collect()
+        };
+        for (node, deleted_at) in expired {
+            let Ok(ephemeral_scalar) = fresh_ephemeral(&mut *self.entropy.borrow_mut()) else {
+                return;
+            };
+            let seal = RecordSeal {
+                owner_enc_secret: scope.enc_secret,
+                ephemeral_scalar,
+            };
+            // The base sequence anchors a rebase against the target's own
+            // record, and a binned node has no record the snapshot renders.
+            let op = Op::purge(node, deleted_at, 1, now);
+            let _ = stage_op(self.staging, seal, &op).await;
+        }
+    }
+
+    /// The index the expiry sweep decides against: this device's cached copy,
+    /// and only on a device that has none does it cost a resolve.
+    ///
+    /// A cached copy is enough because the sweep decides nothing on its own — it
+    /// queues an op, and the publish re-reads the resolved index and refuses an
+    /// entry stamped otherwise. Retention is measured in days, so a copy that is
+    /// a pass or two behind costs nothing but a pass or two.
+    async fn expiry_bin_index(&self) -> Option<BinIndex> {
+        if let Some(index) = cached_bin_index(self.snapshot_cache, self.bin_keys).await {
+            return Some(index);
+        }
+        match load_bin_index(
+            self.transport,
+            self.gateway,
+            self.http,
+            self.floors,
+            self.snapshot_cache,
+            self.scheduler,
+            self.profile,
+            self.bin_keys,
+        )
+        .await
+        {
+            BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => Some(index),
+            BinIndexLoad::Empty(_) => None,
+        }
+    }
+
     /// The captures this pass may adopt, removed from the shared set.
     ///
     /// A node the base still links did not leave the tree — a move or a
@@ -2062,19 +2496,7 @@ where
     }
 
     /// Re-seal the doomed subtree under the bin's held key, which is the access
-    /// cut a soft delete owes (ADR 0010 item 3). Names, signers and the scope id
-    /// the AAD binds do not move, so the bin entry's `ipnsName` stays the route
-    /// back to the node.
-    ///
-    /// The whole subtree is re-keyed in this pass, not left to the lazy wave: a
-    /// binned node takes no ordinary write, so nothing would ever carry it.
-    ///
-    /// A descendant that is a scope root is a boundary, not a member. Its
-    /// subtree is sealed under its own scope's seed, which no grantee of the
-    /// source scope holds, and cutting that scope's grantees is a rotation.
-    ///
-    /// Every failure returns before the parent's unlink publishes, so a subtree
-    /// this pass could not re-key stays linked and nothing is lost.
+    /// cut a soft delete owes (ADR 0010 item 3).
     async fn rekey_into_bin(
         &self,
         scope: &DrainScope<'_>,
@@ -2087,6 +2509,29 @@ where
             read_scope_seed: &held,
             ..*scope
         };
+        self.rekey_subtree(scope, &binned, epoch, root).await
+    }
+
+    /// Re-seal every node of the subtree at `root` from the key `from` derives
+    /// to the key `to` derives. Names, signers and the scope id the AAD binds do
+    /// not move, so the bin entry's `ipnsName` stays the route back to the node.
+    ///
+    /// The whole subtree is re-keyed in this pass, not left to the lazy wave: a
+    /// binned node takes no ordinary write, so nothing would ever carry it.
+    ///
+    /// A descendant that is a scope root is a boundary, not a member. Its
+    /// subtree is sealed under its own scope's seed, which no grantee of the
+    /// source scope holds, and cutting that scope's grantees is a rotation.
+    ///
+    /// Every failure returns before the caller publishes the link it is about
+    /// to move, so a subtree this pass could not re-key stays as it was.
+    async fn rekey_subtree(
+        &self,
+        from: &DrainScope<'_>,
+        to: &DrainScope<'_>,
+        epoch: u64,
+        root: NodeId,
+    ) -> Result<(), Halt> {
         let mut seen = BTreeSet::new();
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
@@ -2095,7 +2540,7 @@ where
             if !seen.insert(node.0) {
                 continue;
             }
-            let (loaded, already_binned) = self.load_doomed(scope, &binned, epoch, node).await?;
+            let (loaded, already_moved) = self.load_doomed(from, to, epoch, node).await?;
             let LoadedNode {
                 name,
                 envelope_unknown,
@@ -2108,13 +2553,13 @@ where
                     pending.extend(
                         children
                             .iter()
-                            .filter(|child| names_this_scope(scope, child))
+                            .filter(|child| names_this_scope(from, child))
                             .map(|child| NodeId(child.id)),
                     );
                     Vec::new()
                 }
                 // Every retained version stays registered under this name, so
-                // the re-key never drops a pin the binned node still needs.
+                // the re-key never drops a pin the node still needs.
                 ReadBody::File { versions, .. } => versions
                     .iter()
                     .map(|version| {
@@ -2122,12 +2567,12 @@ where
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             };
-            if already_binned {
+            if already_moved {
                 continue;
             }
             let published = self
                 .publish_node(
-                    &binned,
+                    to,
                     epoch,
                     node,
                     &name,
@@ -2146,22 +2591,22 @@ where
     }
 
     /// Load a doomed node under whichever key seals it now, reporting whether
-    /// that was the held key. A pass that stopped part-way through a re-key
-    /// leaves a subtree holding both, and the retry has to read both.
+    /// that was already the key the re-key is moving it to. A pass that stopped
+    /// part-way leaves a subtree holding both, and the retry has to read both.
     async fn load_doomed(
         &self,
-        scope: &DrainScope<'_>,
-        binned: &DrainScope<'_>,
+        from: &DrainScope<'_>,
+        to: &DrainScope<'_>,
         epoch: u64,
         node: NodeId,
     ) -> Result<(LoadedNode, bool), Halt> {
         match self
-            .load_child_node(scope, epoch, node, ResolveMode::CacheFirst)
+            .load_child_node(from, epoch, node, ResolveMode::CacheFirst)
             .await
         {
             Ok(loaded) => Ok((loaded, false)),
             Err(halt) => self
-                .load_child_node(binned, epoch, node, ResolveMode::CacheFirst)
+                .load_child_node(to, epoch, node, ResolveMode::CacheFirst)
                 .await
                 .map(|loaded| (loaded, true))
                 .map_err(|_| halt),
@@ -2177,9 +2622,17 @@ where
     /// drawn from a record this pass actually resolved. Every other node's
     /// detachment is unproven, so its name and its debt both wait for
     /// [`Drain::prove_quarantine`] on a later pass.
-    fn owed_by_delete(&self, target: NodeId, doomed: &[Doomed]) -> Reclamation {
+    fn owed_by_delete(
+        &self,
+        target: NodeId,
+        doomed: &[Doomed],
+        binned_at: Option<u64>,
+    ) -> Reclamation {
         let unlinked = self.base.borrow().links_to(target).is_empty();
-        let mut reclamation = Reclamation::default();
+        let mut reclamation = Reclamation {
+            binned_at,
+            ..Reclamation::default()
+        };
         for node in doomed {
             // A version list is wire data and may name one root twice. The
             // ledger is keyed by target, so the second naming owes nothing the
@@ -2237,10 +2690,7 @@ where
     ) -> Option<Reclamation> {
         let (proven, held_over) = match settle {
             Settle::Hold => (Vec::new(), reclamation.quarantined.clone()),
-            Settle::Decide(budget) => {
-                self.prove_quarantine(scope, &reclamation.quarantined, budget)
-                    .await
-            }
+            Settle::Decide(budget) => self.prove_quarantine(scope, reclamation, budget).await,
         };
         let mut owed = reclamation.owed.clone();
         owed.extend(proven.iter().flat_map(|entry| entry.owed.iter().cloned()));
@@ -2308,11 +2758,13 @@ where
                 doomed: reclamation.doomed.iter().take(1).cloned().collect(),
                 owed: Vec::new(),
                 quarantined: held_over,
+                binned_at: reclamation.binned_at,
             }),
             (false, _) => Some(Reclamation {
                 doomed,
                 owed: Vec::new(),
                 quarantined: held_over,
+                binned_at: reclamation.binned_at,
             }),
         }
     }
@@ -2330,18 +2782,32 @@ where
     async fn prove_quarantine(
         &self,
         scope: &DrainScope<'_>,
-        quarantined: &[Quarantined],
+        reclamation: &Reclamation,
         budget: &mut usize,
     ) -> (Vec<Quarantined>, Vec<Quarantined>) {
+        let quarantined = &reclamation.quarantined;
         if quarantined.is_empty() {
             return (Vec::new(), Vec::new());
         }
         // One root read serves every proof this entry spends. A root this pass
         // cannot establish decides nothing: the whole quarantine waits rather
-        // than settling against an epoch this pass never read.
+        // than settling against an epoch this pass never read. The root is the
+        // scope's own record whatever the entry holds, so it is read under the
+        // scope key even for a purge.
         let Ok((_, epoch)) = self.load_scope_root(scope).await else {
             return (Vec::new(), quarantined.to_vec());
         };
+        // A purge's descendants left the scope's derivation at the delete that
+        // binned them, so the bin-held key is the only one that opens them.
+        let held = reclamation
+            .binned_at
+            .zip(reclamation.doomed.first())
+            .map(|(deleted_at, (target, _))| self.bin_keys.held_key(&target.0, deleted_at));
+        let sealed_under = held.as_ref().map_or(*scope, |held| DrainScope {
+            read_scope_seed: held,
+            ..*scope
+        });
+        let scope = &sealed_under;
         let mut proven = Vec::new();
         let mut held_over = Vec::new();
         for entry in quarantined {
@@ -4299,6 +4765,36 @@ mod tests {
 
     use crate::seams::SeamError;
     use crate::settings::PlacementRefusal;
+
+    /// Retention decides an irreversible purge, so the boundary is stated once
+    /// and read off the injected clock. Only a retention the owner chose expires
+    /// anything: a `0` turns the bin off rather than emptying it, a settings
+    /// load carrying no member choice destroys nothing, and a deadline the clock
+    /// has not reached expires nothing.
+    #[test]
+    fn only_an_elapsed_retention_the_owner_chose_expires_a_bin_entry() {
+        let day = DAY_MILLIS;
+        assert_eq!(
+            bin_expiry_cutoff(UnixMillis(30 * day), None),
+            None,
+            "a settings load with no member choice destroys nothing",
+        );
+        assert_eq!(
+            bin_expiry_cutoff(UnixMillis(30 * day), Some(0)),
+            None,
+            "a vault that keeps no bin destroys none of the entries it already has",
+        );
+        assert_eq!(
+            bin_expiry_cutoff(UnixMillis(29 * day), Some(30)),
+            None,
+            "a deadline the clock has not reached expires nothing",
+        );
+        assert_eq!(
+            bin_expiry_cutoff(UnixMillis(31 * day), Some(30)),
+            Some(day),
+            "an entry stamped at or before the cutoff has outlived the retention",
+        );
+    }
 
     /// The bin index split decides retry against charge for every soft delete,
     /// so a wrong arm either abandons a delete the plane would have taken or

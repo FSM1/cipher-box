@@ -566,6 +566,8 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::Forgotten => "forgotten",
         EngineError::InvalidSecret => "invalidSecret",
         EngineError::UnknownNode => "unknownNode",
+        EngineError::RestoreTargetGone => "restoreTargetGone",
+        EngineError::NotBinned => "notBinned",
         EngineError::NotAFolder => "notAFolder",
         EngineError::NotAFile => "notAFile",
         EngineError::ContentUnavailable { .. } => "contentUnavailable",

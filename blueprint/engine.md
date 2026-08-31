@@ -480,6 +480,90 @@ grantee that removed it stops reading it.
   and an adoption carries no owner command that could overrule that, so a
   grantee's unlink there is the loss retention `0` already means.
 
+### Restore, purge, and expiry
+
+Three operations take a node back out of the bin, and every one of them is a
+journaled intent op, so a replay of the queue reproduces the same bin and the
+same reclamation ([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
+items 4, 6 and 7).
+
+- **A restore re-keys in reverse, then relinks, then drops the entry.** Every
+  node of the subtree is re-sealed at the destination scope's current epoch, so
+  the destination's grantees read it again by scope membership and the bin-held
+  key stops opening it. An unshared destination gets the same operation: the
+  scope key it re-seals under is the fresh key such a restore needs, and no
+  second mechanism exists to drift from this one.
+- **The entry is dropped last.** A pass that stops between the relink and the
+  drop leaves a node that is both linked and binned, and the retry settles it.
+  The reverse order leaves a node no folder names and no entry finds.
+- **The destination is resolved at command time**, from the caller's choice or
+  from the entry's `originParent`, and journaled on the op. A destination the
+  vault no longer holds is its own refusal, so a host can offer another folder
+  rather than report a generic failure; one lost between the queue and the drain
+  is the same `destinationGone` dead letter a move gets.
+- **A purge proves the node unlinked before it destroys anything.** The bin entry
+  alone is not that proof: the soft delete writes the entry, unlinks, then
+  republishes the parent, so a parent publish that spends its attempt budget
+  leaves an entry standing for a node the user still sees. Two halves refuse it
+  — gate-passing state that still holds the node, and the entry's own
+  `originParent` **record**, which the pass reads rather than looking the folder
+  up in the base. The base is populated by the focus window, so absence from it
+  says only that this session never rendered the folder, and reading that as
+  proof would make the whole check vacuous for any nested folder.
+- **A purge is conditional on the `deletedAt` it was formed against.** That value
+  is the per-delete half of the bin-held key, so an entry stamped otherwise is
+  one this op never saw and whose subtree is sealed under another key.
+- **The purge walk runs under the bin-held key and stops at a scope root.** The
+  bin re-keyed no scope-root child, so such a child's record does not open under
+  the held key and is not this purge's to reclaim.
+- **The reclamation is the delete's.** The doomed manifest, the journal, the
+  target's own debt, and the descendant quarantine above under "Retirement" all
+  apply unchanged. The journal entry additionally carries the entry's
+  `deletedAt`, which is what lets a later pass derive the held key and resolve a
+  quarantined descendant at all; without it every purge of a folder would drop
+  its descendants unspent.
+- **The journal lands before the entry does, and a journal that does not land
+  refuses the purge.** Nothing is reclaimed at that point, so the entry is still
+  the whole retry: dropping it over an unwritten journal would strand the
+  subtree's names and pins with no durable handle to finish from. The entry drop
+  is what completes the op, and the settle replays off the journal on any later
+  pass.
+- **A restore's entry drop is its last act, not the relink.** The op is not
+  marked complete at the folder publish, and a rebase that finds the node
+  already linked applies rather than drops: an entry left standing for a linked
+  node is the entry a later delete of that node would inherit, already past its
+  retention.
+- **A bin read the pass cannot establish is charged.** A binned subtree takes no
+  ordinary write and joins no eager set, so a rotation can leave it sealed at an
+  epoch the gate refuses for good (ADR 0011). Uncharged, such a read would hold
+  the strict-FIFO head for every pass thereafter, and expiry queues these ops
+  with no owner command. Charged, the op spends its attempt budget and
+  dead-letters, which keeps the entry and its content — a leak, never a loss.
+- **Expiry is what enforces retention, and what frees the index.** The poll tick
+  compares each entry's journaled `deletedAt` against the injected clock and
+  queues a bounded share of purges per pass, skipping any entry the queue already
+  names. The bin index body has a frozen ceiling, and this is the only thing that
+  makes room under it.
+- **The sweep reads this device's cached index**, so it costs no record resolve
+  on a tick, and it queues nothing for an entry the publish would refuse for
+  good — one naming another scope, one whose `ipnsName` this scope's write seed
+  does not derive, one whose node this device still renders, or one whose own
+  purge has already dead-lettered.
+  A device with no cached copy loads one. The accepted residual is that a device
+  which never writes the bin holds a copy that only a bin operation refreshes,
+  so it can be late to see another device's entry. Any device of the account
+  expires it, and the entry stands until one does.
+- **Only a retention the owner chose expires anything.** A settings load that
+  carried no member choice takes the documented default, which is right for the
+  delete branch because binning is the reversible error and wrong here: an owner
+  who set ten years and whose settings record will not resolve on one device
+  must not have a month applied to their bin.
+- **A retention of `0` expires nothing.** It means the bin takes no new nodes,
+  never that the entries already in it are destroyed: an owner who stops binning
+  has not asked for what they already binned to go.
+- **The sweep waits when it cannot read the queue.** It stages ops, and a queue
+  it could not read cannot say which purges are already on it.
+
 ## Sync core
 
 One model, two trigger sources (FSM1/cipher-box-next#33 D2): web drives it from navigation and the

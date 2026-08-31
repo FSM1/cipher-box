@@ -395,6 +395,9 @@ pub enum DeadLetterReason {
     /// The record plane already carries the node this create mints, while
     /// nothing durable on this device remembers publishing it.
     AlreadyPublished,
+    /// A purge named a node gate-passing state still reaches through a live
+    /// parent, so the bin entry alone did not prove it unlinked.
+    TargetStillLinked,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -416,6 +419,7 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             facade::DeadLetterReason::HeadTooLarge => DeadLetterReason::HeadTooLarge,
             facade::DeadLetterReason::PreservationRefused => DeadLetterReason::PreservationRefused,
             facade::DeadLetterReason::AlreadyPublished => DeadLetterReason::AlreadyPublished,
+            facade::DeadLetterReason::TargetStillLinked => DeadLetterReason::TargetStillLinked,
         }
     }
 }
