@@ -11,9 +11,13 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -22,18 +26,25 @@ import type {
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
-import type { EngineWasm, WasmCommandOutcome, WasmEngineHandle } from './engineWasm.js';
+import type {
+  EngineWasm,
+  WasmCommandOutcome,
+  WasmDeviceApprovalResponse,
+  WasmEngineHandle,
+} from './engineWasm.js';
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
-  bytes,
   buildCommand,
+  bytes,
   count,
   minted,
   nodeId,
   readAuthMethods,
   readBin,
+  readDevices,
   readEvent,
+  readPendingApprovals,
   readReceivedShare,
   readSharing,
   readSnapshot,
@@ -69,6 +80,14 @@ export interface EngineHostLike {
   bin(): Promise<BinDescriptor>;
   vaultStorage(): Promise<VaultStorageDescriptor>;
   authMethods(): Promise<AuthMethodDescriptor[]>;
+  /** Reads the device identity keys registered to this account. */
+  devices(): Promise<RegisteredDeviceDescriptor[]>;
+  /** The bytes this device signs to join the account registry. */
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
+  /** Reads the rendezvous rows this account is asked to approve. */
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]>;
+  /** Runs one pure rendezvous step (ADR 0009); the engine holds no state for it. */
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult>;
   siweChallenge(intent: SiweIntent): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /**
@@ -115,6 +134,104 @@ function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
       return { kind: 'inviteLinkMinted', fragment: present(outcome.fragment, kind, 'fragment') };
   }
   throw new Error(`unknown command outcome ${kind}`);
+}
+
+/** Reads an approver's answer into a descriptor, releasing the boundary object. */
+function readApproval(answer: WasmDeviceApprovalResponse): DeviceRendezvousResult {
+  try {
+    return { kind: 'response', sealedFactor: answer.sealedFactor ?? null, payload: answer.payload };
+  } finally {
+    answer.free();
+  }
+}
+
+/**
+ * Exhaustiveness bound: adding a step kind without a wasm call fails the build,
+ * and a sender off the union gets a refusal rather than an unhandled
+ * fall-through.
+ */
+function unknownStep(step: never): Error {
+  return new Error(`unknown rendezvous step kind: ${String((step as DeviceRendezvousStep).kind)}`);
+}
+
+/**
+ * Runs one rendezvous step against the pure wasm functions. A step arrives as
+ * plain data across a realm boundary, so every field passes a checker before
+ * wasm-bindgen can coerce a wrong-typed one.
+ */
+function runRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRendezvousResult {
+  try {
+    return dispatchRendezvous(wasm, step);
+  } finally {
+    // This realm's copies are its own to erase (security rule 7). The caller
+    // keeps and erases its own, and a transferred buffer is already detached.
+    scrubStep(step);
+  }
+}
+
+/** Erases every secret a step carried into this realm. */
+function scrubStep(step: DeviceRendezvousStep): void {
+  if (typeof step !== 'object' || step === null) return;
+  for (const held of [
+    (step as { scalar?: unknown }).scalar,
+    (step as { sealScalar?: unknown }).sealScalar,
+    (step as { factorKey?: unknown }).factorKey,
+  ]) {
+    if (held instanceof Uint8Array) held.fill(0);
+  }
+}
+
+function dispatchRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRendezvousResult {
+  text(record(step, 'step').kind, 'step.kind');
+  switch (step.kind) {
+    case 'open': {
+      const opened = wasm.openDeviceRendezvous(
+        text(step.devicePublicKey, 'devicePublicKey'),
+        bytes(step.scalar, 'scalar')
+      );
+      try {
+        return {
+          kind: 'opened',
+          ephemeralPublicKey: opened.ephemeralPublicKey,
+          requestPayload: opened.requestPayload,
+          comparisonValue: opened.comparisonValue,
+        };
+      } finally {
+        opened.free();
+      }
+    }
+    case 'approve':
+      return readApproval(
+        wasm.approveDeviceRendezvous(
+          text(step.devicePublicKey, 'devicePublicKey'),
+          text(step.requestId, 'requestId'),
+          text(step.requesterDevicePublicKey, 'requesterDevicePublicKey'),
+          text(step.ephemeralPublicKey, 'ephemeralPublicKey'),
+          bytes(step.sealScalar, 'sealScalar'),
+          bytes(step.factorKey, 'factorKey')
+        )
+      );
+    case 'deny':
+      return readApproval(
+        wasm.denyDeviceRendezvous(
+          text(step.devicePublicKey, 'devicePublicKey'),
+          text(step.requestId, 'requestId'),
+          text(step.ephemeralPublicKey, 'ephemeralPublicKey')
+        )
+      );
+    case 'openFactor':
+      return {
+        kind: 'factor',
+        factorKey: wasm.openDeviceFactor(
+          text(step.sealedFactor, 'sealedFactor'),
+          text(step.requestId, 'requestId'),
+          text(step.requesterDevicePublicKey, 'requesterDevicePublicKey'),
+          bytes(step.scalar, 'scalar')
+        ),
+      };
+    default:
+      throw unknownStep(step);
+  }
 }
 
 /** A refusal carrying one of the engine's own stable codes, as the engine does. */
@@ -283,6 +400,22 @@ export class EngineHost implements EngineHostLike {
 
   async authMethods(): Promise<AuthMethodDescriptor[]> {
     return readAuthMethods(this.wasm, await this.handle.authMethods());
+  }
+
+  async devices(): Promise<RegisteredDeviceDescriptor[]> {
+    return readDevices(await this.handle.devices());
+  }
+
+  async deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    return this.handle.deviceRegistrationChallenge(text(devicePublicKey, 'devicePublicKey'));
+  }
+
+  async pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    return readPendingApprovals(await this.handle.pendingApprovals());
+  }
+
+  async deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    return runRendezvous(this.wasm, step);
   }
 
   siweChallenge(intent: SiweIntent): Promise<string> {

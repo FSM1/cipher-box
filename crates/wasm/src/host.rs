@@ -36,8 +36,8 @@ use crate::seams_bridge::{
     StagingStoreAdapter,
 };
 use crate::{
-    AuthMethod, BinView, Command, CommandOutcome, Event, NodeId, OpenedStream, ReceivedShareRow,
-    SharingView, SnapshotView, VaultStorageView,
+    AuthMethod, BinView, Command, CommandOutcome, Event, NodeId, OpenedStream, PendingApproval,
+    ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView, VaultStorageView,
 };
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
@@ -421,6 +421,59 @@ impl EngineHandle {
             Ok(rows
                 .into_iter()
                 .map(AuthMethod::from_facade)
+                .map(JsValue::from)
+                .collect::<js_sys::Array>()
+                .into())
+        })
+    }
+
+    /// The device identity keys registered to this account. Resolves with an
+    /// array of `RegisteredDevice`.
+    #[wasm_bindgen(js_name = devices)]
+    pub fn devices(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let rows = engine.read().await.devices().await.map_err(engine_error)?;
+            Ok(rows
+                .into_iter()
+                .map(RegisteredDevice::from_facade)
+                .map(JsValue::from)
+                .collect::<js_sys::Array>()
+                .into())
+        })
+    }
+
+    /// The bytes this device signs to join the account registry. The account id
+    /// comes from the engine's own session.
+    #[wasm_bindgen(js_name = deviceRegistrationChallenge)]
+    pub fn device_registration_challenge(&self, device_public_key: String) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let payload = engine
+                .read()
+                .await
+                .device_registration_challenge(&device_public_key)
+                .await
+                .map_err(engine_error)?;
+            Ok(js_sys::Uint8Array::from(payload.as_slice()).into())
+        })
+    }
+
+    /// What this account is asked to approve. Resolves with an array of
+    /// `PendingApproval`, each carrying its comparison value.
+    #[wasm_bindgen(js_name = pendingApprovals)]
+    pub fn pending_approvals(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let rows = engine
+                .read()
+                .await
+                .pending_approvals()
+                .await
+                .map_err(engine_error)?;
+            Ok(rows
+                .into_iter()
+                .map(PendingApproval::from_facade)
                 .map(JsValue::from)
                 .collect::<js_sys::Array>()
                 .into())

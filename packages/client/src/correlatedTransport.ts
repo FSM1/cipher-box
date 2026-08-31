@@ -18,9 +18,13 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -149,6 +153,10 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract bin(): Promise<BinDescriptor>;
   abstract vaultStorage(): Promise<VaultStorageDescriptor>;
   abstract authMethods(): Promise<AuthMethodDescriptor[]>;
+  abstract devices(): Promise<RegisteredDeviceDescriptor[]>;
+  abstract deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
+  abstract pendingApprovals(): Promise<PendingApprovalDescriptor[]>;
+  abstract deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult>;
   abstract siweChallenge(intent: SiweIntent): Promise<string>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
   abstract openContentStream(node: Uint8Array): Promise<OpenedStream>;

@@ -14,8 +14,12 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
+  PendingApprovalDescriptor,
+  RegisteredDeviceDescriptor,
   SiweIntent,
   SnapshotDescriptor,
   WorkerMessage,
@@ -62,6 +66,14 @@ function loopback(): {
   return { scope, worker, toUi };
 }
 
+const DEVICE_ROW: RegisteredDeviceDescriptor = {
+  id: '7c1e-uuid',
+  publicKey: 'ed25519hex',
+  label: null,
+  createdAt: '2026-08-27T10:00:00.000Z',
+  lastSeenAt: '2026-08-27T11:00:00.000Z',
+};
+
 const SNAPSHOT: SnapshotDescriptor = {
   ...emptySnapshot(new Uint8Array(16).fill(2)),
   root: new Uint8Array(16).fill(1),
@@ -103,6 +115,10 @@ class ReadHost extends StubEngineHost {
   siweChallenges = 0;
   siweChallengeIntents: SiweIntent[] = [];
   binReads = 0;
+  deviceReads = 0;
+  pendingApprovalReads = 0;
+  readonly registrationChallenges: string[] = [];
+  readonly rendezvousSteps: DeviceRendezvousStep[] = [];
 
   start(): Promise<void> {
     return Promise.resolve();
@@ -111,6 +127,26 @@ class ReadHost extends StubEngineHost {
   bin(): Promise<BinDescriptor> {
     this.binReads += 1;
     return Promise.resolve(BIN);
+  }
+
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    this.deviceReads += 1;
+    return Promise.resolve([DEVICE_ROW]);
+  }
+
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    this.pendingApprovalReads += 1;
+    return Promise.resolve([]);
+  }
+
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    this.registrationChallenges.push(devicePublicKey);
+    return Promise.resolve(Uint8Array.of(9, 9));
+  }
+
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    this.rendezvousSteps.push(step);
+    return Promise.resolve({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
   }
 
   /** What the next `command` resolves with; a queued op answers with its id. */
@@ -237,6 +273,44 @@ describe('serveEngine read requests', () => {
     );
     expect(response).toBeDefined();
     expect(response!.transfer).toEqual([content]);
+  });
+
+  it('serves the three device reads end to end over the transport', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    await expect(transport.devices()).resolves.toEqual([DEVICE_ROW]);
+    await expect(transport.pendingApprovals()).resolves.toEqual([]);
+    await expect(transport.deviceRegistrationChallenge('ed25519hex')).resolves.toEqual(
+      Uint8Array.of(9, 9)
+    );
+
+    expect(host.deviceReads).toBe(1);
+    expect(host.pendingApprovalReads).toBe(1);
+    expect(host.registrationChallenges).toEqual(['ed25519hex']);
+  });
+
+  it('serves a rendezvous step end to end, carrying the step it was given', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+    const scalar = new Uint8Array(32).fill(5);
+    const step: DeviceRendezvousStep = {
+      kind: 'openFactor',
+      sealedFactor: 'c2VhbA==',
+      requestId: 'req-1',
+      requesterDevicePublicKey: 'reqhex',
+      scalar,
+    };
+
+    await expect(transport.deviceRendezvous(step)).resolves.toEqual({
+      kind: 'factor',
+      factorKey: Uint8Array.of(7, 7),
+    });
+    expect(host.rendezvousSteps).toHaveLength(1);
   });
 
   it('serves a SIWE challenge end to end over the transport', async () => {
@@ -433,6 +507,9 @@ describe('serveEngine event pump over the real EngineHost', () => {
       bin: () => Promise.reject(new Error('unused')),
       vaultStorage: () => Promise.reject(new Error('unused')),
       authMethods: () => Promise.reject(new Error('unused')),
+      devices: () => Promise.reject(new Error('unused')),
+      deviceRegistrationChallenge: () => Promise.reject(new Error('unused')),
+      pendingApprovals: () => Promise.reject(new Error('unused')),
       siweChallenge: () => Promise.reject(new Error('unused')),
       download: () => Promise.reject(new Error('unused')),
       openContentStream: () => Promise.reject(new Error('unused')),

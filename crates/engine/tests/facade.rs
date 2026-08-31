@@ -14,9 +14,9 @@ use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    ApiBaseUrl, Command, CommandOutcome, ContentProfile, Engine, EngineError, EventStream,
-    GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, NodeKind, Permission, SiweIntent,
-    StoragePolicy, SyncTimingProfile,
+    ApiBaseUrl, ApprovalDecision, Command, CommandOutcome, ContentProfile, Engine, EngineError,
+    EventStream, GatewayConfig, LoginSecret, MAX_CONTACT_CODE_BYTES, NodeId, NodeKind, Permission,
+    SiweIntent, StoragePolicy, SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -39,6 +39,9 @@ const SECRET: [u8; 32] = [7u8; 32];
 fn secret() -> LoginSecret {
     LoginSecret::new(SECRET.to_vec())
 }
+
+/// A raw Ed25519 device identity public key, as the registry spells one.
+const DEVICE_KEY: &str = "cd11223344556677889900aabbccddeeff00112233445566778899aabbccddee";
 
 /// The wired grant, share and rotation arms, each named with the rule that
 /// refuses them on an unprovisioned session — a typed verdict of their own, not
@@ -85,6 +88,43 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             Command::RevokeInviteLink { node },
             EngineError::MalformedInput {
                 check: "link-not-committed",
+            },
+        ),
+        // The registry takes the key the host proved possession of, so this arm
+        // reaches the API and reports what the seam answered.
+        (
+            Command::RegisterDevice {
+                public_key: DEVICE_KEY.to_owned(),
+                signature: "device-signature".to_owned(),
+                identity_token: "identity-token".to_owned(),
+                label: None,
+            },
+            // A registration names the account the session holds, so an engine
+            // with no session refuses it before it builds a request.
+            EngineError::Auth {
+                message: "api rejected the request as unauthorized".to_owned(),
+            },
+        ),
+        (
+            Command::RevokeDevice {
+                device_id: "../account".to_owned(),
+            },
+            EngineError::MalformedInput {
+                check: "device-id-not-path-safe",
+            },
+        ),
+        (
+            Command::RespondToApproval {
+                request_id: "request-1".to_owned(),
+                decision: ApprovalDecision::Deny,
+                device_public_key: DEVICE_KEY.to_owned(),
+                ephemeral_public_key: cipherbox_engine::rendezvous_public_key(&[3u8; 32])
+                    .expect("a rendezvous key"),
+                signature: "approval-signature".to_owned(),
+                sealed_factor: Some("c2VhbGVkLWZhY3Rvcg==".to_owned()),
+            },
+            EngineError::MalformedInput {
+                check: "denial-seals-nothing",
             },
         ),
     ]

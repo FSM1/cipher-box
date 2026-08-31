@@ -364,3 +364,77 @@ pub(crate) struct MailboxPollWire {
 pub(crate) struct MailboxPostWire {
     pub id: String,
 }
+
+// --- device registry and approval rendezvous (ADR 0009) ---
+
+/// The registration body for
+/// [`ApiClient::register_device`](super::ApiClient::register_device).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RegisterDeviceRequest<'a> {
+    pub public_key: &'a str,
+    pub signature: &'a str,
+    pub identity_token: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<&'a str>,
+}
+
+/// The response body for
+/// [`ApiClient::respond_to_approval`](super::ApiClient::respond_to_approval).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RespondApprovalRequest<'a> {
+    pub decision: &'a str,
+    pub device_public_key: &'a str,
+    pub signature: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sealed_factor: Option<&'a str>,
+}
+
+/// The `GET /devices` envelope.
+#[derive(Deserialize)]
+pub(crate) struct RegisteredDeviceList {
+    pub devices: Vec<RegisteredDevice>,
+}
+
+/// The `GET /device-approval/pending` envelope.
+#[derive(Deserialize)]
+pub(crate) struct PendingApprovalList {
+    pub requests: Vec<PendingApproval>,
+}
+
+/// One device identity key on the account registry. The label is context a
+/// device chose, never evidence: only the key is proved.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredDevice {
+    /// The row id, which [`ApiClient::revoke_device`](super::ApiClient::revoke_device) names.
+    pub id: String,
+    /// The raw Ed25519 device identity public key, lowercase hex.
+    pub public_key: String,
+    /// The display label the device offered, when it offered one.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// When the key was registered, ISO 8601.
+    pub created_at: String,
+    /// When the key was last seen, ISO 8601.
+    pub last_seen_at: String,
+}
+
+/// One rendezvous this account is being asked to approve.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingApproval {
+    /// The rendezvous id.
+    pub request_id: String,
+    /// The requesting device identity public key, lowercase hex.
+    pub requester_device_public_key: String,
+    /// The compressed secp256k1 key a factor must be sealed to.
+    pub ephemeral_public_key: String,
+    /// The requester's signature over the pair above.
+    pub request_signature: String,
+    /// When the rendezvous opened, ISO 8601.
+    pub created_at: String,
+    /// When the row is gone, ISO 8601.
+    pub expires_at: String,
+}

@@ -26,6 +26,7 @@
 pub mod api;
 pub mod bin_index;
 pub mod content;
+pub mod devices;
 pub mod entropy;
 pub mod facade;
 pub mod gate;
@@ -46,8 +47,8 @@ pub mod testkit;
 
 pub use api::{
     ApiClient, ApiError, AuthMethod, AuthMethodKind, ChallengeSigner, IdentityChallengeSigner,
-    LoginOutcome, MailboxItem, NameRegistration, QUOTA_EXCEEDED, Quota, RetireResult, SiweNonce,
-    TestLoginOutcome, UPLOAD_TOO_LARGE, UploadResult,
+    LoginOutcome, MailboxItem, NameRegistration, PendingApproval, QUOTA_EXCEEDED, Quota,
+    RegisteredDevice, RetireResult, SiweNonce, TestLoginOutcome, UPLOAD_TOO_LARGE, UploadResult,
 };
 pub use bin_index::{
     BinIndexKeys, BinIndexLoad, BinIndexPublishError, load_bin_index, publish_bin_index,
@@ -60,6 +61,10 @@ pub use content::{
     SealedChunk, SealedContent, SessionBearer, assemble, decode_root, expand_retire_targets,
     frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block,
     seal_one_chunk, test_connection, validate_byo_config,
+};
+pub use devices::{
+    ApprovalDecision, MalformedDeviceField, PendingApprovalView, approval_request_payload,
+    approval_response_payload, comparison_value, open_factor, rendezvous_public_key, seal_factor,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{

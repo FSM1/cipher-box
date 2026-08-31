@@ -15,14 +15,19 @@ import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
+  ApprovalDecision,
   AuthMethodDescriptor,
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   NodeKind,
   OpenedStream,
+  PendingApprovalDescriptor,
   Permission,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -146,6 +151,29 @@ export class EngineFacade {
   /** The login methods on this account, in the display form the API serves. */
   authMethods(): Promise<AuthMethodDescriptor[]> {
     return this.transport.authMethods();
+  }
+
+  /** The device identity keys registered to this account (ADR 0009 D4). */
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    return this.transport.devices();
+  }
+
+  /** The bytes `devicePublicKey` signs to join this account's device registry. */
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    return this.transport.deviceRegistrationChallenge(devicePublicKey);
+  }
+
+  /** The rendezvous rows this account is asked to approve, each with its digits. */
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    return this.transport.pendingApprovals();
+  }
+
+  /**
+   * Runs one step of the device-approval rendezvous (ADR 0009). Each step is a
+   * pure function of the transcript, so the caller drives the exchange itself.
+   */
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    return this.transport.deviceRendezvous(step);
   }
 
   /** Downloads one file node's plaintext through the verified read pipeline. */
@@ -381,6 +409,41 @@ export class EngineFacade {
   /** Unlinks one login method. The engine re-proves the account identity key. */
   unlinkAuthMethod(methodId: string): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'unlinkAuthMethod', methodId });
+  }
+
+  /** Registers this device's identity key on the account; `label` is optional. */
+  registerDevice(
+    publicKey: string,
+    signature: string,
+    identityToken: string,
+    label: string | null
+  ): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'registerDevice', publicKey, signature, identityToken, label });
+  }
+
+  /** Revokes one registered device key. */
+  revokeDevice(deviceId: string): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'revokeDevice', deviceId });
+  }
+
+  /** Answers one rendezvous. A denial carries no sealed factor. */
+  respondToApproval(
+    requestId: string,
+    decision: ApprovalDecision,
+    devicePublicKey: string,
+    ephemeralPublicKey: string,
+    signature: string,
+    sealedFactor: string | null
+  ): Promise<CommandOutcomeDescriptor> {
+    return this.command({
+      kind: 'respondToApproval',
+      requestId,
+      decision,
+      devicePublicKey,
+      ephemeralPublicKey,
+      signature,
+      sealedFactor,
+    });
   }
 
   private command(descriptor: CommandDescriptor): Promise<CommandOutcomeDescriptor> {

@@ -683,6 +683,85 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.siweChallengeIntents).toEqual(['link']);
   });
 
+  it('serves the three follower device reads off the leader engine', async () => {
+    const { engine, follower } = wire();
+    const row = {
+      id: '7c1e-uuid',
+      publicKey: 'ed25519hex',
+      label: null,
+      createdAt: '2026-08-27T10:00:00.000Z',
+      lastSeenAt: '2026-08-27T11:00:00.000Z',
+    };
+    engine.respondDevices = () => Promise.resolve([row]);
+    engine.respondRegistrationChallenge = () => Promise.resolve(Uint8Array.of(9, 9));
+
+    await expect(follower.devices()).resolves.toEqual([row]);
+    await expect(follower.pendingApprovals()).resolves.toEqual([]);
+    await expect(follower.deviceRegistrationChallenge('ed25519hex')).resolves.toEqual(
+      Uint8Array.of(9, 9)
+    );
+
+    expect(engine.deviceReads).toBe(1);
+    expect(engine.pendingApprovalReads).toBe(1);
+    expect(engine.registrationChallenges).toEqual(['ed25519hex']);
+  });
+
+  it('serves a follower rendezvous step off the leader engine, step intact', async () => {
+    const { engine, follower } = wire();
+    const scalar = new Uint8Array(32).fill(5);
+    // The step the leader realm holds: its own clone, not the caller's buffer.
+    let relayHeld: Uint8Array | null = null;
+    engine.respondRendezvous = (step) => {
+      relayHeld = step.kind === 'open' ? step.scalar : null;
+      return Promise.resolve({
+        kind: 'opened',
+        ephemeralPublicKey: '02beef',
+        requestPayload: Uint8Array.of(1, 2),
+        comparisonValue: '482913 205776 640118',
+      });
+    };
+
+    await expect(
+      follower.deviceRendezvous({ kind: 'open', devicePublicKey: 'ed25519hex', scalar })
+    ).resolves.toEqual({
+      kind: 'opened',
+      ephemeralPublicKey: '02beef',
+      requestPayload: Uint8Array.of(1, 2),
+      comparisonValue: '482913 205776 640118',
+    });
+    // Snapshotted at the call, so the erase below cannot rewrite the evidence.
+    expect(engine.rendezvousSteps).toEqual([
+      { kind: 'open', devicePublicKey: 'ed25519hex', scalar: new Uint8Array(32).fill(5) },
+    ]);
+    // An `open` step's scalar stays the caller's, so nothing detaches the copy
+    // the leader realm holds: the relay erases that copy once the step has run.
+    expect(relayHeld).toEqual(new Uint8Array(32));
+    // The caller's own buffer is untouched — it opens the sealed factor later.
+    expect(scalar).toEqual(new Uint8Array(32).fill(5));
+  });
+
+  it('moves an opened factor key to the follower rather than leaving the leader a copy', async () => {
+    const { ports, engine, follower } = wire();
+    const factorKey = new Uint8Array(32).fill(0x7c);
+    const backing = factorKey.buffer;
+    engine.respondRendezvous = () => Promise.resolve({ kind: 'factor', factorKey });
+
+    const result = await follower.deviceRendezvous({
+      kind: 'openFactor',
+      sealedFactor: 'c2VhbA==',
+      requestId: 'req-1',
+      requesterDevicePublicKey: 'reqhex',
+      scalar: new Uint8Array(32).fill(5),
+    });
+
+    expect(result.kind).toBe('factor');
+    // The key is the account's; a clone would leave the leader realm holding it
+    // for the life of the tab (AGENTS.md 7). A transferred buffer is detached,
+    // so the leader has nothing left to read.
+    expect(ports.transfers.some((list) => list.includes(backing))).toBe(true);
+    expect(backing.byteLength).toBe(0);
+  });
+
   it('serves a follower stream window over the private port and rebuilds the window bytes', async () => {
     const { engine, follower } = wire();
     const file = Uint8Array.from({ length: 256 }, (_, i) => (i * 3 + 1) & 0xff);

@@ -93,8 +93,17 @@ export type {
   VaultStorageDescriptor,
   AuthMethodKind,
   AuthMethodDescriptor,
+  RegisteredDeviceDescriptor,
+  PendingApprovalDescriptor,
+  ApprovalDecision,
+  DeviceRendezvousStep,
+  DeviceRendezvousResult,
   SiweIntent,
 } from './worker/protocol.js';
+
+// The rule for which rendezvous buffers move rather than clone, exported so a
+// host's own test double detaches exactly what the transport detaches.
+export { rendezvousTransfer } from './worker/protocol.js';
 
 export {
   formatBytes,

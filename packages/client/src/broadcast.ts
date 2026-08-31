@@ -15,7 +15,10 @@
  * - A `BroadcastChannel` carries no transferables, so anything value-bearing put
  *   on it is cloned into every same-origin context that opened it. The port
  *   moves upload buffers instead, so a chunk's plaintext leaves the follower's
- *   heap rather than being copied to every bystander.
+ *   heap rather than being copied to every bystander. A device-approval step
+ *   ([`WireRead`] `deviceRendezvous`) carries key bytes on that port for the
+ *   same reason and under the same rule: it is transferred, and the realm it
+ *   lands in erases what it holds.
  * - What a bystanding same-origin context sees on the channel, stated exactly:
  *   per-tab `clientId`s, the leadership token, the port-host address, and that a
  *   session on this origin has just ended. No key bytes, no plaintext, no
@@ -30,9 +33,13 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -58,6 +65,10 @@ export type WireRead =
   | { kind: 'bin' }
   | { kind: 'vaultStorage' }
   | { kind: 'authMethods' }
+  | { kind: 'devices' }
+  | { kind: 'deviceRegistrationChallenge'; devicePublicKey: string }
+  | { kind: 'pendingApprovals' }
+  | { kind: 'deviceRendezvous'; step: DeviceRendezvousStep }
   | { kind: 'siweChallenge'; intent: SiweIntent }
   | { kind: 'download'; node: Uint8Array };
 
@@ -141,8 +152,12 @@ export type PortResponse =
         | BinDescriptor
         | VaultStorageDescriptor
         | AuthMethodDescriptor[]
+        | RegisteredDeviceDescriptor[]
+        | PendingApprovalDescriptor[]
+        | DeviceRendezvousResult
         | CommandOutcomeDescriptor
         | ArrayBuffer
+        | Uint8Array
         | string
         | OpenedStream
         | StreamHandle

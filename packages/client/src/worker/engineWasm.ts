@@ -224,6 +224,40 @@ export interface WasmAuthMethod {
   readonly lastUsedAt?: string;
 }
 
+/** wasm-bindgen `RegisteredDevice` — one device identity key on the registry. */
+export interface WasmRegisteredDevice {
+  readonly id: string;
+  readonly publicKey: string;
+  readonly label?: string;
+  readonly createdAt: string;
+  readonly lastSeenAt: string;
+}
+
+/** wasm-bindgen `PendingApproval` — one rendezvous awaiting an answer. */
+export interface WasmPendingApproval {
+  readonly requestId: string;
+  readonly requesterDevicePublicKey: string;
+  readonly ephemeralPublicKey: string;
+  readonly comparisonValue: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
+/** wasm-bindgen `DeviceRendezvous` — what a requester offers and must sign. */
+export interface WasmDeviceRendezvous {
+  readonly ephemeralPublicKey: string;
+  readonly requestPayload: Uint8Array;
+  readonly comparisonValue: string;
+  free(): void;
+}
+
+/** wasm-bindgen `DeviceApprovalResponse` — what an approver sends and must sign. */
+export interface WasmDeviceApprovalResponse {
+  readonly sealedFactor?: string;
+  readonly payload: Uint8Array;
+  free(): void;
+}
+
 /** wasm-bindgen `EngineHandle` — the one engine instance. */
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
@@ -248,6 +282,9 @@ export interface WasmEngineHandle {
   bin(): Promise<WasmBinView>;
   vaultStorage(): Promise<WasmVaultStorageView>;
   authMethods(): Promise<readonly WasmAuthMethod[]>;
+  devices(): Promise<readonly WasmRegisteredDevice[]>;
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
+  pendingApprovals(): Promise<readonly WasmPendingApproval[]>;
   siweChallenge(intent: SiweIntent): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   openContentStream(node: WasmNodeId): Promise<WasmOpenedStream>;
@@ -297,9 +334,48 @@ export interface EngineWasm {
     saveVaultSettings(settings: WasmVaultSettings): WasmCommand;
     siweLink(message: string, signature: Uint8Array): WasmCommand;
     unlinkAuthMethod(methodId: string): WasmCommand;
+    registerDevice(
+      publicKey: string,
+      signature: string,
+      identityToken: string,
+      label?: string
+    ): WasmCommand;
+    revokeDevice(deviceId: string): WasmCommand;
+    respondToApproval(
+      requestId: string,
+      decision: number,
+      devicePublicKey: string,
+      ephemeralPublicKey: string,
+      signature: string,
+      sealedFactor?: string
+    ): WasmCommand;
     logout(): WasmCommand;
     forgetDevice(): WasmCommand;
   };
+  /**
+   * The rendezvous free functions (ADR 0009). They are pure and hold no engine
+   * state, so they hang off the module rather than the handle.
+   */
+  openDeviceRendezvous(devicePublicKey: string, rendezvousScalar: Uint8Array): WasmDeviceRendezvous;
+  approveDeviceRendezvous(
+    devicePublicKey: string,
+    requestId: string,
+    requesterDevicePublicKey: string,
+    ephemeralPublicKey: string,
+    sealScalar: Uint8Array,
+    factorKey: Uint8Array
+  ): WasmDeviceApprovalResponse;
+  denyDeviceRendezvous(
+    devicePublicKey: string,
+    requestId: string,
+    ephemeralPublicKey: string
+  ): WasmDeviceApprovalResponse;
+  openDeviceFactor(
+    sealedFactor: string,
+    requestId: string,
+    requesterDevicePublicKey: string,
+    rendezvousScalar: Uint8Array
+  ): Uint8Array;
   ByoIpfsConfig: new (
     endpoint: string,
     kind: number,
@@ -341,6 +417,7 @@ export interface EngineWasm {
     readonly Test: number;
     readonly Unknown: number;
   };
+  ApprovalDecision: { readonly Approve: number; readonly Deny: number };
   OpPhase: {
     readonly DownloadStarted: number;
     readonly DownloadCompleted: number;

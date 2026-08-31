@@ -19,8 +19,12 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -63,6 +67,10 @@ class FakeTransport implements EngineTransport {
   binReads = 0;
   vaultStorageReads = 0;
   authMethodReads = 0;
+  deviceReads = 0;
+  pendingApprovalReads = 0;
+  registrationChallenges: string[] = [];
+  rendezvousSteps: DeviceRendezvousStep[] = [];
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
   siweChallengeIntents: SiweIntent[] = [];
@@ -147,6 +155,26 @@ class FakeTransport implements EngineTransport {
   authMethods(): Promise<AuthMethodDescriptor[]> {
     this.authMethodReads += 1;
     return Promise.resolve([]);
+  }
+
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    this.deviceReads += 1;
+    return Promise.resolve([]);
+  }
+
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    this.registrationChallenges.push(devicePublicKey);
+    return Promise.resolve(Uint8Array.of(1, 2, 3));
+  }
+
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    this.pendingApprovalReads += 1;
+    return Promise.resolve([]);
+  }
+
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    this.rendezvousSteps.push(step);
+    return Promise.resolve({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
   }
 
   siweChallenge(intent: SiweIntent): Promise<string> {
@@ -616,6 +644,99 @@ describe('EngineFacade', () => {
       { kind: 'restore', node, into },
       { kind: 'restore', node, into: null },
       { kind: 'purge', node },
+    ]);
+  });
+
+  it('forwards a devices read', async () => {
+    const transport = new FakeTransport();
+
+    await expect(new EngineFacade(transport).devices()).resolves.toEqual([]);
+    expect(transport.deviceReads).toBe(1);
+  });
+
+  it('forwards a pending-approvals read', async () => {
+    const transport = new FakeTransport();
+
+    await expect(new EngineFacade(transport).pendingApprovals()).resolves.toEqual([]);
+    expect(transport.pendingApprovalReads).toBe(1);
+  });
+
+  it('names the device key a registration challenge is issued for', async () => {
+    const transport = new FakeTransport();
+
+    await expect(
+      new EngineFacade(transport).deviceRegistrationChallenge('ed25519hex')
+    ).resolves.toEqual(Uint8Array.of(1, 2, 3));
+    expect(transport.registrationChallenges).toEqual(['ed25519hex']);
+  });
+
+  it('posts the rendezvous step it was handed, unaltered', async () => {
+    const transport = new FakeTransport();
+    const scalar = new Uint8Array(32).fill(5);
+
+    await expect(
+      new EngineFacade(transport).deviceRendezvous({
+        kind: 'open',
+        devicePublicKey: 'ed25519hex',
+        scalar,
+      })
+    ).resolves.toEqual({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
+    expect(transport.rendezvousSteps).toEqual([
+      { kind: 'open', devicePublicKey: 'ed25519hex', scalar },
+    ]);
+  });
+
+  it('sends a device registration carrying its label', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).registerDevice(
+      'ed25519hex',
+      'sighex',
+      'token.jwt',
+      'Work laptop'
+    );
+
+    expect(transport.commands).toEqual([
+      {
+        kind: 'registerDevice',
+        publicKey: 'ed25519hex',
+        signature: 'sighex',
+        identityToken: 'token.jwt',
+        label: 'Work laptop',
+      },
+    ]);
+  });
+
+  it('sends a device revoke naming only the device id', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).revokeDevice('7c1e-uuid');
+
+    expect(transport.commands).toEqual([{ kind: 'revokeDevice', deviceId: '7c1e-uuid' }]);
+  });
+
+  it('sends a denial with no sealed factor on it', async () => {
+    const transport = new FakeTransport();
+
+    await new EngineFacade(transport).respondToApproval(
+      'req-1',
+      'deny',
+      'ed25519hex',
+      '02beef',
+      'sighex',
+      null
+    );
+
+    expect(transport.commands).toEqual([
+      {
+        kind: 'respondToApproval',
+        requestId: 'req-1',
+        decision: 'deny',
+        devicePublicKey: 'ed25519hex',
+        ephemeralPublicKey: '02beef',
+        signature: 'sighex',
+        sealedFactor: null,
+      },
     ]);
   });
 

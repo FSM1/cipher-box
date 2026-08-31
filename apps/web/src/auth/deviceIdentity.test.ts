@@ -1,10 +1,12 @@
 import { createPublicKey, verify } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deviceIdentitiesTestInstance,
   deviceIdentityTestInstance as identity,
   MemoryDeviceKeys,
   SerialLocks,
 } from '../test/storeFakes';
+import { deviceKeyPlace } from './deviceIdentity';
 
 /** What the device registry takes, and what a rendezvous signature must be. */
 const PUBLIC_KEY_HEX = /^[0-9a-f]{64}$/;
@@ -205,5 +207,65 @@ describe('a store that no longer holds this device identity', () => {
     await identity(keys, locks).forget();
 
     await expect(warm.publicKeyHex()).resolves.not.toBe(before);
+  });
+});
+
+/**
+ * The registry declares `public_key` unique across every account, so a key two
+ * members shared on one browser would let only the first of them register. It
+ * would also hand the server a stable pseudonym linking the two accounts.
+ */
+describe('two members on one browser', () => {
+  const ONE = 'subject-one';
+  const OTHER = 'subject-other';
+
+  it('gives each subject an identity key of its own', async () => {
+    const identities = deviceIdentitiesTestInstance();
+
+    const one = await identities.forSubject(ONE).publicKeyHex();
+    const other = await identities.forSubject(OTHER).publicKeyHex();
+
+    expect(one).toMatch(PUBLIC_KEY_HEX);
+    expect(other).toMatch(PUBLIC_KEY_HEX);
+    expect(other).not.toBe(one);
+  });
+
+  it('does not serve one subject the key minted for the other', async () => {
+    const identities = deviceIdentitiesTestInstance();
+    const one = await identities.forSubject(ONE).publicKeyHex();
+
+    const other = await identities.forSubject(OTHER).publicKeyHex();
+
+    expect(other).not.toBe(one);
+    await expect(identities.forSubject(ONE).publicKeyHex()).resolves.toBe(one);
+  });
+
+  /**
+   * For the email verifier the subject is an email address, so a record key
+   * holding one would leave any script on this origin an enumerable list of
+   * every member who signed in here.
+   */
+  it('names a subject by a digest, never in the clear', async () => {
+    const subject = 'member@example.test';
+
+    const place = await deviceKeyPlace(subject);
+    const other = await deviceKeyPlace('someone.else@example.test');
+
+    expect(place.record.id).not.toContain(subject);
+    expect(place.lock).not.toContain(subject);
+    expect(place.record.id).toMatch(/^device-identity\/[0-9a-f]{64}$/);
+    expect(other.record.id).not.toBe(place.record.id);
+    await expect(deviceKeyPlace(subject)).resolves.toEqual(place);
+  });
+
+  it('leaves one subject standing when the other is forgotten', async () => {
+    const identities = deviceIdentitiesTestInstance();
+    await identities.forSubject(ONE).publicKeyHex();
+    const other = await identities.forSubject(OTHER).publicKeyHex();
+
+    await identities.forSubject(ONE).forget();
+
+    expect(identities.keysFor(ONE).held).toBeNull();
+    await expect(identities.forSubject(OTHER).publicKeyHex()).resolves.toBe(other);
   });
 });

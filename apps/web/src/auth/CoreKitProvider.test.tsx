@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { COREKIT_STATUS } from '@web3auth/mpc-core-kit';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { deviceIdentityTestInstance, sealedTestStore } from '../test/storeFakes';
+import { deviceIdentitiesTestInstance, sealedTestStore } from '../test/storeFakes';
 import { createCoreKitSession } from './coreKit';
 import type { SealedStore } from './sealedStore';
 import { CoreKitProvider, useCoreKit } from './CoreKitProvider';
@@ -81,7 +81,7 @@ describe('CoreKitProvider', () => {
     return renderHook(() => useCoreKit(), {
       wrapper: ({ children }: { children: ReactNode }) => (
         <CoreKitProvider
-          createSession={() => createCoreKitSession(ENV, store, deviceIdentityTestInstance())}
+          createSession={() => createCoreKitSession(ENV, store, deviceIdentitiesTestInstance())}
         >
           {children}
         </CoreKitProvider>

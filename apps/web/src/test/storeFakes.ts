@@ -5,7 +5,11 @@
  */
 
 import type { LockGrant, LockManagerLike } from '@cipherbox/client';
-import { DeviceIdentity, type DeviceKeyStore } from '../auth/deviceIdentity';
+import {
+  DeviceIdentity,
+  type DeviceIdentityStore,
+  type DeviceKeyStore,
+} from '../auth/deviceIdentity';
 import type { KeyRecordStore } from '../auth/keyStore';
 import { SealedStore, type WrappingKeyStore } from '../auth/sealedStore';
 
@@ -65,5 +69,24 @@ export function deviceIdentityTestInstance(
   keys: DeviceKeyStore = new MemoryDeviceKeys(),
   locks: LockManagerLike = new SerialLocks()
 ): DeviceIdentity {
-  return new DeviceIdentity(keys, locks);
+  return new DeviceIdentity(keys, locks, 'test-device-identity');
+}
+
+/**
+ * The per-subject store, over one memory record per subject, so a test can prove
+ * that two subjects on one browser never share a key.
+ */
+export function deviceIdentitiesTestInstance(
+  locks: LockManagerLike = new SerialLocks()
+): DeviceIdentityStore & { keysFor(subject: string): MemoryDeviceKeys } {
+  const stores = new Map<string, MemoryDeviceKeys>();
+  const keysFor = (subject: string): MemoryDeviceKeys => {
+    const held = stores.get(subject) ?? new MemoryDeviceKeys();
+    stores.set(subject, held);
+    return held;
+  };
+  return {
+    keysFor,
+    forSubject: (subject) => new DeviceIdentity(keysFor(subject), locks, `test/${subject}`),
+  };
 }

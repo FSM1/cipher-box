@@ -32,19 +32,22 @@ import {
   type WireStream,
   type WireWrite,
 } from './broadcast.js';
-import { wipeTransfer } from './buffers.js';
+import { isBuffer, wipeBytes, wipeTransfer } from './buffers.js';
 import { EngineRequestError, unknownHandle, type HandleKind } from './correlatedTransport.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import { commandTransfer } from './worker/protocol.js';
+import { commandTransfer, rendezvousTransfer } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
   BinDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
   EventDescriptor,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   StreamHandle,
@@ -89,14 +92,31 @@ function wipeChunk(payload: unknown): void {
 }
 
 /**
+ * Wipes the secret scalars a rendezvous step carries. Every kind is covered,
+ * `open` included: the step reached this realm by structured clone, so these
+ * bytes are a copy the sender does not share and this frame is their last
+ * owner. Takes the step unvalidated: an off-shape one carries none.
+ */
+function wipeStep(step: unknown): void {
+  const held = step as { scalar?: unknown; sealScalar?: unknown; factorKey?: unknown } | null;
+  wipeBytes(held?.scalar);
+  wipeBytes(held?.sealScalar);
+  wipeBytes(held?.factorKey);
+}
+
+/**
  * Wipes every buffer a port message carries, on the routes that answer it with
- * neither a relay nor a refusal — a write step's upload chunk, and a settings
- * command's BYO bearer.
+ * neither a relay nor a refusal — a write step's upload chunk, a settings
+ * command's BYO bearer, and a rendezvous step's secret scalars.
  */
 function wipeDropped(message: unknown): void {
-  const envelope = message as { write?: unknown; command?: unknown } | null | undefined;
+  const envelope = message as
+    | { write?: unknown; command?: unknown; read?: { step?: unknown } | null }
+    | null
+    | undefined;
   wipeChunk(envelope?.write);
   wipeTransfer(commandTransfer(envelope?.command));
+  wipeStep(envelope?.read?.step);
 }
 
 /**
@@ -456,8 +476,12 @@ export class LeaderRelay {
       | BinDescriptor
       | VaultStorageDescriptor
       | AuthMethodDescriptor[]
+      | RegisteredDeviceDescriptor[]
+      | PendingApprovalDescriptor[]
+      | DeviceRendezvousResult
       | CommandOutcomeDescriptor
       | ArrayBuffer
+      | Uint8Array
       | string
       | bigint
       | OpenedStream
@@ -466,18 +490,21 @@ export class LeaderRelay {
   ): Promise<void> {
     try {
       const result = await step();
+      // A rendezvous result carries the opened factor key, which is secret in
+      // the same way a download window is: both move rather than clone.
+      const transfer = isBuffer(result) ? [result as Transferable] : rendezvousTransfer(result);
       if (this.closed || !this.ports.has(entry)) {
         // The port went away while the read ran, so nobody will receive this
-        // window: wipe it rather than leave plaintext for the collector
+        // result: wipe it rather than leave plaintext for the collector
         // (AGENTS.md 7 — with no transfer to make, this frame is its last owner).
-        if (result instanceof ArrayBuffer) new Uint8Array(result).fill(0);
+        wipeTransfer(transfer);
         return;
       }
       // Transferred, not cloned: the plaintext leaves this tab's heap outright.
       this.postPort(
         entry.port,
         { type: 'cb:portResult', requestId, ok: true, result },
-        result instanceof ArrayBuffer ? [result] : undefined
+        transfer.length > 0 ? transfer : undefined
       );
     } catch (error) {
       this.postPort(entry.port, {
@@ -498,7 +525,11 @@ export class LeaderRelay {
     | BinDescriptor
     | VaultStorageDescriptor
     | AuthMethodDescriptor[]
+    | RegisteredDeviceDescriptor[]
+    | PendingApprovalDescriptor[]
+    | DeviceRendezvousResult
     | ArrayBuffer
+    | Uint8Array
     | string
   > {
     switch (read.kind) {
@@ -514,6 +545,18 @@ export class LeaderRelay {
         return this.transport.vaultStorage();
       case 'authMethods':
         return this.transport.authMethods();
+      case 'devices':
+        return this.transport.devices();
+      case 'deviceRegistrationChallenge':
+        return this.transport.deviceRegistrationChallenge(read.devicePublicKey);
+      case 'pendingApprovals':
+        return this.transport.pendingApprovals();
+      case 'deviceRendezvous':
+        // The step arrived by structured clone, so this realm owns a copy of
+        // its secrets. The leg below transfers most of them on, but an `open`
+        // step's scalar stays the caller's and is never detached here, so this
+        // realm erases whatever it still holds once the step has run.
+        return this.transport.deviceRendezvous(read.step).finally(() => wipeStep(read.step));
       case 'siweChallenge':
         return this.transport.siweChallenge(read.intent);
       case 'download':

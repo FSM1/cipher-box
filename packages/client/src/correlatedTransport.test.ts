@@ -11,8 +11,11 @@ import type {
   AuthMethodDescriptor,
   BinDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SnapshotDescriptor,
   VaultStorageDescriptor,
@@ -92,6 +95,18 @@ class ProbeTransport extends CorrelatedTransport {
     return unsupported();
   }
   authMethods(): Promise<AuthMethodDescriptor[]> {
+    return unsupported();
+  }
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    return unsupported();
+  }
+  deviceRegistrationChallenge(): Promise<Uint8Array> {
+    return unsupported();
+  }
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    return unsupported();
+  }
+  deviceRendezvous(): Promise<DeviceRendezvousResult> {
     return unsupported();
   }
   siweChallenge(): Promise<string> {

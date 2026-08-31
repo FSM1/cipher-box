@@ -136,6 +136,47 @@ describe('the recovery phrase step', () => {
     expect(parts.progress.failures).toHaveLength(1);
   });
 
+  it('finishes a held login from the factor another device sealed back', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+    const factorKey = new Uint8Array(32).fill(9);
+
+    await parts.flow.completeDeviceApproval(factorKey);
+
+    expect(parts.session.calls.adoptedFactors).toEqual([factorKey]);
+    expect(parts.facade.calls.secrets).toEqual([SECRET_BYTES]);
+    expect(loggedIn(parts)).toEqual([{ method: 'google', email: 'user@example.test' }]);
+  });
+
+  it('leaves the login held when the approved factor opens nothing', async () => {
+    const parts = build({ session: fakeSession({ needsRecovery: true }) });
+    await expect(parts.flow.loginWithGoogle('google.id.token')).rejects.toBeInstanceOf(
+      RecoveryRequiredError
+    );
+
+    await expect(parts.flow.completeDeviceApproval(new Uint8Array(4))).rejects.toThrow(
+      'that approval opens nothing'
+    );
+
+    expect(parts.facade.calls.secrets).toEqual([]);
+  });
+
+  // Desktop's session may carry no approval path of its own, so the seam is
+  // optional and the flow has to refuse rather than call through undefined.
+  it('refuses an approval on a host whose session cannot adopt one', async () => {
+    const bare = fakeSession({ needsRecovery: true });
+    delete (bare.session as Partial<CoreKitSession>).adoptApprovalFactor;
+    const parts = build({ session: bare });
+
+    await expect(parts.flow.completeDeviceApproval(new Uint8Array(32))).rejects.toThrow(
+      'device approval is not available on this device'
+    );
+
+    expect(parts.facade.calls.secrets).toEqual([]);
+  });
+
   // Desktop's session has no phrase redemption of its own, so the seam is
   // optional and the flow has to refuse rather than call through undefined.
   it('refuses a phrase on a host whose session cannot redeem one', async () => {

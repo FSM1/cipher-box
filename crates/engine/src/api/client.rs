@@ -20,10 +20,11 @@ use super::error::ApiError;
 use super::signer::ChallengeSigner;
 use super::types::{
     AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
-    MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
-    RetireEntry, RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweNonce,
-    StepUpChallengeRequest, StepUpOperation, TestLoginOutcome, TestLoginRequest, TestLoginResponse,
-    TokenResponse, UnlinkMethodRequest, UploadResult,
+    MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, PendingApproval,
+    PendingApprovalList, Quota, RefreshRequest, RegisterDeviceRequest, RegisteredDevice,
+    RegisteredDeviceList, RespondApprovalRequest, RetireEntry, RetireResult, SiweChallengeResponse,
+    SiweLinkRequest, SiweNonce, StepUpChallengeRequest, StepUpOperation, TestLoginOutcome,
+    TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest, UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::seams::{
@@ -501,6 +502,116 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             .collect()
     }
 
+    /// The account id the API knows this session by — the `sub` claim of the
+    /// access token this client was issued.
+    ///
+    /// Read rather than trusted: it is echoed straight back into the
+    /// registration payload the API re-derives from its own JWT, so a wrong
+    /// value produces a refused registration and never a wrong decision. It
+    /// must never reach a **local** decision, which would inherit that exemption
+    /// without the server's re-derivation behind it.
+    pub fn account_id(&self) -> Result<String, ApiError> {
+        let token = self.session.peek().ok_or(ApiError::Unauthorized)?;
+        let payload = token
+            .split('.')
+            .nth(1)
+            .ok_or_else(|| ApiError::Decode("the access token is not a JWT".into()))?;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|_| ApiError::Decode("the access token payload is not base64url".into()))?;
+        #[derive(serde::Deserialize)]
+        struct Claims {
+            sub: String,
+        }
+        let claims: Claims = serde_json::from_slice(&bytes)
+            .map_err(|_| ApiError::Decode("the access token carries no subject".into()))?;
+        if claims.sub.is_empty() {
+            return Err(ApiError::Decode(
+                "the access token carries no subject".into(),
+            ));
+        }
+        Ok(claims.sub)
+    }
+
+    /// Register this device's identity key on the account (ADR 0009 D4).
+    /// `signature` is made outside the engine, by the browser-held key.
+    pub async fn register_device(
+        &self,
+        public_key: &str,
+        signature: &str,
+        identity_token: &str,
+        label: Option<&str>,
+    ) -> Result<RegisteredDevice, ApiError> {
+        let response = self
+            .json_authed(
+                HttpMethod::Post,
+                "/devices",
+                &RegisterDeviceRequest {
+                    public_key,
+                    signature,
+                    identity_token,
+                    label,
+                },
+            )
+            .await?;
+        let response = ok_or_err(response)?;
+        decode(&response)
+    }
+
+    /// The device identity keys registered to the authenticated account.
+    pub async fn devices(&self) -> Result<Vec<RegisteredDevice>, ApiError> {
+        let response = self.request_authed(HttpMethod::Get, "/devices").await?;
+        let response = ok_or_err(response)?;
+        let list: RegisteredDeviceList = decode(&response)?;
+        Ok(list.devices)
+    }
+
+    /// Revoke a device key: a hard delete. It stops that device approving from
+    /// now on and un-shares nothing it already holds (ADR 0009 D5).
+    pub async fn revoke_device(&self, id: &str) -> Result<(), ApiError> {
+        let response = self
+            .request_authed(HttpMethod::Delete, &format!("/devices/{}", path_id(id)?))
+            .await?;
+        ok_or_err(response).map(drop)
+    }
+
+    /// What this account is being asked to approve. Every field is relayed by
+    /// the bulletin board, so a caller checks the request signature and the
+    /// comparison value before it seals anything.
+    pub async fn pending_approvals(&self) -> Result<Vec<PendingApproval>, ApiError> {
+        let response = self
+            .request_authed(HttpMethod::Get, "/device-approval/pending")
+            .await?;
+        let response = ok_or_err(response)?;
+        let list: PendingApprovalList = decode(&response)?;
+        Ok(list.requests)
+    }
+
+    /// Answer a rendezvous, signed by a registered device. `sealed_factor` is
+    /// opaque ciphertext the API never inspects, and a denial carries none.
+    pub async fn respond_to_approval(
+        &self,
+        request_id: &str,
+        decision: &str,
+        device_public_key: &str,
+        signature: &str,
+        sealed_factor: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .json_authed(
+                HttpMethod::Post,
+                &format!("/device-approval/requests/{}/respond", path_id(request_id)?),
+                &RespondApprovalRequest {
+                    decision,
+                    device_public_key,
+                    signature,
+                    sealed_factor,
+                },
+            )
+            .await?;
+        ok_or_err(response).map(drop)
+    }
+
     /// Ack (delete) a mailbox item by id.
     ///
     /// The id comes from an integrity-untrusted transport and lands in this
@@ -828,6 +939,17 @@ fn to_json<B: Serialize + ?Sized>(body: &B) -> Vec<u8> {
     serde_json::to_vec(body).expect("api request bodies always serialize")
 }
 
+/// An id bound for a request path. The device surface takes ids the API
+/// minted, but they arrive through host code, so the same alphabet the mailbox
+/// ack enforces is checked before one is interpolated into a route.
+fn path_id(id: &str) -> Result<&str, ApiError> {
+    if item_id_is_legal(id) {
+        Ok(id)
+    } else {
+        Err(ApiError::Decode("illegal path id".into()))
+    }
+}
+
 fn ok_or_err(response: HttpResponse) -> Result<HttpResponse, ApiError> {
     if is_success(response.status) {
         Ok(response)
@@ -934,13 +1056,22 @@ mod tests {
 
     /// Log in so the client holds an access token and a stored refresh token.
     fn login(http: &ScriptedHttp, client: &ApiClient<ScriptedHttp, InMemoryCredentialStore>) {
+        login_holding(http, client, "jwt-1");
+    }
+
+    /// [`login`], with the access token the API's token response carries.
+    fn login_holding(
+        http: &ScriptedHttp,
+        client: &ApiClient<ScriptedHttp, InMemoryCredentialStore>,
+        access_token: &str,
+    ) {
         http.enqueue_response(json_response(
             200,
             json!({ "challenge": challenge(), "expiresAt": "2026-01-01T00:00:00Z" }),
         ));
         http.enqueue_response(json_response(
             200,
-            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
+            new_user_login_response(access_token, &"a".repeat(64), "gw-a"),
         ));
         block_on(client.login_identity(&StubSigner)).expect("login");
     }
@@ -2033,5 +2164,347 @@ mod tests {
         let requests = http.requests();
         assert_eq!(requests.len(), 1, "only the mint for {challenge:?}");
         assert_eq!(requests[0].url, "http://api.test/auth/challenge/step-up");
+    }
+
+    // --- device registry and approval rendezvous (ADR 0009) ---
+
+    /// A raw Ed25519 device identity public key, as the registry spells one.
+    const DEVICE_KEY: &str = "cd11223344556677889900aabbccddeeff00112233445566778899aabbccddee";
+    /// A compressed secp256k1 rendezvous key, as a requester offers one.
+    const RENDEZVOUS_KEY: &str =
+        "02aa11223344556677889900aabbccddeeff00112233445566778899aabbccddee";
+    /// Opaque ciphertext to the client, which never inspects it.
+    const SEALED_FACTOR: &str = "c2VhbGVkLWZhY3Rvcg==";
+
+    /// The middle segment of a JWT: base64url with no padding.
+    fn claims_segment(claims: &str) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims)
+    }
+
+    /// An access token shaped as the API issues one: three dot-separated
+    /// segments whose middle one carries the claim set.
+    fn access_token_naming(account_id: &str) -> String {
+        let claims = claims_segment(&json!({ "sub": account_id }).to_string());
+        format!("header.{claims}.signature")
+    }
+
+    #[test]
+    fn register_device_posts_the_signed_key_and_decodes_the_registry_row() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(
+            200,
+            json!({
+                "id": "device-1",
+                "publicKey": DEVICE_KEY,
+                "label": "Laptop",
+                "createdAt": "2026-08-27T10:00:00.000Z",
+                "lastSeenAt": "2026-08-27T11:00:00.000Z",
+            }),
+        ));
+
+        let row = block_on(client.register_device(
+            DEVICE_KEY,
+            "device-signature",
+            "identity-token",
+            Some("Laptop"),
+        ))
+        .expect("the registry accepted the key");
+
+        assert_eq!(
+            row,
+            RegisteredDevice {
+                id: "device-1".to_owned(),
+                public_key: DEVICE_KEY.to_owned(),
+                label: Some("Laptop".to_owned()),
+                created_at: "2026-08-27T10:00:00.000Z".to_owned(),
+                last_seen_at: "2026-08-27T11:00:00.000Z".to_owned(),
+            }
+        );
+        let requests = http.requests();
+        let sent = &requests[sent_after_login..];
+        assert_eq!(sent.len(), 1, "one registration and nothing else");
+        assert_eq!(sent[0].method, HttpMethod::Post);
+        assert_eq!(sent[0].url, "http://api.test/devices");
+        assert!(has_bearer(&sent[0]), "the registry is owner-authenticated");
+        let body = body_json(&sent[0]);
+        assert_eq!(body["publicKey"], DEVICE_KEY);
+        assert_eq!(body["signature"], "device-signature");
+        assert_eq!(body["identityToken"], "identity-token");
+        assert_eq!(body["label"], "Laptop");
+    }
+
+    /// The label is optional context, so a device that offered none must not
+    /// send a field the API would then have to interpret.
+    #[test]
+    fn a_device_that_offered_no_label_sends_no_label_field() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(
+            200,
+            json!({
+                "id": "device-1",
+                "publicKey": DEVICE_KEY,
+                "createdAt": "2026-08-27T10:00:00.000Z",
+                "lastSeenAt": "2026-08-27T11:00:00.000Z",
+            }),
+        ));
+
+        let row = block_on(client.register_device(
+            DEVICE_KEY,
+            "device-signature",
+            "identity-token",
+            None,
+        ))
+        .expect("the registry accepted the key");
+
+        assert_eq!(row.label, None, "an absent label decodes as none");
+        let requests = http.requests();
+        let body = body_json(&requests[sent_after_login]);
+        assert!(
+            body.get("label").is_none(),
+            "an absent label is absent from the wire"
+        );
+    }
+
+    #[test]
+    fn devices_unwraps_the_envelope_and_keeps_a_row_that_carries_no_label() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(
+            200,
+            json!({ "devices": [
+                {
+                    "id": "device-1",
+                    "publicKey": DEVICE_KEY,
+                    "label": "Laptop",
+                    "createdAt": "2026-08-27T10:00:00.000Z",
+                    "lastSeenAt": "2026-08-27T11:00:00.000Z",
+                },
+                {
+                    "id": "device-2",
+                    "publicKey": DEVICE_KEY,
+                    "label": null,
+                    "createdAt": "2026-08-27T09:00:00.000Z",
+                    "lastSeenAt": "2026-08-27T09:30:00.000Z",
+                },
+            ]}),
+        ));
+
+        let rows = block_on(client.devices()).expect("the registry served its rows");
+
+        assert_eq!(rows.len(), 2, "the envelope is unwrapped to its rows");
+        assert_eq!(rows[0].id, "device-1");
+        assert_eq!(rows[0].label.as_deref(), Some("Laptop"));
+        assert_eq!(rows[1].id, "device-2");
+        assert_eq!(rows[1].label, None, "a null label decodes as none");
+        let requests = http.requests();
+        let sent = &requests[sent_after_login];
+        assert_eq!(sent.method, HttpMethod::Get);
+        assert_eq!(sent.url, "http://api.test/devices");
+        assert!(has_bearer(sent), "only the owner reads the registry");
+    }
+
+    #[test]
+    fn revoke_device_deletes_the_row_the_registry_named() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(client.revoke_device("device-1")).expect("the row is gone");
+
+        let requests = http.requests();
+        let sent = &requests[sent_after_login..];
+        assert_eq!(sent.len(), 1, "one delete and nothing else");
+        assert_eq!(sent[0].method, HttpMethod::Delete);
+        assert_eq!(sent[0].url, "http://api.test/devices/device-1");
+        assert!(has_bearer(&sent[0]), "only the owner revokes a device");
+    }
+
+    /// A row id crosses from host code into a request path, so one outside the
+    /// path alphabet is refused rather than interpolated into a route.
+    #[test]
+    fn a_device_id_outside_the_path_alphabet_never_reaches_the_wire() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+
+        for id in ["../account", "a b", ""] {
+            let before = http.requests().len();
+            assert_eq!(
+                block_on(client.revoke_device(id)).unwrap_err(),
+                ApiError::Decode("illegal path id".into()),
+                "the id {id:?} must be refused"
+            );
+            assert_eq!(
+                http.requests().len(),
+                before,
+                "the id {id:?} built no request"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_approvals_unwraps_the_relayed_envelope() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(
+            200,
+            json!({ "requests": [{
+                "requestId": "request-1",
+                "requesterDevicePublicKey": DEVICE_KEY,
+                "ephemeralPublicKey": RENDEZVOUS_KEY,
+                "requestSignature": "11".repeat(64),
+                "createdAt": "2026-08-27T10:00:00.000Z",
+                "expiresAt": "2026-08-27T10:05:00.000Z",
+            }]}),
+        ));
+
+        let rows = block_on(client.pending_approvals()).expect("the board served its rows");
+
+        assert_eq!(
+            rows,
+            vec![PendingApproval {
+                request_id: "request-1".to_owned(),
+                requester_device_public_key: DEVICE_KEY.to_owned(),
+                ephemeral_public_key: RENDEZVOUS_KEY.to_owned(),
+                request_signature: "11".repeat(64),
+                created_at: "2026-08-27T10:00:00.000Z".to_owned(),
+                expires_at: "2026-08-27T10:05:00.000Z".to_owned(),
+            }]
+        );
+        let requests = http.requests();
+        let sent = &requests[sent_after_login];
+        assert_eq!(sent.method, HttpMethod::Get);
+        assert_eq!(sent.url, "http://api.test/device-approval/pending");
+        assert!(has_bearer(sent), "a board row reaches its account alone");
+    }
+
+    #[test]
+    fn respond_to_approval_posts_the_decision_to_the_rendezvous_it_answers() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(client.respond_to_approval(
+            "request-1",
+            "approve",
+            DEVICE_KEY,
+            "approval-signature",
+            Some(SEALED_FACTOR),
+        ))
+        .expect("the rendezvous is answered");
+
+        let requests = http.requests();
+        let sent = &requests[sent_after_login..];
+        assert_eq!(sent.len(), 1, "one response and nothing else");
+        assert_eq!(sent[0].method, HttpMethod::Post);
+        assert_eq!(
+            sent[0].url,
+            "http://api.test/device-approval/requests/request-1/respond"
+        );
+        assert!(has_bearer(&sent[0]), "only a member answers a rendezvous");
+        let body = body_json(&sent[0]);
+        assert_eq!(body["decision"], "approve");
+        assert_eq!(body["devicePublicKey"], DEVICE_KEY);
+        assert_eq!(body["signature"], "approval-signature");
+        assert_eq!(body["sealedFactor"], SEALED_FACTOR);
+    }
+
+    /// A denial seals nothing, and the field it would travel in is absent.
+    #[test]
+    fn a_denial_carries_no_sealed_factor_on_the_wire() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+        http.enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(client.respond_to_approval(
+            "request-1",
+            "deny",
+            DEVICE_KEY,
+            "approval-signature",
+            None,
+        ))
+        .expect("the rendezvous is answered");
+
+        let requests = http.requests();
+        let body = body_json(&requests[sent_after_login]);
+        assert_eq!(body["decision"], "deny");
+        assert!(body.get("sealedFactor").is_none());
+    }
+
+    #[test]
+    fn a_request_id_outside_the_path_alphabet_never_reaches_the_wire() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+
+        for id in ["../account", "a b", ""] {
+            let before = http.requests().len();
+            assert_eq!(
+                block_on(client.respond_to_approval(id, "deny", DEVICE_KEY, "sig", None))
+                    .unwrap_err(),
+                ApiError::Decode("illegal path id".into()),
+                "the id {id:?} must be refused"
+            );
+            assert_eq!(
+                http.requests().len(),
+                before,
+                "the id {id:?} built no request"
+            );
+        }
+    }
+
+    #[test]
+    fn account_id_reads_the_subject_of_the_access_token() {
+        let (http, _creds, client) = fakes();
+        login_holding(&http, &client, &access_token_naming("account-7"));
+
+        assert_eq!(
+            client.account_id().expect("the session names an account"),
+            "account-7"
+        );
+    }
+
+    /// The account id is echoed into a payload a device signs, so a token this
+    /// side cannot read names no account at all.
+    #[test]
+    fn account_id_refuses_a_session_with_no_token_and_a_token_it_cannot_read() {
+        let (_http, _creds, client) = fakes();
+        assert_eq!(
+            client.account_id().unwrap_err(),
+            ApiError::Unauthorized,
+            "a session that never logged in holds no subject"
+        );
+
+        let unreadable = [
+            "not-a-jwt".to_owned(),
+            "header.!not base64url!.signature".to_owned(),
+            format!(
+                "header.{}.signature",
+                claims_segment("plain text, not json")
+            ),
+            format!(
+                "header.{}.signature",
+                claims_segment(&json!({ "iss": "cipherbox" }).to_string())
+            ),
+            format!(
+                "header.{}.signature",
+                claims_segment(&json!({ "sub": "" }).to_string())
+            ),
+        ];
+        for token in unreadable {
+            let (http, _creds, client) = fakes();
+            login_holding(&http, &client, &token);
+            assert!(
+                matches!(client.account_id(), Err(ApiError::Decode(_))),
+                "the token {token:?} must name no account"
+            );
+        }
     }
 }

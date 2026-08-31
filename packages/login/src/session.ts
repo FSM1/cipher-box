@@ -26,6 +26,11 @@ export interface CoreKitSession extends LoginSecretExporter {
    * terminal there.
    */
   recoverWithPhrase?(phrase: string): Promise<void>;
+  /**
+   * Adopts the factor another device sealed back, against a login held at the
+   * factor policy. Absent on a host that cannot request approval.
+   */
+  adoptApprovalFactor?(factorKey: Uint8Array): Promise<void>;
   /** Restores a prior session, if the SDK has one on this device. */
   restore(): Promise<void>;
   /** True once a login (or a restore) has completed on this device. */

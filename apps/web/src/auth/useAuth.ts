@@ -59,6 +59,8 @@ export interface Auth {
   recoveryRequired: boolean;
   /** Finishes such a login from the phrase alone (ADR 0009 D2). */
   loginWithRecoveryPhrase(phrase: string): Promise<void>;
+  /** Finishes it from the factor another device sealed back instead. */
+  completeDeviceApproval(factorKey: Uint8Array): Promise<void>;
   /** Abandons it instead, ending the partial session on this device. */
   cancelRecovery(): Promise<void>;
   /** Whether the signed-in account already carries a factor policy. */
@@ -170,6 +172,15 @@ export function useAuth(): Auth {
     [flow]
   );
 
+  const completeDeviceApproval = useCallback(
+    async (factorKey: Uint8Array): Promise<void> => {
+      await flow.completeDeviceApproval(factorKey);
+      // An approval answers the same factor policy a phrase would.
+      authStore.recoveryEnrollment(true);
+    },
+    [flow]
+  );
+
   const cancelRecovery = useCallback(async (): Promise<void> => {
     authStore.recoveryResolved();
     await flow.logout();
@@ -226,6 +237,7 @@ export function useAuth(): Auth {
     forgetDevice: flow.forgetDevice,
     recoveryRequired,
     loginWithRecoveryPhrase,
+    completeDeviceApproval,
     cancelRecovery,
     recoveryEnrolled,
     enrollRecoveryPhrase,

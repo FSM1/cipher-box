@@ -58,6 +58,9 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
 use cipherbox_core::suite::contact::{import_contact_code, subkey_binding_preimage};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
+use cipherbox_core::suite::ecies::{
+    ENC_LEN as ECIES_ENC_LEN, ecies_open, ecies_public_key, ecies_seal,
+};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
 use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::hpke::{MODE_AUTH, hpke_open, hpke_seal};
@@ -92,6 +95,14 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/hpke/open_reject.json",
         include_str!("../kat/vectors/hpke/open_reject.json"),
+    ),
+    (
+        "vectors/ecies/seal.json",
+        include_str!("../kat/vectors/ecies/seal.json"),
+    ),
+    (
+        "vectors/ecies/open_reject.json",
+        include_str!("../kat/vectors/ecies/open_reject.json"),
     ),
     (
         "vectors/contact/accept.json",
@@ -990,6 +1001,7 @@ struct EdgeRow {
 #[serde(deny_unknown_fields)]
 struct SuiteSection {
     hpke: HpkeMeta,
+    ecies: EciesMeta,
     contact: ContactMeta,
 }
 
@@ -999,6 +1011,17 @@ struct HpkeMeta {
     kem_id: String,
     kdf_id: String,
     aead_id: String,
+    seal_file: String,
+    seal_count: usize,
+    open_reject_file: String,
+    open_reject_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EciesMeta {
+    curve: String,
+    enc_len: usize,
     seal_file: String,
     seal_count: usize,
     open_reject_file: String,
@@ -1193,6 +1216,31 @@ struct HpkeOpenRejectVector {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EciesSealVector {
+    name: String,
+    recipient_secret: String,
+    recipient_public: String,
+    ephemeral_scalar: String,
+    aad: String,
+    plaintext: String,
+    enc: String,
+    ciphertext: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EciesOpenRejectVector {
+    name: String,
+    recipient_secret: String,
+    enc: String,
+    aad: String,
+    ciphertext: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ContactAcceptVector {
     name: String,
     hex: String,
@@ -1241,6 +1289,15 @@ fn hpke_seal_vectors(m: &Manifest) -> Vec<HpkeSealVector> {
 fn hpke_open_reject_vectors(m: &Manifest) -> Vec<HpkeOpenRejectVector> {
     serde_json::from_str(fixture(&m.suite.hpke.open_reject_file))
         .expect("hpke open_reject.json shape")
+}
+
+fn ecies_seal_vectors(m: &Manifest) -> Vec<EciesSealVector> {
+    serde_json::from_str(fixture(&m.suite.ecies.seal_file)).expect("ecies seal.json shape")
+}
+
+fn ecies_open_reject_vectors(m: &Manifest) -> Vec<EciesOpenRejectVector> {
+    serde_json::from_str(fixture(&m.suite.ecies.open_reject_file))
+        .expect("ecies open_reject.json shape")
 }
 
 fn contact_accept_vectors(m: &Manifest) -> Vec<ContactAcceptVector> {
@@ -1504,6 +1561,8 @@ fn fixture_table_matches_manifest_files() {
         m.kdf.file.as_str(),
         m.suite.hpke.seal_file.as_str(),
         m.suite.hpke.open_reject_file.as_str(),
+        m.suite.ecies.seal_file.as_str(),
+        m.suite.ecies.open_reject_file.as_str(),
         m.suite.contact.accept.file.as_str(),
         m.suite.contact.reject.file.as_str(),
         m.seal.seal.file.as_str(),
@@ -1621,12 +1680,13 @@ fn vector_names_are_unique_within_each_file() {
     }
 }
 
-/// Which vector files carry HPKE ephemerals, and how many each pins — the
+/// Which vector files carry sealing ephemerals, and how many each pins — the
 /// anti-vacuity anchor for the freshness check below. A family that stopped
 /// emitting `ephemeralScalar` would drop out of a bare total silently; naming
 /// the files makes it a failure that says which one went dark.
-const HPKE_EPHEMERAL_FAMILIES: &[(&str, usize)] = &[
+const EPHEMERAL_SCALAR_FAMILIES: &[(&str, usize)] = &[
     ("vectors/content_key/content_key_accept.json", 2),
+    ("vectors/ecies/seal.json", 3),
     ("vectors/grant/ascent_link_accept.json", 1),
     ("vectors/grant/grant_blob_accept.json", 2),
     ("vectors/grant/owner_blob_accept.json", 1),
@@ -1641,7 +1701,7 @@ const HPKE_EPHEMERAL_FAMILIES: &[(&str, usize)] = &[
 
 /// Every `(vector name, ephemeral scalar)` a vector file pins, decoded, so the
 /// repeat check compares scalars rather than their spelling. A vector carrying
-/// no `ephemeralScalar` is skipped — that absence is how a file with no HPKE
+/// no `ephemeralScalar` is skipped — that absence is how a file with no sealing
 /// ephemerals is recognised — but one that carries the field owes a 32-byte
 /// scalar, which [`unhex32`] enforces along with the lowercase-hex contract.
 fn ephemeral_scalars(body: &str, path: &str) -> Vec<(String, [u8; 32])> {
@@ -1662,8 +1722,8 @@ fn ephemeral_scalars(body: &str, path: &str) -> Vec<(String, [u8; 32])> {
         .collect()
 }
 
-/// HPKE ephemeral reuse under one recipient key and one `info` is a
-/// confidentiality break (`seal::seal_owner_local`). A vector file is a superset
+/// Ephemeral reuse under one recipient key and one `info` is a confidentiality
+/// break (`seal::seal_owner_local`, `suite::ecies`). A vector file is a superset
 /// of each `(recipient, info)` group inside it, so per-file uniqueness forbids
 /// every real repeat, plus some harmless ones.
 ///
@@ -1687,8 +1747,8 @@ fn ephemeral_scalars_are_fresh_within_each_vector_file() {
             );
         }
     }
-    let expected: BTreeMap<&str, usize> = HPKE_EPHEMERAL_FAMILIES.iter().copied().collect();
-    assert_eq!(pinned, expected, "hpke ephemeral family coverage drift");
+    let expected: BTreeMap<&str, usize> = EPHEMERAL_SCALAR_FAMILIES.iter().copied().collect();
+    assert_eq!(pinned, expected, "ephemeral family coverage drift");
 }
 
 /// The codec's decode-reachable checks, fixed HERE as the anti-vacuity anchor
@@ -1778,6 +1838,7 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     covered.extend(reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(contact_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(hpke_open_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(ecies_open_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(seal_open_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(read_body_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(envelope_reject_vectors(&m).into_iter().map(|v| v.check));
@@ -2904,6 +2965,140 @@ fn hpke_open_reject_vectors_fail_closed() {
         )
         .expect_err("open-reject vector must fail closed");
         assert_eq!(err.check(), v.check, "open-reject {}", v.name);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ECIES: the fixed-ephemeral full-envelope KAT for the device-approval
+// rendezvous seal, and the one indistinguishable refusal its open path gives.
+// ---------------------------------------------------------------------------
+
+/// The reject case names the family must carry — the anti-vacuity anchor, fixed
+/// HERE, since every ECIES refusal reports one check.
+const ECIES_REQUIRED_REJECTS: &[&str] = &[
+    "tampered-ciphertext",
+    "wrong-aad",
+    "substituted-enc",
+    "another-recipient",
+    "enc-not-a-point",
+    // The two the prefix case never reaches: both are refused by the curve
+    // arithmetic, which is what makes the reject family pin a behaviour and not
+    // a name.
+    "enc-x-not-on-the-curve",
+    "enc-x-at-the-field-prime",
+];
+
+#[test]
+fn ecies_envelope_shape_is_frozen() {
+    let m = manifest();
+    assert_eq!(m.suite.ecies.curve, "secp256k1");
+    assert_eq!(
+        m.suite.ecies.enc_len, ECIES_ENC_LEN,
+        "enc is one compressed SEC1 point"
+    );
+}
+
+#[test]
+fn ecies_seal_vectors_are_frozen_and_open() {
+    let m = manifest();
+    let vectors = ecies_seal_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.suite.ecies.seal_count,
+        "ecies seal count drift"
+    );
+    assert!(!vectors.is_empty(), "ecies seal family must not be empty");
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate ecies seal {}",
+            v.name
+        );
+        let recipient_secret = unhex32(&v.name, &v.recipient_secret);
+        let recipient_public = unhex_n::<ECIES_ENC_LEN>(&v.name, &v.recipient_public);
+        assert_eq!(
+            ecies_public_key(&recipient_secret),
+            Some(recipient_public),
+            "ecies seal {}: the recipient key is the one its scalar derives",
+            v.name
+        );
+        let eph = unhex32(&v.name, &v.ephemeral_scalar);
+        let aad = unhex(&v.name, &v.aad);
+        let plaintext = unhex(&v.name, &v.plaintext);
+
+        // Fixed-ephemeral seal must reproduce the frozen enc + ciphertext.
+        let sealed = ecies_seal(&recipient_public, &eph, &aad, &plaintext)
+            .unwrap_or_else(|| panic!("ecies seal {}: must seal", v.name));
+        assert_eq!(
+            hex::encode(sealed.enc),
+            v.enc,
+            "ecies seal {}: enc drift",
+            v.name
+        );
+        assert_eq!(
+            hex::encode(&sealed.ciphertext),
+            v.ciphertext,
+            "ecies seal {}: ciphertext drift",
+            v.name
+        );
+
+        let opened = ecies_open(
+            &recipient_secret,
+            &unhex_n::<ECIES_ENC_LEN>(&v.name, &v.enc),
+            &aad,
+            &unhex(&v.name, &v.ciphertext),
+        )
+        .unwrap_or_else(|_| panic!("ecies seal {}: open must recover plaintext", v.name));
+        assert_eq!(
+            &opened[..],
+            &plaintext[..],
+            "ecies seal {}: plaintext",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn ecies_open_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = ecies_open_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.suite.ecies.open_reject_count,
+        "ecies open-reject count drift"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate ecies open-reject {}",
+            v.name
+        );
+        // One verdict for every reject shape: the open path tells no caller
+        // which check fired.
+        assert_eq!(
+            v.check, "ecies-open-failed",
+            "open-reject {}: check",
+            v.name
+        );
+        assert_eq!(v.class, "trust", "open-reject {}: class", v.name);
+        let err = ecies_open(
+            &unhex32(&v.name, &v.recipient_secret),
+            &unhex_n::<ECIES_ENC_LEN>(&v.name, &v.enc),
+            &unhex(&v.name, &v.aad),
+            &unhex(&v.name, &v.ciphertext),
+        )
+        .expect_err("open-reject vector must fail closed");
+        assert_eq!(err.check(), v.check, "open-reject {}", v.name);
+    }
+    for required in ECIES_REQUIRED_REJECTS {
+        assert!(
+            names.contains(*required),
+            "ecies open-reject family lost {required}"
+        );
     }
 }
 
