@@ -2649,9 +2649,26 @@ struct LiveWrites {
 struct LiveStream {
     version: Version,
     manifest: RootManifest,
+    /// The queued op that staged this version, for a stream pinned on one: every
+    /// window off it refuses under that op's name rather than under a bare
+    /// availability message.
+    staged_op: Option<OpId>,
     /// Released when the last [`Rc`] drops, which an in-flight
     /// [`read_stream`](Engine::read_stream) can outlive the map entry by.
     _slot: StreamSlot,
+}
+
+/// The version one read pins, and where it came from.
+struct PinnedVersion {
+    /// The version every block of the read is verified and unsealed under.
+    version: Version,
+    /// The queued op that staged it, for a version this device has authored and
+    /// not yet published. `None` for a published head.
+    staged_op: Option<OpId>,
+    /// The retained version count to repaint the base node with. `None` for a
+    /// staged version: it is not gate-passing state, so pinning one repaints
+    /// nothing.
+    version_count: Option<u64>,
 }
 
 /// One of the [`MAX_OPEN_STREAMS`] slots, reserved before
@@ -6788,21 +6805,45 @@ where {
 
     /// [`read_content`](Engine::read_content) without its progress phases.
     async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
+        let PinnedVersion {
+            version,
+            staged_op,
+            version_count,
+        } = self.pinned_version(node).await?;
         // The range clamps to the version's size, so the whole file is the
         // unbounded window.
-        if let Some(version) = self.staged_version(node).await? {
-            return self
-                .read_version_range(&version, 0, u64::MAX)
-                .await
-                .map_err(open_engine_error);
-        }
-        let (version, version_count) = self.head_version(node).await?;
         let bytes = self
             .read_version_range(&version, 0, u64::MAX)
             .await
-            .map_err(open_engine_error)?;
-        self.project_head(node, &version, version_count);
+            .map_err(|error| staged_open_error(staged_op, error))?;
+        if let Some(version_count) = version_count {
+            self.project_head(node, &version, version_count);
+        }
         Ok(bytes)
+    }
+
+    /// The version a read of `node` pins: the one a queued op staged when there
+    /// is one, else the published head.
+    ///
+    /// Serving the staged version is what pairs the length the rendered view
+    /// reports with the bytes a partial write composes over
+    /// ([`rendered_version_cid`](Self::rendered_version_cid)).
+    async fn pinned_version(&self, node: NodeId) -> Result<PinnedVersion, EngineError> {
+        match self.staged_version(node).await? {
+            Some((op_id, version)) => Ok(PinnedVersion {
+                version,
+                staged_op: Some(op_id),
+                version_count: None,
+            }),
+            None => {
+                let (version, count) = self.head_version(node).await?;
+                Ok(PinnedVersion {
+                    version,
+                    staged_op: None,
+                    version_count: Some(count),
+                })
+            }
+        }
     }
 
     /// One window of `version`, local-first: a version this device staged is
@@ -6841,16 +6882,11 @@ where {
         // network and no open that reaches the insert can be refused there.
         let slot =
             StreamSlot::acquire(&self.streams.borrow().live).ok_or(EngineError::TooManyStreams)?;
-        let staged = self.staged_version(node).await?;
-        let (version, projection) = match staged {
-            // A staged version is this device's own and not gate-passing state,
-            // so it pins a stream without repainting the base node.
-            Some(version) => (version, None),
-            None => {
-                let (version, count) = self.head_version(node).await?;
-                (version, Some(count))
-            }
-        };
+        let PinnedVersion {
+            version,
+            staged_op,
+            version_count,
+        } = self.pinned_version(node).await?;
         let manifest = open_content_root(
             &StagedBlocks(&self.seams.staging_store),
             &self.gateway,
@@ -6858,8 +6894,8 @@ where {
             &version,
         )
         .await
-        .map_err(open_engine_error)?;
-        if let Some(version_count) = projection {
+        .map_err(|error| staged_open_error(staged_op, error))?;
+        if let Some(version_count) = version_count {
             self.project_head(node, &version, version_count);
         }
         let mut streams = self.streams.borrow_mut();
@@ -6870,6 +6906,7 @@ where {
             Rc::new(LiveStream {
                 version,
                 manifest,
+                staged_op,
                 _slot: slot,
             }),
         );
@@ -6907,7 +6944,7 @@ where {
             length,
         )
         .await
-        .map_err(open_engine_error)
+        .map_err(|error| staged_open_error(stream.staged_op, error))
     }
 
     /// The `contentCid` of the version a live stream pinned: the identity of
@@ -6985,13 +7022,13 @@ where {
             None => {
                 // Absent from gate-passing state: a queued op targeting the node
                 // means a pending (unpublished) create; anything else is unknown.
-                let pending = self.pending_ops().await?;
-                return Err(if pending.iter().any(|op| op.target == node) {
-                    EngineError::ContentUnavailable {
-                        message: "content not yet published".to_owned(),
-                    }
-                } else {
-                    EngineError::UnknownNode
+                let pending = self.scan_queue().await?;
+                let owed = pending.mine.iter().find(|(_, op)| op.target == node);
+                return Err(match owed {
+                    Some((op_id, _)) => EngineError::ContentUnavailable {
+                        message: format!("content not yet published by queued op {}", op_id.0),
+                    },
+                    None => EngineError::UnknownNode,
                 });
             }
         };
@@ -7178,7 +7215,8 @@ where {
         }
     }
 
-    /// The version the read plane pins for `node` when the queue has staged one.
+    /// The version the read plane pins for `node` when the queue has staged one,
+    /// with the durable id of the op that owes it.
     ///
     /// This is the read half of the pairing rule
     /// [`rendered_version_cid`](Self::rendered_version_cid) states: the reader
@@ -7188,8 +7226,8 @@ where {
     /// under the owner enc subkey at the epoch the op carries — a blob authored
     /// for another scope or another epoch fails closed here, exactly as it does
     /// at the drain.
-    async fn staged_version(&self, node: NodeId) -> Result<Option<Version>, EngineError> {
-        let Some((staged, authored_at)) = self.staged_content(node).await? else {
+    async fn staged_version(&self, node: NodeId) -> Result<Option<(OpId, Version)>, EngineError> {
+        let Some((op_id, staged, authored_at)) = self.staged_content(node).await? else {
             return Ok(None);
         };
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
@@ -7202,29 +7240,37 @@ where {
             &staged.sealed_content_key,
         )
         .map_err(|error| EngineError::ContentUnavailable {
-            message: format!("the staged content key did not open: [{}]", error.check()),
+            message: format!(
+                "the staged content key of queued op {} did not open: [{}]",
+                op_id.0,
+                error.check()
+            ),
         })?;
-        Ok(Some(Version::new(
-            staged.root_cid,
-            *key,
-            staged.plaintext_size,
-            authored_at.0,
+        Ok(Some((
+            op_id,
+            Version::new(staged.root_cid, *key, staged.plaintext_size, authored_at.0),
         )))
     }
 
-    /// What the newest queued op stages for `node`, with the time it was
-    /// authored — the `modifiedAt` the drain will publish the version under, so
-    /// the reader and the publisher agree.
+    /// The newest queued op that stages content for `node`: its durable id, what
+    /// it staged, and the time it was authored — the `modifiedAt` the drain will
+    /// publish the version under, so the reader and the publisher agree.
     async fn staged_content(
         &self,
         node: NodeId,
-    ) -> Result<Option<(StagedContent, UnixMillis)>, EngineError> {
-        Ok(self.pending_ops().await?.into_iter().rev().find_map(|op| {
-            (op.target == node)
-                .then(|| op.staged_content().cloned())
-                .flatten()
-                .map(|staged| (staged, op.authored_at))
-        }))
+    ) -> Result<Option<(OpId, StagedContent, UnixMillis)>, EngineError> {
+        Ok(self
+            .scan_queue()
+            .await?
+            .mine
+            .into_iter()
+            .rev()
+            .find_map(|(op_id, op)| {
+                (op.target == node)
+                    .then(|| op.staged_content().cloned())
+                    .flatten()
+                    .map(|staged| (op_id, staged, op.authored_at))
+            }))
     }
 
     /// The `contentCid` of the newest version a queued op has staged for `node`,
@@ -7233,7 +7279,7 @@ where {
         Ok(self
             .staged_content(node)
             .await?
-            .map(|(staged, _)| staged.root_cid))
+            .map(|(_, staged, _)| staged.root_cid))
     }
 
     /// The `contentCid` of the version the rendered view's size and mtime
@@ -7374,6 +7420,25 @@ where {
     /// The measured storage split this engine runs under.
     pub fn storage_policy(&self) -> &StoragePolicy {
         &self.storage_policy
+    }
+}
+
+/// [`open_engine_error`], naming the queued op when the read pinned a version
+/// this device staged.
+///
+/// The blocks of a staged version live in this device's own staging store, so a
+/// read that cannot assemble one points the host at the op still holding it —
+/// `SessionStatus::blocked` and the settings hold are reachable from there,
+/// where a bare "unavailable" leaves the host nothing to route on. A trust
+/// verdict passes through unannotated: the op did not author the violation.
+fn staged_open_error(staged_op: Option<OpId>, error: OpenError) -> EngineError {
+    match (open_engine_error(error), staged_op) {
+        (EngineError::ContentUnavailable { message }, Some(op_id)) => {
+            EngineError::ContentUnavailable {
+                message: format!("{message}; the version is staged by queued op {}", op_id.0),
+            }
+        }
+        (verdict, _) => verdict,
     }
 }
 
@@ -9287,6 +9352,7 @@ mod tests {
                     size: 0,
                     leaf_cids: Vec::new().into_boxed_slice(),
                 },
+                staged_op: None,
                 _slot: StreamSlot::acquire(&streams.live).expect("a free slot"),
             }),
         );

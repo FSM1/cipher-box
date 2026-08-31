@@ -1424,6 +1424,54 @@ fn both_readers_serve_the_staged_version_the_rendered_size_names() {
     engine.close_stream(opened);
 }
 
+/// A staged version this device can no longer assemble is availability, and the
+/// refusal names the queued op that still owes it: a bare "unavailable" leaves
+/// the host nothing to route the member to.
+#[test]
+fn a_staged_version_missing_a_block_refuses_and_names_the_queued_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the first version commits");
+    tick(&world, &engine, &mut tasks);
+    let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
+
+    // A second version, journaled and not drained, then one of its leaves lost:
+    // no gateway serves what no drain has uploaded.
+    write_file(&mut engine, WriteTarget::Version { node }, &vec![0xBB; 323])
+        .expect("the second version commits");
+    let op_id = block_on(alice.staging_store.queued_ops()).unwrap()[0].0;
+    evict_leaf(&alice, |_| 0);
+
+    // The root manifest is still staged, so the stream opens on the version the
+    // rendered length names; only the window that needs the lost leaf refuses.
+    let stream = block_on(engine.open_content_stream(node)).expect("the staged root opens");
+    for refusal in [
+        block_on(engine.read_content(node)),
+        block_on(engine.read_stream(stream, 0, 323)),
+    ] {
+        match refusal {
+            Err(EngineError::ContentUnavailable { message }) => assert!(
+                message.contains(&format!("queued op {}", op_id.0)),
+                "the refusal names the op that owes the version: {message}"
+            ),
+            other => panic!("expected an availability refusal, got {other:?}"),
+        }
+    }
+    engine.close_stream(stream);
+}
+
 /// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a
 /// live stream, and the refusal costs no network: the slot is reserved before
 /// the resolve, so a doomed open never pays for one.
