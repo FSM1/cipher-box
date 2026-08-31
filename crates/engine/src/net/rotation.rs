@@ -27,7 +27,9 @@ use cipherbox_core::seal::{
     WriteBody, decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
     open_owner_history_link, open_read_body, sign_grant_set, unseal,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::ecdsa::{
+    EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
+};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -72,7 +74,10 @@ use crate::rotation::{
     WriteHistory, WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
     derive_write_name, published_override_seed, reseal_scope_root, rotate_scope, seed_at_epoch,
 };
-use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
+use crate::seams::{
+    BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
+    SharerScopedFloorStore,
+};
 use crate::session::SessionIdentity;
 use crate::sync::pointer::{
     PointerFetch, PointerRecord, open_repoint, scope_pointer_name, scope_pointer_signer,
@@ -1062,11 +1067,17 @@ pub struct GranteeRotationKeys<'a> {
 /// root's name — that derivation runs off the write scope seed only the record
 /// itself conveys — so the pairing is caller-held, from the accept flow that
 /// adopted the share.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantedScopeRoot {
     /// The scope id, which is also its scope root's node id.
     pub scope_id: [u8; 16],
     /// The name the scope root's record lives at.
     pub ipns_name: IpnsName,
+    /// The identity that granted this scope. A `scopeId` is authored by its own
+    /// owner, so it names no authority on its own; this is what files the
+    /// scope's epoch floors under the party entitled to move them
+    /// ([`SharerScopedFloorStore`]).
+    pub sharer_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
 }
 
 /// The grantee-arm rotation seams over the live net plane.
@@ -1149,6 +1160,14 @@ where
             .ok_or(ResolveFailure::Rejected)
     }
 
+    /// The floors every epoch-namespace read and raise on a granted scope goes
+    /// through: filed under the granting identity, so a contact can only move
+    /// the floors of scopes it actually granted. `granted` spans several
+    /// sharers, so the view is per scope root and never per net.
+    fn granted_floors(&self, granted: &GrantedScopeRoot) -> SharerScopedFloorStore<'_, F> {
+        SharerScopedFloorStore::granted_by(self.floors, granted.sharer_identity_pk)
+    }
+
     /// This device's pairwise ECDH with the verified contact and the blinded tag
     /// it derives at `name` — one shared secret for both, as `mint_grant_row`
     /// derives the owner's half of the same pair.
@@ -1187,10 +1206,11 @@ where
         let Some((_, record_bytes)) = fanout_get_verify(self.transport, name).await else {
             return Err(RootGateVerdict::Unavailable);
         };
+        let floors = self.granted_floors(granted);
         let adopter = RootAdopter::for_grantee(
             self.gateway,
             self.http,
-            self.floors,
+            &floors,
             self.keys.enc_secret,
             self.keys.owner_enc_pub,
             self.keys.owner_identity,
@@ -1233,7 +1253,7 @@ where
             return Err(ResolveFailure::Rejected);
         };
         let (write_body, write_epoch) = write_plane_of(
-            self.floors,
+            &self.granted_floors(granted),
             &envelope,
             &section,
             &write_scope_seed,
@@ -1311,11 +1331,16 @@ where
         Ok(plan)
     }
 
-    fn root_publish(&self) -> RootPublish<'_, T, H, C, F, Sch, E> {
+    /// The publish arm over `floors`, which the caller has already filed under
+    /// the granting identity ([`Self::granted_floors`]).
+    fn root_publish<'f, Fl: FloorStore>(
+        &'f self,
+        floors: &'f Fl,
+    ) -> RootPublish<'f, T, H, C, Fl, Sch, E> {
         RootPublish {
             transport: self.transport,
             api: self.api,
-            floors: self.floors,
+            floors,
             scheduler: self.scheduler,
             profile: self.profile,
             entropy: self.entropy,
@@ -1358,7 +1383,11 @@ where
             .gated
             .take(&name)
             .ok_or(RotationPublishError::NotPublished)?;
-        self.root_publish()
+        let granted = self
+            .granted_root(NodeId(record.scope_id))
+            .map_err(|_| RotationPublishError::Rejected)?;
+        let floors = self.granted_floors(granted);
+        self.root_publish(&floors)
             .run(&name, record, &override_seed, current)
             .await
     }
@@ -1415,7 +1444,7 @@ where
         };
         rotate_scope(
             &mut SharedEntropy(self.entropy),
-            self.floors,
+            &self.granted_floors(granted),
             self.scheduler,
             self,
             &plan,
@@ -3349,7 +3378,7 @@ mod tests {
         seal_read_body, set_grant_section, sign_grant_set, sign_recipient_binding, sign_structure,
         verify_grant_set,
     };
-    use cipherbox_core::suite::ecdsa::{EcdsaSignature, IDENTITY_PUBLIC_LEN};
+    use cipherbox_core::suite::ecdsa::EcdsaSignature;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
@@ -5119,11 +5148,29 @@ mod tests {
 
     impl<T: RecordTransport + Clone + 'static> GranteeWorld<T> {
         fn staged(harness: Harness<T>, root: OwnerRootFixture) -> Self {
-            harness.stage(GRANTEE_SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+            Self::staged_by(harness.identity.to_sec1(), harness, root)
+        }
+
+        /// The same world with the granting identity named, so a case can drive
+        /// two sharers over one scope id. The write-epoch floor is seeded through
+        /// the sharer view the accept path raises under, never the bare key.
+        fn staged_by(
+            sharer: [u8; IDENTITY_PUBLIC_LEN],
+            harness: Harness<T>,
+            root: OwnerRootFixture,
+        ) -> Self {
+            harness.stage(GRANTEE_SCOPE, &root, None);
+            block_on(floor::advance_write_epoch_on_sight(
+                &SharerScopedFloorStore::granted_by(&harness.floors, sharer),
+                &GRANTEE_SCOPE,
+                OWNER_ROOT_EPOCH,
+            ))
+            .expect("write floor");
             Self {
                 granted: vec![GrantedScopeRoot {
                     scope_id: GRANTEE_SCOPE,
                     ipns_name: root.name.clone(),
+                    sharer_identity_pk: sharer,
                 }],
                 harness,
                 root,
@@ -5239,6 +5286,63 @@ mod tests {
 
     fn plain_world(permission: Permission) -> GranteeWorld<InMemoryRecordStore> {
         GranteeWorld::staged(Harness::plain(), granted_scope_root(permission, Vec::new()))
+    }
+
+    /// The rotation arm addresses a scope by an id its sharer authored, so two
+    /// contacts can present one id. A second sharer's ratchet on that id must
+    /// not reach this grant's floors, and this arm's own cut must not reach the
+    /// second sharer's — the cross-sharer lockout the sharer-scoped view closed
+    /// on the accept path, closed here too.
+    #[test]
+    fn the_grantee_arm_moves_no_floor_of_a_scope_a_second_sharer_granted() {
+        const OTHER_SHARER: [u8; IDENTITY_PUBLIC_LEN] = [0x03; IDENTITY_PUBLIC_LEN];
+
+        let world = plain_world(Permission::Write);
+        let floors = &world.harness.floors;
+        let other = SharerScopedFloorStore::granted_by(floors, OTHER_SHARER);
+
+        // A contact with no authority over this scope pins its own view as high
+        // as the ratchet goes.
+        block_on(other.raise_epoch_floor(&GRANTEE_SCOPE, u64::MAX)).expect("the floor raises");
+
+        world.cut().expect("the flat cut completes");
+
+        let mine = SharerScopedFloorStore::granted_by(floors, world.harness.identity.to_sec1());
+        assert_eq!(
+            block_on(floor::read_epoch_floor(&mine, &GRANTEE_SCOPE)).expect("floor read"),
+            Some(OWNER_ROOT_EPOCH + 1),
+            "the cut ratchets only the floors of the identity that granted this scope"
+        );
+        assert_eq!(
+            block_on(floor::read_epoch_floor(&other, &GRANTEE_SCOPE)).expect("floor read"),
+            Some(u64::MAX),
+            "and the other sharer's ratchet is neither read nor moved"
+        );
+        assert_eq!(
+            block_on(floor::read_epoch_floor(floors, &GRANTEE_SCOPE)).expect("floor read"),
+            None,
+            "no grantee raise lands on the bare key an owned scope of this id would use"
+        );
+    }
+
+    /// The other direction of the same key. An owned scope carrying this id —
+    /// the anchored all-zero root included — ratchets the bare key, and a
+    /// granted scope sharing that id must not be held to it. Under one shared
+    /// key the cut refuses forever, because nothing lowers a ratchet.
+    #[test]
+    fn an_owned_scopes_ratchet_on_one_id_does_not_brick_a_grant_of_the_same_id() {
+        let world = plain_world(Permission::Write);
+        block_on(
+            world
+                .harness
+                .floors
+                .raise_epoch_floor(&GRANTEE_SCOPE, u64::MAX),
+        )
+        .expect("the floor raises");
+
+        world
+            .cut()
+            .expect("a floor on the bare key bars no scope held by grant");
     }
 
     #[test]
@@ -5616,6 +5720,14 @@ mod tests {
                 world.cut().expect("the grantee arm cuts");
             } else {
                 let harness = &world.harness;
+                // The owner arm reads and raises on the bare scope-id key; only
+                // a scope held by grant is filed under a granting identity.
+                block_on(floor::advance_write_epoch_on_sight(
+                    &harness.floors,
+                    &GRANTEE_SCOPE,
+                    OWNER_ROOT_EPOCH,
+                ))
+                .expect("write floor");
                 let pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
                 let owner_enc_pub = owner_enc().public();
                 let parent_node_seed = grantee_parent_node_seed();

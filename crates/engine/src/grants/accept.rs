@@ -19,9 +19,7 @@ use cipherbox_core::codec::{Map, RedactedBytes, RedactedText, Value, decode, enc
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{
-    AadContext, ChildScopeRef, Permission, STRUCT_TAG_GRANT_BLOB, open_grant_blob,
-};
+use cipherbox_core::seal::{AadContext, Permission, STRUCT_TAG_GRANT_BLOB, open_grant_blob};
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -256,16 +254,13 @@ impl ReceivedSharesList {
     /// re-seals and republishes, so it is "runnable by any write-capable client"
     /// (blueprint/engine.md "sweep"); sweeping a read-only share could only fail
     /// to publish, once per cadence, forever.
-    pub fn writable_scope_refs(&self) -> Vec<ChildScopeRef> {
+    ///
+    /// The granting identity rides out with each root, not just the id and the
+    /// name: it is what files the scope's epoch floors under the party entitled
+    /// to move them ([`SharerScopedFloorStore`](crate::seams::SharerScopedFloorStore)),
+    /// and a round that reduced this to a bare scope reference could not.
+    pub fn writable_scope_refs(&self) -> Vec<GrantedScopeRoot> {
         self.paired(|share| share.permission == Permission::Write)
-            .into_iter()
-            .map(|granted| {
-                ChildScopeRef::new(
-                    granted.scope_id,
-                    granted.ipns_name.as_str().as_bytes().to_vec(),
-                )
-            })
-            .collect()
     }
 
     /// Ambiguity is decided over **every** bookmark, before `keep` or name
@@ -284,6 +279,7 @@ impl ReceivedSharesList {
                 Some(GrantedScopeRoot {
                     scope_id: run[0].scope_id,
                     ipns_name: IpnsName::parse(text).ok()?,
+                    sharer_identity_pk: run[0].sharer_identity_pk,
                 })
             })
             .collect()
@@ -1251,7 +1247,14 @@ mod tests {
         assert_eq!(granted.len(), 1);
         assert_eq!(granted[0].scope_id, [0x5c; 16]);
         assert_eq!(granted[0].ipns_name, a_name(0x31));
-        assert_eq!(list.writable_scope_refs().len(), 1);
+        // The rotation arm keys this scope's epoch floors on the granting
+        // identity, so a paired root that dropped it could not name them.
+        assert_eq!(granted[0].sharer_identity_pk, [0x02; IDENTITY_PUBLIC_LEN]);
+        assert_eq!(
+            list.writable_scope_refs(),
+            granted,
+            "the write half carries the same identity the rotation arm files under"
+        );
     }
 
     #[test]
