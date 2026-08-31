@@ -447,9 +447,11 @@ pub struct SharingView {
 /// says whether the share still stands.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReceivedShareRow {
-    /// The shared scope's id — this row's stable identity, and the handle a
-    /// browse opens it under. The scope root's `ipnsName` is deliberately not
-    /// projected: a write rotation moves it, and the durable list seals it.
+    /// The shared scope's id. The sharer authors it, so it identifies this row
+    /// only together with [`sharer_identity_public_key`](Self::sharer_identity_public_key):
+    /// two sharers may each grant one id, and a host must key a row on the pair.
+    /// The scope root's `ipnsName` is deliberately not projected: a write
+    /// rotation moves it, and the durable list seals it.
     pub scope: NodeId,
     /// The sharer's identity key as the accepted bookmark holds it, which the
     /// accept flow bound to a verified contact before writing.
