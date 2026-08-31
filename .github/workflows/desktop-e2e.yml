@@ -12,11 +12,9 @@
 # Job names are the contract (blueprint/deploy.md freeze step 4). `ci-e2e.yml`
 # and `tag-staging.yml` call this workflow and read the `ref` input.
 #
-# One leg today. The Linux shell reaches GTK and then never runs its setup
-# hook, so it arms no control endpoint and mounts nothing. The Windows shell
-# builds the detached projection and makes no mount at all. Both legs join this
-# matrix when their host starts headless; the steps below already carry the
-# provisioning each one needs.
+# Two legs today. The Windows shell builds the detached projection and makes no
+# mount at all; it joins this matrix when its host projects the vault. The steps
+# below already carry the provisioning it needs.
 name: Desktop E2E Tests
 
 on:
@@ -43,6 +41,8 @@ jobs:
         include:
           - platform: macos
             os: macos-latest
+          - platform: linux
+            os: ubuntu-latest
 
     env:
       # The desktop binary reads these at compile time (`option_env!` in
