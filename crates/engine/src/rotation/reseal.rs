@@ -217,6 +217,10 @@ impl ResealSeeds<'_> {
 }
 
 /// The owner-committed grant set plus the write-body content a re-seal carries.
+/// Every field is a shared borrow, so a caller re-points one arm of it
+/// (`rotation/cascade.rs` narrows `revoked_recipients` per scope) by struct
+/// update rather than by re-listing the set.
+#[derive(Clone, Copy)]
 pub struct CommittedSet<'a> {
     /// The vault owner's identity public key — the authority every carried
     /// signature in this set answers to: the commitment's, and each ledger row's
@@ -233,8 +237,9 @@ pub struct CommittedSet<'a> {
     pub grant_ledger: &'a [GrantLedgerEntry],
     /// The directly-descendant scope roots (the F-4 cascade index, #38 D6).
     pub direct_child_scope_index: &'a [cipherbox_core::seal::ChildScopeRef],
-    /// Recipient encryption keys the owner's cut removed. No blob is minted for
-    /// a row a blinded tag proves belongs to one, whatever `commitment` says.
+    /// Recipient encryption keys **this scope's** re-key must mint no blob for.
+    /// No blob is minted for a row a blinded tag proves belongs to one,
+    /// whatever `commitment` says.
     ///
     /// The encryption key, not the identity key: a tag is
     /// `blind(ownerEncSecret, recipientEncPk, ipnsName)`, so the owner's own
@@ -242,14 +247,13 @@ pub struct CommittedSet<'a> {
     /// `recipientIdentityPk` carries no such proof and any committed writer can
     /// re-author it.
     ///
-    /// A grant-set commitment is epoch-free, so a pre-cut one an owner really
-    /// did sign still verifies at every gate stage. Down a cascade that reads
-    /// each descendant's set off the record it just resolved, that is a
-    /// permanent read-revocation bypass: a current write grantee republishes a
-    /// descendant root carrying the pre-cut set, and the next ancestor rotation
-    /// wraps the fresh read override seed straight back to the revokee.
-    /// An encryption key is vault-wide where a blinded tag is per-scope, so this
-    /// is the axis the owner's cut carries down.
+    /// Per scope, never carried down a cascade: an ancestor's cut says nothing
+    /// about a grant the owner issued independently one level below it. The
+    /// cascade fills this from the scope's own durable revocation floor
+    /// (`rotation/cascade.rs::effective_revoked_recipients`), which is the only
+    /// state that survives a replayed pre-cut commitment — a grant-set
+    /// commitment is epoch-free, so one the owner really did sign passes every
+    /// gate stage for ever.
     pub revoked_recipients: &'a [[u8; SECRET_LEN]],
 }
 
