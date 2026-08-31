@@ -110,6 +110,10 @@ pub enum InviteError {
     /// The claim names a different scope root than the committed set it is
     /// converted against.
     ScopeMismatch,
+    /// The scope id offered with a commitment is not the one whose write
+    /// material derives the scope root name that commitment carries
+    /// ([`CommittedScope::bind`]).
+    ScopeUnbound,
     /// The caller's identity key did not sign the committed set it is acting on,
     /// so it is not this scope's owner. Minting, converting and revoking are all
     /// owner-only.
@@ -167,6 +171,7 @@ impl InviteError {
             Self::MalformedFragment => "malformed-invite-fragment",
             Self::FragmentTooLarge => "invite-fragment-too-large",
             Self::ScopeMismatch => "claim-scope-mismatch",
+            Self::ScopeUnbound => "scope-not-bound-to-the-commitment",
             Self::NotOwner => "not-owner",
             Self::LinkNotCommitted => "link-not-committed",
             Self::LinkExpired => "link-expired",
@@ -567,16 +572,47 @@ pub struct OwnerAuthority<'a> {
 /// epoch-free (`CONTEXT.md`), so a stale one still verifies and re-signing it
 /// resurrects every tag cut since; the adoption gate's floor law is what keeps a
 /// served-stale record out.
+///
+/// No field of the commitment carries a scope id, so [`bind`](Self::bind) is the
+/// only constructor: it derives the scope root's name from the scope's own write
+/// material and refuses a pair the commitment does not name. Without that an
+/// owner-authentic commitment for one scope could be presented under another
+/// scope's id, and every gate over it would pass.
 pub struct CommittedScope<'a> {
-    /// The scope id the writer pseudonyms bind. Must be the scope the commitment
-    /// belongs to — no field of the commitment carries it.
-    pub scope_id: &'a [u8; 16],
-    /// The owner-signed grant-set commitment.
-    pub commitment: &'a GrantSetCommitment,
-    /// The commitment's owner signature.
-    pub commitment_sig: &'a EcdsaSignature,
-    /// The authoritative grant ledger.
-    pub ledger: &'a [GrantLedgerEntry],
+    scope_id: &'a [u8; 16],
+    commitment: &'a GrantSetCommitment,
+    commitment_sig: &'a EcdsaSignature,
+    ledger: &'a [GrantLedgerEntry],
+}
+
+impl<'a> CommittedScope<'a> {
+    /// Bind `scope_id` to `commitment`, or fail closed.
+    ///
+    /// `write_scope_seed` is the scope's current write-scope seed, which with
+    /// the scope id derives the name the scope root answers at
+    /// ([`derive_write_name`]). The commitment carries that name, so only the
+    /// pair that derives it is admitted.
+    pub fn bind(
+        scope_id: &'a [u8; 16],
+        write_scope_seed: &[u8; SECRET_LEN],
+        commitment: &'a GrantSetCommitment,
+        commitment_sig: &'a EcdsaSignature,
+        ledger: &'a [GrantLedgerEntry],
+    ) -> Result<Self, InviteError> {
+        if derive_write_name(write_scope_seed, scope_id)
+            .as_str()
+            .as_bytes()
+            != commitment.ipns_name
+        {
+            return Err(InviteError::ScopeUnbound);
+        }
+        Ok(Self {
+            scope_id,
+            commitment,
+            commitment_sig,
+            ledger,
+        })
+    }
 }
 
 impl OwnerAuthority<'_> {
@@ -1475,12 +1511,18 @@ mod tests {
         commitment_sig: &'a EcdsaSignature,
         ledger: &'a [GrantLedgerEntry],
     ) -> CommittedScope<'a> {
-        CommittedScope {
-            scope_id: &SCOPE,
-            commitment,
-            commitment_sig,
-            ledger,
-        }
+        committed_scope_under(&WRITE_SCOPE_SEED, commitment, commitment_sig, ledger)
+    }
+
+    /// The same, at the scope root `write_scope_seed` derives.
+    fn committed_scope_under<'a>(
+        write_scope_seed: &[u8; 32],
+        commitment: &'a GrantSetCommitment,
+        commitment_sig: &'a EcdsaSignature,
+        ledger: &'a [GrantLedgerEntry],
+    ) -> CommittedScope<'a> {
+        CommittedScope::bind(&SCOPE, write_scope_seed, commitment, commitment_sig, ledger)
+            .expect("the scope's own write seed derives the name the set carries")
     }
 
     /// A minted link over `SCOPE`, keyed by its fragment secret.
@@ -1900,6 +1942,36 @@ mod tests {
         );
     }
 
+    /// The gate's own binding: no field of a commitment carries a scope id, so
+    /// pairing an owner-authentic commitment for one scope with another scope's
+    /// id would pass every check the owner authority runs.
+    #[test]
+    fn a_commitment_authorises_nothing_under_a_scope_it_does_not_name() {
+        const OTHER_SCOPE: [u8; 16] = [0xa1; 16];
+        const OTHER_SEED: [u8; 32] = [0x5b; 32];
+        let l = link(0x71, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
+
+        let refusal = |scope_id: &[u8; 16], seed: &[u8; 32]| {
+            CommittedScope::bind(scope_id, seed, &commitment, &sig, &ledger)
+                .err()
+                .map(|e| e.check())
+        };
+        assert_eq!(
+            refusal(&OTHER_SCOPE, &WRITE_SCOPE_SEED),
+            Some("scope-not-bound-to-the-commitment"),
+        );
+        assert_eq!(
+            refusal(&SCOPE, &OTHER_SEED),
+            Some("scope-not-bound-to-the-commitment"),
+            "and the scope's write material is half of the pair, not a formality"
+        );
+        assert!(
+            CommittedScope::bind(&SCOPE, &WRITE_SCOPE_SEED, &commitment, &sig, &ledger).is_ok(),
+            "only the pair that derives the name the commitment carries is admitted"
+        );
+    }
+
     #[test]
     fn a_link_is_located_only_when_recorded_and_still_committed() {
         let read = link(0x71, Permission::Read, None);
@@ -2054,7 +2126,7 @@ mod tests {
 
         let converted = convert_invite_claim(
             &keys.authority(),
-            &committed_scope(&commitment, &sig, &ledger),
+            &committed_scope_under(&MOVED_WRITE_SEED, &commitment, &sig, &ledger),
             &[before.link],
             &[],
             &claim_item_for(&link_signer(0x4e), contact_code(&id, &enc), moved),

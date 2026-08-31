@@ -1356,7 +1356,7 @@ impl EngineError {
     fn from_invite(err: InviteError) -> Self {
         match err {
             InviteError::Entropy(e) => EngineError::from_entropy(e),
-            e @ (InviteError::NotOwner | InviteError::Authority(_)) => {
+            e @ (InviteError::NotOwner | InviteError::Authority(_) | InviteError::ScopeUnbound) => {
                 EngineError::TrustViolation {
                     message: e.to_string(),
                 }
@@ -1908,6 +1908,23 @@ fn parsed_commitment_sig(compact: &[u8; 64]) -> Result<EcdsaSignature, EngineErr
     EcdsaSignature::from_compact(compact).ok_or_else(|| EngineError::TrustViolation {
         message: "the scope root's commitment signature is unparseable".to_owned(),
     })
+}
+
+/// The resolved set at `target` with its scope id bound to the commitment
+/// ([`CommittedScope::bind`]).
+fn bound_scope<'a>(
+    target: &'a OwnerScope,
+    current: &'a CascadeTarget,
+    commitment_sig: &'a EcdsaSignature,
+) -> Result<CommittedScope<'a>, EngineError> {
+    CommittedScope::bind(
+        &target.scope.scope_id,
+        &current.write_scope_seed,
+        &current.commitment,
+        commitment_sig,
+        &current.grant_ledger,
+    )
+    .map_err(EngineError::from_invite)
 }
 
 /// A scope root's opaque `ipnsName` bytes as a parsed name, on the resolve
@@ -5575,17 +5592,13 @@ where {
             CutKind::Revoke,
             async |target: &OwnerScope, current: &CascadeTarget| {
                 let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
+                let scope = bound_scope(target, current, &commitment_sig)?;
                 let link = locate_invite_link(
                     &OwnerAuthority {
                         identity_signer: session.identity(),
                         enc_secret: session.enc_subkey(),
                     },
-                    &CommittedScope {
-                        scope_id: &target.scope.scope_id,
-                        commitment: &current.commitment,
-                        commitment_sig: &commitment_sig,
-                        ledger: &current.grant_ledger,
-                    },
+                    &scope,
                     &links,
                 )
                 .map_err(EngineError::from_invite)?;
@@ -5776,12 +5789,7 @@ where {
         // one item, so they fail the pass closed instead of reading as every
         // item merely skipped (AGENTS.md rule 6).
         authority
-            .authorise(&CommittedScope {
-                scope_id: &target.scope.scope_id,
-                commitment: &current.commitment,
-                commitment_sig: &commitment_sig,
-                ledger: &current.grant_ledger,
-            })
+            .authorise(&bound_scope(&target, &current, &commitment_sig)?)
             .map_err(EngineError::from_invite)?;
         enforce_committed_ledger(&current.commitment, &current.grant_ledger)
             .map_err(|v| EngineError::from_invite(InviteError::Authority(v)))?;
@@ -5790,12 +5798,7 @@ where {
         for item in &items {
             let converted = convert_invite_claim(
                 &authority,
-                &CommittedScope {
-                    scope_id: &target.scope.scope_id,
-                    commitment: &current.commitment,
-                    commitment_sig: &commitment_sig,
-                    ledger: &current.grant_ledger,
-                },
+                &bound_scope(&target, &current, &commitment_sig)?,
                 &records.links,
                 &records.claims,
                 item,
@@ -7058,12 +7061,7 @@ where {
             identity_signer: session.identity(),
             enc_secret: session.enc_subkey(),
         }
-        .authorise(&CommittedScope {
-            scope_id: &target.scope.scope_id,
-            commitment: &current.commitment,
-            commitment_sig: &commitment_sig,
-            ledger: &current.grant_ledger,
-        })
+        .authorise(&bound_scope(&target, &current, &commitment_sig).ok()?)
         .ok()?;
 
         // A link store this could not open is absence, not "no links": the grant

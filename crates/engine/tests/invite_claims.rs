@@ -78,12 +78,14 @@ struct Link {
 
 impl Link {
     fn scope(&self) -> CommittedScope<'_> {
-        CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &self.commitment,
-            commitment_sig: &self.commitment_sig,
-            ledger: &self.ledger,
-        }
+        CommittedScope::bind(
+            &SCOPE,
+            &WRITE_SCOPE_SEED,
+            &self.commitment,
+            &self.commitment_sig,
+            &self.ledger,
+        )
+        .expect("the scope's own write seed derives the name the set carries")
     }
 }
 
@@ -496,12 +498,8 @@ fn published<'a>(
     sig: &'a cipherbox_core::suite::ecdsa::EcdsaSignature,
     ledger: &'a [cipherbox_core::seal::GrantLedgerEntry],
 ) -> CommittedScope<'a> {
-    CommittedScope {
-        scope_id: &SCOPE,
-        commitment,
-        commitment_sig: sig,
-        ledger,
-    }
+    CommittedScope::bind(&SCOPE, &WRITE_SCOPE_SEED, commitment, sig, ledger)
+        .expect("the scope's own write seed derives the name the set carries")
 }
 
 /// Convert one claim and refuse it, returning the refusal's stable name.
