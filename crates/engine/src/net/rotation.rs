@@ -62,8 +62,9 @@ use crate::facade::NodeId;
 use crate::gate::floor::PointerPlane;
 use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{
-    ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
-    recipient_self_location, row_is_owner_attested, self_locate_signed,
+    InteriorRecord, InteriorResealer, ScopeRootPromoter, UNATTESTED_IDENTITY_PK,
+    enforce_committed_ledger, mint_grant_row, recipient_self_location, row_is_owner_attested,
+    self_locate_signed,
 };
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
@@ -999,7 +1000,7 @@ where
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
-    ) -> Result<(), RotationPublishError> {
+    ) -> Result<Vec<NodeRef>, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         let override_seed = new_override_seed(self.keys.enc_secret, record)?;
         let source = self
@@ -1013,6 +1014,7 @@ where
             Ok(SweptChild::ScopeRoot(_)) => return Err(RotationPublishError::Rejected),
             Err(failure) => return Err(promote_verdict(failure)),
         };
+        let children = body_children(&current.read_body);
         let base = RepublishBase {
             read_body: current.read_body,
             unknown: current.carried_unknown,
@@ -1026,7 +1028,8 @@ where
             .map_err(|_| RotationPublishError::NotPublished)?;
         self.root_publish()
             .run(&name, record, &override_seed, base)
-            .await
+            .await?;
+        Ok(children)
     }
 }
 
@@ -1816,6 +1819,83 @@ where
     }
 }
 
+/// The derivation one interior record is authored under: the scope it belongs
+/// to, that scope's read epoch, and the per-node read key both are bound into.
+struct InteriorSeal<'a> {
+    scope_id: [u8; 16],
+    read_epoch: u64,
+    read_key: &'a [u8; SECRET_LEN],
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    /// Author `node`'s carried body under `seal` and CAS-publish it at `name`.
+    ///
+    /// The two interior re-seals share this tail: the sweep advances a node
+    /// inside the scope it already belongs to, and a grant's mint hands one to
+    /// the scope it minted. Only `seal` differs — the name, and the write seed
+    /// that signs at it, stay the scope's the node answers under today.
+    async fn publish_interior_head(
+        &self,
+        name: &IpnsName,
+        seal: &InteriorSeal<'_>,
+        write_scope_seed: &[u8; SECRET_LEN],
+        node: &InteriorRecord<'_>,
+    ) -> Result<(), RotationPublishError> {
+        let nonce = nonce(self.entropy)?;
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: node.node_id,
+            scope_id: seal.scope_id,
+            epoch: seal.read_epoch,
+            read_key: seal.read_key,
+            nonce: &nonce,
+            body: node.read_body,
+            carried_unknown: node.carried_unknown.clone(),
+            carried_epoch_tag_unknown: node.carried_epoch_tag_unknown.clone(),
+        })
+        .map_err(author_verdict)?;
+
+        let binding = HeadBinding {
+            node_id: node.node_id,
+            scope_id: seal.scope_id,
+            epoch: seal.read_epoch,
+        };
+        let preflighted = preflight(&binding, seal.read_key, &head)
+            .map_err(|_| RotationPublishError::NotPublished)?;
+        let signer = SessionIdentity::write_name_signer(write_scope_seed, &node.node_id);
+        let receipt = publish_record(
+            self.transport,
+            self.api,
+            self.floors,
+            self.scheduler,
+            self.profile,
+            &RecordPublishRequest {
+                name,
+                signer: &signer,
+                head: &preflighted,
+                content_cids: Vec::new(),
+                // The record the read came from is the CAS lower bound, named
+                // here rather than left to the durable floor alone, exactly as
+                // the pointer publish and revival treat their own ungated names.
+                min_current_sequence: Some(node.sequence),
+            },
+        )
+        .await
+        .map_err(|_| RotationPublishError::NotPublished)?;
+
+        match receipt.outcome {
+            PublishOutcome::Published { .. } => Ok(()),
+            PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
+            PublishOutcome::Unconfirmed { .. } => Err(RotationPublishError::NotPublished),
+        }
+    }
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E> SweepPublisher
     for OwnerRotationNet<'_, T, H, C, F, Sch, E>
 where
@@ -1850,54 +1930,24 @@ where
             return Err(RotationPublishError::Rejected);
         }
         let read_key = read_key_for(&source.read_scope_seed, &node.node_id);
-        let nonce = nonce(self.entropy)?;
-        let head = author_child_envelope(EnvelopeAuthoring {
-            node_id: node.node_id,
-            scope_id: source.scope_id,
-            epoch: node.read_epoch,
-            read_key: &read_key,
-            nonce: &nonce,
-            body: node.read_body,
-            carried_unknown: node.carried_unknown.clone(),
-            carried_epoch_tag_unknown: node.carried_epoch_tag_unknown.clone(),
-        })
-        .map_err(author_verdict)?;
-
-        let binding = HeadBinding {
-            node_id: node.node_id,
-            scope_id: source.scope_id,
-            epoch: node.read_epoch,
-        };
-        let preflighted = preflight(&binding, &read_key, &head)
-            .map_err(|_| RotationPublishError::NotPublished)?;
-        let signer = SessionIdentity::write_name_signer(&source.write_scope_seed, &node.node_id);
-        let receipt = publish_record(
-            self.transport,
-            self.api,
-            self.floors,
-            self.scheduler,
-            self.profile,
-            &RecordPublishRequest {
-                name: &name,
-                signer: &signer,
-                head: &preflighted,
-                content_cids: Vec::new(),
-                // Nothing on the sweep's read path adopts an interior record, so
-                // no gate ever raises this name's durable sequence floor to what
-                // the network already holds: the record the pass read is the CAS
-                // lower bound, exactly as the pointer publish and revival treat
-                // their own ungated names.
-                min_current_sequence: Some(node.sequence),
+        self.publish_interior_head(
+            &name,
+            &InteriorSeal {
+                scope_id: source.scope_id,
+                read_epoch: node.read_epoch,
+                read_key: &read_key,
+            },
+            &source.write_scope_seed,
+            &InteriorRecord {
+                node_id: node.node_id,
+                ipns_name: node.ipns_name,
+                sequence: node.sequence,
+                read_body: node.read_body,
+                carried_unknown: node.carried_unknown,
+                carried_epoch_tag_unknown: node.carried_epoch_tag_unknown,
             },
         )
         .await
-        .map_err(|_| RotationPublishError::NotPublished)?;
-
-        match receipt.outcome {
-            PublishOutcome::Published { .. } => Ok(()),
-            PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
-            PublishOutcome::Unconfirmed { .. } => Err(RotationPublishError::NotPublished),
-        }
     }
 
     async fn repair_child_scope_index(
@@ -1957,6 +2007,65 @@ where
             write_epoch: source.write_epoch,
             section,
         })
+        .await
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> InteriorResealer
+    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport + Clone + 'static,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    async fn reseal_interior_node(
+        &self,
+        source: &ChildScopeRef,
+        root: &ResealedScopeRoot,
+        node: &InteriorRecord<'_>,
+    ) -> Result<(), RotationPublishError> {
+        let source = self
+            .swept_scope(source)
+            .map_err(|_| RotationPublishError::Rejected)?;
+        let name = scope_name(node.ipns_name).map_err(publish_verdict)?;
+        // Release-active, both halves. A child envelope at the root's own node
+        // id would publish an interior body over the record that carries the
+        // scope's seeds. And a `ChildRef` names an `ipnsName` no reader
+        // authenticates, so the destination is checked against the derivation
+        // that signs at it rather than left for the record plane to refuse.
+        if node.node_id == root.scope_id
+            || name != derive_write_name(&source.write_scope_seed, &node.node_id)
+        {
+            return Err(RotationPublishError::Rejected);
+        }
+        // The durable mirror of the same rule the sweep's publish arm applies:
+        // the fresh scope's read-epoch floor can already stand above the epoch
+        // this record binds, and a signed record cannot be unpublished.
+        let read_floor = floor::read_epoch_floor(self.floors, &root.scope_id)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?
+            .unwrap_or(0);
+        if root.read_epoch < read_floor {
+            return Err(RotationPublishError::Rejected);
+        }
+        // Recovered from the owner blob the minted section wraps, so the seam
+        // carries no seed ([`new_override_seed`]).
+        let override_seed = new_override_seed(self.keys.enc_secret, root)?;
+        let read_key = read_key_for(&override_seed, &node.node_id);
+        self.publish_interior_head(
+            &name,
+            &InteriorSeal {
+                scope_id: root.scope_id,
+                read_epoch: root.read_epoch,
+                read_key: &read_key,
+            },
+            // The node keeps the name it answers at until a write grant's name
+            // wave moves it, so the key that signs there still derives from the
+            // write seed of the scope the folder left.
+            &source.write_scope_seed,
+            node,
+        )
         .await
     }
 }
@@ -9283,6 +9392,183 @@ mod tests {
             "and nothing was signed at the promoted name"
         );
         drop(lease);
+    }
+
+    /// The node id of the folder a grant promotes to a scope root — the scope
+    /// the interior nodes below it join.
+    const GRANTED_FOLDER: [u8; 16] = [0x9c; 16];
+
+    /// The record the mint hands the interior leg: the promoted folder's root.
+    fn promoted_folder_root() -> ResealedScopeRoot {
+        promoted(&NodeRef {
+            node_id: GRANTED_FOLDER,
+            ipns_name: b"granted-folder-name".to_vec(),
+        })
+    }
+
+    /// One interior node handed over verbatim, at the sequence the staged record
+    /// carries.
+    fn interior_record_of<'a>(
+        node_id: [u8; 16],
+        ipns_name: &'a [u8],
+        body: &'a ReadBody,
+        empty: &'a PreservedFields,
+    ) -> InteriorRecord<'a> {
+        InteriorRecord {
+            node_id,
+            ipns_name,
+            sequence: 1,
+            read_body: body,
+            carried_unknown: empty,
+            carried_epoch_tag_unknown: empty,
+        }
+    }
+
+    /// The mint's interior leg. A grantee derives every key from the scope it is
+    /// granted, and that scope's first epoch carries no history link, so a node
+    /// left sealed under the scope the folder left is unreadable to it.
+    #[test]
+    fn a_promoted_interior_node_re_seals_into_the_scope_it_joins() {
+        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let net = harness.net(&[]);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let child = swept.children[0].clone();
+        let SweptChild::Interior(node) =
+            block_on(net.resolve_child(&scope, &child)).expect("the node opens")
+        else {
+            panic!("an ordinary node is not a scope-root boundary");
+        };
+        let root = promoted_folder_root();
+
+        block_on(net.reseal_interior_node(
+            &scope,
+            &root,
+            &InteriorRecord {
+                node_id: child.node_id,
+                ipns_name: &child.ipns_name,
+                sequence: node.sequence,
+                read_body: &node.read_body,
+                carried_unknown: &node.carried_unknown,
+                carried_epoch_tag_unknown: &node.carried_epoch_tag_unknown,
+            },
+        ))
+        .expect("the re-seal lands");
+
+        let (_, envelope) = published_head(&harness, &interior_name(node_id));
+        assert_eq!(
+            envelope.scope, GRANTED_FOLDER,
+            "bound to the scope the folder became",
+        );
+        assert_eq!(envelope.epoch, 1, "at that scope's first epoch");
+        assert!(
+            !has_grant_section(&envelope),
+            "an interior node never gains a scope-root marker",
+        );
+        assert_eq!(
+            open_read_body(&envelope, &read_key_for(&FRESH_SEED, &node_id))
+                .expect("reopens under the fresh derivation"),
+            interior_body(),
+            "the body is carried forward verbatim",
+        );
+        assert!(
+            open_read_body(
+                &envelope,
+                &read_key_for(&seed_at(OWNER_ROOT_EPOCH), &node_id)
+            )
+            .is_err(),
+            "and the derivation it left opens it no longer",
+        );
+    }
+
+    /// A child envelope at the promoted root's own node id would publish an
+    /// interior body over the record that carries the scope's seeds.
+    #[test]
+    fn a_re_seal_at_the_promoted_roots_own_node_id_is_refused() {
+        let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let net = harness.net(&[]);
+        block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        // The root's own derived name, so the name half of the refusal holds and
+        // only the node id can reject.
+        let name = interior_name(GRANTED_FOLDER);
+        let sequence_before = sequence_at(&harness, &name);
+        let root = promoted_folder_root();
+        let body = interior_body();
+        let empty = PreservedFields::new();
+
+        assert_eq!(
+            block_on(net.reseal_interior_node(
+                &scope,
+                &root,
+                &interior_record_of(root.scope_id, name.as_str().as_bytes(), &body, &empty),
+            )),
+            Err(RotationPublishError::Rejected),
+        );
+        assert_eq!(
+            sequence_at(&harness, &name),
+            sequence_before,
+            "and nothing was signed",
+        );
+    }
+
+    /// A `ChildRef`'s `ipnsName` is authored by any committed writer of the
+    /// scope and no reader authenticates it, so the destination is checked
+    /// against the derivation that signs at it.
+    #[test]
+    fn a_re_seal_at_a_name_this_scopes_write_seed_does_not_own_is_refused() {
+        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let net = harness.net(&[]);
+        block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        // Another node's name: derivable, and owned by a key this publish does
+        // not sign with.
+        let elsewhere = interior_name([0x02; 16]);
+        let sequence_before = sequence_at(&harness, &elsewhere);
+        let root = promoted_folder_root();
+        let body = interior_body();
+        let empty = PreservedFields::new();
+
+        assert_eq!(
+            block_on(net.reseal_interior_node(
+                &scope,
+                &root,
+                &interior_record_of(node_id, elsewhere.as_str().as_bytes(), &body, &empty),
+            )),
+            Err(RotationPublishError::Rejected),
+        );
+        assert_eq!(
+            sequence_at(&harness, &elsewhere),
+            sequence_before,
+            "and nothing was signed",
+        );
+    }
+
+    /// The durable mirror of the gate reject this build would make on the record
+    /// it is about to sign: a scope whose read-epoch floor already stands above
+    /// the epoch the mint bound, which no republish can take back.
+    #[test]
+    fn a_re_seal_below_the_promoted_scopes_read_epoch_floor_is_refused() {
+        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        block_on(harness.floors.raise_epoch_floor(&GRANTED_FOLDER, 2)).expect("raise the floor");
+        let net = harness.net(&[]);
+        block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let name = interior_name(node_id);
+        let sequence_before = sequence_at(&harness, &name);
+        let root = promoted_folder_root();
+        let body = interior_body();
+        let empty = PreservedFields::new();
+
+        assert_eq!(
+            block_on(net.reseal_interior_node(
+                &scope,
+                &root,
+                &interior_record_of(node_id, name.as_str().as_bytes(), &body, &empty),
+            )),
+            Err(RotationPublishError::Rejected),
+        );
+        assert_eq!(
+            sequence_at(&harness, &name),
+            sequence_before,
+            "and nothing was signed",
+        );
     }
 
     /// The sequence of the record currently published at `name`.

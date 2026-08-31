@@ -1456,6 +1456,76 @@ fn a_grant_inside_a_granted_scope_anchors_under_that_scope() {
     .expect("the enclosing scope's derivation opens the nested scope's ascent link");
 }
 
+/// The interior travels with the folder. A grantee derives every key from the
+/// scope it is granted, and that scope's first epoch carries no history link, so
+/// a node left under the derivation of the scope the folder left is a node the
+/// grantee opens the root above and nothing inside.
+#[test]
+fn a_granted_folders_interior_re_seals_into_the_scope_the_grant_mints() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let section = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder answers as a scope root");
+    let override_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &section,
+    )
+    .expect("the owner blob yields the fresh override seed");
+
+    let head = published_head(&fx.world, &fx.blocks, &write_name(inner))
+        .expect("the interior node is published");
+    let envelope = decode_envelope(&head).expect("the head decodes");
+    assert_eq!(
+        envelope.scope, fx.folder.0,
+        "the node now belongs to the scope the grant minted"
+    );
+    assert_eq!(envelope.epoch, 1, "at that scope's first epoch");
+    let read_key = kdf::read_key(kdf::node_seed(&override_seed, &inner.0).as_bytes());
+    open_read_body(&envelope, read_key.as_bytes())
+        .expect("the grantee's own derivation opens the node inside the folder");
+}
+
+/// A stalled interior publish strands the nodes it did not move, and re-running
+/// the grant is refused at the promotion — so the host is told a retry cannot
+/// clear it, never that one will.
+#[test]
+fn an_interior_node_that_cannot_publish_posts_no_share_pointer() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inner",
+    );
+    fx.world
+        .record_store
+        .fail_put_for(write_name(inner).as_str());
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::TrustViolation {
+            message: "grant creation failed: interior-publish-failed".to_owned(),
+        }),
+    );
+    assert!(
+        inbox(&fx.recipient_device).is_empty(),
+        "and no share pointer names a scope whose interior the grantee cannot open"
+    );
+}
+
 /// The read the share dialog renders from: engine truth, not a tally of the
 /// commands this session happened to issue. The contact book comes from the
 /// durable store, and the grant rows off the scope root's own committed ledger —

@@ -32,8 +32,9 @@ use cipherbox_engine::api::{
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
-    GrantRecipient, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, ScopeRootPromoter,
-    SharePointer, create_grant, import_contact, post_share_pointer,
+    GrantRecipient, GranteeScopePlan, InteriorRecord, InteriorResealer, OwnerGrantKeys,
+    ParentScopePlan, ScopeRootPromoter, SharePointer, create_grant, import_contact,
+    post_share_pointer,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
@@ -1371,6 +1372,18 @@ impl ScopeRootPromoter for LocalNet {
         _parent: &ChildScopeRef,
         _node: &NodeRef,
         _record: &ResealedScopeRoot,
+    ) -> Result<Vec<NodeRef>, RotationPublishError> {
+        Ok(Vec::new())
+    }
+}
+
+/// Inert: this suite's subject is the mailbox DTO the grant emits.
+impl InteriorResealer for LocalNet {
+    async fn reseal_interior_node(
+        &self,
+        _source: &ChildScopeRef,
+        _root: &ResealedScopeRoot,
+        _node: &InteriorRecord<'_>,
     ) -> Result<(), RotationPublishError> {
         Ok(())
     }

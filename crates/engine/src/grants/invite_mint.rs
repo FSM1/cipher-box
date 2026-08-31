@@ -31,8 +31,8 @@ use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher,
 use crate::seams::UnixMillis;
 
 use super::create::{
-    CreateGrantError, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, converge_grant_subtree,
-    mint_grantee_scope,
+    CreateGrantError, GranteeScopePlan, InteriorResealer, OwnerGrantKeys, ParentScopePlan,
+    converge_grant_subtree, mint_grantee_scope,
 };
 use super::invite::{EphemeralInvitee, InviteError, InviteFragment, mint_invite_grant};
 use super::invite_store::{InviteStore, InviteStoreError};
@@ -159,7 +159,7 @@ pub async fn mint_invite_link<E, R, P, S>(
 where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
-    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
+    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter + InteriorResealer,
     S: InviteStore,
 {
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
@@ -209,13 +209,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::super::create::InteriorRecord;
     use super::*;
     use core::cell::RefCell;
     use std::rc::Rc;
 
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{
-        ChildScopeRef, GrantSetCommitment, PreservedFields, ReadBody, SignedSealed, sign_grant_set,
+        ChildRef, ChildScopeRef, GrantSetCommitment, NodeKind, PreservedFields, ReadBody,
+        SignedSealed, sign_grant_set,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -281,6 +283,11 @@ mod tests {
     struct FakeNet {
         published: Rc<RefCell<Vec<ResealedScopeRoot>>>,
         refuse_publish: bool,
+        /// One interior node inside the invited folder, when a test wants the
+        /// mint to own a subtree rather than a bare folder.
+        interior: Option<[u8; 16]>,
+        /// The interior nodes the mint re-sealed into the invite's scope.
+        resealed: Rc<RefCell<Vec<[u8; 16]>>>,
     }
 
     impl FakeNet {
@@ -288,7 +295,14 @@ mod tests {
             Self {
                 published: Rc::new(RefCell::new(Vec::new())),
                 refuse_publish: false,
+                interior: None,
+                resealed: Rc::new(RefCell::new(Vec::new())),
             }
+        }
+
+        fn with_interior(mut self, node_id: [u8; 16]) -> Self {
+            self.interior = Some(node_id);
+            self
         }
     }
 
@@ -322,16 +336,30 @@ mod tests {
             _scope: &ChildScopeRef,
             child: &NodeRef,
         ) -> Result<SweptChild, SweepResolveFailure> {
-            if child.node_id != FOLDER {
+            let children = if child.node_id == FOLDER {
+                self.interior
+                    .iter()
+                    .map(|node_id| ChildRef {
+                        id: *node_id,
+                        name: "n".into(),
+                        ipns_name: b"invited-folder-interior".to_vec(),
+                        kind: NodeKind::Folder,
+                        link_counter: 1,
+                        unknown: PreservedFields::new(),
+                    })
+                    .collect()
+            } else if self.interior == Some(child.node_id) {
+                Vec::new()
+            } else {
                 return Err(SweepResolveFailure::Unavailable);
-            }
+            };
             Ok(SweptChild::Interior(SweptNode {
                 current_read_epoch: PARENT_EPOCH,
                 sequence: 1,
                 read_body: ReadBody::Folder {
                     created_at: 0,
                     modified_at: 0,
-                    children: Vec::new(),
+                    children,
                     unknown: PreservedFields::new(),
                 },
                 carried_unknown: PreservedFields::new(),
@@ -364,6 +392,18 @@ mod tests {
         }
     }
 
+    impl InteriorResealer for FakeNet {
+        async fn reseal_interior_node(
+            &self,
+            _source: &ChildScopeRef,
+            _root: &ResealedScopeRoot,
+            node: &InteriorRecord<'_>,
+        ) -> Result<(), RotationPublishError> {
+            self.resealed.borrow_mut().push(node.node_id);
+            Ok(())
+        }
+    }
+
     /// The promotion seam over the same recording publisher; an invite mints a
     /// scope at a folder exactly as a direct grant does.
     impl ScopeRootPromoter for FakeNet {
@@ -372,8 +412,16 @@ mod tests {
             _parent: &ChildScopeRef,
             _node: &NodeRef,
             record: &ResealedScopeRoot,
-        ) -> Result<(), RotationPublishError> {
-            self.publish_scope_root(record).await
+        ) -> Result<Vec<NodeRef>, RotationPublishError> {
+            self.publish_scope_root(record).await?;
+            Ok(self
+                .interior
+                .iter()
+                .map(|node_id| NodeRef {
+                    node_id: *node_id,
+                    ipns_name: b"invited-folder-interior".to_vec(),
+                })
+                .collect())
         }
     }
 
@@ -427,6 +475,12 @@ mod tests {
                 entropy: RefCell::new(SeededEntropy::new(SEED)),
                 net: FakeNet::new(),
             }
+        }
+
+        /// The same fixture over a folder that holds one interior node.
+        fn with_interior(mut self, node_id: [u8; 16]) -> Self {
+            self.net = self.net.with_interior(node_id);
+            self
         }
 
         fn store(&self) -> StagingInviteStore<'_, InMemoryStagingStore, SeededEntropy> {
@@ -571,6 +625,18 @@ mod tests {
         };
         assert_eq!(entry.tag, record.tag);
         assert_eq!(entry.permission, Permission::Read);
+    }
+
+    /// A bearer reads the folder's interior under the scope the link mints, so
+    /// the mint owes that interior the same re-seal a personal grant owes it.
+    #[test]
+    fn a_minted_link_re_seals_the_invited_folders_interior() {
+        const INTERIOR_NODE: [u8; 16] = [0xa1; 16];
+        let f = Fixture::new().with_interior(INTERIOR_NODE);
+
+        f.mint(None).expect("the mint lands");
+
+        assert_eq!(*f.net.resealed.borrow(), vec![INTERIOR_NODE]);
     }
 
     /// The narrowing this slice exists for: a bearer's history walk has nowhere
