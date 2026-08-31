@@ -5556,6 +5556,7 @@ where {
                 commitment,
                 ledger,
                 claimant,
+                claimant_code,
                 outcome,
                 record,
             } = match converted {
@@ -5587,6 +5588,15 @@ where {
                 // The set cannot take another grant, or would not publish.
                 Err(e) => return Err(EngineError::from_invite(e)),
             };
+
+            // Ahead of the publish: `revoke`/`downgrade` resolve their recipient
+            // in the contact book alone, so a grant this owner cannot later cut
+            // must never reach the record plane. A book with no room refuses the
+            // conversion and the item stays un-acked.
+            if let Err(e) = self.contact_store(session).record(&claimant_code).await {
+                failure.get_or_insert(EngineError::from_contact_store(e));
+                continue;
+            }
 
             if outcome != ClaimOutcome::Unchanged {
                 match self
