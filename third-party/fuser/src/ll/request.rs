@@ -12,6 +12,7 @@ use std::{convert::TryFrom, fmt::Display, path::Path};
 use std::{error, fmt, mem};
 
 use super::argument::ArgumentIterator;
+use crate::redact::redacted;
 
 /// Error that may occur while reading and parsing a request from the kernel driver.
 #[derive(Debug)]
@@ -179,7 +180,7 @@ impl Display for Version {
 }
 
 /// Represents a filename in a directory
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct FilenameInDir<'a> {
     /// The Inode number of the directory
     pub dir: INodeNo,
@@ -187,6 +188,15 @@ pub struct FilenameInDir<'a> {
     /// subdirectory so is guaranteed not to contain '\0' or '/'.  It may be literally "." or ".."
     /// however.
     pub name: &'a Path,
+}
+
+impl fmt::Debug for FilenameInDir<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FilenameInDir")
+            .field("dir", &self.dir)
+            .field("name", &redacted(self.name))
+            .finish()
+    }
 }
 
 impl fmt::Display for RequestError {
@@ -289,7 +299,6 @@ mod op {
     /// Implementations allocate and assign [INodeNo]s in this request.  Learn more
     /// about INode lifecycle and the relationship between [Lookup] and [Forget] in the
     /// documentation for [INodeNo].
-    #[derive(Debug)]
     pub struct Lookup<'a> {
         header: &'a fuse_in_header,
         name: &'a OsStr,
@@ -502,7 +511,6 @@ mod op {
     impl_request!(ReadLink<'_>);
 
     /// Create a symbolic link.
-    #[derive(Debug)]
     pub struct SymLink<'a> {
         header: &'a fuse_in_header,
         target: &'a Path,
@@ -520,7 +528,6 @@ mod op {
 
     /// Create file node.
     /// Create a regular file, character device, block device, fifo or socket node.
-    #[derive(Debug)]
     pub struct MkNod<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_mknod_in,
@@ -543,7 +550,6 @@ mod op {
     }
 
     /// Create a directory.
-    #[derive(Debug)]
     pub struct MkDir<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_mkdir_in,
@@ -563,7 +569,6 @@ mod op {
     }
 
     /// Remove a file.
-    #[derive(Debug)]
     pub struct Unlink<'a> {
         header: &'a fuse_in_header,
         name: &'a Path,
@@ -576,7 +581,6 @@ mod op {
     }
 
     /// Remove a directory.
-    #[derive(Debug)]
     pub struct RmDir<'a> {
         header: &'a fuse_in_header,
         pub name: &'a Path,
@@ -589,7 +593,6 @@ mod op {
     }
 
     /// Rename a file.
-    #[derive(Debug)]
     pub struct Rename<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_rename_in,
@@ -613,7 +616,6 @@ mod op {
     }
 
     /// Create a hard link.
-    #[derive(Debug)]
     pub struct Link<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_link_in,
@@ -801,7 +803,6 @@ mod op {
     }
 
     /// Set an extended attribute.
-    #[derive(Debug)]
     pub struct SetXAttr<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_setxattr_in,
@@ -834,7 +835,6 @@ mod op {
     ///
     /// If the requested XAttr doesn't exist return [Err(Errno::NO_XATTR)] which will
     /// map to the right platform-specific error code.
-    #[derive(Debug)]
     pub struct GetXAttr<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_getxattr_in,
@@ -904,7 +904,6 @@ mod op {
     ///
     /// Return [Err(Errno::NO_XATTR)] if the xattr doesn't exist
     /// Return [Err(Errno::ENOTSUP)] if this filesystem doesn't support XAttrs
-    #[derive(Debug)]
     pub struct RemoveXAttr<'a> {
         header: &'a fuse_in_header,
         name: &'a OsStr,
@@ -1185,7 +1184,6 @@ mod op {
     /// structure in <fuse_common.h> for more details. If this method is not
     /// implemented or under Linux kernel versions earlier than 2.6.15, the [MkNod]
     /// and [Open] methods will be called instead.
-    #[derive(Debug)]
     pub struct Create<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_create_in,
@@ -1434,7 +1432,6 @@ mod op {
     ///
     /// TODO: Document the differences to [Rename] and [Exchange]
     #[cfg(feature = "abi-7-23")]
-    #[derive(Debug)]
     pub struct Rename2<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_rename2_in,
@@ -1543,7 +1540,6 @@ mod op {
     /// MacOS only: Rename the volume. Set `fuse_init_out.flags` during init to
     /// `FUSE_VOL_RENAME` to enable
     #[cfg(target_os = "macos")]
-    #[derive(Debug)]
     pub struct SetVolName<'a> {
         header: &'a fuse_in_header,
         name: &'a OsStr,
@@ -1569,7 +1565,6 @@ mod op {
     // API TODO: Consider rename2(RENAME_EXCHANGE)
     /// macOS only (undocumented)
     #[cfg(target_os = "macos")]
-    #[derive(Debug)]
     pub struct Exchange<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_exchange_in,
@@ -1852,12 +1847,19 @@ mod op {
             }),
         })
     }
+    crate::redact::opaque_debug!(
+        Lookup, SymLink, MkNod, MkDir, Unlink, RmDir, Rename, Link, SetXAttr, GetXAttr,
+        RemoveXAttr, Create,
+    );
+    #[cfg(feature = "abi-7-23")]
+    crate::redact::opaque_debug!(Rename2);
+    #[cfg(target_os = "macos")]
+    crate::redact::opaque_debug!(SetVolName, Exchange);
 }
 use op::*;
 
 /// Filesystem operation (and arguments) the kernel driver wants us to perform. The fields of each
 /// variant needs to match the actual arguments the kernel driver sends for the specific operation.
-#[derive(Debug)]
 #[allow(missing_docs)]
 pub enum Operation<'a> {
     Lookup(Lookup<'a>),
@@ -1925,10 +1927,18 @@ pub enum Operation<'a> {
     CuseInit(CuseInit<'a>),
 }
 
+/// A derive would print every argument struct's raw `&OsStr` name, which is the
+/// leak `Display` closes. One render path is the only way both modes stay shut.
+impl fmt::Debug for Operation<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl fmt::Display for Operation<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Operation::Lookup(x) => write!(f, "LOOKUP name {:?}", x.name()),
+            Operation::Lookup(x) => write!(f, "LOOKUP name {}", redacted(x.name())),
             Operation::Forget(x) => write!(f, "FORGET nlookup {}", x.nlookup()),
             Operation::GetAttr(_) => write!(f, "GETATTR"),
             Operation::SetAttr(x) => x.fmt(f),
@@ -1936,21 +1946,21 @@ impl fmt::Display for Operation<'_> {
             Operation::SymLink(x) => {
                 write!(
                     f,
-                    "SYMLINK target {:?}, link_name {:?}",
-                    x.target(),
-                    x.link_name()
+                    "SYMLINK target {}, link_name {}",
+                    redacted(x.target()),
+                    redacted(x.link_name())
                 )
             }
             Operation::MkNod(x) => write!(
                 f,
-                "MKNOD name {:?}, mode {:#05o}, rdev {}",
-                x.name(),
+                "MKNOD name {}, mode {:#05o}, rdev {}",
+                redacted(x.name()),
                 x.mode(),
                 x.rdev()
             ),
-            Operation::MkDir(x) => write!(f, "MKDIR name {:?}, mode {:#05o}", x.name(), x.mode()),
-            Operation::Unlink(x) => write!(f, "UNLINK name {:?}", x.name()),
-            Operation::RmDir(x) => write!(f, "RMDIR name {:?}", x.name),
+            Operation::MkDir(x) => write!(f, "MKDIR name {}, mode {:#05o}", redacted(x.name()), x.mode()),
+            Operation::Unlink(x) => write!(f, "UNLINK name {}", redacted(x.name())),
+            Operation::RmDir(x) => write!(f, "RMDIR name {}", redacted(x.name)),
             Operation::Rename(x) => write!(f, "RENAME src {:?}, dest {:?}", x.src(), x.dest()),
             Operation::Link(x) => write!(f, "LINK ino {:?}, dest {:?}", x.inode_no(), x.dest()),
             Operation::Open(x) => write!(f, "OPEN flags {:#x}", x.flags()),
@@ -1986,16 +1996,16 @@ impl fmt::Display for Operation<'_> {
             ),
             Operation::SetXAttr(x) => write!(
                 f,
-                "SETXATTR name {:?}, size {}, flags {:#x}",
-                x.name(),
+                "SETXATTR name {}, size {}, flags {:#x}",
+                redacted(x.name()),
                 x.value().len(),
                 x.flags()
             ),
             Operation::GetXAttr(x) => {
-                write!(f, "GETXATTR name {:?}, size {:?}", x.name(), x.size())
+                write!(f, "GETXATTR name {}, size {:?}", redacted(x.name()), x.size())
             }
             Operation::ListXAttr(x) => write!(f, "LISTXATTR size {}", x.size()),
-            Operation::RemoveXAttr(x) => write!(f, "REMOVEXATTR name {:?}", x.name()),
+            Operation::RemoveXAttr(x) => write!(f, "REMOVEXATTR name {}", redacted(x.name())),
             Operation::Flush(x) => write!(
                 f,
                 "FLUSH fh {:?}, lock owner {:?}",
@@ -2052,8 +2062,8 @@ impl fmt::Display for Operation<'_> {
             Operation::Access(x) => write!(f, "ACCESS mask {:#05o}", x.mask()),
             Operation::Create(x) => write!(
                 f,
-                "CREATE name {:?}, mode {:#05o}, flags {:#x}",
-                x.name(),
+                "CREATE name {}, mode {:#05o}, flags {:#x}",
+                redacted(x.name()),
                 x.mode(),
                 x.flags()
             ),
@@ -2101,7 +2111,7 @@ impl fmt::Display for Operation<'_> {
             ),
 
             #[cfg(target_os = "macos")]
-            Operation::SetVolName(x) => write!(f, "SETVOLNAME name {:?}", x.name()),
+            Operation::SetVolName(x) => write!(f, "SETVOLNAME name {}", redacted(x.name())),
             #[cfg(target_os = "macos")]
             Operation::GetXTimes(_) => write!(f, "GETXTIMES"),
             #[cfg(target_os = "macos")]
@@ -2119,10 +2129,16 @@ impl fmt::Display for Operation<'_> {
 }
 
 /// Low-level request of a filesystem operation the kernel driver wants to perform.
-#[derive(Debug)]
 pub struct AnyRequest<'a> {
     header: &'a fuse_in_header,
     data: &'a [u8],
+}
+
+/// A derive would print `data`, the raw argument bytes, which hold the name.
+impl fmt::Debug for AnyRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 impl_request!(AnyRequest<'_>);
 
@@ -2281,5 +2297,64 @@ mod tests {
             }
             _ => panic!("Unexpected request operation"),
         }
+    }
+
+    #[test]
+    fn every_render_of_a_request_redacts_the_name() {
+        let req = AnyRequest::try_from(&MKNOD_REQUEST[..]).unwrap();
+        let op = req.operation().unwrap();
+
+        for rendered in [
+            format!("{req}"),
+            format!("{op}"),
+            format!("{req:?}"),
+            format!("{op:?}"),
+        ] {
+            assert!(
+                !rendered.contains("foo.txt"),
+                "a name reached the render: {rendered}"
+            );
+            assert!(rendered.contains("MKNOD"), "the render lost the operation");
+            assert!(
+                rendered.contains("<redacted 7 bytes>"),
+                "the render lost the redaction marker: {rendered}"
+            );
+        }
+
+        // A derived `Debug` would print the raw argument bytes, which carry the
+        // name in a form no substring check catches. One render path shuts both.
+        assert_eq!(format!("{req:?}"), format!("{req}"));
+        assert_eq!(format!("{op:?}"), format!("{op}"));
+    }
+
+    /// A caller that takes the payload out of the enum holds the name directly,
+    /// so the payload needs its own opaque render.
+    #[test]
+    fn debug_of_a_request_payload_redacts_the_name() {
+        let req = AnyRequest::try_from(&MKNOD_REQUEST[..]).unwrap();
+        let Ok(Operation::MkNod(payload)) = req.operation() else {
+            panic!("Unexpected request operation");
+        };
+
+        assert_eq!(format!("{payload:?}"), "MkNod { .. }");
+    }
+
+    #[test]
+    fn debug_of_a_filename_in_dir_redacts_the_name() {
+        let entry = FilenameInDir {
+            dir: INodeNo(42),
+            name: Path::new("secret.txt"),
+        };
+
+        let rendered = format!("{entry:?}");
+        assert!(
+            !rendered.contains("secret.txt"),
+            "a name reached the render: {rendered}"
+        );
+        assert!(rendered.contains("42"), "the render lost the directory");
+        assert!(
+            rendered.contains("<redacted 10 bytes>"),
+            "the render lost the redaction marker: {rendered}"
+        );
     }
 }

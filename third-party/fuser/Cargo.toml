@@ -13,6 +13,17 @@
 # around, which is invisible while both carry one value and silently swaps the
 # wire fields once they differ.
 #
+# It also carries the name-redaction patch: the default `Filesystem` bodies and
+# the `Display` impls for `Operation`, `AnyRequest` and `FilenameInDir` rendered
+# the caller's name, which in this product is user plaintext. Every such site
+# now formats the name through `redacted` (`src/redact.rs`), which renders a
+# byte length only. That module is the single definition a re-vendor re-applies,
+# and the tests in `src/lib_impl.rs` and `src/ll/request.rs` assert no name
+# reaches a log record or a render. `Operation` and `AnyRequest` also lose their
+# derived `Debug`, which printed the raw name and the raw argument bytes; both
+# now delegate to the redacted `Display`. Each name-bearing request payload in
+# `op` loses its derived `Debug` too, through the `opaque_debug` macro.
+#
 # Trimmed against upstream: the examples, the mount-requiring integration
 # tests, and their dev-dependencies are gone — this is a library the product
 # links, not a crate under development here. Every dependency is scoped to

@@ -141,8 +141,10 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
   const exclusively = async (step: () => Promise<void>): Promise<void> => {
     if (inFlight) throw new Error('another sign-in is already in progress');
     inFlight = true;
-    progress.begin();
     try {
+      // Inside the guard: a host that threw as it began to render would
+      // otherwise latch the gate shut for every later sign-in and logout.
+      progress.begin();
       await step();
     } catch (failure) {
       // A login held at the factor policy is a transition, not a failure: the

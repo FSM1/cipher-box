@@ -6,7 +6,12 @@
  */
 
 import './polyfills';
-import { createIdentityExchange, createLoginFlow, type LoginFlow } from '@cipherbox/login';
+import {
+  createIdentityExchange,
+  createLoginFlow,
+  RecoveryRequiredError,
+  type LoginFlow,
+} from '@cipherbox/login';
 import { desktopCollector, type DesktopCollected } from './auth/collector';
 import { createCoreKitSession } from './auth/coreKit';
 import { shellFacade } from './auth/facade';
@@ -85,8 +90,21 @@ function start(root: HTMLElement): void {
     },
   });
 
+  /**
+   * A login held at the factor policy is a transition, not a failure: the window
+   * shows the phrase prompt, and a banner beside it would be noise.
+   */
+  const attempt = async (login: Promise<void>): Promise<void> => {
+    try {
+      await login;
+    } catch (failure) {
+      if (!(failure instanceof RecoveryRequiredError)) throw failure;
+      model.phase = 'recovery';
+    }
+  };
+
   const actions: ShellActions = {
-    google: () => run('google', () => flow.loginWithGoogle(undefined)),
+    google: () => run('google', () => attempt(flow.loginWithGoogle(undefined))),
     sendEmailCode: (email) => {
       model.address = email;
       run('emailCode', async () => {
@@ -94,7 +112,19 @@ function start(root: HTMLElement): void {
         model.codeSent = true;
       });
     },
-    submitEmailCode: (email, code) => run('signIn', () => flow.loginWithEmailCode({ email, code })),
+    submitEmailCode: (email, code) =>
+      run('signIn', () => attempt(flow.loginWithEmailCode({ email, code }))),
+    submitRecoveryPhrase: (phrase) =>
+      run('recovery', async () => {
+        try {
+          await flow.recoverWithPhrase(phrase);
+        } catch (failure) {
+          // An engine that refused the secret ends the held login, and a prompt
+          // left standing over it refuses every phrase typed into it after.
+          if (!session.awaitsRecovery()) model.phase = 'signedOut';
+          throw failure;
+        }
+      }),
     logout: () => run('logout', () => flow.logout()),
   };
 

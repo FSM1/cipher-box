@@ -53,6 +53,7 @@ p {
 }
 
 .front-door,
+.recovery,
 .signed-in {
   display: flex;
   flex-direction: column;
@@ -67,6 +68,7 @@ form {
 }
 
 input,
+textarea,
 button {
   font: inherit;
   padding: 0.55rem 0.75rem;
@@ -74,9 +76,14 @@ button {
   border: 1px solid var(--line);
 }
 
-input {
+input,
+textarea {
   background: #010409;
   color: var(--fg);
+}
+
+textarea {
+  resize: vertical;
 }
 
 button {

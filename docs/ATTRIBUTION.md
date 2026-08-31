@@ -53,5 +53,6 @@ Project: <https://github.com/cberner/fuser>
 
 The Linux app speaks the FUSE wire through a vendored copy of `fuser`
 (`third-party/fuser`, MIT), carrying a socket-read patch for the FUSE-T shim the
-macOS backend shares with it. Its own licence and notices travel with the
-vendored tree.
+macOS backend shares with it, a two-lifetime entry patch, and a name-redaction
+patch that keeps user plaintext out of the crate's own log records. Its own
+licence and notices travel with the vendored tree.

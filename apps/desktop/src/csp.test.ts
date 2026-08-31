@@ -99,4 +99,10 @@ describe('the committed shell policy', () => {
     expect(csp).toContain("default-src 'self'");
     expect(connectSrc(csp)).toBe("connect-src 'self' ipc: http://ipc.localhost");
   });
+
+  // `default-src` does not cover `form-action`, and this window now holds a form
+  // the member types their recovery phrase into.
+  it('lets no form submit anywhere', () => {
+    expect(csp).toContain("form-action 'none'");
+  });
 });

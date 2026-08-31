@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { IdentityCredential } from '@cipherbox/login';
+import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
 import { invoke } from '@tauri-apps/api/core';
 import type { DesktopConfig } from '../config';
 import { createCoreKitSession } from './coreKit';
@@ -11,22 +11,37 @@ interface CoreKitStorage {
   purge(): Promise<void>;
 }
 
+/** A 24-word phrase's shape; the SDK's own decoder is faked below. */
+const PHRASE = Array.from({ length: 24 }, (_, word) => `word${String(word)}`).join(' ');
+const PHRASE_KEY = '0f'.repeat(32);
+
 const sdk = vi.hoisted(() => ({
   status: 'logged-in',
   storage: null as CoreKitStorage | null,
   logout: vi.fn((): Promise<void> => Promise.resolve()),
   loginWithJWT: vi.fn((): Promise<void> => Promise.resolve()),
+  commitChanges: vi.fn((): Promise<void> => Promise.resolve()),
+  getDeviceFactor: vi.fn((): Promise<string | undefined> => Promise.resolve(undefined)),
+  inputFactorKey: vi.fn((): Promise<void> => Promise.resolve()),
+  createFactor: vi.fn((): Promise<string> => Promise.resolve('a-new-factor')),
+  setDeviceFactor: vi.fn((): Promise<void> => Promise.resolve()),
+  mnemonicToKey: vi.fn((_phrase: string): string => '00'),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@toruslabs/tss-dkls-lib', () => ({ tssLib: {} }));
-vi.mock('@cipherbox/login', () => ({
+vi.mock('@cipherbox/login', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@cipherbox/login')>()),
   accountIdFromTssPoint: () => 'an-account-id',
   isIdentityMethod: (method: unknown) => method === 'google',
 }));
 vi.mock('@web3auth/mpc-core-kit', () => ({
-  COREKIT_STATUS: { LOGGED_IN: 'logged-in' },
+  COREKIT_STATUS: { LOGGED_IN: 'logged-in', REQUIRED_SHARE: 'needs-a-share' },
   WEB3AUTH_NETWORK: { MAINNET: 'mainnet', DEVNET: 'devnet' },
+  FactorKeyTypeShareDescription: { DeviceShare: 'device-share' },
+  TssShareType: { DEVICE: 2 },
+  generateFactorKey: () => ({ private: 'a-scalar', pub: 'a-point' }),
+  mnemonicToKey: sdk.mnemonicToKey,
   Web3AuthMPCCoreKit: class {
     constructor(options: { storage: CoreKitStorage }) {
       sdk.storage = options.storage;
@@ -36,8 +51,12 @@ vi.mock('@web3auth/mpc-core-kit', () => ({
     }
     init = (): Promise<void> => Promise.resolve();
     loginWithJWT = sdk.loginWithJWT;
-    commitChanges = (): Promise<void> => Promise.resolve();
+    commitChanges = sdk.commitChanges;
     logout = sdk.logout;
+    getDeviceFactor = sdk.getDeviceFactor;
+    inputFactorKey = sdk.inputFactorKey;
+    createFactor = sdk.createFactor;
+    setDeviceFactor = sdk.setDeviceFactor;
   },
 }));
 
@@ -63,11 +82,20 @@ function storage(): CoreKitStorage {
   return held;
 }
 
+/** Reaches the phrase prompt, which every recovery test starts from. */
+async function heldAtTheFactorPolicy() {
+  sdk.status = 'needs-a-share';
+  const session = createCoreKitSession(config);
+  await expect(session.login(credential)).rejects.toBeInstanceOf(RecoveryRequiredError);
+  return session;
+}
+
 beforeEach(() => {
-  ipc.mockReset();
+  vi.resetAllMocks();
   ipc.mockResolvedValue(null);
-  sdk.logout.mockClear();
-  sdk.loginWithJWT.mockClear();
+  sdk.getDeviceFactor.mockResolvedValue(undefined);
+  sdk.mnemonicToKey.mockReturnValue(PHRASE_KEY);
+  sdk.createFactor.mockResolvedValue('a-new-factor');
   sdk.status = 'logged-in';
   sdk.storage = null;
 });
@@ -105,26 +133,157 @@ describe("the shell's Core Kit store", () => {
     await expect(session.logout()).rejects.toThrow('the keyring is locked');
     expect(sdk.logout).toHaveBeenCalled();
   });
+});
 
-  // A partial session must not stay resident: this device holds no factor, so
-  // what the login left behind opens nothing and only waits to be taken.
-  it('leaves nothing of a login that still needs a recovery phrase', async () => {
-    sdk.status = 'needs-a-share';
-    const session = createCoreKitSession(config);
+describe('a sign-in that meets a factor policy', () => {
+  // The phrase is redeemed against this very login, so ending it here would
+  // make every such sign-in a lockout (ADR 0009 D2).
+  it('holds the login open and asks for the recovery phrase', async () => {
+    await heldAtTheFactorPolicy();
 
-    await expect(session.login(credential)).rejects.toThrow('recovery phrase');
-    expect(ipc).toHaveBeenCalledWith('core_kit_purge');
+    expect(ipc).not.toHaveBeenCalledWith('core_kit_purge');
+    expect(sdk.logout).not.toHaveBeenCalled();
   });
 
-  // What the partial sign-in left behind is a device factor, so a caller told
-  // only to find a recovery phrase would never learn it is still on the disk.
-  it('says so when a partial login could not be cleared, and still names the phrase', async () => {
+  // The SDK's own reconstruct tries the hashed share the policy deleted, so a
+  // device that does hold a factor stops short unless the factor is read back.
+  it('reads this device stored factor before it calls the login a lockout', async () => {
     sdk.status = 'needs-a-share';
+    sdk.getDeviceFactor.mockResolvedValue('0a'.repeat(32));
+    sdk.inputFactorKey.mockImplementation(() => {
+      sdk.status = 'logged-in';
+      return Promise.resolve();
+    });
     const session = createCoreKitSession(config);
-    ipc.mockRejectedValue(new Error('the keyring is locked'));
 
-    await expect(session.login(credential)).rejects.toThrow(
-      /recovery phrase[\s\S]*the keyring is locked/
-    );
+    await expect(session.login(credential)).resolves.toBeUndefined();
+    expect(sdk.commitChanges).toHaveBeenCalled();
+  });
+
+  it('refuses any other stalled status rather than offering a phrase for it', async () => {
+    sdk.status = 'not-initialized';
+    const session = createCoreKitSession(config);
+
+    const failure = await session.login(credential).catch((error: unknown) => error);
+    expect(failure).not.toBeInstanceOf(RecoveryRequiredError);
+    expect(failure).toBeInstanceOf(Error);
+  });
+
+  // A session held short of reconstruction is still a live credential.
+  it('ends the held login when the member abandons the prompt', async () => {
+    const session = await heldAtTheFactorPolicy();
+
+    await session.logout();
+
+    expect(sdk.logout).toHaveBeenCalled();
+    expect(ipc).toHaveBeenCalledWith('core_kit_purge');
+  });
+});
+
+describe('the recovery phrase as a login', () => {
+  it('reads a typed phrase the one way, whatever the case and spacing', async () => {
+    const session = await heldAtTheFactorPolicy();
+    sdk.inputFactorKey.mockImplementation(() => {
+      sdk.status = 'logged-in';
+      return Promise.resolve();
+    });
+
+    await session.recoverWithPhrase(`  ${PHRASE.toUpperCase()}  `);
+
+    expect(sdk.mnemonicToKey).toHaveBeenCalledWith(PHRASE);
+  });
+
+  // Without a factor of its own this device asks for the phrase at every
+  // launch, which is the per-launch ritual the keyring store exists to end.
+  it('mints this device a factor once the phrase opens the account', async () => {
+    const session = await heldAtTheFactorPolicy();
+    sdk.inputFactorKey.mockImplementation(() => {
+      sdk.status = 'logged-in';
+      return Promise.resolve();
+    });
+
+    await session.recoverWithPhrase(PHRASE);
+
+    expect(sdk.createFactor).toHaveBeenCalled();
+    expect(sdk.setDeviceFactor).toHaveBeenCalledWith('a-scalar', true);
+    expect(sdk.commitChanges).toHaveBeenCalled();
+  });
+
+  // The account is open by then, so raising would leave a live session this
+  // device's own guard refuses to retry.
+  it('signs the member in even when the device factor could not be minted', async () => {
+    const session = await heldAtTheFactorPolicy();
+    sdk.inputFactorKey.mockImplementation(() => {
+      sdk.status = 'logged-in';
+      return Promise.resolve();
+    });
+    sdk.createFactor.mockRejectedValue(new Error('the account could not be re-synced'));
+
+    await expect(session.recoverWithPhrase(PHRASE)).resolves.toBeUndefined();
+    expect(session.isLoggedIn()).toBe(true);
+  });
+
+  it('leaves the login held when the phrase does not open the account', async () => {
+    const session = await heldAtTheFactorPolicy();
+    sdk.inputFactorKey.mockRejectedValue(new Error('reconstruction failed'));
+
+    await expect(session.recoverWithPhrase(PHRASE)).rejects.toThrow(/did not open this account/);
+    expect(session.isLoggedIn()).toBe(false);
+    expect(ipc).not.toHaveBeenCalledWith('core_kit_purge');
+  });
+
+  it('leaves the login held when the SDK stops short of a session', async () => {
+    const session = await heldAtTheFactorPolicy();
+
+    await expect(session.recoverWithPhrase(PHRASE)).rejects.toThrow(/did not open this account/);
+    expect(session.isLoggedIn()).toBe(false);
+  });
+
+  // Both the decoder's message and the SDK's quote what they were handed, and
+  // what they were handed is the member's phrase.
+  it('never repeats the typed phrase in what it reports', async () => {
+    const session = await heldAtTheFactorPolicy();
+    sdk.mnemonicToKey.mockImplementation((typed: string) => {
+      throw new Error(`bad mnemonic: ${typed}`);
+    });
+
+    const failure = await session.recoverWithPhrase(PHRASE).catch((error: unknown) => error);
+    expect(String(failure)).not.toContain('word0');
+    expect(String(failure)).toContain('not a valid recovery phrase');
+  });
+
+  // The phrase never leaves this window: the SDK reads it, and what crosses the
+  // IPC seam is the sealed store slot and a freshly minted factor.
+  it('never hands the typed phrase to the shell process', async () => {
+    const session = await heldAtTheFactorPolicy();
+    sdk.inputFactorKey.mockImplementation(() => {
+      sdk.status = 'logged-in';
+      return Promise.resolve();
+    });
+
+    await session.recoverWithPhrase(PHRASE);
+
+    expect(JSON.stringify(ipc.mock.calls)).not.toContain('word0');
+  });
+
+  // A commit that did not land leaves a factor the account never learned about.
+  // Without the replacing write it would refuse every later mint on this device.
+  it('replaces a stored factor the account never learned about', async () => {
+    const session = await heldAtTheFactorPolicy();
+    sdk.inputFactorKey.mockImplementation(() => {
+      sdk.status = 'logged-in';
+      return Promise.resolve();
+    });
+    sdk.commitChanges.mockRejectedValueOnce(new Error('the account could not be re-synced'));
+
+    await expect(session.recoverWithPhrase(PHRASE)).resolves.toBeUndefined();
+    expect(sdk.setDeviceFactor).toHaveBeenCalledWith('a-scalar', true);
+  });
+
+  it('refuses a phrase on a device that is not waiting for one', async () => {
+    const session = createCoreKitSession(config);
+
+    await expect(session.recoverWithPhrase(PHRASE)).rejects.toThrow('not waiting on a recovery');
+    expect(sdk.inputFactorKey).not.toHaveBeenCalled();
   });
 });

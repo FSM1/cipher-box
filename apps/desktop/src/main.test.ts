@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import type { ShellModel } from './frontDoor';
+import type { ShellActions, ShellModel } from './frontDoor';
 
 /** One snapshot per redraw; the shell mutates a single model in place. */
 interface Redraw {
@@ -7,6 +7,16 @@ interface Redraw {
   busy: boolean;
   step: ShellModel['step'];
 }
+
+/** Stands in for the shared package's own class, which this file mocks away. */
+const { RecoveryRequired } = vi.hoisted(() => ({
+  RecoveryRequired: class RecoveryRequiredError extends Error {
+    constructor() {
+      super('this device needs your recovery phrase before it can sign in');
+      this.name = 'RecoveryRequiredError';
+    }
+  },
+}));
 
 const shell = vi.hoisted(() => {
   const redraws: Redraw[] = [];
@@ -19,6 +29,12 @@ const shell = vi.hoisted(() => {
     finishRestore: (): void => release(),
     /** The login flow's host, so a test can drive the account transitions. */
     host: null as { account: { signedIn(method: null, email: string | null): void } } | null,
+    /** The last actions the window rendered, so a test can drive them. */
+    actions: null as ShellActions | null,
+    loginWithGoogle: vi.fn((): Promise<void> => Promise.resolve()),
+    recoverWithPhrase: vi.fn((): Promise<void> => Promise.resolve()),
+    /** Whether the Core Kit session still holds a login at the factor policy. */
+    awaitsRecovery: vi.fn((): boolean => true),
     readVaultStatus: vi.fn(() => Promise.reject(new Error('no session is live'))),
     onVaultChanged: vi.fn((changed: () => void) => {
       vaultListeners.push(changed);
@@ -30,15 +46,26 @@ const shell = vi.hoisted(() => {
 vi.mock('./polyfills', () => ({}));
 vi.mock('./auth/facade', () => ({ shellFacade: {} }));
 vi.mock('./auth/collector', () => ({ desktopCollector: () => ({}) }));
-vi.mock('./auth/coreKit', () => ({ createCoreKitSession: () => ({ restore: shell.restore }) }));
+vi.mock('./auth/coreKit', () => ({
+  createCoreKitSession: () => ({
+    restore: shell.restore,
+    awaitsRecovery: shell.awaitsRecovery,
+  }),
+}));
 vi.mock('./config', () => ({
   desktopConfig: () => ({ apiBaseUrl: 'http://api.test', googleClientId: undefined }),
 }));
 vi.mock('@cipherbox/login', () => ({
+  RecoveryRequiredError: RecoveryRequired,
   createIdentityExchange: () => ({}),
   createLoginFlow: (host: never) => {
     shell.host = host;
-    return { methods: [], resume: () => Promise.resolve() };
+    return {
+      methods: [],
+      resume: () => Promise.resolve(),
+      loginWithGoogle: shell.loginWithGoogle,
+      recoverWithPhrase: shell.recoverWithPhrase,
+    };
   },
 }));
 vi.mock('./vault', () => ({
@@ -46,7 +73,8 @@ vi.mock('./vault', () => ({
   readVaultStatus: shell.readVaultStatus,
 }));
 vi.mock('./frontDoor', () => ({
-  renderShell: (_root: HTMLElement, model: ShellModel) => {
+  renderShell: (_root: HTMLElement, model: ShellModel, actions: ShellActions) => {
+    shell.actions = actions;
     shell.redraws.push({ phase: model.phase, busy: model.busy, step: model.step });
   },
 }));
@@ -82,5 +110,46 @@ describe('the shell bootstrap', () => {
 
     shell.vaultListeners.forEach((emitted) => emitted());
     await vi.waitFor(() => expect(shell.readVaultStatus).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * A login held at the factor policy is a transition, not a failure: the copy
+   * on this window promises the recovery phrase works here, so the shell owes
+   * the member a field to type it into (ADR 0009 D2).
+   */
+  it('shows the phrase prompt when a sign-in stops at the factor policy', async () => {
+    shell.loginWithGoogle.mockRejectedValueOnce(new RecoveryRequired());
+
+    shell.actions!.google();
+
+    await vi.waitFor(() => expect(shell.redraws.at(-1)?.phase).toBe('recovery'));
+  });
+
+  it('keeps the prompt when the phrase itself did not open the account', async () => {
+    shell.loginWithGoogle.mockRejectedValueOnce(new RecoveryRequired());
+    shell.actions!.google();
+    await vi.waitFor(() => expect(shell.redraws.at(-1)?.phase).toBe('recovery'));
+
+    shell.recoverWithPhrase.mockRejectedValueOnce(new Error('that phrase did not open it'));
+    const drawn = shell.redraws.length;
+
+    shell.actions!.submitRecoveryPhrase('a typed recovery phrase');
+
+    await vi.waitFor(() => expect(shell.redraws.length).toBeGreaterThan(drawn));
+    expect(shell.redraws.at(-1)?.phase).toBe('recovery');
+  });
+
+  /**
+   * The shared flow ends the Core Kit session when the engine refuses the secret
+   * it exported. A prompt left standing over that ended login refuses every
+   * phrase typed into it after.
+   */
+  it('returns to the front door when a refused handoff ended the held login', async () => {
+    shell.awaitsRecovery.mockReturnValue(false);
+    shell.recoverWithPhrase.mockRejectedValueOnce(new Error('the engine refused the secret'));
+
+    shell.actions!.submitRecoveryPhrase('a typed recovery phrase');
+
+    await vi.waitFor(() => expect(shell.redraws.at(-1)?.phase).toBe('signedOut'));
   });
 });
