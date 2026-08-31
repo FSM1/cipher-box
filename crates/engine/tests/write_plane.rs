@@ -1165,6 +1165,15 @@ fn a_second_device_of_the_same_account_resolves_the_write() {
 
 /// Feed `plaintext` through a write handle in small slices, the way a host
 /// slices a `File`, and commit it.
+/// A new version of `node`, anchored on whatever the engine derives — the
+/// shape every write here takes but the one that supplies its own version.
+fn version(node: NodeId) -> WriteTarget {
+    WriteTarget::Version {
+        node,
+        expected_version: None,
+    }
+}
+
 fn write_file(
     engine: &mut Engine<FakeSeamTypes>,
     target: WriteTarget,
@@ -1375,15 +1384,7 @@ fn a_staged_second_version(
     .expect("the first version commits");
     tick(world, engine, tasks);
     let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
-    write_file(
-        engine,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &vec![0xBB; 323],
-    )
-    .expect("the second version commits");
+    write_file(engine, version(node), &vec![0xBB; 323]).expect("the second version commits");
     let op_id = block_on(alice.staging_store.queued_ops()).unwrap()[0].0;
     (node, op_id)
 }
@@ -1583,15 +1584,7 @@ fn a_stream_serves_the_pinned_version_across_a_head_change() {
 
     // The owner's other device republishes the file under a new version while
     // the stream is mid-body.
-    write_file(
-        &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &second,
-    )
-    .expect("the update commits");
+    write_file(&mut engine_a, version(node), &second).expect("the update commits");
     tick(&world, &engine_a, &mut tasks);
 
     while (assembled.len() as u64) < first.len() as u64 {
@@ -1638,15 +1631,7 @@ fn a_stream_reports_the_size_of_the_version_it_pinned() {
     let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, 400);
 
     let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
-    write_file(
-        &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &short,
-    )
-    .expect("the update commits");
+    write_file(&mut engine_a, version(node), &short).expect("the update commits");
     tick(&world, &engine_a, &mut tasks);
 
     assert_eq!(engine_b.stream_size(stream), Some(long.len() as u64));
@@ -1731,10 +1716,7 @@ fn an_update_content_write_round_trips_the_new_version_to_a_second_device() {
 
     write_file(
         &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
+        version(node),
         b"second version bytes, longer than the first",
     )
     .unwrap();
@@ -2244,6 +2226,19 @@ fn a_refused_root_authoring_names_the_check_that_fired_on_the_pass_it_fired() {
     assert!(
         abuse[0].contains("commitment-name-mismatch"),
         "the report names the check, not just that something failed: {}",
+        abuse[0]
+    );
+    // The report crosses to a host verbatim, and the refused record's name is a
+    // live handle that resolves it. A base36 IPNS name is one long alphanumeric
+    // run, which no classification this report carries ever is.
+    let longest_run = abuse[0]
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        longest_run < 40,
+        "the report withholds the ipnsName it refused: {}",
         abuse[0]
     );
     assert!(
@@ -4480,15 +4475,7 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
     let (root_sequence, _) = published(&world.record_store, ROOT);
 
     let authored_at = cipherbox_engine::seams::Scheduler::now(&world.scheduler).0;
-    write_file(
-        &mut engine,
-        WriteTarget::Version {
-            node: file,
-            expected_version: None,
-        },
-        b"v2 bytes",
-    )
-    .unwrap();
+    write_file(&mut engine, version(file), b"v2 bytes").unwrap();
     tick(&world, &engine, &mut tasks);
 
     let (sequence, head_cid) = published(&world.record_store, file);
@@ -6650,15 +6637,7 @@ fn every_content_publish_raises_the_published_op_mark() {
     assert_eq!(published_op_mark(&alice), Some(created.0), "the create");
 
     let file = child_id(&engine, ROOT, "photo.bin");
-    let updated = write_file(
-        &mut engine,
-        WriteTarget::Version {
-            node: file,
-            expected_version: None,
-        },
-        &(0..64u8).collect::<Vec<u8>>(),
-    )
-    .unwrap();
+    let updated = write_file(&mut engine, version(file), &(0..64u8).collect::<Vec<u8>>()).unwrap();
     tick(&world, &engine, &mut tasks);
     assert_eq!(
         published_op_mark(&alice),
@@ -7266,15 +7245,7 @@ fn a_cancelled_create_cascades_onto_its_node_and_a_cancelled_version_does_not() 
         new_name: "renamed.bin".into(),
     }))
     .unwrap();
-    let version = write_file(
-        &mut engine,
-        WriteTarget::Version {
-            node: kept,
-            expected_version: None,
-        },
-        b"a new version",
-    )
-    .unwrap();
+    let version = write_file(&mut engine, version(kept), b"a new version").unwrap();
 
     block_on(engine.command(Command::CancelUpload { op_id: create })).expect("the create cancels");
     let queued: Vec<OpId> = block_on(alice.staging_store.queued_ops())
@@ -7649,24 +7620,9 @@ fn parked_write(
     let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(world, blocks, &first);
     let (bob, mut engine_b, mut tasks_b) = open_writer(world, blocks, node, &first);
 
-    let op_id = write_file(
-        &mut engine_b,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &bobs,
-    )
-    .expect("the second device's edit commits");
-    write_file(
-        &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &alices,
-    )
-    .expect("the first device's edit commits");
+    let op_id =
+        write_file(&mut engine_b, version(node), &bobs).expect("the second device's edit commits");
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's edit commits");
     tick(world, &engine_a, &mut tasks_a);
 
     let (parked, _) = tick_until_dead_lettered(world, &engine_b, &mut tasks_b);
@@ -7771,6 +7727,105 @@ fn recovering_a_parked_write_queues_a_fresh_op_anchored_on_the_head_that_beat_it
     );
 }
 
+/// The key the preserved set lives under, as the staging module spells it.
+const PRESERVED_KEY: &[u8] = b"cipherbox/preserved-dead-letters";
+
+/// One format-v3 preserved set holding exactly `entries`.
+fn preserved_set(entries: &[(OpId, u8, &[u8])]) -> Vec<u8> {
+    let mut bytes = vec![3u8];
+    for (op_id, reason, record) in entries {
+        bytes.extend_from_slice(&op_id.0.to_be_bytes());
+        bytes.push(*reason);
+        bytes.extend_from_slice(&0u64.to_be_bytes());
+        bytes.extend_from_slice(&(record.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(record);
+    }
+    bytes
+}
+
+/// The drain writes the preserved entry before it dequeues the op, so a crash
+/// in that gap leaves one version named by a live queue entry and by the
+/// preserved set at once. Discarding then would release bytes an op is still
+/// going to publish, so an op the queue still holds is pending, never parked.
+#[test]
+fn a_parked_entry_whose_op_is_still_queued_is_neither_listed_nor_discardable() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (bob, mut engine_b, _tasks_b, node, parked_op) = parked_write(&world, &blocks);
+
+    // A live queued op of this session's own, then the crash shape: the
+    // preserved set names it too, beside the write that really is parked.
+    let (_, live_bytes, _) = contested_bodies();
+    let queued_op = write_file(&mut engine_b, version(node), &live_bytes).expect("it queues");
+    let queued = block_on(bob.staging_store.queued_ops()).unwrap();
+    let (_, live_record) = queued
+        .iter()
+        .find(|(id, _)| *id == queued_op)
+        .expect("the op this session just staged");
+    let parked_record = block_on(bob.staging_store.staged_bytes(PRESERVED_KEY))
+        .unwrap()
+        .expect("the fixture parked one");
+    block_on(bob.staging_store.put_staged_bytes(
+        PRESERVED_KEY,
+        &preserved_set(&[(queued_op, 9, live_record)]),
+    ))
+    .expect("the store takes the crash shape");
+
+    assert_eq!(
+        block_on(engine_b.command(Command::DiscardDeadLetter { op_id: queued_op })),
+        Err(EngineError::UnknownDeadLetter { op_id: queued_op }),
+        "a queued op is pending, so its version is not the set's to release"
+    );
+    assert_eq!(
+        block_on(engine_b.command(Command::RecoverDeadLetter { op_id: queued_op })),
+        Err(EngineError::UnknownDeadLetter { op_id: queued_op }),
+        "and not one to queue a second time either"
+    );
+    assert_eq!(
+        block_on(bob.staging_store.staged_bytes(PRESERVED_KEY)).unwrap(),
+        Some(preserved_set(&[(queued_op, 9, live_record)])),
+        "a refused command shortens nothing"
+    );
+
+    // The gate is the queue and not a blanket refusal: restore the write that
+    // really is parked and it still answers.
+    block_on(
+        bob.staging_store
+            .put_staged_bytes(PRESERVED_KEY, &parked_record),
+    )
+    .unwrap();
+    block_on(engine_b.command(Command::DiscardDeadLetter { op_id: parked_op }))
+        .expect("the genuinely parked write still discards");
+}
+
+/// An entry another identity parked is that identity's to act on. The staging
+/// store is shared, so a session that could discard one would destroy another
+/// account's only copy of those bytes.
+#[test]
+fn a_parked_entry_this_session_cannot_open_is_never_acted_on() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (bob, mut engine_b, _tasks_b, _node, _op_id) = parked_write(&world, &blocks);
+    let stored = preserved_set(&[(OpId(77), 9, b"another identity's op record")]);
+    block_on(bob.staging_store.put_staged_bytes(PRESERVED_KEY, &stored))
+        .expect("the store holds it");
+
+    assert_eq!(
+        block_on(engine_b.command(Command::DiscardDeadLetter { op_id: OpId(77) })),
+        Err(EngineError::UnknownDeadLetter { op_id: OpId(77) }),
+        "a record this session cannot open is not this session's to release"
+    );
+    assert_eq!(
+        block_on(engine_b.command(Command::RecoverDeadLetter { op_id: OpId(77) })),
+        Err(EngineError::UnknownDeadLetter { op_id: OpId(77) })
+    );
+    assert_eq!(
+        block_on(bob.staging_store.staged_bytes(PRESERVED_KEY)).unwrap(),
+        Some(stored),
+        "and the set it sits in is left standing"
+    );
+}
+
 /// The upload a refusal lands on to halt a 200-byte version mid-set: past the
 /// first leaves, well short of the 13 the CI framing produces.
 const MID_SET_UPLOAD: usize = 8;
@@ -7804,15 +7859,7 @@ fn stage_a_second_version(
 
     let file = child_id(&engine, ROOT, "photo.bin");
     let next: Vec<u8> = (0..200u8).rev().collect();
-    write_file(
-        &mut engine,
-        WriteTarget::Version {
-            node: file,
-            expected_version: None,
-        },
-        &next,
-    )
-    .unwrap();
+    write_file(&mut engine, version(file), &next).unwrap();
     let version = block_on(async {
         let queued = device.staging_store.queued_ops().await.unwrap();
         let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
@@ -9400,15 +9447,7 @@ fn a_file_in_view_repaints_from_another_devices_version_on_the_tick() {
     let (engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    write_file(
-        &mut engine_b,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &second,
-    )
-    .expect("the second device's write commits");
+    write_file(&mut engine_b, version(node), &second).expect("the second device's write commits");
     tick(&world, &engine_b, &mut tasks_b);
 
     // Device A polls without the file in view: nothing it resolves carries the
@@ -9496,27 +9535,12 @@ fn an_edit_refuses_to_supersede_a_version_published_after_it_was_formed() {
     let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    let op_id = write_file(
-        &mut engine_b,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &bobs,
-    )
-    .expect("the second device's write commits");
+    let op_id =
+        write_file(&mut engine_b, version(node), &bobs).expect("the second device's write commits");
     let (root_cid, leaves) = staged_version(&bob);
     // The first device publishes over the version the queued edit was formed
     // against.
-    write_file(
-        &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &alices,
-    )
-    .expect("the first device's write commits");
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's write commits");
     tick(&world, &engine_a, &mut tasks_a);
 
     let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
@@ -9564,15 +9588,8 @@ fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
         let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
         let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-        let op_id = write_file(
-            &mut engine_b,
-            WriteTarget::Version {
-                node,
-                expected_version: None,
-            },
-            &bobs,
-        )
-        .expect("the second device's write commits");
+        let op_id = write_file(&mut engine_b, version(node), &bobs)
+            .expect("the second device's write commits");
         let (root_cid, leaves) = staged_version(&bob);
         // Leaf zero left staging. Marked, it reached a destination and the
         // version is still assemblable; unmarked, those bytes are simply gone.
@@ -9590,15 +9607,8 @@ fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
             block_on(bob.staging_store.remove_staged_bytes(leaf)).unwrap();
         }
 
-        write_file(
-            &mut engine_a,
-            WriteTarget::Version {
-                node,
-                expected_version: None,
-            },
-            &alices,
-        )
-        .expect("the first device's write commits");
+        write_file(&mut engine_a, version(node), &alices)
+            .expect("the first device's write commits");
         tick(&world, &engine_a, &mut tasks_a);
 
         let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
@@ -9787,33 +9797,10 @@ fn a_second_queued_edit_does_not_slip_past_the_writer_that_beat_the_first() {
     let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    let one = write_file(
-        &mut engine_b,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &bobs,
-    )
-    .expect("the first edit commits");
-    let two = write_file(
-        &mut engine_b,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &first,
-    )
-    .expect("the second edit commits on top of the first");
-    write_file(
-        &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &alices,
-    )
-    .expect("the first device's write commits");
+    let one = write_file(&mut engine_b, version(node), &bobs).expect("the first edit commits");
+    let two = write_file(&mut engine_b, version(node), &first)
+        .expect("the second edit commits on top of the first");
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's write commits");
     tick(&world, &engine_a, &mut tasks_a);
 
     let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
@@ -9866,26 +9853,12 @@ fn an_edit_anchors_on_the_version_its_handle_opened_on() {
     let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    let handle = block_on(engine_b.begin_write(
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        bobs.len() as u64,
-    ))
-    .expect("the handle opens against the version the caller read");
+    let handle = block_on(engine_b.begin_write(version(node), bobs.len() as u64))
+        .expect("the handle opens against the version the caller read");
 
     // The other device publishes, and this one's own render advances past it
     // while the draft is still open.
-    write_file(
-        &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &alices,
-    )
-    .expect("the first device's write commits");
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's write commits");
     tick(&world, &engine_a, &mut tasks_a);
     assert_eq!(
         block_on(engine_b.read_content(node)).expect("the refreshed head reads"),
@@ -9933,15 +9906,7 @@ fn a_caller_supplied_version_anchors_the_write_the_caller_actually_read() {
 
     // The other device publishes and this device's own view advances past it,
     // all before the caller opens a handle for the bytes it read earlier.
-    write_file(
-        &mut engine_a,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &alices,
-    )
-    .expect("the first device's write commits");
+    write_file(&mut engine_a, version(node), &alices).expect("the first device's write commits");
     tick(&world, &engine_a, &mut tasks_a);
     tick(&world, &engine_b, &mut tasks_b);
     assert_eq!(
@@ -9975,6 +9940,35 @@ fn a_caller_supplied_version_anchors_the_write_the_caller_actually_read() {
     );
 }
 
+/// An anchor that is not a content CID can only ever park the write, and a
+/// parked write spends a slot in a set that evicts oldest-first — so the shape
+/// is refused where the caller can still act on the refusal.
+#[test]
+fn an_expected_version_that_is_not_a_content_cid_is_refused_at_the_handle() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, _, _) = contested_bodies();
+    let (mut engine, _events, _tasks, node) = publish_clip(&world, &blocks, &first);
+
+    for bogus in [vec![], vec![0xAB; 4], vec![0xCD; 4096]] {
+        assert_eq!(
+            block_on(engine.begin_write(
+                WriteTarget::Version {
+                    node,
+                    expected_version: Some(bogus.clone()),
+                },
+                8,
+            )),
+            Err(EngineError::MalformedInput {
+                check: "expected-version-is-not-a-content-cid"
+            }),
+            "{} bytes is not a content CID",
+            bogus.len()
+        );
+    }
+}
+
 /// A device that never read the file has no head to anchor on, so `beginWrite`
 /// resolves one — before a byte is spent. The write then publishes like any
 /// other rather than dead-lettering after a whole upload.
@@ -9988,15 +9982,8 @@ fn an_edit_from_a_device_that_never_read_the_file_resolves_its_anchor() {
 
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
-    write_file(
-        &mut engine_b,
-        WriteTarget::Version {
-            node,
-            expected_version: None,
-        },
-        &bobs,
-    )
-    .expect("the write commits against the head it resolved");
+    write_file(&mut engine_b, version(node), &bobs)
+        .expect("the write commits against the head it resolved");
     tick(&world, &engine_b, &mut tasks_b);
 
     assert!(
@@ -10121,15 +10108,7 @@ fn file_with_history(
     tick(world, engine, tasks);
     let node = child_id(engine, ROOT, "clip.bin");
     for body in rest {
-        write_file(
-            engine,
-            WriteTarget::Version {
-                node,
-                expected_version: None,
-            },
-            body,
-        )
-        .expect("the update commits");
+        write_file(engine, version(node), body).expect("the update commits");
         tick(world, engine, tasks);
     }
     node

@@ -259,7 +259,8 @@ impl EngineHandle {
                 },
                 _ => {
                     return Err(JsError::new(
-                        "beginWrite takes either (parent, name) or (node, expectedVersion?), never both",
+                        "beginWrite takes either (parent, name) or (node), never both; \
+                         expectedVersion belongs to (node)",
                     )
                     .into());
                 }

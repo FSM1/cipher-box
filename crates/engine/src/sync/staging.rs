@@ -905,9 +905,7 @@ mod tests {
         reconcile_preserved_dead_letters(store, &staged, bounds).await;
     }
 
-    /// The op records the preserved set holds, oldest first.
-    /// Parks `record` under an op id derived from its own bytes, so a test that
-    /// parks the same record twice still names one entry.
+    /// Parks `record` under an op id derived from its own bytes.
     async fn park<S: StagingStore>(store: &S, record: &[u8]) -> Preservation {
         preserve_dead_letter(
             store,
@@ -926,6 +924,7 @@ mod tests {
         }))
     }
 
+    /// The op records the preserved set holds, oldest first.
     async fn kept_records<S: StagingStore>(store: &S) -> Vec<Vec<u8>> {
         read_preserved_dead_letters(store)
             .await

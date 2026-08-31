@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
-use cipherbox_core::content::encode_content_cid_str;
+use cipherbox_core::content::{CONTENT_CID_LEN, encode_content_cid_str};
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -124,8 +124,8 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    LiveBlocks, PreservedBounds, StagedBlocks, read_preserved_dead_letters, reconcile_staging,
-    release_version_blocks, stage_op, take_preserved_dead_letter,
+    LiveBlocks, PreservedBounds, PreservedDeadLetter, StagedBlocks, read_preserved_dead_letters,
+    reconcile_staging, release_version_blocks, stage_op, take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
@@ -322,10 +322,8 @@ pub struct SnapshotChild {
     pub dead_letter: bool,
     /// Retained version count, `None` until projected.
     pub content_version: Option<u64>,
-    /// The head version's content root CID, `None` until projected. A caller
-    /// that reads at this version hands it back on
-    /// [`WriteTarget::Version::expected_version`], so the write it derives is
-    /// anchored where it was read.
+    /// The head version's content root CID, `None` until projected — what a
+    /// caller hands back on [`WriteTarget::Version::expected_version`].
     pub content_cid: Option<Vec<u8>>,
 }
 
@@ -2521,15 +2519,19 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
 
 /// Surface a fail-closed resolve rejection as [`Event::AttributableAbuse`]: a
 /// trust violation is never mere staleness (AGENTS.md rule 6), so it must not
-/// poll silently. `routing_key` is the record's `ipnsName` and `detail` a
-/// classification; neither carries key material.
+/// poll silently.
+///
+/// `routing_key` is the record's `ipnsName`, and this description crosses to a
+/// host verbatim rather than through a rendering policy — so the name renders as
+/// its shape here, the way its own type does. `detail` is a classification and
+/// carries no key material.
 pub(crate) fn emit_trust_violation(
     events: &mpsc::UnboundedSender<Event>,
     routing_key: &str,
     detail: impl fmt::Display,
 ) {
     let _ = events.unbounded_send(Event::AttributableAbuse {
-        description: format!("{routing_key}: {detail}"),
+        description: format!("{:?}: {detail}", RedactedText::of(routing_key)),
     });
 }
 
@@ -3852,9 +3854,17 @@ impl<T: SeamTypes> Engine<T> {
             .map_err(ColdStartError::Seam)?
         {
             Some(parked) => {
+                let reader = RecordReader::new(session.enc_subkey());
                 let mut notices = self.dead_letters.borrow_mut();
                 for entry in parked {
-                    notices.insert(entry.op_id, (None, entry.reason));
+                    // The same two conditions [`Self::parked_write`] states: one
+                    // account's session lists no other's entries, and an op the
+                    // queue still holds is pending rather than parked.
+                    let mine = matches!(reader.classify(&entry.record), RecordClass::Mine(_));
+                    let queued = raw.iter().any(|(id, _)| *id == entry.op_id);
+                    if mine && !queued {
+                        notices.insert(entry.op_id, (None, entry.reason));
+                    }
                 }
             }
             None => {
@@ -6639,9 +6649,16 @@ where {
                 refuse_outside_vault(&rendered, *node)?;
                 match rendered.node(*node).map(|meta| meta.kind) {
                     Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
-                    // The caller's own read wins: only it knows which version
-                    // the bytes it is about to push were derived from.
                     Some(_) => match expected_version {
+                        // Shape-checked at the boundary rather than left to fail
+                        // closed on the drain: an anchor that is not a content
+                        // CID can only ever park the write, and a parked write
+                        // spends a slot in a set that evicts oldest-first.
+                        Some(expected) if expected.len() != CONTENT_CID_LEN => {
+                            return Err(EngineError::MalformedInput {
+                                check: "expected-version-is-not-a-content-cid",
+                            });
+                        }
                         Some(expected) => Some(expected.clone()),
                         None => self.write_anchor(*node).await?,
                     },
@@ -8014,16 +8031,52 @@ where {
 
     /// Drop one parked write ([`Command::DiscardDeadLetter`]).
     ///
+    /// The parked write `op_id` names, with the op it holds.
+    ///
+    /// Two conditions, both fail-closed, and both because the set is a durable
+    /// surface of a store one account shares with another
+    /// (`crate::sync::drain` owner scoping). The record must open under **this**
+    /// session's own custody, so no session acts on an entry another identity
+    /// parked; and the op must have left the durable queue, because the drain
+    /// writes the preserved entry before it dequeues, so a crash in that gap
+    /// leaves one version named by a live queue entry and by this set at once.
+    /// Releasing it then would drop bytes an op is still going to publish.
+    async fn parked_write(&self, op_id: OpId) -> Result<(PreservedDeadLetter, Op), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let queued = self
+            .seams
+            .staging_store
+            .queued_ops()
+            .await
+            .map_err(EngineError::from_seam)?;
+        if queued.iter().any(|(id, _)| *id == op_id) {
+            return Err(EngineError::UnknownDeadLetter { op_id });
+        }
+        let parked = read_preserved_dead_letters(&self.seams.staging_store)
+            .await
+            .map_err(EngineError::from_seam)?
+            .unwrap_or_default()
+            .into_iter()
+            .find(|entry| entry.op_id == op_id)
+            .ok_or(EngineError::UnknownDeadLetter { op_id })?;
+        match RecordReader::new(session.enc_subkey()).classify(&parked.record) {
+            RecordClass::Mine(op) => Ok((parked, op)),
+            _ => Err(EngineError::UnknownDeadLetter { op_id }),
+        }
+    }
+
     /// The shortened set is durable before a byte is released, so a failed write
     /// leaves a list that still names the version rather than one naming blocks
     /// that are already gone.
     async fn discard_dead_letter(&self, op_id: OpId) -> Result<(), EngineError> {
         self.live_session()?;
-        let taken = take_preserved_dead_letter(&self.seams.staging_store, op_id)
+        let (parked, _) = self.parked_write(op_id).await?;
+        take_preserved_dead_letter(&self.seams.staging_store, op_id)
             .await
-            .map_err(EngineError::from_seam)?
-            .ok_or(EngineError::UnknownDeadLetter { op_id })?;
-        if let Ok(Some(root)) = record_content_root_cid(&taken.record) {
+            .map_err(EngineError::from_seam)?;
+        // A record whose clear root will not read names no blocks to release;
+        // orphan GC reclaims them once this list no longer holds it.
+        if let Some(root) = record_content_root_cid(&parked.record).ok().flatten() {
             release_version_blocks(&self.seams.staging_store, root.as_slice()).await;
         }
         self.dead_letters.borrow_mut().remove(&op_id);
@@ -8033,29 +8086,14 @@ where {
 
     /// Re-queue one parked write ([`Command::RecoverDeadLetter`]).
     ///
-    /// The new op is authored here rather than replayed: an `updateContent`
-    /// takes the anchor this device renders now, and a create mints a fresh node
-    /// id so a version the plane already carries is never re-authored at its own
-    /// name. Both reuse the parked version's staged blocks, which the queue
-    /// entry references from the moment it lands.
+    /// A create mints a fresh node id, so a version the plane already carries is
+    /// never re-authored at its own name. Both arms reuse the parked version's
+    /// staged blocks, which the new queue entry references from the moment it
+    /// lands.
     async fn recover_dead_letter(&mut self, op_id: OpId) -> Result<CommandOutcome, EngineError> {
         self.live_session()?;
         let authored_at = self.seams.scheduler.now();
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let parked = read_preserved_dead_letters(&self.seams.staging_store)
-            .await
-            .map_err(EngineError::from_seam)?
-            .unwrap_or_default()
-            .into_iter()
-            .find(|entry| entry.op_id == op_id)
-            .ok_or(EngineError::UnknownDeadLetter { op_id })?;
-        let RecordClass::Mine(op) =
-            RecordReader::new(session.enc_subkey()).classify(&parked.record)
-        else {
-            return Err(EngineError::MalformedInput {
-                check: "parked-write-does-not-open",
-            });
-        };
+        let (_, op) = self.parked_write(op_id).await?;
 
         let fresh = match &op.kind {
             OpKind::UpdateContent { content, .. } => Op::update_content(
@@ -10856,6 +10894,8 @@ mod tests {
 
         use std::sync::{Arc, Mutex};
 
+        use crate::sync::staging::PRESERVED_DEAD_LETTERS_KEY;
+
         use cipherbox_core::ipns::{IpnsName, IpnsRecord};
         use cipherbox_core::kdf;
         use cipherbox_core::payload::RepointObject;
@@ -11204,8 +11244,6 @@ mod tests {
                 "the dead-lettered op is removed from the durable queue"
             );
         }
-
-        use crate::sync::staging::PRESERVED_DEAD_LETTERS_KEY;
 
         /// A preserved set this build cannot read holds parked writes it can
         /// neither list nor release, and no later dead letter may join them.
@@ -11843,9 +11881,13 @@ mod tests {
                     .collect();
                 assert_eq!(abuse.len(), 1, "every forged poll raises one abuse event");
                 assert!(
-                    abuse[0].contains(root_name.as_str())
-                        && abuse[0].contains("content-cid-mismatch"),
-                    "the event names the record and the check that rejected it: {}",
+                    abuse[0].contains("content-cid-mismatch"),
+                    "the event names the check that rejected it: {}",
+                    abuse[0]
+                );
+                assert!(
+                    !abuse[0].contains(root_name.as_str()),
+                    "and withholds the live handle it rejected: {}",
                     abuse[0]
                 );
             }
@@ -12162,7 +12204,9 @@ mod tests {
             tick(&world, &device, &mut tasks);
 
             // The record answering there is bound to the name it moved off, so
-            // the gate refuses it — and names what this pass resolved.
+            // the gate refuses it. Only the moved record trips that check, and
+            // the name cold start opened with resolves clean — so one refusal
+            // naming it is what proves where this pass went.
             let abuse: Vec<String> = drain(&mut events)
                 .into_iter()
                 .filter_map(|event| match event {
@@ -12172,7 +12216,7 @@ mod tests {
                 .collect();
             assert_eq!(abuse.len(), 1, "one verdict on the one root resolved");
             assert!(
-                abuse[0].contains(moved.as_str()),
+                abuse[0].contains("commitment-invalid"),
                 "the pass resolved the root its anchor pointer named: {}",
                 abuse[0]
             );

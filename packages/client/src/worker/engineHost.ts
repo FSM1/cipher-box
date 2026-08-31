@@ -225,7 +225,7 @@ export class EngineHost implements EngineHostLike {
         reserved,
         fields.expectedVersion === undefined
           ? undefined
-          : new Uint8Array(bytes(fields.expectedVersion, 'expectedVersion'))
+          : bytes(fields.expectedVersion, 'expectedVersion')
       );
     }
     return this.handle.beginWrite(

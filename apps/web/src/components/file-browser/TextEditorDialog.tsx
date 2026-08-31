@@ -43,8 +43,6 @@ export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
     const bytes = new TextEncoder().encode(draft);
     let handle: bigint | null = null;
     try {
-      // The version the load read, not the one the engine has advanced to:
-      // the draft descends from those bytes and from no later ones.
       handle = await facade.beginWrite(
         { node: row.id, expectedVersion: row.contentCid ?? undefined },
         bytes.byteLength

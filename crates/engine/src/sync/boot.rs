@@ -234,17 +234,15 @@ where
     )
     .await
     .map_err(ColdStartError::Seam)?;
-    // Project the gate-passing root read-body to its direct children (E7). An
-    // own current record at the floor paints from the read-body the recovery
-    // unsealed, so a restart whose root never advanced still renders the vault.
+    // Project the gate-passing root read-body to its direct children (E7); an
+    // own current record at the floor paints from `Resolved::current_at_floor`.
     let (root_resolve, base) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => {
             let mut base = base;
             project_root(&mut base, params.root, &adopted);
             (RootResolve::Adopted, base)
         }
-        // A current record is availability staleness here, same as nothing
-        // newer fetched, so it paints without claiming an adoption.
+        // Availability staleness, so it paints without claiming an adoption.
         ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
             let mut base = base;
             if let Some(at_floor) = &resolved.current_at_floor {

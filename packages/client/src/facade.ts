@@ -226,8 +226,7 @@ export class EngineFacade {
 
   /**
    * Re-queues one parked write's staged version as a fresh op anchored on the
-   * head this device renders now, resolving `queued` with the new op id. Never
-   * resumes the parked op, whose own anchor is what parked it.
+   * head this device renders now, resolving `queued` with the new op id.
    */
   recoverDeadLetter(opId: bigint): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'recoverDeadLetter', opId });

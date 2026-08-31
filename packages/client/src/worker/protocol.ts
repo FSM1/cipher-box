@@ -406,12 +406,8 @@ export type CommandOutcomeDescriptor =
  */
 export type WriteTarget =
   | { parent: Uint8Array; name: string }
-  /**
-   * `expectedVersion` is the `contentCid` the caller read. It anchors the
-   * conditional edit on the version the caller's bytes came from, rather than
-   * on whatever the engine's own view has advanced to by the time the handle
-   * opens. Omit it to take the engine's derivation.
-   */
+  /** `expectedVersion` is the `contentCid` the caller read; omit it to take
+   * the engine's own anchor derivation. */
   | { node: Uint8Array; expectedVersion?: Uint8Array };
 
 /** An open write handle's id — the engine's `u64`, opaque to this layer. */
