@@ -7748,7 +7748,7 @@ where {
             .ok()?;
         // Fail closed on a ledger the owner's commitment does not commit: the
         // write body it rides in is authored by any committed writer, so the row
-        // set is only as trustworthy as the epoch-free commitment over it.
+        // set is only as trustworthy as the owner's commitment over it.
         if enforce_committed_ledger(&current.commitment, &current.grant_ledger).is_err() {
             return None;
         }

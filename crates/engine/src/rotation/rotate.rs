@@ -478,6 +478,7 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: b"scope-root".to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
+                cut_epoch: 0,
                 entries: vec![GrantSetEntry::new(
                     [0xa1; 32],
                     self.grantee.public().to_bytes(),

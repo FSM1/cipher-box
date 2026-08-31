@@ -136,6 +136,7 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
     let commitment = GrantSetCommitment {
         ipns_name: name.as_str().as_bytes().to_vec(),
         owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: grants
             .iter()
             .map(|row| row.commitment_entry.clone())

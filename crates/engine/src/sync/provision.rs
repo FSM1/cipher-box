@@ -535,6 +535,7 @@ where
     let commitment = GrantSetCommitment {
         ipns_name: root_name.as_str().as_bytes().to_vec(),
         owner_pseudonym_pk: pseudonym_signer.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: Vec::new(),
         unknown: PreservedFields::new(),
     };

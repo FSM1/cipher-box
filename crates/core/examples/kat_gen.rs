@@ -5374,6 +5374,7 @@ fn section_commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {
     GrantSetCommitment {
         ipns_name: b"grant-section-scope-root".to_vec(),
         owner_pseudonym_pk: [0x88; 32],
+        cut_epoch: 0,
         entries,
         unknown: PreservedFields::new(),
     }
@@ -6554,6 +6555,7 @@ fn grant_set_sample() -> GrantSetCommitment {
     GrantSetCommitment {
         ipns_name: b"scope-root-ipns".to_vec(),
         owner_pseudonym_pk: [0x88; 32],
+        cut_epoch: 7,
         entries: vec![
             GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
             GrantSetEntry::new([0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
@@ -6608,6 +6610,7 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
     // Codec rejects (signature empty): the commitment never decodes.
     let commitment_of = |entries: Vec<Value>, omit_entries: bool| -> Vec<u8> {
         let mut kv = vec![
+            ("cutEpoch", Value::Unsigned(7)),
             ("ipnsName", Value::Bytes(b"scope-root-ipns".to_vec())),
             ("ownerPseudonymPk", Value::Bytes(vec![0x88; 32])),
         ];
@@ -6672,6 +6675,27 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
             "missing-entries",
             commitment_of(vec![], true),
             "missing-field",
+        ),
+        (
+            "missing-cut-epoch",
+            encode(&map_of(vec![
+                ("entries", Value::Array(vec![])),
+                ("ipnsName", Value::Bytes(b"scope-root-ipns".to_vec())),
+                ("ownerPseudonymPk", Value::Bytes(vec![0x88; 32])),
+            ]))
+            .unwrap(),
+            "missing-field",
+        ),
+        (
+            "cut-epoch-not-an-unsigned",
+            encode(&map_of(vec![
+                ("cutEpoch", Value::Text("7".to_string())),
+                ("entries", Value::Array(vec![])),
+                ("ipnsName", Value::Bytes(b"scope-root-ipns".to_vec())),
+                ("ownerPseudonymPk", Value::Bytes(vec![0x88; 32])),
+            ]))
+            .unwrap(),
+            "unexpected-type",
         ),
         (
             // One past the ceiling, all tags and recipients distinct so the

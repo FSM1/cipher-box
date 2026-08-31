@@ -249,7 +249,7 @@ impl SignedSealed {
 /// owner-signed grant-set commitment. Rides `envelope.grantSection`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantSection {
-    /// The owner-signed, epoch-free grant-set commitment.
+    /// The owner-signed grant-set commitment.
     pub commitment: GrantSetCommitment,
     /// The 64-byte compact ECDSA owner signature over the commitment.
     pub commitment_sig: [u8; ECDSA_SIG_LEN],
@@ -529,6 +529,7 @@ mod tests {
         GrantSetCommitment {
             ipns_name: b"scope-root-name".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries,
             unknown: PreservedFields::new(),
         }

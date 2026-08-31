@@ -141,6 +141,7 @@ fn link_until(permission: Permission, expires_at: Option<UnixMillis>) -> Link {
         owner_pseudonym_pk: Ed25519Signer::from_seed([0x22; 32])
             .verifying_key()
             .to_bytes(),
+        cut_epoch: 0,
         entries: vec![minted.row.commitment_entry.clone()],
         unknown: PreservedFields::new(),
     };

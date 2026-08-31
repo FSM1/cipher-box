@@ -27,7 +27,7 @@ use cipherbox_core::seal::{
     PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
     STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
     STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
-    open_read_body, verify_grant_set_bound, verify_structure,
+    open_read_body, refuse_stale_cut_epoch, verify_grant_set_bound, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -299,6 +299,17 @@ pub struct PendingAdoption {
     adopted: Adopted,
     scope_id: [u8; 16],
     ipns_name: Vec<u8>,
+    cut_epoch: u64,
+}
+
+/// Suffix that keeps the cut-epoch floor apart from the other floors under one
+/// scope id, on the convention `gate::floor` sets for the write-epoch floor.
+const CUT_EPOCH_SUFFIX: &[u8] = b"/cut-epoch";
+
+/// The floor key carrying the newest cut epoch this device has adopted at
+/// `scope_id`.
+fn cut_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
+    [scope_id.as_slice(), CUT_EPOCH_SUFFIX].concat()
 }
 
 impl PendingAdoption {
@@ -311,6 +322,18 @@ impl PendingAdoption {
     /// cross-writer contention is resolved on the publish plane, never on the
     /// local floor read.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, GateError> {
+        // The restrictive floor goes first (`FloorStore::commit_floors`'s
+        // revocation-before-liveness rule): an interrupt between the two leaves
+        // this device refusing a pre-cut set it would otherwise re-adopt, where
+        // the reverse order would leave the cut forgotten. A scope the owner
+        // never cut carries zero, which an absent key already reads as, so it
+        // files nothing.
+        if self.cut_epoch > 0 {
+            floors
+                .raise_epoch_floor(&cut_epoch_floor_key(&self.scope_id), self.cut_epoch)
+                .await
+                .map_err(GateError::Seam)?;
+        }
         floor::advance_on_unseal(
             floors,
             &self.scope_id,
@@ -588,6 +611,17 @@ pub async fn adopt_deferred<F: FloorStore>(
             RejectionReason::Trust(e.into()),
         )
     })?;
+    // A commitment carries no read epoch, so a pre-cut set the owner really did
+    // sign passes the verify above for ever, and any committed write grantee can
+    // republish a root that carries it. The cut epoch this device already
+    // adopted here is what tells the replay apart from the set in force.
+    let cut_epoch_floor = floors
+        .epoch_floor(&cut_epoch_floor_key(&reader.scope_id))
+        .await
+        .map_err(GateError::Seam)?
+        .unwrap_or(0);
+    refuse_stale_cut_epoch(&section.commitment, cut_epoch_floor)
+        .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
 
     // Stage 3 — grant-section authentication under `authenticate_structure`'s
     // recompute contract. Any failure rejects the whole record (#39 D3).
@@ -728,6 +762,7 @@ pub async fn adopt_deferred<F: FloorStore>(
             },
             scope_id: reader.scope_id,
             ipns_name: name_bytes.to_vec(),
+            cut_epoch: section.commitment.cut_epoch,
         },
         write_scope_seed,
     ))

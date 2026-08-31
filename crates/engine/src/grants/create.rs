@@ -166,7 +166,7 @@ pub struct OwnerGrantKeys<'a> {
     /// Owner encryption subkey secret — the pairwise ECDH half for the blinded
     /// tag and the recipient's writer pseudonym.
     pub enc_secret: &'a X25519Secret,
-    /// Owner identity signer — signs the epoch-free grant-set commitment; its
+    /// Owner identity signer — signs the grant-set commitment; its
     /// verifying key is the sharer identity in the share pointer.
     pub identity_signer: &'a EcdsaSigner,
     /// Owner writer pseudonym for the new scope — reseals its structures.
@@ -527,6 +527,7 @@ where
     let commitment = GrantSetCommitment {
         ipns_name: name_bytes.to_vec(),
         owner_pseudonym_pk: owner.pseudonym_signer.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: vec![row.commitment_entry.clone()],
         unknown: PreservedFields::new(),
     };
@@ -1043,6 +1044,7 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: DESCENDANT_NAME.to_vec(),
                 owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+                cut_epoch: 0,
                 entries: Vec::new(),
                 unknown: PreservedFields::new(),
             };
@@ -1167,6 +1169,7 @@ mod tests {
         let parent_commitment = GrantSetCommitment {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };
@@ -1304,6 +1307,7 @@ mod tests {
         let parent_commitment = GrantSetCommitment {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: parent_grants
                 .iter()
                 .map(|g| g.commitment_entry.clone())

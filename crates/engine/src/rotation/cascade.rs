@@ -114,7 +114,7 @@ pub struct CascadeTarget {
     pub pointer_read_key: Zeroizing<[u8; SECRET_LEN]>,
     /// The write epoch (unchanged by a read-plane rotation).
     pub write_epoch: u64,
-    /// The owner-signed, epoch-free commitment.
+    /// The owner-signed commitment.
     pub commitment: GrantSetCommitment,
     /// The 64-byte compact ECDSA owner signature over `commitment`.
     pub commitment_sig: [u8; ECDSA_SIG_LEN],
@@ -953,6 +953,7 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name,
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
+                cut_epoch: 0,
                 entries: vec![GrantSetEntry::new(
                     tag,
                     self.grantee.public().to_bytes(),
@@ -1379,8 +1380,8 @@ mod tests {
 
     #[test]
     fn a_descendant_the_owner_cut_at_that_descendant_gets_no_re_keyed_grant_blob() {
-        // A grant-set commitment is epoch-free, so a pre-cut one the owner
-        // really did sign still passes every gate stage. A current write
+        // A grant-set commitment carries no read epoch, so a pre-cut one the
+        // owner really did sign still passes every gate stage. A current write
         // grantee can therefore republish a descendant root carrying it, at
         // the live read and write epochs. Bound to the record's own set alone,
         // the cascade would wrap the fresh read override seed straight back to

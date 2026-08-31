@@ -275,7 +275,7 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   decoder refuses.
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
-  grant-set commitment (ECDSA over det-CBOR `{ipnsName,
+  grant-set commitment (ECDSA over det-CBOR `{cutEpoch, ipnsName,
 ownerPseudonymPk, [(tag, recipientEncPk, permission, pseudonymPk)]}`), owner
   blob, the optional
   owner-write-blob (below), ascent link (public half plaintext,

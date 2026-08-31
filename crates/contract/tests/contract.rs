@@ -1422,6 +1422,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     let parent_commitment = GrantSetCommitment {
         ipns_name: b"contract-parent-scope-root".to_vec(),
         owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: Vec::new(),
         unknown: PreservedFields::new(),
     };

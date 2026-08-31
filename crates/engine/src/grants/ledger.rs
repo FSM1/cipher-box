@@ -2,7 +2,7 @@
 //! (blueprint/engine.md "Grants and ledger", #25 D1/D7, #26 D5, #39 D1).
 //!
 //! Grants live in the published scope root: grant blobs keyed by blinded tags,
-//! the authoritative write-body ledger, and the epoch-free owner-signed grant-set
+//! the authoritative write-body ledger, and the owner-signed grant-set
 //! commitment. This module composes core's codecs/KDF over those three; it mints
 //! nothing (grant creation rides the rotation primitives) and holds no crypto.
 //!
@@ -279,6 +279,7 @@ mod tests {
         GrantSetCommitment {
             ipns_name: b"scope-root".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries,
             unknown: PreservedFields::new(),
         }

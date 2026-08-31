@@ -450,12 +450,13 @@
     },
     "grantSetReject": {
       "file": "vectors/grant/grant_set_reject.json",
-      "count": 9,
+      "count": 11,
       "checks": [
         "duplicate-grant-tag",
         "duplicate-grant-recipient",
         "commitment-invalid",
         "too-many-structures",
+        "unexpected-type",
         "missing-field",
         "invalid-permission",
         "invalid-field-length"

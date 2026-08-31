@@ -2003,9 +2003,11 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// (`RotateScopeWritePlan::commitment`) — what the root's re-seal binds to,
     /// never the set carried by the record the wave re-reads.
     ///
-    /// A grant-set commitment is epoch-free, so an older owner-signed one still
-    /// verifies: a write grantee inside the forgery window can republish the root
-    /// carrying the **pre-revoke** set, and that record passes every gate stage.
+    /// A grant-set commitment carries no read epoch, so an older owner-signed
+    /// one still verifies: a write grantee inside the forgery window can
+    /// republish the root carrying the **pre-revoke** set, and that record
+    /// passes every gate stage on a device whose cut-epoch floor is still
+    /// below it.
     /// Minting the moved root's section from it would wrap the freshly minted
     /// `writeScopeSeed` to the revokee — a permanent write-revocation bypass.
     pub authorized_commitment: &'a GrantSetCommitment,
@@ -4381,6 +4383,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };
@@ -5857,6 +5860,7 @@ mod tests {
         GrantSetCommitment {
             ipns_name: Vec::new(),
             owner_pseudonym_pk: [0u8; 32],
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         }
@@ -8952,6 +8956,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: node.ipns_name.clone(),
             owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };

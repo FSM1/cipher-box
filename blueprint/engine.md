@@ -184,7 +184,10 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
 1. **Record verify** — core's full chain: Ed25519 pubkey from the name itself,
    `signatureV2`, data-field/Value consistency, EOL/sequence extraction.
 2. **Commitment verify** (scope roots) — the owner-signed grant-set commitment
-   against the contact-code-anchored owner identity (FSM1/cipher-box-next#34 D6, FSM1/cipher-box-next#39 D1).
+   against the contact-code-anchored owner identity (FSM1/cipher-box-next#34 D6, FSM1/cipher-box-next#39 D1),
+   then its `cutEpoch` against the newest cut epoch this scope already adopted.
+   The set carries no read epoch, so an owner-signed pre-cut set verifies for
+   ever; the cut-epoch floor is what refuses the replay of one.
 3. **Grant-section authentication** (scope roots) — every seed-bearing
    structure (grant blobs, owner blob, the optional owner-write-blob, ascent
    link, history links, write-body) verifies under **one** committed
@@ -220,8 +223,8 @@ same predicate release-active (`net/author.rs::check_scope_root`), so this build
 never signs a section its own gate rejects.
 
 The pinned signer may be **any** committed write-capable pseudonym, not the
-owner's specifically: the commitment is epoch-free so that grantee-triggered
-rotation needs no owner signature (`CONTEXT.md`). Per-structure signers would
+owner's specifically: the commitment carries no read epoch so that
+grantee-triggered rotation needs no owner signature (`CONTEXT.md`). Per-structure signers would
 need a per-structure signer index on the wire, since the gate cannot otherwise
 avoid the product — a format change, not a relaxation of this rule.
 

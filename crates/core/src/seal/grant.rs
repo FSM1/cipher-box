@@ -20,8 +20,8 @@
 //!   `write-history-link`), HPKE auth-mode sealed by the owner to themselves
 //!   ([`seal_owner_history_link`]), so only the owner opens it and only the
 //!   owner can have written it.
-//! - **Grant-set commitment** — the owner-signed, **epoch-free**
-//!   `{ipnsName, ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`
+//! - **Grant-set commitment** — the owner-signed `{cutEpoch, ipnsName,
+//!   ownerPseudonymPk, [(tag, recipientEncPk, permission, pseudonymPk)]}`
 //!   ([`GrantSetCommitment`]).
 //!
 //! All crypto is composed from [`crate::suite`]; the whole-record fail-closed
@@ -762,7 +762,7 @@ pub fn open_owner_history_link(
 }
 
 // ---------------------------------------------------------------------------
-// Grant-set commitment: the owner-signed, epoch-free tag/pseudonym set.
+// Grant-set commitment: the owner-signed recipient/permission/pseudonym set.
 // ---------------------------------------------------------------------------
 
 /// One committed grant: a recipient's blinded tag, their encryption subkey,
@@ -854,17 +854,28 @@ impl GrantSetEntry {
     }
 }
 
-/// The owner-signed, epoch-free grant-set commitment: the scope root's
-/// `ipnsName`, the owner's own writer-pseudonym public key, and the committed
-/// `(tag, permission, pseudonymPk)` entries. A recipient verifies their tag is
-/// committed before trusting a grant. Deliberately epoch-free, so a
-/// grantee-triggered rotation needs no fresh owner signature.
+/// The owner-signed grant-set commitment: the scope root's `ipnsName`, the
+/// owner's own writer-pseudonym public key, the scope's cut epoch, and the
+/// committed `(tag, recipientEncPk, permission, pseudonymPk)` entries. A
+/// recipient verifies their tag is committed before trusting a grant.
+///
+/// It carries no **read** epoch, so a grantee-triggered rotation needs no fresh
+/// owner signature. The trade is that an old set the owner really did sign
+/// verifies for ever, which [`cut_epoch`](Self::cut_epoch) is what separates a
+/// replay of from real staleness.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrantSetCommitment {
     /// The scope root's opaque `ipnsName` bytes.
     pub ipns_name: Vec<u8>,
     /// The owner's own writer-pseudonym public key (Ed25519).
     pub owner_pseudonym_pk: [u8; 32],
+    /// The scope's **cut epoch**: a counter the owner steps at every cut of
+    /// this scope's grant set, and at nothing else. Zero before the first cut.
+    ///
+    /// A reader that recorded a cut here refuses any commitment below the cut
+    /// it recorded ([`refuse_stale_cut_epoch`]), which is what stops a committed
+    /// write grantee from restoring a pre-cut set by republishing the root.
+    pub cut_epoch: u64,
     /// The committed grants.
     pub entries: Vec<GrantSetEntry>,
     /// Preserved unknown top-level fields (never any of the known keys).
@@ -876,13 +887,14 @@ impl fmt::Debug for GrantSetCommitment {
         f.debug_struct("GrantSetCommitment")
             .field("ipns_name", &RedactedBytes::of(&self.ipns_name))
             .field("owner_pseudonym_pk", &self.owner_pseudonym_pk)
+            .field("cut_epoch", &self.cut_epoch)
             .field("entries", &self.entries)
             .field("unknown", &self.unknown)
             .finish()
     }
 }
 
-const GRANT_SET_KNOWN: &[&str] = &["entries", "ipnsName", "ownerPseudonymPk"];
+const GRANT_SET_KNOWN: &[&str] = &["cutEpoch", "entries", "ipnsName", "ownerPseudonymPk"];
 
 /// Decode a grant-set commitment (strict det-CBOR, unknown fields preserved).
 ///
@@ -893,6 +905,7 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
     let map = value.as_map()?;
     let ipns_name = req(map, "ipnsName")?.as_bytes()?.to_vec();
     let owner_pseudonym_pk = bytes_fixed::<32>(req(map, "ownerPseudonymPk")?, "ownerPseudonymPk")?;
+    let cut_epoch = req(map, "cutEpoch")?.as_unsigned()?;
     let raw_entries = req(map, "entries")?.as_array()?;
     assert_within_bound("entries", raw_entries.len(), MAX_GRANT_BLOBS)?;
     let mut entries = Vec::with_capacity(raw_entries.len());
@@ -904,6 +917,7 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
     Ok(GrantSetCommitment {
         ipns_name,
         owner_pseudonym_pk,
+        cut_epoch,
         entries,
         unknown: collect_unknown(map, GRANT_SET_KNOWN),
     })
@@ -923,6 +937,7 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, Co
     assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
     assert_grant_recipients_unique(c.entries.iter().map(|e| e.recipient_enc_pk))?;
     let mut m = Map::new();
+    m.insert("cutEpoch", Value::Unsigned(c.cut_epoch));
     m.insert(
         "entries",
         Value::Array(c.entries.iter().map(GrantSetEntry::to_value).collect()),
@@ -973,6 +988,24 @@ pub enum GrantSetBindingError {
     /// The owner attested the set, but bound it to a different scope root's
     /// `ipnsName` than the one presented.
     ScopeMismatch,
+}
+
+/// Refuse a grant-set commitment the owner signed before a cut the reader has
+/// already recorded at this scope root — the check that turns a replayed
+/// pre-cut set from an indistinguishable one into a trust violation.
+///
+/// `cut_epoch_floor` is the reader's own durable record of the newest cut it
+/// saw here, and zero where it recorded none. Fails closed with
+/// [`TrustViolation::CommitmentInvalid`]: the owner-signed set is authentic, and
+/// it is still not the set that governs this scope now.
+pub fn refuse_stale_cut_epoch(
+    c: &GrantSetCommitment,
+    cut_epoch_floor: u64,
+) -> Result<(), CodecError> {
+    if c.cut_epoch < cut_epoch_floor {
+        return Err(TrustViolation::CommitmentInvalid.into());
+    }
+    Ok(())
 }
 
 impl From<GrantSetBindingError> for CodecError {
@@ -1423,6 +1456,7 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"scope-root-name".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries: vec![
                 GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
                 GrantSetEntry::new([0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
@@ -1458,6 +1492,7 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"scope-root-ipns".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
                 [0x01; 32],
                 [0x41; 32],
@@ -1493,6 +1528,7 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"scope-root-ipns".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
                 [0x01; 32],
                 [0x41; 32],
@@ -1550,6 +1586,7 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"n".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries: vec![
                 GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
                 GrantSetEntry::new([0x02; 32], [0x41; 32], Permission::Write, [0x04; 32]),
@@ -1575,6 +1612,7 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"scope-root-name".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
                 [0x01; 32],
                 [0x41; 32],
@@ -1598,6 +1636,77 @@ mod tests {
         );
     }
 
+    /// The cut epoch rides inside the signed preimage, so a step off a signed
+    /// set detaches that set's signature — which is what makes the counter
+    /// owner-authority rather than an advisory field.
+    #[test]
+    fn a_stepped_cut_epoch_detaches_the_commitment_signature() {
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"scope-root-name".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 4,
+            entries: vec![GrantSetEntry::new(
+                [0x01; 32],
+                [0x41; 32],
+                Permission::Read,
+                [0x02; 32],
+            )],
+            unknown: PreservedFields::new(),
+        };
+        let sig = sign_grant_set(&owner, &c).expect("signs");
+        let bytes = encode_grant_set_commitment(&c).expect("encodes");
+        assert_eq!(decode_grant_set_commitment(&bytes).unwrap(), c);
+
+        let mut stepped = c.clone();
+        stepped.cut_epoch = 5;
+        assert_eq!(
+            verify_grant_set(&owner.verifying_key(), &stepped, &sig)
+                .unwrap_err()
+                .check(),
+            "commitment-invalid"
+        );
+    }
+
+    #[test]
+    fn a_commitment_below_the_cut_epoch_floor_is_refused() {
+        let mut c = GrantSetCommitment {
+            ipns_name: b"n".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 4,
+            entries: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        assert!(refuse_stale_cut_epoch(&c, 4).is_ok(), "the set in force");
+        assert!(
+            refuse_stale_cut_epoch(&c, 0).is_ok(),
+            "a reader with no cut"
+        );
+        assert_eq!(
+            refuse_stale_cut_epoch(&c, 5).unwrap_err().check(),
+            "commitment-invalid"
+        );
+        c.cut_epoch = 6;
+        assert!(
+            refuse_stale_cut_epoch(&c, 5).is_ok(),
+            "a cut this reader missed"
+        );
+    }
+
+    #[test]
+    fn a_commitment_without_a_cut_epoch_rejects() {
+        let mut m = Map::new();
+        m.insert("entries", Value::Array(Vec::new()));
+        m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
+        m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
+        assert_eq!(
+            decode_grant_set_commitment(&encode(&Value::Map(m)).unwrap())
+                .unwrap_err()
+                .check(),
+            "missing-field"
+        );
+    }
+
     /// A hand-built commitment entry map, the way a hostile peer bytes arrive.
     fn entry_value(
         tag: Vec<u8>,
@@ -1615,6 +1724,7 @@ mod tests {
 
     fn commitment_value(entries: Vec<Value>) -> Vec<u8> {
         let mut m = Map::new();
+        m.insert("cutEpoch", Value::Unsigned(0));
         m.insert("entries", Value::Array(entries));
         m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
         m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
@@ -1630,6 +1740,7 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"n".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries: vec![
                 GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
                 GrantSetEntry::new([0x01; 32], [0x42; 32], Permission::Write, [0x04; 32]),
@@ -1651,6 +1762,7 @@ mod tests {
         GrantSetCommitment {
             ipns_name: b"n".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries: (0..n)
                 .map(|i| {
                     let mut tag = [0u8; SECRET_LEN];
@@ -1723,6 +1835,7 @@ mod tests {
             Value::Map(e)
         };
         let mut m = Map::new();
+        m.insert("cutEpoch", Value::Unsigned(0));
         m.insert(
             "entries",
             Value::Array((0..=MAX_GRANT_BLOBS).map(|_| entry()).collect()),

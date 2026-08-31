@@ -210,6 +210,7 @@ impl GrantFixture {
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
                 tag,
                 recipient_enc.public().to_bytes(),

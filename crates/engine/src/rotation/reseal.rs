@@ -218,7 +218,7 @@ pub struct CommittedSet<'a> {
     /// signature in this set answers to: the commitment's, and each ledger row's
     /// recipient binding ([`row_is_owner_attested`](crate::grants::row_is_owner_attested)).
     pub owner_identity: &'a EcdsaVerifier,
-    /// The owner-signed, epoch-free commitment (reused verbatim on a grantee
+    /// The owner-signed commitment (reused verbatim on a grantee
     /// rotation; owner-re-signed by the read-revoke trigger before it reaches
     /// here).
     pub commitment: &'a GrantSetCommitment,
@@ -1163,6 +1163,7 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: ipns_name.to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
+                cut_epoch: 0,
                 entries,
                 unknown: PreservedFields::new(),
             };
@@ -1218,6 +1219,7 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: MINTED_NAME.to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
+                cut_epoch: 0,
                 entries: rows.iter().map(|r| r.commitment_entry.clone()).collect(),
                 unknown: PreservedFields::new(),
             };
@@ -2193,6 +2195,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: scope_name_bytes.to_vec(),
             owner_pseudonym_pk: fx.pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries,
             unknown: PreservedFields::new(),
         };
@@ -2603,6 +2606,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: b"n".to_vec(),
             owner_pseudonym_pk: fx.pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: vec![GrantSetEntry::new(
                 Fixture::read_tag(),
                 [0u8; 32], // low-order X25519 → from_bytes rejects

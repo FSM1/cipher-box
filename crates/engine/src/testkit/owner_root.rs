@@ -248,6 +248,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
     let commitment = GrantSetCommitment {
         ipns_name: name.as_str().as_bytes().to_vec(),
         owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: grants.iter().map(|g| g.commitment_entry.clone()).collect(),
         unknown: PreservedFields::new(),
     };

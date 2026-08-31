@@ -124,7 +124,7 @@ pub async fn consume_scope_exit_triggers<R: ScopeExitRotator>(
 
 /// The owner-authorized inputs every committed-set cut shares.
 pub struct GrantCutPlan<'a> {
-    /// The scope root's current owner-signed, epoch-free grant-set commitment —
+    /// The scope root's current owner-signed grant-set commitment —
     /// the authoritative set. Every permission a cut acts on is read from here,
     /// never from the write-grantee-authored ledger.
     pub commitment: &'a GrantSetCommitment,
@@ -244,6 +244,10 @@ pub enum RevokeError {
     /// a recipient the cascade could never match — the verdict
     /// [`adopt_recipients`](super::reseal) reaches on the re-seal side.
     UnusableRecipientKey,
+    /// The scope's cut epoch cannot step again without wrapping. A wrapped
+    /// counter would let a later replay sit above the floor a cut installed, so
+    /// the cut refuses instead. Release-active (AGENTS.md rule 8).
+    CutEpochExhausted,
     /// Re-signing the cut commitment failed (a duplicate tag or an oversized set
     /// — never possible, since no cut adds a tag, but propagated fail-closed).
     Sign(cipherbox_core::error::CodecError),
@@ -269,6 +273,9 @@ impl core::fmt::Display for RevokeError {
             RevokeError::UnusableRecipientKey => {
                 f.write_str("a dropped commitment entry names an unusable recipient key")
             }
+            RevokeError::CutEpochExhausted => {
+                f.write_str("the scope cut epoch cannot step again without wrapping")
+            }
             RevokeError::Sign(e) => write!(f, "commitment re-sign failed: {}", e.check()),
         }
     }
@@ -287,6 +294,7 @@ impl RevokeError {
             RevokeError::WriteGranted => "write-granted",
             RevokeError::LedgerDiverges(v) => v.check(),
             RevokeError::UnusableRecipientKey => "unusable-recipient-key",
+            RevokeError::CutEpochExhausted => "cut-epoch-exhausted",
             RevokeError::Sign(_) => "commitment-sign-failed",
         }
     }
@@ -365,16 +373,24 @@ struct DroppedSet {
 
 /// Owner-re-sign the cut set, refusing release-active to sign a commitment its
 /// own ledger contradicts ([`RevokeError::LedgerDiverges`]).
+///
+/// The one place a cut epoch steps. It steps off the epoch the owner already
+/// signed, which [`authorize_cut`] verified, so the counter cannot be walked
+/// backward by whoever republished the record this plan was read from.
 fn resign(
     set: DroppedSet,
     planes: RotationPlanes,
     owner_signer: &EcdsaSigner,
 ) -> Result<RevokedCommittedSet, RevokeError> {
     let DroppedSet {
-        commitment,
+        mut commitment,
         grant_ledger,
         revoked_recipients,
     } = set;
+    commitment.cut_epoch = commitment
+        .cut_epoch
+        .checked_add(1)
+        .ok_or(RevokeError::CutEpochExhausted)?;
     enforce_committed_ledger(&commitment, &grant_ledger).map_err(RevokeError::LedgerDiverges)?;
     let commitment_sig = sign_grant_set(owner_signer, &commitment)
         .map_err(RevokeError::Sign)?
@@ -910,6 +926,7 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: name.as_str().as_bytes().to_vec(),
                 owner_pseudonym_pk: [0x88; 32],
+                cut_epoch: 0,
                 entries: rows.iter().map(|r| r.commitment_entry.clone()).collect(),
                 unknown: PreservedFields::new(),
             };
@@ -1106,6 +1123,37 @@ mod tests {
             cut.commitment.owner_pseudonym_pk,
             fx.commitment.owner_pseudonym_pk
         );
+    }
+
+    /// Every cut that re-signs steps the counter, and the one that re-uses the
+    /// set the owner already signed does not. A step the write-grant cut made
+    /// would raise the floor over a set no cut removed anybody from.
+    #[test]
+    fn every_re_signed_cut_steps_the_cut_epoch_and_the_re_used_set_does_not() {
+        let fx = Fixture::new();
+        let before = fx.commitment.cut_epoch;
+
+        for cut in [
+            revoke_read_grant(&fx.plan(), &read_tag()).expect("read revoke"),
+            revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::Full)
+                .expect("write revoke"),
+            revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
+                .expect("downgrade"),
+        ] {
+            assert_eq!(cut.commitment.cut_epoch, before + 1);
+            assert!(
+                verify_grant_set(
+                    &fx.owner.verifying_key(),
+                    &cut.commitment,
+                    &EcdsaSignature::from_compact(&cut.commitment_sig).expect("compact"),
+                )
+                .is_ok(),
+                "and the stepped counter is inside what the owner signed"
+            );
+        }
+
+        let reused = cut_for_write_grant(&fx.plan()).expect("write-grant cut");
+        assert_eq!(reused.commitment.cut_epoch, before);
     }
 
     #[test]

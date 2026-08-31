@@ -592,10 +592,10 @@ pub struct OwnerAuthority<'a> {
 /// signature, and the write-body ledger it must reproduce. The scope root's
 /// `ipnsName` is the commitment's own, so no caller supplies one.
 ///
-/// Must be the **currently adopted** record's set. The commitment is deliberately
-/// epoch-free (`CONTEXT.md`), so a stale one still verifies and re-signing it
-/// resurrects every tag cut since; the adoption gate's floor law is what keeps a
-/// served-stale record out.
+/// Must be the **currently adopted** record's set. The commitment carries no
+/// read epoch (`CONTEXT.md`), so a stale one still verifies and re-signing it
+/// resurrects every tag cut since; the adoption gate's floor law, the cut epoch
+/// included, is what keeps a served-stale record out.
 ///
 /// No field of the commitment carries a scope id, so [`bind`](Self::bind) is the
 /// only constructor: the scope id is read off the gated scope reference the
@@ -1072,6 +1072,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: name.clone(),
             owner_pseudonym_pk: committed.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: grants.iter().map(|g| g.commitment_entry.clone()).collect(),
             unknown: PreservedFields::new(),
         };
@@ -1459,6 +1460,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: scope_name(),
             owner_pseudonym_pk: owner_pseudonym().verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: vec![row.commitment_entry.clone()],
             unknown: PreservedFields::new(),
         };
@@ -1498,6 +1500,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: name,
             owner_pseudonym_pk: owner_pseudonym().verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: rows.iter().map(|r| r.commitment_entry.clone()).collect(),
             unknown: PreservedFields::new(),
         };
