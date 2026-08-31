@@ -28,12 +28,11 @@ const USAGE = `Usage: tsx src/runAll.ts [options]
 
 The desktop mounted e2e suite. It needs Postgres, Kubo and the record
 store up, a built API, and an "e2e-hook" build of cipherbox-desktop. It starts and
-stops the API itself, because the offline scenario needs a real outage.
+stops the API itself, because a scenario needs a real outage.
 
 Options:
   --scenario <name>   Run only this scenario. Repeat for several.
   --list              List the scenario names and exit.
-  --keep-workdir      Keep the home roots and the logs after a pass.
   --help              Show this text and exit.
 
 Environment:
@@ -42,24 +41,22 @@ Environment:
                              Default: apps/api/dist/main.js
   CIPHERBOX_API_URL          Where the API answers.
                              Default: http://localhost:3000
-  CIPHERBOX_E2E_WORKDIR      Home roots and logs. Default: a temporary
-                             directory.
+  CIPHERBOX_E2E_WORKDIR      Home roots and logs, kept after a pass.
+                             Default: a temporary directory the suite removes.
 `;
 
 interface Options {
   help: boolean;
   list: boolean;
-  keepWorkdir: boolean;
   only: string[];
 }
 
 export function parseArguments(argv: string[]): Options {
-  const options: Options = { help: false, list: false, keepWorkdir: false, only: [] };
+  const options: Options = { help: false, list: false, only: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const argument = argv[i];
     if (argument === '--help' || argument === '-h') options.help = true;
     else if (argument === '--list') options.list = true;
-    else if (argument === '--keep-workdir') options.keepWorkdir = true;
     else if (argument === '--scenario') {
       const value = argv[i + 1];
       if (!value || value.startsWith('--')) {
@@ -139,7 +136,6 @@ async function main(): Promise<number> {
       const logDir = join(home, 'logs');
       const devKey = randomBytes(32).toString('hex');
       const context: ScenarioContext = {
-        devKey,
         deadlines: budget,
         stack,
         start: (name) =>
@@ -165,7 +161,7 @@ async function main(): Promise<number> {
         process.stdout.write(`  ${describe(error)}\n`);
         process.stdout.write(`  the instance logs are under ${logDir}\n`);
       }
-      // The offline scenario takes the API down. Bring it back for the next.
+      // A scenario may leave the API down. Restore it for the next one.
       await stack.startApi();
     }
   } finally {
@@ -182,7 +178,7 @@ async function main(): Promise<number> {
   }
 
   process.stdout.write(`\nall ${chosen.length} scenarios passed\n`);
-  if (!options.keepWorkdir && !process.env.CIPHERBOX_E2E_WORKDIR) {
+  if (!process.env.CIPHERBOX_E2E_WORKDIR) {
     await rm(workdir, { recursive: true, force: true });
   }
   return 0;

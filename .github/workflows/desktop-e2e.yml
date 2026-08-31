@@ -53,7 +53,6 @@ jobs:
       # the small CI storage budget.
       VITE_ENVIRONMENT: ci
       # The API under test.
-      NODE_ENV: test
       DB_HOST: localhost
       DB_PORT: '5432'
       DB_USERNAME: postgres
@@ -64,9 +63,6 @@ jobs:
       # Two instances cold-start the same account from one runner address, and
       # the per-address auth bucket would otherwise cap the scenarios.
       THROTTLE_AUTH_LIMIT: '200'
-      # The headless binary holds one access token for a whole scenario and has
-      # no window to re-authenticate in.
-      ACCESS_TOKEN_TTL: 2h
 
     steps:
       - name: Checkout
@@ -136,15 +132,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # One pinned release on both legs, the version every sibling
+          # workflow runs. Homebrew pins nothing.
+          KUBO_VERSION=v0.42.0
           if [ "$RUNNER_OS" = "macOS" ]; then
-            brew install kubo
+            KUBO_PLATFORM=darwin-arm64
           else
-            KUBO_VERSION=v0.34.0
-            curl -fsSL --retry 3 \
-              "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_linux-amd64.tar.gz" \
-              | tar -xz
-            sudo ./kubo/install.sh
+            KUBO_PLATFORM=linux-amd64
           fi
+          curl -fsSL --retry 3 \
+            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.tar.gz" \
+            | tar -xz
+          sudo ./kubo/install.sh
           ipfs init --profile server
           ipfs daemon > "$RUNNER_TEMP/kubo.log" 2>&1 &
           curl -fsS --retry 60 --retry-connrefused --retry-delay 1 \
@@ -153,8 +152,12 @@ jobs:
 
       - uses: ./.github/actions/mock-ipns-routing
 
+      # `NODE_ENV` stays on the steps that need it. Job-wide, Vite reads it and
+      # hands the suite a development bundle of the app under test.
       - name: Apply migrations to a fresh database
         run: pnpm --filter @cipherbox/api migration:run
+        env:
+          NODE_ENV: test
 
       - name: Build the API
         run: pnpm --filter @cipherbox/api build
@@ -176,13 +179,19 @@ jobs:
           CIPHERBOX_API_ENTRY: ${{ github.workspace }}/apps/api/dist/main.js
           CIPHERBOX_E2E_WORKDIR: ${{ runner.temp }}/desktop-e2e
           CIPHERBOX_API_URL: http://localhost:3000
+          NODE_ENV: test
+          # The shell's own log is the only account of what the engine did with
+          # a kernel operation, and the failure artifact carries it.
+          RUST_LOG: info
 
       - name: Collect the logs a failure leaves
         if: failure()
         shell: bash
         run: |
           mkdir -p failure-logs
-          cp -R "${RUNNER_TEMP}/desktop-e2e"/*.log failure-logs/ 2>/dev/null || true
+          # Only the log files: the home roots hold the account directory and
+          # the control token, and neither may reach an artifact.
+          find "${RUNNER_TEMP}/desktop-e2e" -name '*.log' -exec cp {} failure-logs/ \; 2>/dev/null || true
           cp "${RUNNER_TEMP}/kubo.log" failure-logs/ 2>/dev/null || true
           cp "${RUNNER_TEMP}/xvfb.log" failure-logs/ 2>/dev/null || true
           cp /tmp/mock-ipns-routing.log failure-logs/ 2>/dev/null || true

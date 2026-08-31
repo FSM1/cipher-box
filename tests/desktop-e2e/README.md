@@ -9,9 +9,10 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 ## What it covers
 
 - `mount-round-trip` — one instance writes a folder and a file through its
-  mount, the engine publishes them, and the mount serves the same bytes back
+  mount, the mount serves the same bytes back, and the root renders the folder
 - `cross-client-sync` — two instances of one host share one vault; A writes, B
-  refreshes, and B reads the bytes A wrote
+  refreshes with nocache, and B reads the bytes A wrote. This is where the
+  suite proves a publication: B holds its own engine and reads the network
 - `conflict-outcomes-at-the-mount` — the outcomes the projection renders: a
   duplicate name, a case twin, a Unicode-normalization twin, a platform-junk
   name, and a rename that replaces a file atomically
@@ -46,8 +47,6 @@ real signal — the control file, a `status` answer, a directory entry — and a
 wait that runs out reports the last value it saw. The deadlines derive from the
 CI sync timing profile in `src/profile.ts`, which mirrors
 `crates/engine/src/profile.rs`.
-
-`retries: 0` is policy. A flaky test is a defect.
 
 ## The two scripts
 

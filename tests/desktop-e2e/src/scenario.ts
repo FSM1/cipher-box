@@ -14,8 +14,6 @@ import type { Stack } from './stack';
 export const PAYLOAD = 'ciphertext round trip\n\tédition — 中文\r\nlast line without a newline';
 
 export interface ScenarioContext {
-  /** The login secret. One secret is one vault, so two instances share it. */
-  devKey: string;
   deadlines: Deadlines;
   /** The API, so a scenario can make a real outage. */
   stack: Stack;
@@ -41,20 +39,46 @@ export async function withInstances<T>(
   const started: Instance[] = [];
   try {
     for (const name of names) started.push(await context.start(name));
-    return await body(started);
+    return await withDeadline(body(started), context.deadlines.scenarioMs);
   } finally {
     for (const instance of started.reverse()) await instance.stop();
   }
 }
 
-/** Waits until the root holds the expected items and carries no dead letter. */
-export async function settled(
+/**
+ * Fails the scenario when its whole body outlasts the budget.
+ *
+ * A kernel call on a mount has no timeout of its own, so a mount that stops
+ * answering hangs the process rather than the wait. The teardown that follows
+ * unmounts, which is what releases the call.
+ */
+function withDeadline<T>(body: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`the scenario did not finish within ${timeoutMs}ms`)),
+      timeoutMs
+    );
+    timer.unref();
+  });
+  return Promise.race([body, expiry]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Waits until the instance renders `items` children at the vault root and holds
+ * no dead letter.
+ *
+ * The rendered root carries the pending-op overlay, so it reaches its count
+ * when the kernel acks the write. This is no publish barrier: only a second
+ * instance that refreshes and reads proves a publication.
+ */
+export async function rendered(
   instance: Instance,
   items: number,
   deadlines: Deadlines
 ): Promise<void> {
   await instance.waitFor(
-    `the root to hold ${items} items with no dead letter`,
+    `the rendered root to hold ${items} children with no dead letter`,
     (seen) => seen.items === items && seen.deadLetters === 0,
     deadlines.publishMs
   );
@@ -101,5 +125,3 @@ export async function refusedWith(
   assert.ok(raised, `${what} must be refused, and it succeeded`);
   assert.equal(raised.code, code, `${what} must be refused with ${code}`);
 }
-
-export { assert };

@@ -2,9 +2,8 @@
  * One headless desktop instance: its own home, its own mount, its own control
  * endpoint.
  *
- * The mount point is `<home>/CipherBox` and the shell offers no override, so a
- * per-process home is what separates two instances of one host
- * (blueprint/desktop.md, "FS projection").
+ * The shell offers no mount-point override, so a per-process home is what
+ * separates two instances of one host (blueprint/desktop.md, "FS projection").
  */
 
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -25,6 +24,8 @@ import type { Deadlines } from './profile';
 
 const run = promisify(execFile);
 const LOG_TAIL_LINES = 40;
+/** The mount point the shell picks under a given home. */
+const DEFAULT_MOUNT_NAME = 'CipherBox';
 
 export interface InstanceOptions {
   /** Names the instance in every message and log file. */
@@ -47,19 +48,14 @@ interface Shell {
 }
 
 export class Instance {
-  readonly name: string;
-  readonly mountRoot: string;
-
   constructor(
-    name: string,
-    mountRoot: string,
+    readonly name: string,
+    /** The path the shell reported once it mounted. */
+    readonly mountRoot: string,
     private readonly shell: Shell,
     private readonly endpoint: ControlEndpoint,
     private readonly budget: Deadlines
-  ) {
-    this.name = name;
-    this.mountRoot = mountRoot;
-  }
+  ) {}
 
   status(): Promise<VaultStatus> {
     return readStatus(this.endpoint, this.budget.refreshMs);
@@ -116,12 +112,12 @@ export class Instance {
  */
 export async function startInstance(options: InstanceOptions): Promise<Instance> {
   const { name, home, binary, devKey, logDir, deadlines: budget } = options;
-  const mountRoot = join(home, 'CipherBox');
 
   await mkdir(home, { recursive: true });
   await mkdir(logDir, { recursive: true });
-  // `prepare()` refuses a mount point that already holds anything.
-  await rm(mountRoot, { recursive: true, force: true });
+  // `prepare()` refuses a mount point that already holds anything, and no
+  // status reports a path yet, so the sweep uses the shell's own default.
+  await rm(join(home, DEFAULT_MOUNT_NAME), { recursive: true, force: true });
 
   const controlFile = join(home, 'control');
   await rm(controlFile, { force: true });
@@ -159,20 +155,24 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
     }
   );
 
-  const instance = new Instance(name, mountRoot, shell, endpoint, budget);
-
-  await instance.waitFor(
-    `the mount to open at ${mountRoot}`,
-    (status) => {
+  const opened = await poll(
+    async () => {
+      await refuseIfDead(shell, name);
+      const status = await readStatus(endpoint, budget.refreshMs);
       if (status.mount.state === 'refused') {
         throw new Error(`${name} refused to mount: ${status.mount.reason}`);
       }
-      return status.mount.state === 'mounted';
+      return status.mount;
     },
-    budget.mountMs
+    (mount): mount is { state: 'mounted'; path: string } => mount.state === 'mounted',
+    {
+      what: `${name}: the mount to open`,
+      timeoutMs: budget.mountMs,
+      intervalMs: budget.intervalMs,
+    }
   );
 
-  return instance;
+  return new Instance(name, opened.path, shell, endpoint, budget);
 }
 
 async function liveStatus(shell: Shell, instance: Instance): Promise<VaultStatus> {

@@ -17,9 +17,8 @@ use super::config::EngineConfig;
 #[cfg(not(feature = "e2e-hook"))]
 pub type HostCredentialStore = cipherbox_desktop_seams::KeyringCredentialStore;
 
-/// The store a session's refresh token lives in. The `e2e-hook` build holds it
-/// in memory: a headless runner has no keyring, and that build always starts
-/// from a supplied login secret rather than a stored token.
+/// The store a session's refresh token lives in: memory, in the `e2e-hook`
+/// build.
 #[cfg(feature = "e2e-hook")]
 pub type HostCredentialStore = crate::e2e::MemoryCredentialStore;
 

@@ -1,17 +1,18 @@
 /**
  * Two instances of one host on one vault: A writes, B reads the same bytes.
  *
- * The barrier is the nocache manual refresh, so the scenario needs no sleep and
- * no cadence luck (blueprint/testing.md, "The DX hook").
+ * This scenario proves the publication. B holds its own engine, and its nocache
+ * manual refresh reads the network rather than A. So the bytes B serves can
+ * only come from what A published (blueprint/testing.md, "The DX hook").
  */
 
+import { strict as assert } from 'node:assert';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   PAYLOAD,
-  assert,
   readWhenPresent,
-  settled,
+  rendered,
   withInstances,
   type Scenario,
   type ScenarioContext,
@@ -26,15 +27,19 @@ export const crossClientSync: Scenario = {
     return withInstances(context, ['a', 'b'], async ([a, b]) => {
       await mkdir(join(a.mountRoot, FOLDER));
       await writeFile(join(a.mountRoot, FOLDER, FILE), PAYLOAD, 'utf8');
-      await settled(a, 1, context.deadlines);
-      context.log('a published the folder and the file');
+      await rendered(a, 1, context.deadlines);
+      context.log('a took the folder and the file through its mount');
 
       await b.refresh();
       const readBack = await readWhenPresent(b, join(FOLDER, FILE), context.deadlines);
-      assert.equal(readBack, PAYLOAD, "b's mount serves the bytes a wrote");
+      assert.equal(
+        readBack,
+        PAYLOAD,
+        'b resolved with nocache and read the bytes a published, so a published them'
+      );
 
       const status = await b.status();
-      assert.equal(status.items, 1, 'the refresh brought the root b holds up to date');
+      assert.equal(status.items, 1, 'the nocache refresh brought the root b renders up to date');
       assert.equal(status.deadLetters, 0, 'a read-only client raises no dead letter');
     });
   },

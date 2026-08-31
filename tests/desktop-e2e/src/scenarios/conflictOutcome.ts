@@ -7,13 +7,13 @@
  * deterministically.
  */
 
+import { strict as assert } from 'node:assert';
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   PAYLOAD,
-  assert,
   refusedWith,
-  settled,
+  rendered,
   withInstances,
   type Scenario,
   type ScenarioContext,
@@ -70,7 +70,7 @@ export const conflictOutcome: Scenario = {
         'the folder lists one entry per name, and no junk'
       );
 
-      await settled(a, 1, context.deadlines);
+      await rendered(a, 1, context.deadlines);
     });
   },
 };

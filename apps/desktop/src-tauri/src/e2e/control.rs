@@ -15,11 +15,15 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use zeroize::Zeroizing;
 
 use crate::engine::EngineHost;
 
 /// Bytes of entropy in the control token.
 const TOKEN_BYTES: usize = 32;
+
+/// Bytes of entropy in a published temporary's name.
+const TEMP_NAME_BYTES: usize = 8;
 
 /// How long one connection may take to deliver its request, so a stalled peer
 /// spends its own deadline rather than the endpoint's.
@@ -57,15 +61,15 @@ type Answering = Pin<Box<dyn Future<Output = Answered> + Send>>;
 
 /// The endpoint's token and what it may ask of the shell.
 pub struct Control {
-    token: String,
+    token: Zeroizing<String>,
     status: Box<dyn Fn() -> Answering + Send + Sync>,
     refresh: Box<dyn Fn() -> Answering + Send + Sync>,
     quit: Box<dyn Fn() + Send + Sync>,
 }
 
 impl Control {
-    /// The endpoint over a running shell.
-    pub fn over(app: &AppHandle, token: String) -> Self {
+    /// The endpoint over a running shell, published at `control_file`.
+    pub fn over(app: &AppHandle, token: Zeroizing<String>, control_file: PathBuf) -> Self {
         let reading = app.clone();
         let refreshing = app.clone();
         let quitting = app.clone();
@@ -86,9 +90,16 @@ impl Control {
             }),
             // The normal exit path: `RunEvent::Exit` ends the session, so the
             // mount is quiesced and unmounted before the process goes.
-            quit: Box::new(move || quitting.exit(0)),
+            quit: Box::new(move || retire(&control_file, || quitting.exit(0))),
         }
     }
+}
+
+/// Ends the shell. The published file goes first, so a dead endpoint cannot be
+/// read back as a live one.
+fn retire(control_file: &Path, exit: impl FnOnce()) {
+    let _ = std::fs::remove_file(control_file);
+    exit();
 }
 
 /// Binds the endpoint on loopback, on a port the OS picks.
@@ -99,19 +110,38 @@ pub async fn bind() -> Result<TcpListener, String> {
 }
 
 /// The endpoint's token: 32 bytes of OS entropy as lowercase hex.
-pub fn mint_token() -> Result<String, String> {
-    let mut bytes = [0u8; TOKEN_BYTES];
-    getrandom::fill(&mut bytes).map_err(|_| "this device has no entropy source".to_owned())?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+pub fn mint_token() -> Result<Zeroizing<String>, String> {
+    let mut bytes = Zeroizing::new([0u8; TOKEN_BYTES]);
+    getrandom::fill(bytes.as_mut()).map_err(|_| no_entropy())?;
+    let mut token = Zeroizing::new(String::with_capacity(TOKEN_BYTES * 2));
+    hex(bytes.as_ref(), &mut token);
+    Ok(token)
+}
+
+/// Writes `bytes` as lowercase hex into `into`, which the caller has reserved.
+///
+/// A formatted temporary per byte would leave two characters of the token on
+/// the heap, past the reach of the owner that zeroizes it.
+fn hex(bytes: &[u8], into: &mut String) {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    for &byte in bytes {
+        into.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        into.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+}
+
+fn no_entropy() -> String {
+    "this device has no entropy source".to_owned()
 }
 
 /// Publishes the endpoint: a temp file beside `path`, then a rename, so a
 /// reader sees either nothing or the whole line.
 pub fn publish(path: &Path, port: u16, token: &str) -> Result<(), String> {
     let line = control_line(port, token)?;
-    let temp = temp_path(path);
+    let temp = temp_path(path)?;
     write_owner_only(&temp, line.as_bytes())?;
     std::fs::rename(&temp, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
         format!(
             "the control file would not land at {}: {error}",
             path.display()
@@ -126,7 +156,7 @@ pub fn publish(path: &Path, port: u16, token: &str) -> Result<(), String> {
 /// offered back. The check returns `Err` rather than asserting, because a
 /// release build strips an assertion and would then publish an endpoint nobody
 /// can drive.
-fn control_line(port: u16, token: &str) -> Result<String, String> {
+fn control_line(port: u16, token: &str) -> Result<Zeroizing<String>, String> {
     if port == 0 {
         return Err("the control endpoint has no port".to_owned());
     }
@@ -136,7 +166,13 @@ fn control_line(port: u16, token: &str) -> Result<String, String> {
             TOKEN_BYTES * 2
         ));
     }
-    Ok(format!("{port} {token}\n"))
+    let port = port.to_string();
+    let mut line = Zeroizing::new(String::with_capacity(port.len() + token.len() + 2));
+    line.push_str(&port);
+    line.push(' ');
+    line.push_str(token);
+    line.push('\n');
+    Ok(line)
 }
 
 /// Whether `token` has the shape [`mint_token`] produces.
@@ -147,17 +183,30 @@ fn minted_shape(token: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn temp_path(path: &Path) -> PathBuf {
+/// A temporary beside `path`, under a name of this run's own. The name is
+/// unguessable and never reused, so no leftover can block a later run and no
+/// local user can wait at it.
+fn temp_path(path: &Path) -> Result<PathBuf, String> {
+    let mut bytes = [0u8; TEMP_NAME_BYTES];
+    getrandom::fill(&mut bytes).map_err(|_| no_entropy())?;
+    let mut suffix = String::with_capacity(TEMP_NAME_BYTES * 2 + 5);
+    suffix.push('.');
+    hex(&bytes, &mut suffix);
+    suffix.push_str(".tmp");
     let mut temp = path.as_os_str().to_owned();
-    temp.push(".tmp");
-    PathBuf::from(temp)
+    temp.push(suffix);
+    Ok(PathBuf::from(temp))
 }
 
-/// Writes `bytes` owner-readable only, where the platform says so, and syncs
-/// before the caller renames the file into place.
+/// Writes `bytes` to a path that must not exist yet, owner-readable only where
+/// the platform says so, and syncs before the caller renames it into place.
+///
+/// The mode applies at creation alone, so a path a local user got there first
+/// would take the port and the token at whatever mode, or through whatever
+/// symlink, that user chose. An occupied path is a refusal instead.
 fn write_owner_only(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -174,13 +223,30 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("the control file would not write: {error}"))
 }
 
-/// Serves control requests until the listener stops accepting.
+/// Where the endpoint takes its connections from.
+///
+/// The seam is what lets a test hand the loop a refused accept and prove the
+/// endpoint outlives one.
+pub trait Accept: Send + Sync + 'static {
+    fn accept(&self) -> impl Future<Output = std::io::Result<TcpStream>> + Send;
+}
+
+impl Accept for TcpListener {
+    async fn accept(&self) -> std::io::Result<TcpStream> {
+        TcpListener::accept(self).await.map(|(stream, _)| stream)
+    }
+}
+
+/// Serves control requests for the life of the process.
 ///
 /// Each connection is handled on its own task, so a peer that opens and then
 /// says nothing spends its own deadline rather than the endpoint's.
-pub async fn serve(listener: TcpListener, control: Arc<Control>) {
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(answer(stream, control.clone()));
+pub async fn serve(source: impl Accept, control: Arc<Control>) {
+    loop {
+        // A refused accept is transient, so the endpoint takes the next one.
+        if let Ok(stream) = source.accept().await {
+            tokio::spawn(answer(stream, control.clone()));
+        }
     }
 }
 
@@ -289,7 +355,7 @@ async fn respond(stream: &mut TcpStream, line: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// A made-up token, of the shape [`mint_token`] produces.
     const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -297,11 +363,27 @@ mod tests {
     /// How many times the endpoint asked its stand-in shell to quit.
     static QUITS: AtomicUsize = AtomicUsize::new(0);
 
+    /// Refuses its first accept, the way an exhausted descriptor table does,
+    /// then hands over what the real listener took.
+    struct RefusesFirstAccept {
+        listener: TcpListener,
+        refused: AtomicBool,
+    }
+
+    impl Accept for RefusesFirstAccept {
+        async fn accept(&self) -> std::io::Result<TcpStream> {
+            if !self.refused.swap(true, Ordering::Relaxed) {
+                return Err(std::io::Error::other("no descriptor is left"));
+            }
+            self.listener.accept().await.map(|(stream, _)| stream)
+        }
+    }
+
     /// An endpoint over a stand-in shell: `status` answers a fixed object,
     /// `refresh` answers nothing, and `quit` is counted.
     fn control() -> Arc<Control> {
         Arc::new(Control {
-            token: TOKEN.to_owned(),
+            token: Zeroizing::new(TOKEN.to_owned()),
             status: Box::new(|| Box::pin(async { Ok(Some(serde_json::json!({ "items": 7 }))) })),
             refresh: Box::new(|| Box::pin(async { Ok(None) })),
             quit: Box::new(|| {
@@ -421,6 +503,24 @@ mod tests {
         serving.abort();
     }
 
+    /// One transient accept error must not end the endpoint for the life of
+    /// the process.
+    #[tokio::test]
+    async fn a_refused_accept_does_not_end_the_endpoint() {
+        let listener = bind().await.expect("a loopback port");
+        let port = listener.local_addr().expect("an address").port();
+        let serving = tokio::spawn(serve(
+            RefusesFirstAccept {
+                listener,
+                refused: AtomicBool::new(false),
+            },
+            control(),
+        ));
+        let answer = ask(port, &format!("{TOKEN} status\n")).await;
+        assert_eq!(answer.trim_end(), r#"{"ok":true,"status":{"items":7}}"#);
+        serving.abort();
+    }
+
     #[test]
     fn reads_each_verb_it_serves() {
         assert_eq!(
@@ -438,13 +538,13 @@ mod tests {
     fn mints_a_new_token_every_time() {
         let (first, second) = (mint_token().unwrap(), mint_token().unwrap());
         assert_ne!(first, second);
-        assert!(minted_shape(&first), "{first} is not the minted shape");
+        assert!(minted_shape(&first), "{} is not the minted shape", *first);
     }
 
     #[test]
     fn publishes_the_port_and_the_token_on_one_line() {
         assert_eq!(
-            control_line(14200, TOKEN).expect("a minted token"),
+            control_line(14200, TOKEN).expect("a minted token").as_str(),
             format!("14200 {TOKEN}\n")
         );
     }
@@ -480,7 +580,7 @@ mod tests {
             std::fs::read_to_string(&path).expect("the control file reads"),
             format!("14200 {TOKEN}\n")
         );
-        assert!(!temp_path(&path).exists(), "the temp file was left behind");
+        assert_eq!(names_in(dir.path()), vec!["control".to_owned()]);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -490,5 +590,56 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o077, 0, "the control file is readable by others");
         }
+    }
+
+    /// A local user who gets to the path first must not receive the write. The
+    /// mode and the symlink target would then be that user's to choose.
+    #[test]
+    fn refuses_to_write_over_a_path_that_is_already_there() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("waiting");
+        std::fs::write(&path, b"another owner").expect("the path is taken");
+
+        assert!(write_owner_only(&path, b"14200 secret\n").is_err());
+        assert_eq!(
+            std::fs::read(&path).expect("the file reads"),
+            b"another owner"
+        );
+    }
+
+    /// A crash leaves its temporary behind. The next run names its own, so the
+    /// leftover cannot block it.
+    #[test]
+    fn names_a_new_temporary_every_run() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("control");
+        let leftover = temp_path(&path).expect("a temporary name");
+        std::fs::write(&leftover, b"a crashed run").expect("the leftover lands");
+
+        publish(&path, 14200, TOKEN).expect("the control file lands");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the control file reads"),
+            format!("14200 {TOKEN}\n")
+        );
+    }
+
+    /// A file left behind would read back as a live endpoint on a dead port.
+    #[test]
+    fn the_quit_path_removes_the_published_file_before_it_exits() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("control");
+        publish(&path, 14200, TOKEN).expect("the control file lands");
+
+        let mut gone_at_exit = false;
+        retire(&path, || gone_at_exit = !path.exists());
+        assert!(gone_at_exit, "the file outlived the shell");
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .expect("the directory reads")
+            .map(|entry| entry.expect("an entry").file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect()
     }
 }

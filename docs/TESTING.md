@@ -8,20 +8,20 @@ the test landscape, shows how to run each suite, and maps tests to CI gates.
 
 ## Test Landscape
 
-| Suite                        | Location               | Framework        | Trigger         |
-| ---------------------------- | ---------------------- | ---------------- | --------------- |
-| API unit tests               | `apps/api/`            | Jest             | PR to `main`    |
-| `@cipherbox/crypto` unit     | `packages/crypto/`     | Vitest           | PR to `main`    |
-| `@cipherbox/core` unit       | `packages/core/`       | Vitest           | PR to `main`    |
-| `@cipherbox/sdk-core` unit   | `packages/sdk-core/`   | Vitest           | PR to `main`    |
-| `@cipherbox/sdk` unit        | `packages/sdk/`        | Vitest           | PR to `main`    |
-| `@cipherbox/api-client` unit | `packages/api-client/` | Vitest           | PR to `main`    |
-| SDK E2E                      | `tests/sdk-e2e/`       | Vitest           | PR to `main`    |
-| Web E2E                      | `tests/web-e2e/`       | Playwright       | Push to `main`  |
-| Desktop mounted E2E          | `tests/desktop-e2e/`   | tsx orchestrator | Push to `main`  |
-| Load tests                   | `tests/load/`          | Vitest (Node.js) | Manual dispatch |
-| Cross-language vectors       | `tests/vectors/`       | JSON fixtures    | PR to `main`    |
-| Rust crate tests             | `crates/`              | `cargo test`     | PR to `main`    |
+| Suite                        | Location               | Framework        | Trigger                             |
+| ---------------------------- | ---------------------- | ---------------- | ----------------------------------- |
+| API unit tests               | `apps/api/`            | Jest             | PR to `main`                        |
+| `@cipherbox/crypto` unit     | `packages/crypto/`     | Vitest           | PR to `main`                        |
+| `@cipherbox/core` unit       | `packages/core/`       | Vitest           | PR to `main`                        |
+| `@cipherbox/sdk-core` unit   | `packages/sdk-core/`   | Vitest           | PR to `main`                        |
+| `@cipherbox/sdk` unit        | `packages/sdk/`        | Vitest           | PR to `main`                        |
+| `@cipherbox/api-client` unit | `packages/api-client/` | Vitest           | PR to `main`                        |
+| SDK E2E                      | `tests/sdk-e2e/`       | Vitest           | PR to `main`                        |
+| Web E2E                      | `tests/web-e2e/`       | Playwright       | Push to `main`                      |
+| Desktop mounted E2E          | `tests/desktop-e2e/`   | tsx orchestrator | Manual dispatch, or a workflow call |
+| Load tests                   | `tests/load/`          | Vitest (Node.js) | Manual dispatch                     |
+| Cross-language vectors       | `tests/vectors/`       | JSON fixtures    | PR to `main`                        |
+| Rust crate tests             | `crates/`              | `cargo test`     | PR to `main`                        |
 
 ## Running Unit Tests
 
@@ -130,29 +130,17 @@ to HTML, disallows `.only`, and always starts a fresh dev server.
 
 ## Running Desktop E2E Tests
 
-The desktop mounted suite drives the real Tauri binary through the mount it
-projects. One TypeScript orchestrator serves every platform; the v1 pair of
-shell and PowerShell scripts is gone.
-
-The binary must carry the `e2e-hook` cargo feature. That feature adds the
-dev-key headless entry and a loopback control endpoint, and a shipping build
-compiles neither.
+One TypeScript orchestrator drives the real Tauri binary through the mount it
+projects. The binary must carry the `e2e-hook` cargo feature. The orchestrator
+owns the API process, so a scenario can take the API away and give it back.
+Postgres, Kubo and the mock `/routing/v1` record store must already run.
 
 ```bash
 pnpm --filter @cipherbox/desktop-e2e run test:e2e
 ```
 
-The orchestrator starts the API and the desktop instances itself, so the
-offline-replay scenario can take the API away and give it back. Postgres, Kubo
-and the mock `/routing/v1` record store must already run. See
-`tests/desktop-e2e/README.md` for the full local recipe.
-
-The suite needs no test credential. A dev key is a fresh 32-byte scalar, and
-challenge-signature login mints the account on first contact. The key crosses
-on standard input, never in a process argument.
-
-The unit suite over the orchestrator's pure helpers runs under `pnpm test` and
-needs no stack.
+[`tests/desktop-e2e/README.md`](../tests/desktop-e2e/README.md) holds the full
+local recipe, the scenario list, and the login mechanics.
 
 ## Running Load Tests
 

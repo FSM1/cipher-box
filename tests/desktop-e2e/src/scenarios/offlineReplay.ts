@@ -3,15 +3,16 @@
  *
  * The orchestrator owns the API, so the outage is the API stopped rather than a
  * mock. The write is journaled, so the mount acks it while nothing can publish.
+ * B's read after the API returns is what proves the replay.
  */
 
+import { strict as assert } from 'node:assert';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   PAYLOAD,
-  assert,
   readWhenPresent,
-  settled,
+  rendered,
   withInstances,
   type Scenario,
   type ScenarioContext,
@@ -42,11 +43,15 @@ export const offlineReplay: Scenario = {
       context.log('the API is back');
 
       await a.refresh();
-      await settled(a, 1, context.deadlines);
+      await rendered(a, 1, context.deadlines);
 
       await b.refresh();
       const readBack = await readWhenPresent(b, join(FOLDER, FILE), context.deadlines);
-      assert.equal(readBack, PAYLOAD, 'the replayed write reaches the other instance intact');
+      assert.equal(
+        readBack,
+        PAYLOAD,
+        'b resolved with nocache and read the journaled write, so the replay published it'
+      );
 
       for (const instance of [a, b]) {
         const status = await instance.status();

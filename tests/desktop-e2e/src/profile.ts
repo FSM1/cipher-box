@@ -43,6 +43,11 @@ export interface Deadlines {
   offlineMs: number;
   /** The process exits after `quit`. */
   shutdownMs: number;
+  /**
+   * One whole scenario. A kernel call on a mount carries no timeout, so this
+   * is what turns a mount that stops answering into a reported failure.
+   */
+  scenarioMs: number;
 }
 
 const MIN_INTERVAL_MS = 50;
@@ -66,6 +71,7 @@ export function deadlines(profile: SyncTimingProfile = CI_PROFILE): Deadlines {
     // by a wide margin or it could never observe the state it names.
     offlineMs: 10 * profile.staleAfterMs,
     shutdownMs: 20 * tick,
+    scenarioMs: 240 * tick,
   };
 }
 

@@ -3,8 +3,7 @@
 //!
 //! A `--dev-key-stdin` on the command line starts the session with no webview
 //! login and no OS keyring, and publishes a loopback control endpoint the suite
-//! asks for status, refresh, and quit over. The whole module sits behind the
-//! `e2e-hook` cargo feature, so a shipping build holds none of it.
+//! asks for status, refresh, and quit over.
 
 mod cli;
 mod control;
@@ -24,13 +23,13 @@ pub use credentials::MemoryCredentialStore;
 ///
 /// The key line is taken at startup, before the shell builds anything.
 pub fn headless() -> Result<Option<Headless>, String> {
-    let Some(options) = cli::options(std::env::args_os().skip(1))? else {
+    let Some(control_file) = cli::control_file(std::env::args_os().skip(1))? else {
         return Ok(None);
     };
-    let dev_key = cli::read_dev_key(std::io::stdin().lock())?;
+    let dev_key = cli::dev_key_from_stdin()?;
     Ok(Some(Headless {
         dev_key,
-        control_file: options.control_file,
+        control_file,
     }))
 }
 
@@ -53,7 +52,7 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
         .port();
     control::publish(&control_file, port, &token)?;
 
-    let endpoint = Arc::new(control::Control::over(app, token));
+    let endpoint = Arc::new(control::Control::over(app, token, control_file));
     tauri::async_runtime::spawn(control::serve(listener, endpoint));
 
     let app = app.clone();

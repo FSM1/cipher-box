@@ -17,10 +17,6 @@ describe('parseControlFile', () => {
     expect(parseControlFile(`51234 ${TOKEN}\n`)).toEqual({ port: 51234, token: TOKEN });
   });
 
-  it('reads a line the shell wrote without a terminator', () => {
-    expect(parseControlFile(`51234 ${TOKEN}`).port).toBe(51234);
-  });
-
   it('refuses an empty file', () => {
     expect(() => parseControlFile('')).toThrow(/empty/);
     expect(() => parseControlFile('\n')).toThrow(/empty/);

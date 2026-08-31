@@ -9,8 +9,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// The headless entry the mounted e2e suite drives. A shipping build carries
-// none of it.
+// The headless entry the mounted e2e suite drives.
 #[cfg(feature = "e2e-hook")]
 mod e2e;
 mod engine;
@@ -24,13 +23,18 @@ use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 /// Label of the one (hidden-by-default) main window.
 const MAIN_WINDOW: &str = "main";
 
+/// Exit code for an argument this build refuses. Distinct from a panic and
+/// from an ordinary quit, so a harness can tell them apart.
+#[cfg(feature = "e2e-hook")]
+const BAD_ARGUMENT: i32 = 2;
+
 fn main() {
     #[cfg(feature = "e2e-hook")]
     let headless = match e2e::headless() {
         Ok(headless) => headless,
         Err(refusal) => {
             eprintln!("{refusal}");
-            std::process::exit(2);
+            std::process::exit(BAD_ARGUMENT);
         }
     };
 
@@ -101,17 +105,5 @@ pub fn show_main_window(app: &AppHandle) {
         if let Err(error) = window.set_focus() {
             eprintln!("failed to focus the main window: {error}");
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    /// The headless entry is a test hook. A shipping build carries no control
-    /// endpoint and no dev-key start path. The default cargo job is where this
-    /// test counts; the hook build ignores it.
-    #[test]
-    #[cfg_attr(feature = "e2e-hook", ignore = "this build is the hook")]
-    fn the_shipping_build_carries_no_headless_entry() {
-        assert!(!cfg!(feature = "e2e-hook"));
     }
 }

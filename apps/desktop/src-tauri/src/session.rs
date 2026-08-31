@@ -73,8 +73,7 @@ fn session_credentials(app: &AppHandle) -> HostCredentialStore {
     app.state::<KeyringCredentialStore>().inner().clone()
 }
 
-/// The `e2e-hook` build's store, which holds the token in memory: a headless
-/// runner has no OS keyring.
+/// The session's credential store, as the `e2e-hook` build holds it.
 #[cfg(feature = "e2e-hook")]
 fn session_credentials(_app: &AppHandle) -> HostCredentialStore {
     HostCredentialStore::default()

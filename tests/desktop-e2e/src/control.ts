@@ -47,14 +47,6 @@ export class ControlProtocolError extends Error {
   }
 }
 
-/** The endpoint understood the request and refused it. */
-export class ControlRefusal extends Error {
-  constructor(verb: ControlVerb, reason: string) {
-    super(`the control endpoint refused ${verb}: ${reason}`);
-    this.name = 'ControlRefusal';
-  }
-}
-
 const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_PORT = 65535;
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -135,7 +127,7 @@ export async function readEndpoint(path: string): Promise<ControlEndpoint | null
 }
 
 /** Sends one verb and returns the endpoint's own answer, refusal included. */
-export async function send(
+async function send(
   endpoint: ControlEndpoint,
   verb: ControlVerb,
   timeoutMs: number
@@ -151,7 +143,7 @@ export async function sendOrThrow(
   timeoutMs: number
 ): Promise<ControlResponse & { ok: true }> {
   const answer = await send(endpoint, verb, timeoutMs);
-  if (!answer.ok) throw new ControlRefusal(verb, answer.error);
+  if (!answer.ok) throw new Error(`the control endpoint refused ${verb}: ${answer.error}`);
   return answer;
 }
 
