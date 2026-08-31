@@ -5985,6 +5985,7 @@ where {
             .get()
             .map(|index| session.vault_pointer_signer(index));
         let rotator = OwnerCutNet {
+            content_profile: &self.content_profile,
             transport: &self.seams.record_transport,
             api: api.as_ref(),
             gateway: &self.gateway,
