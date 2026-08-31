@@ -68,15 +68,22 @@ export class Stack {
     });
     this.child = child;
 
-    await poll(
-      () => answers(this.options.apiUrl),
-      (up) => up,
-      {
-        what: `the API to answer ${this.options.apiUrl}; its log is ${logPath}`,
-        timeoutMs: this.options.deadlines.apiReadyMs,
-        intervalMs: this.options.deadlines.intervalMs,
-      }
-    );
+    try {
+      await poll(
+        () => answers(this.options.apiUrl),
+        (up) => up,
+        {
+          what: `the API to answer ${this.options.apiUrl}; its log is ${logPath}`,
+          timeoutMs: this.options.deadlines.apiReadyMs,
+          intervalMs: this.options.deadlines.intervalMs,
+        }
+      );
+    } catch (error) {
+      // A start that never answers still owns a live process. It holds the
+      // port, so the next run of this suite would refuse to start at all.
+      await this.stopApi();
+      throw error;
+    }
   }
 
   /** Stops the API and returns once the port goes silent. */
@@ -85,6 +92,15 @@ export class Stack {
     if (!child) return;
     this.child = null;
     child.kill('SIGKILL');
+    await poll(
+      () => child.exitCode !== null || child.signalCode !== null,
+      (gone) => gone,
+      {
+        what: 'the API process to exit',
+        timeoutMs: this.options.deadlines.shutdownMs,
+        intervalMs: this.options.deadlines.intervalMs,
+      }
+    );
     await poll(
       () => answers(this.options.apiUrl),
       (up) => !up,

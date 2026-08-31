@@ -8,7 +8,8 @@
 
 import { strict as assert } from 'node:assert';
 import { readdir, stat } from 'node:fs/promises';
-import { withInstances, type Scenario, type ScenarioContext } from '../scenario';
+import { poll } from '../poll';
+import { isMounted, withInstances, type Scenario, type ScenarioContext } from '../scenario';
 
 export const mountLifecycle: Scenario = {
   name: 'mount-lifecycle',
@@ -16,8 +17,19 @@ export const mountLifecycle: Scenario = {
     return withInstances(context, ['a'], async ([a]) => {
       // `startInstance` already waited for `mounted`, so the mount point is a
       // real directory by the time this body runs.
-      const mounted = await stat(a.mountRoot);
-      assert.equal(mounted.isDirectory(), true, 'the mount point is a directory');
+      const point = await stat(a.mountRoot);
+      assert.equal(point.isDirectory(), true, 'the mount point is a directory');
+      // The host lands the mount a moment after the shell reports `mounted`,
+      // so this waits for the namespace rather than reading it once.
+      await poll(
+        () => isMounted(a.mountRoot),
+        (mounted) => mounted,
+        {
+          what: 'the mount root to carry a filesystem of its own',
+          timeoutMs: context.deadlines.mountMs,
+          intervalMs: context.deadlines.intervalMs,
+        }
+      );
 
       const started = await a.status();
       assert.equal(started.provisioned, true, 'a cold start mints the vault');
@@ -36,6 +48,15 @@ export const mountLifecycle: Scenario = {
       // `stop` quits over the control endpoint, which is the orderly path:
       // quiesce the adapter, unmount, then end the engine.
       await a.stop();
+      await poll(
+        () => isMounted(a.mountRoot),
+        (mounted) => !mounted,
+        {
+          what: 'the mount root to give its filesystem back',
+          timeoutMs: context.deadlines.shutdownMs,
+          intervalMs: context.deadlines.intervalMs,
+        }
+      );
       const left = await readdir(a.mountRoot).catch(() => []);
       assert.deepEqual(left, [], 'the mount point holds nothing once the session ends');
     });

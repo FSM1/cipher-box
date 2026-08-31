@@ -13,12 +13,11 @@ use cipherbox_engine::{Entropy, EntropyError, OwnerScopedFloorStore, SeamSet, Se
 
 use super::config::EngineConfig;
 
-/// The store a session's refresh token lives in: the OS keyring.
+/// Where a session's refresh token lives on this host.
 #[cfg(not(feature = "e2e-hook"))]
 pub type HostCredentialStore = cipherbox_desktop_seams::KeyringCredentialStore;
 
-/// The store a session's refresh token lives in: memory, in the `e2e-hook`
-/// build.
+/// Where a session's refresh token lives on this host.
 #[cfg(feature = "e2e-hook")]
 pub type HostCredentialStore = crate::e2e::MemoryCredentialStore;
 

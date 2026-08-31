@@ -8,6 +8,7 @@ const NAMES = [
   'mountMs',
   'refreshMs',
   'shutdownMs',
+  'scenarioMs',
 ] as const satisfies readonly (keyof Deadlines)[];
 
 describe('deadlines', () => {

@@ -50,6 +50,7 @@ export class ControlProtocolError extends Error {
 const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_PORT = 65535;
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const NEWLINE = 0x0a;
 
 /**
  * Reads the one line the shell wrote.
@@ -104,13 +105,57 @@ export function parseResponse(line: string): ControlResponse {
   const body = parsed as Record<string, unknown>;
   if (body.ok === true) {
     const status = body.status;
-    return status === undefined ? { ok: true } : { ok: true, status: status as VaultStatus };
+    return status === undefined ? { ok: true } : { ok: true, status: vaultStatus(status) };
   }
   if (body.ok === false) {
     const error = typeof body.error === 'string' ? body.error : 'no reason given';
     return { ok: false, error };
   }
   throw new ControlProtocolError(`the control answer carries no ok field: ${excerpt(line)}`);
+}
+
+const STALENESS: readonly string[] = ['fresh', 'reconciling', 'stale', 'offline'];
+
+/**
+ * The status a well-formed answer carries.
+ *
+ * Every field is checked here, so a shell that answers a shape this suite does
+ * not know fails with a named protocol error rather than with a `TypeError`
+ * from the first reader that walks into an absent field.
+ */
+function vaultStatus(value: unknown): VaultStatus {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ControlProtocolError('the control status is not an object');
+  }
+  const status = value as Record<string, unknown>;
+  for (const name of ['items', 'deadLetters'] as const) {
+    if (typeof status[name] !== 'number') {
+      throw new ControlProtocolError(`the control status field ${name} is not a number`);
+    }
+  }
+  if (typeof status.provisioned !== 'boolean') {
+    throw new ControlProtocolError('the control status field provisioned is not a boolean');
+  }
+  if (typeof status.staleness !== 'string' || !STALENESS.includes(status.staleness)) {
+    throw new ControlProtocolError('the control status carries no staleness this suite knows');
+  }
+  if (!Array.isArray(status.warnings)) {
+    throw new ControlProtocolError('the control status field warnings is not an array');
+  }
+  mountStatus(status.mount);
+  return status as unknown as VaultStatus;
+}
+
+/** The mount state a well-formed status carries, with the field its state needs. */
+function mountStatus(value: unknown): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ControlProtocolError('the control status field mount is not an object');
+  }
+  const mount = value as Record<string, unknown>;
+  if (mount.state === 'opening') return;
+  if (mount.state === 'mounted' && typeof mount.path === 'string') return;
+  if (mount.state === 'refused' && typeof mount.reason === 'string') return;
+  throw new ControlProtocolError('the control status carries no mount state this suite knows');
 }
 
 /** Reads the control file, or returns null while the shell has not written it. */
@@ -166,7 +211,10 @@ export async function quit(endpoint: ControlEndpoint, timeoutMs: number): Promis
 function exchange(endpoint: ControlEndpoint, request: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = createConnection({ host: '127.0.0.1', port: endpoint.port });
-    let buffer = '';
+    // The bytes are framed before they are decoded: a mount path or a warning
+    // detail can carry a character whose bytes cross two chunks, and a decode
+    // per chunk turns that character into U+FFFD.
+    let raw = Buffer.alloc(0);
     let settled = false;
 
     const finish = (error: Error | null, line?: string) => {
@@ -184,17 +232,19 @@ function exchange(endpoint: ControlEndpoint, request: string, timeoutMs: number)
       finish(new ControlProtocolError(`the control endpoint is unreachable: ${error.message}`))
     );
     socket.on('connect', () => socket.write(request));
-    socket.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
-      if (buffer.length > MAX_RESPONSE_BYTES) {
-        finish(new ControlProtocolError('the control answer exceeded the byte ceiling'));
+    socket.on('data', (chunk: Buffer) => {
+      raw = Buffer.concat([raw, chunk]);
+      const newline = raw.indexOf(NEWLINE);
+      if (newline >= 0 && newline <= MAX_RESPONSE_BYTES) {
+        finish(null, raw.subarray(0, newline).toString('utf8'));
         return;
       }
-      const newline = buffer.indexOf('\n');
-      if (newline >= 0) finish(null, buffer.slice(0, newline));
+      if (raw.length > MAX_RESPONSE_BYTES) {
+        finish(new ControlProtocolError('the control answer exceeded the byte ceiling'));
+      }
     });
     socket.on('end', () => {
-      if (buffer.length > 0) finish(null, buffer);
+      if (raw.length > 0) finish(null, raw.toString('utf8'));
       else finish(new ControlProtocolError('the control endpoint closed without an answer'));
     });
   });

@@ -72,10 +72,13 @@ export async function poll<T>(
     attempts += 1;
     last = value;
     if (accept(value)) return value;
-    if (clock.now() >= deadline) {
+    const remaining = deadline - clock.now();
+    if (remaining <= 0) {
       throw new PollTimeout(options.what, last, attempts, options.timeoutMs);
     }
-    await clock.wait(options.intervalMs);
+    // Never sleep past the deadline: a wait longer than what is left would
+    // report the timeout late, and a caller reads that delay as a slow signal.
+    await clock.wait(Math.min(options.intervalMs, remaining));
   }
 }
 

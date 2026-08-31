@@ -89,6 +89,18 @@ describe('poll', () => {
     expect(timeout.attempts).toBeGreaterThan(1);
   });
 
+  it('never waits past the deadline, whatever the interval asks for', async () => {
+    const clock = fakeClock();
+
+    await poll(
+      () => 'opening',
+      () => false,
+      { what: 'the mount to open', timeoutMs: 100, intervalMs: 1000, clock }
+    ).catch(() => undefined);
+
+    expect(clock.elapsed()).toBe(100);
+  });
+
   it('propagates a throw from the probe rather than a retry past it', async () => {
     const clock = fakeClock();
     let reads = 0;

@@ -66,14 +66,12 @@ fn login_secret(body: &InvokeBody) -> Result<Zeroizing<Vec<u8>>, String> {
     Ok(secret)
 }
 
-/// The session's credential store, as this build holds it: the app's one
-/// keyring handle.
+/// This session's [`HostCredentialStore`].
 #[cfg(not(feature = "e2e-hook"))]
 fn session_credentials(app: &AppHandle) -> HostCredentialStore {
     app.state::<KeyringCredentialStore>().inner().clone()
 }
 
-/// The session's credential store, as the `e2e-hook` build holds it.
 #[cfg(feature = "e2e-hook")]
 fn session_credentials(_app: &AppHandle) -> HostCredentialStore {
     HostCredentialStore::default()

@@ -140,14 +140,20 @@ jobs:
           # One pinned release on both legs, the version every sibling
           # workflow runs. Homebrew pins nothing.
           KUBO_VERSION=v0.42.0
+          # The archive runs as a daemon on the runner, so the digest is pinned
+          # here rather than taken from the same host that serves the archive.
           if [ "$RUNNER_OS" = "macOS" ]; then
             KUBO_PLATFORM=darwin-arm64
+            KUBO_SHA512=5f863972f7edee0ac3f003d8b097366927e8d9f651fd5c74e1fda980f766dbf7af4b8a813b13400eb2bcf3a871a494a139c85f022e239b237581ad152259cd22
           else
             KUBO_PLATFORM=linux-amd64
+            KUBO_SHA512=054c38a0cf66f7d738e25085ad62cb3a42d03d4bac329b7dd25c1d71cf18e1ce87d55b1d1b705b04c65210dca9109973579e0eb1cd72f6341ecb3311d840d156
           fi
-          curl -fsSL --retry 3 \
-            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.tar.gz" \
-            | tar -xz
+          KUBO_ARCHIVE="$RUNNER_TEMP/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.tar.gz"
+          curl -fsSL --retry 3 -o "$KUBO_ARCHIVE" \
+            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.tar.gz"
+          echo "${KUBO_SHA512}  ${KUBO_ARCHIVE}" | shasum -a 512 -c -
+          tar -xzf "$KUBO_ARCHIVE"
           # On PATH rather than installed: the release ships no installer for
           # every platform, and this job needs no system-wide binary.
           echo "$PWD/kubo" >> "$GITHUB_PATH"

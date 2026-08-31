@@ -2,6 +2,8 @@
  * What every scenario gets, and the assertions they share.
  */
 
+import { stat } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { Instance } from './instance';
 import type { Deadlines } from './profile';
 import type { Stack } from './stack';
@@ -18,6 +20,21 @@ export interface ScenarioContext {
 export interface Scenario {
   name: string;
   run(context: ScenarioContext): Promise<void>;
+}
+
+/**
+ * Whether `path` is the root of a mounted filesystem.
+ *
+ * A mount root and the directory that holds it sit on different devices, and an
+ * empty directory alone does not tell a live mount from a released one.
+ */
+export async function isMounted(path: string): Promise<boolean> {
+  try {
+    const [root, parent] = await Promise.all([stat(path), stat(dirname(path))]);
+    return root.dev !== parent.dev;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -29,6 +29,9 @@ const TEMP_NAME_BYTES: usize = 8;
 /// spends its own deadline rather than the endpoint's.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 
+/// How long the accept loop waits after a refused accept.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(50);
+
 /// A control request is one short line. Anything larger is refused rather than
 /// buffered.
 const MAX_REQUEST_BYTES: usize = 512;
@@ -243,9 +246,17 @@ impl Accept for TcpListener {
 /// says nothing spends its own deadline rather than the endpoint's.
 pub async fn serve(source: impl Accept, control: Arc<Control>) {
     loop {
-        // A refused accept is transient, so the endpoint takes the next one.
-        if let Ok(stream) = source.accept().await {
-            tokio::spawn(answer(stream, control.clone()));
+        // A refused accept is usually transient, so the endpoint takes the next
+        // one. The pause keeps a lasting refusal, such as an exhausted
+        // descriptor table, from spinning this loop at full speed and silently.
+        match source.accept().await {
+            Ok(stream) => {
+                tokio::spawn(answer(stream, control.clone()));
+            }
+            Err(error) => {
+                eprintln!("e2e: the control endpoint refused a connection: {error}");
+                tokio::time::sleep(ACCEPT_PAUSE).await;
+            }
         }
     }
 }
