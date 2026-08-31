@@ -94,9 +94,9 @@ use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
     RevokeError, RevokedCommittedSet, RotateError, RotateScopePlan, ScopeRootIdentity,
-    ScopeRootPublisher, WriteHistory, WriteRevokeKind, bounded, cut_for_write_grant,
-    derive_write_name, record_grant_floor, reseal_scope_root, revoke_read_grant,
-    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
+    ScopeRootPublisher, SweepResolveFailure, WriteHistory, WriteRevokeKind, bounded,
+    cut_for_write_grant, derive_write_name, record_grant_floor, reseal_scope_root,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
@@ -1842,6 +1842,7 @@ impl EngineError {
             },
             CreateGrantError::Publish(e)
             | CreateGrantError::DescendantPublish { error: e, .. }
+            | CreateGrantError::InteriorPublish { error: e, .. }
             | CreateGrantError::ParentPublish(e)
                 if e.is_retryable() =>
             {
@@ -1850,7 +1851,17 @@ impl EngineError {
                 }
             }
             CreateGrantError::DescendantResolve { reason, .. }
+            | CreateGrantError::Resume(reason)
                 if reason != ResolveFailure::Rejected =>
+            {
+                EngineError::Seam {
+                    message: reason.to_string(),
+                }
+            }
+            // A stalled interior move is re-drivable, so an availability
+            // failure in it is the one class the host should retry.
+            CreateGrantError::InteriorResolve { reason, .. }
+                if reason != SweepResolveFailure::Rejected =>
             {
                 EngineError::Seam {
                     message: reason.to_string(),
@@ -1863,6 +1874,12 @@ impl EngineError {
             | CreateGrantError::RecipientIsTheOwner
             | CreateGrantError::SubtreeNotConverged { .. }) => {
                 EngineError::MalformedInput { check: e.check() }
+            }
+            // The promoted root authenticated; it just commits another grant.
+            // That is a target this command cannot mint over, not a verdict on
+            // the record.
+            e @ CreateGrantError::ResumeNotThisGrant => {
+                EngineError::UnsupportedTarget { check: e.check() }
             }
             terminal => EngineError::TrustViolation {
                 message: terminal.to_string(),
@@ -6139,7 +6156,7 @@ where {
             return Err(EngineError::UnsupportedTarget { check });
         }
 
-        self.refuse_an_unindexed_scope(node, &current, api, owner_keys(), checks.already_a_scope)
+        self.refuse_a_floored_target(node, checks.already_a_scope)
             .await?;
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
 
@@ -6289,36 +6306,18 @@ where {
         }
     }
 
-    /// Refuse when a live scope root already answers at the name a mint would
-    /// publish `node`'s under.
+    /// Refuse a share at a node this device already holds a read-epoch floor
+    /// for.
     ///
-    /// [`record_share_standing`] decides from the parent's index, which
-    /// `mint_grantee_scope` writes last: a mint that published the grantee scope
-    /// root and then failed leaves a live scope the index does not name. A mint
-    /// over it would republish at that same derived name under a fresh override
-    /// seed and cut the first grantee off a scope they still hold — a revocation
-    /// the owner never asked for.
-    ///
-    /// Two answers refuse, and both are needed.
-    ///
-    /// A read-epoch floor at `node`'s own scope id is the first: only a scope
-    /// root adopted at that id ever raises one, and it is what answers when the
-    /// record there sits below the floor this device already holds — a state the
-    /// gate reports as a plain rejection rather than as the live scope it is.
-    ///
-    /// The gated read is the second, under the ascent authority a real scope
-    /// root there must answer to.
-    ///
-    /// Past both, `node`'s own record is what answers at that name until a mint
-    /// promotes it, so a rejection is the ordinary "no scope here" and the share
-    /// proceeds. A name this pass could not read leaves the question open, and
-    /// the answer that costs nothing is to retry.
-    async fn refuse_an_unindexed_scope(
+    /// Only a scope root adopted at that id ever raises a floor there, so the
+    /// floor alone answers that a live scope stands at the name a mint would
+    /// publish `node`'s under — a record the gate reports as a plain rejection
+    /// rather than as the live scope it is. Minting over it would republish at
+    /// that name under a fresh override seed and cut its grantee off a scope
+    /// they still hold.
+    async fn refuse_a_floored_target(
         &self,
         node: NodeId,
-        parent: &CascadeTarget,
-        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
-        keys: OwnerRotationKeys<'_>,
         check: &'static str,
     ) -> Result<(), EngineError> {
         if floor::read_epoch_floor(&self.seams.floor_store, &node.0)
@@ -6328,6 +6327,26 @@ where {
         {
             return Err(EngineError::UnsupportedTarget { check });
         }
+        Ok(())
+    }
+
+    /// Refuse an unindexed `node` whose derived name a live scope root already
+    /// answers at, under the ascent authority a real scope root there must
+    /// answer to.
+    ///
+    /// Past that read, `node`'s own record is what answers there until a mint
+    /// promotes it, so a rejection is the ordinary "no scope here". A name this
+    /// pass could not read leaves the question open, and the answer that costs
+    /// nothing is to retry.
+    async fn refuse_an_unindexed_scope(
+        &self,
+        node: NodeId,
+        parent: &CascadeTarget,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'_>,
+        check: &'static str,
+    ) -> Result<(), EngineError> {
+        self.refuse_a_floored_target(node, check).await?;
         let probe = OwnerScope {
             scope: ChildScopeRef::new(
                 node.0,

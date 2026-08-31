@@ -12,6 +12,8 @@ const SHARE_REFUSALS: Record<string, string> = {
     'this folder is already shared, so it takes no second grant of its own',
   'invite-target-already-names-a-scope':
     'this folder is already shared, so no further link can be minted here',
+  'resume-not-this-grant':
+    'this folder already carries a share of its own, so it takes no second one',
   'grant-parent-envelope-version-unsupported':
     'this vault was published by a newer build — update to grant here',
   'invite-parent-envelope-version-unsupported':

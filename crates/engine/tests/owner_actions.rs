@@ -662,6 +662,24 @@ impl GrantScenario {
         }))
     }
 
+    /// Drive a grant whose parent index update fails, which is the state a
+    /// mint leaves when the grantee root is live and no index names it.
+    /// Returns that root's grant section.
+    fn strand_the_grantee_scope(&mut self) -> GrantSection {
+        self.world
+            .record_store
+            .fail_put_for(write_name(ROOT).as_str());
+        assert!(
+            self.grant_folder_to_recipient().is_err(),
+            "the parent index update fails, so the mint reports the partial commit"
+        );
+        self.world
+            .record_store
+            .heal_put_for(write_name(ROOT).as_str());
+        published_grant_section(&self.world, &self.blocks, self.folder)
+            .expect("the grantee scope root is live at its derived name")
+    }
+
     fn granted_scope_repoint(&self) -> RepointObject {
         scope_repoint(&self.world, &self.folder.0)
     }
@@ -1286,34 +1304,72 @@ fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
 }
 
 /// The parent's index is written last, so a mint that published the grantee
-/// scope root and then failed leaves a live scope the index does not name. A
-/// second share of that folder must refuse: republishing at the same derived
-/// name under a fresh override seed would cut the first grantee off a scope
-/// they still hold.
+/// scope root and then failed leaves a live scope the index does not name.
+/// Re-driving the same share resumes against that root: it draws no second
+/// override seed, and the index catches up.
 #[test]
-fn a_second_share_of_a_folder_whose_scope_the_index_lost_is_refused() {
+fn a_second_share_of_a_folder_whose_scope_the_index_lost_resumes_that_scope() {
     let mut fx = GrantScenario::new();
-    // The grantee root publishes first and the parent's index update fails, so
-    // the scope goes live and nothing names it.
-    fx.world
-        .record_store
-        .fail_put_for(write_name(ROOT).as_str());
-    assert!(
-        fx.grant_folder_to_recipient().is_err(),
-        "the parent index update fails, so the mint reports the partial commit"
-    );
-    fx.world
-        .record_store
-        .heal_put_for(write_name(ROOT).as_str());
-    let stranded = published_grant_section(&fx.world, &fx.blocks, fx.folder)
-        .expect("the grantee scope root is live at its derived name");
+    let stranded = fx.strand_the_grantee_scope();
+    let first_seed = stranded_override_seed(&stranded, fx.folder);
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
 
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let resumed = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the resumed scope answers");
+    // The commitment alone would hold across a second mint: it carries the row,
+    // the name and the cut epoch, and none of those move. The override seed
+    // rides the owner blob, so it is what separates a resume from a re-mint.
+    assert!(
+        stranded_override_seed(&resumed, fx.folder) == first_seed,
+        "the re-drive resumed against the published root and minted no second seed",
+    );
     assert_eq!(
-        fx.grant_folder_to_recipient(),
+        resumed.commitment, stranded.commitment,
+        "over the same committed set",
+    );
+    assert!(
+        sequence_at(&fx.world, &write_name(ROOT)) > root_before,
+        "and the parent republished the index the first attempt owed"
+    );
+}
+
+/// The override seed in a scope root's owner blob, opened under the owner's own
+/// encryption subkey at the scope's first read epoch.
+fn stranded_override_seed(section: &GrantSection, node: NodeId) -> Zeroizing<[u8; 32]> {
+    published_override_seed(&kdf::enc_subkey(&SECRET), ENVELOPE_V, node.0, 1, section)
+        .expect("the owner blob yields the scope's override seed")
+}
+
+/// A live scope root the index lost commits the grant that minted it. A share
+/// of the same folder to another recipient is refused there rather than
+/// resumed, so no second recipient is grafted onto a scope whose committed set
+/// holds nothing for them.
+#[test]
+fn a_share_to_another_recipient_over_a_scope_the_index_lost_is_refused() {
+    let mut fx = GrantScenario::new();
+    let stranded = fx.strand_the_grantee_scope();
+
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(
+            fx.engine.command(Command::Grant {
+                node: fx.folder,
+                recipient_identity_public_key: EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+                    .expect("valid identity scalar")
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Read,
+            })
+        ),
         Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
+            check: "resume-not-this-grant"
         }),
-        "the second share is refused against the name, not the index",
     );
     assert_eq!(
         published_grant_section(&fx.world, &fx.blocks, fx.folder)
@@ -1497,9 +1553,80 @@ fn a_granted_folders_interior_re_seals_into_the_scope_the_grant_mints() {
         .expect("the grantee's own derivation opens the node inside the folder");
 }
 
-/// A stalled interior publish strands the nodes it did not move, and re-running
-/// the grant is refused at the promotion — so the host is told a retry cannot
-/// clear it, never that one will.
+/// The move the mint owes is re-drivable. A grant that stalls part way through
+/// its interior leaves nodes in two scopes, and re-driving the owner action
+/// finishes the move against the root the first attempt promoted rather than
+/// minting a second scope over it.
+#[test]
+fn a_stalled_grant_re_drives_into_the_scope_the_first_attempt_promoted() {
+    let mut fx = GrantScenario::new();
+    let one = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "one");
+    let two = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "two");
+    // The walk publishes in node-id order, so stalling the higher id leaves the
+    // lower one already moved when the re-drive picks the move up.
+    let (moved, stalled) = if one.0 < two.0 {
+        (one, two)
+    } else {
+        (two, one)
+    };
+
+    fx.world
+        .record_store
+        .fail_put_for(write_name(stalled).as_str());
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::Seam {
+            message: "rotation record not published".to_owned(),
+        }),
+    );
+    let promoted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the folder answers as a scope root the stall did not undo");
+    let first_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &promoted,
+    )
+    .expect("the owner blob yields the scope's override seed");
+
+    fx.world
+        .record_store
+        .heal_put_for(write_name(stalled).as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let resumed = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the folder still answers as a scope root");
+    let second_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &resumed,
+    )
+    .expect("the owner blob yields the scope's override seed");
+    assert!(
+        first_seed == second_seed,
+        "the re-drive resumed against the published root and minted no second seed",
+    );
+
+    for node in [moved, stalled] {
+        let head = published_head(&fx.world, &fx.blocks, &write_name(node))
+            .expect("the interior node is published");
+        let envelope = decode_envelope(&head).expect("the head decodes");
+        assert_eq!(
+            envelope.scope, fx.folder.0,
+            "every node of the subtree belongs to the scope the grant minted",
+        );
+        assert_eq!(envelope.epoch, 1, "at that scope's first epoch");
+        let read_key = kdf::read_key(kdf::node_seed(&second_seed, &node.0).as_bytes());
+        open_read_body(&envelope, read_key.as_bytes())
+            .expect("the granted scope's own derivation opens it");
+    }
+}
+
+/// A stalled interior publish leaves the grantee a scope root whose interior
+/// they cannot open, so the share pointer that names it is never posted.
 #[test]
 fn an_interior_node_that_cannot_publish_posts_no_share_pointer() {
     let mut fx = GrantScenario::new();
@@ -1514,10 +1641,11 @@ fn an_interior_node_that_cannot_publish_posts_no_share_pointer() {
         .record_store
         .fail_put_for(write_name(inner).as_str());
 
+    // Retryable, because the move it stalled in is now re-drivable.
     assert_eq!(
         fx.grant_folder_to_recipient(),
-        Err(EngineError::TrustViolation {
-            message: "grant creation failed: interior-publish-failed".to_owned(),
+        Err(EngineError::Seam {
+            message: "rotation record not published".to_owned(),
         }),
     );
     assert!(

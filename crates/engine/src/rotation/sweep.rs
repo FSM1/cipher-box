@@ -427,7 +427,7 @@ pub(crate) fn body_children(body: &ReadBody) -> Vec<NodeRef> {
 /// through the pointer consult and re-resolving at the re-pointed
 /// `currentRootName`. Returns the ref the scope resolved current at, which is
 /// the only name a repair may write into an index.
-async fn resolve_scope_current<R: SweepResolver>(
+pub(crate) async fn resolve_scope_current<R: SweepResolver>(
     resolver: &R,
     scope: &ChildScopeRef,
 ) -> Result<(ChildScopeRef, SweptScope), SweepResolveFailure> {
