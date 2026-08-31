@@ -5591,6 +5591,11 @@ mod tests {
 
     /// Run the enumeration's gated root read — the boundary-proved read a root
     /// republish runs off, which the wave always performs before it publishes.
+    ///
+    /// A root republish refuses an unparked root before `publish_moved`, so a
+    /// test that skips this call asserts that refusal and never the guard it
+    /// names. `a_root_republish_without_the_boundary_proved_read_is_refused_fail_closed`
+    /// is the one test that wants the refusal itself.
     fn enumerate_root<T: RecordTransport + Clone, F: FloorStore, E: Entropy>(
         net: &Wave<'_, T, F, E>,
     ) {
@@ -6284,6 +6289,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -6304,6 +6310,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let mut moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         // The name and its record signer still agree; only the seed the section
         // hands out no longer derives them.
@@ -6504,6 +6511,7 @@ mod tests {
 
             let owner = owner_identity();
             let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+            enumerate_root(&net);
             let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
             assert_eq!(
                 block_on(net.republish(&moved)),
@@ -6527,6 +6535,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -6560,6 +6569,7 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &plan);
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
@@ -6596,8 +6606,6 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &plan);
-        // Park the root, so the republish reaches the re-mint's own comparison
-        // rather than the unparked-root refusal ahead of it.
         enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
