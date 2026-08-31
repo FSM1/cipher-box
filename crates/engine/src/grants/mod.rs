@@ -25,9 +25,9 @@ pub(crate) mod received_status;
 pub mod revocation;
 
 pub use accept::{
-    AcceptError, AcceptOutcome, MAX_DISPLAY_NAME_BYTES, MAX_RECEIVED_SHARES, ReceivedShare,
-    ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList,
-    SentIndex, SentShare, SharePointer, TooLong, accept_share,
+    AcceptError, AcceptOutcome, BookmarkKey, MAX_DISPLAY_NAME_BYTES, MAX_RECEIVED_SHARES,
+    ReceivedShare, ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError,
+    ReceivedSharesList, SentIndex, SentShare, SharePointer, TooLong, accept_share,
 };
 pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,

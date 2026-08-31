@@ -1,8 +1,10 @@
 //! `FloorStore` — durable monotonic-max floors (blueprint/engine.md).
 
 use core::cell::Cell;
+use std::borrow::Cow;
 use std::rc::Rc;
 
+use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::{SeamError, SeamResult};
@@ -100,6 +102,16 @@ pub struct FloorRaise {
     pub value: u64,
 }
 
+/// `key` behind a fixed-width namespace `prefix`. Fixed width is the whole
+/// property: it keeps the prefixed keyspace prefix-free, so no (prefix, key)
+/// pair can spell another pair's stored key.
+fn prefixed(prefix: &[u8], key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(prefix.len() + key.len());
+    out.extend_from_slice(prefix);
+    out.extend_from_slice(key);
+    out
+}
+
 impl FloorRaise {
     /// An epoch-namespace raise.
     pub fn epoch(key: impl Into<Vec<u8>>, value: u64) -> Self {
@@ -176,10 +188,7 @@ impl<F> OwnerScopedFloorStore<F> {
         let Some(tag) = self.tag.get() else {
             return Err(SeamError::new("floor_store: no identity is bound"));
         };
-        let mut scoped = Vec::with_capacity(tag.len() + key.len());
-        scoped.extend_from_slice(&tag);
-        scoped.extend_from_slice(key);
-        Ok(scoped)
+        Ok(prefixed(&tag, key))
     }
 }
 
@@ -228,6 +237,106 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
     /// does.
     ///
     /// [`Command::ForgetDevice`]: crate::facade::Command::ForgetDevice
+    async fn clear(&self) -> SeamResult<()> {
+        self.inner.clear().await
+    }
+}
+
+/// A [`FloorStore`] view for a scope this device reads under **another party's**
+/// authority: every epoch-namespace key carries that party's identity key, so
+/// the ratchet is per-granting-authority.
+///
+/// A scope root's `scopeId` is authored by its owner and bound to nothing
+/// outside its own record, so two unrelated grants may carry one id — and a
+/// vault's own root scope id is the anchored all-zero id16 every account shares.
+/// Epoch floors are a durable monotonic ratchet nothing can lower, so one shared
+/// key lets any imported contact raise the floor of a scope it has no authority
+/// over and pin every later record of that scope below it. Binding the key to
+/// the granting identity means a raise can only restrict the scopes that
+/// identity actually granted.
+///
+/// Sequence floors pass through unprefixed: an `ipnsName` is an Ed25519 public
+/// key, so no second authority can name one it holds no signing key for.
+///
+/// The prefix changes the durable key shape with no migration, exactly as
+/// [`OwnerScopedFloorStore`]'s does: a device holding pre-cutover floors for an
+/// accepted share reads none of them back and must be forgotten, not upgraded.
+#[derive(Clone, Copy)]
+pub struct SharerScopedFloorStore<'a, F> {
+    inner: &'a F,
+    /// The granting owner's compressed SEC1 identity key, or `None` for a scope
+    /// this vault owns.
+    sharer: Option<[u8; IDENTITY_PUBLIC_LEN]>,
+}
+
+impl<'a, F> SharerScopedFloorStore<'a, F> {
+    /// The view for a scope this vault owns — the plain scope-id key every other
+    /// owner-side floor caller reads.
+    pub fn own(inner: &'a F) -> Self {
+        Self {
+            inner,
+            sharer: None,
+        }
+    }
+
+    /// The view for a scope `sharer` granted this device.
+    pub fn granted_by(inner: &'a F, sharer: [u8; IDENTITY_PUBLIC_LEN]) -> Self {
+        Self {
+            inner,
+            sharer: Some(sharer),
+        }
+    }
+
+    /// `scope_id` under the granting identity, borrowed unchanged on the owner
+    /// arm. The prefix is fixed-width, so no (identity, scope) pair can spell
+    /// another pair's stored key.
+    fn scoped<'k>(&self, scope_id: &'k [u8]) -> Cow<'k, [u8]> {
+        let Some(sharer) = &self.sharer else {
+            return Cow::Borrowed(scope_id);
+        };
+        Cow::Owned(prefixed(sharer, scope_id))
+    }
+}
+
+impl<F: FloorStore> FloorStore for SharerScopedFloorStore<'_, F> {
+    async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        self.inner.epoch_floor(&self.scoped(scope_id)).await
+    }
+
+    async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+        self.inner
+            .raise_epoch_floor(&self.scoped(scope_id), epoch)
+            .await
+    }
+
+    async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        self.inner.sequence_floor(ipns_name).await
+    }
+
+    async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+        self.inner.raise_sequence_floor(ipns_name, sequence).await
+    }
+
+    /// Prefixes the epoch entries and hands the batch on whole, so the backing's
+    /// own atomicity still covers the raises as one commit.
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
+        if self.sharer.is_none() {
+            return self.inner.commit_floors(raises).await;
+        }
+        let scoped: Vec<FloorRaise> = raises
+            .iter()
+            .map(|raise| match raise.namespace {
+                FloorNamespace::Epoch => FloorRaise {
+                    namespace: raise.namespace,
+                    key: self.scoped(&raise.key).into_owned(),
+                    value: raise.value,
+                },
+                FloorNamespace::Sequence => raise.clone(),
+            })
+            .collect();
+        self.inner.commit_floors(&scoped).await
+    }
+
     async fn clear(&self) -> SeamResult<()> {
         self.inner.clear().await
     }
@@ -295,6 +404,50 @@ mod tests {
         assert_eq!(
             block_on(bob.sequence_floor(b"y")).expect("floor read"),
             None
+        );
+    }
+
+    /// The attack the sharer prefix exists for: a contact grants a scope whose
+    /// `scopeId` collides with one this vault holds elsewhere — the anchored
+    /// all-zero root id included — at an epoch far past anything the real scope
+    /// will publish at. Under one shared key that raise is a permanent,
+    /// unrecoverable lockout, because the ratchet has no descent.
+    #[test]
+    fn a_sharer_cannot_raise_a_scope_it_did_not_grant() {
+        let store = InMemoryFloorStore::default();
+        let hostile = SharerScopedFloorStore::granted_by(&store, [0x03; IDENTITY_PUBLIC_LEN]);
+        let honest = SharerScopedFloorStore::granted_by(&store, [0x02; IDENTITY_PUBLIC_LEN]);
+        let mine = SharerScopedFloorStore::own(&store);
+
+        block_on(hostile.raise_epoch_floor(&ROOT_SCOPE, u64::MAX)).expect("the floor raises");
+        block_on(hostile.commit_floors(&[FloorRaise::epoch(ROOT_SCOPE.as_slice(), u64::MAX)]))
+            .expect("the batch commits");
+
+        assert_eq!(
+            block_on(honest.epoch_floor(&ROOT_SCOPE)).expect("floor read"),
+            None,
+            "another sharer's grant of the same scope id keeps its own floor"
+        );
+        assert_eq!(
+            block_on(mine.epoch_floor(&ROOT_SCOPE)).expect("floor read"),
+            None,
+            "and this vault's own scope is out of every contact's reach"
+        );
+    }
+
+    #[test]
+    fn sequence_floors_stay_shared_across_sharers() {
+        let store = InMemoryFloorStore::default();
+        let sharer = SharerScopedFloorStore::granted_by(&store, [0x02; IDENTITY_PUBLIC_LEN]);
+
+        block_on(sharer.raise_sequence_floor(NAME, 7)).expect("the floor raises");
+        block_on(sharer.commit_floors(&[FloorRaise::sequence(NAME, 9)]))
+            .expect("the batch commits");
+
+        assert_eq!(
+            block_on(SharerScopedFloorStore::own(&store).sequence_floor(NAME)).expect("floor read"),
+            Some(9),
+            "one name has one sequence ratchet, whoever reads it"
         );
     }
 

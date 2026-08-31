@@ -6584,7 +6584,7 @@ where {
                 sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
                 display_name: share.display_name.clone(),
                 permission: share.permission.into(),
-                resolution: verdicts.get(&share.scope_id).map(|v| v.class),
+                resolution: verdicts.get(&share.key()).map(|v| v.class),
             })
             .collect())
     }
