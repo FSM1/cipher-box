@@ -86,8 +86,8 @@ use crate::rotation::{
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
     RevokeError, RevokedCommittedSet, RotateError, RotateScopePlan, ScopeRootIdentity,
     ScopeRootPublisher, WriteHistory, WriteRevokeKind, bounded, cut_for_write_grant,
-    derive_write_name, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
-    rotate_scope, run_sweep,
+    derive_write_name, record_grant_floor, reseal_scope_root, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
@@ -6450,6 +6450,24 @@ where {
             }
 
             if outcome != ClaimOutcome::Unchanged {
+                // The owner's own grant decision, and the only evidence of one
+                // this pass holds: the conversion minted this row rather than
+                // finding it. An unchanged outcome proves nothing, because the
+                // set it matched against is the resolved record, which a
+                // committed write grantee authors
+                // (`rotation::record_grant_floor`). Ahead of the publish,
+                // because a lift alone mints no blob.
+                if let Err(e) = record_grant_floor(
+                    &self.seams.floor_store,
+                    &target.scope.scope_id,
+                    &claimant.enc_subkey(),
+                    current.current_read_epoch,
+                )
+                .await
+                {
+                    failure.get_or_insert(EngineError::from_seam(e));
+                    continue;
+                }
                 match self
                     .publish_converted_claim(session, &net, &target, &current, &commitment, &ledger)
                     .await

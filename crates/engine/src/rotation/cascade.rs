@@ -387,6 +387,7 @@ impl CascadeError {
 /// the revocation floor's.
 const REVOKED_MARKER_SUFFIX: &[u8] = b"/revoked";
 const REVOKED_ENTRY_SUFFIX: &[u8] = b"/revoked/";
+const GRANTED_ENTRY_SUFFIX: &[u8] = b"/granted/";
 
 /// The key that carries **whether** this engine ever recorded a cut at
 /// `scope_id`. Read first, so the common scope pays one floor read rather than
@@ -395,11 +396,50 @@ fn revocation_marker_key(scope_id: &[u8; 16]) -> Vec<u8> {
     [scope_id.as_slice(), REVOKED_MARKER_SUFFIX].concat()
 }
 
-/// The key that carries whether the owner cut `recipient` at `scope_id`.
-/// Membership is the whole signal; the stored epoch is a diagnostic, and no
-/// reader compares it.
+/// The key that carries the read epoch of the owner's newest cut of
+/// `recipient` at `scope_id`.
 fn revocation_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8> {
     [scope_id.as_slice(), REVOKED_ENTRY_SUFFIX, recipient].concat()
+}
+
+/// The key that carries the read epoch of the owner's newest **grant** to
+/// `recipient` at `scope_id`. A re-key withholds a blob only while the cut
+/// stands above the grant, so an owner who grants again after a cut is served
+/// and a replayed pre-cut commitment still is not: only the owner's own grant
+/// path raises this, and a replay raises nothing.
+fn grant_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8> {
+    [scope_id.as_slice(), GRANTED_ENTRY_SUFFIX, recipient].concat()
+}
+
+/// Record one owner grant of `recipient` at `scope_id`, at the read epoch the
+/// grant publishes.
+///
+/// # Caller obligation
+///
+/// `recipient` MUST be the recipient of a grant **this owner just minted**, and
+/// nothing else. Never derive it from a resolved record: a re-key withholds a
+/// blob without removing the row, and a committed write grantee can republish a
+/// pre-cut owner-signed set, so neither a ledger row nor a commitment entry is
+/// evidence that the owner grants that recipient now. Either would lift a
+/// standing cut off bytes the attacker chose.
+///
+/// The raise may run before or after the publish that carries the row. A lift
+/// alone hands out nothing: a re-seal mints one blob per **ledger row**
+/// (`reseal_scope_root`), so a recipient with no row gets no blob whatever the
+/// floor says. Raising first therefore leaves no window where a landed publish
+/// has no matching floor.
+pub(crate) async fn record_grant_floor<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    recipient: &X25519Public,
+    read_epoch: u64,
+) -> Result<u64, SeamError> {
+    floors
+        .raise_epoch_floor(
+            &grant_floor_key(scope_id, &recipient.to_bytes()),
+            read_epoch,
+        )
+        .await
 }
 
 /// Which recipients this scope's re-key must mint no blob for: the cut the
@@ -414,10 +454,14 @@ fn revocation_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Ve
 /// attests the recipient keeps its blob unless the floor says otherwise — the
 /// ancestor's cut alone no longer revokes an independent grant one level down.
 ///
+/// A cut stands only while it is newer than the owner's newest grant to the
+/// same recipient at the same scope ([`record_grant_floor`]), so an owner who
+/// grants again after a cut is served rather than silently withheld for ever.
+///
 /// The marker read comes first because the per-row work is attacker-sized: a
 /// committed write grantee sets a descendant's row count, and each row would
-/// otherwise cost one floor read and one owner-recipient DH
-/// ([`bound_recipient`]). A scope the owner never cut pays neither.
+/// otherwise cost one owner-recipient DH ([`bound_recipient`]) and up to two
+/// floor reads. A scope the owner never cut pays none of it.
 async fn effective_revoked_recipients<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
@@ -442,11 +486,16 @@ async fn effective_revoked_recipients<F: FloorStore>(
         if revoked.contains(&recipient) {
             continue;
         }
-        if floors
+        let Some(cut) = floors
             .epoch_floor(&revocation_floor_key(scope_id, &recipient))
             .await?
-            .is_some()
-        {
+        else {
+            continue;
+        };
+        let granted = floors
+            .epoch_floor(&grant_floor_key(scope_id, &recipient))
+            .await?;
+        if granted.is_none_or(|granted| cut > granted) {
             revoked.insert(recipient);
         }
     }
@@ -1366,6 +1415,97 @@ mod tests {
     }
 
     #[test]
+    fn a_recipient_the_owner_granted_again_after_the_cut_is_re_keyed() {
+        // The floor is monotonic and never clears, so a cut recorded once would
+        // withhold the recipient for ever. An owner who grants again at the same
+        // scope must be served, or the re-grant reads to that party as a
+        // definitive revocation of a grant the owner just made.
+        let net = FakeNet::new().scope(0x0a, 4, &[]);
+        let recipient = net.owner.grantee.public().to_bytes();
+        let floors = InMemoryFloorStore::default();
+        cut_at(&floors, 0x0a, &recipient, 3);
+
+        // The owner's own grant path, at the epoch the re-grant published.
+        block_on(record_grant_floor(
+            &floors,
+            &sid(0x0a),
+            &net.owner.grantee.public(),
+            4,
+        ))
+        .expect("the grant floor raises");
+
+        let (outcome, after, ..) = run_over(
+            SeededEntropy::new(0xCA5CADE),
+            floors,
+            RootFx::new(net.clone()),
+            net.clone(),
+            vec![childref(0x0a)],
+        );
+        outcome.expect("the cascade runs");
+        assert_eq!(
+            after.blob_tags(0x0a).len(),
+            1,
+            "a cut older than the owner's newest grant must not still withhold"
+        );
+    }
+
+    #[test]
+    fn a_grant_floor_lifts_only_the_recipient_it_names() {
+        // The floor must never be raised from a resolved ledger: a re-key
+        // withholds a blob without removing the row, and a write grantee can
+        // republish a pre-cut owner-signed set, so a row in a ledger is no
+        // evidence that the owner grants that recipient now. One grant lifts
+        // one cut.
+        let net = FakeNet::new().scope(0x0a, 4, &[]).scope(0x0b, 4, &[]);
+        let cut_party = net.owner.grantee.public().to_bytes();
+        let someone_else = X25519Secret::from_scalar([0x6b; 32]).public();
+        let floors = InMemoryFloorStore::default();
+        cut_at(&floors, 0x0a, &cut_party, 3);
+
+        // The owner grants somebody else at the same scope.
+        block_on(record_grant_floor(&floors, &sid(0x0a), &someone_else, 9))
+            .expect("the grant floor raises");
+
+        let (outcome, after, ..) = run_over(
+            SeededEntropy::new(0xCA5CADE),
+            floors,
+            RootFx::new(net.clone()),
+            net.clone(),
+            vec![childref(0x0a)],
+        );
+        outcome.expect("the cascade runs");
+        assert!(
+            after.blob_tags(0x0a).is_empty(),
+            "a grant to another recipient must not lift this one's cut"
+        );
+    }
+
+    #[test]
+    fn a_grant_older_than_the_cut_does_not_lift_it() {
+        // The comparison is directional: only a grant at or above the cut's
+        // epoch lifts it, so a stale grant record cannot re-admit a cut party.
+        let net = FakeNet::new().scope(0x0a, 4, &[]);
+        let recipient = net.owner.grantee.public().to_bytes();
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_epoch_floor(&grant_floor_key(&sid(0x0a), &recipient), 2))
+            .expect("the grant floor raises");
+        cut_at(&floors, 0x0a, &recipient, 3);
+
+        let (outcome, after, ..) = run_over(
+            SeededEntropy::new(0xCA5CADE),
+            floors,
+            RootFx::new(net.clone()),
+            net.clone(),
+            vec![childref(0x0a)],
+        );
+        outcome.expect("the cascade runs");
+        assert!(
+            after.blob_tags(0x0a).is_empty(),
+            "a grant older than the cut must leave the cut standing"
+        );
+    }
+
+    #[test]
     fn a_descendant_that_independently_commits_the_cut_recipient_keeps_its_blob() {
         // The revokee holds an owner-issued grant at the root and a separate,
         // uncut one at the descendant. Carrying the root's cut down would take
@@ -1428,6 +1568,9 @@ mod tests {
             revocation_floor_key(&scope, &[0x08; SECRET_LEN]),
             revocation_floor_key(&other, &[0x07; SECRET_LEN]),
             revocation_marker_key(&other),
+            grant_floor_key(&scope, &[0x07; SECRET_LEN]),
+            grant_floor_key(&scope, &[0x08; SECRET_LEN]),
+            grant_floor_key(&other, &[0x07; SECRET_LEN]),
         ];
         for (i, a) in shapes.iter().enumerate() {
             for b in &shapes[i + 1..] {
