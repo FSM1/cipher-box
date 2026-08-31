@@ -72,6 +72,7 @@ export function renderShell(root: HTMLElement, model: ShellModel, actions: Shell
   if (model.error !== null) {
     view.append(text('p', model.error, { class: 'error', role: 'alert' }));
   }
+  view.append(attribution());
   const focused = focusedName(root);
   root.replaceChildren(view);
   refocus(view, focused);
@@ -292,6 +293,22 @@ function warning({ kind, detail }: VaultWarning): HTMLElement {
     'data-vault': 'warning',
     'data-warning': kind,
   });
+}
+
+/** Shown verbatim on every screen — the licence condition, see `docs/ATTRIBUTION.md`. */
+const WINFSP_NOTICE = 'WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos';
+const WINFSP_HOME = 'https://github.com/winfsp/winfsp';
+
+/**
+ * The attribution footer. The address is text, not an anchor: this shell has no
+ * opener plugin and its CSP admits nothing but itself, so a live link would
+ * navigate the only window away from a signed-in session.
+ */
+function attribution(): HTMLElement {
+  const footer = element('footer', { class: 'attribution', 'data-attribution': 'winfsp' });
+  footer.append(note(WINFSP_NOTICE));
+  footer.append(note(WINFSP_HOME));
+  return footer;
 }
 
 function note(message: string): HTMLElement {

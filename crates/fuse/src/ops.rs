@@ -45,6 +45,12 @@ pub struct Attributes {
 }
 
 /// One entry in a directory listing.
+///
+/// Carries the attributes an enumeration has to report, not just the name: a
+/// FUSE `readdir` needs the name and kind alone, but a WinFsp one answers with
+/// a whole `FSP_FSCTL_DIR_INFO`, and re-`getattr`-ing every child to fill it
+/// would put a whole directory into the engine's focus window. Both come out of
+/// the one render the listing already made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
     /// The session's inode number for the child.
@@ -53,6 +59,12 @@ pub struct DirEntry {
     pub name: String,
     /// File or folder.
     pub kind: NodeKind,
+    /// Plaintext size in bytes, `None` until the content plane projects one —
+    /// the same provisional number [`Attributes::size`] carries, on the same
+    /// terms.
+    pub size: Option<u64>,
+    /// Modification time in Unix millis, once projected.
+    pub mtime_millis: Option<u64>,
 }
 
 /// One writable handle's uncommitted content: the sealed spill its writes
@@ -469,6 +481,12 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             .into_iter()
             .map(|child| DirEntry {
                 ino: self.inodes.ino_for(child.id),
+                // A child a handle is still writing is as long as that handle
+                // has made it, exactly as `attributes` reports it — a listing
+                // that disagreed with the `getattr` beside it would show a
+                // stale length for a file this mount is holding open.
+                size: self.pending_len(child.id).or(child.size),
+                mtime_millis: child.mtime,
                 name: child.name,
                 kind: child.kind,
             })
@@ -525,6 +543,20 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// Remove an empty directory.
     pub async fn rmdir(&mut self, parent: u64, name: &str) -> Result<(), VfsError> {
         self.remove(parent, name, NodeKind::Folder).await
+    }
+
+    /// Whether [`unlink`](Self::unlink) or [`rmdir`](Self::rmdir) would be
+    /// allowed to make `ino` vanish, without making it vanish.
+    ///
+    /// For a host that decides a delete's disposition one call before it
+    /// carries the delete out: the same predicate the removal itself gates on,
+    /// so an approved disposition cannot fail at a step that has no status to
+    /// report.
+    pub async fn removable(&mut self, ino: u64, kind: NodeKind) -> Result<(), VfsError> {
+        let view = self.render().await?;
+        let node = self.node_of(ino)?;
+        let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
+        removable(&view, &meta, kind)
     }
 
     /// Move and/or rename a node, replacing an existing destination the way
@@ -712,6 +744,23 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         pending.len = pending.len.max(end);
         pending.dirty = true;
         Ok(took)
+    }
+
+    /// The length an append on `handle` lands at.
+    ///
+    /// Not [`getattr`](Self::getattr)'s size, which is provisional until the
+    /// content plane projects one: a host that took an unprojected `None` for
+    /// the end of the file would append at offset zero and overwrite its head,
+    /// silently, because the length the version publishes would still be right.
+    /// Resolving the head is what projects the length, and this is the call
+    /// that forces it.
+    pub async fn append_offset(&mut self, handle: HandleId) -> Result<u64, VfsError> {
+        let open = self.handles.get(handle).ok_or(VfsError::BadHandle)?;
+        if !open.access.writable() {
+            return Err(VfsError::BadHandle);
+        }
+        self.begin_pending(handle, open.node).await?;
+        Ok(self.pending.get(&handle).ok_or(VfsError::BadHandle)?.len)
     }
 
     /// Set a file's length.

@@ -125,6 +125,14 @@ The adapter trait carries, in each direction:
 | Invalidation | SMB-backend invalidation (added 1.2.1) — **mount with `noattrcache`**, verified on hardware (`tools/hw-gates/RESULTS.md`) | `inval_inode`/`inval_entry`                               | WinFsp notify API        | `FSVolume.DataCacheHandler`                                                                                               |
 | Status       | ship v2.0                                                                                                                 | ship v2.0                                                 | ship v2.0                | designed-for; FSKit spike **passed** on macOS 27 (`tools/hw-gates/fskit-spike/RESULTS.md`) — successor timeline unblocked |
 
+**Windows licensing.** WinFsp and the winfsp-rs binding the adapter is built on
+are GPLv3, so the Windows build is a combined work distributed under GPLv3, with
+WinFsp's commercial licence as the alternative. Two conditions ride with that and
+are part of the backend, not paperwork beside it: the notice **"WinFsp - Windows
+File System Proxy, Copyright (C) Bill Zissimopoulos"** and a pointer to
+<https://github.com/winfsp/winfsp> are shown in the desktop UI and stated in
+`docs/ATTRIBUTION.md`, and no proprietary software is bundled alongside WinFsp.
+
 macFUSE stays rejected (kext install friction, license, fuser ABI divergence);
 File Provider stays a fallback-only note (its plaintext replica is an E2EE
 regression). The hardware verification gates from FSM1/cipher-box-next#32 — SMB invalidation

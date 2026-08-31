@@ -13,6 +13,7 @@ fn main() {
         println!("cargo:rerun-if-env-changed={variable}");
     }
     link_fuse_t_rpath();
+    link_winfsp_delayload();
     tauri_build::build();
 }
 
@@ -34,3 +35,18 @@ fn link_fuse_t_rpath() {
         Err(e) => println!("cargo:warning=fuse-t.pc not found, linking no rpath: {e}"),
     }
 }
+
+/// The shell links the Windows host adapter, and WinFsp supports delay-loading
+/// only, so this binary states the `/DELAYLOAD` arg for the same reason it
+/// states the FUSE-T rpath — see `crates/fuse/build.rs`. Without it the shell
+/// carries a static import on `winfsp-x64.dll` and will not start on a device
+/// that has it installed anywhere but `PATH`.
+#[cfg(windows)]
+fn link_winfsp_delayload() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        winfsp::build::winfsp_link_delayload();
+    }
+}
+
+#[cfg(not(windows))]
+fn link_winfsp_delayload() {}

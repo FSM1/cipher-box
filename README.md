@@ -216,4 +216,10 @@ colleagues who worked on the original ChainSafe Files project.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE).
+
+The Windows desktop app mounts through **WinFsp - Windows File System Proxy,
+Copyright (C) Bill Zissimopoulos** (<https://github.com/winfsp/winfsp>), which is
+GPLv3; that build is a combined work distributed under GPLv3. See
+[`docs/ATTRIBUTION.md`](docs/ATTRIBUTION.md) for the full notice and for the
+other mount backends.

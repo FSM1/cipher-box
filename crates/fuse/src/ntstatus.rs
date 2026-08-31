@@ -21,7 +21,8 @@ const STATUS_FILE_IS_A_DIRECTORY: NtStatus = 0xC000_00BA_u32 as i32;
 const STATUS_DIRECTORY_NOT_EMPTY: NtStatus = 0xC000_0101_u32 as i32;
 const STATUS_OBJECT_NAME_COLLISION: NtStatus = 0xC000_0035_u32 as i32;
 const STATUS_INVALID_PARAMETER: NtStatus = 0xC000_000D_u32 as i32;
-const STATUS_OBJECT_NAME_INVALID: NtStatus = 0xC000_0033_u32 as i32;
+/// Also the status for a request naming text the projection could not store.
+pub(crate) const STATUS_OBJECT_NAME_INVALID: NtStatus = 0xC000_0033_u32 as i32;
 const STATUS_NAME_TOO_LONG: NtStatus = 0xC000_0106_u32 as i32;
 const STATUS_INVALID_HANDLE: NtStatus = 0xC000_0008_u32 as i32;
 const STATUS_DISK_FULL: NtStatus = 0xC000_007F_u32 as i32;

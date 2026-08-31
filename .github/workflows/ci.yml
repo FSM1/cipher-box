@@ -829,6 +829,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The authoritative leg for the WinFsp host adapter: it is the only one
+      # that compiles `crates/fuse`'s Windows target, and `winfsp-sys` builds
+      # its bindings against the headers and import library the MSI installs.
+      # Ahead of the cache restore, because the bindings it generates are
+      # cached under `target`.
+      - uses: ./.github/actions/setup-winfsp
+
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -840,6 +847,14 @@ jobs:
 
       - name: Cargo check (workspace)
         run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
+
+      # The `lint` job clippies on Linux, where the WinFsp adapter does not
+      # exist, so this is the only leg that can lint it at all. Same flags as
+      # that job, narrowed to the crate whose Windows target this leg is
+      # authoritative for — widening it is a separate change, because the rest
+      # of the workspace has never been linted on this platform.
+      - name: Cargo clippy (the Windows host adapter)
+        run: cargo clippy -p cipherbox-fuse -p cipherbox-win-security --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
@@ -1066,6 +1081,13 @@ jobs:
       # `fuse-t.pc` at build time (blueprint/desktop.md "Backends").
       - uses: ./.github/actions/setup-fuse-t
         if: runner.os == 'macOS'
+
+      # And the Windows one, whose `winfsp-sys` generates its bindings against
+      # the headers and import library the MSI installs — the shell links the
+      # adapter and states WinFsp's `/DELAYLOAD` arg itself, so this leg needs
+      # the driver as much as the leg that checks the adapter does.
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

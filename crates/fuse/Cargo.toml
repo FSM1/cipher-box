@@ -11,6 +11,18 @@ publish.workspace = true
 # Reads FUSE-T's libdir back out of `fuse-t.pc` for the macOS rpath.
 pkg-config = "0.3"
 
+[target.'cfg(windows)'.build-dependencies]
+# WinFsp is only ever delay-loaded, and the `/DELAYLOAD` link arg that makes it
+# so does not cross a dependency's build script — every package that links the
+# adapter states it, this one for its own test binaries. The feature set matches
+# the runtime dependency's exactly, so `winfsp-sys` is built once rather than
+# twice under the v2 resolver's split feature graphs.
+winfsp = { version = "0.12", default-features = false, features = [
+  "notify",
+  "delayload",
+  "system",
+] }
+
 [features]
 # Compiles the seam constructor the vfs suite drives the spill area through.
 # Never enabled in a production build: it is activated only by this crate's own
@@ -52,6 +64,31 @@ nix = { version = "0.29", features = ["user"] }
 # "Backends"). Default features select the pure-Rust `fusermount3` mount path,
 # so building the adapter needs no libfuse3 headers.
 fuser = { path = "../../third-party/fuser", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+# WinFsp's user-mode filesystem host, through winfsp-rs — the only mount
+# technology Windows has (blueprint/desktop.md "Backends"). Both are GPLv3;
+# what that means for the combined work is in `docs/ATTRIBUTION.md`.
+#
+# `system` resolves WinFsp through `HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir`
+# — the headers and import library at build time, the DLL at `winfsp_init` — so
+# the mount links against the driver the MSI actually installed rather than a
+# vendored copy. `notify` is the push-invalidation path; `delayload` matches the
+# build dependency's feature set.
+winfsp = { version = "0.12", default-features = false, features = [
+  "notify",
+  "delayload",
+  "system",
+] }
+# The session thread hands operations to the engine task over these — the same
+# channel the FUSE backends use, so both adapters wait the same way.
+futures-channel.workspace = true
+futures-core.workspace = true
+# WinFsp speaks UTF-16 at every name-bearing edge; the engine stores UTF-8.
+widestring = "1"
+# The Windows FFI shapes this crate cannot express, because it forbids
+# `unsafe`. The descriptor itself is assembled here, in safe Rust.
+cipherbox-win-security = { path = "../win-security" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The pure-Rust mount path is `fusermount3`, Linux only, so macOS links a

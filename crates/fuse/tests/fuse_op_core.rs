@@ -432,6 +432,36 @@ fn unlink_and_rmdir_hold_each_other_to_their_own_kind() {
     );
 }
 
+/// A host that decides a delete's disposition before it carries the delete out
+/// has to be told the same verdict the removal itself would reach — the step
+/// that carries it out may have no status to report the difference with.
+#[test]
+fn removable_answers_what_the_removal_itself_would() {
+    let (mut core, _adapter) = mount();
+    let dir = block_on(core.mkdir(ROOT_INO, "dir")).unwrap();
+    let (file, _) = block_on(core.create(ROOT_INO, "f.txt", Access::Write)).unwrap();
+    block_on(core.create(dir.ino, "inner", Access::Write)).unwrap();
+
+    assert_eq!(
+        block_on(core.removable(dir.ino, NodeKind::Folder)),
+        Err(VfsError::NotEmpty)
+    );
+    assert_eq!(
+        block_on(core.removable(dir.ino, NodeKind::File)),
+        Err(VfsError::IsADirectory)
+    );
+    assert_eq!(
+        block_on(core.removable(file.ino, NodeKind::Folder)),
+        Err(VfsError::NotADirectory)
+    );
+    block_on(core.removable(file.ino, NodeKind::File)).expect("a file is always removable");
+
+    block_on(core.unlink(dir.ino, "inner")).unwrap();
+    block_on(core.removable(dir.ino, NodeKind::Folder)).expect("an emptied folder is removable");
+    // The verdict and the removal agree, which is the whole contract.
+    block_on(core.rmdir(ROOT_INO, "dir")).unwrap();
+}
+
 #[test]
 fn an_inode_survives_a_rename() {
     let (mut core, _adapter) = mount();
@@ -949,6 +979,72 @@ fn a_case_insensitive_host_resolves_a_respelling_to_the_name_as_entered() {
         names(&mut core, ROOT_INO),
         vec!["Report.txt".to_owned()],
         "the stored name is never mutated by how it was looked up"
+    );
+}
+
+/// The Windows host adapter's own profile, driven through the core the way
+/// WinFsp drives it: a respelling resolves onto the stored name, every
+/// operation that names an existing node resolves the same way, and the strict
+/// comparator still decides every collision.
+///
+/// The generic tests above prove the rule; this one proves the WinFsp backend
+/// is the mount that ships it, so a profile that stopped declaring it would
+/// fail here rather than at a member's Explorer window.
+#[cfg(windows)]
+#[test]
+fn the_winfsp_profile_presents_names_the_windows_way() {
+    let adapter = RecordingAdapter::declaring(cipherbox_fuse::WINFSP_CAPABILITIES);
+    let mut core = mount_with(adapter);
+    let created = block_on(core.create(ROOT_INO, "Report.txt", Access::ReadWrite)).expect("create");
+    block_on(core.mkdir(ROOT_INO, "Archive")).expect("mkdir");
+
+    let found = block_on(core.lookup(ROOT_INO, "REPORT.TXT")).expect("the respelling resolves");
+    assert_eq!(found.node, created.0.node);
+    assert_eq!(
+        names(&mut core, ROOT_INO),
+        vec!["Archive".to_owned(), "Report.txt".to_owned()],
+        "the stored name is never mutated by how it was looked up"
+    );
+
+    assert_eq!(
+        block_on(core.create(ROOT_INO, "report.txt", Access::ReadWrite)).err(),
+        Some(VfsError::AlreadyExists),
+        "presentation is not collision policy"
+    );
+    assert_eq!(
+        block_on(core.mkdir(ROOT_INO, "ARCHIVE")).err(),
+        Some(VfsError::AlreadyExists)
+    );
+
+    // A mount that resolves a respelling has to remove through one too, or a
+    // name Explorer shows is a name nothing can delete.
+    block_on(core.rmdir(ROOT_INO, "ARCHIVE")).expect("rmdir through the respelling");
+    block_on(core.unlink(ROOT_INO, "REPORT.TXT")).expect("unlink through the respelling");
+    assert!(names(&mut core, ROOT_INO).is_empty());
+}
+
+/// An append is relative to the end of the file, and the size a read-path
+/// reply carries is provisional — `None` until the content plane projects one.
+/// A host that read that as zero would land the append on the file's head and
+/// say nothing, because the version it publishes still carries the right total
+/// length. `append_offset` resolves the head instead, and refuses when it
+/// cannot: a length nobody can state is not a length to append at.
+#[test]
+fn an_append_offset_refuses_a_length_it_cannot_resolve() {
+    let (mut engine, root) = started_engine();
+    seed_child(&mut engine, root, "unresolved.txt", NodeKind::File);
+    let mut core = mount_over(engine);
+
+    let found = block_on(core.lookup(ROOT_INO, "unresolved.txt")).expect("the seeded file");
+    assert_eq!(found.size, None, "nothing has projected a length");
+
+    let handle = block_on(core.open(found.ino, Access::ReadWrite)).expect("the file opens");
+    assert!(
+        matches!(
+            block_on(core.append_offset(handle)),
+            Err(VfsError::Unavailable { .. })
+        ),
+        "an unresolvable length refuses rather than reading as zero"
     );
 }
 
@@ -2281,6 +2377,48 @@ mod published {
 
     fn opened(mount: &mut Mount) -> HandleId {
         block_on(mount.core.open(mount.ino, Access::Read)).expect("the file opens")
+    }
+
+    /// An append lands after every byte the file already has, and reading the
+    /// file back is what proves it — a version published at the right total
+    /// length can still have had its head overwritten.
+    #[test]
+    fn an_append_lands_after_every_published_byte() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle =
+            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+
+        let at = block_on(mount.core.append_offset(handle)).expect("the head resolves");
+        assert_eq!(at, plaintext.len() as u64);
+
+        let tail = b"appended";
+        block_on(mount.core.write(handle, at, tail)).expect("the append lands");
+        block_on(mount.core.release(handle)).expect("the append journals");
+        advance_and_pump(&mut mount);
+
+        let reader = opened(&mut mount);
+        let whole = block_on(mount.core.read(reader, 0, 4096)).expect("the file reads back");
+        let mut expected = plaintext.clone();
+        expected.extend_from_slice(tail);
+        assert_eq!(whole, expected, "the published bytes survive the append");
+    }
+
+    /// A writable handle is what an append is relative to; nothing else can be.
+    #[test]
+    fn an_append_offset_is_refused_on_a_handle_that_cannot_write() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let reader = opened(&mut mount);
+
+        assert_eq!(
+            block_on(mount.core.append_offset(reader)),
+            Err(VfsError::BadHandle)
+        );
+        assert_eq!(
+            block_on(mount.core.append_offset(HandleId(9999))),
+            Err(VfsError::BadHandle)
+        );
     }
 
     #[test]

@@ -35,7 +35,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
-use crate::adapters::stale;
+use crate::adapters::{ADVISORY_CAPACITY_BYTES, Listed, cursor_of, stale};
 use crate::errno::errno_of;
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
@@ -55,12 +55,6 @@ const STAT_BLOCK_BYTES: u64 = 512;
 /// the chunk cache's, and nothing here is served better by a larger hint.
 const PREFERRED_IO_BYTES: u32 = 4096;
 
-/// The capacity `statfs` advertises. Byte accounting does not reach the facade,
-/// and a mount that answers zero free space is refused *before* the write by
-/// clients that read `statfs` first; a write over a real budget is still refused
-/// where it belongs, by the engine's `ENOSPC`/`EDQUOT`.
-const ADVISORY_CAPACITY_BYTES: u64 = 1 << 40;
-
 /// The node-count counterpart of [`ADVISORY_CAPACITY_BYTES`]: the nodes in use
 /// are truthful, the headroom above them is not.
 const ADVISORY_FREE_NODES: u64 = 1 << 20;
@@ -76,14 +70,6 @@ const FILE_MODE: u16 = 0o600;
 /// The directory counterpart of [`FILE_MODE`] — traversal needs the execute
 /// bit.
 const DIRECTORY_MODE: u16 = 0o700;
-
-/// `.` and `..`, which a listing synthesizes ahead of the children the core
-/// hands back. Both name the directory itself — the kernel resolves `..`
-/// through lookup and its own dcache, never through the inode a listing
-/// reports.
-const DOT_NAMES: [&str; 2] = [".", ".."];
-
-const DOT_ENTRIES: usize = DOT_NAMES.len();
 
 /// A request the projection cannot even name. Answered through the shared table
 /// rather than beside it, so no adapter drifts from another.
@@ -1017,37 +1003,17 @@ fn reply_statfs(reply: ReplyStatfs, stats: StatFs) {
     );
 }
 
-/// The core cursor a kernel `readdir` offset resumes at. The kernel counts the
-/// synthesized [`DOT_NAMES`] ahead of the children; the core counts children
-/// alone.
-fn cursor_of(offset: usize) -> usize {
-    offset.saturating_sub(DOT_ENTRIES)
-}
-
-/// One page in the kernel's offset space: the dot entries this `offset` has not
-/// passed, then `entries` — which the core already resumed at
-/// [`cursor_of(offset)`](cursor_of). Each carries the offset the kernel resumes
-/// at, which is the one *after* it.
+/// One [`crate::adapters::page`] as the FUSE wire spells it: a dot entry names
+/// the directory itself, and the resume position is the kernel's cookie.
 fn page(
     ino: u64,
     offset: usize,
     entries: &[DirEntry],
 ) -> impl Iterator<Item = (u64, NodeKind, &str, i64)> {
-    let dots = DOT_NAMES
-        .iter()
-        .enumerate()
-        .skip(offset.min(DOT_ENTRIES))
-        .map(move |(index, name)| (ino, NodeKind::Folder, *name, index as i64 + 1));
-    let base = offset.max(DOT_ENTRIES);
-    let children = entries.iter().enumerate().map(move |(step, child)| {
-        (
-            child.ino,
-            child.kind,
-            child.name.as_str(),
-            (base + step) as i64 + 1,
-        )
-    });
-    dots.chain(children)
+    crate::adapters::page(offset, entries).map(move |(listed, resume_at)| match listed {
+        Listed::Dot(name) => (ino, NodeKind::Folder, name, resume_at as i64),
+        Listed::Child(child) => (child.ino, child.kind, child.name.as_str(), resume_at as i64),
+    })
 }
 
 /// Pack one [`page`] into the reply buffer, stopping where it fills.
@@ -1107,6 +1073,7 @@ mod tests {
     use cipherbox_engine::NodeId;
 
     use super::*;
+    use crate::adapters::DOT_ENTRIES;
 
     fn owner() -> Ownership {
         Ownership { uid: 501, gid: 20 }
@@ -1252,6 +1219,8 @@ mod tests {
             ino,
             name: name.to_owned(),
             kind: NodeKind::File,
+            size: Some(0),
+            mtime_millis: None,
         }
     }
 

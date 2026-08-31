@@ -37,6 +37,12 @@ pub use adapters::fuse::{FuseInvalidator, FuseMount, KernelOp};
 pub use adapters::linux::mount;
 #[cfg(target_os = "macos")]
 pub use adapters::macos::mount;
+#[cfg(windows)]
+pub use adapters::windows::mount;
+#[cfg(windows)]
+pub use adapters::windows::{
+    CAPABILITIES as WINFSP_CAPABILITIES, KernelOp, WinFspInvalidator, WinFspMount,
+};
 pub use cache::CacheBudget;
 #[cfg(unix)]
 pub use errno::errno_of;
