@@ -8,9 +8,10 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  readsBack,
   readsThrough,
   rendersItems,
   withInstances,
@@ -28,10 +29,12 @@ export const offlineReplay: Scenario = {
       await context.stack.stopApi();
 
       await writeFile(join(a.mountRoot, QUEUED_FILE), QUEUED_TEXT);
-      assert.equal(
-        await readFile(join(a.mountRoot, QUEUED_FILE), 'utf8'),
+      await readsBack(
+        context,
+        `${a.name}: the mount to serve what it took while the API was away`,
+        join(a.mountRoot, QUEUED_FILE),
         QUEUED_TEXT,
-        'the mount serves what it took while the API was away'
+        context.deadlines.refreshMs
       );
       const queued = await rendersItems(context, a, 1, 'the offline write to render');
       assert.equal(queued.deadLetters, 0, 'a write taken while offline is journaled, not lost');

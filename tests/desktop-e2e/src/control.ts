@@ -181,6 +181,18 @@ async function send(
   return parseResponse(line);
 }
 
+/** The endpoint answered and refused the verb. Its own class, because a shell
+ * that is still starting refuses `status` and that is a state to wait out. */
+export class ControlRefusal extends Error {
+  constructor(
+    readonly verb: ControlVerb,
+    readonly refusal: string
+  ) {
+    super(`the control endpoint refused ${verb}: ${refusal}`);
+    this.name = 'ControlRefusal';
+  }
+}
+
 /** Sends one verb and turns a refusal into a throw. */
 export async function sendOrThrow(
   endpoint: ControlEndpoint,
@@ -188,7 +200,7 @@ export async function sendOrThrow(
   timeoutMs: number
 ): Promise<ControlResponse & { ok: true }> {
   const answer = await send(endpoint, verb, timeoutMs);
-  if (!answer.ok) throw new Error(`the control endpoint refused ${verb}: ${answer.error}`);
+  if (!answer.ok) throw new ControlRefusal(verb, answer.error);
   return answer;
 }
 

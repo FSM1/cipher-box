@@ -7,9 +7,10 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  readsBack,
   refuses,
   rendersItems,
   withInstances,
@@ -32,18 +33,22 @@ export const writeRoundTrip: Scenario = {
       await rendersItems(context, a, 1, 'a folder made at the mount root to render a child');
 
       await writeFile(join(a.mountRoot, ROOT_FILE), 'at the root');
-      assert.equal(
-        await readFile(join(a.mountRoot, ROOT_FILE), 'utf8'),
-        'at the root',
-        'a file made at the mount root reads back what was written'
-      );
       await rendersItems(context, a, 2, 'a file made at the mount root to render a child');
+      await readsBack(
+        context,
+        `${a.name}: ${ROOT_FILE} at the mount root`,
+        join(a.mountRoot, ROOT_FILE),
+        'at the root',
+        context.deadlines.refreshMs
+      );
 
       await writeFile(join(a.mountRoot, FOLDER, NESTED_FILE), 'inside a folder');
-      assert.equal(
-        await readFile(join(a.mountRoot, FOLDER, NESTED_FILE), 'utf8'),
+      await readsBack(
+        context,
+        `${a.name}: ${NESTED_FILE} inside a folder`,
+        join(a.mountRoot, FOLDER, NESTED_FILE),
         'inside a folder',
-        'a file made inside a folder reads back what was written'
+        context.deadlines.refreshMs
       );
       // The root still holds two children: the nested file is the folder's.
       await rendersItems(context, a, 2, 'a nested file to leave the root count alone');

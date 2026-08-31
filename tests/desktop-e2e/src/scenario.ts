@@ -124,6 +124,33 @@ export async function refuses(
 }
 
 /**
+ * Waits until `path` under a mount reads back `text`.
+ *
+ * A read that follows a write is not instant. The write journals one op and its
+ * content resolves after that, and until it does the projection answers the
+ * retryable `EAGAIN` rather than blocking (blueprint/desktop.md "Reads, writes,
+ * and the never-block law"). A read that lands ahead of it sees the version
+ * before the write, which for a create is an empty file.
+ */
+export async function readsBack(
+  context: ScenarioContext,
+  what: string,
+  path: string,
+  text: string,
+  timeoutMs: number
+): Promise<void> {
+  await poll(
+    () => contentOf(path),
+    (read) => read === text,
+    {
+      what: `${what} to read back what was written`,
+      timeoutMs,
+      intervalMs: context.deadlines.intervalMs,
+    }
+  );
+}
+
+/**
  * Waits until `instance` lists `name` at its mount root and reads `text` back
  * from it, and hands back the whole listing.
  *
@@ -139,22 +166,33 @@ export async function readsThrough(
   text: string,
   timeoutMs: number
 ): Promise<string[]> {
-  const listed = await poll(
+  const seen = await poll(
     async () => {
       await instance.refresh();
-      return readdir(instance.mountRoot);
+      const listed = await readdir(instance.mountRoot);
+      const read = listed.includes(name)
+        ? await contentOf(join(instance.mountRoot, name))
+        : 'not listed';
+      return { listed, read };
     },
-    (names) => names.includes(name),
+    (found) => found.read === text,
     {
-      what: `${instance.name}: the mount to list ${name}`,
+      what: `${instance.name}: the mount to serve ${name}`,
       timeoutMs,
       intervalMs: context.deadlines.intervalMs,
     }
   );
-  assert.equal(
-    await readFile(join(instance.mountRoot, name), 'utf8'),
-    text,
-    `${instance.name} reads back the content published with ${name}`
-  );
-  return listed;
+  return seen.listed;
+}
+
+/**
+ * The file's content, or the error code a read that the projection refused
+ * carried — so a wait that runs out reports the refusal rather than a stack.
+ */
+async function contentOf(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code ?? 'the read failed';
+  }
 }
