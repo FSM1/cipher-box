@@ -77,6 +77,12 @@ pub enum InviteMintError {
     /// the scope-root publish; past it the record is live and
     /// [`CreateGrantError`] states what stayed behind.
     Create(CreateGrantError),
+    /// The plan carries a write cut, so it mints at
+    /// [`Permission::Write`](cipherbox_core::seal::Permission::Write). The
+    /// fragment and the recorded tag both bind the pre-cut scope root name, and
+    /// the cut moves that name — so the link would be unclaimable at the name it
+    /// carries. Refused before anything seals.
+    WriteCut,
 }
 
 impl fmt::Display for InviteMintError {
@@ -85,6 +91,9 @@ impl fmt::Display for InviteMintError {
             InviteMintError::Mint(e) => write!(f, "{e}"),
             InviteMintError::Store(e) => write!(f, "{e}"),
             InviteMintError::Create(e) => write!(f, "{e}"),
+            InviteMintError::WriteCut => {
+                f.write_str("an invite link mints read-only, so a write-cut plan is refused")
+            }
         }
     }
 }
@@ -112,6 +121,10 @@ where
     P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
     S: InviteStore,
 {
+    // Release-active, ahead of every seal ([`InviteMintError::WriteCut`]).
+    if plan.grantee.write_cut.is_some() {
+        return Err(InviteMintError::WriteCut);
+    }
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
     let minted = mint_invite_grant(
         owner.identity_signer,
@@ -394,6 +407,14 @@ mod tests {
             &self,
             expires_at: Option<UnixMillis>,
         ) -> Result<MintedInviteLink, InviteMintError> {
+            self.mint_with(expires_at, None)
+        }
+
+        fn mint_with(
+            &self,
+            expires_at: Option<UnixMillis>,
+            write_cut: Option<&[u8; SECRET_LEN]>,
+        ) -> Result<MintedInviteLink, InviteMintError> {
             let owner_enc_pub = self.enc.public();
             let grantee = GranteeScopePlan {
                 v: V,
@@ -401,7 +422,7 @@ mod tests {
                 parent_node_seed: &PARENT_NODE_SEED,
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &WRITE_SCOPE_SEED,
-                write_cut: None,
+                write_cut,
                 write_epoch: 1,
                 pointer_read_key: &POINTER_READ_KEY,
                 subtree_child_index: &[],
@@ -573,6 +594,28 @@ mod tests {
             f.recovered().len(),
             1,
             "the record landed before the publish",
+        );
+    }
+
+    /// A write cut moves the scope root name the fragment and the record both
+    /// bind, so a write link is unclaimable at the name it carries. The refusal
+    /// is a runtime `Err`, never a debug_assert. Active in release.
+    #[test]
+    fn a_plan_that_cuts_a_write_scope_mints_no_link_release_active() {
+        let f = Fixture::new();
+
+        let refused = f
+            .mint_with(None, Some(&OVERRIDE_SEED))
+            .expect_err("a write plan mints no link");
+
+        assert!(matches!(refused, InviteMintError::WriteCut));
+        assert!(
+            f.recovered().is_empty(),
+            "the refusal precedes the record, so no durable slot is spent",
+        );
+        assert!(
+            f.net.published.borrow().is_empty(),
+            "and nothing publishes at a name the cut would move",
         );
     }
 }

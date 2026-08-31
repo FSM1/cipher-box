@@ -1295,6 +1295,9 @@ impl EngineError {
             InviteMintError::Mint(e) => EngineError::from_invite(e),
             InviteMintError::Store(e) => EngineError::from_invite_store(e),
             InviteMintError::Create(e) => EngineError::from_create_grant(e),
+            InviteMintError::WriteCut => EngineError::UnsupportedTarget {
+                check: WRITE_LINK_CHECK,
+            },
         }
     }
 
@@ -1886,6 +1889,10 @@ enum UnindexedScope {
     Derive,
 }
 
+/// The name an invite-link mint at `Permission::Write` reports. The mint owes
+/// the same refusal ([`InviteMintError::WriteCut`]), and both report this.
+const WRITE_LINK_CHECK: &str = "write-links-need-a-write-scope-cut";
+
 /// How far a committed-set cut goes at the tag it names.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CutKind {
@@ -1894,6 +1901,17 @@ enum CutKind {
     /// Demote a write row to read, keeping the recipient committed
     /// ([`WriteRevokeKind::DowngradeToRead`]).
     Downgrade,
+}
+
+impl CutKind {
+    /// The name this cut reports for a target that names no scope root. One
+    /// rule, one name per command, as [`ShareChecks`] does for share actions.
+    fn target_check(self) -> &'static str {
+        match self {
+            CutKind::Revoke => "revoke-target-is-not-a-scope-root",
+            CutKind::Downgrade => "downgrade-target-is-not-a-scope-root",
+        }
+    }
 }
 
 impl OwnerScope {
@@ -4596,7 +4614,7 @@ where {
             .await?;
         self.cut_and_rotate(
             node,
-            "revoke-target-is-not-a-scope-root",
+            kind.target_check(),
             UnindexedScope::Refuse,
             kind,
             async |target: &OwnerScope, _current: &CascadeTarget| {
@@ -4791,7 +4809,7 @@ where {
         // not admit.
         if permission == Permission::Write {
             return Err(EngineError::UnsupportedTarget {
-                check: "write-links-need-a-write-scope-cut",
+                check: WRITE_LINK_CHECK,
             });
         }
         self.share_scope(node, ScopeShare::InviteLink { expires_at }, permission)

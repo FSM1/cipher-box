@@ -602,10 +602,13 @@ impl GrantScenario {
     }
 
     /// The permission the owner's own commitment at `name` carries for the
-    /// recipient, or `None` when it commits no row for them.
+    /// recipient, or `None` when it commits no row for them. A name no section
+    /// answers at panics, so `None` reports the tag and never a silent
+    /// non-publish.
     fn committed_permission(&self, name: &IpnsName) -> Option<CorePermission> {
         let tag = Self::recipient_tag(name);
-        published_grant_section_at(&self.world, &self.blocks, name)?
+        published_grant_section_at(&self.world, &self.blocks, name)
+            .expect("a scope root answers at the name the pointer vouches for")
             .commitment
             .entries
             .iter()
@@ -1807,6 +1810,33 @@ fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violati
         recorded_links(&alice).len(),
         1,
         "a refused revoke forgets nothing"
+    );
+}
+
+/// A revoke and a downgrade are different actions to a user, so an ordinary
+/// folder refuses each under its own name.
+#[test]
+fn a_cut_at_an_ordinary_folder_reports_the_name_of_the_command_it_refused() {
+    let mut fx = GrantScenario::new();
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: recipient.clone(),
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "revoke-target-is-not-a-scope-root"
+        }),
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::Downgrade {
+            node: fx.folder,
+            recipient_identity_public_key: recipient,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "downgrade-target-is-not-a-scope-root"
+        }),
     );
 }
 

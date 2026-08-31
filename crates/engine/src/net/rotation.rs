@@ -6596,6 +6596,9 @@ mod tests {
 
         let owner = owner_identity();
         let net = wave(&harness, &owner, &root.name, &plan);
+        // Park the root, so the republish reaches the re-mint's own comparison
+        // rather than the unparked-root refusal ahead of it.
+        enumerate_root(&net);
         let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
         assert_eq!(
             block_on(net.republish(&moved)),
