@@ -51,7 +51,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::content::limits::{MAX_RESEALABLE_SECTION_BYTES, MAX_RETAINED_HISTORY_LINK_BYTES};
+use crate::content::limits::{MAX_RETAINED_HISTORY_LINK_BYTES, resealable_section_bytes};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
 use crate::grants::{enforce_committed_ledger, recipient_blinded_tag};
@@ -347,9 +347,9 @@ pub enum ResealError {
         limit: usize,
     },
     /// The freshly minted section is past
-    /// [`MAX_RESEALABLE_SECTION_BYTES`](crate::content::limits::MAX_RESEALABLE_SECTION_BYTES),
-    /// the budget the scope root's own authoring reserves room for.
-    /// Release-active (AGENTS.md rule 8).
+    /// [`resealable_section_bytes`](crate::content::limits::resealable_section_bytes)
+    /// at this root's committed grant count — the budget the scope root's own
+    /// authoring reserves room for. Release-active (AGENTS.md rule 8).
     SectionNotResealable {
         /// The minted section's encoded size.
         size: usize,
@@ -912,7 +912,7 @@ pub fn reseal_scope_root<E: Entropy>(
     let write_body = {
         // Every carried unknown map is dropped, so the minted section is a
         // function of the frozen counts alone and the re-seal budget is a real
-        // bound ([`MAX_RESEALABLE_SECTION_BYTES`]). A rotation is not a
+        // bound ([`resealable_section_bytes`]). A rotation is not a
         // republish and owes no byte stability (FSM1/cipher-box-next#27 D10).
         let wb = WriteBody {
             grant_ledger: committed
@@ -970,11 +970,9 @@ pub fn reseal_scope_root<E: Entropy>(
     let size = encode_grant_section(&section)
         .map_err(ResealError::Encode)?
         .len();
-    if size > MAX_RESEALABLE_SECTION_BYTES {
-        return Err(ResealError::SectionNotResealable {
-            size,
-            limit: MAX_RESEALABLE_SECTION_BYTES,
-        });
+    let limit = resealable_section_bytes(committed.commitment.entries.len());
+    if size > limit {
+        return Err(ResealError::SectionNotResealable { size, limit });
     }
     Ok(section)
 }
@@ -1979,10 +1977,11 @@ mod tests {
             .expect("a maximal committed set re-seals");
         assert_eq!(section.grant_blobs.len(), MAX_GRANT_BLOBS);
         let size = encode_grant_section(&section).expect("encodes").len();
+        let budget = resealable_section_bytes(MAX_GRANT_BLOBS);
         // Headroom, so a wire-shape edit fails here rather than at the cliff.
         assert!(
-            size + 64 * 1024 <= MAX_RESEALABLE_SECTION_BYTES,
-            "a maximal re-seal is {size} bytes against a {MAX_RESEALABLE_SECTION_BYTES}-byte budget"
+            size + 64 * 1024 <= budget,
+            "a maximal re-seal is {size} bytes against a {budget}-byte budget"
         );
     }
 

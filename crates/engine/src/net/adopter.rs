@@ -35,7 +35,7 @@ use zeroize::Zeroizing;
 
 use super::publish::head_cid_from_value;
 use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
-use crate::content::limits::{MAX_RESEALABLE_ROOT_REST_BYTES, scope_root_rest_bytes};
+use crate::content::limits::{resealable_root_rest_bytes, scope_root_rest_bytes};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
@@ -242,17 +242,20 @@ pub(crate) async fn assemble_candidate<H: Http>(
             .into(),
         )
     })?;
+    let grant_section = decode_grant_section(section_bytes).map_err(assembly_reject)?;
+    // After the decode, because the reservation is sized from this root's own
+    // committed grant count. Stage 2 has not verified the owner signature over
+    // that count yet, and does not need to here: a writer that edits it breaks
+    // the signature and the record is refused a stage later, so no record this
+    // gate passes ever bought itself room with a count the owner did not sign.
     let rest = scope_root_rest_bytes(block_len, section_bytes.len());
-    if rest > MAX_RESEALABLE_ROOT_REST_BYTES {
+    let limit = resealable_root_rest_bytes(grant_section.commitment.entries.len());
+    if rest > limit {
         return Err(GateError::Rejected(GateRejection {
             stage: GateStage::RecordVerify,
-            reason: RejectionReason::ScopeRootNotResealable {
-                size: rest,
-                limit: MAX_RESEALABLE_ROOT_REST_BYTES,
-            },
+            reason: RejectionReason::ScopeRootNotResealable { size: rest, limit },
         }));
     }
-    let grant_section = decode_grant_section(section_bytes).map_err(assembly_reject)?;
 
     Ok(Candidate {
         name: name.clone(),
@@ -748,7 +751,7 @@ pub(super) fn map_read_error(e: ReadError) -> GateError {
 mod tests {
     use super::*;
 
-    use cipherbox_core::seal::{Envelope, GrantSection, encode_envelope};
+    use cipherbox_core::seal::{Envelope, GrantSection, MAX_GRANT_BLOBS, encode_envelope};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
     use crate::content::root_block_cid;
@@ -920,7 +923,9 @@ mod tests {
         // would leave the owner's own re-key refusing on that scope for ever —
         // the encode/decode asymmetry AGENTS.md rule 8 forbids.
         let fx = Fixture::new();
-        let (block, cid) = fx.padded(MAX_RESEALABLE_ROOT_REST_BYTES);
+        let (block, cid) = fx.padded(resealable_root_rest_bytes(
+            fx.grant_section.commitment.entries.len(),
+        ));
         let http = ScriptedHttp::default();
         http.enqueue_response(ok_response(block));
         let floors = InMemoryFloorStore::default();
@@ -933,6 +938,32 @@ mod tests {
             panic!("an un-resealable root must be refused as a rejection");
         };
         assert_eq!(rejection.check(), "scope-root-not-resealable");
+    }
+
+    /// The reservation tracks the root's own owner-signed grant count, so a
+    /// root the frozen ceiling would have refused still adopts when its
+    /// committed set is small — the capacity that fixed reservation cost every
+    /// scope root.
+    #[test]
+    fn a_small_committed_set_buys_back_the_room_the_frozen_ceiling_reserved() {
+        let fx = Fixture::new();
+        let entries = fx.grant_section.commitment.entries.len();
+        assert!(
+            entries < MAX_GRANT_BLOBS,
+            "the fixture must carry fewer than the ceiling for this to say anything"
+        );
+        // Past what the frozen ceiling would have left, inside what this set needs.
+        let (block, cid) = fx.padded(resealable_root_rest_bytes(MAX_GRANT_BLOBS) + 1);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(block));
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        assert!(
+            block_on(adopter.assemble_candidate(&fx.name, &fx.record_over(&cid, 1))).is_ok(),
+            "a root inside its own committed set's reservation must adopt"
+        );
     }
 
     #[test]
