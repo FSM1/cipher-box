@@ -2203,7 +2203,8 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         // Availability, not trust: the next pass re-resolves that record
         // ([`ResealError::SectionNotResealable`]).
         ResealError::SectionNotResealable { .. } => WritePublishError::NotLanded,
-        ResealError::LedgerDivergesFromCommitment
+        ResealError::HistoryLinkTooLarge { .. }
+        | ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
         | ResealError::UnusableRecipientKey
         | ResealError::TagNotBoundToRecipient
@@ -7561,6 +7562,7 @@ mod tests {
             ResealError::OwnerKeyRequiredForWriteCut,
             ResealError::WriteBodyTooLarge,
             ResealError::SectionNotResealable { size: 2, limit: 1 },
+            ResealError::HistoryLinkTooLarge { size: 2, limit: 1 },
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
@@ -7574,7 +7576,8 @@ mod tests {
                     WritePublishError::NotLanded,
                     "a permanent size verdict would let whoever grew the root block the cascade",
                 ),
-                ResealError::LedgerDivergesFromCommitment
+                ResealError::HistoryLinkTooLarge { .. }
+                | ResealError::LedgerDivergesFromCommitment
                 | ResealError::SignerNotCommitted
                 | ResealError::UnusableRecipientKey
                 | ResealError::TagNotBoundToRecipient

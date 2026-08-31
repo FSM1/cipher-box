@@ -13,6 +13,8 @@ struct Inner {
     failing: HashSet<Vec<u8>>,
     /// Whether [`FloorStore::clear`] is injected to fail.
     failing_clear: bool,
+    /// Whether every floor **read** is injected to fail.
+    failing_reads: bool,
 }
 
 impl Inner {
@@ -54,6 +56,13 @@ impl InMemoryFloorStore {
         let mut inner = self.inner.lock().expect("lock");
         inner.failing.clear();
         inner.failing_clear = false;
+        inner.failing_reads = false;
+    }
+
+    /// Make every floor read fail, so a test can drive a consumer that must
+    /// refuse rather than treat an unreadable floor as no floor.
+    pub fn fail_floor_reads(&self) {
+        self.inner.lock().expect("lock").failing_reads = true;
     }
 
     /// Make [`FloorStore::clear`] fail, so a test can drive the erase leg of
@@ -71,13 +80,11 @@ fn raise(map: &mut HashMap<Vec<u8>, u64>, key: &[u8], value: u64) -> u64 {
 
 impl FloorStore for InMemoryFloorStore {
     async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        Ok(self
-            .inner
-            .lock()
-            .expect("lock")
-            .epoch
-            .get(scope_id)
-            .copied())
+        let inner = self.inner.lock().expect("lock");
+        if inner.failing_reads {
+            return Err(SeamError::new("floor read injected to fail"));
+        }
+        Ok(inner.epoch.get(scope_id).copied())
     }
 
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
@@ -89,13 +96,11 @@ impl FloorStore for InMemoryFloorStore {
     }
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        Ok(self
-            .inner
-            .lock()
-            .expect("lock")
-            .sequence
-            .get(ipns_name)
-            .copied())
+        let inner = self.inner.lock().expect("lock");
+        if inner.failing_reads {
+            return Err(SeamError::new("floor read injected to fail"));
+        }
+        Ok(inner.sequence.get(ipns_name).copied())
     }
 
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {

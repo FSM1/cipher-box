@@ -103,7 +103,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         record_bytes: &[u8],
     ) -> Result<(u64, Envelope), GateError> {
         let local = self.local_head.borrow().clone();
-        let (sequence, envelope) =
+        let (sequence, envelope, _) =
             assemble_head_envelope(self.gateway, self.http, name, record_bytes, local.as_ref())
                 .await?;
         // A grant section marks a scope root; granted-subscope reads are a

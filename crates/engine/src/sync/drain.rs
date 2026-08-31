@@ -1046,8 +1046,9 @@ where
                 // ever reached ([`Halt`]).
                 let (reason, owes_its_name) = match halt {
                     Halt::Attempt => (DeadLetterReason::AttemptsExhausted, false),
-                    Halt::HeadOversized | Halt::ScopeRootNotResealable => {
-                        (DeadLetterReason::HeadTooLarge, true)
+                    Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
+                    Halt::ScopeRootNotResealable => {
+                        (DeadLetterReason::ScopeRootNotResealable, true)
                     }
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
@@ -1252,7 +1253,7 @@ where
             .await
             .map_err(seam)?
             .ok_or(Halt::Unclassified)?;
-        let (sequence, envelope) = assemble_head_envelope(
+        let (sequence, envelope, _) = assemble_head_envelope(
             self.gateway,
             self.http,
             scope.root_name,

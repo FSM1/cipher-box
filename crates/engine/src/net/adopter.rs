@@ -35,7 +35,7 @@ use zeroize::Zeroizing;
 
 use super::publish::head_cid_from_value;
 use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
-use crate::content::limits::MAX_RESEALABLE_ROOT_REST_BYTES;
+use crate::content::limits::{MAX_RESEALABLE_ROOT_REST_BYTES, scope_root_rest_bytes};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
@@ -222,10 +222,10 @@ pub(crate) async fn assemble_candidate<H: Http>(
     local: Option<&LocalHead>,
 ) -> Result<Candidate, GateError> {
     // Steps 1-4; the sequence is discarded — the gate re-verifies the record
-    // from scratch. The block itself is kept: its length is what the re-seal
-    // reservation below is measured against.
-    let (_sequence, block) = fetch_head_block(gateway, http, name, record_bytes, local).await?;
-    let envelope = decode_envelope(&block).map_err(assembly_reject)?;
+    // from scratch. Only the block's length outlives the decode, so the buffer
+    // is released rather than held beside the envelope it decoded into.
+    let (_sequence, envelope, block_len) =
+        assemble_head_envelope(gateway, http, name, record_bytes, local).await?;
 
     // Step 5 — decode the grant section.
     let section_bytes = grant_section_bytes(&envelope).ok_or_else(|| {
@@ -236,7 +236,7 @@ pub(crate) async fn assemble_candidate<H: Http>(
             .into(),
         )
     })?;
-    let rest = block.len().saturating_sub(section_bytes.len());
+    let rest = scope_root_rest_bytes(block_len, section_bytes.len());
     if rest > MAX_RESEALABLE_ROOT_REST_BYTES {
         return Err(GateError::Rejected(GateRejection {
             stage: GateStage::RecordVerify,
@@ -683,20 +683,19 @@ pub(crate) async fn fetch_head_block<H: Http>(
     Ok((verified.sequence, block))
 }
 
-/// The head-envelope assembly for the record families that need no size
-/// reservation of their own: [`fetch_head_block`], then decode the envelope.
-/// A scope root goes through [`assemble_candidate`], which also holds it to the
-/// re-seal reservation.
+/// The head-envelope assembly shared by both adopters: [`fetch_head_block`],
+/// then decode the envelope. The block's length rides out beside it, because a
+/// scope root is measured against it; the buffer itself is dropped here.
 pub(crate) async fn assemble_head_envelope<H: Http>(
     gateway: &Gateway,
     http: &H,
     name: &IpnsName,
     record_bytes: &[u8],
     local: Option<&LocalHead>,
-) -> Result<(u64, Envelope), GateError> {
+) -> Result<(u64, Envelope, usize), GateError> {
     let (sequence, block) = fetch_head_block(gateway, http, name, record_bytes, local).await?;
     let envelope = decode_envelope(&block).map_err(assembly_reject)?;
-    Ok((sequence, envelope))
+    Ok((sequence, envelope, block.len()))
 }
 
 /// The structured AAD a seed-bearing structure of `env` is sealed under.
@@ -743,7 +742,6 @@ pub(super) fn map_read_error(e: ReadError) -> GateError {
 mod tests {
     use super::*;
 
-    use cipherbox_core::codec::Value;
     use cipherbox_core::seal::{Envelope, GrantSection, encode_envelope};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
@@ -755,7 +753,7 @@ mod tests {
     use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
-        OwnerRootSpec, block_on, owner_root_fixture,
+        OwnerRootSpec, block_on, owner_root_fixture, padding,
     };
 
     const TTL_NANOS: u64 = 2_000_000_000;
@@ -851,7 +849,7 @@ mod tests {
                 .entries()
                 .iter()
                 .cloned()
-                .chain([("zpad".to_string(), Value::Bytes(vec![0u8; pad]))])
+                .chain(padding(pad).entries().iter().cloned())
                 .collect();
             let block = encode_envelope(&envelope).expect("the padded envelope encodes");
             let cid = root_block_cid(&block);

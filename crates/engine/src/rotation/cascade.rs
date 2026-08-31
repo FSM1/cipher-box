@@ -33,12 +33,7 @@
 //! # Which recipients a re-key cuts
 //!
 //! Per scope, off the engine's own durable **revocation floor**, never carried
-//! down from the ancestor under cut. A record cannot separate a descendant
-//! whose grant the owner cut from one it granted independently — a grant-set
-//! commitment is epoch-free, so a pre-cut set the owner really did sign passes
-//! every gate stage and any committed write grantee can republish it. The floor
-//! is the state that remembers the cut, so it decides both cases
-//! ([`effective_revoked_recipients`], [`record_revocation_floor`]).
+//! down from the ancestor under cut ([`effective_revoked_recipients`]).
 //!
 //! # Fail-closed completeness
 //!
@@ -384,16 +379,27 @@ impl CascadeError {
     }
 }
 
-/// The durable revocation-floor key for `recipient` at `scope_id`.
-///
-/// Rides [`FloorStore`]'s epoch namespace under a wider key: a scope's own
-/// epoch floor is keyed by the bare 16-byte scope id, and both shapes are fixed
-/// width, so no revocation key can spell a scope's epoch-floor key.
+/// Suffixes that keep the two revocation-floor shapes apart from the two
+/// epoch-floor shapes inside [`FloorStore`]'s one epoch namespace, on the
+/// convention `gate::floor` already sets for the write-epoch floor. Every key
+/// is a 16-byte scope id followed by a distinct tail: the empty tail is the
+/// read-epoch floor, `/write-epoch` is the write-epoch floor, and these two are
+/// the revocation floor's.
+const REVOKED_MARKER_SUFFIX: &[u8] = b"/revoked";
+const REVOKED_ENTRY_SUFFIX: &[u8] = b"/revoked/";
+
+/// The key that carries **whether** this engine ever recorded a cut at
+/// `scope_id`. Read first, so the common scope pays one floor read rather than
+/// one per committed row.
+fn revocation_marker_key(scope_id: &[u8; 16]) -> Vec<u8> {
+    [scope_id.as_slice(), REVOKED_MARKER_SUFFIX].concat()
+}
+
+/// The key that carries whether the owner cut `recipient` at `scope_id`.
+/// Membership is the whole signal; the stored epoch is a diagnostic, and no
+/// reader compares it.
 fn revocation_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(scope_id.len() + recipient.len());
-    key.extend_from_slice(scope_id);
-    key.extend_from_slice(recipient);
-    key
+    [scope_id.as_slice(), REVOKED_ENTRY_SUFFIX, recipient].concat()
 }
 
 /// Which recipients this scope's re-key must mint no blob for: the cut the
@@ -408,9 +414,10 @@ fn revocation_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Ve
 /// attests the recipient keeps its blob unless the floor says otherwise — the
 /// ancestor's cut alone no longer revokes an independent grant one level down.
 ///
-/// Candidates come from the committed ledger through [`bound_recipient`], the
-/// same owner-secret proof the re-seal wraps its blobs under, so a row no
-/// committed tag binds is neither wrapped nor consulted.
+/// The marker read comes first because the per-row work is attacker-sized: a
+/// committed write grantee sets a descendant's row count, and each row would
+/// otherwise cost one floor read and one owner-recipient DH
+/// ([`bound_recipient`]). A scope the owner never cut pays neither.
 async fn effective_revoked_recipients<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
@@ -420,6 +427,13 @@ async fn effective_revoked_recipients<F: FloorStore>(
 ) -> Result<Vec<[u8; SECRET_LEN]>, SeamError> {
     let mut revoked: BTreeSet<[u8; SECRET_LEN]> =
         committed.revoked_recipients.iter().copied().collect();
+    if floors
+        .epoch_floor(&revocation_marker_key(scope_id))
+        .await?
+        .is_none()
+    {
+        return Ok(revoked.into_iter().collect());
+    }
     for entry in committed.grant_ledger {
         let Some(recipient) = bound_recipient(owner_enc_secret, entry, ipns_name) else {
             continue;
@@ -446,6 +460,9 @@ async fn effective_revoked_recipients<F: FloorStore>(
 /// revocation-before-liveness rule: an interrupted raise then leaves the engine
 /// more restrictive than the record plane, which the next pass re-converges,
 /// where the reverse order would drop the only memory of a cut that landed.
+/// The marker goes **last** in the batch, so the store's own ordered fallback
+/// can never publish a marker over entries it has not written yet; a cut this
+/// pass drove is re-driven from the record until it lands, and re-raises both.
 async fn record_revocation_floor<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
@@ -458,6 +475,10 @@ async fn record_revocation_floor<F: FloorStore>(
     let raises: Vec<FloorRaise> = revoked
         .iter()
         .map(|recipient| FloorRaise::epoch(revocation_floor_key(scope_id, recipient), read_epoch))
+        .chain([FloorRaise::epoch(
+            revocation_marker_key(scope_id),
+            read_epoch,
+        )])
         .collect();
     floors.commit_floors(&raises).await
 }
@@ -521,9 +542,8 @@ where
         .checked_add(1)
         .ok_or(CascadeError::EpochExhausted { scope_id })?;
 
-    // Fail-closed BEFORE minting: without the durable revocation floor this
-    // re-key cannot tell a descendant the owner cut from one it independently
-    // granted, and would wrap the fresh seed back to a removed party.
+    // Fail-closed BEFORE minting: a floor this re-key cannot read would wrap the
+    // fresh seed back to a party the owner removed.
     let revoked = effective_revoked_recipients(
         floors,
         &scope_id,
@@ -822,7 +842,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
     use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::rc::Rc;
 
@@ -1221,12 +1241,8 @@ mod tests {
 
     /// What every cascade run hands back: the outcome, the fake network it ran
     /// against, its floors, and the number of tasks it spawned.
-    type CascadeRun = (
-        Result<CascadeOutcome, CascadeError>,
-        FakeNet,
-        InMemoryFloorStore,
-        usize,
-    );
+    type CascadeRun<F = InMemoryFloorStore> =
+        (Result<CascadeOutcome, CascadeError>, FakeNet, F, usize);
 
     fn run(net: FakeNet, root_children: &[u8]) -> CascadeRun {
         let root_index: Vec<ChildScopeRef> = root_children.iter().map(|b| childref(*b)).collect();
@@ -1238,39 +1254,63 @@ mod tests {
         run_fx(RootFx::new(net.clone()), net, root_index)
     }
 
-    /// [`run_with_index`] over a caller-built root fixture.
+    /// [`run_fx`] over a caller-built root fixture.
     fn run_fx(fx: RootFx, net: FakeNet, root_index: Vec<ChildScopeRef>) -> CascadeRun {
-        run_fx_with(SeededEntropy::new(0xCA5CADE), fx, net, root_index)
+        run_over(
+            SeededEntropy::new(0xCA5CADE),
+            InMemoryFloorStore::default(),
+            fx,
+            net,
+            root_index,
+        )
     }
 
-    /// [`run_fx`] over a caller-chosen entropy seam.
-    fn run_fx_with<E: Entropy>(
-        entropy: E,
-        fx: RootFx,
-        net: FakeNet,
-        root_index: Vec<ChildScopeRef>,
-    ) -> CascadeRun {
-        run_over(entropy, InMemoryFloorStore::default(), fx, net, root_index)
+    /// An [`InMemoryFloorStore`] that counts the revocation-namespace reads it
+    /// serves, so a test can measure the per-row cost rather than assume it.
+    #[derive(Clone, Default)]
+    struct CountingFloorStore {
+        inner: InMemoryFloorStore,
+        revocation_reads: Rc<Cell<usize>>,
     }
 
-    /// [`run_fx`] over a caller-supplied floor store — a pre-seeded revocation
-    /// floor, or one that refuses.
-    fn run_fx_over<F: FloorStore>(
-        floors: F,
-        fx: RootFx,
-        net: FakeNet,
-        root_index: Vec<ChildScopeRef>,
-    ) -> (Result<CascadeOutcome, CascadeError>, FakeNet, F, usize) {
-        run_over(SeededEntropy::new(0xCA5CADE), floors, fx, net, root_index)
+    impl FloorStore for CountingFloorStore {
+        async fn epoch_floor(&self, key: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+            if key.len() > sid(0).len() {
+                self.revocation_reads.set(self.revocation_reads.get() + 1);
+            }
+            self.inner.epoch_floor(key).await
+        }
+
+        async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> crate::seams::SeamResult<u64> {
+            self.inner.raise_epoch_floor(key, epoch).await
+        }
+
+        async fn sequence_floor(&self, key: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
+            self.inner.sequence_floor(key).await
+        }
+
+        async fn raise_sequence_floor(
+            &self,
+            key: &[u8],
+            sequence: u64,
+        ) -> crate::seams::SeamResult<u64> {
+            self.inner.raise_sequence_floor(key, sequence).await
+        }
+
+        async fn clear(&self) -> crate::seams::SeamResult<()> {
+            self.inner.clear().await
+        }
     }
 
+    /// The one cascade run: a caller-chosen entropy seam and floor store, so a
+    /// test can pre-seed a revocation floor or make one refuse.
     fn run_over<E: Entropy, F: FloorStore>(
         mut entropy: E,
         floors: F,
         fx: RootFx,
         net: FakeNet,
         root_index: Vec<ChildScopeRef>,
-    ) -> (Result<CascadeOutcome, CascadeError>, FakeNet, F, usize) {
+    ) -> CascadeRun<F> {
         let scheduler = VirtualScheduler::new();
         let outcome = block_on(async {
             let plan = fx.plan(&root_index);
@@ -1283,45 +1323,14 @@ mod tests {
         (outcome, net, floors, spawned)
     }
 
-    /// A floor store whose every read and raise fails — the seam outage the
-    /// cascade must fail closed on rather than re-key past.
-    struct RefusingFloorStore;
-
-    impl FloorStore for RefusingFloorStore {
-        async fn epoch_floor(&self, _scope_id: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
-            Err(SeamError::new("floor store offline"))
-        }
-
-        async fn raise_epoch_floor(
-            &self,
-            _scope_id: &[u8],
-            _epoch: u64,
-        ) -> crate::seams::SeamResult<u64> {
-            Err(SeamError::new("floor store offline"))
-        }
-
-        async fn sequence_floor(&self, _name: &[u8]) -> crate::seams::SeamResult<Option<u64>> {
-            Err(SeamError::new("floor store offline"))
-        }
-
-        async fn raise_sequence_floor(
-            &self,
-            _name: &[u8],
-            _sequence: u64,
-        ) -> crate::seams::SeamResult<u64> {
-            Err(SeamError::new("floor store offline"))
-        }
-
-        async fn clear(&self) -> crate::seams::SeamResult<()> {
-            Err(SeamError::new("floor store offline"))
-        }
-    }
-
-    /// Mark `recipient` cut at scope `byte` in a floor store, the way a past
-    /// cascade at that scope left it.
+    /// Mark `recipient` cut at scope `byte`, the way a past cascade at that
+    /// scope left the floor — the entry and the marker that gates the read.
     fn cut_at(floors: &InMemoryFloorStore, byte: u8, recipient: &[u8; SECRET_LEN], epoch: u64) {
-        block_on(floors.raise_epoch_floor(&revocation_floor_key(&sid(byte), recipient), epoch))
-            .expect("the revocation floor raises");
+        block_on(floors.commit_floors(&[
+            FloorRaise::epoch(revocation_floor_key(&sid(byte), recipient), epoch),
+            FloorRaise::epoch(revocation_marker_key(&sid(byte)), epoch),
+        ]))
+        .expect("the revocation floor raises");
     }
 
     #[test]
@@ -1337,7 +1346,8 @@ mod tests {
         let floors = InMemoryFloorStore::default();
         cut_at(&floors, 0x0a, &revokee, 3);
 
-        let (outcome, after, ..) = run_fx_over(
+        let (outcome, after, ..) = run_over(
+            SeededEntropy::new(0xCA5CADE),
             floors,
             RootFx::new(net.clone()),
             net.clone(),
@@ -1404,12 +1414,47 @@ mod tests {
     }
 
     #[test]
-    fn a_revocation_floor_key_cannot_spell_a_scopes_own_epoch_floor_key() {
-        // Both shapes are fixed width, which is what keeps the two uses of the
-        // one epoch namespace apart.
-        let key = revocation_floor_key(&sid(0x0a), &[0x07; SECRET_LEN]);
-        assert_eq!(key.len(), sid(0x0a).len() + SECRET_LEN);
-        assert_ne!(key, sid(0x0a).to_vec());
+    fn no_two_epoch_namespace_key_shapes_collide() {
+        // Four producers share the one epoch namespace: the read-epoch floor is
+        // the bare scope id, `gate::floor` adds a `/write-epoch` suffix, and
+        // these two add theirs. Every pair must differ for every scope.
+        let scope = sid(0x0a);
+        let other = sid(0x0b);
+        let shapes = [
+            scope.to_vec(),
+            [scope.as_slice(), b"/write-epoch"].concat(),
+            revocation_marker_key(&scope),
+            revocation_floor_key(&scope, &[0x07; SECRET_LEN]),
+            revocation_floor_key(&scope, &[0x08; SECRET_LEN]),
+            revocation_floor_key(&other, &[0x07; SECRET_LEN]),
+            revocation_marker_key(&other),
+        ];
+        for (i, a) in shapes.iter().enumerate() {
+            for b in &shapes[i + 1..] {
+                assert_ne!(a, b, "two distinct floors share one key");
+            }
+        }
+    }
+
+    #[test]
+    fn a_scope_with_no_recorded_cut_reads_one_floor_key() {
+        // The per-row work is attacker-sized, so the marker must gate it. A
+        // scope the owner never cut pays one read and no owner-recipient DH.
+        let net = FakeNet::new().scope(0x0a, 4, &[]);
+        let floors = CountingFloorStore::default();
+        let (outcome, _, floors, _) = run_over(
+            SeededEntropy::new(0xCA5CADE),
+            floors,
+            RootFx::new(net.clone()),
+            net,
+            vec![childref(0x0a)],
+        );
+        outcome.expect("the cascade runs");
+        assert_eq!(
+            floors.revocation_reads.get(),
+            2,
+            "one marker read per scope, and nothing per committed row"
+        );
     }
 
     #[test]
@@ -1417,8 +1462,11 @@ mod tests {
         // Fail-closed: an engine that cannot read which recipients it already
         // cut must not publish a fresh seed wrapped to any of them.
         let net = FakeNet::new().scope(0x0a, 4, &[]);
-        let (outcome, net, _, spawned) = run_fx_over(
-            RefusingFloorStore,
+        let floors = InMemoryFloorStore::default();
+        floors.fail_floor_reads();
+        let (outcome, net, _, spawned) = run_over(
+            SeededEntropy::new(0xCA5CADE),
+            floors,
             RootFx::new(net.clone()),
             net,
             vec![childref(0x0a)],
@@ -1459,8 +1507,9 @@ mod tests {
         // `reseal_scope_root`, and the epoch's own history link would republish
         // the pre-cascade seed under it.
         let net = FakeNet::new().scope(0x0a, 4, &[]);
-        let (outcome, net, floors, spawned) = run_fx_with(
+        let (outcome, net, floors, spawned) = run_over(
             SilentEntropy,
+            InMemoryFloorStore::default(),
             RootFx::new(net.clone()),
             net,
             vec![childref(0x0a)],

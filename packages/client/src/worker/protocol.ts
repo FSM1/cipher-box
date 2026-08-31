@@ -75,7 +75,8 @@ export type DeadLetterReason =
   | 'headTooLarge'
   | 'preservationRefused'
   | 'alreadyPublished'
-  | 'targetStillLinked';
+  | 'targetStillLinked'
+  | 'scopeRootNotResealable';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {
