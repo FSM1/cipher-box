@@ -31,6 +31,11 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   browser context, and the minter converts that claim into a read grant
 - a saved settings record reads back off the vault field by field, with the
   provider credential offered for clearing rather than shown
+- two sessions carry a device approval end to end: both devices derive the same
+  comparison value, an approval hands the requester the exact factor the
+  approver minted, a denial and an abandon each end the rendezvous, and a
+  substituted ephemeral key shows other digits and seals a factor the honest
+  device cannot open
 - the shipping bundle exposes no introspection hook
 
 The slices split on the `@full` tag. The smoke slice keeps login, CRUD, the
@@ -47,6 +52,23 @@ isolated vault — no fixture setup and no shared state to serialize around.
 
 The `release` project runs the same specs' counterpart against a bundle built
 **without** the flag, and asserts `window.__CIPHERBOX_ENGINE__` is absent.
+
+## How the suite drives two devices
+
+`device-approval.spec.ts` gives each device its own browser context: its own
+engine, and its own identity key in its own IndexedDB. One context signs in and
+registers as an approver; the other stays cold, which is the state of a device
+that cannot yet reconstruct.
+
+The suite drives the shipped relay client
+(`apps/web/src/auth/deviceApprovalApi.ts`) from the test process rather than from
+the requester's tab, so a spec can carry something other than what the requester
+cut. The rendezvous binds an account to an identity subject, so the specs mint
+one real identity token through the wallet method and sign the EIP-4361 message
+themselves.
+
+Every rendezvous secret stays behind the introspection seam: a tap answers with
+the public transcript and, for a factor, a SHA-256 of it.
 
 ## Running it locally
 
