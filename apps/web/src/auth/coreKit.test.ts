@@ -5,7 +5,12 @@ import {
   TssShareType,
 } from '@web3auth/mpc-core-kit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryKeys, sealedTestStore } from '../test/storeFakes';
+import {
+  deviceIdentityTestInstance,
+  MemoryDeviceKeys,
+  MemoryKeys,
+  sealedTestStore,
+} from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
 import { createCoreKitSession } from './coreKit';
 import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
@@ -138,9 +143,10 @@ const REFUSED = new Error('the session server is unreachable');
 
 let keys: MemoryKeys;
 let store: SealedStore;
+let deviceKeys: MemoryDeviceKeys;
 
 /** A session over a store this test can seed and read back. */
-const session = () => createCoreKitSession(ENV, store);
+const session = () => createCoreKitSession(ENV, store, deviceIdentityTestInstance(deviceKeys));
 
 /** What the identity exchange hands back, as the Core Kit seam takes it. */
 const credential = (overrides: Partial<IdentityCredential> = {}): IdentityCredential => ({
@@ -178,6 +184,7 @@ beforeEach(() => {
   window.localStorage.clear();
   keys = new MemoryKeys();
   store = sealedTestStore(keys);
+  deviceKeys = new MemoryDeviceKeys();
 });
 
 describe('the Core Kit store', () => {
@@ -333,6 +340,27 @@ describe('forgetting this device with the account', () => {
     sdk.deleteFactorError = REFUSED;
 
     await expect(session().forgetDevice()).resolves.toBeUndefined();
+  });
+
+  /**
+   * Unconditional, unlike the factor drop: an identity key left behind keeps
+   * signing as a device the member erased.
+   */
+  it("erases this device's identity key even when the factor has to stand", async () => {
+    sdk.shareDescriptions = {};
+    // Seeded through an identity of its own, so a key is really there to erase.
+    await deviceIdentityTestInstance(deviceKeys).publicKeyHex();
+
+    await session().forgetDevice();
+
+    expect(deviceKeys.held).toBeNull();
+  });
+
+  it('reports an identity erase the key store refused', async () => {
+    enrolled();
+    deviceKeys.refusal = REFUSED;
+
+    await expect(session().forgetDevice()).rejects.toThrow(REFUSED);
   });
 });
 
@@ -526,7 +554,11 @@ describe('a Core Kit login', () => {
   // The Google client ID configures the Google button alone; a build without one
   // must still seat an email or wallet login rather than refuse every session.
   it('is built by a bundle carrying no Google client ID', async () => {
-    const withoutGoogle = createCoreKitSession({ ...ENV, VITE_GOOGLE_CLIENT_ID: undefined }, store);
+    const withoutGoogle = createCoreKitSession(
+      { ...ENV, VITE_GOOGLE_CLIENT_ID: undefined },
+      store,
+      deviceIdentityTestInstance(deviceKeys)
+    );
 
     await withoutGoogle.login(credential({ method: 'email', verifierId: 'subject-42' }));
     expect(sdk.jwtLogin).toMatchObject({ verifier: 'verifier', verifierId: 'subject-42' });
