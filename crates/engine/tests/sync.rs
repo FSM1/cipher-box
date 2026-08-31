@@ -32,9 +32,9 @@ use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{open_repoint, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     self, Connectivity, DeadLetterReason, DropReason, NewNode, Op, OpResolution, PointerFetch,
-    RecordReader, RecordSeal, ScopeCrossing, SessionRole, Snapshot, StagedContent, apply_repairs,
-    classify, decode_queue, observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op,
-    withheld_escalation,
+    PointerRecord, RecordReader, RecordSeal, ScopeCrossing, SessionRole, Snapshot, StagedContent,
+    apply_repairs, classify, decode_queue, observed_repair, rebase_one, replay,
+    resolve_vault_pointer, stage_op, withheld_escalation,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryFloorStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{SeededEntropy, block_on};
@@ -529,8 +529,11 @@ impl ScriptedPointers {
 }
 
 impl PointerFetch for ScriptedPointers {
-    async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
-        Ok(self.blocks.lock().unwrap().get(name.as_str()).cloned())
+    async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
+        Ok(match self.blocks.lock().unwrap().get(name.as_str()) {
+            Some(block) => PointerRecord::Found(block.clone()),
+            None => PointerRecord::Absent,
+        })
     }
 }
 
@@ -557,6 +560,7 @@ fn cold_start_adopts_nothing_until_the_floor_seeds_from_the_pointer() {
         // Step 1 — cold start with an empty vault-pointer chain: adopt nothing.
         let cold = resolve_vault_pointer(
             &pointers,
+            &floors,
             LOGIN_SECRET,
             &owner.verifying_key(),
             &ROOT_SCOPE,
@@ -593,6 +597,7 @@ fn cold_start_adopts_nothing_until_the_floor_seeds_from_the_pointer() {
         // then the floors cold-seed from its owner-vouched epochs.
         let adopted = resolve_vault_pointer(
             &pointers,
+            &floors,
             LOGIN_SECRET,
             &owner.verifying_key(),
             &ROOT_SCOPE,

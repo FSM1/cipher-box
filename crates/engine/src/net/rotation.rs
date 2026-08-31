@@ -40,7 +40,9 @@ use super::author::{
 };
 use super::child::ChildAdopter;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
-use super::pointer_fetch::{PointerConsult, PointerConsultError, RecordPointerFetch};
+use super::pointer_fetch::{
+    ConsultedPointer, PointerConsult, PointerConsultError, RecordPointerFetch,
+};
 use super::publish::{InlineRecordRequest, PublishError, PublishOutcome, publish_inline};
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -72,7 +74,9 @@ use crate::rotation::{
 };
 use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 use crate::session::SessionIdentity;
-use crate::sync::pointer::{PointerFetch, open_repoint, scope_pointer_name, scope_pointer_signer};
+use crate::sync::pointer::{
+    PointerFetch, PointerRecord, open_repoint, scope_pointer_name, scope_pointer_signer,
+};
 
 /// The owner key material the rotation edges run under. The owner is the
 /// terminal owner of its own key material, so nothing here is zeroized.
@@ -1713,7 +1717,9 @@ where
         }
         .run(self.transport, self.floors, scope_id)
         .await
-        .map(|name| name.map(|name| name.as_str().as_bytes().to_vec()))
+        .map(|consulted| {
+            consulted.map(|consulted| consulted.current_root.as_str().as_bytes().to_vec())
+        })
         .map_err(|failure| match failure {
             PointerConsultError::Unavailable => SweepResolveFailure::Unavailable,
             PointerConsultError::Rejected => SweepResolveFailure::Rejected,
@@ -2938,13 +2944,13 @@ where
             .fetch(&pointer)
             .await
         {
-            Ok(Some(block)) => block,
+            Ok(PointerRecord::Found(block)) => block,
             // No pointer record: this scope has never been re-pointed, so there is
-            // no wave to pick up. A seam failure is not that answer — reporting it
-            // as one mints a second seed for a wave already in flight and orphans
-            // every name the first one registered.
-            Ok(None) => return Ok(None),
-            Err(_) => return Err(ResolveFailure::Unavailable),
+            // no wave to pick up. An unreadable plane is not that answer —
+            // reporting it as one mints a second seed for a wave already in
+            // flight and orphans every name the first one registered.
+            Ok(PointerRecord::Absent) => return Ok(None),
+            Ok(PointerRecord::Unavailable) | Err(_) => return Err(ResolveFailure::Unavailable),
         };
         let pointer_read_key = self.scope_keys.pointer_read_key(&self.scope_id);
         let repoint = open_repoint(
@@ -3274,34 +3280,31 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E>(
         {
             continue;
         }
-        if matches!(
-            consult.run(pass.transport, pass.floors, &scope_id).await,
-            Ok(Some(_))
-        ) {
-            enrol_scope_pointer(pass.transport, pass.keys, &scope_id, pass.held).await;
+        if let Ok(Some(consulted)) = consult.run(pass.transport, pass.floors, &scope_id).await {
+            enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
         }
     }
 }
 
-/// Hold one scope's pointer record, under the same name-to-signer bind
-/// [`resolve_and_hold`](super::resolve::resolve_and_hold) applies: the derived
-/// signer must sign for the name the read edge named, or a later renewal would
-/// re-sign a routing key this session cannot own. It catches a key arm whose
-/// read and signing edges disagree, and it is the one check that stands between
-/// a held pointer and a name no seed here derives.
-async fn enrol_scope_pointer<K, T>(
-    transport: &T,
+/// Hold the pointer record `consulted` authenticated, under the same
+/// name-to-signer bind [`resolve_and_hold`](super::resolve::resolve_and_hold)
+/// applies: the derived signer must sign for the name the read edge named, or a
+/// later renewal would re-sign a routing key this session cannot own. It catches
+/// a key arm whose read and signing edges disagree, and it is the one check that
+/// stands between a held pointer and a name no seed here derives.
+///
+/// The consult hands its own record over rather than the name to re-fetch: a
+/// second read of the same name lets an endpoint set that serves fresh then
+/// stale seat a record no consult validated.
+fn enrol_scope_pointer<K>(
     keys: &K,
     scope_id: &[u8; 16],
+    consulted: ConsultedPointer,
     held: &RefCell<HeldRecords>,
 ) where
     K: OwnerPointerRead + OwnerPointerSign,
-    T: RecordTransport,
 {
     let name = keys.pointer_name(scope_id);
-    let Some((verified, record_bytes)) = fanout_get_verify(transport, &name).await else {
-        return;
-    };
     let signer = keys.pointer_signer(scope_id);
     if IpnsName::from_public_key(&signer.verifying_key()) != name {
         return;
@@ -3312,9 +3315,9 @@ async fn enrol_scope_pointer<K, T>(
     if let Entry::Vacant(slot) = held.borrow_mut().entry(HeldKey::scope_pointer(*scope_id)) {
         slot.insert(HeldRecord {
             routing_key: name.as_str().to_owned(),
-            record_bytes,
+            record_bytes: consulted.record_bytes,
             signer,
-            value: HeldValue::Inline(verified.value),
+            value: HeldValue::Inline(consulted.value),
             content_cids: Vec::new(),
         });
     }
@@ -9222,12 +9225,16 @@ mod tests {
             .borrow_mut()
             .insert(HeldKey::scope_pointer(SCOPE), flipped.clone());
 
-        block_on(enrol_scope_pointer(
-            &harness.transport,
+        enrol_scope_pointer(
             &OwnerSeeds,
             &SCOPE,
+            ConsultedPointer {
+                current_root: scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE),
+                record_bytes: b"a record read before the flip".to_vec(),
+                value: b"the block read before the flip".to_vec(),
+            },
             &harness.held,
-        ));
+        );
 
         assert_eq!(
             harness.held.borrow()[&HeldKey::scope_pointer(SCOPE)].value,

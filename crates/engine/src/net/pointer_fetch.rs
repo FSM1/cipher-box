@@ -10,11 +10,11 @@
 //!
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
-use super::fanout::fanout_get_verify;
+use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::rotation::OwnerPointerRead;
 use crate::gate::floor;
 use crate::seams::{FloorStore, RecordTransport, SeamResult};
-use crate::sync::pointer::{PointerFetch, open_repoint};
+use crate::sync::pointer::{PointerFetch, PointerRecord, open_repoint};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 
@@ -32,12 +32,41 @@ impl<'a, T> RecordPointerFetch<'a, T> {
     }
 }
 
+impl<'a, T: RecordTransport> RecordPointerFetch<'a, T> {
+    /// The record at `name` with its marshalled bytes, so a caller that seats it
+    /// in the held set holds the very record this fetch authenticated. Fetching
+    /// twice would let an endpoint set that serves fresh then stale seat a
+    /// record the first read never validated.
+    async fn fetch_record(&self, name: &IpnsName) -> FetchedPointer {
+        match fanout_get_classified(self.transport, name).await {
+            FanoutRecord::Found(verified, record_bytes) => FetchedPointer::Found {
+                value: verified.value,
+                record_bytes,
+            },
+            FanoutRecord::Absent => FetchedPointer::Absent,
+            FanoutRecord::Unavailable => FetchedPointer::Unavailable,
+        }
+    }
+}
+
+/// [`RecordPointerFetch::fetch_record`]'s answer: [`PointerRecord`] plus the
+/// marshalled record behind it.
+enum FetchedPointer {
+    Found {
+        value: Vec<u8>,
+        record_bytes: Vec<u8>,
+    },
+    Absent,
+    Unavailable,
+}
+
 impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
-    async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
-        let Some((verified, _bytes)) = fanout_get_verify(self.transport, name).await else {
-            return Ok(None);
-        };
-        Ok(Some(verified.value))
+    async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
+        Ok(match self.fetch_record(name).await {
+            FetchedPointer::Found { value, .. } => PointerRecord::Found(value),
+            FetchedPointer::Absent => PointerRecord::Absent,
+            FetchedPointer::Unavailable => PointerRecord::Unavailable,
+        })
     }
 }
 
@@ -68,20 +97,39 @@ pub(crate) struct PointerConsult<'a> {
     pub payload_version: u64,
 }
 
+/// One consulted scope pointer: the root its re-point vouches, and the record
+/// that vouched it.
+pub(crate) struct ConsultedPointer {
+    /// The owner-vouched current root name.
+    pub(crate) current_root: IpnsName,
+    /// The pointer record this consult authenticated, for the caller that seats
+    /// it in the held set.
+    pub(crate) record_bytes: Vec<u8>,
+    /// That record's authenticated inline value — the sealed re-point block.
+    pub(crate) value: Vec<u8>,
+}
+
 impl PointerConsult<'_> {
-    /// The scope's current owner-vouched root name, or `None` when the scope was
-    /// never re-pointed.
+    /// The scope's current owner-vouched root, or `None` when the scope was
+    /// never re-pointed. A pointer plane no endpoint could answer for is
+    /// [`PointerConsultError::Unavailable`], never that second answer.
     pub(crate) async fn run<T: RecordTransport, F: FloorStore>(
         &self,
         transport: &T,
         floors: &F,
         scope_id: &[u8; 16],
-    ) -> Result<Option<IpnsName>, PointerConsultError> {
+    ) -> Result<Option<ConsultedPointer>, PointerConsultError> {
         let pointer = self.scope_keys.pointer_name(scope_id);
-        let block = match RecordPointerFetch::new(transport).fetch(&pointer).await {
-            Ok(Some(block)) => block,
-            Ok(None) => return Ok(None),
-            Err(_) => return Err(PointerConsultError::Unavailable),
+        let (block, record_bytes) = match RecordPointerFetch::new(transport)
+            .fetch_record(&pointer)
+            .await
+        {
+            FetchedPointer::Found {
+                value,
+                record_bytes,
+            } => (value, record_bytes),
+            FetchedPointer::Absent => return Ok(None),
+            FetchedPointer::Unavailable => return Err(PointerConsultError::Unavailable),
         };
         let pointer_read_key = self.scope_keys.pointer_read_key(scope_id);
         let repoint = open_repoint(
@@ -105,7 +153,11 @@ impl PointerConsult<'_> {
         floor::advance_write_epoch_on_sight(floors, scope_id, repoint.write_epoch)
             .await
             .map_err(|_| PointerConsultError::Unavailable)?;
-        Ok(Some(repoint.current_root))
+        Ok(Some(ConsultedPointer {
+            current_root: repoint.current_root,
+            record_bytes,
+            value: block,
+        }))
     }
 }
 
@@ -223,7 +275,7 @@ mod tests {
         store.seed_record(
             &eps[0],
             ConsultKeys.pointer_name(&ROOT_SCOPE).as_str(),
-            record,
+            record.clone(),
         );
 
         let consult = PointerConsult {
@@ -231,14 +283,57 @@ mod tests {
             owner_identity: &owner.verifying_key(),
             payload_version: PAYLOAD_VERSION,
         };
+        let consulted = block_on(consult.run(&store, &floors, &ROOT_SCOPE))
+            .expect("the consult succeeds")
+            .expect("the pointer names a root");
         assert_eq!(
-            block_on(consult.run(&store, &floors, &ROOT_SCOPE)),
-            Ok(Some(moved)),
+            consulted.current_root, moved,
             "the consult answers with the root its own pointer name vouches"
+        );
+        assert_eq!(
+            consulted.record_bytes, record,
+            "and hands back the very record it authenticated, so no caller re-fetches"
         );
         assert_eq!(
             block_on(floor::write_epoch_floor(&floors, &ROOT_SCOPE)).unwrap(),
             Some(3),
+        );
+    }
+
+    /// An unreadable pointer plane is availability, never "this scope was never
+    /// re-pointed". The second answer would let a cold start be steered past the
+    /// one clock-checked plane and seed its floors from the vault anchor alone.
+    #[test]
+    fn an_unreadable_scope_pointer_is_unavailable_not_a_scope_never_re_pointed() {
+        let eps = endpoints(2);
+        let store = InMemoryRecordStore::new(eps.clone());
+        let floors = InMemoryFloorStore::default();
+        let owner = owner_signer();
+        let consult = PointerConsult {
+            scope_keys: &ConsultKeys,
+            owner_identity: &owner.verifying_key(),
+            payload_version: PAYLOAD_VERSION,
+        };
+
+        assert!(
+            matches!(
+                block_on(consult.run(&store, &floors, &ROOT_SCOPE)),
+                Ok(None)
+            ),
+            "endpoints that all answer 'no record' mean the scope was never re-pointed"
+        );
+
+        for endpoint in &eps {
+            store.fail_endpoint(endpoint);
+        }
+        assert_eq!(
+            block_on(consult.run(&store, &floors, &ROOT_SCOPE)).err(),
+            Some(PointerConsultError::Unavailable),
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&floors, &ROOT_SCOPE)).unwrap(),
+            None,
+            "and an unreadable plane vouches no epoch, so no floor moves"
         );
     }
 
@@ -258,21 +353,21 @@ mod tests {
         let got = block_on(fetch.fetch(&name)).expect("fetch succeeds");
         assert_eq!(
             got,
-            Some(block),
+            PointerRecord::Found(block),
             "the authenticated value is the inlined re-point block"
         );
     }
 
     #[test]
-    fn fetch_unknown_name_is_none() {
+    fn fetch_unknown_name_is_absent() {
         let eps = endpoints(2);
         let store = InMemoryRecordStore::new(eps);
         let fetch = RecordPointerFetch::new(&store);
         let unseeded = vault_pointer_name(SECRET, 7);
         assert_eq!(
             block_on(fetch.fetch(&unseeded)).expect("fetch succeeds"),
-            None,
-            "an unresolvable name yields None"
+            PointerRecord::Absent,
+            "endpoints that all answer 'no record' make the name absent"
         );
     }
 
@@ -300,7 +395,7 @@ mod tests {
         let fetch = RecordPointerFetch::new(&store);
         assert_eq!(
             block_on(fetch.fetch(&name)).expect("fetch succeeds"),
-            Some(freshest_block),
+            PointerRecord::Found(freshest_block),
             "the freshest valid record's value wins over an older one and a forged outer sig"
         );
     }
@@ -332,6 +427,7 @@ mod tests {
         let fetch = RecordPointerFetch::new(&store);
         let err = block_on(resolve_vault_pointer(
             &fetch,
+            &InMemoryFloorStore::default(),
             SECRET,
             &owner.verifying_key(),
             &ROOT_SCOPE,

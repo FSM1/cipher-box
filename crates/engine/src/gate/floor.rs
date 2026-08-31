@@ -137,12 +137,25 @@ impl std::error::Error for ColdSeedError {}
 /// collide.
 const WRITE_EPOCH_SUFFIX: &[u8] = b"/write-epoch";
 
+/// Suffix for the vault-pointer index high-water mark, squatting in the epoch
+/// namespace beside the two epoch floors of the same scope. It is not an epoch:
+/// it is the highest vault-pointer index this device has walked to, and it
+/// ratchets on the same monotonic-max terms so a truncated walk cannot step
+/// back onto an abandoned index ([`vault_pointer_index_floor`]).
+const VAULT_POINTER_INDEX_SUFFIX: &[u8] = b"/vault-pointer-index";
+
+/// `scope_id` under a fixed suffix. Every suffix is distinct and none is a
+/// prefix of another, so no two keys here can spell one stored key.
+fn suffixed(scope_id: &[u8; 16], suffix: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(scope_id.len() + suffix.len());
+    key.extend_from_slice(scope_id);
+    key.extend_from_slice(suffix);
+    key
+}
+
 /// The [`FloorStore`] epoch-namespace key for a scope's write-epoch floor.
 fn write_epoch_key(scope_id: &[u8; 16]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(scope_id.len() + WRITE_EPOCH_SUFFIX.len());
-    key.extend_from_slice(scope_id);
-    key.extend_from_slice(WRITE_EPOCH_SUFFIX);
-    key
+    suffixed(scope_id, WRITE_EPOCH_SUFFIX)
 }
 
 /// The scope's durable read-epoch floor (the revocation boundary), if ever
@@ -161,6 +174,31 @@ pub async fn write_epoch_floor<F: FloorStore>(
     scope_id: &[u8; 16],
 ) -> SeamResult<Option<u64>> {
     floors.epoch_floor(&write_epoch_key(scope_id)).await
+}
+
+/// The highest vault-pointer index this device has adopted, if it has ever
+/// walked the chain. `None` is a device that has not, which is why a first walk
+/// is unbarred and every later one is not.
+pub async fn vault_pointer_index_floor<F: FloorStore>(
+    floors: &F,
+    root_scope_id: &[u8; 16],
+) -> SeamResult<Option<u64>> {
+    floors
+        .epoch_floor(&suffixed(root_scope_id, VAULT_POINTER_INDEX_SUFFIX))
+        .await
+}
+
+/// Ratchet the vault-pointer index high-water mark to `index`, monotonic-max.
+/// Only the owner can extend the chain and an index never descends, so this
+/// only ever moves toward the owner's own recovery bump.
+pub async fn advance_vault_pointer_index<F: FloorStore>(
+    floors: &F,
+    root_scope_id: &[u8; 16],
+    index: u64,
+) -> SeamResult<u64> {
+    floors
+        .raise_epoch_floor(&suffixed(root_scope_id, VAULT_POINTER_INDEX_SUFFIX), index)
+        .await
 }
 
 /// The durable per-name sequence floor, if ever raised.
@@ -358,6 +396,19 @@ pub async fn mint_revision<F: FloorStore>(
 /// trust-critical read-epoch (revocation) floor commits before the write-epoch
 /// floor, so a partial seam failure leaves the fail-closed state (or none at
 /// all, on a backing with an atomic [`FloorStore::commit_floors`]).
+///
+/// **The sequence namespace is left alone, deliberately.** [`RepointObject`]
+/// carries no sequence, so the owner vouches no per-name high-water mark and
+/// there is nothing here to anchor one from. A cold device therefore meets a
+/// long-lived name with a sequence bar of 0, and a resolver that chooses which
+/// owner-signed record to serve can pin an older record from the vouched epoch.
+/// That is the accepted within-epoch staleness of blueprint/engine.md's floor
+/// law, not an oversight: the record is still Ed25519-verified against the key
+/// the name encodes, still at or above the cold-seeded read-epoch floor, and
+/// still AAD-confirmed at unseal, so a chosen-record adversary replays bytes
+/// the owner signed inside a boundary it cannot roll back. Closing it needs the
+/// owner to vouch a sequence the way it vouches the epochs, which is a
+/// [`RepointObject`] wire change.
 pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> SeamResult<()> {
     // Revocation floor first (fail-safe ordering).
     floors
@@ -384,6 +435,17 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 ///
 /// The write-epoch stage is narrowed on the other axis: only the scope pointer
 /// authors that clock ([`PointerPlane::VaultPointer`]).
+///
+/// What guards the exempt plane instead: the read-epoch stage above, which does
+/// run at the vault anchor and is where a rolled-back revocation boundary is
+/// caught; the durable vault-pointer index floor
+/// ([`vault_pointer_index_floor`]), which refuses a walk steered back onto an
+/// abandoned index; and the scope-pointer consult, which is clock-checked and
+/// which a cold start cannot be steered away from now that an unreadable
+/// pointer plane refuses instead of reporting a scope that was never
+/// re-pointed. Those three, and not a bound on the lag, are the whole guard —
+/// a wave that stops at the anchor and is never resumed leaves a gap no
+/// constant bounds.
 pub async fn repoint_regression<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,
@@ -694,6 +756,60 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(7));
+        });
+    }
+
+    /// The cold-start posture the floor law accepts, pinned so it is a decision
+    /// rather than a drift: the anchor seeds the two epoch floors and nothing in
+    /// the sequence namespace, because the re-point vouches no sequence. A cold
+    /// device therefore meets a long-lived name with a bar of 0 and admits an
+    /// older owner-signed record from the vouched epoch.
+    #[test]
+    fn a_cold_seed_anchors_the_epoch_floors_and_never_the_sequence_namespace() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3), &SCOPE)
+                .await
+                .expect("a fresh scope seeds");
+
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(5));
+            assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
+            assert_eq!(
+                sequence_floor(&floors, NAME).await.unwrap(),
+                None,
+                "no anchored sequence bar, so a cold device admits the first record it sees"
+            );
+            check_sequence(&floors, NAME, 1, Strictness::StrictlyNewer)
+                .await
+                .expect("an older record from the vouched epoch still clears stage 4");
+        });
+    }
+
+    /// The vault-pointer index high-water mark ratchets and never descends, and
+    /// it is keyed apart from the two epoch floors of the same scope.
+    #[test]
+    fn the_vault_pointer_index_floor_ratchets_and_is_keyed_apart() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            assert_eq!(
+                vault_pointer_index_floor(&floors, &SCOPE).await.unwrap(),
+                None,
+                "a device that has never walked the chain has no bar"
+            );
+
+            advance_vault_pointer_index(&floors, &SCOPE, 2)
+                .await
+                .unwrap();
+            advance_vault_pointer_index(&floors, &SCOPE, 1)
+                .await
+                .unwrap();
+            assert_eq!(
+                vault_pointer_index_floor(&floors, &SCOPE).await.unwrap(),
+                Some(2),
+                "monotonic-max: a lower index is a no-op"
+            );
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), None);
+            assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), None);
         });
     }
 

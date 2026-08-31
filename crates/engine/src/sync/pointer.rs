@@ -23,7 +23,8 @@ use cipherbox_core::payload::{RepointObject, open_pointer_payload, seal_pointer_
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
-use crate::seams::{SeamError, SeamResult};
+use crate::gate::floor;
+use crate::seams::{FloorStore, SeamError, SeamResult};
 
 /// A safety bound on the vault-pointer index walk. The chain length is
 /// owner-authored (each index needs the owner's identity signature to open),
@@ -64,15 +65,41 @@ pub enum PointerError {
     Open(CodecError),
     /// A host durable-store / transport seam failure.
     Seam(SeamError),
+    /// A pointer name no endpoint could answer for. Availability, never the
+    /// verdict that the chain ends here.
+    Unavailable,
+    /// The walk would adopt below the durable vault-pointer index floor — a
+    /// truncated chain steering this device back onto an index it has already
+    /// walked past. `adopted` is `None` when the walk reached no valid index at
+    /// all.
+    IndexRegression {
+        /// The highest index this device has adopted before.
+        floor: u64,
+        /// The index this walk would adopt.
+        adopted: Option<u64>,
+    },
 }
 
-/// Fetches the sealed re-point block published at a pointer name. `None` means
-/// the name is unresolvable (a gap in the vault-pointer chain, or a scope with
-/// no pointer yet). Abstracts the record resolve + content fetch the net/
-/// content slices own, so the pointer walk is testable in isolation.
+/// What a pointer name resolved to. The two `None` answers a single `Option`
+/// collapsed are kept apart on rule 6's axis: an availability failure must
+/// never produce a "this does not exist" verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PointerRecord {
+    /// The sealed re-point block published at the name.
+    Found(Vec<u8>),
+    /// The name carries no record: a gap in the vault-pointer chain, or a scope
+    /// that was never re-pointed.
+    Absent,
+    /// The name could not be read. Never a chain gap.
+    Unavailable,
+}
+
+/// Fetches the sealed re-point block published at a pointer name. Abstracts the
+/// record resolve the net/ slices own, so the pointer walk is testable in
+/// isolation.
 pub trait PointerFetch {
-    /// The sealed re-point block at `name`, or `None` if unresolvable.
-    async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>>;
+    /// What `name` resolved to ([`PointerRecord`]).
+    async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord>;
 }
 
 /// The vault-pointer IPNS name at `index` (`pointerKey_i = KDF(secret,
@@ -107,17 +134,29 @@ pub struct VaultPointerAdoption {
 
 /// Walk the indexed vault-pointer chain with probe-one-past semantics
 /// (CONTEXT.md "Vault pointer", #39 D5): from index 0 upward, adopt the highest
-/// index bearing a valid owner-signed payload, and stop at the first
-/// unresolvable index — which only the owner can extend. Probing continues one
+/// index bearing a valid owner-signed payload, and stop at the first index that
+/// carries no record — which only the owner can extend. Probing continues one
 /// index past the highest resolvable one so an owner-side index bump (the
 /// pointer-key-compromise recovery) is discovered.
 ///
-/// A resolvable-but-invalid payload (bad owner signature, tamper) stops the
-/// walk fail-closed at that index: it is never adopted and the walk never
-/// reaches beyond it, so a forged record cannot truncate the chain *below* an
-/// already-adopted valid index.
-pub async fn resolve_vault_pointer<F: PointerFetch>(
-    fetch: &F,
+/// Three refusals, all fail-closed:
+///
+/// - A resolvable-but-invalid payload (bad owner signature, tamper) is never
+///   adopted and the walk never reaches beyond it, so a forged record cannot
+///   truncate the chain *below* an already-adopted valid index.
+/// - An index no endpoint could answer for is [`PointerError::Unavailable`],
+///   not a chain end. Reading an unreadable plane as the end of the chain is
+///   the downgrade this refuses.
+/// - A walk that would adopt below the durable index floor is
+///   [`PointerError::IndexRegression`]. An endpoint's "no record" answer is not
+///   authoritative, so a withheld index can still truncate the walk; the floor
+///   is what makes that truncation a refusal rather than a silent step back
+///   onto an index this device has already walked past. On success the floor
+///   ratchets to the adopted index
+///   ([`floor::advance_vault_pointer_index`](crate::gate::floor::advance_vault_pointer_index)).
+pub async fn resolve_vault_pointer<P: PointerFetch, F: FloorStore>(
+    fetch: &P,
+    floors: &F,
     login_secret: &[u8],
     owner_identity: &EcdsaVerifier,
     root_scope_id: &[u8; 16],
@@ -131,9 +170,10 @@ pub async fn resolve_vault_pointer<F: PointerFetch>(
     while index < MAX_VAULT_POINTER_PROBE {
         let name = vault_pointer_name(login_secret, index);
         match fetch.fetch(&name).await.map_err(PointerError::Seam)? {
+            PointerRecord::Unavailable => return Err(PointerError::Unavailable),
             // A gap: the chain ends here; the highest adopted below is the answer.
-            None => break,
-            Some(block) => match open_repoint(
+            PointerRecord::Absent => break,
+            PointerRecord::Found(block) => match open_repoint(
                 read_key.as_bytes(),
                 payload_version,
                 root_scope_id,
@@ -148,6 +188,20 @@ pub async fn resolve_vault_pointer<F: PointerFetch>(
                 Err(e) => return Err(e),
             },
         }
+    }
+
+    let adopted = best.as_ref().map(|adoption| adoption.index);
+    if let Some(floor) = floor::vault_pointer_index_floor(floors, root_scope_id)
+        .await
+        .map_err(PointerError::Seam)?
+        && adopted.is_none_or(|index| index < floor)
+    {
+        return Err(PointerError::IndexRegression { floor, adopted });
+    }
+    if let Some(index) = adopted {
+        floor::advance_vault_pointer_index(floors, root_scope_id, index)
+            .await
+            .map_err(PointerError::Seam)?;
     }
     Ok(best)
 }
@@ -226,11 +280,12 @@ pub fn should_consult(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::{Arc, Mutex};
 
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
+    use crate::testkit::fakes::InMemoryFloorStore;
     use crate::testkit::{SeededEntropy, block_on};
 
     // A deterministic owner identity for the fixtures.
@@ -243,6 +298,9 @@ mod tests {
     #[derive(Clone, Default)]
     struct ScriptedPointers {
         blocks: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        /// Names no endpoint can answer for — the withholding an adversary in a
+        /// routing position performs, and the outage an honest one suffers.
+        unreadable: Arc<Mutex<BTreeSet<String>>>,
     }
 
     impl ScriptedPointers {
@@ -252,11 +310,24 @@ mod tests {
                 .unwrap()
                 .insert(name.as_str().to_owned(), block);
         }
+
+        fn withhold(&self, name: &IpnsName) {
+            self.unreadable
+                .lock()
+                .unwrap()
+                .insert(name.as_str().to_owned());
+        }
     }
 
     impl PointerFetch for ScriptedPointers {
-        async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
-            Ok(self.blocks.lock().unwrap().get(name.as_str()).cloned())
+        async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
+            if self.unreadable.lock().unwrap().contains(name.as_str()) {
+                return Ok(PointerRecord::Unavailable);
+            }
+            Ok(match self.blocks.lock().unwrap().get(name.as_str()) {
+                Some(block) => PointerRecord::Found(block.clone()),
+                None => PointerRecord::Absent,
+            })
         }
     }
 
@@ -322,6 +393,7 @@ mod tests {
 
         let adopted = block_on(resolve_vault_pointer(
             &pointers,
+            &InMemoryFloorStore::default(),
             SECRET,
             &owner.verifying_key(),
             &ROOT_SCOPE,
@@ -338,6 +410,7 @@ mod tests {
         let pointers = ScriptedPointers::default();
         let adopted = block_on(resolve_vault_pointer(
             &pointers,
+            &InMemoryFloorStore::default(),
             SECRET,
             &owner_signer().verifying_key(),
             &ROOT_SCOPE,
@@ -358,9 +431,113 @@ mod tests {
         seal_index(&pointers, &rogue, 1, &repoint(ROOT_SCOPE, 99, 99));
 
         let owner_identity = owner.verifying_key();
-        let result = resolve_vault_pointer(&pointers, SECRET, &owner_identity, &ROOT_SCOPE, 1);
+        let floors = InMemoryFloorStore::default();
+        let result =
+            resolve_vault_pointer(&pointers, &floors, SECRET, &owner_identity, &ROOT_SCOPE, 1);
         let err = block_on(result).expect_err("a forged index is fail-closed");
         assert!(matches!(err, PointerError::Open(_)));
+    }
+
+    /// An index nobody could answer for is not the end of the chain. Reading it
+    /// as one is exactly the downgrade: index 1 is withheld, so a device that
+    /// has never walked would otherwise adopt index 0's abandoned root.
+    #[test]
+    fn an_unreadable_index_refuses_the_walk_rather_than_truncating_it() {
+        let pointers = ScriptedPointers::default();
+        let owner = owner_signer();
+        seal_index(&pointers, &owner, 0, &repoint(ROOT_SCOPE, 1, 1));
+        seal_index(&pointers, &owner, 1, &repoint(ROOT_SCOPE, 2, 1));
+        pointers.withhold(&vault_pointer_name(SECRET, 1));
+
+        let err = block_on(resolve_vault_pointer(
+            &pointers,
+            &InMemoryFloorStore::default(),
+            SECRET,
+            &owner.verifying_key(),
+            &ROOT_SCOPE,
+            1,
+        ))
+        .expect_err("an unreadable index refuses");
+        assert_eq!(err, PointerError::Unavailable);
+    }
+
+    /// The durable half of the same defence, for the withholding that looks
+    /// clean: a device that walked to index 1 refuses to step back to index 0
+    /// when index 1 later answers "no record".
+    #[test]
+    fn a_walk_below_the_durable_index_floor_is_refused() {
+        let pointers = ScriptedPointers::default();
+        let floors = InMemoryFloorStore::default();
+        let owner = owner_signer();
+        seal_index(&pointers, &owner, 0, &repoint(ROOT_SCOPE, 1, 1));
+        seal_index(&pointers, &owner, 1, &repoint(ROOT_SCOPE, 2, 1));
+
+        let first = block_on(resolve_vault_pointer(
+            &pointers,
+            &floors,
+            SECRET,
+            &owner.verifying_key(),
+            &ROOT_SCOPE,
+            1,
+        ))
+        .unwrap()
+        .expect("the chain adopts");
+        assert_eq!(first.index, 1);
+        assert_eq!(
+            block_on(floor::vault_pointer_index_floor(&floors, &ROOT_SCOPE)).unwrap(),
+            Some(1),
+            "a clean walk ratchets the index high-water mark"
+        );
+
+        // The attacker now serves a chain that ends one index early.
+        pointers
+            .blocks
+            .lock()
+            .unwrap()
+            .remove(vault_pointer_name(SECRET, 1).as_str());
+        let err = block_on(resolve_vault_pointer(
+            &pointers,
+            &floors,
+            SECRET,
+            &owner.verifying_key(),
+            &ROOT_SCOPE,
+            1,
+        ))
+        .expect_err("a truncated chain refuses");
+        assert_eq!(
+            err,
+            PointerError::IndexRegression {
+                floor: 1,
+                adopted: Some(0)
+            }
+        );
+    }
+
+    /// A chain withheld outright is the same refusal: a device that has adopted
+    /// an index never treats "there is no vault pointer" as an answer again.
+    #[test]
+    fn an_emptied_chain_below_the_index_floor_is_refused() {
+        let pointers = ScriptedPointers::default();
+        let floors = InMemoryFloorStore::default();
+        let owner = owner_signer();
+        block_on(floor::advance_vault_pointer_index(&floors, &ROOT_SCOPE, 0)).unwrap();
+
+        let err = block_on(resolve_vault_pointer(
+            &pointers,
+            &floors,
+            SECRET,
+            &owner.verifying_key(),
+            &ROOT_SCOPE,
+            1,
+        ))
+        .expect_err("an emptied chain refuses once an index was adopted");
+        assert_eq!(
+            err,
+            PointerError::IndexRegression {
+                floor: 0,
+                adopted: None
+            }
+        );
     }
 
     #[test]

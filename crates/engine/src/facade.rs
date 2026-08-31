@@ -2676,10 +2676,10 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
                     "scope pointer unauthenticated, or vouched below the write-epoch floor",
                 );
             }
-            Ok(current_root) => {
+            Ok(consult) => {
                 consulted.borrow_mut().insert(scope, window.now);
                 if scope == window.anchor {
-                    anchor_root = current_root;
+                    anchor_root = consult.map(|consult| consult.current_root);
                 }
             }
         }
@@ -11195,7 +11195,7 @@ mod tests {
         use crate::gate::Adopted;
         use crate::seams::{EndpointId, OpId, SeamResult, StagingStore};
         use crate::sync::boot::RootResolve;
-        use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
+        use crate::sync::pointer::{PointerRecord, SessionRole, seal_repoint, vault_pointer_name};
         use crate::testkit::FakeDevice;
 
         const SECRET: &[u8] = b"facade-cold-start-secret-fixture";
@@ -11250,8 +11250,11 @@ mod tests {
         }
 
         impl PointerFetch for ScriptedPointers {
-            async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
-                Ok(self.blocks.lock().unwrap().get(name.as_str()).cloned())
+            async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
+                Ok(match self.blocks.lock().unwrap().get(name.as_str()) {
+                    Some(block) => PointerRecord::Found(block.clone()),
+                    None => PointerRecord::Absent,
+                })
             }
         }
 

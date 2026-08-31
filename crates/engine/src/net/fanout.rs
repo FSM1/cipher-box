@@ -85,6 +85,29 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
     Fanout { acked, not_acked }
 }
 
+/// What a fan-out GET found at a name, on rule 6's axis: [`Absent`] is a
+/// statement about the name, [`Unavailable`] is a statement about the endpoints.
+///
+/// `Absent` is not authoritative — an endpoint can answer "no record" about a
+/// name it simply never held — so a caller that must not be steered by one
+/// still needs a durable bar of its own. What this separation buys is the other
+/// direction: a plane nobody could read is never *reported* as a name that does
+/// not exist.
+///
+/// [`Absent`]: FanoutRecord::Absent
+/// [`Unavailable`]: FanoutRecord::Unavailable
+pub enum FanoutRecord {
+    /// The freshest verifiable record an endpoint served, with its bytes.
+    Found(VerifiedRecord, Vec<u8>),
+    /// No endpoint served a verifiable record, and at least one answered that
+    /// it holds none.
+    Absent,
+    /// No endpoint served a verifiable record and none answered cleanly:
+    /// every one errored, broke the size cap, or served unverifiable bytes.
+    /// Availability, never a verdict about the name.
+    Unavailable,
+}
+
 /// Fan-out GET across the endpoint set and core-verify each returned record
 /// against `name`, returning the freshest `(VerifiedRecord, record_bytes)` or
 /// `None` when no endpoint serves a verifiable record. A malformed or
@@ -95,18 +118,44 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
 /// This is the record-plane verify step (core's Ed25519-from-the-name chain);
 /// the full adoption gate runs downstream on the chosen bytes. The
 /// [`VerifiedRecord`] rides out so no caller re-verifies the same signature.
+///
+/// Callers that must not read an unreadable plane as an empty one take
+/// [`fanout_get_classified`] instead.
 pub async fn fanout_get_verify<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> Option<(VerifiedRecord, Vec<u8>)> {
+    match fanout_get_classified(transport, name).await {
+        FanoutRecord::Found(verified, bytes) => Some((verified, bytes)),
+        FanoutRecord::Absent | FanoutRecord::Unavailable => None,
+    }
+}
+
+/// [`fanout_get_verify`] with the two answers it collapses kept apart
+/// ([`FanoutRecord`]).
+///
+/// An empty endpoint set is `Unavailable`: zero answers is the degenerate form
+/// of inferring vacancy from silence, so the guard is release-active rather
+/// than an assumption about the seam.
+pub async fn fanout_get_classified<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> FanoutRecord {
     let key = name.as_str();
     let mut best: Option<(VerifiedRecord, Vec<u8>)> = None;
+    let mut answered_vacant = false;
     for endpoint in transport.endpoints() {
-        let Ok(Some(bytes)) = transport.get_record(&endpoint, key, MAX_RECORD_BYTES).await else {
-            continue;
+        let bytes = match transport.get_record(&endpoint, key, MAX_RECORD_BYTES).await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                answered_vacant = true;
+                continue;
+            }
+            Err(_) => continue,
         };
         // Release-active backstop: a transport that ignores its cap must not
         // talk the engine past it (mirrors the WASM bridge's `send_capped`).
+        // Bytes that exist but do not verify say nothing about vacancy.
         if bytes.len() > MAX_RECORD_BYTES {
             continue;
         }
@@ -123,7 +172,11 @@ pub async fn fanout_get_verify<T: RecordTransport>(
             best = Some((verified, bytes));
         }
     }
-    best
+    match (best, answered_vacant) {
+        (Some((verified, bytes)), _) => FanoutRecord::Found(verified, bytes),
+        (None, true) => FanoutRecord::Absent,
+        (None, false) => FanoutRecord::Unavailable,
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +188,7 @@ mod tests {
     use super::*;
     use crate::seams::{SeamError, SeamResult};
     use crate::testkit::block_on;
+    use crate::testkit::fakes::InMemoryRecordStore;
 
     /// A transport that ignores `max_bytes` and serves whatever it was seeded,
     /// recording the cap the engine handed it.
@@ -181,6 +235,48 @@ mod tests {
             transport.seen_cap.get(),
             Some(MAX_RECORD_BYTES),
             "the engine, not the transport, chooses the record cap"
+        );
+    }
+
+    /// Bytes that exist but do not verify say nothing about vacancy: an
+    /// over-cap answer is availability, never "this name has no record".
+    #[test]
+    fn unverifiable_bytes_classify_as_unavailable_not_absent() {
+        let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([7u8; 32]).verifying_key());
+        let transport = IgnoresTheCap {
+            bytes: vec![0u8; MAX_RECORD_BYTES + 1],
+            seen_cap: Cell::new(None),
+        };
+
+        assert!(matches!(
+            block_on(fanout_get_classified(&transport, &name)),
+            FanoutRecord::Unavailable
+        ));
+    }
+
+    #[test]
+    fn an_unseeded_name_is_absent_and_an_unreachable_one_is_unavailable() {
+        let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([9u8; 32]).verifying_key());
+        let eps = vec![EndpointId::new("a"), EndpointId::new("b")];
+        let store = InMemoryRecordStore::new(eps.clone());
+
+        assert!(
+            matches!(
+                block_on(fanout_get_classified(&store, &name)),
+                FanoutRecord::Absent
+            ),
+            "every endpoint answers 'no record', so the name is absent"
+        );
+
+        for endpoint in &eps {
+            store.fail_endpoint(endpoint);
+        }
+        assert!(
+            matches!(
+                block_on(fanout_get_classified(&store, &name)),
+                FanoutRecord::Unavailable
+            ),
+            "no endpoint answered at all, so nothing is known about the name"
         );
     }
 }

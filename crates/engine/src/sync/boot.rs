@@ -181,13 +181,23 @@ where
     // fail-closed inside the walk.
     let adoption = resolve_vault_pointer(
         pointer_fetch,
+        floors,
         params.login_secret,
         params.owner_identity,
         &params.root_scope_id,
         params.payload_version,
     )
     .await
-    .map_err(ColdStartError::VaultPointer)?;
+    .map_err(|e| match e {
+        // Availability, not trust: an unreadable pointer plane must reach the
+        // host as a retry, or the boot that could not read one turns into an
+        // accusation. The walk refuses either way.
+        PointerError::Unavailable => {
+            ColdStartError::Seam(SeamError::new("the vault-pointer plane could not be read"))
+        }
+        PointerError::Seam(seam) => ColdStartError::Seam(seam),
+        trust => ColdStartError::VaultPointer(trust),
+    })?;
 
     let base = Snapshot::new(params.root);
     let Some(adoption) = adoption else {
@@ -292,7 +302,7 @@ mod tests {
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
     use crate::seams::{EndpointId, FloorStore, SeamResult, SnapshotCache};
     use crate::sync::op::Op;
-    use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
+    use crate::sync::pointer::{PointerRecord, SessionRole, seal_repoint, vault_pointer_name};
     use crate::testkit::fakes::{InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache};
     use crate::testkit::{SeededEntropy, block_on};
 
@@ -337,8 +347,11 @@ mod tests {
     }
 
     impl PointerFetch for ScriptedPointers {
-        async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
-            Ok(self.blocks.lock().unwrap().get(name.as_str()).cloned())
+        async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
+            Ok(match self.blocks.lock().unwrap().get(name.as_str()) {
+                Some(block) => PointerRecord::Found(block.clone()),
+                None => PointerRecord::Absent,
+            })
         }
     }
 
