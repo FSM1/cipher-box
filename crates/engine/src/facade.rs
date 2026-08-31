@@ -46,6 +46,7 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
+use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts};
 use crate::grants::{
     AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
@@ -2094,7 +2095,7 @@ fn subtree_child_scopes(
 /// The published grant blobs of a gated scope root, as the accept flow's
 /// self-location reads them. The structure signature is the gate's to verify;
 /// self-location keys on the tag alone.
-fn published_grant_blobs(section: &GrantSection) -> Vec<PublishedGrantBlob> {
+pub(crate) fn published_grant_blobs(section: &GrantSection) -> Vec<PublishedGrantBlob> {
     section
         .grant_blobs
         .iter()
@@ -4166,6 +4167,19 @@ where {
                     // Last, and after the settle above: the grantee's own read
                     // leg is the slowest in the pass, and a host refresh waits
                     // on nothing it reports.
+                    //
+                    // The mailbox pull leads it, so a share this pass accepts is
+                    // classified by the refresh below rather than a pass later.
+                    ShareInbox {
+                        mailbox: api.as_ref(),
+                        transport: &transport,
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        enc_secret: &enc_subkey,
+                    }
+                    .pull(&staging, &entropy, ENVELOPE_V, &events)
+                    .await;
                     ReceivedShareStatus {
                         transport: &transport,
                         gateway: &gateway,
