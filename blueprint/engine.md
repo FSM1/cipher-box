@@ -419,8 +419,66 @@ delete does.
   owner did not ask for destroys the node.
 - **A child that is a scope root stays hard.** Such a child publishes under a
   name this scope's write seed does not derive. Its subtree is sealed under a
-  grantee's own seed, and cutting that grantee needs a re-key the bin does not
-  carry.
+  grantee's own seed, and cutting that grantee is a rotation, not a bin entry.
+
+### Re-key into the bin
+
+A soft delete re-seals every node of the doomed subtree under the bin-held key
+before the unlink publishes ([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)
+item 3). That re-key is the access cut: key regression hands a current or a
+revoked grantee every older epoch of the scope seed, so only a key outside the
+scope's derivation entirely stops them reading a node the owner has binned.
+
+- **Names, signers and the AAD-bound scope id do not move.** Only the read key
+  does, so the bin entry's `ipnsName` stays the route back to the node and the
+  write plane is untouched.
+- **The whole subtree re-keys in the pass that bins it.** A binned node takes no
+  ordinary write, so no lazy wave would ever carry it.
+- **A descendant scope root is a boundary, not a member.** Its subtree is sealed
+  under its own scope's seed, which no grantee of the source scope holds.
+- **A re-key that does not land leaves the node linked.** The unlink publishes
+  after the re-key, so a failure is retried whole rather than binning a node the
+  cut never reached.
+- **Every soft delete re-keys, shared scope or not.** The drain carries the
+  scope's read and write seeds, never its grant ledger, so it cannot tell a
+  scope with live or historical grants from one without. A wrong "unshared"
+  verdict is a fail-open disclosure no later pass repairs, and the cost of the
+  re-key is the same order as the hard branch's own subtree walk.
+- **A create never re-authors over a record that reached the unseal.** The
+  replay probe reads a rejection at the unseal stage as published: the record
+  verified and cleared both floors, so it is a node the bin re-keyed, and
+  re-authoring it under the scope key would resurrect what the bin cut.
+
+### Owner capture
+
+The owner's engine adopts an unlink it observes but did not author (ADR 0010
+item 5). The poll leg's folder merge reports the children a folder stopped
+naming; the drain writes one bin entry for each and re-keys the node, so the
+grantee that removed it stops reading it.
+
+- **The re-key runs before the entry**, the opposite of the authored delete's
+  order and for the opposite reason: the unlink has already published, so
+  nothing waits on the entry, and an entry ahead of the re-key would claim a cut
+  that may never run.
+- **A capture outlives the pass that could not settle it.** The merge that saw
+  the departure has already dropped the node from the base, so the next pass
+  would see nothing; the session holds the unsettled captures and clears one
+  only when its entry lands. Each carries the `deletedAt` it was stamped with,
+  so a retry re-keys under the key its entry will name.
+- **A node the base still links is no capture.** A move and a dual-link loser
+  both depart one parent and stay named by another, and binning one would seal a
+  live node under a key no reader derives. A child that does not publish under a
+  name this scope's write seed derives is a scope root, which the authored
+  delete refuses for the same reason.
+- **One entry per node, however many ticks observe it.** The index refuses a
+  duplicate node id, and a later pass re-keys under the standing entry's own
+  `deletedAt` rather than minting a second key.
+- **Capture is bounded and runs after the queue.** A peer chooses both the
+  trigger and the count, so one pass adopts a bounded share on one index load
+  and one index publish, and the owner's own operations drain first.
+- **A vault at retention `0` captures nothing.** The owner turned the bin off,
+  and an adoption carries no owner command that could overrule that, so a
+  grantee's unlink there is the loss retention `0` already means.
 
 ## Sync core
 

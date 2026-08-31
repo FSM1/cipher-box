@@ -104,12 +104,12 @@ use crate::settings::{
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{Drain, DrainReport, DrainScope, published_op_mark};
+use crate::sync::drain::{Drain, DrainReport, DrainScope, hold_captures, published_op_mark};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
-use crate::sync::project::project_child_version;
+use crate::sync::project::{UnlinkedChild, project_child_version};
 use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
     VaultPointerProbe, provision_vault,
@@ -2602,6 +2602,19 @@ async fn consult_pointers<T: RecordTransport, F: FloorStore>(
     anchor_root
 }
 
+/// The bin retention a session loaded, which decides whether a delete is soft
+/// and whether the poll leg's observed unlinks are captured
+/// (blueprint/engine.md "Delete branch"). A session with no settings summary
+/// yet takes the documented default, and so does one whose load degraded.
+fn bin_retention_days(summary: &RefCell<Option<VaultSettingsSummary>>) -> u32 {
+    summary
+        .borrow()
+        .as_ref()
+        .map_or(DEFAULT_BIN_RETENTION_DAYS, |summary| {
+            summary.bin_retention_days
+        })
+}
+
 /// Project a scope root's grant ledger for a host: the recipient label and the
 /// committed permission, and nothing the ledger's sealed half carries.
 ///
@@ -3321,6 +3334,11 @@ pub struct Engine<T: SeamTypes> {
     /// Shared with the tick loop, which must never move the placement without
     /// moving what the host is told the session writes under.
     settings_summary: Rc<RefCell<Option<VaultSettingsSummary>>>,
+    /// Unlinks a read leg observed and this device did not author. The drain
+    /// adopts them into the bin and clears only what it settles, so a capture
+    /// the merge already dropped from the base is not lost on a failed pass
+    /// (ADR 0010 item 5).
+    observed_unlinks: Rc<RefCell<Vec<UnlinkedChild>>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
@@ -3407,6 +3425,7 @@ impl<T: SeamTypes> Engine<T> {
                 sweep_keys: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
                 settings_summary: Rc::new(RefCell::new(None)),
+                observed_unlinks: Rc::new(RefCell::new(Vec::new())),
                 byo_reconciled: Rc::new(Cell::new(false)),
                 api: None,
                 started: false,
@@ -4228,6 +4247,8 @@ where {
         let session = self.session.as_ref()?;
         let tick_enc_subkey = self.tick_enc_subkey.clone();
         let tick_bin_keys = self.tick_bin_keys.clone();
+        let tick_settings = self.settings_summary.clone();
+        let observed_unlinks = self.observed_unlinks.clone();
         let bin_index_record = self.bin_index_record.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
@@ -4459,9 +4480,14 @@ where {
                         if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
                             emit_trust_violation(&events, root_name.as_str(), rejection);
                         }
-                        if refresh_base_from_resolved(&base, NodeId(root_id), resolved) {
+                        let merged = refresh_base_from_resolved(&base, NodeId(root_id), resolved);
+                        if merged.changed {
                             let _ = events.unbounded_send(Event::SnapshotUpdated);
                         }
+                        hold_captures(
+                            &observed_unlinks,
+                            merged.observed_unlinks(root_id, NodeId(root_id), now.0),
+                        );
                     }
                     let read_seed = cached_seed(&scope_read_seeds, &root_id);
                     // A host that derives focus from an operation stream cannot
@@ -4510,6 +4536,7 @@ where {
                             scope_read_seed: &scope_read_seed,
                             plane_roots: (scope_root.0 != root_id).then_some(&scope_roots),
                             mode,
+                            observed_at: now.0,
                         };
                         for (nodes, report) in [
                             (&targets.folders, refresh.run(&targets.folders).await),
@@ -4522,6 +4549,7 @@ where {
                             if report.changed {
                                 let _ = events.unbounded_send(Event::SnapshotUpdated);
                             }
+                            hold_captures(&observed_unlinks, report.departed);
                             folder_verdict = folder_verdict.worst(report.verdict);
                         }
                     }
@@ -4549,6 +4577,12 @@ where {
                     // view unresolved has not landed. The drain below reports its own
                     // progress through the op events.
                     manual.settle(root_verdict.worst(folder_verdict));
+                    // A vault that keeps no bin captures no unlink either: the
+                    // owner turned the bin off, and an adoption carries no owner
+                    // command that could overrule that.
+                    if bin_retention_days(&tick_settings) == 0 {
+                        observed_unlinks.borrow_mut().clear();
+                    }
                     // The drain rides the same tick: it publishes onto exactly the
                     // gate-passing state this pass just reconciled. Both scope seeds
                     // are required — without them there is no name to publish under
@@ -4581,6 +4615,7 @@ where {
                             events: &events,
                             bin_keys: &bin_keys,
                             bin_index_record: &bin_index_record,
+                            observed_unlinks: &observed_unlinks,
                         }
                         .run(&DrainScope {
                             root: NodeId(root_id),
@@ -6606,9 +6641,11 @@ where {
             scope_read_seed: &scope_read_seed,
             plane_roots: None,
             mode: ResolveMode::CacheFirst,
+            observed_at: now.0,
         }
         .run(&due)
         .await;
+        hold_captures(&self.observed_unlinks, report.departed);
         stamp_focus_refreshed(&self.focus_refreshed, &due, now);
         report.changed
     }
@@ -8007,17 +8044,8 @@ where {
         Ok(rendered.record_sequence(node).unwrap_or(1))
     }
 
-    /// The bin retention this session loaded, which decides whether a delete is
-    /// soft (blueprint/engine.md "Delete branch"). A session with no settings
-    /// summary yet takes the documented default, and so does one whose load
-    /// degraded.
     fn bin_retention_days(&self) -> u32 {
-        self.settings_summary
-            .borrow()
-            .as_ref()
-            .map_or(DEFAULT_BIN_RETENTION_DAYS, |summary| {
-                summary.bin_retention_days
-            })
+        bin_retention_days(&self.settings_summary)
     }
 
     /// Mint a fresh random 16-byte node id from the injected entropy seam
@@ -11134,13 +11162,16 @@ mod tests {
 
             // One resolve-tick pass over a gate-passing newer `Adopted`: fold it
             // into the shared base cell and emit, exactly as the tick loop does.
-            assert!(refresh_base_from_resolved(
-                &engine.snapshot,
-                root,
-                &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
-                    [0xC1; 16], "live.txt"
-                ))),
-            ));
+            assert!(
+                refresh_base_from_resolved(
+                    &engine.snapshot,
+                    root,
+                    &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
+                        [0xC1; 16], "live.txt"
+                    ))),
+                )
+                .changed
+            );
             let _ = engine.events.unbounded_send(Event::SnapshotUpdated);
 
             let view = block_on(engine.view()).unwrap();

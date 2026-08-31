@@ -22,7 +22,7 @@ use crate::gate::{Adopted, GateError, RejectionReason};
 use crate::grants::grafted::{BookmarkedScopeRoots, GraftedPlane, PlaneSplit};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
-use crate::sync::project::{project_child_version, project_folder_partial};
+use crate::sync::project::{UnlinkedChild, merge_folder, project_child_version};
 use crate::sync::refresh::RefreshVerdict;
 use crate::sync::tick::ResolveMode;
 
@@ -34,6 +34,9 @@ pub(crate) struct FolderRefreshReport {
     pub(crate) changed: bool,
     /// The worst verdict any folder leg earned.
     pub(crate) verdict: RefreshVerdict,
+    /// Children a refreshed folder stopped naming — an unlink this device did
+    /// not author, which the owner's engine adopts into the bin.
+    pub(crate) departed: Vec<UnlinkedChild>,
 }
 
 impl FolderRefreshReport {
@@ -91,6 +94,8 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// [`ResolveMode::NoCache`], so an unreachable record is reported as
     /// staleness rather than re-projected from cached bytes.
     pub(crate) mode: ResolveMode,
+    /// The pass's own clock read, stamped on every capture this leg observes.
+    pub(crate) observed_at: u64,
 }
 
 impl<T, S, H, F> FolderRefresh<'_, T, S, H, F>
@@ -107,6 +112,7 @@ where
         let mut report = FolderRefreshReport {
             changed: false,
             verdict: RefreshVerdict::Reconciled,
+            departed: Vec::new(),
         };
         for folder in folders.iter().rev() {
             let Some((name, adopted)) = self
@@ -143,7 +149,7 @@ where
                 Some(split) => (split.linkable.as_slice(), split.withheld.as_slice()),
                 None => (children.as_slice(), NOTHING_WITHHELD),
             };
-            report.changed |= project_folder_partial(
+            let merged = merge_folder(
                 &mut self.base.borrow_mut(),
                 *folder,
                 linkable,
@@ -151,6 +157,12 @@ where
                 adopted.sequence,
                 *modified_at,
             );
+            report.changed |= merged.changed;
+            report.departed.extend(merged.observed_unlinks(
+                self.scope_id,
+                *folder,
+                self.observed_at,
+            ));
         }
         report
     }
@@ -180,6 +192,7 @@ where
         let mut report = FolderRefreshReport {
             changed: false,
             verdict: RefreshVerdict::Reconciled,
+            departed: Vec::new(),
         };
         for file in files {
             let Some((name, adopted)) = self
@@ -338,6 +351,9 @@ mod tests {
         base: RefCell<Snapshot>,
         read_seed: Zeroizing<[u8; 32]>,
         head_block: Vec<u8>,
+        /// The captures the last pass reported, so a test can hold the
+        /// cross-plane rule to the bin path as well as to the render tree.
+        captured: RefCell<Vec<NodeId>>,
     }
 
     impl FolderLeg {
@@ -392,6 +408,7 @@ mod tests {
                 base: RefCell::new(Snapshot::new(NodeId(OWN_ROOT))),
                 read_seed: Zeroizing::new(READ_SCOPE_SEED),
                 head_block,
+                captured: RefCell::new(Vec::new()),
             }
         }
 
@@ -400,9 +417,11 @@ mod tests {
         fn place(&self, id: [u8; 16], name: &str, parent: Option<[u8; 16]>) {
             let mut base = self.base.borrow_mut();
             let mut meta = NodeMeta::new(NodeId(id), name, NodeKind::Folder);
-            if id == FOLDER {
-                meta.ipns_name = Some(folder_name().as_str().as_bytes().to_vec());
-            }
+            meta.ipns_name = Some(if id == FOLDER {
+                folder_name().as_str().as_bytes().to_vec()
+            } else {
+                vec![id[0]]
+            });
             base.upsert_node(meta);
             if let Some(parent) = parent {
                 base.link(NodeId(parent), NodeId(id), 1);
@@ -418,7 +437,7 @@ mod tests {
                 body: self.head_block.clone(),
             });
             let (events, mut rx) = mpsc::unbounded();
-            block_on(
+            let report = block_on(
                 FolderRefresh {
                     transport: &self.records,
                     snapshot_cache: &self.snapshot_cache,
@@ -431,9 +450,15 @@ mod tests {
                     scope_read_seed: &self.read_seed,
                     plane_roots,
                     mode: ResolveMode::NoCache,
+                    observed_at: 0,
                 }
                 .run(&[NodeId(FOLDER)]),
             );
+            *self.captured.borrow_mut() = report
+                .departed
+                .into_iter()
+                .map(|unlinked| unlinked.node)
+                .collect();
             drop(events);
             core::iter::from_fn(|| rx.try_recv().ok())
                 .any(|event| matches!(event, Event::AttributableAbuse { .. }))
@@ -532,6 +557,11 @@ mod tests {
         assert_eq!(leg.parent_of(CONTESTED), Some(NodeId(FOLDER)));
         assert_eq!(leg.name_of(CONTESTED), "still-mine");
         assert!(!leg.holds(DROPPED), "an unnamed child still departs");
+        assert_eq!(
+            *leg.captured.borrow(),
+            vec![NodeId(DROPPED)],
+            "a withheld id is no departure, so the bin never captures it"
+        );
     }
 
     /// The rule is the grafted plane's alone. On this vault's own plane every

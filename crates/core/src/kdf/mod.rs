@@ -278,14 +278,19 @@ fn bin_index_seal_key_bytes(login_secret: &[u8]) -> SecretBytes {
     derive_key(CTX_BIN_INDEX_SEAL_KEY, login_secret)
 }
 
-fn bin_held_key_bytes(login_secret: &[u8], node_id: &[u8; 16], deleted_at: u64) -> SecretBytes {
+fn bin_held_root_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_BIN_HELD_KEY, login_secret)
+}
+
+fn bin_held_key_bytes(
+    bin_held_root: &[u8; SECRET_LEN],
+    node_id: &[u8; 16],
+    deleted_at: u64,
+) -> SecretBytes {
     let mut message = [0u8; 24];
     message[..16].copy_from_slice(node_id);
     message[16..].copy_from_slice(&deleted_at.to_be_bytes());
-    keyed_hash(
-        derive_key(CTX_BIN_HELD_KEY, login_secret).as_bytes(),
-        &message,
-    )
+    keyed_hash(bin_held_root, &message)
 }
 
 fn genesis_read_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
@@ -420,16 +425,36 @@ pub fn bin_index_seal_key(login_secret: &[u8]) -> SecretBytes {
     bin_index_seal_key_bytes(login_secret)
 }
 
+/// The account half of the `bin-held-key` edge — an intermediate, never a key.
+/// It seals nothing and seeds no scope; the only thing it may do is feed
+/// [`bin_held_key`].
+///
+/// A session derives it once and carries it in place of the login secret, so the
+/// pass that re-keys a doomed subtree holds the bin's capability and nothing
+/// wider. That capability is every held key of every node and every generation,
+/// so it never enters a bin entry, an export, or a log.
+pub fn bin_held_root(login_secret: &[u8]) -> SecretBytes {
+    bin_held_root_bytes(login_secret)
+}
+
 /// `bin-held-key`: the seed one soft delete re-keys a doomed subtree under
 /// (ADR 0010 item 3). It sits outside every scope's derivation, which is what
 /// cuts a grantee's access — key regression cannot reach it, because no scope
 /// seed of any epoch is an input.
 ///
+/// The key is scope-seed shaped: every node of the doomed subtree keys at
+/// `read_key(node_seed(held, nodeId))`, so one held key opens the whole subtree
+/// and `node_id` here is the subtree root's — the node the bin entry names.
+///
 /// `deleted_at` makes the key per-delete rather than per-node: a node that is
 /// binned, restored, and binned again re-keys under fresh bytes, so a disclosed
 /// held key opens one bin generation and not every later one.
-pub fn bin_held_key(login_secret: &[u8], node_id: &[u8; 16], deleted_at: u64) -> SecretBytes {
-    bin_held_key_bytes(login_secret, node_id, deleted_at)
+pub fn bin_held_key(
+    bin_held_root: &[u8; SECRET_LEN],
+    node_id: &[u8; 16],
+    deleted_at: u64,
+) -> SecretBytes {
+    bin_held_key_bytes(bin_held_root, node_id, deleted_at)
 }
 
 /// `genesis-read-scope-seed`: the vault root scope's read (override) seed at the
@@ -595,7 +620,11 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         },
         EdgeProbeOutput {
             name: "bin-held-key",
-            output: b(bin_held_key_bytes(probe.seed, probe.id, probe.index)),
+            output: b(bin_held_key_bytes(
+                bin_held_root_bytes(probe.seed).as_bytes(),
+                probe.id,
+                probe.index,
+            )),
         },
         EdgeProbeOutput {
             name: "genesis-read-scope-seed",
@@ -699,7 +728,10 @@ mod tests {
             bin_index_seal_key(&seed).as_bytes(),
             &by("bin-index-seal-key")
         );
-        assert_eq!(bin_held_key(&seed, &id, 0).as_bytes(), &by("bin-held-key"));
+        assert_eq!(
+            bin_held_key(bin_held_root(&seed).as_bytes(), &id, 0).as_bytes(),
+            &by("bin-held-key")
+        );
         assert_eq!(
             genesis_read_scope_seed(&seed).as_bytes(),
             &by("genesis-read-scope-seed")
@@ -727,22 +759,25 @@ mod tests {
             bin_index_seal_key(secret).as_bytes(),
             bin_index_seal_key(other).as_bytes(),
         );
+        let root = bin_held_root(secret);
+        let other_root = bin_held_root(other);
+        assert_ne!(root.as_bytes(), other_root.as_bytes());
         assert_ne!(
-            bin_held_key(secret, &node, 10).as_bytes(),
-            bin_held_key(other, &node, 10).as_bytes(),
+            bin_held_key(root.as_bytes(), &node, 10).as_bytes(),
+            bin_held_key(other_root.as_bytes(), &node, 10).as_bytes(),
         );
         assert_ne!(
-            bin_held_key(secret, &node, 10).as_bytes(),
-            bin_held_key(secret, &[8u8; 16], 10).as_bytes(),
+            bin_held_key(root.as_bytes(), &node, 10).as_bytes(),
+            bin_held_key(root.as_bytes(), &[8u8; 16], 10).as_bytes(),
         );
         assert_ne!(
-            bin_held_key(secret, &node, 10).as_bytes(),
-            bin_held_key(secret, &node, 11).as_bytes(),
+            bin_held_key(root.as_bytes(), &node, 10).as_bytes(),
+            bin_held_key(root.as_bytes(), &node, 11).as_bytes(),
             "a re-bin of one node must not reuse the first binning's key",
         );
         assert_eq!(
-            bin_held_key(secret, &node, 10).as_bytes(),
-            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(root.as_bytes(), &node, 10).as_bytes(),
+            bin_held_key(root.as_bytes(), &node, 10).as_bytes(),
         );
     }
 

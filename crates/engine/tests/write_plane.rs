@@ -3566,8 +3566,8 @@ fn a_soft_delete_bins_the_node_and_reclaims_nothing() {
     }
     assert_eq!(
         published(&world.record_store, doomed).0,
-        sequence,
-        "the binned node's own record still resolves, untouched"
+        sequence + 1,
+        "the binned node's own record still resolves, re-keyed once"
     );
 
     let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
@@ -3583,8 +3583,8 @@ fn a_soft_delete_bins_the_node_and_reclaims_nothing() {
     assert_eq!(entry.origin_name(), "notes.txt");
     assert_eq!(entry.ipns_name(), name.as_str().as_bytes());
     assert!(
-        entry.held_key().is_none(),
-        "a scope needing the re-key takes the hard path, so this entry holds no key"
+        entry.held_key().is_some(),
+        "the entry carries the key the doomed subtree was re-keyed under"
     );
     // The op's own authoring time, not a clock read at publish: the tick above
     // moved the injected clock between the two.
@@ -3592,6 +3592,465 @@ fn a_soft_delete_bins_the_node_and_reclaims_nothing() {
     assert!(
         cipherbox_engine::seams::Scheduler::now(&world.scheduler).0 > authored_at,
         "the clock moved after authoring, so the equality above is a real one"
+    );
+}
+
+/// Whether the record standing at `node`'s write name opens under `key`.
+fn opens_under(world: &FakeWorld, blocks: &Blocks, node: NodeId, key: &[u8; 32]) -> bool {
+    let (_, head_cid) = published(&world.record_store, node);
+    let envelope =
+        decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
+    open_read_body(&envelope, key).is_ok()
+}
+
+/// A vault whose settings name the default retention, so every delete is soft.
+fn boot_binning(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    seed_vault_settings(
+        world,
+        alice,
+        blocks,
+        &VaultSettings {
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+            ..VaultSettings::default()
+        },
+    );
+    boot(world, blocks, alice, 42)
+}
+
+/// The access cut a soft delete owes (ADR 0010 item 3). Every node of the
+/// doomed subtree leaves the scope's derivation before the unlink publishes, so
+/// no holder of the scope read seed — a current grantee or a revoked one that
+/// key regression hands every older epoch — opens a node the owner has binned.
+#[test]
+fn a_soft_delete_re_keys_the_whole_doomed_subtree_out_of_the_scope() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "box".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "box");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: doomed,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let leaf = child_id(&engine, doomed, "notes.txt");
+    assert!(
+        opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
+        "the scope read seed opens the subtree while it is linked"
+    );
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the soft delete published a bin index record");
+    };
+    let held = *index.entries[0]
+        .held_key()
+        .expect("the entry carries the key the subtree re-keyed under");
+    for node in [doomed, leaf] {
+        assert!(
+            !opens_under(&world, &blocks, node, &read_key_of(node)),
+            "the scope read seed no longer opens the binned node"
+        );
+        assert!(
+            opens_under(&world, &blocks, node, &read_key_under(&held, node)),
+            "and the bin's held key does, so a restore can still read it"
+        );
+    }
+}
+
+/// The one ordering the re-key must not produce (ADR 0010 item 3). A subtree
+/// this pass could not re-key stays linked in its parent, so the delete retries
+/// whole rather than binning a node the cut never reached.
+#[test]
+fn a_re_key_that_cannot_publish_leaves_the_node_linked() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+
+    let target = doomed.0;
+    blocks.refuse_upload(Box::new(move |block| {
+        decode_envelope(block)
+            .ok()
+            .filter(|envelope| envelope.id == target)
+            .map(|_| unreachable_upload())
+    }));
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["notes.txt".to_owned()],
+        "the unlink waits on the re-key it never landed"
+    );
+}
+
+/// The owner's capture of a grantee's unlink (ADR 0010 item 5). The poll leg
+/// sees a folder stop naming a child this device did not unlink; the owner's
+/// engine binds it and re-keys it, so the grantee that removed it stops reading
+/// it. A second poll over the same unlink writes no second entry.
+#[test]
+fn an_unlink_this_device_did_not_author_is_adopted_into_the_bin_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "shared".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let shared = child_id(&engine, ROOT, "shared");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: shared,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let leaf = child_id(&engine, shared, "notes.txt");
+    block_on(engine.command(Command::SetFocus { node: Some(shared) })).unwrap();
+
+    // A write grantee republishes the folder without the child: a well-formed
+    // record under the scope's own material, which is what a grantee authors.
+    let body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 1,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        shared,
+        Planted {
+            node_id: shared.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(shared),
+            body: &body,
+        },
+    );
+    tick(&world, &engine, &mut tasks);
+
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the adoption published a bin index record");
+    };
+    assert_eq!(index.entries.len(), 1, "one unlink, one entry");
+    let entry = &index.entries[0];
+    assert_eq!(entry.node_id, leaf.0);
+    assert_eq!(entry.origin_parent, shared.0);
+    assert_eq!(entry.origin_name(), "notes.txt");
+    let held = *entry
+        .held_key()
+        .expect("adoption re-keys, so the entry carries the key");
+    assert!(
+        !opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
+        "the grantee that unlinked the node stops reading it"
+    );
+    assert!(opens_under(
+        &world,
+        &blocks,
+        leaf,
+        &read_key_under(&held, leaf)
+    ));
+
+    tick(&world, &engine, &mut tasks);
+    let BinIndexLoad::Resolved(again) = load_bin(&world, &alice, &blocks) else {
+        panic!("the bin index still resolves");
+    };
+    assert_eq!(
+        again.entries.len(),
+        1,
+        "a second poll over one unlink writes one entry, not two"
+    );
+}
+
+/// A child that leaves one parent but is still named by another moved; it did
+/// not depart the tree. Binning it would seal a live node under a key no reader
+/// derives, so the capture drops it.
+#[test]
+fn a_child_another_parent_still_names_is_never_captured() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    for name in ["left", "right"] {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let left = child_id(&engine, ROOT, "left");
+    let right = child_id(&engine, ROOT, "right");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: left,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let leaf = child_id(&engine, left, "notes.txt");
+
+    // The second parent names it too, so the base carries both links.
+    let shared_body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 1,
+        children: vec![file_ref(leaf.0, "notes.txt")],
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        right,
+        Planted {
+            node_id: right.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(right),
+            body: &shared_body,
+        },
+    );
+    block_on(engine.command(Command::SetFocus { node: Some(right) })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // Now the first parent drops it: a move, not an unlink.
+    let emptied = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 2,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        left,
+        Planted {
+            node_id: left.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(left),
+            body: &emptied,
+        },
+    );
+    block_on(engine.command(Command::SetFocus { node: Some(left) })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        matches!(
+            load_bin(&world, &alice, &blocks),
+            BinIndexLoad::Empty { .. }
+        ),
+        "a node the tree still names is no capture"
+    );
+    assert!(
+        opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
+        "and it still opens for every holder of the scope read seed"
+    );
+}
+
+/// A capture the merge already dropped from the base outlives the pass that
+/// could not settle it. Without that, one refused publish would leave the node
+/// with no entry, no re-key, and no route back.
+#[test]
+fn a_capture_that_cannot_settle_is_adopted_by_a_later_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "shared".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let shared = child_id(&engine, ROOT, "shared");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: shared,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let leaf = child_id(&engine, shared, "notes.txt");
+    block_on(engine.command(Command::SetFocus { node: Some(shared) })).unwrap();
+
+    let target = leaf.0;
+    blocks.refuse_upload(Box::new(move |block| {
+        decode_envelope(block)
+            .ok()
+            .filter(|envelope| envelope.id == target)
+            .map(|_| unreachable_upload())
+    }));
+    let body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 1,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        shared,
+        Planted {
+            node_id: shared.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(shared),
+            body: &body,
+        },
+    );
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        matches!(
+            load_bin(&world, &alice, &blocks),
+            BinIndexLoad::Empty { .. }
+        ),
+        "the re-key did not land, so no entry claims the cut"
+    );
+
+    blocks.refuse_upload(Box::new(|_| None));
+    tick(&world, &engine, &mut tasks);
+
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the later pass published the bin index record");
+    };
+    assert_eq!(index.entries.len(), 1, "the held capture landed");
+    let entry = &index.entries[0];
+    assert_eq!(entry.node_id, leaf.0);
+    let held = *entry.held_key().expect("the entry carries the key");
+    assert!(
+        !opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
+        "and the cut ran with it"
+    );
+    assert!(opens_under(
+        &world,
+        &blocks,
+        leaf,
+        &read_key_under(&held, leaf)
+    ));
+}
+
+/// The owner who keeps no bin captures no unlink either. A vault at retention
+/// `0` asked for no bin, and an adoption carries no owner command that could
+/// overrule that.
+#[test]
+fn a_vault_at_retention_zero_captures_no_unlink() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_vault_settings(
+        &world,
+        &alice,
+        &blocks,
+        &VaultSettings {
+            bin_retention_days: 0,
+            ..VaultSettings::default()
+        },
+    );
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "shared".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let shared = child_id(&engine, ROOT, "shared");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: shared,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let leaf = child_id(&engine, shared, "notes.txt");
+    block_on(engine.command(Command::SetFocus { node: Some(shared) })).unwrap();
+
+    let body = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 1,
+        children: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    plant_record(
+        &world.record_store,
+        &blocks,
+        shared,
+        Planted {
+            node_id: shared.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(shared),
+            body: &body,
+        },
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        matches!(
+            load_bin(&world, &alice, &blocks),
+            BinIndexLoad::Empty { .. }
+        ),
+        "the observed unlink wrote no entry"
+    );
+    assert!(
+        opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
+        "and nothing re-keyed the node"
     );
 }
 
