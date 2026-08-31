@@ -61,7 +61,7 @@ pub use invite_store::{
     MAX_CONVERTED_CLAIMS, MAX_INVITE_RECORDS, StagingInviteStore,
 };
 pub use ledger::{
-    AuthorityViolation, GrantRow, PublishedGrantBlob, UNATTESTED_IDENTITY_PK, bound_recipient,
+    AuthorityViolation, GrantRow, PublishedGrantBlob, UNATTESTED_IDENTITY_PK,
     enforce_committed_ledger, entry_is_live, mint_grant_row, recipient_blinded_tag,
     recipient_self_location, row_is_owner_attested, self_locate, self_locate_signed,
 };

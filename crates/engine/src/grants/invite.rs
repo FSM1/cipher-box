@@ -2449,9 +2449,16 @@ mod tests {
         for i in 1..MAX_GRANT_BLOBS {
             let mut tag = [0u8; 32];
             tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
-            full_commitment
-                .entries
-                .push(GrantSetEntry::new(tag, Permission::Read, [0x02; 32]));
+            // A commitment names each recipient at most once, so the padding
+            // entries need distinct keys as well as distinct tags.
+            let mut recipient_enc_pk = [0x42u8; 32];
+            recipient_enc_pk[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            full_commitment.entries.push(GrantSetEntry::new(
+                tag,
+                recipient_enc_pk,
+                Permission::Read,
+                [0x02; 32],
+            ));
             // Ceiling padding: never read as a live grant, so it carries no
             // owner attestation.
             full_ledger.push(GrantLedgerEntry::new(

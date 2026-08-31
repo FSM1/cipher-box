@@ -2607,7 +2607,12 @@ fn identity_signed_preimages() -> Vec<(&'static str, Vec<Vec<u8>>)> {
     let commitment = GrantSetCommitment {
         ipns_name: scope_root.clone(),
         owner_pseudonym_pk: [0x44; 32],
-        entries: vec![GrantSetEntry::new([0x55; 32], Permission::Read, [0x66; 32])],
+        entries: vec![GrantSetEntry::new(
+            [0x55; 32],
+            [0x95; 32],
+            Permission::Read,
+            [0x66; 32],
+        )],
         unknown: PreservedFields::new(),
     };
 

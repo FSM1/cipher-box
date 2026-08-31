@@ -74,44 +74,13 @@ pub fn recipient_self_location(
     Some((shared, tag))
 }
 
-/// `entry`'s adopted `recipientEncPk`, when the row is filed under the tag that
-/// key derives at `scope_root_ipns_name` — the check only a holder of the owner
-/// encryption subkey can run, since the tag is the owner–recipient pairwise
-/// ECDH.
-///
-/// `None` on a recipient key core refuses to adopt: a tag it can never derive
-/// is a tag it is not bound to. That refusal covers the whole cofactor class of
-/// an honest key, not just the low-order points — a twin re-derives the honest
-/// key's tag, so the shared secret alone cannot tell the two apart. Every input
-/// is public and the verdict is a public tag comparison, so no constant-time
-/// guarantee is needed.
-///
-/// Adoption is an Edwards lift plus a scalar multiplication, so callers that go
-/// on to seal to the recipient take the key from here rather than re-adopting
-/// the same bytes.
-pub fn bound_recipient(
-    owner_enc_secret: &X25519Secret,
-    entry: &GrantLedgerEntry,
-    scope_root_ipns_name: &[u8],
-) -> Option<X25519Public> {
-    let recipient = X25519Public::from_bytes(entry.recipient_enc_pk)?;
-    (recipient_blinded_tag(owner_enc_secret, &recipient, scope_root_ipns_name) == Some(entry.tag))
-        .then_some(recipient)
-}
-
 /// Whether the owner attested `entry`'s recipient binding at
-/// `scope_root_ipns_name` — the one recipient check that needs no owner secret,
-/// so a write-grantee re-sealer runs it too.
+/// `scope_root_ipns_name`.
 ///
-/// The grant-set commitment covers `(tag, permission, pseudonymPk)` only, so
-/// before the row carried an owner signature a write-grantee could swap
-/// `recipientEncPk` under a committed tag and only the owner could tell. The
-/// signature makes the swap self-detaching: an altered row verifies against no
-/// owner key.
-///
-/// Adoption is deliberately not part of the verdict — a caller that goes on to
-/// seal takes its key from [`bound_recipient`] (or core's adoption gate) so the
-/// row's bytes are lifted onto the curve exactly once.
+/// The only owner authority over `recipientIdentityPk`, which no commitment
+/// entry carries. A re-mint copies that label from an attested row and drops it
+/// otherwise, rather than laundering a write-grantee's choice into the owner's
+/// signature ([`mint_grant_row`]).
 pub fn row_is_owner_attested(
     owner_identity: &EcdsaVerifier,
     entry: &GrantLedgerEntry,
@@ -163,7 +132,8 @@ pub fn entry_is_live(entry: &GrantLedgerEntry, now: UnixMillis) -> bool {
 pub struct GrantRow {
     /// The grantee's blinded tag — the grant blob's public key in the envelope.
     pub tag: [u8; 32],
-    /// The `(tag, permission, pseudonymPk)` entry for the owner-signed commitment.
+    /// The `(tag, recipientEncPk, permission, pseudonymPk)` entry for the
+    /// owner-signed commitment.
     pub commitment_entry: GrantSetEntry,
     /// The authoritative ledger row.
     pub ledger_entry: GrantLedgerEntry,
@@ -224,7 +194,12 @@ pub fn mint_grant_row(
             .to_compact();
     Some(GrantRow {
         tag,
-        commitment_entry: GrantSetEntry::new(tag, permission, pseudonym_pk),
+        commitment_entry: GrantSetEntry::new(
+            tag,
+            recipient_enc_pub.to_bytes(),
+            permission,
+            pseudonym_pk,
+        ),
         ledger_entry,
     })
 }
@@ -263,12 +238,13 @@ fn committed_permissions(commitment: &GrantSetCommitment) -> BTreeMap<[u8; 32], 
 /// permission is an [`AuthorityViolation`]. (Duplicate tags are already rejected
 /// fail-closed at decode in core, so each side is a well-formed set here.)
 ///
-/// `(tag, permission)` is the whole comparison because it is all a ledger row and
-/// a committed entry share — the owner also signs each entry's `pseudonymPk`, but
-/// no ledger row carries one. A row's `recipientIdentityPk` and `recipientEncPk`
-/// are under owner authority separately, in the row's own signature
-/// ([`row_is_owner_attested`]); `expiresAt` is under none, and is not a
-/// capability boundary ([`GrantLedgerEntry::expires_at`]).
+/// `(tag, permission)` is the whole comparison because it is all that decides
+/// authority. The owner signs each entry's `recipientEncPk` and `pseudonymPk`
+/// too, and every consumer reads those off the commitment rather than off a row,
+/// so a row that disagrees misdirects nothing and buys a committed writer no
+/// veto over the record. `recipientIdentityPk` is under the row's own owner
+/// signature ([`row_is_owner_attested`]); `expiresAt` is under none, and is not
+/// a capability boundary ([`GrantLedgerEntry::expires_at`]).
 pub fn enforce_committed_ledger(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
@@ -339,49 +315,47 @@ mod tests {
     }
 
     #[test]
-    fn a_recipient_key_core_will_not_adopt_is_not_bound_to_the_tag() {
-        // Both encodings a write-grantee can swap in re-derive the victim's own
-        // tag — a cofactor twin and a non-canonical spelling of the key itself —
-        // so only core's adoption gate ([`X25519Public::from_bytes`]) stops the
-        // owner re-minting a blob the victim can never open.
+    fn a_mint_commits_the_recipient_key_the_committed_tag_derives_from() {
+        // Every consumer wraps a blob to the key the commitment entry names and
+        // files it under the tag beside it, so the mint must derive both from
+        // the one ECDH. A drift between them seals a grantee's blob to somebody
+        // else under a tag the grantee still self-locates.
         let owner_enc = X25519Secret::from_scalar([0x33; 32]);
-        let victim = X25519Secret::from_scalar([0x44; 32]).public();
+        let recipient = X25519Secret::from_scalar([0x44; 32]);
         let name = b"scope-root-name";
 
         let row = mint_grant_row(
             &owner_identity(),
             &owner_enc,
             [0x02; IDENTITY_PUBLIC_LEN],
-            &victim,
+            &recipient.public(),
             &[0x07; 16],
             name,
             Permission::Read,
         )
         .expect("a contributory recipient key");
-        assert!(bound_recipient(&owner_enc, &row.ledger_entry, name).is_some());
 
-        let mut high_bit = victim.to_bytes();
-        high_bit[31] |= 0x80;
-        let unadoptable = cipherbox_core::suite::x25519::cofactor_twins(&victim)
-            .into_iter()
-            .chain([high_bit]);
-
-        for enc_pk in unadoptable {
-            let mut swapped = row.ledger_entry.clone();
-            swapped.recipient_enc_pk = enc_pk;
-            assert_eq!(swapped.tag, row.ledger_entry.tag, "owner-committed tag");
-            assert!(
-                bound_recipient(&owner_enc, &swapped, name).is_none(),
-                "a key core will not adopt binds no tag"
-            );
-        }
+        assert_eq!(row.commitment_entry.tag, row.tag);
+        assert_eq!(
+            row.commitment_entry.recipient_enc_pk,
+            recipient.public().to_bytes()
+        );
+        assert_eq!(
+            row.ledger_entry.recipient_enc_pk, row.commitment_entry.recipient_enc_pk,
+            "the row repeats what the owner committed"
+        );
+        assert_eq!(
+            recipient_blinded_tag(&recipient, &owner_enc.public(), name),
+            Some(row.commitment_entry.tag),
+            "and the recipient self-locates under the committed tag"
+        );
     }
 
     #[test]
     fn only_the_owner_minted_row_at_its_own_name_is_attested() {
-        // The commitment binds `(tag, permission, pseudonymPk)`, so the row's own
-        // signature is the whole of the owner's authority over `recipientEncPk`
-        // and `recipientIdentityPk`. It needs no owner secret to read, which is
+        // The commitment carries no `recipientIdentityPk`, so the row's own
+        // signature is the whole of the owner's authority over that label. It
+        // needs no owner secret to read, which is
         // what lets a write-grantee re-sealer refuse a swap.
         let owner_identity = owner_identity();
         let owner_enc = X25519Secret::from_scalar([0x33; 32]);
@@ -468,8 +442,8 @@ mod tests {
     #[test]
     fn matching_ledger_passes_owner_authority() {
         let c = commitment(vec![
-            GrantSetEntry::new([0x21; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x22; 32], Permission::Write, [0x03; 32]),
+            GrantSetEntry::new([0x21; 32], [0x61; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new([0x22; 32], [0x62; 32], Permission::Write, [0x03; 32]),
         ]);
         let ledger = vec![
             ledger_entry([0x21; 32], Permission::Read),
@@ -483,6 +457,7 @@ mod tests {
         // A write-grantee injects a row for a tag the owner never committed.
         let c = commitment(vec![GrantSetEntry::new(
             [0x21; 32],
+            [0x61; 32],
             Permission::Read,
             [0x02; 32],
         )]);
@@ -498,6 +473,7 @@ mod tests {
     fn changed_permission_is_an_authority_violation() {
         let c = commitment(vec![GrantSetEntry::new(
             [0x21; 32],
+            [0x61; 32],
             Permission::Read,
             [0x02; 32],
         )]);
@@ -508,8 +484,8 @@ mod tests {
     #[test]
     fn dropped_tag_is_an_authority_violation() {
         let c = commitment(vec![
-            GrantSetEntry::new([0x21; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x22; 32], Permission::Write, [0x03; 32]),
+            GrantSetEntry::new([0x21; 32], [0x61; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new([0x22; 32], [0x62; 32], Permission::Write, [0x03; 32]),
         ]);
         let ledger = vec![ledger_entry([0x21; 32], Permission::Read)]; // dropped 0x22
         assert!(enforce_committed_ledger(&c, &ledger).is_err());

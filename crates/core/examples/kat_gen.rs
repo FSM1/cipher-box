@@ -5388,8 +5388,8 @@ fn section_grant_blob(tag: u8) -> SignedGrantBlob {
 fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
     let full = seal::GrantSection {
         commitment: section_commitment(vec![
-            GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+            GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new([0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
         ]),
         commitment_sig: [0x11; 64],
         grant_blobs: vec![section_grant_blob(0x01), section_grant_blob(0x03)],
@@ -6551,8 +6551,8 @@ fn grant_set_sample() -> GrantSetCommitment {
         ipns_name: b"scope-root-ipns".to_vec(),
         owner_pseudonym_pk: [0x88; 32],
         entries: vec![
-            GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+            GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new([0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
         ],
         unknown: PreservedFields::new(),
     }
@@ -6583,10 +6583,16 @@ fn build_grant_set_accept() -> Vec<GrantSetAcceptVector> {
 }
 
 /// A grant-set entry map value, for hand-crafting commitment reject vectors.
-fn grant_set_entry_map(tag: Vec<u8>, permission: &str, pseudonym: Vec<u8>) -> Value {
+fn grant_set_entry_map(
+    tag: Vec<u8>,
+    recipient: Vec<u8>,
+    permission: &str,
+    pseudonym: Vec<u8>,
+) -> Value {
     map_of(vec![
         ("permission", Value::Text(permission.to_string())),
         ("pseudonymPk", Value::Bytes(pseudonym)),
+        ("recipientEncPk", Value::Bytes(recipient)),
         ("tag", Value::Bytes(tag)),
     ])
 }
@@ -6610,7 +6616,12 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         (
             "entry-invalid-permission",
             commitment_of(
-                vec![grant_set_entry_map(vec![0x01; 32], "owner", vec![0x02; 32])],
+                vec![grant_set_entry_map(
+                    vec![0x01; 32],
+                    vec![0x41; 32],
+                    "owner",
+                    vec![0x02; 32],
+                )],
                 false,
             ),
             "invalid-permission",
@@ -6618,10 +6629,40 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         (
             "pseudonym-pk-wrong-length",
             commitment_of(
-                vec![grant_set_entry_map(vec![0x01; 32], "read", vec![0x02; 31])],
+                vec![grant_set_entry_map(
+                    vec![0x01; 32],
+                    vec![0x41; 32],
+                    "read",
+                    vec![0x02; 31],
+                )],
                 false,
             ),
             "invalid-field-length",
+        ),
+        (
+            "recipient-enc-pk-wrong-length",
+            commitment_of(
+                vec![grant_set_entry_map(
+                    vec![0x01; 32],
+                    vec![0x41; 31],
+                    "read",
+                    vec![0x02; 32],
+                )],
+                false,
+            ),
+            "invalid-field-length",
+        ),
+        (
+            "entry-missing-recipient-enc-pk",
+            commitment_of(
+                vec![map_of(vec![
+                    ("permission", Value::Text("read".to_string())),
+                    ("pseudonymPk", Value::Bytes(vec![0x02; 32])),
+                    ("tag", Value::Bytes(vec![0x01; 32])),
+                ])],
+                false,
+            ),
+            "missing-field",
         ),
         (
             "missing-entries",
@@ -6629,16 +6670,18 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
             "missing-field",
         ),
         (
-            // One past the ceiling, all tags distinct so the bound is what fires
-            // — every write entry is another key the gate trial-verifies each
-            // structure against.
+            // One past the ceiling, all tags and recipients distinct so the
+            // bound is what fires — every write entry is another key the gate
+            // trial-verifies each structure against.
             "entries-past-the-bound",
             commitment_of(
                 (0..=seal::MAX_GRANT_BLOBS as u64)
                     .map(|i| {
                         let mut tag = vec![0u8; 32];
                         tag[..8].copy_from_slice(&i.to_be_bytes());
-                        grant_set_entry_map(tag, "write", vec![0x02; 32])
+                        let mut recipient = vec![0xff; 32];
+                        recipient[..8].copy_from_slice(&i.to_be_bytes());
+                        grant_set_entry_map(tag, recipient, "write", vec![0x02; 32])
                     })
                     .collect(),
                 false,
@@ -6672,8 +6715,8 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
     // at decode (no signature exercised), so its signature stays empty.
     let dup_tag_bytes = commitment_of(
         vec![
-            grant_set_entry_map(vec![0x01; 32], "read", vec![0x02; 32]),
-            grant_set_entry_map(vec![0x01; 32], "write", vec![0x09; 32]),
+            grant_set_entry_map(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]),
+            grant_set_entry_map(vec![0x01; 32], vec![0x42; 32], "write", vec![0x09; 32]),
         ],
         false,
     );
@@ -6692,6 +6735,33 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         commitment: hexstr(&dup_tag_bytes),
         signature: String::new(),
         check: "duplicate-grant-tag".to_string(),
+        class: "trust".to_string(),
+    });
+
+    // The same confused deputy seen from the recipient side: one recipient
+    // encryption subkey committed twice under distinct tags.
+    let dup_recipient_bytes = commitment_of(
+        vec![
+            grant_set_entry_map(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]),
+            grant_set_entry_map(vec![0x02; 32], vec![0x41; 32], "write", vec![0x09; 32]),
+        ],
+        false,
+    );
+    let err = decode_grant_set_commitment(&dup_recipient_bytes)
+        .expect_err("duplicate grant-set recipient must reject");
+    assert_eq!(
+        err.check(),
+        "duplicate-grant-recipient",
+        "grant-set dup-recipient reject"
+    );
+    assert_eq!(err.class(), "trust", "grant-set dup-recipient class");
+    assert!(names.insert("entries-duplicate-recipient"));
+    out.push(GrantSetRejectVector {
+        name: "entries-duplicate-recipient".to_string(),
+        owner_identity_pk: String::new(),
+        commitment: hexstr(&dup_recipient_bytes),
+        signature: String::new(),
+        check: "duplicate-grant-recipient".to_string(),
         class: "trust".to_string(),
     });
 

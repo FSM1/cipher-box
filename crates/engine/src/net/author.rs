@@ -677,6 +677,7 @@ mod tests {
         let mut section = fixture.grant_section.clone();
         section.commitment.entries.push(GrantSetEntry::new(
             [0x66; 32],
+            [0x67; 32],
             Permission::Write,
             second.verifying_key().to_bytes(),
         ));

@@ -299,6 +299,9 @@ const GATE_KAT_ROOT: [u8; 16] = [0x1b; 16];
 const GATE_KAT_OWNER_ENC_SEED: [u8; 32] = [0x3c; 32];
 /// The committed write-grantee's blinded tag and pseudonym seed.
 const GATE_KAT_GRANTEE_TAG: [u8; 32] = [0x66; 32];
+
+/// The write grantee's encryption subkey public half in the same commitment.
+const GATE_KAT_GRANTEE_ENC_PK: [u8; 32] = [0x67; 32];
 const GATE_KAT_GRANTEE_PSEUDONYM_SEED: [u8; 32] = [0x55; 32];
 
 /// Stage 3's **one section, one signer** rule frozen over whole scope-root head
@@ -343,6 +346,7 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerVector>, Vec<SectionSigne
         let mut section = fixture.grant_section.clone();
         section.commitment.entries.push(GrantSetEntry::new(
             GATE_KAT_GRANTEE_TAG,
+            GATE_KAT_GRANTEE_ENC_PK,
             Permission::Write,
             grantee.verifying_key().to_bytes(),
         ));

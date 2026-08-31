@@ -396,6 +396,23 @@ pub(crate) fn assert_grant_tags_unique(
     Ok(())
 }
 
+/// Fail-closed uniqueness over a grant-set commitment's recipient encryption
+/// subkeys, the [`assert_grant_tags_unique`] rule on the other identifier the
+/// owner now signs into each entry. One recipient key derives exactly one
+/// blinded tag at one scope root, so two entries naming the same key are two
+/// permissions for one party and a first-match lookup decides which wins.
+pub(crate) fn assert_grant_recipients_unique(
+    recipients: impl IntoIterator<Item = [u8; SECRET_LEN]>,
+) -> Result<(), CodecError> {
+    let mut seen = BTreeSet::new();
+    for r in recipients {
+        if !seen.insert(r) {
+            return Err(TrustViolation::DuplicateGrantRecipient.into());
+        }
+    }
+    Ok(())
+}
+
 /// Release-active bound on a repeated collection or a bounded byte field,
 /// symmetric across decode and encode (AGENTS.md rule 8).
 pub(crate) fn assert_within_bound(

@@ -275,8 +275,9 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   decoder refuses.
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
-  epoch-free grant-set commitment (ECDSA over det-CBOR `{ipnsName,
-ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
+  grant-set commitment (ECDSA over det-CBOR `{ipnsName,
+ownerPseudonymPk, [(tag, recipientEncPk, permission, pseudonymPk)]}`), owner
+  blob, the optional
   owner-write-blob (below), ascent link (public half plaintext,
   derive-and-verified by ancestor readers), per-epoch history links, and a
   detached **structure signature** per seed-bearing structure. On the wire the
@@ -286,7 +287,9 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   with `None`). Every repeated collection in the grant section is bounded
   fail-closed at decode and
   encode — `historyLinks` at 256, `grantBlobs` and the commitment's `entries`
-  both at 1024 (`too-many-structures`) — and two history links may not carry
+  both at 1024 (`too-many-structures`) — the commitment additionally refuses a
+  repeated `tag` (`duplicate-grant-tag`) or a repeated `recipientEncPk`
+  (`duplicate-grant-recipient`), and two history links may not carry
   equal sealed bytes (`duplicate-history-link`): the gate's stage-3 work is
   `pseudonyms + structures` (engine.md "One section, one signer"), so an
   unbounded collection on **either** side of that sum is a reader-CPU amplifier,

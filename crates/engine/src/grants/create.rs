@@ -1954,12 +1954,12 @@ mod tests {
     }
 
     #[test]
-    fn an_attested_parent_row_the_owner_cannot_re_derive_fails_closed_release_active() {
-        // The owner's two authorities over one row disagree: its signature binds
-        // a `recipientEncPk` its own encryption subkey cannot re-derive the tag
-        // from. Wrapping the parent's override seed and pointer read key under
-        // that disagreement is what the refusal prevents. Runtime `Err`, never a
-        // debug_assert. Active in release.
+    fn a_relabelled_parent_row_cannot_redirect_the_parent_blob() {
+        // A committed write grantee authors the ledger row, so it can relabel
+        // `recipientEncPk` there and re-file it. The re-seal takes the recipient
+        // off the owner-signed commitment entry instead, so the relabel is inert:
+        // the blob still opens for the committed party and never for the
+        // attacker.
         let victim = X25519Secret::from_scalar([0x51; SECRET_LEN]);
         let attacker = X25519Secret::from_scalar([0x52; SECRET_LEN]);
         let mut row = parent_row(&victim.public());
@@ -1968,16 +1968,35 @@ mod tests {
             sign_recipient_binding(&owner_identity(), PARENT_NAME, &row.ledger_entry)
                 .expect("the owner attests the row")
                 .to_compact();
+        let tag = row.tag;
 
         let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[row]);
+        outcome.expect("the parent re-seal ignores the row's recipient field");
 
-        assert_eq!(
-            outcome.expect_err("the parent re-seal refuses the row"),
-            CreateGrantError::ParentMint(ResealError::TagNotBoundToRecipient)
+        let parent = published
+            .iter()
+            .find(|r| r.scope_id == PARENT_SCOPE)
+            .expect("the parent record publishes");
+        let ctx = AadContext {
+            v: V,
+            id: PARENT_SCOPE,
+            scope: PARENT_SCOPE,
+            epoch: parent.read_epoch,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        };
+        let blob = parent
+            .section
+            .grant_blobs
+            .iter()
+            .find(|b| b.tag == tag)
+            .expect("the committed grantee still gets its blob");
+        assert!(
+            open_grant_blob(&victim, &blob.enc, &ctx, &blob.ciphertext).is_ok(),
+            "the blob opens for the party the owner committed"
         );
         assert!(
-            published.iter().all(|r| r.scope_id != PARENT_SCOPE),
-            "no parent record reaches the network"
+            open_grant_blob(&attacker, &blob.enc, &ctx, &blob.ciphertext).is_err(),
+            "and never for the key the row was relabelled to"
         );
     }
 

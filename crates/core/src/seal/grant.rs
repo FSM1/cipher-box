@@ -46,8 +46,8 @@ use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
-    bytes_fixed, collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_recipients_unique, assert_grant_tags_unique,
+    assert_unknown_disjoint, assert_within_bound, bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::section::MAX_GRANT_BLOBS;
 
@@ -765,13 +765,20 @@ pub fn open_owner_history_link(
 // Grant-set commitment: the owner-signed, epoch-free tag/pseudonym set.
 // ---------------------------------------------------------------------------
 
-/// One committed grant: a recipient's blinded tag, their permission, and the
-/// writer pseudonym public key any envelope holder verifies committed-write
-/// authorship against.
+/// One committed grant: a recipient's blinded tag, their encryption subkey,
+/// their permission, and the writer pseudonym public key any envelope holder
+/// verifies committed-write authorship against.
+///
+/// `recipient_enc_pk` is the same value the matching grant-ledger row carries,
+/// but under the owner's own signature rather than the write-grantee-authored
+/// ledger. A cut names the party it revokes from here, so a committed write
+/// grantee cannot relabel its own row and leave the cut naming nobody.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrantSetEntry {
     /// The recipient's blinded tag.
     pub tag: [u8; SECRET_LEN],
+    /// The recipient's X25519 encryption subkey public half.
+    pub recipient_enc_pk: [u8; SECRET_LEN],
     /// The recipient's permission.
     pub permission: Permission,
     /// The writer pseudonym public key (Ed25519).
@@ -780,13 +787,14 @@ pub struct GrantSetEntry {
     pub unknown: PreservedFields,
 }
 
-/// Both `tag` and `pseudonym_pk` derive from the owner–recipient pairwise
-/// ECDH, so each names one grantee. A rendered set links every grantee of a
-/// scope, which is what blinding the tag exists to deny.
+/// `tag`, `recipient_enc_pk` and `pseudonym_pk` each name one grantee. A
+/// rendered set links every grantee of a scope, which is what blinding the tag
+/// exists to deny.
 impl fmt::Debug for GrantSetEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GrantSetEntry")
             .field("tag", &RedactedBytes::of(&self.tag))
+            .field("recipient_enc_pk", &RedactedBytes::of(&self.recipient_enc_pk))
             .field("permission", &self.permission)
             .field("pseudonym_pk", &RedactedBytes::of(&self.pseudonym_pk))
             .field("unknown", &self.unknown)
@@ -794,13 +802,19 @@ impl fmt::Debug for GrantSetEntry {
     }
 }
 
-const GRANT_SET_ENTRY_KNOWN: &[&str] = &["permission", "pseudonymPk", "tag"];
+const GRANT_SET_ENTRY_KNOWN: &[&str] = &["permission", "pseudonymPk", "recipientEncPk", "tag"];
 
 impl GrantSetEntry {
     /// A committed grant with no preserved unknown fields.
-    pub fn new(tag: [u8; SECRET_LEN], permission: Permission, pseudonym_pk: [u8; 32]) -> Self {
+    pub fn new(
+        tag: [u8; SECRET_LEN],
+        recipient_enc_pk: [u8; SECRET_LEN],
+        permission: Permission,
+        pseudonym_pk: [u8; 32],
+    ) -> Self {
         Self {
             tag,
+            recipient_enc_pk,
             permission,
             pseudonym_pk,
             unknown: PreservedFields::new(),
@@ -810,10 +824,13 @@ impl GrantSetEntry {
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
         let tag = bytes_fixed::<SECRET_LEN>(req(map, "tag")?, "tag")?;
+        let recipient_enc_pk =
+            bytes_fixed::<SECRET_LEN>(req(map, "recipientEncPk")?, "recipientEncPk")?;
         let permission = Permission::from_value(req(map, "permission")?)?;
         let pseudonym_pk = bytes_fixed::<32>(req(map, "pseudonymPk")?, "pseudonymPk")?;
         Ok(Self {
             tag,
+            recipient_enc_pk,
             permission,
             pseudonym_pk,
             unknown: collect_unknown(map, GRANT_SET_ENTRY_KNOWN),
@@ -827,6 +844,10 @@ impl GrantSetEntry {
             Value::Text(self.permission.as_wire().to_string()),
         );
         m.insert("pseudonymPk", Value::Bytes(self.pseudonym_pk.to_vec()));
+        m.insert(
+            "recipientEncPk",
+            Value::Bytes(self.recipient_enc_pk.to_vec()),
+        );
         m.insert("tag", Value::Bytes(self.tag.to_vec()));
         merge_unknown(&mut m, &self.unknown);
         Value::Map(m)
@@ -879,6 +900,7 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
         entries.push(GrantSetEntry::from_value(item)?);
     }
     assert_grant_tags_unique(entries.iter().map(|e| e.tag))?;
+    assert_grant_recipients_unique(entries.iter().map(|e| e.recipient_enc_pk))?;
     Ok(GrantSetCommitment {
         ipns_name,
         owner_pseudonym_pk,
@@ -890,14 +912,16 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
 /// preimage the owner ECDSA-signs and a recipient verifies.
 ///
-/// Fails closed on a duplicate-tag commitment, or on an entry set past
-/// [`MAX_GRANT_BLOBS`], with the same verdict `decode_grant_set_commitment`
-/// raises, so the sign path never attests bytes every recipient rejects.
+/// Fails closed on a duplicate-tag or duplicate-recipient commitment, or on an
+/// entry set past [`MAX_GRANT_BLOBS`], with the same verdict
+/// `decode_grant_set_commitment` raises, so the sign path never attests bytes
+/// every recipient rejects.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
     // Bound first, the order the decoder checks them in, so a value violating
     // both invariants gets the same verdict from either side.
     assert_within_bound("entries", c.entries.len(), MAX_GRANT_BLOBS)?;
     assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
+    assert_grant_recipients_unique(c.entries.iter().map(|e| e.recipient_enc_pk))?;
     let mut m = Map::new();
     m.insert(
         "entries",
@@ -913,8 +937,8 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, Co
 }
 
 /// Owner-sign a grant-set commitment: RFC 6979 ECDSA over the det-CBOR preimage.
-/// Fails closed before signing on a duplicate-tag commitment, so a release build
-/// never publishes an attestation every recipient rejects.
+/// Fails closed before signing on a commitment the decoder rejects, so a release
+/// build never publishes an attestation every recipient rejects.
 pub fn sign_grant_set(
     signer: &EcdsaSigner,
     c: &GrantSetCommitment,
@@ -1400,8 +1424,8 @@ mod tests {
             ipns_name: b"scope-root-name".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
             entries: vec![
-                GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
-                GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+                GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                GrantSetEntry::new([0x03; 32], [0x43; 32], Permission::Write, [0x04; 32]),
             ],
             unknown: PreservedFields::new(),
         };
@@ -1434,7 +1458,12 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"scope-root-ipns".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
-            entries: vec![GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32])],
+            entries: vec![GrantSetEntry::new(
+                [0x01; 32],
+                [0x41; 32],
+                Permission::Read,
+                [0x02; 32],
+            )],
             unknown: PreservedFields::new(),
         };
         let sig = sign_grant_set(&owner, &c).expect("signs");
@@ -1464,7 +1493,12 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: b"scope-root-ipns".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
-            entries: vec![GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32])],
+            entries: vec![GrantSetEntry::new(
+                [0x01; 32],
+                [0x41; 32],
+                Permission::Read,
+                [0x02; 32],
+            )],
             unknown: PreservedFields::new(),
         };
         let mut other = c.clone();
@@ -1481,23 +1515,110 @@ mod tests {
         // The confused-deputy shape: one tag committed twice with a different
         // permission and pseudonym. Hand-built CBOR, the way a hostile peer's
         // bytes arrive, so decode is what rejects it here.
-        let mut a = Map::new();
-        a.insert("permission", Value::Text("read".into()));
-        a.insert("pseudonymPk", Value::Bytes(vec![0x02; 32]));
-        a.insert("tag", Value::Bytes(vec![0x01; 32]));
-        let mut b = Map::new();
-        b.insert("permission", Value::Text("write".into()));
-        b.insert("pseudonymPk", Value::Bytes(vec![0x09; 32]));
-        b.insert("tag", Value::Bytes(vec![0x01; 32])); // same tag as `a`
-        let mut m = Map::new();
-        m.insert("entries", Value::Array(vec![Value::Map(a), Value::Map(b)]));
-        m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
-        m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
-        let bytes = encode(&Value::Map(m)).unwrap();
+        let a = entry_value(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]);
+        // Same tag as `a`, with a distinct recipient so the tag check is what
+        // fires.
+        let b = entry_value(vec![0x01; 32], vec![0x42; 32], "write", vec![0x09; 32]);
         assert_eq!(
-            decode_grant_set_commitment(&bytes).unwrap_err().check(),
+            decode_grant_set_commitment(&commitment_value(vec![a, b]))
+                .unwrap_err()
+                .check(),
             "duplicate-grant-tag"
         );
+    }
+
+    /// One recipient key derives one tag at one scope root, so two entries
+    /// naming it are two permissions for one party — the confused deputy the
+    /// tag check catches from the other side.
+    #[test]
+    fn duplicate_grant_set_recipient_rejects() {
+        let a = entry_value(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]);
+        let b = entry_value(vec![0x02; 32], vec![0x41; 32], "write", vec![0x09; 32]);
+        assert_eq!(
+            decode_grant_set_commitment(&commitment_value(vec![a, b]))
+                .unwrap_err()
+                .check(),
+            "duplicate-grant-recipient"
+        );
+    }
+
+    #[test]
+    fn encode_and_sign_reject_duplicate_recipients() {
+        // Release-active guard (AGENTS.md rule 8), so no build signs a set its
+        // own decoder refuses.
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"n".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            entries: vec![
+                GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                GrantSetEntry::new([0x02; 32], [0x41; 32], Permission::Write, [0x04; 32]),
+            ],
+            unknown: PreservedFields::new(),
+        };
+        assert_eq!(
+            encode_grant_set_commitment(&c).unwrap_err().check(),
+            "duplicate-grant-recipient"
+        );
+        assert_eq!(
+            sign_grant_set(&owner, &c).unwrap_err().check(),
+            "duplicate-grant-recipient"
+        );
+    }
+
+    /// The whole of the recipient binding: the field is inside the preimage the
+    /// owner signs, so relabelling it detaches the entry from the owner
+    /// signature instead of passing under the committed tag.
+    #[test]
+    fn a_relabelled_recipient_fails_the_commitment_signature() {
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"scope-root-name".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            entries: vec![GrantSetEntry::new(
+                [0x01; 32],
+                [0x41; 32],
+                Permission::Read,
+                [0x02; 32],
+            )],
+            unknown: PreservedFields::new(),
+        };
+        let sig = sign_grant_set(&owner, &c).expect("signs");
+        let mut relabelled = c.clone();
+        relabelled.entries[0].recipient_enc_pk = [0x99; 32];
+        assert_ne!(
+            encode_grant_set_commitment(&relabelled).unwrap(),
+            encode_grant_set_commitment(&c).unwrap(),
+        );
+        assert_eq!(
+            verify_grant_set(&owner.verifying_key(), &relabelled, &sig)
+                .unwrap_err()
+                .check(),
+            "commitment-invalid"
+        );
+    }
+
+    /// A hand-built commitment entry map, the way a hostile peer bytes arrive.
+    fn entry_value(
+        tag: Vec<u8>,
+        recipient: Vec<u8>,
+        permission: &str,
+        pseudonym: Vec<u8>,
+    ) -> Value {
+        let mut m = Map::new();
+        m.insert("permission", Value::Text(permission.into()));
+        m.insert("pseudonymPk", Value::Bytes(pseudonym));
+        m.insert("recipientEncPk", Value::Bytes(recipient));
+        m.insert("tag", Value::Bytes(tag));
+        Value::Map(m)
+    }
+
+    fn commitment_value(entries: Vec<Value>) -> Vec<u8> {
+        let mut m = Map::new();
+        m.insert("entries", Value::Array(entries));
+        m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
+        m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
+        encode(&Value::Map(m)).unwrap()
     }
 
     #[test]
@@ -1510,8 +1631,8 @@ mod tests {
             ipns_name: b"n".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
             entries: vec![
-                GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
-                GrantSetEntry::new([0x01; 32], Permission::Write, [0x04; 32]),
+                GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                GrantSetEntry::new([0x01; 32], [0x42; 32], Permission::Write, [0x04; 32]),
             ],
             unknown: PreservedFields::new(),
         };
@@ -1525,7 +1646,7 @@ mod tests {
         );
     }
 
-    /// A commitment of `n` distinct-tag read entries.
+    /// A commitment of `n` distinct-tag, distinct-recipient read entries.
     fn commitment_of(n: usize) -> GrantSetCommitment {
         GrantSetCommitment {
             ipns_name: b"n".to_vec(),
@@ -1534,7 +1655,9 @@ mod tests {
                 .map(|i| {
                     let mut tag = [0u8; SECRET_LEN];
                     tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
-                    GrantSetEntry::new(tag, Permission::Read, [0x02; 32])
+                    let mut recipient = [0xffu8; SECRET_LEN];
+                    recipient[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                    GrantSetEntry::new(tag, recipient, Permission::Read, [0x02; 32])
                 })
                 .collect(),
             unknown: PreservedFields::new(),
@@ -1628,18 +1751,33 @@ mod tests {
 
     #[test]
     fn invalid_permission_rejects() {
+        let entry = entry_value(vec![0x01; 32], vec![0x41; 32], "admin", vec![0x02; 32]);
+        assert_eq!(
+            decode_grant_set_commitment(&commitment_value(vec![entry]))
+                .unwrap_err()
+                .check(),
+            "invalid-permission"
+        );
+    }
+
+    #[test]
+    fn a_commitment_entry_without_a_recipient_key_rejects() {
         let mut entry = Map::new();
-        entry.insert("permission", Value::Text("admin".into()));
+        entry.insert("permission", Value::Text("read".into()));
         entry.insert("pseudonymPk", Value::Bytes(vec![0x02; 32]));
         entry.insert("tag", Value::Bytes(vec![0x01; 32]));
-        let mut m = Map::new();
-        m.insert("entries", Value::Array(vec![Value::Map(entry)]));
-        m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
-        m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
-        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
-            decode_grant_set_commitment(&bytes).unwrap_err().check(),
-            "invalid-permission"
+            decode_grant_set_commitment(&commitment_value(vec![Value::Map(entry)]))
+                .unwrap_err()
+                .check(),
+            "missing-field"
+        );
+        let short = entry_value(vec![0x01; 32], vec![0x41; 31], "read", vec![0x02; 32]);
+        assert_eq!(
+            decode_grant_set_commitment(&commitment_value(vec![short]))
+                .unwrap_err()
+                .check(),
+            "invalid-field-length"
         );
     }
 }

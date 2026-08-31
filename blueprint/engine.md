@@ -823,7 +823,9 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
 Grants-in-metadata (FSM1/cipher-box-next#25 D1): key material lives in the published scope root —
 grant blobs keyed by blinded tags, the authoritative ledger
 `(recipientIdentityPk, recipientEncPk, permission, tag)` in the write-body,
-and the epoch-free owner-signed grant-set commitment. The engine maintains all
+and the owner-signed grant-set commitment. Every re-seal and every cut names
+its recipients from the commitment, which the owner signs, never from a ledger
+row a committed write grantee authors. The engine maintains all
 three plus the per-(scope, writer) pseudonyms; re-mint does not exist as a
 separate step — every rekey re-seals surviving committed grants uniformly in
 the republish it already does.

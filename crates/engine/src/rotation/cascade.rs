@@ -76,7 +76,6 @@ use super::reseal::{
 };
 use super::rotate::{ResealedScopeRoot, RotateScopePlan, RotationPublishError, ScopeRootPublisher};
 use crate::entropy::{Entropy, fresh_seed};
-use crate::grants::bound_recipient;
 use crate::grants::child_index::canonicalize;
 use crate::seams::{BoxedTask, FloorRaise, FloorStore, Scheduler, SeamError};
 use cipherbox_core::hex::lower as hex_lower;
@@ -450,26 +449,23 @@ pub(crate) async fn record_grant_floor<F: FloorStore>(
 /// records as already cut **at this scope**.
 ///
 /// The floor is what separates the two descendants a record cannot tell apart.
-/// A grant-set commitment is epoch-free, so a pre-cut set the owner really did
-/// sign passes every gate stage, and a committed write grantee can republish a
-/// descendant root carrying it. Only the engine's own durable state remembers
-/// that the owner cut that recipient there, so a descendant whose commitment
-/// attests the recipient keeps its blob unless the floor says otherwise — the
-/// ancestor's cut alone no longer revokes an independent grant one level down.
+/// A grant-set commitment carries no read epoch, so a pre-cut set the owner
+/// really did sign passes every gate stage, and a committed write grantee can
+/// republish a descendant root carrying it. Only the engine's own durable state
+/// remembers that the owner cut that recipient there, so a descendant whose
+/// commitment attests the recipient keeps its blob unless the floor says
+/// otherwise — the ancestor's cut alone no longer revokes an independent grant
+/// one level down.
 ///
 /// A cut stands only while it is newer than the owner's newest grant to the
 /// same recipient at the same scope ([`record_grant_floor`]), so an owner who
 /// grants again after a cut is served rather than silently withheld for ever.
 ///
-/// The marker read comes first because the per-row work is attacker-sized: a
-/// committed write grantee sets a descendant's row count, and each row would
-/// otherwise cost one owner-recipient DH ([`bound_recipient`]) and up to two
-/// floor reads. A scope the owner never cut pays none of it.
+/// The marker read comes first so a scope the owner never cut pays no per-entry
+/// floor read at all.
 async fn effective_revoked_recipients<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
-    owner_enc_secret: &X25519Secret,
-    ipns_name: &[u8],
     committed: &CommittedSet<'_>,
 ) -> Result<Vec<[u8; SECRET_LEN]>, SeamError> {
     let mut revoked: BTreeSet<[u8; SECRET_LEN]> =
@@ -481,11 +477,8 @@ async fn effective_revoked_recipients<F: FloorStore>(
     {
         return Ok(revoked.into_iter().collect());
     }
-    for entry in committed.grant_ledger {
-        let Some(recipient) = bound_recipient(owner_enc_secret, entry, ipns_name) else {
-            continue;
-        };
-        let recipient = recipient.to_bytes();
+    for entry in &committed.commitment.entries {
+        let recipient = entry.recipient_enc_pk;
         if revoked.contains(&recipient) {
             continue;
         }
@@ -596,15 +589,9 @@ where
 
     // Fail-closed BEFORE minting: a floor this re-key cannot read would wrap the
     // fresh seed back to a party the owner removed.
-    let revoked = effective_revoked_recipients(
-        floors,
-        &scope_id,
-        owner_enc_secret,
-        plan.identity.ipns_name,
-        &plan.committed,
-    )
-    .await
-    .map_err(|error| CascadeError::RevocationFloor { scope_id, error })?;
+    let revoked = effective_revoked_recipients(floors, &scope_id, &plan.committed)
+        .await
+        .map_err(|error| CascadeError::RevocationFloor { scope_id, error })?;
 
     // Mint the fresh random override seed — the fresh-seed cut that revokes cached
     // access. `Zeroizing` wipes it on every return path, including a panic unwind.
@@ -966,7 +953,12 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name,
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
-                entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
+                entries: vec![GrantSetEntry::new(
+                    tag,
+                    self.grantee.public().to_bytes(),
+                    Permission::Read,
+                    [0x02; 32],
+                )],
                 unknown: PreservedFields::new(),
             };
             let commitment_sig = sign_grant_set(&self.ecdsa, &commitment)

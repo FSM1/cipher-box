@@ -21,15 +21,13 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::suite::x25519::X25519Public;
 
 use super::cascade::{CascadeError, CascadeOutcome};
 use super::rotate::{RotateError, RotationOutcome};
 use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
-use crate::grants::ledger::{
-    AuthorityViolation, bound_recipient, enforce_committed_ledger, row_is_owner_attested,
-};
+use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger};
 use crate::seams::UnixMillis;
 
 /// Which trigger fired a rotation — a host-facing classifier carrying no key
@@ -142,11 +140,6 @@ pub struct GrantCutPlan<'a> {
     /// The owner identity signer — MUST be the identity that produced
     /// `commitment_sig`, and re-signs the cut set.
     pub owner_signer: &'a EcdsaSigner,
-    /// The owner encryption subkey the committed tags were blinded under. A tag
-    /// is `blind(ECDH(this, recipientEncPk), scopeRootName)`, so it is the only
-    /// authority that can name a dropped tag's recipient without trusting a
-    /// field a write grantee authored ([`drop_tags`]).
-    pub owner_enc_secret: &'a X25519Secret,
 }
 
 /// Which planes a committed-set cut must rotate before it is a real revocation.
@@ -246,12 +239,11 @@ pub enum RevokeError {
     /// rejects (`enforce_committed_ledger`). Release-active, so no build signs a
     /// set its own readers refuse.
     LedgerDiverges(AuthorityViolation),
-    /// A dropped ledger row carries the owner's own binding signature, yet its
-    /// `recipientEncPk` derives none of the committed tags. The owner's two
-    /// authorities over that field contradict each other, so the cut refuses
-    /// rather than name a recipient neither proves — the verdict
+    /// A dropped commitment entry names a recipient encryption key core refuses
+    /// to adopt. The owner signed that key, so the cut refuses rather than name
+    /// a recipient the cascade could never match — the verdict
     /// [`adopt_recipients`](super::reseal) reaches on the re-seal side.
-    TagNotBoundToRecipient,
+    UnusableRecipientKey,
     /// Re-signing the cut commitment failed (a duplicate tag or an oversized set
     /// — never possible, since no cut adds a tag, but propagated fail-closed).
     Sign(cipherbox_core::error::CodecError),
@@ -274,8 +266,8 @@ impl core::fmt::Display for RevokeError {
                 f.write_str("the committed grant under the tag carries write permission")
             }
             RevokeError::LedgerDiverges(v) => write!(f, "cut set rejected: {}", v.description),
-            RevokeError::TagNotBoundToRecipient => {
-                f.write_str("an owner-signed dropped row derives no committed tag")
+            RevokeError::UnusableRecipientKey => {
+                f.write_str("a dropped commitment entry names an unusable recipient key")
             }
             RevokeError::Sign(e) => write!(f, "commitment re-sign failed: {}", e.check()),
         }
@@ -294,7 +286,7 @@ impl RevokeError {
             RevokeError::NotWriteGranted => "not-write-granted",
             RevokeError::WriteGranted => "write-granted",
             RevokeError::LedgerDiverges(v) => v.check(),
-            RevokeError::TagNotBoundToRecipient => "tag-not-bound-to-recipient",
+            RevokeError::UnusableRecipientKey => "unusable-recipient-key",
             RevokeError::Sign(_) => "commitment-sign-failed",
         }
     }
@@ -339,38 +331,28 @@ fn drop_tags(
     tags: &BTreeSet<[u8; 32]>,
 ) -> Result<DroppedSet, RevokeError> {
     let mut commitment = plan.commitment.clone();
-    commitment.entries.retain(|e| !tags.contains(&e.tag));
-    let (dropped, kept): (Vec<_>, Vec<_>) = plan
-        .grant_ledger
+    // The owner signs `recipientEncPk` into every committed entry, so the cut
+    // names the parties it revokes from the owner's own attestation. A committed
+    // write grantee authors the ledger row, so a harvest off the row let it
+    // relabel its own grant and leave the cascade naming nobody.
+    let dropped: Vec<X25519Public> = commitment
+        .entries
         .iter()
-        .cloned()
-        .partition(|e| tags.contains(&e.tag));
-    // Any committed writer authors a ledger row, and the row's own `ownerSig` is
-    // the writer's to strip. The owner-committed tag is not: only the key the
-    // owner blinded it under re-derives it, so the tag is the stronger of the
-    // owner's two authorities over `recipientEncPk` wherever the owner secret is
-    // in hand — the same split `rotation::reseal::adopt_recipients` applies.
-    let owner_identity = plan.owner_signer.verifying_key();
-    let name = plan.scope_root_name.as_str().as_bytes();
-    let mut revoked_recipients = Vec::with_capacity(dropped.len());
-    for entry in dropped {
-        match bound_recipient(plan.owner_enc_secret, &entry, name) {
-            Some(proven) => revoked_recipients.push(proven.to_bytes()),
-            // A row the owner attested but whose key derives no committed tag is
-            // the two authorities disagreeing. A writer cannot mint the owner's
-            // signature, so refusing here hands it no veto over its own cut.
-            None if row_is_owner_attested(&owner_identity, &entry, name) => {
-                return Err(RevokeError::TagNotBoundToRecipient);
-            }
-            // Writer-authored noise under a committed tag: skipped, never
-            // refused, or the grantee under cut could veto its own revocation.
-            None => {}
-        }
-    }
+        .filter(|e| tags.contains(&e.tag))
+        .map(|e| {
+            X25519Public::from_bytes(e.recipient_enc_pk).ok_or(RevokeError::UnusableRecipientKey)
+        })
+        .collect::<Result<_, _>>()?;
+    commitment.entries.retain(|e| !tags.contains(&e.tag));
     Ok(DroppedSet {
         commitment,
-        grant_ledger: kept,
-        revoked_recipients,
+        grant_ledger: plan
+            .grant_ledger
+            .iter()
+            .filter(|e| !tags.contains(&e.tag))
+            .cloned()
+            .collect(),
+        revoked_recipients: dropped.iter().map(X25519Public::to_bytes).collect(),
     })
 }
 
@@ -773,6 +755,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
     use crate::grants::ledger::{mint_grant_row, recipient_blinded_tag};
+    use cipherbox_core::suite::x25519::X25519Secret;
 
     /// Records the roots it was asked to cut, failing the ones named in
     /// `refuse` — the driver's only view of the rotation edge.
@@ -898,7 +881,6 @@ mod tests {
     struct Fixture {
         owner: EcdsaSigner,
         name: IpnsName,
-        owner_enc: X25519Secret,
         commitment: GrantSetCommitment,
         commitment_sig: [u8; ECDSA_SIG_LEN],
         ledger: Vec<GrantLedgerEntry>,
@@ -936,7 +918,6 @@ mod tests {
             Self {
                 owner,
                 name,
-                owner_enc: owner_enc(),
                 commitment,
                 commitment_sig,
                 ledger,
@@ -950,7 +931,6 @@ mod tests {
                 grant_ledger: &self.ledger,
                 scope_root_name: &self.name,
                 owner_signer: &self.owner,
-                owner_enc_secret: &self.owner_enc,
             }
         }
 
@@ -1018,9 +998,9 @@ mod tests {
         );
     }
 
-    /// `attest` picks which of the two authority states the swapped row lands
-    /// in: an unsigned row is writer-authored noise the cut skips, an
-    /// owner-signed one is the conflict the cut refuses.
+    /// Relabel the link grant's ledger row. `attest` picks whether the writer
+    /// leaves the owner's stale signature in place or the owner is tricked into
+    /// re-signing the row as presented — the strongest form of the attack.
     fn relabel_link_row(fx: &mut Fixture, enc_pk: [u8; 32], attest: bool) {
         let owner = EcdsaSigner::from_scalar(&[0x33; 32]).unwrap();
         let name = fx.name.as_str().as_bytes().to_vec();
@@ -1036,43 +1016,49 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_cut_names_no_recipient_off_a_row_whose_key_derives_no_committed_tag() {
-        // Any committed writer authors a ledger row. Harvesting a key the
-        // committed tag does not prove would let a writer point the cascade at a
-        // bystander and strip their grants vault-wide.
-        let mut fx = Fixture::new();
-        relabel_link_row(&mut fx, recipient_enc(0x99).public().to_bytes(), false);
-
-        let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("revoke");
-        assert!(
-            cut.revoked_recipients.is_empty(),
-            "a relabelled row names nobody the cascade will cut"
-        );
-        assert!(
-            !cut.commitment.entries.iter().any(|e| e.tag == link_tag()),
-            "the tag still leaves the owner-signed set"
-        );
+    /// Relabel the link grant's committed recipient key and owner-re-sign the
+    /// set, so the cut reads the new key from the owner's own attestation.
+    fn relabel_link_entry(fx: &mut Fixture, enc_pk: [u8; 32]) {
+        for entry in &mut fx.commitment.entries {
+            if entry.tag == link_tag() {
+                entry.recipient_enc_pk = enc_pk;
+            }
+        }
+        fx.commitment_sig = sign_grant_set(&fx.owner, &fx.commitment)
+            .expect("the owner signs the set as presented")
+            .to_compact();
     }
 
-    /// The row's own owner signature does not outrank the owner-committed tag:
-    /// where the two disagree the cut refuses, rather than name a party neither
-    /// authority proves.
     #[test]
-    fn a_cut_refuses_an_owner_signed_row_that_derives_no_committed_tag() {
-        let mut fx = Fixture::new();
-        relabel_link_row(&mut fx, recipient_enc(0x99).public().to_bytes(), true);
+    fn a_cut_names_the_committed_recipient_though_its_row_was_relabelled() {
+        // Any committed writer authors a ledger row. The cut names its revokees
+        // from the owner-signed commitment, so relabelling a row neither lets its
+        // author escape the cascade nor points the cascade at a bystander whose
+        // grants would then be stripped vault-wide.
+        let bystander = recipient_enc(0x99).public().to_bytes();
+        for attest in [false, true] {
+            let mut fx = Fixture::new();
+            relabel_link_row(&mut fx, bystander, attest);
 
-        let err = revoke_read_grant(&fx.plan(), &link_tag()).expect_err("the two disagree");
-        assert_eq!(err.check(), "tag-not-bound-to-recipient");
+            let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("revoke");
+            assert_eq!(
+                cut.revoked_recipients,
+                vec![recipient_enc(LINK_RECIPIENT).public().to_bytes()],
+                "the commitment names the revokee, whatever the row was relabelled to"
+            );
+            assert!(
+                !cut.commitment.entries.iter().any(|e| e.tag == link_tag()),
+                "the tag still leaves the owner-signed set"
+            );
+        }
     }
 
-    /// A cofactor twin and a non-canonical spelling both re-derive the honest
-    /// key's tag, so the shared secret alone cannot tell them apart. Only the
-    /// adoption lift inside `bound_recipient` refuses them, and a twin in
-    /// `revoked_recipients` would match no recipient the cascade re-keys.
+    /// A cofactor twin and a non-canonical spelling both blind to the honest
+    /// key's tag, so nothing but core's adoption gate separates them from it. A
+    /// twin in `revoked_recipients` would match no recipient the cascade re-keys,
+    /// so the cut refuses rather than name a party the cascade cannot reach.
     #[test]
-    fn a_cut_names_no_recipient_off_a_key_core_will_not_adopt() {
+    fn a_cut_refuses_a_committed_key_core_will_not_adopt() {
         let honest = recipient_enc(LINK_RECIPIENT).public();
         let mut high_bit = honest.to_bytes();
         high_bit[31] |= 0x80;
@@ -1082,21 +1068,18 @@ mod tests {
             .chain([high_bit])
         {
             let mut fx = Fixture::new();
-            relabel_link_row(&mut fx, enc_pk, false);
+            relabel_link_entry(&mut fx, enc_pk);
 
-            let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("revoke");
-            assert!(
-                cut.revoked_recipients.is_empty(),
-                "a key core will not adopt binds no tag, so it names nobody"
-            );
+            let err = revoke_read_grant(&fx.plan(), &link_tag()).expect_err("an unusable key");
+            assert_eq!(err.check(), "unusable-recipient-key");
         }
     }
 
     /// A committed write grantee authors its own ledger row, so it can strip the
     /// `ownerSig` off it before the owner reads the record for the cut. The
-    /// owner-committed tag it cannot touch, and that alone names the recipient.
+    /// commitment entry it cannot touch, and that alone names the recipient.
     #[test]
-    fn a_cut_names_the_recipient_the_committed_tag_proves_with_no_owner_signature() {
+    fn a_cut_names_the_committed_recipient_with_no_owner_signature_on_the_row() {
         let mut fx = Fixture::new();
         for row in &mut fx.ledger {
             if row.tag == write_tag() {
@@ -1108,7 +1091,7 @@ mod tests {
         assert_eq!(
             cut.revoked_recipients,
             vec![recipient_enc(WRITE_RECIPIENT).public().to_bytes()],
-            "the tag proves the recipient the stripped signature no longer names"
+            "the commitment names the recipient the stripped signature no longer does"
         );
     }
 

@@ -478,7 +478,12 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: b"scope-root".to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
-                entries: vec![GrantSetEntry::new([0xa1; 32], Permission::Read, [0x02; 32])],
+                entries: vec![GrantSetEntry::new(
+                    [0xa1; 32],
+                    self.grantee.public().to_bytes(),
+                    Permission::Read,
+                    [0x02; 32],
+                )],
                 unknown: PreservedFields::new(),
             };
             let sig = sign_grant_set(&self.owner_ecdsa, &commitment)
