@@ -53,7 +53,7 @@ use crate::grants::{
     ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
     GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
     InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority,
-    OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShareStore,
+    OwnerGrantKeys, ParentScopePlan, PendingInviteLink, PublishedGrantBlob, ReceivedShareStore,
     ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
     StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
     convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
@@ -1322,9 +1322,7 @@ impl EngineError {
             InviteMintError::Mint(e) => EngineError::from_invite(e),
             InviteMintError::Store(e) => EngineError::from_invite_store(e),
             InviteMintError::Create(e) => EngineError::from_create_grant(e),
-            InviteMintError::WriteCut => EngineError::UnsupportedTarget {
-                check: WRITE_LINK_CHECK,
-            },
+            InviteMintError::Fragment(e) => EngineError::from_invite(e),
         }
     }
 
@@ -1961,10 +1959,6 @@ enum UnindexedScope {
     Derive,
 }
 
-/// The name an invite-link mint at `Permission::Write` reports. The mint owes
-/// the same refusal ([`InviteMintError::WriteCut`]), and both report this.
-const WRITE_LINK_CHECK: &str = "write-links-need-a-write-scope-cut";
-
 /// The name a claim conversion reports once the links this owner records hold
 /// the whole link-sourced share of the contact book
 /// ([`MAX_LINK_CONTACTS`](crate::grants::MAX_LINK_CONTACTS)).
@@ -2047,8 +2041,8 @@ enum ScopeShare<'a> {
 enum PendingShare<'a> {
     /// The sealed mailbox pointer a personal grant's recipient reads.
     SharePointer(GrantRecipient<'a>),
-    /// The bearer capability an invite link hands its host.
-    Fragment(MintedInviteLink),
+    /// The bearer capability an invite link hands its host, still to be sealed.
+    Fragment(PendingInviteLink),
 }
 
 /// The host-facing names a scope mint's refusals carry. One rule, one name per
@@ -5173,17 +5167,6 @@ where {
         permission: Permission,
         expires_at: Option<UnixMillis>,
     ) -> Result<CommandOutcome, EngineError> {
-        // A link's fragment and the owner's own record both bind the scope root
-        // name the mint published at, and the write-scope cut moves it — so a
-        // write link would be unclaimable at the name it carries and
-        // unlocatable at the tag it recorded. The cut has to run before the
-        // fragment is sealed, which the mint's record-before-publish order does
-        // not admit.
-        if permission == Permission::Write {
-            return Err(EngineError::UnsupportedTarget {
-                check: WRITE_LINK_CHECK,
-            });
-        }
         self.share_scope(node, ScopeShare::InviteLink { expires_at }, permission)
             .await
     }
@@ -5385,7 +5368,10 @@ where {
             .await
             .map(|()| CommandOutcome::Done)
             .map_err(EngineError::from_create_grant),
-            PendingShare::Fragment(link) => Ok(CommandOutcome::InviteLinkMinted(link)),
+            PendingShare::Fragment(link) => link
+                .seal(&scope_root_name)
+                .map(CommandOutcome::InviteLinkMinted)
+                .map_err(EngineError::from_invite_mint),
         }
     }
 

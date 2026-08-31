@@ -52,7 +52,9 @@ pub use invite::{
     convert_invite_claim, locate_invite_link, mint_invite_grant, partition_scope_links,
     post_invite_claim,
 };
-pub use invite_mint::{InviteMintError, InviteMintPlan, MintedInviteLink, mint_invite_link};
+pub use invite_mint::{
+    InviteMintError, InviteMintPlan, MintedInviteLink, PendingInviteLink, mint_invite_link,
+};
 pub use invite_store::{
     INVITE_RECORDS_PREFIX, InviteRecords, InviteRecordsCodecError, InviteStore, InviteStoreError,
     MAX_CONVERTED_CLAIMS, MAX_INVITE_RECORDS, StagingInviteStore,

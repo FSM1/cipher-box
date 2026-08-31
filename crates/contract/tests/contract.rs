@@ -33,7 +33,7 @@ use cipherbox_engine::api::{
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
     GrantRecipient, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, ScopeRootPromoter,
-    SharePointer, create_grant, import_contact,
+    SharePointer, create_grant, import_contact, post_share_pointer,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
@@ -1450,30 +1450,33 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     let mut entropy = SeededEntropy::new(954);
     let net = LocalNet;
 
+    let grantee = GranteeScopePlan {
+        v: V,
+        scope_id: [0x5c; 16],
+        parent_node_seed: &parent_node_seed,
+        owner_enc_pub: &owner_enc_pub,
+        write_scope_seed: &grantee_write_scope_seed,
+        write_cut: None,
+        pointer_read_key: &grantee_pointer_read_key,
+        subtree_child_index: &[],
+    };
+    let recipient = GrantRecipient {
+        contact: &recipient_contact,
+        display_name: "Shared Folder".to_string(),
+    };
+    let owner = OwnerGrantKeys {
+        enc_secret: &owner_enc,
+        identity_signer: &owner_identity,
+        pseudonym_signer: &owner_pseudonym,
+    };
+
     create_grant(
         &mut entropy,
         &net,
         &net,
-        &owner_client,
-        &GranteeScopePlan {
-            v: V,
-            scope_id: [0x5c; 16],
-            parent_node_seed: &parent_node_seed,
-            owner_enc_pub: &owner_enc_pub,
-            write_scope_seed: &grantee_write_scope_seed,
-            write_cut: None,
-            pointer_read_key: &grantee_pointer_read_key,
-            subtree_child_index: &[],
-        },
-        &GrantRecipient {
-            contact: &recipient_contact,
-            display_name: "Shared Folder".to_string(),
-        },
-        &OwnerGrantKeys {
-            enc_secret: &owner_enc,
-            identity_signer: &owner_identity,
-            pseudonym_signer: &owner_pseudonym,
-        },
+        &grantee,
+        &recipient,
+        &owner,
         &ParentScopePlan {
             identity: ScopeRootIdentity {
                 v: V,
@@ -1500,6 +1503,17 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
             current_child_index: &[],
             carried_history_links: &[],
         },
+    )
+    .await
+    .expect("the grant mints against the local net");
+
+    post_share_pointer(
+        &mut entropy,
+        &owner_client,
+        &owner,
+        &grantee,
+        &recipient,
+        &grantee.ipns_name(),
     )
     .await
     .expect("the live mailbox accepts the grant path's own address and idempotency key");

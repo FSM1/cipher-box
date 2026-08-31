@@ -452,15 +452,15 @@ describe('the invite link', () => {
     expect(writeText).toHaveBeenCalledWith(shownLink());
   });
 
-  it("renders the engine's refusal of a write link instead of a link", async () => {
-    const refusal = new EngineRequestError('write-links-need-a-write-scope-cut', 'unsupported');
+  it("renders the engine's refusal of a mint instead of a link", async () => {
+    const refusal = new EngineRequestError('invite-target-already-names-a-scope', 'unsupported');
     await share(sharingEngine({ createInviteLink: refusal }));
     fireEvent.change(screen.getByLabelText('permission'), { target: { value: 'write' } });
 
     await click('share-mint-link');
 
     expect(screen.getByTestId('dialog-error').textContent).toBe(
-      'write-links-need-a-write-scope-cut'
+      'invite-target-already-names-a-scope'
     );
     expect(screen.queryByTestId('invite-link')).toBeNull();
     expect(screen.getByTestId('share-mint-link')).toBeTruthy();
