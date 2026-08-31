@@ -67,7 +67,8 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
+    LiveRecord, OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head,
+    retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
@@ -888,7 +889,7 @@ where
             self.gateway,
             self.http,
             self.content_profile,
-            async |node, owing| self.live_node_cids(scope, node, owing).await,
+            async |node, owing| self.live_owing_record(scope, node, owing).await,
         )
         .await
         {
@@ -2112,9 +2113,6 @@ where
                 continue;
             };
             replayed += 1;
-            // A journal entry outlives the process; the base does not. Until a
-            // poll of this session has reconciled it, no descendant's absence
-            // from it means anything.
             let settle = match self.converged_tick.get() {
                 true => Settle::Decide(&mut proofs),
                 false => Settle::Hold,
@@ -3290,7 +3288,7 @@ where
     /// names the dropped roots once the shortened history is live, so a journal
     /// lost there is lost for good. Holding the entry early is safe because
     /// [`drain_owed_retires`] retires nothing this node's published record still
-    /// names ([`Self::live_node_cids`]) — an entry whose publish never lands
+    /// names ([`Self::live_owing_record`]) — an entry whose publish never lands
     /// simply never drains.
     async fn publish_prune(
         &self,
@@ -3449,8 +3447,10 @@ where
         Ok(owed)
     }
 
-    /// Every content CID one node's **currently published** record still reaches
-    /// — the set a retire against that node may not name.
+    /// The record one node's debts are owed by: its write-plane name, which
+    /// scopes the retire to that record's own reference edges, and every content
+    /// CID its **currently published** record still reaches — the set a retire
+    /// against that node may not name.
     ///
     /// Read on the pass that retires rather than frozen into the ledger, and
     /// resolved from the node's derived name rather than the base tree, which
@@ -3471,14 +3471,18 @@ where
     /// published fact. Reading the node instead would settle nothing — a hard
     /// delete leaves the record resolvable at its own name until its EOL lapses,
     /// and it names its content the whole time.
-    async fn live_node_cids(
+    async fn live_owing_record(
         &self,
         scope: &DrainScope<'_>,
         node: [u8; 16],
         owing: OwingRecord,
-    ) -> Option<BTreeSet<String>> {
+    ) -> Option<LiveRecord> {
+        let name = derive_write_name(scope.write_scope_seed, &node)
+            .as_str()
+            .to_owned();
+        let reaching = |cids| Some(LiveRecord { name, cids });
         if owing == OwingRecord::Retired {
-            return Some(BTreeSet::new());
+            return reaching(BTreeSet::new());
         }
         let (_, epoch) = self.load_scope_root(scope).await.ok()?;
         // Nocache: the retire unpins, so what may be named is decided against
@@ -3490,13 +3494,13 @@ where
             .ok()?;
         // A record carrying no version list reaches no content.
         let ReadBody::File { versions, .. } = loaded.body else {
-            return Some(BTreeSet::new());
+            return reaching(BTreeSet::new());
         };
         let mut live = BTreeSet::new();
         for version in self.pinned_history(&versions).ok()? {
             live.extend(self.expand_version(&version).await.ok()?.cids());
         }
-        Some(live)
+        reaching(live)
     }
 
     /// One published version's whole CID set, off its own fetched root block.

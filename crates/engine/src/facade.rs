@@ -3384,9 +3384,8 @@ pub struct Engine<T: SeamTypes> {
     /// registry refused goes out again on a later pass.
     orphan_heads: Rc<OrphanHeads>,
     /// Whether a poll tick has reconciled the record plane since this session
-    /// started. The drain holds a replayed quarantine until it is set: the base
-    /// opens empty, so a decide pass before the first converged tick would read
-    /// no link for any descendant (blueprint/engine.md "Retirement").
+    /// started. The drain holds a replayed quarantine until it is set
+    /// (blueprint/engine.md "Retirement").
     converged_tick: Rc<Cell<bool>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.

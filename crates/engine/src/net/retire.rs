@@ -120,8 +120,26 @@ where
     H: Http,
     C: CredentialStore,
 {
+    retire_chunked(api, None, targets).await
+}
+
+/// The same, chunked the same way, under the record `ipns_name` names — `None`
+/// being the account-wide form above, and the only one whose targets may name a
+/// record ([`ApiClient::retire_for_record`]).
+async fn retire_chunked<H, C>(
+    api: &ApiClient<H, C>,
+    ipns_name: Option<&str>,
+    targets: &[String],
+) -> Result<(), ApiError>
+where
+    H: Http,
+    C: CredentialStore,
+{
     for chunk in targets.chunks(REGISTRY_BATCH_MAX) {
-        api.retire(chunk).await?;
+        match ipns_name {
+            Some(name) => api.retire_for_record(name, chunk).await?,
+            None => api.retire(chunk).await?,
+        };
     }
     Ok(())
 }
@@ -371,6 +389,19 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
     })
 }
 
+/// The record a debt is owed by, as the settling pass established it.
+///
+/// The name is what scopes the retire: a leaf a doomed root aliased from another
+/// node stays pinned, because the registry drops this record's reference edge
+/// rather than the account's whole claim (blueprint/api.md "Pin/name registry").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveRecord {
+    /// The owning node's write-plane IPNS name.
+    pub name: String,
+    /// Every content CID that node's currently published record still reaches.
+    pub cids: BTreeSet<String>,
+}
+
 /// Work the ledger once and report what it left behind: the pinned bytes still
 /// owed — the vault's pending-reclaim figure — and why every debt that did not
 /// settle did not ([`ReclaimStall`]). `None` when the ledger could not be read,
@@ -381,9 +412,10 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
 /// `live` reports for the entry's own node ([`Expansion::minus`]).
 ///
 /// `live` answers "what does this node's **currently published** record still
-/// reach", read fresh so a version adopted since the prune journaled its debt is
-/// in the answer. `None` is "this pass could not establish it", and no entry
-/// retires without it, because retiring blind is loss where waiting is a leak.
+/// reach, and under what name", read fresh so a version adopted since the prune
+/// journaled its debt is in the answer. `None` is "this pass could not establish
+/// it", and no entry retires without it, because retiring blind is loss where
+/// waiting is a leak.
 /// It is also what makes a debt safe to journal ahead of the shortened record: a
 /// target the node's record still names has no landed shortening behind it.
 ///
@@ -407,7 +439,7 @@ pub async fn drain_owed_retires<L, H, C>(
     gateway: &Gateway,
     http: &H,
     profile: &ContentProfile,
-    live: impl AsyncFn([u8; 16], OwingRecord) -> Option<BTreeSet<String>>,
+    live: impl AsyncFn([u8; 16], OwingRecord) -> Option<LiveRecord>,
 ) -> Option<ReclaimPass>
 where
     L: RetireLedger,
@@ -426,7 +458,7 @@ where
     // One record read per owing node, not per entry — a prune drops several
     // versions of one file. A node's set grows only with what actually retired,
     // so a CID a deferred entry named is still reachable by the next one.
-    let mut live_of: BTreeMap<[u8; 16], Option<BTreeSet<String>>> = BTreeMap::new();
+    let mut live_of: BTreeMap<[u8; 16], Option<LiveRecord>> = BTreeMap::new();
     // A CID two doomed roots both name is one pin row either way, so the figure
     // counts it once whether or not the retire that names it lands.
     let mut counted: BTreeSet<String> = BTreeSet::new();
@@ -458,7 +490,7 @@ where
         // has not landed. Live content is not pending reclaim, so it adds
         // nothing to the figure and the entry waits for the record that drops
         // it.
-        if node.contains(&entry.target) {
+        if node.cids.contains(&entry.target) {
             if stalls.len() < REGISTRY_BATCH_MAX {
                 stalls.push(stall(ReclaimStallReason::TargetStillLive));
             }
@@ -471,7 +503,7 @@ where
             }
             continue;
         };
-        let retirable = expansion.minus(node);
+        let retirable = expansion.minus(&node.cids);
         let targets = retirable.cids();
         let pinned_bytes = retirable.minus(&counted).pinned_bytes;
         counted.extend(targets.iter().cloned());
@@ -479,10 +511,10 @@ where
         if !registry_up {
             continue;
         }
-        match send_retire(&entry, &targets, ledger, owner_tag, api).await {
+        match send_retire(&entry, &node.name, &targets, ledger, owner_tag, api).await {
             SendOutcome::Retired => {
                 still_owed = still_owed.saturating_sub(pinned_bytes);
-                node.extend(targets);
+                node.cids.extend(targets);
             }
             SendOutcome::Deferred => {}
             SendOutcome::RegistryDown => registry_up = false,
@@ -567,7 +599,9 @@ enum SendOutcome {
     RegistryDown,
 }
 
-/// Hand `targets` to the registry and settle the entry.
+/// Hand `targets` to the registry on behalf of `owner_name` and settle the
+/// entry. Every target is a content CID the owning record references, so the
+/// whole set goes record-scoped ([`LiveRecord`]).
 ///
 /// The settle lands **between** the leaf batches and the root's own final batch.
 /// The root is the expansion key, so an entry still owed once its root is gone
@@ -576,6 +610,7 @@ enum SendOutcome {
 /// batch never lands.
 async fn send_retire<L, H, C>(
     entry: &OwedRetire,
+    owner_name: &str,
     targets: &[String],
     ledger: &L,
     owner_tag: &[u8],
@@ -594,7 +629,7 @@ where
     if root != &entry.target {
         return SendOutcome::Deferred;
     }
-    if retire(api, leaves).await.is_err() {
+    if retire_chunked(api, Some(owner_name), leaves).await.is_err() {
         return SendOutcome::RegistryDown;
     }
     if ledger
@@ -606,7 +641,7 @@ where
     }
     // Past the settle the debt is discharged, so a refused root batch is a leaked
     // pin row rather than a reason to re-own it.
-    let _ = retire(api, core::slice::from_ref(root)).await;
+    let _ = retire_chunked(api, Some(owner_name), core::slice::from_ref(root)).await;
     SendOutcome::Retired
 }
 
@@ -630,6 +665,7 @@ mod tests {
     use cipherbox_core::suite::x25519::X25519Secret;
 
     use super::*;
+    use crate::api::RetireEntry;
     use crate::seams::{HttpMethod, HttpResponse};
     use crate::testkit::fakes::{InMemoryCredentialStore, InMemoryStagingStore, ScriptedHttp};
     use crate::testkit::{
@@ -679,6 +715,53 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, HttpMethod::Post);
         assert!(requests[0].url.ends_with("/registry/retire"));
+    }
+
+    /// The account-wide form drops every record's edge, so it is reserved for a
+    /// target no record owns: an orphaned head block, and the interior names a
+    /// name wave retires.
+    #[test]
+    fn the_account_wide_retire_names_no_owning_record() {
+        let (http, client) = client();
+        http.enqueue_response(retire_answer(Some(1)));
+        http.enqueue_response(retire_answer(Some(1)));
+
+        block_on(retire(&client, &["k51interior".to_owned()])).expect("retire");
+        let heads = OrphanHeads::default();
+        heads.record("bafyorphanhead");
+        block_on(heads.retire_pending(&client));
+
+        assert_eq!(
+            retire_entries(&http),
+            vec![
+                (None, vec!["k51interior".to_owned()]),
+                (None, vec!["bafyorphanhead".to_owned()]),
+            ],
+            "neither target answers to a record, so every reference goes"
+        );
+    }
+
+    /// A leaf a doomed root aliased from another live node stays pinned only if
+    /// the registry knows whose edge to drop, which no client can decide.
+    #[test]
+    fn an_owed_retire_scopes_every_batch_to_the_owning_record() {
+        let (entry, root_block, leaf_cids) = owed_version(&[3u8; 100]);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+
+        let http = ledger_http(&entry, Some(root_block), Some(1));
+        let (_, owed) = drain(&store, OWNER, &http);
+        assert!(owed.is_empty(), "the pass settles the debt");
+
+        let owner = Some(OWNER_NAME.to_owned());
+        assert_eq!(
+            retire_entries(&http),
+            vec![
+                (owner.clone(), leaf_cids),
+                (owner, vec![entry.target.clone()]),
+            ],
+            "the leaves and the expansion key both name the record that owed them"
+        );
     }
 
     #[test]
@@ -797,18 +880,41 @@ mod tests {
 
     /// The retire calls the pass made, one entry per batch, in order.
     fn retire_batches(http: &ScriptedHttp) -> Vec<Vec<String>> {
+        retire_entries(http)
+            .into_iter()
+            .map(|(_, targets)| targets)
+            .collect()
+    }
+
+    /// Every retire batch the pass sent, as the record it names and its targets.
+    fn retire_entries(http: &ScriptedHttp) -> Vec<(Option<String>, Vec<String>)> {
         http.requests()
             .iter()
             .filter(|request| request.url.ends_with("/registry/retire"))
-            .map(|request| {
-                retire_targets(request.body.as_deref().expect("a retire call has a body"))
+            .flat_map(|request| {
+                serde_json::from_slice::<Vec<RetireEntry>>(
+                    request.body.as_deref().expect("a retire call has a body"),
+                )
+                .expect("a retire body is a JSON array of entries")
             })
+            .map(|entry| (entry.ipns_name, entry.targets))
             .collect()
     }
 
     /// Every target the pass handed the registry, batch order preserved.
     fn retired_targets(http: &ScriptedHttp) -> Vec<String> {
         retire_batches(http).into_iter().flatten().collect()
+    }
+
+    /// The owning record every test pass answers with: one node, so one name.
+    const OWNER_NAME: &str = "k51qzowningrecord";
+
+    /// What the drain's own `live` closure answers, over a fixed name.
+    fn owning(cids: BTreeSet<String>) -> LiveRecord {
+        LiveRecord {
+            name: OWNER_NAME.to_owned(),
+            cids,
+        }
     }
 
     /// A pass over the ledger against `live` — the CIDs the owing node's
@@ -834,7 +940,7 @@ mod tests {
             &gateway(),
             http,
             &ContentProfile::CI,
-            async |_, _| live.clone(),
+            async |_, _| live.clone().map(owning),
         ))
         .expect("the ledger reads");
         (
@@ -1215,7 +1321,7 @@ mod tests {
             // live listing reaches it, whatever its lingering record names.
             async |_, owing| {
                 asked.borrow_mut().push(owing);
-                Some(BTreeSet::new())
+                Some(owning(BTreeSet::new()))
             },
         ))
         .expect("the ledger reads");
@@ -1272,7 +1378,7 @@ mod tests {
             &ContentProfile::CI,
             async |_, owing| {
                 asked.borrow_mut().push(owing);
-                Some(BTreeSet::new())
+                Some(owning(BTreeSet::new()))
             },
         ))
         .expect("the ledger reads");

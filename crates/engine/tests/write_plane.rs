@@ -27,6 +27,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
+use cipherbox_engine::api::RetireEntry;
 use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
     ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
@@ -65,7 +66,7 @@ use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_PSEUDONYM_SEED,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
-    poll_tasks_once, poll_tasks_until_parked, retire_targets as body_targets,
+    poll_tasks_once, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BinIndexKeys, BinIndexLoad, BlockProgress, Command, CommandOutcome,
@@ -4718,6 +4719,21 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
         assert!(
             retired.contains(cid),
             "every block the deleted version pinned is reclaimed"
+        );
+    }
+
+    // The registry refcounts a pin per referencing record, so what each batch
+    // names decides whose edge goes. Only the content batches own a record.
+    let batches = retire_entries(&alice);
+    assert!(
+        batch_naming(&batches, name.as_str()).is_none(),
+        "a name retire names no owning record, so every reference to it goes"
+    );
+    for cid in &content {
+        assert_eq!(
+            batch_naming(&batches, cid).as_deref(),
+            Some(name.as_str()),
+            "the owed retire drops this record's edge and no other's"
         );
     }
 }
@@ -9497,21 +9513,41 @@ fn retire_targets(device: &FakeDevice) -> Vec<String> {
     retire_batches(device).into_iter().flatten().collect()
 }
 
-/// The retire calls this device made, one entry per batch.
-fn retire_batches(device: &FakeDevice) -> Vec<Vec<String>> {
+/// The record a batch naming `target` scoped itself to, `None` for the
+/// account-wide form. Panics when no batch named it.
+fn batch_naming(batches: &[(Option<String>, Vec<String>)], target: &str) -> Option<String> {
+    batches
+        .iter()
+        .find(|(_, targets)| targets.iter().any(|sent| sent == target))
+        .map(|(record, _)| record.clone())
+        .expect("the target reaches the registry")
+}
+
+/// Every retire batch this device sent, as the record it names and its targets.
+fn retire_entries(device: &FakeDevice) -> Vec<(Option<String>, Vec<String>)> {
     device
         .http
         .requests()
         .iter()
         .filter(|request| request.url.ends_with("/registry/retire"))
-        .map(|request| {
-            body_targets(
+        .flat_map(|request| {
+            serde_json::from_slice::<Vec<RetireEntry>>(
                 request
                     .body
                     .as_deref()
                     .expect("a retire call carries a body"),
             )
+            .expect("a retire body is a JSON array of entries")
         })
+        .map(|entry| (entry.ipns_name, entry.targets))
+        .collect()
+}
+
+/// The retire calls this device made, one entry per batch.
+fn retire_batches(device: &FakeDevice) -> Vec<Vec<String>> {
+    retire_entries(device)
+        .into_iter()
+        .map(|(_, targets)| targets)
         .collect()
 }
 

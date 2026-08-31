@@ -63,7 +63,7 @@ pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_resolved, resolve_and_hold, resolve_gated,
 };
 pub use retire::{
-    OrphanHeads, RETIRE_LEDGER_PREFIX, ReclaimPass, ReclaimStall, ReclaimStallReason,
+    LiveRecord, OrphanHeads, RETIRE_LEDGER_PREFIX, ReclaimPass, ReclaimStall, ReclaimStallReason,
     StagingRetireLedger, drain_owed_retires, orphaned_head, retire, root_retire_ready,
 };
 pub use revival::{ReviveError, ReviveRequest, revive};
