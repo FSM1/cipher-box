@@ -1867,7 +1867,6 @@ use op::*;
 
 /// Filesystem operation (and arguments) the kernel driver wants us to perform. The fields of each
 /// variant needs to match the actual arguments the kernel driver sends for the specific operation.
-#[derive(Debug)]
 #[allow(missing_docs)]
 pub enum Operation<'a> {
     Lookup(Lookup<'a>),
@@ -1933,6 +1932,14 @@ pub enum Operation<'a> {
 
     #[allow(dead_code)]
     CuseInit(CuseInit<'a>),
+}
+
+/// A derive would print every argument struct's raw `&OsStr` name, which is the
+/// leak `Display` closes. One render path is the only way both modes stay shut.
+impl fmt::Debug for Operation<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 
 impl fmt::Display for Operation<'_> {
@@ -2129,10 +2136,16 @@ impl fmt::Display for Operation<'_> {
 }
 
 /// Low-level request of a filesystem operation the kernel driver wants to perform.
-#[derive(Debug)]
 pub struct AnyRequest<'a> {
     header: &'a fuse_in_header,
     data: &'a [u8],
+}
+
+/// A derive would print `data`, the raw argument bytes, which hold the name.
+impl fmt::Debug for AnyRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
 }
 impl_request!(AnyRequest<'_>);
 
@@ -2294,11 +2307,16 @@ mod tests {
     }
 
     #[test]
-    fn display_of_a_request_redacts_the_name() {
+    fn every_render_of_a_request_redacts_the_name() {
         let req = AnyRequest::try_from(&MKNOD_REQUEST[..]).unwrap();
         let op = req.operation().unwrap();
 
-        for rendered in [format!("{req}"), format!("{op}")] {
+        for rendered in [
+            format!("{req}"),
+            format!("{op}"),
+            format!("{req:?}"),
+            format!("{op:?}"),
+        ] {
             assert!(
                 !rendered.contains("foo.txt"),
                 "a name reached the render: {rendered}"
@@ -2309,6 +2327,11 @@ mod tests {
                 "the render lost the redaction marker: {rendered}"
             );
         }
+
+        // A derived `Debug` would print the raw argument bytes, which carry the
+        // name in a form no substring check catches. One render path shuts both.
+        assert_eq!(format!("{req:?}"), format!("{req}"));
+        assert_eq!(format!("{op:?}"), format!("{op}"));
     }
 
     #[test]

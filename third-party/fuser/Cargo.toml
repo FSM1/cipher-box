@@ -19,7 +19,9 @@
 # now formats the name through `redacted` (`src/redact.rs`), which renders a
 # byte length only. That module is the single definition a re-vendor re-applies,
 # and the tests in `src/lib_impl.rs` and `src/ll/request.rs` assert no name
-# reaches a log record or a render.
+# reaches a log record or a render. `Operation` and `AnyRequest` also lose their
+# derived `Debug`, which printed the raw name and the raw argument bytes; both
+# now delegate to the redacted `Display`.
 #
 # Trimmed against upstream: the examples, the mount-requiring integration
 # tests, and their dev-dependencies are gone — this is a library the product
