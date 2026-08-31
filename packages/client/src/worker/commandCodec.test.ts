@@ -69,6 +69,36 @@ describe('buildCommand', () => {
     expect(calls).toEqual([[2n ** 60n]]);
   });
 
+  /** Both name one parked write, and neither may reach the other's builder. */
+  it('routes each parked-write command to its own builder with the bigint op id', () => {
+    const calls: Record<string, unknown[][]> = {};
+    const wasm = {
+      ...fakeWasmEnums,
+      Command: new Proxy(
+        {},
+        {
+          get:
+            (_target, name: string) =>
+            (...args: unknown[]): object => {
+              (calls[name] ??= []).push(args);
+              return {};
+            },
+        }
+      ),
+    } as unknown as EngineWasm;
+
+    buildCommand(wasm, { kind: 'discardDeadLetter', opId: 2n ** 60n });
+    buildCommand(wasm, { kind: 'recoverDeadLetter', opId: 5n });
+
+    expect(calls).toEqual({ discardDeadLetter: [[2n ** 60n]], recoverDeadLetter: [[5n]] });
+  });
+
+  it('rejects a parked-write op id that is not the engine bigint', () => {
+    expect(refuses({ kind: 'recoverDeadLetter', opId: 7 })).toThrow(
+      'invalid request field opId: number'
+    );
+  });
+
   it('maps the second literal of each mirror enum, not just the first', () => {
     const calls: unknown[][] = [];
     const record = (...args: unknown[]): object => {
@@ -652,6 +682,12 @@ describe('readEvent', () => {
       kind: 'renewalFailed',
       routingKey: 'k51qzi5uqu5dr',
       detail: 'record rejected',
+    });
+  });
+
+  it('maps the payload-free parked-writes refusal', () => {
+    expect(readEvent(fakeWasm, { kind: 'parkedWritesUnreadable' })).toEqual({
+      kind: 'parkedWritesUnreadable',
     });
   });
 

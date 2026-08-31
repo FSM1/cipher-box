@@ -115,6 +115,7 @@ use crate::sync::provision::{
     VaultPointerProbe, provision_vault,
 };
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
+use crate::sync::record::{RecordClass, record_content_root_cid};
 use cipherbox_core::hex::lower as hex_lower;
 
 pub use crate::sync::drain::{BlockedOp, SettingsHold};
@@ -123,7 +124,8 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    LiveBlocks, PreservedBounds, StagedBlocks, reconcile_staging, release_version_blocks, stage_op,
+    LiveBlocks, PreservedBounds, StagedBlocks, read_preserved_dead_letters, reconcile_staging,
+    release_version_blocks, stage_op, take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
@@ -885,6 +887,25 @@ pub enum Command {
         /// The queue id [`Engine::commit_write`] returned.
         op_id: OpId,
     },
+    /// Drop one parked write: the preserved entry goes, and its staged version
+    /// is released. Irreversible, so a host asks first.
+    DiscardDeadLetter {
+        /// The op id the dead letter was announced under, and the identity the
+        /// preserved entry carries.
+        op_id: OpId,
+    },
+    /// Re-queue one parked write's staged version as a **fresh** op, anchored on
+    /// the head this device renders now.
+    ///
+    /// Never a resumed op: the parked one lost its anchor, and re-queueing it as
+    /// authored would replay exactly the conditional-edit refusal that parked
+    /// it. The fresh anchor is the member saying the bytes they parked are the
+    /// ones they want, so the write is theirs to lose, not one this device loses
+    /// for them.
+    RecoverDeadLetter {
+        /// The op id the dead letter was announced under.
+        op_id: OpId,
+    },
 
     // --- focus and refresh ---
     /// Set the open folder driving the focus window; `None` when no folder
@@ -1021,6 +1042,8 @@ impl Command {
             Command::Relink { .. } => "relink",
             Command::Move { .. } => "move",
             Command::CancelUpload { .. } => "cancelUpload",
+            Command::DiscardDeadLetter { .. } => "discardDeadLetter",
+            Command::RecoverDeadLetter { .. } => "recoverDeadLetter",
             Command::SetFocus { .. } => "setFocus",
             Command::ManualRefresh => "manualRefresh",
             Command::ImportContact { .. } => "importContact",
@@ -1125,6 +1148,11 @@ pub enum Event {
         /// Why it dead-lettered — the four reasons need four different messages.
         reason: DeadLetterReason,
     },
+    /// This device holds a preserved dead-letter record another build wrote.
+    /// Nothing may overwrite it, so the parked writes it holds can be neither
+    /// listed nor released, and no later dead letter may join them. Terminal:
+    /// no pass changes it, and the member is the only one who can.
+    ParkedWritesUnreadable,
     /// Attributable abuse: a fail-closed adoption-gate rejection, or an
     /// owner-blob / ascent-link / unseal cross-check disagreement (#39 D6) —
     /// never a silent failure.
@@ -1188,6 +1216,7 @@ impl fmt::Debug for Event {
                 .field("op_id", op_id)
                 .field("reason", reason)
                 .finish(),
+            Self::ParkedWritesUnreadable => f.write_str("ParkedWritesUnreadable"),
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
                 .field("description", description)
@@ -1368,6 +1397,13 @@ pub enum EngineError {
     /// metadata op is undone by a compensating mutation, not a cancel.
     NotAnUpload {
         /// The op the cancel named.
+        op_id: OpId,
+    },
+    /// [`Command::DiscardDeadLetter`] or [`Command::RecoverDeadLetter`] named an
+    /// op this device holds no parked write for — one already discarded, one
+    /// already recovered, or one the age or byte bound evicted.
+    UnknownDeadLetter {
+        /// The op the command named.
         op_id: OpId,
     },
     /// The file is past the flat-DAG ceiling: its root would inline more leaf
@@ -1823,6 +1859,11 @@ impl fmt::Display for EngineError {
             EngineError::NotAnUpload { op_id } => write!(
                 f,
                 "queued op {} carries no upload to cancel; undo it with a compensating change",
+                op_id.0
+            ),
+            EngineError::UnknownDeadLetter { op_id } => write!(
+                f,
+                "no parked write is held for op {}",
                 op_id.0
             ),
             EngineError::ContentTooLarge { check } => write!(
@@ -3802,6 +3843,25 @@ impl<T: SeamTypes> Engine<T> {
         let scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
         let pending: Vec<_> = scan.mine.into_iter().map(|(_id, op)| op).collect();
 
+        // The preserved set outlives the process and the notice map does not, so
+        // a parked write is only nameable again once the set is read back. A set
+        // this build cannot read holds parked writes it can neither list nor
+        // release, which is the one state a host has to be told about outright.
+        match read_preserved_dead_letters(&self.seams.staging_store)
+            .await
+            .map_err(ColdStartError::Seam)?
+        {
+            Some(parked) => {
+                let mut notices = self.dead_letters.borrow_mut();
+                for entry in parked {
+                    notices.insert(entry.op_id, (None, entry.reason));
+                }
+            }
+            None => {
+                let _ = self.events.unbounded_send(Event::ParkedWritesUnreadable);
+            }
+        }
+
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
         // its op record from the durable queue so a corrupt entry is not
         // re-decoded and re-emitted on every boot.
@@ -4733,6 +4793,11 @@ where {
                 .cancel_upload(op_id)
                 .await
                 .map(|()| CommandOutcome::Done),
+            Command::DiscardDeadLetter { op_id } => self
+                .discard_dead_letter(op_id)
+                .await
+                .map(|()| CommandOutcome::Done),
+            Command::RecoverDeadLetter { op_id } => self.recover_dead_letter(op_id).await,
             Command::SetFocus { node } => {
                 self.focus.borrow_mut().open_folder = node;
                 // Navigation is the tick model's second trigger source (#33 D2):
@@ -7947,6 +8012,86 @@ where {
         Ok(NodeId(id))
     }
 
+    /// Drop one parked write ([`Command::DiscardDeadLetter`]).
+    ///
+    /// The shortened set is durable before a byte is released, so a failed write
+    /// leaves a list that still names the version rather than one naming blocks
+    /// that are already gone.
+    async fn discard_dead_letter(&self, op_id: OpId) -> Result<(), EngineError> {
+        self.live_session()?;
+        let taken = take_preserved_dead_letter(&self.seams.staging_store, op_id)
+            .await
+            .map_err(EngineError::from_seam)?
+            .ok_or(EngineError::UnknownDeadLetter { op_id })?;
+        if let Ok(Some(root)) = record_content_root_cid(&taken.record) {
+            release_version_blocks(&self.seams.staging_store, root.as_slice()).await;
+        }
+        self.dead_letters.borrow_mut().remove(&op_id);
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        Ok(())
+    }
+
+    /// Re-queue one parked write ([`Command::RecoverDeadLetter`]).
+    ///
+    /// The new op is authored here rather than replayed: an `updateContent`
+    /// takes the anchor this device renders now, and a create mints a fresh node
+    /// id so a version the plane already carries is never re-authored at its own
+    /// name. Both reuse the parked version's staged blocks, which the queue
+    /// entry references from the moment it lands.
+    async fn recover_dead_letter(&mut self, op_id: OpId) -> Result<CommandOutcome, EngineError> {
+        self.live_session()?;
+        let authored_at = self.seams.scheduler.now();
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let parked = read_preserved_dead_letters(&self.seams.staging_store)
+            .await
+            .map_err(EngineError::from_seam)?
+            .unwrap_or_default()
+            .into_iter()
+            .find(|entry| entry.op_id == op_id)
+            .ok_or(EngineError::UnknownDeadLetter { op_id })?;
+        let RecordClass::Mine(op) =
+            RecordReader::new(session.enc_subkey()).classify(&parked.record)
+        else {
+            return Err(EngineError::MalformedInput {
+                check: "parked-write-does-not-open",
+            });
+        };
+
+        let fresh = match &op.kind {
+            OpKind::UpdateContent { content, .. } => Op::update_content(
+                op.target,
+                content.clone(),
+                self.write_anchor(op.target).await?,
+                self.base_sequence_for(op.target).await?,
+                authored_at,
+            ),
+            OpKind::Create { parent, name, node } => Op::create(
+                self.mint_node_id()?,
+                *parent,
+                name.clone(),
+                node.clone(),
+                self.base_sequence_for(*parent).await?,
+                authored_at,
+            ),
+            // Every other intent is metadata, which a compensating command
+            // expresses directly and which stages no version to recover.
+            _ => {
+                return Err(EngineError::MalformedInput {
+                    check: "parked-write-carries-no-version",
+                });
+            }
+        };
+
+        let outcome = self.stage_and_notify(&fresh).await?;
+        // Only after the queue entry references the blocks: a failure here costs
+        // a second reference to a version nothing released.
+        take_preserved_dead_letter(&self.seams.staging_store, op_id)
+            .await
+            .map_err(EngineError::from_seam)?;
+        self.dead_letters.borrow_mut().remove(&op_id);
+        Ok(outcome)
+    }
+
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,
     /// returning the durable queue id the drain will report the op under.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<CommandOutcome, EngineError> {
@@ -11057,6 +11202,40 @@ mod tests {
                     .unwrap()
                     .is_empty(),
                 "the dead-lettered op is removed from the durable queue"
+            );
+        }
+
+        use crate::sync::staging::PRESERVED_DEAD_LETTERS_KEY;
+
+        /// A preserved set this build cannot read holds parked writes it can
+        /// neither list nor release, and no later dead letter may join them.
+        /// Standing down silently would leave the member with a vault that has
+        /// quietly stopped keeping their parked work.
+        #[test]
+        fn an_unreadable_preserved_set_surfaces_on_cold_start() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            block_on(
+                engine
+                    .seams
+                    .staging_store
+                    .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, b"another build wrote this"),
+            )
+            .expect("the store holds it");
+
+            drive(&mut engine, &pointers);
+
+            assert_eq!(block_on(events.next()), Some(Event::ParkedWritesUnreadable));
+            assert_eq!(
+                block_on(
+                    engine
+                        .seams
+                        .staging_store
+                        .staged_bytes(PRESERVED_DEAD_LETTERS_KEY)
+                )
+                .unwrap()
+                .as_deref(),
+                Some(b"another build wrote this".as_slice()),
+                "and nothing overwrites what it already holds"
             );
         }
 

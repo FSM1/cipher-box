@@ -589,6 +589,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::TooManyStreams => "tooManyStreams",
         EngineError::TooLateToCancel { .. } => "tooLateToCancel",
         EngineError::NotAnUpload { .. } => "notAnUpload",
+        EngineError::UnknownDeadLetter { .. } => "unknownDeadLetter",
         EngineError::ContentTooLarge { .. } => "contentTooLarge",
         EngineError::ContentKeySealFailed { .. } => "contentKeySealFailed",
         EngineError::RefreshFailed { .. } => "refreshFailed",

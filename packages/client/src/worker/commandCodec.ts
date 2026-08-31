@@ -276,6 +276,10 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       );
     case 'cancelUpload':
       return wasm.Command.cancelUpload(minted(descriptor.opId, 'opId'));
+    case 'discardDeadLetter':
+      return wasm.Command.discardDeadLetter(minted(descriptor.opId, 'opId'));
+    case 'recoverDeadLetter':
+      return wasm.Command.recoverDeadLetter(minted(descriptor.opId, 'opId'));
     case 'setFocus':
       return wasm.Command.setFocus(
         descriptor.node === null ? undefined : nodeId(wasm, descriptor.node, 'node')
@@ -464,6 +468,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
         opId: event.opId ?? 0n,
         reason: deadLetterReason(wasm, event.deadLetterReason),
       };
+    case 'parkedWritesUnreadable':
+      return { kind: 'parkedWritesUnreadable' };
     case 'attributableAbuse':
       return { kind: 'attributableAbuse', description: event.description ?? '' };
     case 'renewalFailed':

@@ -1450,6 +1450,23 @@ impl Command {
         })
     }
 
+    /// Drop one parked write and release its staged version. Irreversible.
+    #[wasm_bindgen(js_name = discardDeadLetter)]
+    pub fn discard_dead_letter(op_id: u64) -> Command {
+        Self::wrap(facade::Command::DiscardDeadLetter {
+            op_id: cipherbox_engine::seams::OpId(op_id),
+        })
+    }
+
+    /// Re-queue one parked write's staged version as a fresh op anchored on the
+    /// head this device renders now. Resolves `queued` with the new op id.
+    #[wasm_bindgen(js_name = recoverDeadLetter)]
+    pub fn recover_dead_letter(op_id: u64) -> Command {
+        Self::wrap(facade::Command::RecoverDeadLetter {
+            op_id: cipherbox_engine::seams::OpId(op_id),
+        })
+    }
+
     /// Set the open folder driving the focus window (`undefined` clears it).
     #[wasm_bindgen(js_name = setFocus)]
     pub fn set_focus(node: Option<NodeId>) -> Command {
@@ -1630,6 +1647,7 @@ impl Event {
             facade::Event::StalenessChanged { .. } => "stalenessChanged",
             facade::Event::WithheldUpdateEscalation { .. } => "withheldUpdateEscalation",
             facade::Event::DeadLetter { .. } => "deadLetter",
+            facade::Event::ParkedWritesUnreadable => "parkedWritesUnreadable",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
             facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",

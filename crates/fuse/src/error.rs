@@ -112,6 +112,7 @@ impl From<EngineError> for VfsError {
             | EngineError::ContentKeySealFailed { .. }
             | EngineError::TooLateToCancel { .. }
             | EngineError::NotAnUpload { .. }
+            | EngineError::UnknownDeadLetter { .. }
             | EngineError::Unimplemented { .. }) => VfsError::Internal {
                 message: error.to_string(),
             },

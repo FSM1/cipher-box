@@ -7629,6 +7629,148 @@ fn a_dead_lettered_ops_blocks_survive_a_cold_start_and_a_gc_pass() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Parked writes: durable identity, discard, and recover.
+// ---------------------------------------------------------------------------
+
+/// A device holding one parked write, and the op id it is named by.
+fn parked_write(
+    world: &FakeWorld,
+    blocks: &Blocks,
+) -> (
+    FakeDevice,
+    Engine<FakeSeamTypes>,
+    Vec<BoxedTask>,
+    NodeId,
+    OpId,
+) {
+    seed_account(world, blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(world, blocks, &first);
+    let (bob, mut engine_b, mut tasks_b) = open_writer(world, blocks, node, &first);
+
+    let op_id = write_file(
+        &mut engine_b,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &bobs,
+    )
+    .expect("the second device's edit commits");
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &alices,
+    )
+    .expect("the first device's edit commits");
+    tick(world, &engine_a, &mut tasks_a);
+
+    let (parked, _) = tick_until_dead_lettered(world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        parked,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::BaseSuperseded
+        }],
+        "the conditional-edit loser parks rather than clobbering"
+    );
+    (bob, engine_b, tasks_b, node, op_id)
+}
+
+/// The preserved set outlives the process and the notice map does not, so the
+/// identity a host discards or recovers by has to come back off the set.
+#[test]
+fn a_parked_write_keeps_its_op_id_and_its_reason_across_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (bob, engine_b, _tasks_b, _node, op_id) = parked_write(&world, &blocks);
+    drop(engine_b);
+
+    let (restarted, _events, _tasks) = boot(&world, &blocks, &bob, 8);
+
+    assert_eq!(
+        block_on(restarted.status())
+            .expect("the status reads")
+            .dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::BaseSuperseded
+        }],
+        "the restart names the parked write by the id its dead letter announced"
+    );
+}
+
+/// Discard is the exit the preserved set had none of: the entry goes and its
+/// version's blocks go with it, and a second discard names nothing.
+#[test]
+fn discarding_a_parked_write_releases_the_version_it_held() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (bob, mut engine_b, _tasks_b, _node, op_id) = parked_write(&world, &blocks);
+    let staged = || block_on(bob.staging_store.staged_keys()).unwrap();
+    let before = staged().len();
+
+    block_on(engine_b.command(Command::DiscardDeadLetter { op_id })).expect("the discard lands");
+
+    assert!(
+        block_on(engine_b.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "the notice goes with the entry"
+    );
+    assert!(
+        staged().len() < before,
+        "and the version it held is released"
+    );
+    assert_eq!(
+        block_on(engine_b.command(Command::DiscardDeadLetter { op_id })),
+        Err(EngineError::UnknownDeadLetter { op_id }),
+        "a second discard names a write this device no longer holds"
+    );
+}
+
+/// Recover re-queues the parked bytes under a **fresh** op anchored on the head
+/// that beat them. Resuming the parked op instead would replay the conditional
+/// edit it lost, so the member could never get their own bytes back.
+#[test]
+fn recovering_a_parked_write_queues_a_fresh_op_anchored_on_the_head_that_beat_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (_bob, mut engine_b, mut tasks_b, node, op_id) = parked_write(&world, &blocks);
+    let (_, bobs, alices) = contested_bodies();
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head reads"),
+        alices,
+        "the version that beat the parked one stands until the recover"
+    );
+
+    let outcome = block_on(engine_b.command(Command::RecoverDeadLetter { op_id }))
+        .expect("the recover lands");
+    let CommandOutcome::Queued { op_id: fresh } = outcome else {
+        panic!("a recover queues a fresh op, got {outcome:?}");
+    };
+    assert_ne!(fresh, op_id, "the parked op is never resumed");
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the recovered head reads"),
+        bobs,
+        "the recovered version publishes rather than parking again"
+    );
+    assert!(
+        block_on(engine_b.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "and the entry it recovered is gone"
+    );
+}
+
 /// The upload a refusal lands on to halt a 200-byte version mid-set: past the
 /// first leaves, well short of the 13 the CI framing produces.
 const MID_SET_UPLOAD: usize = 8;

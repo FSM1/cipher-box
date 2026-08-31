@@ -216,6 +216,23 @@ export class EngineFacade {
     return this.command({ kind: 'cancelUpload', opId });
   }
 
+  /**
+   * Drops one parked write and releases its staged version. Irreversible, and
+   * refused with `unknownDeadLetter` when this device holds no such write.
+   */
+  discardDeadLetter(opId: bigint): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'discardDeadLetter', opId });
+  }
+
+  /**
+   * Re-queues one parked write's staged version as a fresh op anchored on the
+   * head this device renders now, resolving `queued` with the new op id. Never
+   * resumes the parked op, whose own anchor is what parked it.
+   */
+  recoverDeadLetter(opId: bigint): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'recoverDeadLetter', opId });
+  }
+
   setFocus(node: Uint8Array | null): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'setFocus', node });
   }

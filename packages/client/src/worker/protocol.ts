@@ -329,6 +329,8 @@ export type CommandDescriptor =
   | { kind: 'rename'; node: Uint8Array; newName: string }
   | { kind: 'relink'; node: Uint8Array; newParent: Uint8Array }
   | { kind: 'cancelUpload'; opId: bigint }
+  | { kind: 'discardDeadLetter'; opId: bigint }
+  | { kind: 'recoverDeadLetter'; opId: bigint }
   | { kind: 'setFocus'; node: Uint8Array | null }
   | { kind: 'manualRefresh' }
   | { kind: 'importContact'; contactCode: Uint8Array }
@@ -439,6 +441,8 @@ export type EventDescriptor =
   | { kind: 'stalenessChanged'; staleness: Staleness }
   | { kind: 'withheldUpdateEscalation'; ipnsName: Uint8Array }
   | { kind: 'deadLetter'; opId: bigint; reason: DeadLetterReason }
+  /** This device holds a preserved dead-letter record another build wrote. */
+  | { kind: 'parkedWritesUnreadable' }
   | { kind: 'attributableAbuse'; description: string }
   | { kind: 'renewalFailed'; routingKey: string; detail: string }
   | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }
