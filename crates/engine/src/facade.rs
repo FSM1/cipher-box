@@ -5165,8 +5165,7 @@ where {
                 api.as_ref(),
                 &grantee,
                 &GrantRecipient {
-                    identity_pk: contact.identity_pk(),
-                    enc_pub: &contact.enc_subkey(),
+                    contact,
                     display_name,
                 },
                 &owner,

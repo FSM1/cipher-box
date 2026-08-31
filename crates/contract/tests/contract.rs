@@ -15,14 +15,15 @@
 //! sets it (and boots the stack), so the assertions always run there.
 
 use cipherbox_contract::{
-    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_bytes, hex_to_scalar,
-    prod_api_url, random_identity_signer, test_login_secret,
+    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_scalar, prod_api_url,
+    random_identity_scalar, random_identity_signer, test_login_secret,
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::seal::{
     ChildScopeRef, GrantSetCommitment, Permission, PreservedFields, ReadBody, sign_grant_set,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
+use cipherbox_core::suite::contact::ContactCode;
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::api::{
@@ -32,7 +33,7 @@ use cipherbox_engine::api::{
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
     GrantRecipient, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, ScopeRootPromoter,
-    SharePointer, create_grant,
+    SharePointer, create_grant, import_contact,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
@@ -1401,14 +1402,23 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     const V: u64 = 1;
 
     let (owner_client, _) = addressable_account(&base, "contract-grant-owner").await;
-    let (recipient_client, recipient_key_hex) =
-        addressable_account(&base, "contract-grant-recipient").await;
 
-    // The recipient's mailbox address is their account identity key, exactly as
-    // the API stores it — normalized compressed SEC1.
-    let recipient_identity =
-        EcdsaVerifier::from_sec1(&hex_to_bytes(&recipient_key_hex).expect("account key is hex"))
-            .expect("account publicKey is a compressed secp256k1 point");
+    // The recipient account is created under an identity scalar the suite
+    // holds, because the grant path takes a `Contact` and only that scalar can
+    // sign the subkey binding a `Contact` needs. The same key is the account's
+    // `publicKey`, so the pointer's routing address is still the live one.
+    let recipient_scalar = random_identity_scalar();
+    let recipient_identity_signer =
+        EcdsaSigner::from_scalar(&recipient_scalar).expect("valid scalar");
+    let recipient_client = new_client(&base);
+    expect_auth(
+        "identity login creates the recipient account",
+        recipient_client
+            .login_identity(
+                &IdentityChallengeSigner::from_scalar(&recipient_scalar).expect("valid scalar"),
+            )
+            .await,
+    );
 
     let owner_enc = X25519Secret::from_scalar([0x11; 32]);
     let owner_enc_pub = owner_enc.public();
@@ -1416,6 +1426,10 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
     let recipient_enc = X25519Secret::from_scalar([0x44; 32]);
     let recipient_enc_pub = recipient_enc.public();
+    let recipient_contact = import_contact(
+        &ContactCode::create(&recipient_identity_signer, recipient_enc_pub).encode(),
+    )
+    .expect("the recipient's own code verifies");
 
     let parent_node_seed = [0x44u8; 32];
     let grantee_write_scope_seed = [0x55u8; 32];
@@ -1452,8 +1466,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
             subtree_child_index: &[],
         },
         &GrantRecipient {
-            identity_pk: recipient_identity,
-            enc_pub: &recipient_enc_pub,
+            contact: &recipient_contact,
             display_name: "Shared Folder".to_string(),
         },
         &OwnerGrantKeys {
