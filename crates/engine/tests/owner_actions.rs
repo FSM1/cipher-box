@@ -55,7 +55,7 @@ use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, Engine, EngineError,
     EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission, ResealSeeds,
     ScopeRootIdentity, SharePointer, SharingInviteLinks, StoragePolicy, SyncTimingProfile,
-    WriteHistory, post_sealed, reseal_scope_root,
+    WriteHistory, poll_verified, post_sealed, reseal_scope_root,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -579,6 +579,19 @@ fn recorded_links(device: &FakeDevice) -> Vec<RecordedInvite> {
         .links
 }
 
+/// The one share pointer waiting on `device`'s inbox, opened under the
+/// recipient's own encryption subkey.
+fn delivered_share_pointer(device: &FakeDevice) -> SharePointer {
+    let mut items = block_on(poll_verified(
+        &device.mailbox,
+        &kdf::enc_subkey(&RECIPIENT_SECRET),
+        ENVELOPE_V,
+    ))
+    .expect("the inbox answers");
+    assert_eq!(items.len(), 1, "one share pointer per grant");
+    SharePointer::decode(&items.remove(0).payload).expect("the pointer decodes")
+}
+
 /// Import the recipient into the owner's contact book, which is the only thing
 /// that makes their encryption subkey usable as a grant target.
 fn import_recipient(engine: &mut Engine<FakeSeamTypes>) {
@@ -908,6 +921,31 @@ fn a_write_grant_cuts_the_granted_subtree_into_its_own_write_scope() {
         1,
         "the share pointer reached the recipient"
     );
+}
+
+/// The pointer is the only thing that tells a grantee where to look, and a write
+/// grant's name wave moves the scope root after the mint. So the post runs past
+/// the wave: a pointer naming the pre-wave root would send the grantee to a name
+/// their own seed does not derive.
+#[test]
+fn a_write_grants_share_pointer_names_the_root_its_wave_moved_to() {
+    let mut fx = GrantScenario::new();
+    let inherited_name = write_name(fx.folder);
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let moved_name = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved_name, inherited_name);
+    let pointer = delivered_share_pointer(&fx.recipient_device);
+    assert_eq!(
+        pointer.scope_root_name,
+        moved_name.as_str().as_bytes(),
+        "the grantee is sent to the root the wave moved to"
+    );
+    assert_eq!(pointer.permission, CorePermission::Write);
 }
 
 /// The record the mint publishes before the wave lingers for ever — the wave

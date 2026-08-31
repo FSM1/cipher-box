@@ -58,7 +58,8 @@ use crate::grants::{
     StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
     convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
     link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
-    post_invite_claim, recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    post_invite_claim, post_share_pointer, recipient_blinded_tag, resolve_recipient,
+    row_is_owner_attested,
 };
 use crate::mailbox::{locate_verified, poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
@@ -2036,6 +2037,18 @@ enum ScopeShare<'a> {
         /// The link's deadline, or `None` for a link that never expires.
         expires_at: Option<UnixMillis>,
     },
+}
+
+/// What a share still owes its recipient once the mint has published and any
+/// write-scope cut has moved the scope root.
+///
+/// Both halves name that root, so neither can be produced before the wave that
+/// moves it (blueprint/engine.md "Grant creation").
+enum PendingShare<'a> {
+    /// The sealed mailbox pointer a personal grant's recipient reads.
+    SharePointer(GrantRecipient<'a>),
+    /// The bearer capability an invite link hands its host.
+    Fragment(MintedInviteLink),
 }
 
 /// The host-facing names a scope mint's refusals carry. One rule, one name per
@@ -5302,45 +5315,48 @@ where {
         };
 
         let scope_root_name = grantee.ipns_name();
-        let outcome = match &share {
-            ScopeShare::Contact(contact) => create_grant(
-                &mut SharedEntropy(&self.entropy),
-                &net,
-                &net,
-                api.as_ref(),
-                &grantee,
-                &GrantRecipient {
+        let pending = match &share {
+            ScopeShare::Contact(contact) => {
+                let recipient = GrantRecipient {
                     contact,
                     display_name,
-                },
-                &owner,
-                &parent_plan,
-            )
-            .await
-            .map(|_| CommandOutcome::Done)
-            .map_err(EngineError::from_create_grant),
-            ScopeShare::InviteLink { expires_at } => mint_invite_link(
-                &mut SharedEntropy(&self.entropy),
-                &net,
-                &net,
-                &StagingInviteStore::new(
-                    &self.seams.staging_store,
-                    session.enc_subkey(),
-                    &self.entropy,
-                ),
-                &owner,
-                &InviteMintPlan {
-                    grantee: &grantee,
-                    parent: &parent_plan,
-                    expires_at: *expires_at,
-                },
-            )
-            .await
-            .map(CommandOutcome::InviteLinkMinted)
-            .map_err(EngineError::from_invite_mint),
-        }?;
+                };
+                create_grant(
+                    &mut SharedEntropy(&self.entropy),
+                    &net,
+                    &net,
+                    &grantee,
+                    &recipient,
+                    &owner,
+                    &parent_plan,
+                )
+                .await
+                .map_err(EngineError::from_create_grant)?;
+                PendingShare::SharePointer(recipient)
+            }
+            ScopeShare::InviteLink { expires_at } => PendingShare::Fragment(
+                mint_invite_link(
+                    &mut SharedEntropy(&self.entropy),
+                    &net,
+                    &net,
+                    &StagingInviteStore::new(
+                        &self.seams.staging_store,
+                        session.enc_subkey(),
+                        &self.entropy,
+                    ),
+                    &owner,
+                    &InviteMintPlan {
+                        grantee: &grantee,
+                        parent: &parent_plan,
+                        expires_at: *expires_at,
+                    },
+                )
+                .await
+                .map_err(EngineError::from_invite_mint)?,
+            ),
+        };
 
-        if let ScopeShare::Contact(contact) = share {
+        if let ScopeShare::Contact(contact) = &share {
             // The grant this mint published is one no claim conversion recorded,
             // so a later cut must not collect the recipient's book entry and
             // leave that grant with no resolvable recipient. An owner grant is a
@@ -5350,11 +5366,27 @@ where {
                 .await
                 .map_err(EngineError::from_contact_store)?;
         }
-        if permission == Permission::Write {
-            self.cut_granted_write_scope(node, &scope_root_name, parent_node_seed.as_bytes())
-                .await?;
+        let scope_root_name = match permission {
+            Permission::Read => scope_root_name,
+            Permission::Write => {
+                self.cut_granted_write_scope(node, &scope_root_name, parent_node_seed.as_bytes())
+                    .await?
+            }
+        };
+        match pending {
+            PendingShare::SharePointer(recipient) => post_share_pointer(
+                &mut SharedEntropy(&self.entropy),
+                api.as_ref(),
+                &owner,
+                &grantee,
+                &recipient,
+                &scope_root_name,
+            )
+            .await
+            .map(|()| CommandOutcome::Done)
+            .map_err(EngineError::from_create_grant),
+            PendingShare::Fragment(link) => Ok(CommandOutcome::InviteLinkMinted(link)),
         }
-        Ok(outcome)
     }
 
     /// Refuse when a live scope root already answers at the name a mint would
@@ -5435,18 +5467,21 @@ where {
     /// revoke's cut runs under, never a set this session merely believes it
     /// wrote.
     ///
+    /// Returns the name the wave moved the scope root to, which is the name the
+    /// share owes its recipient.
+    ///
     /// This runs inside the non-atomic tail
-    /// [`CreateGrantError`](crate::grants::CreateGrantError) already documents:
-    /// the grantee root is published and the share pointer posted before it. A
-    /// failure therefore leaves a grantee holding a seed that derives nothing,
-    /// which is fail-closed — they read through child refs and write nowhere —
-    /// and self-heals on the next pointer consult once a later attempt cuts.
+    /// [`CreateGrantError`](crate::grants::CreateGrantError) documents, but ahead
+    /// of the delivery: the grantee root is published and the parent index names
+    /// it. A failure therefore leaves a scope the recipient was never told
+    /// about, and no command re-drives the owed wave — the owner revokes the
+    /// grantee and grants again.
     async fn cut_granted_write_scope(
         &self,
         node: NodeId,
         scope_root_name: &IpnsName,
         parent_node_seed: &[u8; SECRET_LEN],
-    ) -> Result<(), EngineError> {
+    ) -> Result<IpnsName, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let owner_identity = session.owner_identity();
@@ -5481,9 +5516,15 @@ where {
             owner_enc_secret: session.enc_subkey(),
         })
         .map_err(EngineError::from_revoke)?;
+        // `cut_for_write_grant` sets the write plane, so the wave ran and its
+        // outcome names the root the grantee resolves.
         self.drive_cut(node, &target, scope_root_name, &cut)
-            .await
-            .map(|_| ())
+            .await?
+            .write
+            .map(|write| write.new_root_name)
+            .ok_or(EngineError::TrustViolation {
+                message: "the write-scope cut reported no name wave".to_owned(),
+            })
     }
 
     /// Point the enclosing scope's direct-child-scope index at the name a
