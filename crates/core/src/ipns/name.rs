@@ -12,6 +12,7 @@
 //! rejecting anything that does not round-trip to the exact bytes we would emit
 //! (the cross-language `$`-before-`\n` lesson: keep the Rust side strict).
 
+use crate::codec::RedactedText;
 use crate::error::{CodecError, Malformed};
 use crate::suite::ed25519::{Ed25519Verifier, PUBLIC_LEN};
 
@@ -110,15 +111,12 @@ impl IpnsName {
     }
 }
 
+/// The name is a live handle that resolves a record, so it renders as its shape
+/// alone ([`crate::codec::redact`]). There is no `Display`: [`IpnsName::as_str`]
+/// is the one way to reach the text, so no interpolation reaches it by accident.
 impl core::fmt::Debug for IpnsName {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "IpnsName({})", self.text)
-    }
-}
-
-impl core::fmt::Display for IpnsName {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.text)
+        write!(f, "IpnsName({:?})", RedactedText::of(&self.text))
     }
 }
 
@@ -203,6 +201,28 @@ mod tests {
 
     fn verifier(seed: u8) -> Ed25519Verifier {
         Ed25519Signer::from_seed([seed; 32]).verifying_key()
+    }
+
+    /// A name resolves a record for whoever reads it off a log line, so the
+    /// only rendering keeps the shape and withholds the text.
+    #[test]
+    fn debug_withholds_the_name_it_renders() {
+        let name = IpnsName::from_public_key(&verifier(11));
+        let rendered = format!("{name:?}");
+
+        assert!(
+            !rendered.contains(name.as_str()),
+            "the name never renders: {rendered}"
+        );
+        // The prefix alone is the whole discriminating part of a base36 name.
+        assert!(
+            !rendered.contains(&name.as_str()[..8]),
+            "nor any leading run of it: {rendered}"
+        );
+        assert!(
+            rendered.contains(&name.as_str().chars().count().to_string()),
+            "the length is kept, so a rendering is still useful: {rendered}"
+        );
     }
 
     #[test]
