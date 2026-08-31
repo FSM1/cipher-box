@@ -154,6 +154,21 @@ bytes (FSM1/cipher-box-next#28 D2).
   retry re-authors under a fresh seal nonce, so the drain retires that head at
   the end of the pass that orphaned it, per attempt. A fan-out that
   acknowledged nothing does **not** qualify: no ack is not proof nothing stored.
+  A **delete** reclaims its own target at once — the shortened parent is a
+  record the pass resolved and republished — and holds every descendant in a
+  bounded quarantine. A descendant is reached through a `ChildRef`, which any
+  holder of the scope's write seed authors, so its name and its pins wait for a
+  proof, and no pass that journals an entry may decide it. The proof is two
+  halves: the snapshot no longer reaches the node, and the node's freshly
+  resolved record still names exactly the version roots the owner-authored
+  doomed manifest quoted at delete time. **No live namer is consulted**, and the
+  snapshot is populated by the focus window rather than by a whole-vault walk,
+  so the first half is a refusal and never an entitlement — its strength is what
+  the session has rendered. The record half is vacuous for a folder, which
+  quotes no root. A proof that does not hold leaves the name registered and the
+  content pinned; a descendant no pass can establish — a rotation leaves an
+  unlinked node sealed at an epoch the gate refuses — drops unspent after a
+  bounded number of attempts, so one entry cannot starve the rest.
 
 ## Adoption gate and floors
 

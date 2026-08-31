@@ -225,13 +225,17 @@ impl Snapshot {
             .retain(|l| !(l.parent == parent && l.child == child));
     }
 
-    /// Removes a node and every link that references it (as parent or child).
+    /// Removes a node and every link that references it (as parent or child),
+    /// reporting whether the node was there to remove.
     ///
-    /// Shallow: a node going away for good wants
-    /// [`remove_deleted`](Self::remove_deleted), which takes the subtree too.
-    pub fn remove_node(&mut self, id: NodeId) {
-        self.nodes.remove(&id);
+    /// Shallow, and private for it: a node going away for good wants
+    /// [`remove_deleted`](Self::remove_deleted) or
+    /// [`remove_unreachable`](Self::remove_unreachable), which take the subtree
+    /// too. Neither leaves a node behind that no walk reaches.
+    fn remove_node(&mut self, id: NodeId) -> bool {
+        let present = self.nodes.remove(&id).is_some();
         self.links.retain(|l| l.parent != id && l.child != id);
+        present
     }
 
     /// Removes `id` and every node that only `id` reached — the cascade an
@@ -239,8 +243,12 @@ impl Snapshot {
     /// no walk can reach. A node another link still names is kept, and so is
     /// everything under it.
     ///
+    /// Reports the ids that actually left, in removal order: the cascade keeps
+    /// nodes the caller named, and takes nodes it did not.
+    ///
     /// Call it where the node is already unlinked.
-    pub fn remove_unreachable(&mut self, id: NodeId) {
+    pub fn remove_unreachable(&mut self, id: NodeId) -> Vec<NodeId> {
+        let mut removed = Vec::new();
         let mut pending = vec![id];
         while let Some(node) = pending.pop() {
             if node == self.root || self.links.iter().any(|l| l.child == node) {
@@ -252,9 +260,12 @@ impl Snapshot {
                 .filter(|l| l.parent == node)
                 .map(|l| l.child)
                 .collect();
-            self.remove_node(node);
+            if self.remove_node(node) {
+                removed.push(node);
+            }
             pending.extend(orphaned);
         }
+        removed
     }
 
     /// Removes `id` as a **delete** does: detached from every parent that names
@@ -584,6 +595,67 @@ mod tests {
             snap.parent_of(id(2)),
             Some(id(4)),
             "still linked from the surviving parent"
+        );
+    }
+
+    /// The report is what a caller prunes node-keyed state from, so it must be
+    /// the snapshot's own answer: everything the cascade took, nothing it kept,
+    /// and no id twice however often the caller names one.
+    #[test]
+    fn remove_unreachable_reports_the_ids_it_removed() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+        folder(&mut snap, id(1), id(2));
+        folder(&mut snap, id(2), id(3));
+        folder(&mut snap, id(0), id(4));
+        snap.link(id(4), id(3), 2);
+
+        snap.unlink(id(0), id(1));
+        let mut removed = snap.remove_unreachable(id(1));
+        removed.sort_unstable();
+        assert_eq!(
+            removed,
+            vec![id(1), id(2)],
+            "the cascade, less the node the surviving parent keeps"
+        );
+
+        assert!(
+            snap.remove_unreachable(id(1)).is_empty(),
+            "a node already gone was not removed by this call"
+        );
+        assert!(
+            snap.remove_unreachable(id(3)).is_empty(),
+            "nor is a node a live link keeps"
+        );
+    }
+
+    /// The reclamation loop walks a wire-ordered doomed set, and a preorder walk
+    /// puts a diamond's child ahead of one of its parents. The child is kept
+    /// while that parent stands, so the parent's own removal is the call that
+    /// owes the cascade — otherwise the child stays in the snapshot with no link
+    /// at all, present and unreachable.
+    #[test]
+    fn removing_a_diamonds_second_parent_takes_the_child_it_orphans() {
+        let mut snap = Snapshot::new(id(0));
+        folder(&mut snap, id(0), id(1));
+        folder(&mut snap, id(1), id(2));
+        folder(&mut snap, id(1), id(3));
+        // The diamond: both doomed folders name the same child.
+        snap.link(id(3), id(2), 2);
+
+        snap.unlink(id(0), id(1));
+        // Wire order: the child first, then the parent that still names it.
+        assert!(
+            snap.remove_unreachable(id(2)).is_empty(),
+            "a parent inside the doomed set still names it"
+        );
+        let mut removed = snap.remove_unreachable(id(1));
+        removed.sort_unstable();
+
+        assert_eq!(removed, vec![id(1), id(2), id(3)]);
+        assert!(
+            !snap.contains(id(2)),
+            "the child does not survive the parent that orphaned it"
         );
     }
 

@@ -14,12 +14,13 @@
 //! ([`crate::sync::bookkeeping`]). The key still says *that* this node has a
 //! delete pending; what the seal withholds is the write-plane names the
 //! detached subtree published under, which outlive the delete recording them.
-//! The seal wraps this codec rather than replacing it: [`FORMAT_V1`] versions
+//! The seal wraps this codec rather than replacing it: [`FORMAT_V2`] versions
 //! the journal's own grammar, independently of the ledger's.
 
 use cipherbox_core::content::{decode_content_cid_str, is_wellformed_content_cid};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::OwnerLocalKind;
+use std::collections::BTreeSet;
 
 use crate::facade::NodeId;
 use zeroize::Zeroizing;
@@ -44,12 +45,29 @@ const NODE_ID_LEN: usize = 16;
 
 /// The entry format tag. The staging store is shared with whatever build wrote
 /// it, so bytes that merely happen to parse must not read as a reclamation.
-const FORMAT_V1: u8 = 1;
+const FORMAT_V2: u8 = 2;
 
 /// Journal entries one drain pass replays. Each costs a store read and a
 /// registry batch, and a device that deleted a great deal offline holds one per
 /// target — the ceiling keeps a backlog from spending a whole tick.
 pub const MAX_JOURNAL_REPLAYS: usize = 32;
+
+/// Quarantine proofs one drain pass spends, across every entry it replays. Each
+/// costs a fresh resolve of one descendant's record, so a delete of a large
+/// subtree settles over several passes rather than holding one open.
+pub const MAX_QUARANTINE_PROOFS: usize = 32;
+
+/// Passes that may decide against one quarantined descendant before it is
+/// dropped unspent. This is what bounds the quarantine.
+///
+/// A descendant no pass can establish is reachable: an unlinked node joins no
+/// eager set, so a scope rotation leaves its record sealed at an epoch the gate
+/// refuses, for good. Without the ceiling that one entry holds its journal
+/// entry open and spends a proof slot on every pass thereafter, which starves
+/// the entries sorting behind it. Dropped, it keeps its name registered and its
+/// content pinned — the lawful side, and what the delete path did before the
+/// proof existed.
+pub const MAX_QUARANTINE_ATTEMPTS: u8 = 8;
 
 /// [`OwingRecord::Published`] as an entry stores it.
 const OWING_PUBLISHED: u8 = 0;
@@ -57,24 +75,62 @@ const OWING_PUBLISHED: u8 = 0;
 /// [`OwingRecord::Retired`] as an entry stores it.
 const OWING_RETIRED: u8 = 1;
 
+/// One descendant the delete detached, held until a later pass proves it.
+///
+/// The delete's own target is never one of these. The shortened parent is a
+/// record the delete pass itself resolved and republished, so the target's
+/// detachment is a published fact; a descendant's is a claim the walk makes off
+/// wire child refs, which any holder of the scope's write seed authors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Quarantined {
+    /// The detached node.
+    pub node: NodeId,
+    /// The name its record publishes under.
+    pub name: String,
+    /// The debt its history owes, as the owner's own manifest quoted it at
+    /// delete time — also the roots the proof re-checks the record against.
+    pub owed: Vec<OwedRetire>,
+    /// Passes that have decided against it, capped by
+    /// [`MAX_QUARANTINE_ATTEMPTS`]. A pass the proof budget never reached
+    /// counts none: it did no work.
+    pub attempts: u8,
+}
+
+impl Quarantined {
+    /// The version roots the manifest quoted — the proof's left operand.
+    #[must_use]
+    pub fn manifest_roots(&self) -> BTreeSet<String> {
+        self.owed.iter().map(|entry| entry.target.clone()).collect()
+    }
+}
+
 /// What a delete owes once its unlink is live: the names its detached subtree
-/// publishes under, and the retire debt the target's own history carries.
+/// publishes under, and the retire debt its history carries.
+///
+/// The owner's own device authors this at delete time and seals it under the
+/// owner's key, which is what makes it a manifest rather than a re-derivation:
+/// no writer can redirect a debt into it after the fact.
 ///
 /// Replayed as a residue rather than as a whole: a leg that lands leaves the
 /// entry, so no pass re-owes a debt the retire ledger already settled.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reclamation {
-    /// Each detached node and the name its record publishes under.
+    /// The delete's own target **first**, then every descendant a later pass
+    /// proved, each with the name its record publishes under. These names
+    /// retire now.
     pub doomed: Vec<(NodeId, String)>,
-    /// The registry debt the delete's own target owes.
+    /// The registry debt those nodes owe.
     pub owed: Vec<OwedRetire>,
+    /// The descendants still in quarantine: their names stay registered and
+    /// their content stays pinned until the proof holds for them.
+    pub quarantined: Vec<Quarantined>,
 }
 
 impl Reclamation {
     /// Whether there is anything to settle.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.doomed.is_empty() && self.owed.is_empty()
+        self.doomed.is_empty() && self.owed.is_empty() && self.quarantined.is_empty()
     }
 
     /// The names to retire, in enumeration order.
@@ -83,8 +139,14 @@ impl Reclamation {
         self.doomed.iter().map(|(_, name)| name.clone()).collect()
     }
 
-    /// Whether this is the entry its key names: the key's target is among the
-    /// detached nodes, and no other node owes a content debt through it.
+    /// Whether this is the entry its key names: the key's target heads the
+    /// doomed nodes, every debt is owed by a node whose name this entry retires,
+    /// and the target is never one of the quarantined descendants.
+    ///
+    /// Binding the debt to `doomed` rather than to the whole detached set is
+    /// what keeps a descendant's debt inside the proof path: the spent list is
+    /// paid without a proof, so a debt may only reach it once the proof has
+    /// moved its node there.
     ///
     /// The key scopes an entry; it does not authenticate one, and the owner tag
     /// it carries is the clear tag anyone reading the store already has. Without
@@ -93,9 +155,27 @@ impl Reclamation {
     /// re-reading the owing node, so nothing downstream would catch it.
     #[must_use]
     pub fn is_for(&self, target: NodeId) -> bool {
-        self.doomed.iter().any(|(node, _)| *node == target)
-            && self.owed.iter().all(|entry| entry.node == target.0)
+        let detached: BTreeSet<[u8; 16]> = self.doomed.iter().map(|(node, _)| node.0).collect();
+        self.doomed.first().is_some_and(|(node, _)| *node == target)
+            && self.owed.iter().all(|entry| detached.contains(&entry.node))
+            && self.quarantined.iter().all(|held| {
+                held.node != target && held.owed.iter().all(|entry| entry.node == held.node.0)
+            })
     }
+}
+
+/// The settle-time half of a quarantined descendant's proof
+/// (blueprint/engine.md "Retirement").
+///
+/// Exact rather than a subset test: a record that gained or lost a version
+/// since the owner's manifest is one a writer has moved on from. `None` is a
+/// record this pass could not establish, which refuses.
+#[must_use]
+pub fn record_matches_manifest(
+    manifest: &BTreeSet<String>,
+    resolved: Option<&BTreeSet<String>>,
+) -> bool {
+    resolved == Some(manifest)
 }
 
 /// One delete's journal key: the prefix, the owner tag, then the delete's
@@ -163,17 +243,37 @@ pub fn open_reclamation(seal: BookkeepingSeal<'_>, blob: &[u8]) -> Option<Reclam
 /// Zeroizing because the plaintext side of a sealed value is exactly what the
 /// tier exists to keep off the host ([`crate::sync::bookkeeping`]).
 fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Zeroizing<Vec<u8>>> {
-    let mut out = Zeroizing::new(vec![FORMAT_V1]);
+    let mut out = Zeroizing::new(vec![FORMAT_V2]);
     push_len(&mut out, reclamation.doomed.len())?;
     for (node, name) in &reclamation.doomed {
-        if IpnsName::parse(name).is_err() {
-            return Err(SeamError::new("doomed journal name is not an ipnsName"));
-        }
-        out.extend_from_slice(&node.0);
-        push_str(&mut out, name)?;
+        push_doomed(&mut out, *node, name)?;
     }
-    push_len(&mut out, reclamation.owed.len())?;
-    for entry in &reclamation.owed {
+    push_owed(&mut out, &reclamation.owed)?;
+    push_len(&mut out, reclamation.quarantined.len())?;
+    for held in &reclamation.quarantined {
+        push_doomed(&mut out, held.node, &held.name)?;
+        push_owed(&mut out, &held.owed)?;
+        if held.attempts >= MAX_QUARANTINE_ATTEMPTS {
+            return Err(SeamError::new("quarantine entry is past its attempts"));
+        }
+        out.push(held.attempts);
+    }
+    Ok(out)
+}
+
+/// One detached node and the name its record publishes under.
+fn push_doomed(out: &mut Vec<u8>, node: NodeId, name: &str) -> SeamResult<()> {
+    if IpnsName::parse(name).is_err() {
+        return Err(SeamError::new("doomed journal name is not an ipnsName"));
+    }
+    out.extend_from_slice(&node.0);
+    push_str(out, name)
+}
+
+/// One node's length-prefixed debt list.
+fn push_owed(out: &mut Vec<u8>, owed: &[OwedRetire]) -> SeamResult<()> {
+    push_len(out, owed.len())?;
+    for entry in owed {
         if !is_cid(&entry.target) {
             return Err(SeamError::new("doomed journal debt is not a content CID"));
         }
@@ -184,33 +284,61 @@ fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Zeroizing<Vec<u8>
             OwingRecord::Published => OWING_PUBLISHED,
             OwingRecord::Retired => OWING_RETIRED,
         });
-        push_str(&mut out, &entry.target)?;
+        push_str(out, &entry.target)?;
     }
-    Ok(out)
+    Ok(())
 }
 
 /// One encoded reclamation, or `None` for bytes this build did not write.
 #[must_use]
 fn decode_reclamation(bytes: &[u8]) -> Option<Reclamation> {
-    let mut rest = bytes.strip_prefix(&[FORMAT_V1][..])?;
+    let mut rest = bytes.strip_prefix(&[FORMAT_V2][..])?;
     let mut doomed = Vec::new();
     for _ in 0..take_len(&mut rest)? {
-        let node = NodeId(take_array::<NODE_ID_LEN>(&mut rest)?);
-        let name = take_str(&mut rest)?;
-        IpnsName::parse(&name).ok()?;
-        doomed.push((node, name));
+        doomed.push(take_doomed(&mut rest)?);
     }
-    let mut owed = Vec::new();
+    let owed = take_owed(&mut rest)?;
+    let mut quarantined = Vec::new();
     for _ in 0..take_len(&mut rest)? {
-        let node = take_array::<NODE_ID_LEN>(&mut rest)?;
-        let owed_bytes = u64::from_be_bytes(take_array::<8>(&mut rest)?);
-        let manifest_bytes = u64::from_be_bytes(take_array::<8>(&mut rest)?);
-        let owing = match take_array::<1>(&mut rest)?[0] {
+        let (node, name) = take_doomed(&mut rest)?;
+        let owed = take_owed(&mut rest)?;
+        let attempts = take_array::<1>(&mut rest)?[0];
+        if attempts >= MAX_QUARANTINE_ATTEMPTS {
+            return None;
+        }
+        quarantined.push(Quarantined {
+            node,
+            name,
+            owed,
+            attempts,
+        });
+    }
+    rest.is_empty().then_some(Reclamation {
+        doomed,
+        owed,
+        quarantined,
+    })
+}
+
+fn take_doomed(rest: &mut &[u8]) -> Option<(NodeId, String)> {
+    let node = NodeId(take_array::<NODE_ID_LEN>(rest)?);
+    let name = take_str(rest)?;
+    IpnsName::parse(&name).ok()?;
+    Some((node, name))
+}
+
+fn take_owed(rest: &mut &[u8]) -> Option<Vec<OwedRetire>> {
+    let mut owed = Vec::new();
+    for _ in 0..take_len(rest)? {
+        let node = take_array::<NODE_ID_LEN>(rest)?;
+        let owed_bytes = u64::from_be_bytes(take_array::<8>(rest)?);
+        let manifest_bytes = u64::from_be_bytes(take_array::<8>(rest)?);
+        let owing = match take_array::<1>(rest)?[0] {
             OWING_PUBLISHED => OwingRecord::Published,
             OWING_RETIRED => OwingRecord::Retired,
             _ => return None,
         };
-        let target = take_str(&mut rest)?;
+        let target = take_str(rest)?;
         if !is_cid(&target) {
             return None;
         }
@@ -222,7 +350,7 @@ fn decode_reclamation(bytes: &[u8]) -> Option<Reclamation> {
             manifest_bytes,
         });
     }
-    rest.is_empty().then_some(Reclamation { doomed, owed })
+    Some(owed)
 }
 
 /// Whether `target` is a content CID the retire ledger could key an entry by —
@@ -296,6 +424,12 @@ mod tests {
         Reclamation {
             doomed: vec![(node(1), name(1)), (node(2), name(2))],
             owed: vec![OwedRetire::whole_retired(node(1).0, cid(3), 4_096)],
+            quarantined: vec![Quarantined {
+                node: node(4),
+                name: name(4),
+                owed: vec![OwedRetire::whole_retired(node(4).0, cid(5), 512)],
+                attempts: 3,
+            }],
         }
     }
 
@@ -325,9 +459,19 @@ mod tests {
         let mut trailing = encoded.clone();
         trailing.push(0);
         assert_eq!(decode_reclamation(&trailing), None, "trailing bytes");
+        let mut spent = encode_reclamation(&sample()).expect("encode");
+        let at = spent.len() - 1;
+        spent[at] = MAX_QUARANTINE_ATTEMPTS;
+        assert_eq!(
+            decode_reclamation(&spent),
+            None,
+            "a quarantine planted past its attempts"
+        );
         let mut bad_class = encoded;
-        // The owing class is the byte before the last length-prefixed target.
-        let at = bad_class.len() - cid(3).len() - 3;
+        // The owing class is the byte before the last length-prefixed target,
+        // which the quarantined descendant's own debt carries; the attempt
+        // count is the one byte after it.
+        let at = bad_class.len() - cid(5).len() - 4;
         bad_class[at] = 9;
         assert_eq!(decode_reclamation(&bad_class), None, "an unknown class");
     }
@@ -339,20 +483,47 @@ mod tests {
     fn a_shape_the_registry_could_not_spend_is_refused_at_both_ends() {
         let long_name = Reclamation {
             doomed: vec![(node(1), "x".repeat(usize::from(u16::MAX) + 1))],
-            owed: Vec::new(),
+            ..Reclamation::default()
         };
         let bad_name = Reclamation {
             doomed: vec![(node(1), "not-an-ipns-name".to_owned())],
-            owed: Vec::new(),
+            ..Reclamation::default()
         };
         let bad_target = Reclamation {
             doomed: vec![(node(1), name(1))],
             owed: vec![OwedRetire::whole_retired(node(1).0, "not-a-cid".into(), 1)],
+            ..Reclamation::default()
+        };
+        let bad_quarantined_name = Reclamation {
+            quarantined: vec![Quarantined {
+                node: node(4),
+                name: "not-an-ipns-name".to_owned(),
+                owed: Vec::new(),
+                attempts: 0,
+            }],
+            ..Reclamation::default()
+        };
+        let bad_quarantined_target = Reclamation {
+            quarantined: vec![Quarantined {
+                node: node(4),
+                name: name(4),
+                owed: vec![OwedRetire::whole_retired(node(4).0, "not-a-cid".into(), 1)],
+                attempts: 0,
+            }],
+            ..Reclamation::default()
         };
         for (case, reclamation) in [
             ("a name over the length prefix", long_name),
             ("a name that is not an ipnsName", bad_name),
             ("a debt that is not a content CID", bad_target),
+            (
+                "a quarantined name that is not an ipnsName",
+                bad_quarantined_name,
+            ),
+            (
+                "a quarantined debt that is not a content CID",
+                bad_quarantined_target,
+            ),
         ] {
             assert!(
                 encode_reclamation(&reclamation).is_err(),
@@ -360,10 +531,26 @@ mod tests {
             );
         }
 
+        let spent = Reclamation {
+            quarantined: vec![Quarantined {
+                node: node(4),
+                name: name(4),
+                owed: Vec::new(),
+                attempts: MAX_QUARANTINE_ATTEMPTS,
+            }],
+            ..Reclamation::default()
+        };
+        assert!(
+            encode_reclamation(&spent).is_err(),
+            "a quarantine past its attempts is dropped, never written"
+        );
+
         // And the same shapes planted directly in the store read as no journal.
+        // The CID bytes alone: the attempt count is the byte after them, and one
+        // planted field per case keeps the refusal pinned to the check it names.
         let mut planted = encode_reclamation(&sample()).expect("encode");
-        let at = planted.len() - cid(3).len();
-        planted[at..].fill(b'!');
+        let end = planted.len() - 1;
+        planted[end - cid(5).len()..end].fill(b'!');
         assert_eq!(decode_reclamation(&planted), None, "a planted debt target");
     }
 
@@ -376,6 +563,7 @@ mod tests {
             !sample().is_for(node(2)),
             "a node the entry merely detaches is not its target"
         );
+        assert!(!sample().is_for(node(4)), "nor is one it quarantines");
         assert!(
             !sample().is_for(node(9)),
             "a target the entry does not name at all"
@@ -383,10 +571,82 @@ mod tests {
         let strangers_debt = Reclamation {
             doomed: vec![(node(1), name(1))],
             owed: vec![OwedRetire::whole_retired(node(9).0, cid(3), 1)],
+            ..Reclamation::default()
         };
         assert!(
             !strangers_debt.is_for(node(1)),
-            "no other node owes a content debt through this entry"
+            "a node this entry never detached owes nothing through it"
+        );
+        let redirected_quarantine = Reclamation {
+            doomed: vec![(node(1), name(1))],
+            quarantined: vec![Quarantined {
+                node: node(4),
+                name: name(4),
+                owed: vec![OwedRetire::whole_retired(node(9).0, cid(3), 1)],
+                attempts: 0,
+            }],
+            ..Reclamation::default()
+        };
+        assert!(
+            !redirected_quarantine.is_for(node(1)),
+            "a quarantined descendant owes only its own history"
+        );
+        let quarantined_target = Reclamation {
+            doomed: vec![(node(1), name(1))],
+            quarantined: vec![Quarantined {
+                node: node(1),
+                name: name(1),
+                owed: Vec::new(),
+                attempts: 0,
+            }],
+            ..Reclamation::default()
+        };
+        assert!(
+            !quarantined_target.is_for(node(1)),
+            "the delete's own target is never a quarantined descendant"
+        );
+        let unproven_debt = Reclamation {
+            doomed: vec![(node(1), name(1))],
+            owed: vec![OwedRetire::whole_retired(node(4).0, cid(3), 1)],
+            quarantined: vec![Quarantined {
+                node: node(4),
+                name: name(4),
+                owed: Vec::new(),
+                attempts: 0,
+            }],
+        };
+        assert!(
+            !unproven_debt.is_for(node(1)),
+            "a quarantined node's debt never reaches the list this pass spends"
+        );
+    }
+
+    /// The re-check gates an irreversible unpin, so anything but an exact match
+    /// refuses.
+    #[test]
+    fn the_record_re_check_holds_only_on_an_exact_match() {
+        let manifest: BTreeSet<String> = [cid(3), cid(5)].into_iter().collect();
+        let moved_on: BTreeSet<String> = [cid(3), cid(5), cid(6)].into_iter().collect();
+        let shortened: BTreeSet<String> = [cid(3)].into_iter().collect();
+
+        assert!(record_matches_manifest(&manifest, Some(&manifest)));
+        assert!(
+            !record_matches_manifest(&manifest, None),
+            "a record this pass could not establish refuses"
+        );
+        assert!(
+            !record_matches_manifest(&manifest, Some(&moved_on)),
+            "a version published since the manifest is a writer still using it"
+        );
+        assert!(
+            !record_matches_manifest(&manifest, Some(&shortened)),
+            "and so is a history that shortened under it"
+        );
+
+        let nothing = BTreeSet::new();
+        assert!(
+            record_matches_manifest(&nothing, Some(&nothing)),
+            "a folder quotes no root and spends nothing"
         );
     }
 

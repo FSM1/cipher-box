@@ -75,7 +75,8 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::{
-    MAX_JOURNAL_REPLAYS, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
+    MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, MAX_QUARANTINE_PROOFS, Quarantined, Reclamation,
+    doomed_journal_key, journalled_keys, open_reclamation, record_matches_manifest,
     seal_reclamation,
 };
 use crate::sync::model::{Snapshot, collation_key};
@@ -154,6 +155,9 @@ pub(crate) struct DrainReport {
     /// Ops removed as restore residue: already drained on this device, so the
     /// queue that holds them is older than the completion record.
     pub(crate) restore_residue: Vec<OpId>,
+    /// Delete targets this pass journaled, which the replay skips: their
+    /// quarantine waits on a poll tick this pass has not had ([`Settle`]).
+    pub(crate) journalled_deletes: Vec<NodeId>,
 }
 
 impl DrainReport {
@@ -493,9 +497,31 @@ struct DestAdd {
     modified_at: u64,
 }
 
+/// What one settle pass decided about a quarantined descendant.
+enum Verdict {
+    /// The proof held: the name and the debt are this delete's to spend.
+    Release,
+    /// A record this pass resolved does not answer to the owner's manifest, so
+    /// the node is one a writer has moved on from.
+    Refuse,
+    /// Nothing this pass established decides it. It waits, under
+    /// [`MAX_QUARANTINE_ATTEMPTS`].
+    Retry,
+}
+
+/// Whether a settle pass may decide the reclamation's quarantined descendants,
+/// and so what bounds the quarantine to one converged poll tick
+/// (blueprint/engine.md "Retirement").
+enum Settle<'a> {
+    /// The delete's own pass. The snapshot it just repainted is this device's
+    /// own work rather than a converged view of the plane.
+    Hold,
+    /// A later pass, with the proof budget it has left to spend.
+    Decide(&'a mut usize),
+}
+
 /// One node a delete detaches: the name its record publishes under, and the
-/// content roots this pass may owe for it — populated for the delete's own
-/// target only ([`Drain::enumerate_doomed`]).
+/// content roots its published history names ([`Drain::enumerate_doomed`]).
 struct Doomed {
     node: NodeId,
     name: IpnsName,
@@ -586,6 +612,8 @@ struct Published {
 struct Pass {
     epoch: u64,
     folders: Vec<(NodeId, FolderState)>,
+    /// Delete targets this pass wrote a doomed-name journal entry for.
+    journalled: Vec<NodeId>,
 }
 
 impl Pass {
@@ -650,7 +678,8 @@ where
         // it through every consumer below.
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
-        self.settle_journalled_deletes(seal, &owner, &staged).await;
+        self.settle_journalled_deletes(scope, seal, &owner, &staged, &report.journalled_deletes)
+            .await;
         if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, seal, &staged),
             &owner,
@@ -745,10 +774,11 @@ where
         }
 
         for applied in &rebased.applied {
-            if let Err(halt) = self
+            let published = self
                 .publish_applied(scope, &mut pass, applied, &rebased.rebased)
-                .await
-            {
+                .await;
+            report.journalled_deletes.append(&mut pass.journalled);
+            if let Err(halt) = published {
                 self.apply_valve(scope, applied.op_id, &applied.op, halt, attempts, report)
                     .await;
                 return Err(halt);
@@ -986,6 +1016,7 @@ where
         let mut pass = Pass {
             epoch,
             folders: Vec::new(),
+            journalled: Vec::new(),
         };
         self.repaint_folder(scope.root, &root.children, root.sequence, root.modified_at);
         pass.insert(scope.root, root);
@@ -1471,9 +1502,17 @@ where
         let seal = self.bookkeeping_seal(scope);
         let key = doomed_journal_key(&owner, target);
         let journalled = self.journal_doomed(seal, &key, target, &reclamation).await;
-        let residue = self.settle_reclamation(seal, &owner, &reclamation).await;
+        if journalled {
+            pass.journalled.push(target);
+        }
+        let residue = self
+            .settle_reclamation(scope, seal, &owner, &reclamation, Settle::Hold)
+            .await;
         match (journalled, residue) {
-            (true, residue) => self.update_journal(seal, &key, &reclamation, residue).await,
+            (true, residue) => {
+                self.update_journal(seal, &key, target, &reclamation, residue)
+                    .await
+            }
             // No durable entry to retry from, so the session-lived orphan set is
             // the only retry there is.
             (false, Some(residue)) => {
@@ -1516,6 +1555,7 @@ where
         &self,
         seal: BookkeepingSeal<'_>,
         key: &[u8],
+        target: NodeId,
         previous: &Reclamation,
         residue: Option<Reclamation>,
     ) {
@@ -1523,7 +1563,10 @@ where
             None => {
                 let _ = self.staging.remove_staged_bytes(key).await;
             }
-            Some(residue) if residue != *previous => {
+            // A residue the replay would refuse leaves the previous entry
+            // standing, which the replay still accepts, rather than an entry
+            // nothing can ever settle ([`Reclamation::is_for`]).
+            Some(residue) if residue != *previous && residue.is_for(target) => {
                 if let Ok(entry) = seal_reclamation(seal, &residue) {
                     let _ = self.staging.put_staged_bytes(key, &entry).await;
                 }
@@ -1544,16 +1587,30 @@ where
     /// read and an HPKE open, but no slot: nothing sweeps this prefix, so
     /// charging it one would starve every entry sorting behind it for good.
     /// Settled entries leave, so the rest are reached on the next pass.
+    ///
+    /// The quarantine proofs the pass may spend are bounded across every entry
+    /// together ([`MAX_QUARANTINE_PROOFS`]), because each one is a fresh resolve
+    /// of a descendant's own record: a delete of a large subtree settles over
+    /// several passes rather than holding one open.
     async fn settle_journalled_deletes(
         &self,
+        scope: &DrainScope<'_>,
         seal: BookkeepingSeal<'_>,
         owner: &[u8; 32],
         staged: &[Vec<u8>],
+        journalled_now: &[NodeId],
     ) {
         let mut replayed = 0usize;
+        let mut proofs = MAX_QUARANTINE_PROOFS;
         for (key, target) in journalled_keys(owner, staged) {
             if replayed == MAX_JOURNAL_REPLAYS {
                 break;
+            }
+            // This pass wrote and settled that entry moments ago, and its
+            // quarantine is waiting on the poll tick this pass has not had. It
+            // spends no slot either: no work is skipped, only repeated.
+            if journalled_now.contains(&target) {
+                continue;
             }
             let Ok(Some(entry)) = self.staging.staged_bytes(&key).await else {
                 continue;
@@ -1563,8 +1620,17 @@ where
                 continue;
             };
             replayed += 1;
-            let residue = self.settle_reclamation(seal, owner, &reclamation).await;
-            self.update_journal(seal, &key, &reclamation, residue).await;
+            let residue = self
+                .settle_reclamation(
+                    scope,
+                    seal,
+                    owner,
+                    &reclamation,
+                    Settle::Decide(&mut proofs),
+                )
+                .await;
+            self.update_journal(seal, &key, target, &reclamation, residue)
+                .await;
         }
     }
 
@@ -1574,16 +1640,12 @@ where
     /// Fail-closed on structure, best-effort per file — v1's locked law. A
     /// folder this pass cannot read hides an unknown subtree, and unlinking
     /// above it would strand records nothing can ever name again; a file whose
-    /// own record will not open still has its name retired, since the name is
-    /// derived rather than read.
+    /// own record will not open contributes no debt, since its history is
+    /// exactly what this pass failed to read.
     ///
-    /// Only `target` carries a content debt, and only when it is a file. A
-    /// descendant is reached through a `ChildRef` — wire data any holder of the
-    /// scope's write seed authors — and nothing in the record binds a node to
-    /// the folder naming it, so this walk cannot prove a descendant is reachable
-    /// only from here. Retiring a derived name costs an availability lapse the
-    /// pin set can revive from; unpinning is the irreversible half, and it waits
-    /// for a reachability proof this walk does not have.
+    /// What each node's history names is a quote, not yet a debt. Only the
+    /// target's own debt is spent on this pass; [`Drain::owed_by_delete`] holds
+    /// every descendant for the proof ([`Quarantined`]).
     async fn enumerate_doomed(
         &self,
         scope: &DrainScope<'_>,
@@ -1617,14 +1679,13 @@ where
                         }
                         // One version this device cannot frame costs that
                         // version's debt, never the rest of the history's.
-                        ReadBody::File { versions, .. } if node == target => versions
+                        ReadBody::File { versions, .. } => versions
                             .iter()
                             .filter_map(|version| {
                                 self.pinned_history(core::slice::from_ref(version)).ok()
                             })
                             .flatten()
                             .collect(),
-                        ReadBody::File { .. } => Vec::new(),
                     };
                     (loaded.name, versions)
                 }
@@ -1657,34 +1718,51 @@ where
         Ok(doomed)
     }
 
-    /// What the unlink just earned: the subtree's names, and the target's own
-    /// content debt.
+    /// The owner-authored doomed manifest this delete just earned: the target's
+    /// own name and content debt, and every descendant held in quarantine.
     ///
-    /// The debt is withheld unless the base agrees the target is now
-    /// unlinked: [`Self::publish_delete`] read and repainted the parent's own
-    /// listing on the way in, so for the target — and only for the target —
-    /// that answer is drawn from a record this pass actually resolved.
+    /// The target's debt is withheld unless the base agrees it is now unlinked:
+    /// [`Self::publish_delete`] read and repainted the parent's own listing on
+    /// the way in, so for the target — and only for the target — that answer is
+    /// drawn from a record this pass actually resolved. Every other node's
+    /// detachment is unproven, so its name and its debt both wait for
+    /// [`Drain::prove_quarantine`] on a later pass.
     fn owed_by_delete(&self, target: NodeId, doomed: &[Doomed]) -> Reclamation {
-        let owed = doomed
-            .iter()
-            .filter(|node| node.node == target && self.base.borrow().links_to(target).is_empty())
-            .flat_map(|node| {
-                node.versions.iter().map(|version| {
+        let unlinked = self.base.borrow().links_to(target).is_empty();
+        let mut reclamation = Reclamation::default();
+        for node in doomed {
+            // A version list is wire data and may name one root twice. The
+            // ledger is keyed by target, so the second naming owes nothing the
+            // first does not carry.
+            let mut quoted: BTreeSet<&str> = BTreeSet::new();
+            let owed: Vec<OwedRetire> = node
+                .versions
+                .iter()
+                .filter(|version| quoted.insert(version.content_cid.as_str()))
+                .map(|version| {
                     OwedRetire::whole_retired(
                         node.node.0,
                         version.content_cid.clone(),
                         version.pinned_bytes,
                     )
                 })
-            })
-            .collect();
-        Reclamation {
-            doomed: doomed
-                .iter()
-                .map(|node| (node.node, node.name.as_str().to_owned()))
-                .collect(),
-            owed,
+                .collect();
+            let name = node.name.as_str().to_owned();
+            if node.node == target {
+                reclamation.doomed.push((node.node, name));
+                if unlinked {
+                    reclamation.owed = owed;
+                }
+            } else {
+                reclamation.quarantined.push(Quarantined {
+                    node: node.node,
+                    name,
+                    owed,
+                    attempts: 0,
+                });
+            }
         }
+        reclamation
     }
 
     /// Settle one journaled reclamation, returning what it still owes — `None`
@@ -1701,45 +1779,204 @@ where
     /// no-op on a repeat, and the local drops are removals.
     async fn settle_reclamation(
         &self,
+        scope: &DrainScope<'_>,
         seal: BookkeepingSeal<'_>,
         owner: &[u8; 32],
         reclamation: &Reclamation,
+        settle: Settle<'_>,
     ) -> Option<Reclamation> {
-        if !reclamation.owed.is_empty()
+        let (proven, held_over) = match settle {
+            Settle::Hold => (Vec::new(), reclamation.quarantined.clone()),
+            Settle::Decide(budget) => {
+                self.prove_quarantine(scope, &reclamation.quarantined, budget)
+                    .await
+            }
+        };
+        let mut owed = reclamation.owed.clone();
+        owed.extend(proven.iter().flat_map(|entry| entry.owed.iter().cloned()));
+        if !owed.is_empty()
             && StagingRetireLedger::new(self.staging, seal)
-                .owe(owner, &reclamation.owed)
+                .owe(owner, &owed)
                 .await
                 .is_err()
         {
             // Leaving the bytes pinned is the lawful side of this failure: the
             // unlink is already live, and an unpin the ledger never recorded is
-            // one nothing can account for.
+            // one nothing can account for. The quarantine goes back whole, so a
+            // descendant this pass proved is proved again rather than lost.
             return Some(reclamation.clone());
         }
-        let retired = retire(self.api, &reclamation.names()).await.is_ok();
+        let mut doomed = reclamation.doomed.clone();
+        doomed.extend(proven.into_iter().map(|entry| (entry.node, entry.name)));
+        let names: Vec<String> = doomed.iter().map(|(_, name)| name.clone()).collect();
+        let retired = retire(self.api, &names).await.is_ok();
         // Whatever the registry answered, this device must stop re-PUTting
         // records no parent references — but only those. The walk enumerates a
-        // subtree it cannot prove is reached from here alone, and the shortened
-        // parent's own repaint has already pruned what is unreachable
-        // ([`Snapshot::remove_unreachable`]), so a node still linked is one a
-        // surviving parent names and its record has to stay alive.
-        let mut held = self.held.borrow_mut();
-        let mut base = self.base.borrow_mut();
-        for (node, _) in &reclamation.doomed {
-            if !base.links_to(*node).is_empty() {
-                continue;
+        // subtree it cannot prove is reached from here alone, so a node still
+        // linked is one a surviving parent names and its record has to stay
+        // alive.
+        //
+        // The removal cascades because the walk is preorder over wire child
+        // refs: a diamond puts the shared child ahead of one of its parents,
+        // and a shallow drop of that parent would leave the child in the
+        // snapshot with no link at all.
+        {
+            let mut held = self.held.borrow_mut();
+            let mut base = self.base.borrow_mut();
+            let mut forget = |node: NodeId| {
+                held.remove(&HeldKey::node(node.0));
+                // A scope root's node id is its scope id, so a reclaimed root
+                // also owns the pointer entry under those bytes; a non-root id
+                // matches nothing in that plane.
+                held.remove(&HeldKey::scope_pointer(node.0));
+            };
+            let detached = reclamation
+                .doomed
+                .iter()
+                .map(|(node, _)| *node)
+                .chain(reclamation.quarantined.iter().map(|entry| entry.node));
+            for node in detached {
+                if !base.links_to(node).is_empty() {
+                    continue;
+                }
+                // A replay settles over a base rebuilt without the doomed node,
+                // so the cascade reports nothing for it while its held entry is
+                // still owed; what the cascade takes is owed from the report.
+                forget(node);
+                for dropped in base.remove_unreachable(node) {
+                    forget(dropped);
+                }
             }
-            held.remove(&HeldKey::node(node.0));
-            // A scope root's node id is its scope id, so a reclaimed root also
-            // owns the pointer entry under those bytes; a non-root id matches
-            // nothing in that plane.
-            held.remove(&HeldKey::scope_pointer(node.0));
-            base.remove_node(*node);
         }
-        (!retired).then(|| Reclamation {
-            doomed: reclamation.doomed.clone(),
-            owed: Vec::new(),
-        })
+        match (retired, held_over.is_empty()) {
+            (true, true) => None,
+            // The names retired and the debt is paid, so only the quarantine is
+            // left. The head — the delete's own target — rides with it because
+            // the entry's key scopes it but does not authenticate it
+            // ([`Reclamation::is_for`]); re-sending one retired name is the cost.
+            (true, false) => Some(Reclamation {
+                doomed: reclamation.doomed.iter().take(1).cloned().collect(),
+                owed: Vec::new(),
+                quarantined: held_over,
+            }),
+            (false, _) => Some(Reclamation {
+                doomed,
+                owed: Vec::new(),
+                quarantined: held_over,
+            }),
+        }
+    }
+
+    /// Decide one pass's worth of quarantined descendants: those the proof
+    /// releases, and those the pass's proof budget did not reach. What neither
+    /// holds is refused for good — its name stays registered and its content
+    /// stays pinned, which is what an unproven reclamation costs.
+    ///
+    /// Two conditions release, both fail-closed. The converged snapshot must no
+    /// longer reach the node, which is decided off local state alone so a
+    /// surviving namer this device renders never spends a proof; and the node's
+    /// freshly resolved record must still match the owner's manifest
+    /// ([`record_matches_manifest`]).
+    async fn prove_quarantine(
+        &self,
+        scope: &DrainScope<'_>,
+        quarantined: &[Quarantined],
+        budget: &mut usize,
+    ) -> (Vec<Quarantined>, Vec<Quarantined>) {
+        if quarantined.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        // One root read serves every proof this entry spends. A root this pass
+        // cannot establish decides nothing: the whole quarantine waits rather
+        // than settling against an epoch this pass never read.
+        let Ok((_, epoch)) = self.load_scope_root(scope).await else {
+            return (Vec::new(), quarantined.to_vec());
+        };
+        let mut proven = Vec::new();
+        let mut held_over = Vec::new();
+        for entry in quarantined {
+            let verdict = if self.base.borrow().contains(entry.node) {
+                // Decided off local state alone, so a surviving namer this
+                // device renders spends no proof. A link that is merely stale is
+                // why it retries rather than refuses outright.
+                Verdict::Retry
+            } else if *budget == 0 {
+                // The budget bounds the resolves one pass spends, never the
+                // entry: one it does not reach waits with its attempts intact.
+                held_over.push(entry.clone());
+                continue;
+            } else {
+                *budget -= 1;
+                self.decide_quarantined(scope, epoch, entry).await
+            };
+            match verdict {
+                Verdict::Release => proven.push(entry.clone()),
+                Verdict::Refuse => {}
+                Verdict::Retry => {
+                    let attempts = entry.attempts.saturating_add(1);
+                    if attempts < MAX_QUARANTINE_ATTEMPTS {
+                        held_over.push(Quarantined {
+                            attempts,
+                            ..entry.clone()
+                        });
+                    }
+                }
+            }
+        }
+        (proven, held_over)
+    }
+
+    /// One quarantined descendant's verdict, off its own freshly resolved
+    /// record. Only a record this pass established decides anything.
+    ///
+    /// A folder quotes no root, so this half always holds for one and its
+    /// release rests on the snapshot alone. A folder owns no pins, so what that
+    /// costs is a name retire, never an unpin.
+    async fn decide_quarantined(
+        &self,
+        scope: &DrainScope<'_>,
+        epoch: u64,
+        entry: &Quarantined,
+    ) -> Verdict {
+        let resolved = self.resolved_version_roots(scope, epoch, entry.node).await;
+        if record_matches_manifest(&entry.manifest_roots(), resolved.as_ref()) {
+            return Verdict::Release;
+        }
+        match resolved {
+            // A record that resolved and disagreed is a writer that moved on,
+            // which no later pass takes back.
+            Some(_) => Verdict::Refuse,
+            None => Verdict::Retry,
+        }
+    }
+
+    /// The version roots one node's **freshly resolved** record names — the
+    /// settle-time half of the quarantine proof.
+    ///
+    /// Nocache, because a cached body is the very state the manifest already
+    /// quoted; the proof needs what the plane serves now. A folder reaches no
+    /// content and answers the empty set. `None` is a record, or a version
+    /// framing, this pass could not establish, and it refuses the proof.
+    async fn resolved_version_roots(
+        &self,
+        scope: &DrainScope<'_>,
+        epoch: u64,
+        node: NodeId,
+    ) -> Option<BTreeSet<String>> {
+        let loaded = self
+            .load_child_node(scope, epoch, node, ResolveMode::NoCache)
+            .await
+            .ok()?;
+        let ReadBody::File { versions, .. } = loaded.body else {
+            return Some(BTreeSet::new());
+        };
+        Some(
+            self.pinned_history(&versions)
+                .ok()?
+                .into_iter()
+                .map(|version| version.content_cid)
+                .collect(),
+        )
     }
 
     /// The one plan behind rename, relink, and move: relocate a child ref,
