@@ -3370,6 +3370,78 @@ fn a_delete_leaves_a_node_the_surviving_parent_still_names() {
     );
 }
 
+/// Two prunes reach a reclaimed subtree — the shortened parent's own repaint,
+/// and the reclamation's own loop — and one invariant binds both: no node may
+/// survive in the snapshot that no walk reaches, or a host holds a live inode on
+/// a path nothing can spell. A diamond is what breaks an order-dependent prune,
+/// because the doomed walk is preorder over wire child refs and puts the shared
+/// child ahead of one of its parents.
+#[test]
+fn a_reclamation_over_a_diamond_strands_no_child_in_the_snapshot() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    for name in ["left", "right"] {
+        block_on(engine.command(Command::Create {
+            parent: photos,
+            name: name.into(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let left = child_id(&engine, photos, "left");
+    let right = child_id(&engine, photos, "right");
+    block_on(engine.command(Command::Create {
+        parent: left,
+        name: "shared".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let shared = child_id(&engine, left, "shared");
+
+    // The second edge of the diamond: `right` names the same node, so both
+    // parents of `shared` are inside the subtree the delete dooms.
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        right,
+        child_ref(shared.0, "shared", CoreNodeKind::Folder),
+    );
+    block_on(engine.command(Command::SetFocus { node: Some(right) })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        listed_names(&engine, right),
+        ["shared"],
+        "both links are in gate-passing state"
+    );
+
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.view()).unwrap();
+    for (node, what) in [
+        (photos, "the delete's own target"),
+        (left, "the parent the walk reached first"),
+        (right, "the parent that held the shared child"),
+        (shared, "the child both doomed parents named"),
+    ] {
+        assert!(view.attrs(node).is_none(), "{what} leaves the snapshot");
+    }
+}
+
 /// A delete can ack its unlink and still lose the confirm — a crash in the
 /// window, or a registry that will not answer. Nothing local survives to
 /// re-derive the doomed set from: the parent no longer names the target, so the

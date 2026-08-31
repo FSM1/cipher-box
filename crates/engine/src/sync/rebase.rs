@@ -1986,7 +1986,7 @@ mod tests {
     #[test]
     fn a_move_already_landed_drops_as_satisfied() {
         let mut base = replace_tree(1);
-        base.remove_node(id(3));
+        base.remove_deleted(id(3));
         base.unlink(id(0), id(2));
         base.link(id(1), id(2), 2);
         base.node_mut(id(2)).unwrap().rename("target.txt");

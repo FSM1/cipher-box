@@ -1719,22 +1719,34 @@ where
         let retired = retire(self.api, &reclamation.names()).await.is_ok();
         // Whatever the registry answered, this device must stop re-PUTting
         // records no parent references — but only those. The walk enumerates a
-        // subtree it cannot prove is reached from here alone, and the shortened
-        // parent's own repaint has already pruned what is unreachable
-        // ([`Snapshot::remove_unreachable`]), so a node still linked is one a
-        // surviving parent names and its record has to stay alive.
+        // subtree it cannot prove is reached from here alone, so a node still
+        // linked is one a surviving parent names and its record has to stay
+        // alive.
+        //
+        // The removal cascades because the walk is preorder over wire child
+        // refs: a diamond puts the shared child ahead of one of its parents,
+        // and a shallow drop of that parent would leave the child in the
+        // snapshot with no link at all.
         let mut held = self.held.borrow_mut();
         let mut base = self.base.borrow_mut();
-        for (node, _) in &reclamation.doomed {
-            if !base.links_to(*node).is_empty() {
-                continue;
-            }
+        let mut forget = |node: NodeId| {
             held.remove(&HeldKey::node(node.0));
             // A scope root's node id is its scope id, so a reclaimed root also
             // owns the pointer entry under those bytes; a non-root id matches
             // nothing in that plane.
             held.remove(&HeldKey::scope_pointer(node.0));
-            base.remove_node(*node);
+        };
+        for (node, _) in &reclamation.doomed {
+            if !base.links_to(*node).is_empty() {
+                continue;
+            }
+            // A replay settles over a base rebuilt without the doomed node, so
+            // the cascade reports nothing for it while its held entry is still
+            // owed; everything the cascade does take is owed from the report.
+            forget(*node);
+            for dropped in base.remove_unreachable(*node) {
+                forget(dropped);
+            }
         }
         (!retired).then(|| Reclamation {
             doomed: reclamation.doomed.clone(),
