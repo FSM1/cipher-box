@@ -1,5 +1,7 @@
 //! Shared content-plane size limits.
 
+use cipherbox_core::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
+
 use super::chunk::SEALED_LEAF_OVERHEAD;
 use super::profile::ContentProfile;
 
@@ -45,6 +47,24 @@ const CHILD_SCOPE_REF_WIRE_BYTES: usize = 128;
 /// structure signature.
 const HISTORY_LINK_WIRE_BYTES: usize = 256;
 
+/// The widest `sealed` blob a re-seal retains on a history link.
+///
+/// A link this engine mints is a fixed-width seal of a fixed-width payload, so
+/// this bound never drops one. The carried set is attacker-influenced, though —
+/// the adoption gate authenticates each link's signature and nothing about its
+/// length — so a re-seal that carried one verbatim would let a committed write
+/// grantee inflate a scope past the section budget and stall its re-key for
+/// good. An over-long link is dropped rather than refused, exactly as an
+/// over-long write history link already is
+/// ([`MAX_WRITE_HISTORY_LINK_BYTES`](cipherbox_core::seal::MAX_WRITE_HISTORY_LINK_BYTES)).
+pub(crate) const MAX_RETAINED_HISTORY_LINK_BYTES: usize = 128;
+
+/// The retained link, its structure signature, and 32 bytes for the det-CBOR
+/// map framing around the two must fit the per-link budget above, or the
+/// section budget is not a bound. Compile-time, so it cannot reach a release
+/// build (AGENTS.md rule 8).
+const _: () = assert!(MAX_RETAINED_HISTORY_LINK_BYTES + ED_SIG_LEN + 32 <= HISTORY_LINK_WIRE_BYTES);
+
 /// The owner blobs, the ascent link, the write history link, and the map
 /// framing around every run — none of them count-driven, all of them small.
 const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
@@ -60,10 +80,12 @@ const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
 /// scope rotation-proof.
 ///
 /// Derived from the frozen count bounds rather than picked, so a change to any
-/// of them moves the budget with it. The counts are frozen; the per-item sizes
-/// are not, because a re-seal carries each row's and each child ref's preserved
-/// unknown map forward. A section over the budget is therefore a **retryable**
-/// refusal on the record the next pass re-resolves, never a trust verdict.
+/// of them moves the budget with it. Every per-item size is bounded too: the
+/// re-seal drops each ledger row's and each child ref's preserved unknown map
+/// and bounds a retained history link's `sealed`
+/// ([`MAX_RETAINED_HISTORY_LINK_BYTES`]), so no attacker-chosen run rides
+/// forward. A section over the budget is still a **retryable** refusal on the
+/// record the next pass re-resolves, never a trust verdict.
 pub(crate) const MAX_RESEALABLE_SECTION_BYTES: usize = cipherbox_core::seal::MAX_GRANT_BLOBS
     * (GRANT_BLOB_WIRE_BYTES + LEDGER_ROW_WIRE_BYTES)
     + cipherbox_core::seal::MAX_DIRECT_CHILD_SCOPES * CHILD_SCOPE_REF_WIRE_BYTES

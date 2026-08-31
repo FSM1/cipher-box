@@ -6368,10 +6368,14 @@ mod tests {
     }
 
     #[test]
-    fn the_re_mint_carries_each_grants_preserved_unknown_fields_forward() {
-        // The two halves come from different signed structures — the commitment
-        // entry from the owner-signed set, the ledger row from the write body —
-        // so each is asserted under its own key.
+    fn the_re_mint_carries_the_owner_signed_half_and_drops_the_write_grantees() {
+        // The two halves come from different signed structures, and only one of
+        // them has an owner behind it. The commitment entry rides the
+        // owner-signed set, so dropping it would discard what another version
+        // committed. The ledger row is authored by any committed write grantee
+        // under no owner signature, and its size is what the re-seal budget
+        // cannot bound, so the re-mint drops it — a rotation is not a republish
+        // and owes no byte stability (FSM1/cipher-box-next#27 D10).
         let field = |key: &str, v: u64| -> PreservedFields {
             [(key.to_string(), Value::Unsigned(v))]
                 .into_iter()
@@ -6423,10 +6427,9 @@ mod tests {
             .iter()
             .find(|e| e.tag == tag)
             .expect("the grantee's re-minted ledger row");
-        assert_eq!(
-            row.unknown.get("zl"),
-            Some(&Value::Unsigned(9)),
-            "and the ledger half is carried under no owner signature at all"
+        assert!(
+            row.unknown.is_empty(),
+            "the ledger half answers to no owner signature and must not ride forward"
         );
     }
 
