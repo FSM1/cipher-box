@@ -177,6 +177,7 @@ struct ProbeJson {
     struct_tag: u8,
     index: u64,
     ipns_name: String,
+    identity_pk: String,
 }
 
 #[derive(Serialize)]
@@ -3659,6 +3660,7 @@ fn build_kdf_edges() -> KdfEdgesFile {
     let struct_tag = 0x01u8;
     let index = 0u64;
     let ipns_name = b"cipherbox/v2/scope-root".to_vec();
+    let identity_pk: [u8; 33] = std::array::from_fn(|i| (0x80 + i) as u8);
 
     let probe = EdgeProbe {
         seed: &seed,
@@ -3666,6 +3668,7 @@ fn build_kdf_edges() -> KdfEdgesFile {
         struct_tag,
         index,
         ipns_name: &ipns_name,
+        identity_pk: &identity_pk,
     };
     let outputs = kdf::edge_probe_outputs(&probe);
     assert_eq!(outputs.len(), EDGES.len(), "probe must cover every edge");
@@ -3710,6 +3713,7 @@ fn build_kdf_edges() -> KdfEdgesFile {
             struct_tag,
             index,
             ipns_name: hexstr(&ipns_name),
+            identity_pk: hexstr(&identity_pk),
         },
         edges,
     }

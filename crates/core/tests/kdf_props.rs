@@ -40,8 +40,16 @@ proptest! {
         struct_tag in any::<u8>(),
         index in any::<u64>(),
         ipns_name in prop::collection::vec(any::<u8>(), 0..40),
+        identity_pk in any::<[u8; 33]>(),
     ) {
-        let probe = EdgeProbe { seed: &seed, id: &id, struct_tag, index, ipns_name: &ipns_name };
+        let probe = EdgeProbe {
+            seed: &seed,
+            id: &id,
+            struct_tag,
+            index,
+            ipns_name: &ipns_name,
+            identity_pk: &identity_pk,
+        };
         let out = edge_probe_outputs(&probe);
         prop_assert_eq!(out.len(), EDGES.len());
         let distinct: BTreeSet<[u8; 32]> = out.iter().map(|o| o.output).collect();
@@ -62,8 +70,16 @@ proptest! {
         struct_tag in any::<u8>(),
         index in any::<u64>(),
         ipns_name in prop::collection::vec(any::<u8>(), 0..40),
+        identity_pk in any::<[u8; 33]>(),
     ) {
-        let probe = EdgeProbe { seed: &seed, id: &id, struct_tag, index, ipns_name: &ipns_name };
+        let probe = EdgeProbe {
+            seed: &seed,
+            id: &id,
+            struct_tag,
+            index,
+            ipns_name: &ipns_name,
+            identity_pk: &identity_pk,
+        };
         prop_assert_eq!(edge_probe_outputs(&probe), edge_probe_outputs(&probe));
     }
 }

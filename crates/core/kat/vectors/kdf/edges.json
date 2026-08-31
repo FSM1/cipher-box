@@ -4,7 +4,8 @@
     "id": "404142434445464748494a4b4c4d4e4f",
     "structTag": 1,
     "index": 0,
-    "ipnsName": "636970686572626f782f76322f73636f70652d726f6f74"
+    "ipnsName": "636970686572626f782f76322f73636f70652d726f6f74",
+    "identityPk": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0"
   },
   "edges": [
     {
@@ -132,6 +133,18 @@
       "context": "cipherbox/v2/genesis-write-scope-seed",
       "inputLayout": "derive_key(ctx, loginSecret[var])",
       "output": "d6632e3ba84f61f9cd686ab420a51f93b0b668838233f041b1f5762c3b5e0cd8"
+    },
+    {
+      "name": "contact-label-seed",
+      "context": "cipherbox/v2/contact-label-seed",
+      "inputLayout": "derive_key(ctx, loginSecret[var])",
+      "output": "164442a7c2d171ba261aa1bbf8f4c390a52442498312f5d22454a60c9c736b9b"
+    },
+    {
+      "name": "contact-label",
+      "context": "cipherbox/v2/contact-label",
+      "inputLayout": "keyed_hash(derive_key(ctx, contactLabelSeed[32]), identityPk[33])",
+      "output": "2f573dbf0c992c7538d4601f599c21ceafa1490ad509438b425f78f979ab642c"
     }
   ],
   "genesisRootName": {

@@ -604,6 +604,13 @@ in the KAT manifest.
 | bin-held-key             | login secret, node id, deletedAt                                | the key one soft delete re-keys a subtree under |
 | genesis-read-scope-seed  | login secret                                                    | the genesis scope's read (override) seed        |
 | genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                      |
+| contact-label-seed       | login secret                                                    | contactLabelSeed (device-only)                  |
+| contact-label            | contactLabelSeed, contact identityPk                            | a local label for a contact identity            |
+
+The contact-label pair is the one edge whose output never reaches the wire: the
+label keys durable device-local state that would otherwise name a contact in the
+clear, and the seed is the account's alone, so no observer who holds the identity
+key can recompute it.
 
 The three bin edges are the owner's alone: no grant carries them, which is what
 makes a soft delete cut a grantee's access that key regression cannot undo

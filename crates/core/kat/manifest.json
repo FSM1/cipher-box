@@ -64,7 +64,7 @@
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
-    "count": 21,
+    "count": 23,
     "edges": [
       {
         "name": "node-seed",
@@ -170,6 +170,16 @@
         "name": "genesis-write-scope-seed",
         "context": "cipherbox/v2/genesis-write-scope-seed",
         "inputLayout": "derive_key(ctx, loginSecret[var])"
+      },
+      {
+        "name": "contact-label-seed",
+        "context": "cipherbox/v2/contact-label-seed",
+        "inputLayout": "derive_key(ctx, loginSecret[var])"
+      },
+      {
+        "name": "contact-label",
+        "context": "cipherbox/v2/contact-label",
+        "inputLayout": "keyed_hash(derive_key(ctx, contactLabelSeed[32]), identityPk[33])"
       }
     ]
   },

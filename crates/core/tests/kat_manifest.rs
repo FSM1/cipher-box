@@ -1150,6 +1150,7 @@ struct ProbeJson {
     struct_tag: u8,
     index: u64,
     ipns_name: String,
+    identity_pk: String,
 }
 
 #[derive(Deserialize)]
@@ -2455,6 +2456,8 @@ const ALL_EDGE_NAMES: &[&str] = &[
     "bin-held-key",
     "genesis-read-scope-seed",
     "genesis-write-scope-seed",
+    "contact-label-seed",
+    "contact-label",
 ];
 
 #[test]
@@ -2507,12 +2510,16 @@ fn kdf_edge_outputs_are_frozen_and_pairwise_separated() {
         .try_into()
         .expect("probe id is 16 bytes");
     let ipns_name = unhex("probe.ipnsName", &file.probe.ipns_name);
+    let identity_pk: [u8; 33] = unhex("probe.identityPk", &file.probe.identity_pk)
+        .try_into()
+        .expect("probe identity key is 33 bytes");
     let probe = EdgeProbe {
         seed: &seed,
         id: &id,
         struct_tag: file.probe.struct_tag,
         index: file.probe.index,
         ipns_name: &ipns_name,
+        identity_pk: &identity_pk,
     };
     let computed = kdf::edge_probe_outputs(&probe);
     assert_eq!(computed.len(), file.edges.len());
