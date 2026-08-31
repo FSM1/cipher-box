@@ -36,6 +36,7 @@ function actions(): ShellActions {
     google: vi.fn(),
     sendEmailCode: vi.fn(),
     submitEmailCode: vi.fn(),
+    submitRecoveryPhrase: vi.fn(),
     logout: vi.fn(),
   };
 }
@@ -320,7 +321,7 @@ describe('the front door', () => {
 
   // A screen that stopped showing this is a licence condition dropped, not a
   // cosmetic regression.
-  it.each(['starting', 'signedOut', 'signedIn'] as const)(
+  it.each(['starting', 'signedOut', 'signedIn', 'recovery'] as const)(
     'shows the WinFsp notice and its project address while %s',
     (phase) => {
       renderShell(root, model({ phase, vault: vaultStatus() }), actions());
@@ -331,6 +332,63 @@ describe('the front door', () => {
       expect(footer?.textContent).toContain('https://github.com/winfsp/winfsp');
     }
   );
+
+  it('offers the recovery phrase when a sign-in stops at the factor policy', () => {
+    renderShell(root, model({ phase: 'recovery' }), actions());
+    const panel = root.querySelector('[data-panel="recovery"]');
+    expect(panel).not.toBeNull();
+    expect(panel?.querySelector('[name="recoveryPhrase"]')).not.toBeNull();
+    // The held login is not a front door: offering a method here would start a
+    // second sign-in over the one waiting for the phrase.
+    expect(root.querySelector('[data-method="google"]')).toBeNull();
+    expect(root.querySelector('[data-method="email"]')).toBeNull();
+  });
+
+  it('hands the typed phrase to the shell', () => {
+    const handlers = actions();
+    renderShell(root, model({ phase: 'recovery' }), handlers);
+    const field = root.querySelector<HTMLTextAreaElement>('[name="recoveryPhrase"]')!;
+    field.value = 'a typed recovery phrase';
+
+    root.querySelector<HTMLFormElement>('[data-method="recoveryPhrase"]')!.requestSubmit();
+
+    expect(handlers.submitRecoveryPhrase).toHaveBeenCalledWith('a typed recovery phrase');
+  });
+
+  // A phrase left in the field outlives the sign-in it answered, and every
+  // redraw of this window would carry it.
+  it('blanks the field as it reads it', () => {
+    renderShell(root, model({ phase: 'recovery' }), actions());
+    const field = root.querySelector<HTMLTextAreaElement>('[name="recoveryPhrase"]')!;
+    field.value = 'a typed recovery phrase';
+
+    root.querySelector<HTMLFormElement>('[data-method="recoveryPhrase"]')!.requestSubmit();
+
+    expect(field.value).toBe('');
+  });
+
+  // The held Core Kit session is a live credential, so leaving the panel is not
+  // enough to end it.
+  it('signs out when the member abandons the phrase prompt', () => {
+    const handlers = actions();
+    renderShell(root, model({ phase: 'recovery' }), handlers);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-panel="recovery"] [data-action="logout"]')!
+      .click();
+
+    expect(handlers.logout).toHaveBeenCalled();
+  });
+
+  it('disables the phrase prompt while an attempt is in flight', () => {
+    renderShell(root, model({ phase: 'recovery', busy: true, step: 'recovery' }), actions());
+    const panel = root.querySelector('[data-panel="recovery"]')!;
+    const controls = panel.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>(
+      'button, textarea'
+    );
+    expect(controls).toHaveLength(3);
+    for (const control of controls) expect(control.disabled).toBe(true);
+  });
 
   it('reports a failure without offering it as markup', () => {
     renderShell(root, model({ error: '<img src=x onerror=alert(1)>' }), actions());

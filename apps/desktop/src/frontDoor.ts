@@ -10,18 +10,20 @@ import type { IdentityMethod } from '@cipherbox/login';
 import type { MountStatus, Staleness, VaultStatus, VaultWarning, VaultWarningKind } from './vault';
 
 /** The transition this host asked for, which `LoginProgress` does not name. */
-export type LoginStep = 'google' | 'emailCode' | 'signIn' | 'logout' | 'restore';
+export type LoginStep = 'google' | 'emailCode' | 'signIn' | 'recovery' | 'logout' | 'restore';
 
 const STEP_LABELS: Record<LoginStep, string> = {
   google: 'Waiting for Google…',
   emailCode: 'Sending a code…',
   signIn: 'Signing in…',
+  recovery: 'Unlocking your account…',
   logout: 'Signing out…',
   restore: 'Restoring your session…',
 };
 
 export interface ShellModel {
-  phase: 'starting' | 'signedOut' | 'signedIn';
+  /** `recovery` is a sign-in held at the factor policy, not a failed one. */
+  phase: 'starting' | 'signedOut' | 'signedIn' | 'recovery';
   /** True while a restore, login, or logout is in flight. */
   busy: boolean;
   /** What that in-flight transition is, so the wait can say so. */
@@ -46,6 +48,8 @@ export interface ShellActions {
   google(): void;
   sendEmailCode(email: string): void;
   submitEmailCode(email: string, code: string): void;
+  /** Finishes a sign-in held at the factor policy from the phrase alone. */
+  submitRecoveryPhrase(phrase: string): void;
   logout(): void;
 }
 
@@ -63,6 +67,7 @@ export function renderShell(root: HTMLElement, model: ShellModel, actions: Shell
 
   if (model.phase === 'starting') view.append(note('Starting…'));
   else if (model.phase === 'signedIn') view.append(signedIn(model, actions));
+  else if (model.phase === 'recovery') view.append(recoveryPrompt(model, actions));
   else view.append(frontDoor(model, actions));
 
   if (model.busy && model.step !== null) {
@@ -158,6 +163,59 @@ function emailForm(model: ShellModel, actions: ShellActions): HTMLElement {
     else actions.sendEmailCode(address.value);
   });
   return form;
+}
+
+/**
+ * The recovery phrase as a login (ADR 0009 D2). It is the shell's only route
+ * past a factor policy, because this host takes no rendezvous role.
+ *
+ * The field is read once and blanked before the attempt runs: a phrase left in
+ * the DOM outlives the sign-in it answered, and every redraw would carry it.
+ */
+function recoveryPrompt(model: ShellModel, actions: ShellActions): HTMLElement {
+  const section = element('section', { class: 'recovery', 'data-panel': 'recovery' });
+  section.append(note('This device holds no key for your account.'));
+  section.append(note('Enter the recovery phrase you saved when you turned recovery on.'));
+
+  const form = element('form', { 'data-method': 'recoveryPhrase' }) as HTMLFormElement;
+
+  const phrase = element('textarea', {
+    name: 'recoveryPhrase',
+    rows: '4',
+    spellcheck: 'false',
+    autocomplete: 'off',
+    // A substitution that rewrites one BIP39 word turns a good phrase into a
+    // refusal the member cannot explain.
+    autocorrect: 'off',
+    autocapitalize: 'off',
+    'aria-label': 'Recovery phrase',
+    required: 'required',
+  }) as HTMLTextAreaElement;
+  phrase.disabled = model.busy;
+  form.append(phrase);
+
+  const submit = text('button', 'Unlock', { type: 'submit' }) as HTMLButtonElement;
+  submit.disabled = model.busy;
+  form.append(submit);
+
+  // Abandoning the prompt signs out: the held Core Kit session is a live
+  // credential, so leaving the panel is not enough to end it.
+  const cancel = text('button', 'Cancel', {
+    'data-action': 'logout',
+    type: 'button',
+  }) as HTMLButtonElement;
+  cancel.disabled = model.busy;
+  cancel.addEventListener('click', () => actions.logout());
+  form.append(cancel);
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const typed = phrase.value;
+    phrase.value = '';
+    actions.submitRecoveryPhrase(typed);
+  });
+  section.append(form);
+  return section;
 }
 
 /** The staleness rung as this window says it (blueprint/desktop.md, "Tray"). */

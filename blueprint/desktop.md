@@ -285,10 +285,17 @@ navigation (FSM1/cipher-box-next#33 D2):
   absent rather than offered and unable to complete (ADR 0008 D2).
 - **Recovery phrase always works here** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md) D2): a member with a factor
   policy signs in on this host with the phrase alone, no second device and no
-  rendezvous. Whether the shell also participates in device approval is a scope
-  decision that must be made rather than left open — v1 shipped a requester UI
-  that could never work beside a settings string saying MFA was web-only, and
-  the affordance and the truth have to agree.
+  rendezvous. A login that reaches the policy is held open rather than ended,
+  because the phrase is redeemed against that same login, and the window renders
+  a phrase field for it.
+- **Device approval is requester-only through the cutover.** Approval itself
+  always happens in a web session, so this window offers no approver affordance
+  and its copy says where factors and approval are managed. Enrollment is
+  web-only for the same reason (ADR 0009 consequence 5). The approver role
+  arrives after v2.0 by reusing the web app's components, never by a second
+  implementation — v1 shipped a requester UI that could never work beside a
+  settings string saying MFA was web-only, and the affordance and the truth have
+  to agree.
 - **Tray** renders the event stream: the staleness ladder maps to
   `Synced / Reconciling / Stale / Offline`, dead-letters to the parked-writes
   state (edge-triggered notifications, v1's anti-spam watermark kept), trust
