@@ -16,9 +16,9 @@ mod types;
 pub use client::ApiClient;
 pub use error::{ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 pub use signer::{ChallengeSigner, IdentityChallengeSigner};
+#[cfg(test)]
+pub(crate) use types::new_user_login_response;
 pub use types::{
     AuthMethod, AuthMethodKind, LoginOutcome, MailboxItem, NameRegistration, Quota, RetireEntry,
     RetireResult, SiweNonce, TestLoginOutcome, UploadResult,
 };
-#[cfg(test)]
-pub(crate) use types::{login_response, new_user_login_response};

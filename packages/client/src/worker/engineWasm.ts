@@ -265,10 +265,8 @@ export interface EngineWasm {
     pruneInviteLinks(node: WasmNodeId): WasmCommand;
     claimInviteLink(fragment: string): WasmCommand;
     convertInviteClaims(node: WasmNodeId): WasmCommand;
-    acceptShare(sealedSharePointer: Uint8Array): WasmCommand;
     rotateNow(node: WasmNodeId): WasmCommand;
     saveVaultSettings(settings: WasmVaultSettings): WasmCommand;
-    siweLogin(message: string, signature: Uint8Array): WasmCommand;
     siweLink(message: string, signature: Uint8Array): WasmCommand;
     unlinkAuthMethod(methodId: string): WasmCommand;
     logout(): WasmCommand;

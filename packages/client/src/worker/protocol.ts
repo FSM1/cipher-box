@@ -354,10 +354,8 @@ export type CommandDescriptor =
    */
   | { kind: 'claimInviteLink'; fragment: string }
   | { kind: 'convertInviteClaims'; node: Uint8Array }
-  | { kind: 'acceptShare'; sealedSharePointer: Uint8Array }
   | { kind: 'rotateNow'; node: Uint8Array }
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
-  | { kind: 'siweLogin'; message: string; signature: Uint8Array }
   /** Links a host-collected wallet signature to the account already signed in. */
   | { kind: 'siweLink'; message: string; signature: Uint8Array }
   | { kind: 'unlinkAuthMethod'; methodId: string }
@@ -396,15 +394,7 @@ export type CommandOutcomeDescriptor =
   | { kind: 'contactImported'; identityPublicKey: Uint8Array; encPublicKey: Uint8Array }
   /** The whole bearer capability: a host puts `fragment` in a URL and hands the
    * same characters back to `claimInviteLink`, reading none of it. */
-  | { kind: 'inviteLinkMinted'; fragment: string }
-  | {
-      kind: 'shareAccepted';
-      scopeId: Uint8Array;
-      sequence: bigint;
-      /** What the owner's ledger commits, never what the share pointer claimed. */
-      permission: Permission;
-      newlyAdded: boolean;
-    };
+  | { kind: 'inviteLinkMinted'; fragment: string };
 
 /**
  * Where a streaming write lands: a new file named `name` under `parent`, or a

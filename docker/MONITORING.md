@@ -94,7 +94,7 @@ Label values come from the call sites:
 
 - `route` holds an Express route template, or the literal `unmatched`.
 - `auth_attempts_total{outcome}` is `success`, `rejected`, or `error`.
-- `auth_attempts_total{route}` is one of `/auth/challenge`, `/auth/login`, `/auth/siwe/challenge`, `/auth/siwe/login`, `/auth/refresh`, `/auth/test-login`, `/auth/identity/google`, `/auth/identity/email/send-code`, `/auth/identity/email/verify-code`, or `/auth/identity/wallet`.
+- `auth_attempts_total{route}` is one of `/auth/challenge`, `/auth/login`, `/auth/siwe/challenge`, `/auth/refresh`, `/auth/test-login`, `/auth/identity/google`, `/auth/identity/email/send-code`, `/auth/identity/email/verify-code`, or `/auth/identity/wallet`.
 - `gateway_verify_total{outcome}` is `accepted` or `refused`. This counter records the `forward_auth` verify leg that the two fronted vhosts call.
 
 prom-client registers its default process and Node series on the same registry. Use them with care. `process_resident_memory_bytes` and `nodejs_eventloop_lag_seconds` are the two that earn a panel.

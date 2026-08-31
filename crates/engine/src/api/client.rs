@@ -21,7 +21,7 @@ use super::signer::ChallengeSigner;
 use super::types::{
     AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
     MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
-    RetireEntry, RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweLoginRequest, SiweNonce,
+    RetireEntry, RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweNonce,
     StepUpChallengeRequest, StepUpOperation, TestLoginOutcome, TestLoginRequest, TestLoginResponse,
     TokenResponse, UnlinkMethodRequest, UploadResult,
 };
@@ -181,24 +181,6 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             .request_authed(HttpMethod::Post, "/auth/siwe/link-challenge")
             .await?;
         siwe_nonce(ok_or_err(response)?)
-    }
-
-    /// SIWE wallet login (secondary method). The host collects the wallet
-    /// signature and the engine exchanges it here; the wallet must already be
-    /// linked to an account.
-    pub async fn siwe_login(
-        &self,
-        message: &str,
-        signature: &str,
-    ) -> Result<LoginOutcome, ApiError> {
-        let response = self
-            .post_json("/auth/siwe/login", &SiweLoginRequest { message, signature })
-            .await?;
-        let response = ok_or_err(response)?;
-        let tokens: TokenResponse = decode(&response)?;
-        let is_new_user = tokens.is_new_user.unwrap_or(false);
-        self.store_tokens(tokens).await?;
-        Ok(LoginOutcome { is_new_user })
     }
 
     /// Fetch a login challenge for `public_key`, refusing one the API could not
@@ -1397,19 +1379,6 @@ mod tests {
                 usable
             );
         }
-    }
-
-    #[test]
-    fn siwe_login_unlinked_wallet_is_unauthorized() {
-        let (http, _creds, client) = fakes();
-        http.enqueue_response(json_response(
-            401,
-            json!({ "message": "Wallet is not linked to an account" }),
-        ));
-        assert_eq!(
-            block_on(client.siwe_login("message", "0xsig")).unwrap_err(),
-            ApiError::Unauthorized
-        );
     }
 
     #[test]

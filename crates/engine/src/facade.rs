@@ -53,19 +53,18 @@ use crate::grants::grafted::{
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
 use crate::grants::{
-    AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
-    ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
-    GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
-    InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority,
-    OwnerGrantKeys, ParentScopePlan, PendingInviteLink, PublishedGrantBlob, ReceivedShareStore,
-    ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
-    StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
-    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
-    link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
-    post_invite_claim, post_share_pointer, recipient_blinded_tag, resolve_recipient,
-    row_is_owner_attested,
+    ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
+    CreateGrantError, EphemeralInvitee, GrantRecipient, GranteeScopePlan, InviteClaim, InviteError,
+    InviteFragment, InviteMintError, InviteMintPlan, InviteStore, InviteStoreError,
+    MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
+    PendingInviteLink, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
+    ResolutionClass, SharePointer, StagingContactStore, StagingInviteStore,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, convert_invite_claim, create_grant,
+    enforce_committed_ledger, import_contact, insert_child, link_budget_full, locate_invite_link,
+    mint_invite_link, partition_scope_links, post_invite_claim, post_share_pointer,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
-use crate::mailbox::{locate_verified, poll_verified, post_sealed};
+use crate::mailbox::{poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
@@ -77,9 +76,8 @@ use crate::net::{
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
     PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
     RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
-    VaultProvisionNet, assemble_candidate, enrol_owned_scope_pointers, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child,
-    run_liveness_loop,
+    VaultProvisionNet, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify,
+    keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -955,11 +953,6 @@ pub enum Command {
         /// The node the link was minted at.
         node: NodeId,
     },
-    /// Accept a share from a polled mailbox pointer or claimed invite.
-    AcceptShare {
-        /// The sealed share pointer payload.
-        sealed_share_pointer: Vec<u8>,
-    },
     /// Manual hygiene rotate-now for a scope (same primitives as every
     /// rotation trigger).
     RotateNow {
@@ -977,14 +970,6 @@ pub enum Command {
     },
 
     // --- auth ---
-    /// Exchange a host-collected SIWE wallet signature (secondary method;
-    /// the engine performs the exchange through its API client).
-    SiweLogin {
-        /// The signed SIWE message.
-        message: String,
-        /// The wallet signature bytes.
-        signature: Vec<u8>,
-    },
     /// Link a host-collected SIWE wallet signature to the signed-in account.
     SiweLink {
         /// The signed SIWE message.
@@ -1029,10 +1014,8 @@ impl Command {
             Command::PruneInviteLinks { .. } => "pruneInviteLinks",
             Command::ClaimInviteLink { .. } => "claimInviteLink",
             Command::ConvertInviteClaims { .. } => "convertInviteClaims",
-            Command::AcceptShare { .. } => "acceptShare",
             Command::RotateNow { .. } => "rotateNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
-            Command::SiweLogin { .. } => "siweLogin",
             Command::SiweLink { .. } => "siweLink",
             Command::UnlinkAuthMethod { .. } => "unlinkAuthMethod",
             Command::Logout => "logout",
@@ -1072,11 +1055,6 @@ pub enum CommandOutcome {
     /// ([`MintedInviteLink`]) — a host puts it in a URL fragment and nowhere
     /// durable.
     InviteLinkMinted(MintedInviteLink),
-    /// [`Command::AcceptShare`] adopted a share: the gate passed, the seeds
-    /// opened, and the entry is durable in this vault's received-shares list.
-    /// Carries no key material — the permission is the owner-committed one, not
-    /// the pointer's claim.
-    ShareAccepted(AcceptOutcome),
 }
 
 impl fmt::Debug for CommandOutcome {
@@ -1086,7 +1064,6 @@ impl fmt::Debug for CommandOutcome {
             CommandOutcome::Queued { op_id } => write!(f, "CommandOutcome(queued {})", op_id.0),
             CommandOutcome::ContactImported(_) => f.write_str("CommandOutcome(contactImported)"),
             CommandOutcome::InviteLinkMinted(_) => f.write_str("CommandOutcome(inviteLinkMinted)"),
-            CommandOutcome::ShareAccepted(_) => f.write_str("CommandOutcome(shareAccepted)"),
         }
     }
 }
@@ -1669,28 +1646,6 @@ impl EngineError {
             }
             terminal => EngineError::TrustViolation {
                 message: terminal.to_string(),
-            },
-        }
-    }
-
-    /// Map an accept-flow failure. Every binding arm is a fail-closed trust
-    /// verdict on the pointer or the record it named — never degraded to
-    /// staleness, which would tell a host to keep retrying a forgery.
-    fn from_accept(err: AcceptError) -> Self {
-        match err {
-            AcceptError::MalformedPointer(e) => EngineError::MalformedInput { check: e.check() },
-            AcceptError::Gate(e) => EngineError::from_gate(e),
-            AcceptError::Ack(e) => EngineError::from_seam(e),
-            AcceptError::Persist(e) => EngineError::from_received_share_store(e),
-            // No blob at your tag on an owner-signed record is the definitive
-            // "you were removed" (`grants/revocation.rs`), never a claim that the
-            // record is forged — a host that could not tell them apart would
-            // report a revocation as an attack.
-            AcceptError::NoBlobAtTag => EngineError::MalformedInput {
-                check: "no-grant-at-your-tag",
-            },
-            trust => EngineError::TrustViolation {
-                message: trust.to_string(),
             },
         }
     }
@@ -4831,25 +4786,12 @@ where {
                 .downgrade_grant(node, &recipient_identity_public_key)
                 .await
                 .map(|()| CommandOutcome::Done),
-            Command::AcceptShare {
-                sealed_share_pointer,
-            } => self
-                .accept_share(&sealed_share_pointer)
-                .await
-                .map(CommandOutcome::ShareAccepted),
             Command::RotateNow { node } => {
                 self.rotate_now(node).await.map(|()| CommandOutcome::Done)
             }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
-                Ok(CommandOutcome::Done)
-            }
-            Command::SiweLogin { message, signature } => {
-                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-                api.siwe_login(&message, &eth_signature_hex(&signature))
-                    .await
-                    .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
             }
             Command::SiweLink { message, signature } => {
@@ -6398,82 +6340,6 @@ where {
         )
     }
 
-    /// Accept a share the mailbox delivered: bind the pointer to the imported
-    /// contact, resolve and gate the scope root it names, self-locate the grant
-    /// blob by blinded tag, unseal the seeds, and append the entry to this
-    /// vault's sealed received-shares list before acking
-    /// (blueprint/engine.md "Accept flow").
-    ///
-    /// Fail-closed throughout: an unverifiable sender, an uncommitted tag, or a
-    /// gate rejection is a trust verdict, never staleness.
-    async fn accept_share(
-        &self,
-        sealed_share_pointer: &[u8],
-    ) -> Result<AcceptOutcome, EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        // The version the sender sealed under is the envelope version its scope
-        // root was minted at, which is the one this build authors; a payload from
-        // any other is an item that does not open, and is dropped.
-        let item = locate_verified(
-            api.as_ref(),
-            session.enc_subkey(),
-            ENVELOPE_V,
-            sealed_share_pointer,
-        )
-        .await
-        .map_err(EngineError::from_seam)?
-        .ok_or(EngineError::MalformedInput {
-            check: "share-pointer-is-not-on-this-inbox",
-        })?;
-
-        let contact = self
-            .recipient_contact(session, &item.sender_identity.to_sec1())
-            .await?;
-        let pointer = SharePointer::decode(&item.payload)
-            .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
-        // Bind the pointer to the contact before it names anything to fetch, so
-        // one imported peer cannot steer a resolve at a scope root of their
-        // choosing. The accept flow re-checks it against the same contact.
-        if pointer.sharer_identity_pk != contact.identity_pk().to_sec1() {
-            return Err(EngineError::TrustViolation {
-                message: AcceptError::SharerMismatch.to_string(),
-            });
-        }
-        let name = parsed_scope_name(&pointer.scope_root_name)?;
-        let (_, record_bytes) = fanout_get_verify(&self.seams.record_transport, &name)
-            .await
-            .ok_or(EngineError::ContentUnavailable {
-                message: "the shared scope root did not resolve".to_owned(),
-            })?;
-        let candidate =
-            assemble_candidate(&self.gateway, &self.seams.http, &name, &record_bytes, None)
-                .await
-                .map_err(EngineError::from_gate)?;
-
-        let store = self.received_share_store(session);
-        let mut received = store
-            .load()
-            .await
-            .map_err(EngineError::from_received_share_store)?;
-        let blobs = published_grant_blobs(&candidate.grant_section);
-        let vault_root_scope = self.snapshot.borrow().root.0;
-        accept_share(
-            &self.seams.floor_store,
-            api.as_ref(),
-            &store,
-            &item,
-            &contact,
-            session.enc_subkey(),
-            &candidate,
-            &blobs,
-            &vault_root_scope,
-            &mut received,
-        )
-        .await
-        .map_err(EngineError::from_accept)
-    }
-
     /// Seal and publish the vault settings record, then adopt what it
     /// published: the renewal enrolment [`publish_settings`] states the need
     /// for, and the placement this session writes under.
@@ -7028,9 +6894,9 @@ where {
     /// Issues the single-use nonce an EIP-4361 message must embed, so the host
     /// collects a wallet signature without reaching the API itself
     /// (blueprint/web-client.md: `apps/web` holds no seam of its own). Fails
-    /// `NotStarted` before [`start`](Self::start), like the
-    /// [`Command::SiweLogin`] that spends the nonce — SIWE is a secondary
-    /// method (blueprint/engine.md "API client").
+    /// `NotStarted` before [`start`](Self::start), like the exchange that spends
+    /// the nonce — SIWE is a secondary method (blueprint/engine.md
+    /// "API client").
     ///
     /// The intent picks the pool ([`SiweIntent`]).
     pub async fn siwe_challenge(&self, intent: SiweIntent) -> Result<String, EngineError> {
@@ -8312,7 +8178,7 @@ mod tests {
 
     use core::num::NonZeroU64;
 
-    use crate::api::{ChallengeSigner, login_response, new_user_login_response};
+    use crate::api::{ChallengeSigner, new_user_login_response};
     use crate::content::{ByoIpfsConfig, ByoKind, RetentionPolicy};
     use crate::net::retire::ReclaimStallReason;
     use crate::seams::{CredentialStore, EndpointId, HttpResponse, UnixMillis};
@@ -9025,41 +8891,7 @@ mod tests {
             signature.len() == 132
                 && signature.starts_with("0x")
                 && signature[2..].bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "the API's SiweLoginRequestDto refuses this signature: {signature:?}"
-        );
-    }
-
-    #[test]
-    fn siwe_login_command_forwards_message_and_hex_signature() {
-        // Offline: `start` skips cold-start login, so only the SIWE exchange is
-        // scripted here.
-        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
-        device.http.enqueue_response(json_response(
-            200,
-            login_response("jwt-siwe", &"b".repeat(64), "gw-b"),
-        ));
-
-        let signature = WALLET_SIGNATURE_FIXTURE.to_vec();
-        block_on(engine.command(Command::SiweLogin {
-            message: "siwe-message".to_owned(),
-            signature: signature.clone(),
-        }))
-        .expect("siwe login");
-
-        let request = device
-            .http
-            .requests()
-            .pop()
-            .expect("a SIWE request was sent");
-        assert_eq!(request.url, "/auth/siwe/login");
-        let body: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["message"], "siwe-message");
-        assert_eth_signature_wire_shape(&body["signature"]);
-        assert_eq!(
-            body["signature"],
-            format!("0x{}", hex_lower(&signature)),
-            "the wallet signature crosses the wire 0x-prefixed hex"
+            "the API's wallet DTO refuses this signature: {signature:?}"
         );
     }
 
@@ -10421,22 +10253,6 @@ mod tests {
             })),
             Err(EngineError::MalformedInput {
                 check: "recipient-not-imported"
-            }),
-        );
-    }
-
-    /// A share pointer the inbox does not hold cannot be accepted: the accept
-    /// acks by transport id, so there would be nothing to ack and the item would
-    /// redeliver forever.
-    #[test]
-    fn a_share_pointer_off_the_inbox_is_refused() {
-        let (mut engine, _events) = started();
-        assert_eq!(
-            block_on(engine.command(Command::AcceptShare {
-                sealed_share_pointer: b"not-a-sealed-item".to_vec(),
-            })),
-            Err(EngineError::MalformedInput {
-                check: "share-pointer-is-not-on-this-inbox"
             }),
         );
     }

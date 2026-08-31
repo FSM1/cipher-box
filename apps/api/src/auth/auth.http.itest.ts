@@ -522,28 +522,6 @@ describe('auth HTTP flows (real Postgres)', () => {
   });
 
   describe('SIWE secondary auth', () => {
-    it('refuses login for an unlinked wallet — no implicit creation through SIWE', async () => {
-      const account = privateKeyToAccount(generatePrivateKey());
-      const { message, signature } = await siweSign(account, SIWE_LOGIN_STATEMENT);
-      await request(http()).post('/auth/siwe/login').send({ message, signature }).expect(401);
-    });
-
-    it('links a wallet to the authenticated account, then logs in with it', async () => {
-      const { identity, loginRes } = await identityLogin();
-      const account = privateKeyToAccount(generatePrivateKey());
-
-      await link(
-        loginRes.body.accessToken,
-        await siweLinkBody(identity, loginRes.body.accessToken, account)
-      ).expect(201);
-
-      const login = await siweSign(account, SIWE_LOGIN_STATEMENT);
-      const siweLoginRes = await request(http()).post('/auth/siwe/login').send(login).expect(200);
-      expect(jwtPayload(siweLoginRes.body.accessToken).sub).toBe(
-        jwtPayload(loginRes.body.accessToken).sub
-      );
-    });
-
     it('refuses to link a wallet already linked to another account', async () => {
       const first = await identityLogin();
       const second = await identityLogin();
@@ -557,13 +535,6 @@ describe('auth HTTP flows (real Postgres)', () => {
         second.loginRes.body.accessToken,
         await siweLinkBody(second.identity, second.loginRes.body.accessToken, account)
       ).expect(409);
-    });
-
-    it('rejects a tampered SIWE signature', async () => {
-      const account = privateKeyToAccount(generatePrivateKey());
-      const other = privateKeyToAccount(generatePrivateKey());
-      const { message, signature } = await siweSign(account, SIWE_LOGIN_STATEMENT, other);
-      await request(http()).post('/auth/siwe/login').send({ message, signature }).expect(401);
     });
 
     /**
@@ -596,7 +567,7 @@ describe('auth HTTP flows (real Postgres)', () => {
       ).expect(201);
 
       const replayed = await siweSign(account, SIWE_LINK_STATEMENT);
-      await request(http()).post('/auth/siwe/login').send(replayed).expect(401);
+      await request(http()).post('/auth/identity/wallet').send(replayed).expect(401);
     });
 
     it('refuses a link whose challenge was signed by another key, and links nothing', async () => {
@@ -656,12 +627,12 @@ describe('auth HTTP flows (real Postgres)', () => {
       await link(accessToken, await siweLinkBody(identity, accessToken, account)).expect(201);
 
       const linkNonced = await siweSign(account, SIWE_LOGIN_STATEMENT, account, accessToken);
-      await request(http()).post('/auth/siwe/login').send(linkNonced).expect(401);
+      await request(http()).post('/auth/identity/wallet').send(linkNonced).expect(401);
 
       // The same wallet and statement over a sign-in nonce still signs in, so
       // the pool is what refused the first attempt.
       const loginNonced = await siweSign(account, SIWE_LOGIN_STATEMENT);
-      await request(http()).post('/auth/siwe/login').send(loginNonced).expect(200);
+      await request(http()).post('/auth/identity/wallet').send(loginNonced).expect(200);
     });
 
     it('refuses a link re-proved with a login challenge, and links nothing', async () => {

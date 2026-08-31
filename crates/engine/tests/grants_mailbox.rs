@@ -1345,6 +1345,58 @@ fn inbox_len(fx: &GrantFixture, recipient: &FakeDevice) -> usize {
         .len()
 }
 
+/// `scopeId` is authored by the sharer and bound to nothing outside its own
+/// record, and every vault anchors its own root at the same id. A share that
+/// names that anchor would have the recipient adopt a foreign record as its own
+/// vault, so it is refused before the gate keys a durable floor on it.
+#[test]
+fn a_share_naming_this_vaults_own_root_scope_is_refused_and_poisons_no_floor() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let candidate = fx.candidate();
+    // The recipient's own anchor is whatever scope the shared record names.
+    let own_root_scope = candidate.envelope.scope;
+
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &candidate,
+        &fx.grant_blobs(),
+        &own_root_scope,
+        &mut received,
+    ))
+    .unwrap_err();
+
+    assert!(matches!(err, AcceptError::OwnVaultScope), "got {err}");
+    assert!(received.is_empty());
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        1,
+        "a refused accept acks nothing"
+    );
+    assert_eq!(
+        block_on(recipient.floor_store.epoch_floor(&own_root_scope)),
+        Ok(None),
+        "and the refusal lands before anything moves this vault's own floor"
+    );
+}
+
 /// A valid contact sender, but the pointer's `sharerPub` is a different identity
 /// than the verified contact's owner: bind-to-contact rejects it, un-acked.
 #[test]

@@ -136,25 +136,6 @@ fn verified(
     })
 }
 
-/// The sender-authenticated inbox item carrying exactly `sealed`, if the inbox
-/// still holds it.
-///
-/// The accept flow acks by transport id, so a pointer the inbox no longer holds
-/// cannot be accepted. Same drop-before-resolve rule as [`poll_verified`].
-pub async fn locate_verified<M: Mailbox>(
-    mailbox: &M,
-    my_enc_secret: &X25519Secret,
-    v: u64,
-    sealed: &[u8],
-) -> SeamResult<Option<VerifiedMailboxItem>> {
-    Ok(mailbox
-        .poll()
-        .await?
-        .into_iter()
-        .filter(|item| item.sealed_payload == sealed)
-        .find_map(|item| verified(my_enc_secret, v, item)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,12 +245,6 @@ mod tests {
                     .unwrap()
                     .is_empty(),
                 "{illegal:?} must not survive to a flow that would ack it"
-            );
-            assert!(
-                block_on(locate_verified(&mailbox, &recip, V, &sealed))
-                    .unwrap()
-                    .is_none(),
-                "{illegal:?} must not be locatable either"
             );
         }
 

@@ -307,10 +307,6 @@ export class EngineFacade {
     return this.command({ kind: 'convertInviteClaims', node });
   }
 
-  acceptShare(sealedSharePointer: Uint8Array): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'acceptShare', sealedSharePointer });
-  }
-
   rotateNow(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'rotateNow', node });
   }
@@ -336,10 +332,6 @@ export class EngineFacade {
   /** Issues the single-use nonce an EIP-4361 message must embed, for `intent`. */
   siweChallenge(intent: SiweIntent): Promise<string> {
     return this.transport.siweChallenge(intent);
-  }
-
-  siweLogin(message: string, signature: Uint8Array): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'siweLogin', message, signature });
   }
 
   /** Links a signed EIP-4361 message to the account this session already holds. */

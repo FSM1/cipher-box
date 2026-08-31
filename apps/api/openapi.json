@@ -195,38 +195,6 @@
         ]
       }
     },
-    "/auth/siwe/login": {
-      "post": {
-        "operationId": "AuthController_siweLogin",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SiweLoginRequestDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TokenResponseDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "SIWE wallet login (secondary method; the wallet must already be linked)",
-        "tags": [
-          "Auth"
-        ]
-      }
-    },
     "/auth/siwe/link": {
       "post": {
         "operationId": "AuthController_siweLink",
@@ -1665,23 +1633,6 @@
           "expiresAt"
         ]
       },
-      "SiweLoginRequestDto": {
-        "type": "object",
-        "properties": {
-          "message": {
-            "type": "string",
-            "description": "EIP-4361 message text"
-          },
-          "signature": {
-            "type": "string",
-            "description": "EIP-191 signature over the message, 0x-prefixed hex"
-          }
-        },
-        "required": [
-          "message",
-          "signature"
-        ]
-      },
       "SiweLinkRequestDto": {
         "type": "object",
         "properties": {
@@ -1940,6 +1891,23 @@
         "required": [
           "email",
           "code"
+        ]
+      },
+      "SiweLoginRequestDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "EIP-4361 message text"
+          },
+          "signature": {
+            "type": "string",
+            "description": "EIP-191 signature over the message, 0x-prefixed hex"
+          }
+        },
+        "required": [
+          "message",
+          "signature"
         ]
       },
       "PostMessageDto": {

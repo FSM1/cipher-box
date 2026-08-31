@@ -315,17 +315,10 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.claimInviteLink(fragment(descriptor.fragment, 'fragment'));
     case 'convertInviteClaims':
       return wasm.Command.convertInviteClaims(nodeId(wasm, descriptor.node, 'node'));
-    case 'acceptShare':
-      return wasm.Command.acceptShare(bytes(descriptor.sealedSharePointer, 'sealedSharePointer'));
     case 'rotateNow':
       return wasm.Command.rotateNow(nodeId(wasm, descriptor.node, 'node'));
     case 'saveVaultSettings':
       return wasm.Command.saveVaultSettings(vaultSettings(wasm, descriptor.settings));
-    case 'siweLogin':
-      return wasm.Command.siweLogin(
-        text(descriptor.message, 'message'),
-        bytes(descriptor.signature, 'signature')
-      );
     case 'siweLink':
       return wasm.Command.siweLink(
         text(descriptor.message, 'message'),

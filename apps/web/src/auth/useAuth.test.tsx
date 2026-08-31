@@ -196,8 +196,6 @@ describe('useAuth', () => {
     expect(identity.calls.wallet).toEqual([{ message: 'siwe-message', signature }]);
     expect(coreKit.calls.logins).toHaveLength(1);
     expect(engine.calls.secrets).toEqual([SECRET_BYTES]);
-    // The engine's own SIWE login is not what a first wallet login travels.
-    expect(engine.calls.siwe).toEqual([]);
     expect(result.current.auth.isAuthenticated).toBe(true);
     expect(authStore.getState()).toMatchObject({ method: 'wallet' });
   });

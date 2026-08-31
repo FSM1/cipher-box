@@ -44,7 +44,6 @@ export interface EngineCalls {
   started: ArrayBuffer[];
   /** What each buffer held on arrival, before the handoff scrubbed it. */
   secrets: Uint8Array[];
-  siwe: { message: string; signature: Uint8Array }[];
   /** The wallet links, kept apart from `siwe`: a link is not a login. */
   siweLinks: { message: string; signature: Uint8Array }[];
   siweChallenges: number;
@@ -96,7 +95,6 @@ export function fakeEngineClient(
     started: [],
     secrets: [],
     logouts: 0,
-    siwe: [],
     siweLinks: [],
     siweChallenges: 0,
     siweChallengeIntents: [],
@@ -137,10 +135,6 @@ export function fakeEngineClient(
         calls.siweChallenges += 1;
         calls.siweChallengeIntents.push(intent);
         return Promise.resolve(FAKE_NONCE);
-      },
-      siweLogin(message: string, signature: Uint8Array) {
-        calls.siwe.push({ message, signature });
-        return Promise.resolve();
       },
       siweLink(message: string, signature: Uint8Array) {
         calls.siweLinks.push({ message, signature });
