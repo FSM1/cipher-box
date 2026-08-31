@@ -3186,13 +3186,15 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
 /// A scope the owner never rotates again therefore lapses, and only the owner
 /// can renew it — a grantee derives neither the pointer name nor its signer.
 ///
-/// The scopes come from the vault root's write-body `directChildScopeIndex`,
-/// plus the vault root scope itself. That index is writer-authored at any scope
-/// root that has a write grantee, but the vault root can have none — a share of
-/// it is refused (`facade.rs`: `grant-target-is-the-vault-root`) — so at this
-/// one root the index is the owner's own. Each scope runs through
-/// [`PointerConsult`] before it is held, which keeps the pointer plane's trust
-/// rules in one place.
+/// The enumeration walks the whole owned scope tree from the vault root's
+/// write-body `directChildScopeIndex` down, because a share of an ancestor
+/// folder reparents the scope roots below it into the fresh scope
+/// (`facade.rs`: `subtree_child_scopes`), so an owned scope sits at any depth.
+/// A deeper index is writer-authored, but it steers nothing here: the owner
+/// derives every pointer name from its own seed, so a fabricated scope id finds
+/// no record, and an omitted one only leaves the lapse this pass repairs. Each
+/// scope runs through [`PointerConsult`] before it is held, which keeps the
+/// pointer plane's trust rules in one place.
 pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E>(
     pass: ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E>,
 ) where
@@ -3243,13 +3245,23 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E>(
         owner_identity: pass.identity,
         payload_version: pass.payload_version,
     };
-    let scopes: BTreeSet<[u8; 16]> = core::iter::once(pass.root_id)
-        .chain(
-            root.direct_child_scope_index
-                .iter()
-                .map(|child| child.scope_id),
-        )
-        .collect();
+    // Best-effort, unlike the eager-set walk: a descendant this pass cannot
+    // resolve costs its own subtree, and an abort would lapse every other
+    // pointer. The visited set pre-seeded with the root also ends a cycle.
+    let mut scopes: BTreeSet<[u8; 16]> = BTreeSet::from([pass.root_id]);
+    let mut frontier = root.direct_child_scope_index;
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for child in frontier {
+            if !scopes.insert(child.scope_id) {
+                continue;
+            }
+            if let Ok(grandchildren) = net.direct_child_index(&child).await {
+                next.extend(grandchildren);
+            }
+        }
+        frontier = next;
+    }
     for scope_id in scopes {
         // The flip's own entry is the fresher one, and the liveness pass drops a
         // superseded entry before this runs rather than replaces it here.
@@ -9131,6 +9143,35 @@ mod tests {
                 IpnsName::from_public_key(&entry.signer.verifying_key()),
                 name,
                 "the held signer renews exactly the routing key it was filed under"
+            );
+        }
+    }
+
+    /// A share of an ancestor folder reparents the scope roots below it into the
+    /// fresh scope, so an owned scope sits at any depth under the vault root. A
+    /// walk that stopped at the vault root's own index would lapse every deeper
+    /// pointer. The leaf root here is unstaged, so the walk also proves it is
+    /// best-effort: an unresolvable descendant still enrols its own pointer.
+    #[test]
+    fn the_enrolment_reaches_a_scope_root_nested_under_another() {
+        let (child, child_ref, grandchild) = one_level();
+        let (harness, _) = owner_session_at_root(vec![child_ref]);
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, CHILD_SCOPE, &repoint_at(CHILD_SCOPE, 1));
+        stage_pointer_at(
+            &harness,
+            grandchild.scope_id,
+            &repoint_at(grandchild.scope_id, 1),
+        );
+
+        run_enrolment(&harness, &OwnerSeeds);
+
+        let held = harness.held.borrow();
+        for scope_id in [SCOPE, CHILD_SCOPE, grandchild.scope_id] {
+            assert!(
+                held.contains_key(&HeldKey::scope_pointer(scope_id)),
+                "the owner renews the pointer of every scope it owns"
             );
         }
     }
