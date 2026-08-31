@@ -26,14 +26,11 @@ export class InvitePage {
   }
 
   /**
-   * Opens a link as its recipient does: a document load, which is what carries
-   * the fragment. The tab that lands here holds no session, so the panel
-   * reports `waiting` until one starts in it.
+   * A document load carries the fragment; a client-side navigation drops it.
    *
-   * The fragment reaches the trace this suite uploads, unlike a login secret,
-   * which is minted in the page for that reason. It may: the link names one
-   * folder of a vault the run cold-started, on a record store reachable only
-   * from inside the job.
+   * The fragment reaches the uploaded trace. It may: the link names one folder
+   * of a vault the run cold-started, on a record store reachable only from
+   * inside the job.
    */
   async open(url: URL): Promise<void> {
     await this.page.goto(url.toString());

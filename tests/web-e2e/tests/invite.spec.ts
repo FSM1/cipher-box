@@ -1,6 +1,6 @@
 /**
  * The invite link across two accounts: one vault mints, another claims, and the
- * minter converts the claim into a grant the claimant then reads on `/shared`.
+ * minter converts that claim into a read grant.
  *
  * The claimant runs in its own browser context. A second page of the owner's
  * context would share the origin's `BroadcastChannel` and `navigator.locks`,
@@ -18,7 +18,6 @@ import { coldStart } from '../vault';
 
 const FOLDER = 'granted-folder';
 
-/** Cold-starts a vault, creates the folder to share, and mints its link. */
 async function mint(page: Page): Promise<URL> {
   const { files, vault } = await coldStart(page);
   await files.createFolder(FOLDER);
@@ -31,9 +30,8 @@ async function mint(page: Page): Promise<URL> {
 }
 
 /**
- * Opens the link in a vault of its own and spends it. The tab lands signed out
- * because it holds no session yet, which is the state the claim route is built
- * to survive — the fragment has to outlive the sign-in.
+ * The claim route must survive a tab that holds no session: the fragment is the
+ * capability, so it has to outlive the sign-in.
  */
 async function claim(browser: Browser, link: URL): Promise<Page> {
   const context = await browser.newContext();
