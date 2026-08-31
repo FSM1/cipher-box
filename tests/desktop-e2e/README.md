@@ -12,14 +12,25 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   projects it as a filesystem, answers a manual refresh, and gives the mount
   back on `quit`
 - `write-round-trip` — a folder, a file at the mount root, and a file inside
-  the folder all reach the engine and read back; a platform-junk name is
-  refused and stays out of every listing
-- `conflict-outcomes` — a call that conflicts with the vault reaches the
-  caller as an error and leaves the vault as it was
-- `cross-client-convergence` — two instances of one vault, and what one writes
-  through its mount the other reads through its own
-- `offline-replay` — the orchestrator stops the API, the mount keeps taking
-  writes, and the second instance reads them once the API returns
+  the folder all reach the engine and render at the vault root; a platform-junk
+  name is refused and stays out of every listing
+- `conflict-outcomes` — a call that conflicts with the vault reaches the caller
+  as an error and leaves the vault as it was
+
+The macOS leg runs all three. The Linux leg runs `mount-lifecycle` alone: a
+mutating call on its mount never returns, so nothing that writes can run there
+yet. Windows is out of the matrix — its shell links the WinFsp adapter and the
+mount never lands, so the projection stays `opening`.
+
+## What it does not cover yet
+
+The content a write puts in the vault is not readable back through any mount.
+The write reaches the engine, the vault renders the child, nothing
+dead-letters, and the bytes never arrive: the writer's own read answers a
+refusal and a second instance reads an empty file. So cross-client convergence
+over content, and offline replay of a queued write, are not here. Each is a
+host-side defect with its own issue, and the harness they need — the instance,
+the control client, the poll, the stack and the orchestrator — is what is here.
 
 ## How the suite logs in
 

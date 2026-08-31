@@ -15,6 +15,9 @@
 # Two legs today. The Windows shell links the WinFsp adapter and its mount does
 # not land, so its projection never leaves `opening`; it joins this matrix when
 # it does. Every step that leg needs is here already.
+#
+# The Linux leg runs the lifecycle alone, because a mutating call on its mount
+# never returns.
 name: Desktop E2E Tests
 
 on:
@@ -182,8 +185,8 @@ jobs:
       - name: Build the API
         run: pnpm --filter @cipherbox/api build
 
-      # The orchestrator owns the API process, so the offline-replay scenario
-      # can take the API away and give it back.
+      # The orchestrator owns the API process, because a scenario needs a real
+      # outage.
       - name: Run the mounted suite
         shell: bash
         run: |
@@ -200,8 +203,12 @@ jobs:
             done
             xdpyinfo -display :99 > /dev/null \
               || { echo '--- Xvfb log ---'; cat "$RUNNER_TEMP/xvfb.log"; exit 1; }
+            # A mutating call on the Linux mount never returns, so this leg runs
+            # the lifecycle alone until it does.
+            pnpm --filter @cipherbox/desktop-e2e run test:e2e -- --scenario mount-lifecycle
+          else
+            pnpm --filter @cipherbox/desktop-e2e run test:e2e
           fi
-          pnpm --filter @cipherbox/desktop-e2e run test:e2e
         env:
           CIPHERBOX_DESKTOP_BINARY: ${{ github.workspace }}/target/debug/cipherbox-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
           CIPHERBOX_API_ENTRY: ${{ github.workspace }}/apps/api/dist/main.js

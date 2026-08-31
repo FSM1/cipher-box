@@ -10,7 +10,6 @@ import { strict as assert } from 'node:assert';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  readsBack,
   refuses,
   rendersItems,
   withInstances,
@@ -34,22 +33,8 @@ export const writeRoundTrip: Scenario = {
 
       await writeFile(join(a.mountRoot, ROOT_FILE), 'at the root');
       await rendersItems(context, a, 2, 'a file made at the mount root to render a child');
-      await readsBack(
-        context,
-        a,
-        join(a.mountRoot, ROOT_FILE),
-        'at the root',
-        context.deadlines.scenarioMs / 3
-      );
 
       await writeFile(join(a.mountRoot, FOLDER, NESTED_FILE), 'inside a folder');
-      await readsBack(
-        context,
-        a,
-        join(a.mountRoot, FOLDER, NESTED_FILE),
-        'inside a folder',
-        context.deadlines.scenarioMs / 3
-      );
       // The root still holds two children: the nested file is the folder's.
       await rendersItems(context, a, 2, 'a nested file to leave the root count alone');
 

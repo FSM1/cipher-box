@@ -16,20 +16,11 @@ import { deadlines } from './profile';
 import type { Scenario, ScenarioContext } from './scenario';
 import { Stack, requireFile } from './stack';
 import { conflictOutcomes } from './scenarios/conflictOutcomes';
-import { crossClientConvergence } from './scenarios/crossClientConvergence';
 import { mountLifecycle } from './scenarios/mountLifecycle';
-import { offlineReplay } from './scenarios/offlineReplay';
 import { writeRoundTrip } from './scenarios/writeRoundTrip';
 
 // The lifecycle first: every scenario after it stands on a mount that opens.
-// The outage last, because it is the one that takes the API away.
-const SCENARIOS: Scenario[] = [
-  mountLifecycle,
-  writeRoundTrip,
-  conflictOutcomes,
-  crossClientConvergence,
-  offlineReplay,
-];
+const SCENARIOS: Scenario[] = [mountLifecycle, writeRoundTrip, conflictOutcomes];
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 

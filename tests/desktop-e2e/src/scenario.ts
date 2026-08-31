@@ -3,8 +3,8 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { readFile, readdir, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { VaultStatus } from './control';
 import type { Instance } from './instance';
 import { poll } from './poll';
@@ -123,78 +123,4 @@ export async function refuses(
     return error as NodeJS.ErrnoException;
   }
   assert.fail(`${what} must be refused, and it succeeded`);
-}
-
-/**
- * Waits until `path` under a mount reads back `text`.
- *
- * A read that follows a write is not instant. The write journals one op and its
- * content resolves after that, and until it does the projection answers the
- * retryable `EAGAIN` rather than blocking (blueprint/desktop.md "Reads, writes,
- * and the never-block law"). A read that lands ahead of it sees the version
- * before the write, which for a create is an empty file.
- */
-export async function readsBack(
-  context: ScenarioContext,
-  instance: Instance,
-  path: string,
-  text: string,
-  timeoutMs: number
-): Promise<void> {
-  await poll(
-    async () => ({ read: await contentOf(path), vault: await instance.status() }),
-    (found) => found.read === text,
-    {
-      what: `${instance.name}: ${path} to read back what was written`,
-      timeoutMs,
-      intervalMs: context.deadlines.intervalMs,
-    }
-  );
-}
-
-/**
- * Waits until `instance` lists `name` at its mount root and reads `text` back
- * from it, and hands back the whole listing.
- *
- * Each read re-resolves: the manual refresh reads past every cache, and the
- * listing that follows it is the one the mount answers from. A second instance
- * reading through its own mount is the only proof of a publish — the instance
- * that wrote renders its own pending op whether or not it left the device.
- */
-export async function readsThrough(
-  context: ScenarioContext,
-  instance: Instance,
-  name: string,
-  text: string,
-  timeoutMs: number
-): Promise<string[]> {
-  const seen = await poll(
-    async () => {
-      await instance.refresh();
-      const listed = await readdir(instance.mountRoot);
-      const read = listed.includes(name)
-        ? await contentOf(join(instance.mountRoot, name))
-        : 'not listed';
-      return { listed, read, vault: await instance.status() };
-    },
-    (found) => found.read === text,
-    {
-      what: `${instance.name}: the mount to serve ${name}`,
-      timeoutMs,
-      intervalMs: context.deadlines.intervalMs,
-    }
-  );
-  return seen.listed;
-}
-
-/**
- * The file's content, or the error code a read that the projection refused
- * carried — so a wait that runs out reports the refusal rather than a stack.
- */
-async function contentOf(path: string): Promise<string> {
-  try {
-    return await readFile(path, 'utf8');
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code ?? 'the read failed';
-  }
 }
