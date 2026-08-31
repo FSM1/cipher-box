@@ -423,11 +423,14 @@ fn grant_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8>
 /// evidence that the owner grants that recipient now. Either would lift a
 /// standing cut off bytes the attacker chose.
 ///
-/// The raise may run before or after the publish that carries the row. A lift
-/// alone hands out nothing: a re-seal mints one blob per **ledger row**
-/// (`reseal_scope_root`), so a recipient with no row gets no blob whatever the
-/// floor says. Raising first therefore leaves no window where a landed publish
-/// has no matching floor.
+/// Call it **after** the publish that carries the row landed. A raise ahead of
+/// the publish is not inert, because the row it needs is not the owner's to
+/// withhold: a committed write grantee republishes a pre-cut owner-signed set
+/// and restores it, so a lift with no publish behind it undoes the cut for
+/// good. The cost of that order is a narrow retry gap — a landed publish whose
+/// raise then failed leaves the recipient withheld until the owner grants
+/// again — which fails toward more restriction, the direction the floor law
+/// takes everywhere.
 pub(crate) async fn record_grant_floor<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
@@ -1477,6 +1480,34 @@ mod tests {
         assert!(
             after.blob_tags(0x0a).is_empty(),
             "a grant to another recipient must not lift this one's cut"
+        );
+    }
+
+    #[test]
+    fn a_grant_at_the_cuts_own_epoch_lifts_it() {
+        // The load-bearing boundary. A claim conversion re-seals at the scope's
+        // current read epoch, and the cut recorded that same epoch, so a
+        // legitimate re-grant always lands at equality. A strict comparison
+        // here would withhold every re-grant.
+        let net = FakeNet::new().scope(0x0a, 4, &[]);
+        let recipient = net.owner.grantee.public();
+        let floors = InMemoryFloorStore::default();
+        cut_at(&floors, 0x0a, &recipient.to_bytes(), 5);
+        block_on(record_grant_floor(&floors, &sid(0x0a), &recipient, 5))
+            .expect("the grant floor raises");
+
+        let (outcome, after, ..) = run_over(
+            SeededEntropy::new(0xCA5CADE),
+            floors,
+            RootFx::new(net.clone()),
+            net.clone(),
+            vec![childref(0x0a)],
+        );
+        outcome.expect("the cascade runs");
+        assert_eq!(
+            after.blob_tags(0x0a).len(),
+            1,
+            "a grant at the cut's own epoch must lift it"
         );
     }
 

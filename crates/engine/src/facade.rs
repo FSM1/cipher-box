@@ -6450,24 +6450,6 @@ where {
             }
 
             if outcome != ClaimOutcome::Unchanged {
-                // The owner's own grant decision, and the only evidence of one
-                // this pass holds: the conversion minted this row rather than
-                // finding it. An unchanged outcome proves nothing, because the
-                // set it matched against is the resolved record, which a
-                // committed write grantee authors
-                // (`rotation::record_grant_floor`). Ahead of the publish,
-                // because a lift alone mints no blob.
-                if let Err(e) = record_grant_floor(
-                    &self.seams.floor_store,
-                    &target.scope.scope_id,
-                    &claimant.enc_subkey(),
-                    current.current_read_epoch,
-                )
-                .await
-                {
-                    failure.get_or_insert(EngineError::from_seam(e));
-                    continue;
-                }
                 match self
                     .publish_converted_claim(session, &net, &target, &current, &commitment, &ledger)
                     .await
@@ -6477,6 +6459,26 @@ where {
                         commitment_sig = signed;
                         current.commitment = commitment;
                         current.grant_ledger = ledger;
+                        // The owner's own grant decision, and the only evidence
+                        // of one this pass holds: the conversion **minted** this
+                        // row, and the set carrying it landed. `Upgraded` and
+                        // `Unchanged` both turn on a row the resolved record
+                        // already carried, which a committed write grantee
+                        // authors, so neither may lift a cut
+                        // (`rotation::record_grant_floor`).
+                        if outcome == ClaimOutcome::Granted {
+                            if let Err(e) = record_grant_floor(
+                                &self.seams.floor_store,
+                                &target.scope.scope_id,
+                                &claimant.enc_subkey(),
+                                current.current_read_epoch,
+                            )
+                            .await
+                            {
+                                failure.get_or_insert(EngineError::from_seam(e));
+                                continue;
+                            }
+                        }
                     }
                     Err(e) => {
                         failure.get_or_insert(e);
