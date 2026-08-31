@@ -13,6 +13,11 @@ export class VaultPage {
   /** Loads the front door and waits for the tab to publish its engine taps. */
   async open(): Promise<void> {
     await this.page.goto('/');
+    await this.ready();
+  }
+
+  /** Waits for the tab to publish its engine taps, whatever route it loaded. */
+  async ready(): Promise<void> {
     await this.page.waitForFunction(() => window.__CIPHERBOX_ENGINE__ !== undefined);
   }
 
@@ -39,12 +44,21 @@ export class VaultPage {
    * own and none is ever an `evaluate` argument in the uploaded trace.
    */
   async joinAs(accountId: string): Promise<void> {
+    await this.signInHere(accountId);
+    await this.page.waitForURL('**/files');
+  }
+
+  /**
+   * Starts a session in whatever route the tab is on. `/invite` is outside
+   * `RequireAuth` and holds the capability in its address, so a claimant signs
+   * in there rather than being carried to the vault first.
+   */
+  async signInHere(accountId: string): Promise<void> {
     await this.page.evaluate(async (account) => {
       const secret = crypto.getRandomValues(new Uint8Array(32));
       const hex = Array.from(secret, (byte) => byte.toString(16).padStart(2, '0')).join('');
       await window.__CIPHERBOX_ENGINE__!.signIn(hex, account);
     }, accountId);
-    await this.page.waitForURL('**/files');
   }
 
   /** How many times this tab re-exported its secret for a promotion. */
