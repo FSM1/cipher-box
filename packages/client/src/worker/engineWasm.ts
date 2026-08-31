@@ -77,6 +77,7 @@ export interface WasmSnapshotChild {
   readonly pending: number;
   readonly deadLetter: boolean;
   readonly contentVersion?: bigint;
+  readonly contentCid?: Uint8Array;
 }
 
 /** wasm-bindgen `DeadLetter` — one retained dead-lettered op and its reason. */
@@ -209,12 +210,16 @@ export interface WasmAuthMethod {
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
   command(command: WasmCommand): Promise<WasmCommandOutcome>;
-  /** Either `(parent, name)` or `(node)` — never both, never neither. */
+  /**
+   * Either `(parent, name)` or `(node)` — never both, never neither.
+   * `expectedVersion` belongs to `node` alone.
+   */
   beginWrite(
     parent: WasmNodeId | undefined,
     name: string | undefined,
     node: WasmNodeId | undefined,
-    size: number
+    size: number,
+    expectedVersion: Uint8Array | undefined
   ): Promise<bigint>;
   pushChunk(handle: bigint, chunk: Uint8Array): Promise<unknown>;
   commitWrite(handle: bigint): Promise<bigint>;

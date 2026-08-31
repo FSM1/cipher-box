@@ -627,6 +627,13 @@ impl SnapshotChild {
     pub fn content_version(&self) -> Option<u64> {
         self.inner.content_version
     }
+
+    /// The head version's content root CID, or `undefined` until projected.
+    /// A caller hands it back on `beginWrite` to anchor a write where it read.
+    #[wasm_bindgen(getter, js_name = contentCid)]
+    pub fn content_cid(&self) -> Option<Vec<u8>> {
+        self.inner.content_cid.clone()
+    }
 }
 
 impl SnapshotChild {
@@ -1931,6 +1938,7 @@ mod tests {
                     pending: facade::PendingClass::Content,
                     dead_letter: false,
                     content_version: Some(2),
+                    content_cid: Some(vec![0xC1, 0xD0]),
                 },
                 facade::SnapshotChild {
                     id: facade::NodeId([4u8; 16]),
@@ -1941,6 +1949,7 @@ mod tests {
                     pending: facade::PendingClass::None,
                     dead_letter: true,
                     content_version: None,
+                    content_cid: None,
                 },
             ],
             ancestors: vec![facade::Breadcrumb {

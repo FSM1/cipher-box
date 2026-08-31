@@ -25,6 +25,7 @@ import type { EngineWasm, WasmCommandOutcome, WasmEngineHandle } from './engineW
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
+  bytes,
   buildCommand,
   count,
   minted,
@@ -221,14 +222,18 @@ export class EngineHost implements EngineHostLike {
         undefined,
         undefined,
         nodeId(this.wasm, fields.node, 'node'),
-        reserved
+        reserved,
+        fields.expectedVersion === undefined
+          ? undefined
+          : new Uint8Array(bytes(fields.expectedVersion, 'expectedVersion'))
       );
     }
     return this.handle.beginWrite(
       nodeId(this.wasm, fields.parent, 'parent'),
       text(fields.name, 'name'),
       undefined,
-      reserved
+      reserved,
+      undefined
     );
   }
 

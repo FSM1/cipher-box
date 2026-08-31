@@ -41,6 +41,7 @@ const folder: ListingRow = {
   size: '-',
   bytes: null,
   contentVersion: null,
+  contentCid: null,
   modified: '-',
   pending: 'none',
   deadLetter: false,

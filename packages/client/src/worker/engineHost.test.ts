@@ -243,11 +243,14 @@ describe('EngineHost request fields', () => {
   it('opens a write on well-typed fields', async () => {
     const { host, calls } = await permissiveHost();
 
+    const readAt = new Uint8Array([0xc1, 0xd0]);
     await host.beginWrite({ parent: node, name: 'a.txt' }, 4);
     await host.beginWrite({ node }, 8);
+    await host.beginWrite({ node, expectedVersion: readAt }, 8);
 
-    expect(calls[0]).toEqual(['beginWrite', { bytes: node }, 'a.txt', undefined, 4]);
-    expect(calls[1]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8]);
+    expect(calls[0]).toEqual(['beginWrite', { bytes: node }, 'a.txt', undefined, 4, undefined]);
+    expect(calls[1]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8, undefined]);
+    expect(calls[2]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8, readAt]);
   });
 
   it('reads a stream window on well-typed bounds', async () => {

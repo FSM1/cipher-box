@@ -63,7 +63,7 @@ export function record(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function bytes(value: unknown, field: string): Uint8Array {
+export function bytes(value: unknown, field: string): Uint8Array {
   if (!(value instanceof Uint8Array)) throw invalidField(field, value);
   return value;
 }
@@ -510,6 +510,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       pending: pendingClass(wasm, child.pending),
       deadLetter: child.deadLetter,
       contentVersion: child.contentVersion ?? null,
+      contentCid: child.contentCid ?? null,
     })),
     ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
     deadLetters: view.deadLetters.map((dead) => ({

@@ -234,6 +234,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 pending: facade::PendingClass::Content,
                 dead_letter: false,
                 content_version: Some(2),
+                content_cid: Some(vec![0xC1, 0xD0]),
             },
             facade::SnapshotChild {
                 id: facade::NodeId([4u8; 16]),
@@ -244,6 +245,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 pending: facade::PendingClass::None,
                 dead_letter: true,
                 content_version: None,
+                content_cid: None,
             },
         ],
         ancestors: vec![facade::Breadcrumb {

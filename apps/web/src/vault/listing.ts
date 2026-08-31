@@ -28,6 +28,8 @@ export interface ListingRow {
   bytes: bigint | null;
   /** The engine's content version count; `null` until projected. */
   contentVersion: bigint | null;
+  /** The head version's content root CID, which anchors an edit of this row. */
+  contentCid: Uint8Array | null;
   /** Formatted mtime, or `...` while the projection is still resolving. */
   modified: string;
   pending: PendingClass;
@@ -53,6 +55,7 @@ function toRow(child: SnapshotChildDescriptor): ListingRow {
     size: isFolder ? NOT_APPLICABLE : projectedSize(child.size),
     bytes: isFolder ? null : child.size,
     contentVersion: child.contentVersion,
+    contentCid: child.contentCid,
     modified: projectedDate(child.mtime),
     pending: child.pending,
     deadLetter: child.deadLetter,

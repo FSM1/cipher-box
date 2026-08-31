@@ -74,6 +74,7 @@ describe('the vault browser read path', () => {
             pending: 'none',
             deadLetter: false,
             contentVersion: 1n,
+            contentCid: null,
           },
           {
             id: DOCS,
@@ -84,6 +85,7 @@ describe('the vault browser read path', () => {
             pending: 'none',
             deadLetter: false,
             contentVersion: null,
+            contentCid: null,
           },
         ],
       })
@@ -114,6 +116,7 @@ describe('the vault browser read path', () => {
       pending: 'none' as const,
       deadLetter: false,
       contentVersion: null,
+      contentCid: null,
     };
     await landSnapshot(engine, folderView({ children: [unresolved] }));
 
@@ -147,6 +150,7 @@ describe('the vault browser read path', () => {
             pending: 'none',
             deadLetter: false,
             contentVersion: null,
+            contentCid: null,
           },
         ],
       })
@@ -192,6 +196,7 @@ describe('the vault browser read path', () => {
             pending: 'none',
             deadLetter: false,
             contentVersion: null,
+            contentCid: null,
           },
         ],
       })
@@ -250,6 +255,7 @@ describe('the vault browser read path', () => {
               pending: 'none',
               deadLetter: false,
               contentVersion: null,
+              contentCid: null,
             },
           ],
         })

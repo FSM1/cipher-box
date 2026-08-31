@@ -230,9 +230,11 @@ impl EngineHandle {
 
     /// Opens a write handle for a file of `size` plaintext bytes, reserving the
     /// exact sealed total it will occupy. `node` names an existing file for a
-    /// new version; `parent` + `name` create one. Resolves with the handle id;
-    /// rejects with the engine error (an over-budget refusal names which budget
-    /// and how much room is left).
+    /// new version; `parent` + `name` create one. `expectedVersion` is the
+    /// `contentCid` the caller read, which anchors the conditional edit where
+    /// the caller's bytes came from; it belongs to a new version alone.
+    /// Resolves with the handle id; rejects with the engine error (an
+    /// over-budget refusal names which budget and how much room is left).
     #[wasm_bindgen(js_name = beginWrite)]
     pub fn begin_write(
         &self,
@@ -240,20 +242,24 @@ impl EngineHandle {
         name: Option<String>,
         node: Option<NodeId>,
         size: f64,
+        expected_version: Option<Vec<u8>>,
     ) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
             let target = match (parent, name, node) {
-                (Some(parent), Some(name), None) => WriteTarget::NewFile {
-                    parent: parent.facade(),
-                    name,
-                },
+                (Some(parent), Some(name), None) if expected_version.is_none() => {
+                    WriteTarget::NewFile {
+                        parent: parent.facade(),
+                        name,
+                    }
+                }
                 (None, None, Some(node)) => WriteTarget::Version {
                     node: node.facade(),
+                    expected_version,
                 },
                 _ => {
                     return Err(JsError::new(
-                        "beginWrite takes either (parent, name) or (node), never both",
+                        "beginWrite takes either (parent, name) or (node, expectedVersion?), never both",
                     )
                     .into());
                 }

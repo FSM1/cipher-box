@@ -102,6 +102,8 @@ export interface SnapshotChildDescriptor {
   pending: PendingClass;
   deadLetter: boolean;
   contentVersion: bigint | null;
+  /** The head version's content root CID; `null` until projected. */
+  contentCid: Uint8Array | null;
 }
 
 /**
@@ -400,7 +402,15 @@ export type CommandOutcomeDescriptor =
  * Where a streaming write lands: a new file named `name` under `parent`, or a
  * new version of the existing file `node`. Never both (the engine rejects it).
  */
-export type WriteTarget = { parent: Uint8Array; name: string } | { node: Uint8Array };
+export type WriteTarget =
+  | { parent: Uint8Array; name: string }
+  /**
+   * `expectedVersion` is the `contentCid` the caller read. It anchors the
+   * conditional edit on the version the caller's bytes came from, rather than
+   * on whatever the engine's own view has advanced to by the time the handle
+   * opens. Omit it to take the engine's derivation.
+   */
+  | { node: Uint8Array; expectedVersion?: Uint8Array };
 
 /** An open write handle's id — the engine's `u64`, opaque to this layer. */
 export type WriteHandle = bigint;

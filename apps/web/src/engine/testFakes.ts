@@ -31,6 +31,7 @@ export function view(
       pending: 'none',
       deadLetter: false,
       contentVersion: null,
+      contentCid: null,
     })),
     ancestors: [],
     deadLetters: [],

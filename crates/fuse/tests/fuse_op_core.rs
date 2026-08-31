@@ -2324,9 +2324,14 @@ mod published {
         let node = mount.node;
         {
             let engine = mount.core.engine_mut();
-            let handle =
-                block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
-                    .expect("the write opens");
+            let handle = block_on(engine.begin_write(
+                WriteTarget::Version {
+                    node,
+                    expected_version: None,
+                },
+                plaintext.len() as u64,
+            ))
+            .expect("the write opens");
             for slice in plaintext.chunks(7) {
                 block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
             }
@@ -2348,9 +2353,14 @@ mod published {
         let mut tasks = mount.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
 
-        let handle =
-            block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
-                .expect("the second device's write opens");
+        let handle = block_on(engine.begin_write(
+            WriteTarget::Version {
+                node,
+                expected_version: None,
+            },
+            plaintext.len() as u64,
+        ))
+        .expect("the second device's write opens");
         for slice in plaintext.chunks(7) {
             block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
         }

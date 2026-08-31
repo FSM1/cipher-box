@@ -1375,8 +1375,15 @@ fn a_staged_second_version(
     .expect("the first version commits");
     tick(world, engine, tasks);
     let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
-    write_file(engine, WriteTarget::Version { node }, &vec![0xBB; 323])
-        .expect("the second version commits");
+    write_file(
+        engine,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &vec![0xBB; 323],
+    )
+    .expect("the second version commits");
     let op_id = block_on(alice.staging_store.queued_ops()).unwrap()[0].0;
     (node, op_id)
 }
@@ -1576,7 +1583,15 @@ fn a_stream_serves_the_pinned_version_across_a_head_change() {
 
     // The owner's other device republishes the file under a new version while
     // the stream is mid-body.
-    write_file(&mut engine_a, WriteTarget::Version { node }, &second).expect("the update commits");
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &second,
+    )
+    .expect("the update commits");
     tick(&world, &engine_a, &mut tasks);
 
     while (assembled.len() as u64) < first.len() as u64 {
@@ -1623,7 +1638,15 @@ fn a_stream_reports_the_size_of_the_version_it_pinned() {
     let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, 400);
 
     let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
-    write_file(&mut engine_a, WriteTarget::Version { node }, &short).expect("the update commits");
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &short,
+    )
+    .expect("the update commits");
     tick(&world, &engine_a, &mut tasks);
 
     assert_eq!(engine_b.stream_size(stream), Some(long.len() as u64));
@@ -1708,7 +1731,10 @@ fn an_update_content_write_round_trips_the_new_version_to_a_second_device() {
 
     write_file(
         &mut engine_a,
-        WriteTarget::Version { node },
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
         b"second version bytes, longer than the first",
     )
     .unwrap();
@@ -4456,7 +4482,10 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
     let authored_at = cipherbox_engine::seams::Scheduler::now(&world.scheduler).0;
     write_file(
         &mut engine,
-        WriteTarget::Version { node: file },
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
         b"v2 bytes",
     )
     .unwrap();
@@ -6623,7 +6652,10 @@ fn every_content_publish_raises_the_published_op_mark() {
     let file = child_id(&engine, ROOT, "photo.bin");
     let updated = write_file(
         &mut engine,
-        WriteTarget::Version { node: file },
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
         &(0..64u8).collect::<Vec<u8>>(),
     )
     .unwrap();
@@ -7236,7 +7268,10 @@ fn a_cancelled_create_cascades_onto_its_node_and_a_cancelled_version_does_not() 
     .unwrap();
     let version = write_file(
         &mut engine,
-        WriteTarget::Version { node: kept },
+        WriteTarget::Version {
+            node: kept,
+            expected_version: None,
+        },
         b"a new version",
     )
     .unwrap();
@@ -7627,7 +7662,15 @@ fn stage_a_second_version(
 
     let file = child_id(&engine, ROOT, "photo.bin");
     let next: Vec<u8> = (0..200u8).rev().collect();
-    write_file(&mut engine, WriteTarget::Version { node: file }, &next).unwrap();
+    write_file(
+        &mut engine,
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        &next,
+    )
+    .unwrap();
     let version = block_on(async {
         let queued = device.staging_store.queued_ops().await.unwrap();
         let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
@@ -9215,8 +9258,15 @@ fn a_file_in_view_repaints_from_another_devices_version_on_the_tick() {
     let (engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    write_file(&mut engine_b, WriteTarget::Version { node }, &second)
-        .expect("the second device's write commits");
+    write_file(
+        &mut engine_b,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &second,
+    )
+    .expect("the second device's write commits");
     tick(&world, &engine_b, &mut tasks_b);
 
     // Device A polls without the file in view: nothing it resolves carries the
@@ -9304,13 +9354,27 @@ fn an_edit_refuses_to_supersede_a_version_published_after_it_was_formed() {
     let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    let op_id = write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
-        .expect("the second device's write commits");
+    let op_id = write_file(
+        &mut engine_b,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &bobs,
+    )
+    .expect("the second device's write commits");
     let (root_cid, leaves) = staged_version(&bob);
     // The first device publishes over the version the queued edit was formed
     // against.
-    write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
-        .expect("the first device's write commits");
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &alices,
+    )
+    .expect("the first device's write commits");
     tick(&world, &engine_a, &mut tasks_a);
 
     let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
@@ -9358,8 +9422,15 @@ fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
         let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
         let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-        let op_id = write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
-            .expect("the second device's write commits");
+        let op_id = write_file(
+            &mut engine_b,
+            WriteTarget::Version {
+                node,
+                expected_version: None,
+            },
+            &bobs,
+        )
+        .expect("the second device's write commits");
         let (root_cid, leaves) = staged_version(&bob);
         // Leaf zero left staging. Marked, it reached a destination and the
         // version is still assemblable; unmarked, those bytes are simply gone.
@@ -9377,8 +9448,15 @@ fn a_losing_edits_verdict_is_decided_against_its_own_leaves() {
             block_on(bob.staging_store.remove_staged_bytes(leaf)).unwrap();
         }
 
-        write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
-            .expect("the first device's write commits");
+        write_file(
+            &mut engine_a,
+            WriteTarget::Version {
+                node,
+                expected_version: None,
+            },
+            &alices,
+        )
+        .expect("the first device's write commits");
         tick(&world, &engine_a, &mut tasks_a);
 
         let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
@@ -9567,12 +9645,33 @@ fn a_second_queued_edit_does_not_slip_past_the_writer_that_beat_the_first() {
     let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    let one = write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
-        .expect("the first edit commits");
-    let two = write_file(&mut engine_b, WriteTarget::Version { node }, &first)
-        .expect("the second edit commits on top of the first");
-    write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
-        .expect("the first device's write commits");
+    let one = write_file(
+        &mut engine_b,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &bobs,
+    )
+    .expect("the first edit commits");
+    let two = write_file(
+        &mut engine_b,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &first,
+    )
+    .expect("the second edit commits on top of the first");
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &alices,
+    )
+    .expect("the first device's write commits");
     tick(&world, &engine_a, &mut tasks_a);
 
     let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
@@ -9625,13 +9724,26 @@ fn an_edit_anchors_on_the_version_its_handle_opened_on() {
     let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
     let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
 
-    let handle = block_on(engine_b.begin_write(WriteTarget::Version { node }, bobs.len() as u64))
-        .expect("the handle opens against the version the caller read");
+    let handle = block_on(engine_b.begin_write(
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        bobs.len() as u64,
+    ))
+    .expect("the handle opens against the version the caller read");
 
     // The other device publishes, and this one's own render advances past it
     // while the draft is still open.
-    write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
-        .expect("the first device's write commits");
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &alices,
+    )
+    .expect("the first device's write commits");
     tick(&world, &engine_a, &mut tasks_a);
     assert_eq!(
         block_on(engine_b.read_content(node)).expect("the refreshed head reads"),
@@ -9654,6 +9766,73 @@ fn an_edit_anchors_on_the_version_its_handle_opened_on() {
     );
 }
 
+/// The window the handle's own anchor leaves open: a caller reads at one
+/// version, a refresh advances this device's view past it, and only then does
+/// the caller open its handle. The engine's derivation would call the newer
+/// version the one the caller wrote against. The version the caller read is the
+/// anchor when the caller names it.
+#[test]
+fn a_caller_supplied_version_anchors_the_write_the_caller_actually_read() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+
+    // What the caller read, taken off the same projection a host renders.
+    let read_at = block_on(engine_b.snapshot(ROOT))
+        .unwrap()
+        .children
+        .into_iter()
+        .find(|child| child.id == node)
+        .and_then(|child| child.content_cid)
+        .expect("the read projected a version");
+
+    // The other device publishes and this device's own view advances past it,
+    // all before the caller opens a handle for the bytes it read earlier.
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &alices,
+    )
+    .expect("the first device's write commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the refreshed head reads"),
+        alices
+    );
+
+    let op_id = write_file(
+        &mut engine_b,
+        WriteTarget::Version {
+            node,
+            expected_version: Some(read_at),
+        },
+        &bobs,
+    )
+    .expect("the write commits, and its fate is decided on the drain");
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::BaseSuperseded
+        }],
+        "a write derived from a superseded version does not clobber the newer one"
+    );
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head still reads"),
+        alices,
+        "the concurrent version stands"
+    );
+}
+
 /// A device that never read the file has no head to anchor on, so `beginWrite`
 /// resolves one — before a byte is spent. The write then publishes like any
 /// other rather than dead-lettering after a whole upload.
@@ -9667,8 +9846,15 @@ fn an_edit_from_a_device_that_never_read_the_file_resolves_its_anchor() {
 
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
-    write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
-        .expect("the write commits against the head it resolved");
+    write_file(
+        &mut engine_b,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &bobs,
+    )
+    .expect("the write commits against the head it resolved");
     tick(&world, &engine_b, &mut tasks_b);
 
     assert!(
@@ -9793,7 +9979,15 @@ fn file_with_history(
     tick(world, engine, tasks);
     let node = child_id(engine, ROOT, "clip.bin");
     for body in rest {
-        write_file(engine, WriteTarget::Version { node }, body).expect("the update commits");
+        write_file(
+            engine,
+            WriteTarget::Version {
+                node,
+                expected_version: None,
+            },
+            body,
+        )
+        .expect("the update commits");
         tick(world, engine, tasks);
     }
     node

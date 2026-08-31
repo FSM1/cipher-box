@@ -178,6 +178,11 @@ pub enum WriteTarget {
     Version {
         /// Target file node.
         node: NodeId,
+        /// The version the caller's bytes were derived from, when the caller
+        /// read one. The conditional-edit anchor is otherwise derived from this
+        /// device's own rendered view, which a refresh between the read and the
+        /// open can advance past what the caller actually holds.
+        expected_version: Option<Vec<u8>>,
     },
 }
 
@@ -189,7 +194,14 @@ impl fmt::Debug for WriteTarget {
                 .field("parent", parent)
                 .field("name", &RedactedText::of(name))
                 .finish(),
-            Self::Version { node } => f.debug_struct("Version").field("node", node).finish(),
+            Self::Version {
+                node,
+                expected_version,
+            } => f
+                .debug_struct("Version")
+                .field("node", node)
+                .field("expectedVersion", &expected_version.is_some())
+                .finish(),
         }
     }
 }
@@ -308,6 +320,11 @@ pub struct SnapshotChild {
     pub dead_letter: bool,
     /// Retained version count, `None` until projected.
     pub content_version: Option<u64>,
+    /// The head version's content root CID, `None` until projected. A caller
+    /// that reads at this version hands it back on
+    /// [`WriteTarget::Version::expected_version`], so the write it derives is
+    /// anchored where it was read.
+    pub content_cid: Option<Vec<u8>>,
 }
 
 impl fmt::Debug for SnapshotChild {
@@ -321,6 +338,7 @@ impl fmt::Debug for SnapshotChild {
             .field("pending", &self.pending)
             .field("dead_letter", &self.dead_letter)
             .field("content_version", &self.content_version)
+            .field("content_cid", &self.content_cid)
             .finish()
     }
 }
@@ -6548,12 +6566,20 @@ where {
                 refuse_full_parent(&rendered, *parent, None, None)?;
                 None
             }
-            WriteTarget::Version { node } => {
+            WriteTarget::Version {
+                node,
+                expected_version,
+            } => {
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, *node)?;
                 match rendered.node(*node).map(|meta| meta.kind) {
                     Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
-                    Some(_) => self.write_anchor(*node).await?,
+                    // The caller's own read wins: only it knows which version
+                    // the bytes it is about to push were derived from.
+                    Some(_) => match expected_version {
+                        Some(expected) => Some(expected.clone()),
+                        None => self.write_anchor(*node).await?,
+                    },
                     None => return Err(EngineError::UnknownNode),
                 }
             }
@@ -6580,7 +6606,7 @@ where {
         let opened = (|| {
             let node = match &target {
                 WriteTarget::NewFile { .. } => self.mint_node_id()?,
-                WriteTarget::Version { node } => *node,
+                WriteTarget::Version { node, .. } => *node,
             };
             let key = ContentKey::generate(&mut *self.entropy.borrow_mut())
                 .map_err(EngineError::from_entropy)?;
@@ -6880,7 +6906,7 @@ where {
                     authored_at,
                 )
             }
-            WriteTarget::Version { node } => {
+            WriteTarget::Version { node, .. } => {
                 let base_sequence = self.base_sequence_for(node).await?;
                 Op::update_content(node, content, base_version_cid, base_sequence, authored_at)
             }
@@ -7106,6 +7132,7 @@ where {
                 pending: pending.get(&child.id).copied().unwrap_or_default(),
                 dead_letter: dead_nodes.contains(&child.id),
                 content_version: child.content_version,
+                content_cid: child.head_content_cid.clone(),
             })
             .collect();
         let ancestors = rendered
@@ -8136,6 +8163,7 @@ mod tests {
                 pending: PendingClass::None,
                 dead_letter: false,
                 content_version: None,
+                content_cid: None,
             }],
             ancestors: vec![Breadcrumb {
                 id: NodeId([4; 16]),
@@ -10518,7 +10546,15 @@ mod tests {
             create(&mut engine, root, "notes.txt", NodeKind::File);
             let node = block_on(engine.snapshot(root)).unwrap().children[0].id;
 
-            write_file(&mut engine, WriteTarget::Version { node }, b"bytes").unwrap();
+            write_file(
+                &mut engine,
+                WriteTarget::Version {
+                    node,
+                    expected_version: None,
+                },
+                b"bytes",
+            )
+            .unwrap();
 
             let view = block_on(engine.snapshot(root)).unwrap();
             assert_eq!(view.children[0].pending, PendingClass::Content);

@@ -15,6 +15,7 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
     size: '12 B',
     bytes: 12n,
     contentVersion: 3n,
+    contentCid: null,
     modified: '14 Nov 2023',
     pending: 'none',
     deadLetter: false,

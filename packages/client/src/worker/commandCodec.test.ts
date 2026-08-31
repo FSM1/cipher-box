@@ -788,6 +788,7 @@ describe('readSnapshot', () => {
           pending: 2,
           deadLetter: false,
           contentVersion: 2n,
+          contentCid: new Uint8Array([0xc1, 0xd0]),
         },
         {
           id: new Uint8Array(16).fill(4),
@@ -832,6 +833,7 @@ describe('readSnapshot', () => {
           pending: 'content',
           deadLetter: false,
           contentVersion: 2n,
+          contentCid: new Uint8Array([0xc1, 0xd0]),
         },
         {
           id: new Uint8Array(16).fill(4),
@@ -842,6 +844,7 @@ describe('readSnapshot', () => {
           pending: 'none',
           deadLetter: true,
           contentVersion: null,
+          contentCid: null,
         },
         {
           id: new Uint8Array(16).fill(5),
@@ -852,6 +855,7 @@ describe('readSnapshot', () => {
           pending: 'metadata',
           deadLetter: false,
           contentVersion: null,
+          contentCid: null,
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
