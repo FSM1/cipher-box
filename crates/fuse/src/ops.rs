@@ -9,8 +9,10 @@
 //! the focus window live below the facade, and the projection only reports
 //! which node an operation had in view.
 
+use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use cipherbox_core::codec::RedactedText;
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{
     Command, Engine, EngineView, Event, NodeAttrs, NodeId, NodeKind, SessionStatus, StatFs,
@@ -51,7 +53,7 @@ pub struct Attributes {
 /// a whole `FSP_FSCTL_DIR_INFO`, and re-`getattr`-ing every child to fill it
 /// would put a whole directory into the engine's focus window. Both come out of
 /// the one render the listing already made.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DirEntry {
     /// The session's inode number for the child.
     pub ino: u64,
@@ -65,6 +67,18 @@ pub struct DirEntry {
     pub size: Option<u64>,
     /// Modification time in Unix millis, once projected.
     pub mtime_millis: Option<u64>,
+}
+
+impl fmt::Debug for DirEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DirEntry")
+            .field("ino", &self.ino)
+            .field("name", &RedactedText::of(&self.name))
+            .field("kind", &self.kind)
+            .field("size", &self.size)
+            .field("mtime_millis", &self.mtime_millis)
+            .finish()
+    }
 }
 
 /// One writable handle's uncommitted content: the sealed spill its writes
@@ -1411,6 +1425,27 @@ mod tests {
 
     fn node(byte: u8) -> NodeId {
         NodeId([byte; 16])
+    }
+
+    /// A listing entry is the projection a host receives per child, so its
+    /// rendering withholds the name for the same reason the engine's do
+    /// (crates/core/src/codec/redact.rs).
+    #[test]
+    fn dir_entry_debug_withholds_the_plaintext_name() {
+        const NAME: &str = "payroll.csv";
+        let entry = DirEntry {
+            ino: 42,
+            name: NAME.to_string(),
+            kind: NodeKind::File,
+            size: Some(11),
+            mtime_millis: Some(3),
+        };
+        let rendered = format!("{entry:?}");
+
+        assert!(!rendered.contains(NAME), "a name never renders: {rendered}");
+        assert!(rendered.contains("DirEntry"), "the shape survives");
+        assert!(rendered.contains("42"), "the inode survives: {rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 
     fn evicted<V>(displaced: Displaced<V>) -> Option<NodeId> {

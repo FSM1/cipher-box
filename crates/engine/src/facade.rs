@@ -21,7 +21,7 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use cipherbox_core::codec::RedactedBytes;
+use cipherbox_core::codec::{RedactedBytes, RedactedText};
 use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
@@ -163,7 +163,7 @@ pub struct WriteHandle(pub u64);
 pub struct StreamHandle(pub u64);
 
 /// What a write handle is writing to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum WriteTarget {
     /// A new file under `parent`, created by the same commit.
     NewFile {
@@ -177,6 +177,19 @@ pub enum WriteTarget {
         /// Target file node.
         node: NodeId,
     },
+}
+
+impl fmt::Debug for WriteTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NewFile { parent, name } => f
+                .debug_struct("NewFile")
+                .field("parent", parent)
+                .field("name", &RedactedText::of(name))
+                .finish(),
+            Self::Version { node } => f.debug_struct("Version").field("node", node).finish(),
+        }
+    }
 }
 
 /// What a created node is. Kind is sealed inside the read-body on the wire;
@@ -217,7 +230,7 @@ pub enum PendingClass {
 
 /// A node's host-facing attributes, projected from the rendered view for a
 /// FUSE getattr/readdir.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct NodeAttrs {
     /// Stable node id.
     pub id: NodeId,
@@ -233,6 +246,19 @@ pub struct NodeAttrs {
     pub content_version: Option<u64>,
 }
 
+impl fmt::Debug for NodeAttrs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeAttrs")
+            .field("id", &self.id)
+            .field("name", &RedactedText::of(&self.name))
+            .field("kind", &self.kind)
+            .field("size", &self.size)
+            .field("mtime", &self.mtime)
+            .field("content_version", &self.content_version)
+            .finish()
+    }
+}
+
 /// Minimal filesystem-level counters for a FUSE statfs. Node count only:
 /// quota and byte accounting live on the API client and are not wired at the
 /// facade.
@@ -243,7 +269,7 @@ pub struct StatFs {
 }
 
 /// One ancestor step in a [`SnapshotView`]'s breadcrumb trail.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Breadcrumb {
     /// Stable node id.
     pub id: NodeId,
@@ -251,9 +277,18 @@ pub struct Breadcrumb {
     pub name: String,
 }
 
+impl fmt::Debug for Breadcrumb {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Breadcrumb")
+            .field("id", &self.id)
+            .field("name", &RedactedText::of(&self.name))
+            .finish()
+    }
+}
+
 /// One direct child in a [`SnapshotView`], projected key-free from the
 /// rendered view plus the op-queue/dead-letter bookkeeping.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SnapshotChild {
     /// Stable node id.
     pub id: NodeId,
@@ -271,6 +306,21 @@ pub struct SnapshotChild {
     pub dead_letter: bool,
     /// Retained version count, `None` until projected.
     pub content_version: Option<u64>,
+}
+
+impl fmt::Debug for SnapshotChild {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SnapshotChild")
+            .field("id", &self.id)
+            .field("name", &RedactedText::of(&self.name))
+            .field("kind", &self.kind)
+            .field("size", &self.size)
+            .field("mtime", &self.mtime)
+            .field("pending", &self.pending)
+            .field("dead_letter", &self.dead_letter)
+            .field("content_version", &self.content_version)
+            .finish()
+    }
 }
 
 /// Which budget refused a write, and what a user can do about it. A full device
@@ -551,7 +601,7 @@ pub struct SessionStatus {
 /// A key-free snapshot of one folder for a host UI paint: its children, its
 /// breadcrumb trail, the retained dead letters, and the staleness rung — one
 /// internally-consistent read of the rendered view (state law).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SnapshotView {
     /// The rendered root node id.
     pub root: NodeId,
@@ -576,6 +626,23 @@ pub struct SnapshotView {
     pub retained_records: usize,
     /// See [`SessionStatus::staleness`].
     pub staleness: Staleness,
+}
+
+impl fmt::Debug for SnapshotView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SnapshotView")
+            .field("root", &self.root)
+            .field("folder", &self.folder)
+            .field("folder_name", &RedactedText::of(&self.folder_name))
+            .field("children", &self.children)
+            .field("ancestors", &self.ancestors)
+            .field("dead_letters", &self.dead_letters)
+            .field("blocked", &self.blocked)
+            .field("settings_hold", &self.settings_hold)
+            .field("retained_records", &self.retained_records)
+            .field("staleness", &self.staleness)
+            .finish()
+    }
 }
 
 /// Grant permission level.
@@ -7851,6 +7918,70 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every host-facing projection carries a plaintext name, and a wasm build
+    /// links `console_error_panic_hook`, so a panic that formats one would put
+    /// that name in the browser console. The rendering keeps the shape and the
+    /// ids and withholds the name (crates/core/src/codec/redact.rs).
+    #[test]
+    fn a_host_facing_projection_debug_withholds_the_plaintext_name() {
+        const NAME: &str = "quarterly-results.txt";
+        const FOLDER: &str = "board-papers";
+
+        let attrs = NodeAttrs {
+            id: NodeId([1; 16]),
+            name: NAME.to_string(),
+            kind: NodeKind::File,
+            size: Some(9),
+            mtime: Some(7),
+            content_version: Some(2),
+        };
+        let view = SnapshotView {
+            root: NodeId([0; 16]),
+            folder: NodeId([2; 16]),
+            folder_name: FOLDER.to_string(),
+            children: vec![SnapshotChild {
+                id: NodeId([3; 16]),
+                name: NAME.to_string(),
+                kind: NodeKind::File,
+                size: None,
+                mtime: None,
+                pending: PendingClass::None,
+                dead_letter: false,
+                content_version: None,
+            }],
+            ancestors: vec![Breadcrumb {
+                id: NodeId([4; 16]),
+                name: FOLDER.to_string(),
+            }],
+            dead_letters: Vec::new(),
+            blocked: None,
+            settings_hold: None,
+            retained_records: 0,
+            staleness: Staleness::Fresh,
+        };
+        let target = WriteTarget::NewFile {
+            parent: NodeId([2; 16]),
+            name: NAME.to_string(),
+        };
+
+        // The view is rendered last so the nested child and breadcrumb
+        // renderings are covered through it.
+        for (shape, rendered) in [
+            ("NodeAttrs", format!("{attrs:?}")),
+            ("SnapshotChild", format!("{:?}", view.children[0])),
+            ("Breadcrumb", format!("{:?}", view.ancestors[0])),
+            ("NewFile", format!("{target:?}")),
+            ("SnapshotView", format!("{view:?}")),
+        ] {
+            assert!(
+                !rendered.contains(NAME) && !rendered.contains(FOLDER),
+                "a name never renders: {rendered}"
+            );
+            assert!(rendered.contains(shape), "the shape survives: {rendered}");
+            assert!(rendered.contains("redacted"), "{rendered}");
+        }
+    }
 
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 

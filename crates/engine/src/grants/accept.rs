@@ -15,7 +15,7 @@
 
 use core::fmt;
 
-use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
+use cipherbox_core::codec::{Map, RedactedBytes, RedactedText, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -40,7 +40,7 @@ use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
 /// courtesy display fields. Opaque application bytes inside the HPKE seal; this
 /// is app framing, not crypto. `sharer_identity_pk` is bound to the verified
 /// contact before anything is trusted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SharePointer {
     /// The scope root's opaque `ipnsName` to resolve.
     pub scope_root_name: Vec<u8>,
@@ -51,6 +51,17 @@ pub struct SharePointer {
     pub display_name: String,
     /// The advertised permission (courtesy; the committed ledger is authority).
     pub permission: Permission,
+}
+
+impl fmt::Debug for SharePointer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharePointer")
+            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
+            .field("sharer_identity_pk", &self.sharer_identity_pk)
+            .field("display_name", &RedactedText::of(&self.display_name))
+            .field("permission", &self.permission)
+            .finish()
+    }
 }
 
 impl SharePointer {
@@ -998,6 +1009,28 @@ mod tests {
             display_name: "Shared Folder".to_string(),
             permission: Permission::Read,
         }
+    }
+
+    /// A scope root's `ipnsName` is a live handle that resolves a record, so it
+    /// is more sensitive than the child `ipnsName` already withheld on
+    /// `NodeMeta` (crates/core/src/codec/redact.rs). The public identity key
+    /// renders in full by the same doctrine.
+    #[test]
+    fn share_pointer_debug_withholds_the_scope_root_name_and_the_label() {
+        let p = pointer();
+        let rendered = format!("{p:?}");
+
+        let unredacted = format!("{:?}", p.scope_root_name);
+        assert!(
+            !rendered.contains(&unredacted),
+            "the scope root name never renders: {rendered}"
+        );
+        assert!(
+            !rendered.contains(&p.display_name),
+            "the label never renders: {rendered}"
+        );
+        assert!(rendered.contains("SharePointer"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 
     #[test]
