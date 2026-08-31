@@ -1847,15 +1847,27 @@ impl EngineView {
             .collect()
     }
 
-    /// The child of `parent` whose name folds equal to `name` under the strict
-    /// comparator, if any (FUSE lookup).
+    /// The child of `parent` a case-insensitive host resolves `name` to: the one
+    /// stored under exactly `name` when it exists, and otherwise the first whose
+    /// name folds equal under the strict comparator (FUSE lookup).
+    ///
+    /// The exact match wins whatever the id order. A write grantee mints its own
+    /// node ids, so without the preference it could plant a folding twin beside
+    /// an owner's file — `\u{fb01}le.txt` beside `file.txt` — pick an id that sorts
+    /// first, and shadow the owner's file at every lookup. The two names render
+    /// differently, so the deceptive-character filter never sees the pair.
     pub fn lookup(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
         let key = collation_key(name);
-        self.rendered
-            .children(parent)
-            .into_iter()
-            .find(|child| collation_key(child.name()) == key)
-            .map(node_attrs)
+        let mut folded = None;
+        for child in self.rendered.children(parent) {
+            if child.name() == name {
+                return Some(node_attrs(child));
+            }
+            if folded.is_none() && collation_key(child.name()) == key {
+                folded = Some(child);
+            }
+        }
+        folded.map(node_attrs)
     }
 
     /// The child of `parent` stored under exactly `name`, if any — what a host
@@ -7918,6 +7930,50 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A write grantee mints its own node ids, so it can plant a name that folds
+    /// equal to an owner's and choose an id that sorts first. The exact spelling
+    /// wins, or the grantee shadows the owner's file at every lookup on a
+    /// case-insensitive host.
+    #[test]
+    fn lookup_prefers_the_exact_name_over_a_folding_twin_that_sorts_first() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        // The ligature U+FB01 folds to "fi", so both names key the same.
+        let twin = NodeId([1; 16]);
+        let owned = NodeId([2; 16]);
+        rendered.upsert_node(NodeMeta::new(twin, "\u{fb01}le.txt", NodeKind::File));
+        rendered.link(root, twin, 1);
+        rendered.upsert_node(NodeMeta::new(owned, "file.txt", NodeKind::File));
+        rendered.link(root, owned, 2);
+        let view = EngineView { rendered };
+
+        assert_eq!(
+            view.lookup(root, "file.txt").expect("resolves").id,
+            owned,
+            "the exact name wins the lower-sorting folding twin"
+        );
+        assert_eq!(
+            view.lookup(root, "\u{fb01}le.txt").expect("resolves").id,
+            twin,
+            "each name still resolves to itself"
+        );
+    }
+
+    /// The fold is what makes a name the host cannot spell exactly reachable, so
+    /// it stays the fallback rather than being dropped for the exact match.
+    #[test]
+    fn lookup_still_folds_when_no_child_carries_the_exact_name() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let junk = NodeId([1; 16]);
+        rendered.upsert_node(NodeMeta::new(junk, ".Ds_StOrE", NodeKind::File));
+        rendered.link(root, junk, 1);
+        let view = EngineView { rendered };
+
+        assert_eq!(view.lookup(root, ".DS_Store").expect("folds").id, junk);
+        assert!(view.lookup_exact(root, ".DS_Store").is_none());
+    }
 
     /// Every host-facing projection carries a plaintext name, and a wasm build
     /// links `console_error_panic_hook`, so a panic that formats one would put
