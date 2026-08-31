@@ -11,6 +11,7 @@
 //! AAD, which binds only `(v, id, scope, epoch, structTag)` ([`aad`]).
 
 pub mod aad;
+pub mod bin_index;
 pub mod body;
 pub mod content_key;
 pub mod envelope;
@@ -23,11 +24,17 @@ pub mod structure;
 pub mod write_body;
 
 pub use aad::{
-    AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
-    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructTagSpec, build_aad,
+    AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_BIN_INDEX, STRUCT_TAG_CONTENT_KEY,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
+    StructTagSpec, build_aad,
+};
+pub use bin_index::{
+    BIN_INDEX_RUNGS, BIN_INDEX_V, BinEntry, BinIndex, MAX_BIN_INDEX_BODY_BYTES,
+    MAX_BIN_INDEX_BYTES, bin_index_aad, decode_bin_index, encode_bin_index, fit_rung,
+    open_bin_index, seal_bin_index,
 };
 pub use body::{
     ChildRef, NodeKind, PreservedFields, ReadBody, Version, decode_read_body, encode_read_body,
@@ -99,10 +106,21 @@ pub fn seal(
     ctx: &AadContext,
     plaintext: &[u8],
 ) -> Vec<u8> {
-    let aad = build_aad(ctx);
+    seal_framed(key, nonce, &build_aad(ctx), plaintext)
+}
+
+/// [`seal`] over raw AAD bytes, for the structures that bind their own clear
+/// header instead of an [`AadContext`] ([`bin_index`]). The wire framing and the
+/// nonce rule are [`seal`]'s.
+pub fn seal_framed(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(NONCE_LEN + plaintext.len() + TAG_LEN);
     out.extend_from_slice(nonce);
-    out.extend(aead::encrypt(key, nonce, &aad, plaintext));
+    out.extend(aead::encrypt(key, nonce, aad, plaintext));
     out
 }
 
@@ -115,6 +133,13 @@ pub fn seal(
 /// transplant, or a `v` downgrade — is [`TrustViolation::SealOpenFailed`], never
 /// a silent degrade.
 pub fn unseal(key: &[u8; KEY_LEN], ctx: &AadContext, sealed: &[u8]) -> Result<Vec<u8>, CodecError> {
+    open_framed(key, &build_aad(ctx), sealed)
+}
+
+/// [`unseal`] over raw AAD bytes, for the structures that bind their own clear
+/// header instead of an [`AadContext`] ([`bin_index`]). The two-class
+/// fail-closed policy is [`unseal`]'s.
+pub fn open_framed(key: &[u8; KEY_LEN], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>, CodecError> {
     if sealed.len() < NONCE_LEN + TAG_LEN {
         return Err(Malformed::Truncated {
             offset: sealed.len(),
@@ -123,8 +148,7 @@ pub fn unseal(key: &[u8; KEY_LEN], ctx: &AadContext, sealed: &[u8]) -> Result<Ve
     }
     let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
     let nonce: &[u8; NONCE_LEN] = nonce.try_into().expect("split_at NONCE_LEN");
-    let aad = build_aad(ctx);
-    aead::decrypt(key, nonce, &aad, ciphertext).ok_or_else(|| TrustViolation::SealOpenFailed.into())
+    aead::decrypt(key, nonce, aad, ciphertext).ok_or_else(|| TrustViolation::SealOpenFailed.into())
 }
 
 #[cfg(test)]

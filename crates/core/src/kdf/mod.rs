@@ -1,6 +1,6 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these eighteen edges. Every edge
+//! Nothing in CipherBox derives a key outside these twenty-one edges. Every edge
 //! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
@@ -46,6 +46,9 @@ const CTX_SCOPE_POINTER: &str = "cipherbox/v2/scope-pointer";
 const CTX_POINTER_READ_KEY: &str = "cipherbox/v2/pointer-read-key";
 const CTX_VAULT_POINTER_INDEX: &str = "cipherbox/v2/vault-pointer-index";
 const CTX_SETTINGS_IPNS_KEYPAIR: &str = "cipherbox/v2/settings-ipns-keypair";
+const CTX_BIN_INDEX_IPNS_KEYPAIR: &str = "cipherbox/v2/bin-index-ipns-keypair";
+const CTX_BIN_INDEX_SEAL_KEY: &str = "cipherbox/v2/bin-index-seal-key";
+const CTX_BIN_HELD_KEY: &str = "cipherbox/v2/bin-held-key";
 const CTX_GENESIS_READ_SCOPE_SEED: &str = "cipherbox/v2/genesis-read-scope-seed";
 const CTX_GENESIS_WRITE_SCOPE_SEED: &str = "cipherbox/v2/genesis-write-scope-seed";
 
@@ -59,7 +62,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The eighteen edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The twenty-one edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -141,6 +144,21 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "settings-ipns-keypair",
         context: CTX_SETTINGS_IPNS_KEYPAIR,
         input_layout: "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
+    },
+    EdgeSpec {
+        name: "bin-index-ipns-keypair",
+        context: CTX_BIN_INDEX_IPNS_KEYPAIR,
+        input_layout: "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
+    },
+    EdgeSpec {
+        name: "bin-index-seal-key",
+        context: CTX_BIN_INDEX_SEAL_KEY,
+        input_layout: "derive_key(ctx, loginSecret[var])",
+    },
+    EdgeSpec {
+        name: "bin-held-key",
+        context: CTX_BIN_HELD_KEY,
+        input_layout: "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16] || deletedAt[8 BE])",
     },
     EdgeSpec {
         name: "genesis-read-scope-seed",
@@ -250,6 +268,24 @@ fn vault_pointer_index_bytes(login_secret: &[u8], index: u64) -> SecretBytes {
 
 fn settings_ipns_keypair_bytes(login_secret: &[u8]) -> SecretBytes {
     derive_key(CTX_SETTINGS_IPNS_KEYPAIR, login_secret)
+}
+
+fn bin_index_ipns_keypair_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_BIN_INDEX_IPNS_KEYPAIR, login_secret)
+}
+
+fn bin_index_seal_key_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_BIN_INDEX_SEAL_KEY, login_secret)
+}
+
+fn bin_held_key_bytes(login_secret: &[u8], node_id: &[u8; 16], deleted_at: u64) -> SecretBytes {
+    let mut message = [0u8; 24];
+    message[..16].copy_from_slice(node_id);
+    message[16..].copy_from_slice(&deleted_at.to_be_bytes());
+    keyed_hash(
+        derive_key(CTX_BIN_HELD_KEY, login_secret).as_bytes(),
+        &message,
+    )
 }
 
 fn genesis_read_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
@@ -364,6 +400,38 @@ pub fn settings_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
     Ed25519Signer::from_seed(*settings_ipns_keypair_bytes(login_secret).as_bytes())
 }
 
+/// `bin-index-ipns-keypair`: the bin index record's Ed25519 keypair
+/// (→ `ipnsName`), derived from the login secret so the owner's bin resolves at
+/// cold start without CipherBox infrastructure (ADR 0010).
+pub fn bin_index_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
+    Ed25519Signer::from_seed(*bin_index_ipns_keypair_bytes(login_secret).as_bytes())
+}
+
+/// `bin-index-seal-key`: the symmetric key that seals the bin index body. The
+/// index is owner-sealed, so it derives from the login secret and no grant
+/// carries it.
+///
+/// This key takes no epoch input, so it never rotates: every publish of the bin
+/// index, on every device, seals under it. A caller must therefore draw each
+/// seal's nonce from a CSPRNG. A counter or a `revision`-derived nonce is unique
+/// on one device and collides across two, and two devices publish this record
+/// concurrently under one CAS guard.
+pub fn bin_index_seal_key(login_secret: &[u8]) -> SecretBytes {
+    bin_index_seal_key_bytes(login_secret)
+}
+
+/// `bin-held-key`: the seed one soft delete re-keys a doomed subtree under
+/// (ADR 0010 item 3). It sits outside every scope's derivation, which is what
+/// cuts a grantee's access — key regression cannot reach it, because no scope
+/// seed of any epoch is an input.
+///
+/// `deleted_at` makes the key per-delete rather than per-node: a node that is
+/// binned, restored, and binned again re-keys under fresh bytes, so a disclosed
+/// held key opens one bin generation and not every later one.
+pub fn bin_held_key(login_secret: &[u8], node_id: &[u8; 16], deleted_at: u64) -> SecretBytes {
+    bin_held_key_bytes(login_secret, node_id, deleted_at)
+}
+
 /// `genesis-read-scope-seed`: the vault root scope's read (override) seed at the
 /// genesis epoch, from the login secret.
 ///
@@ -441,7 +509,7 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the eighteen outputs must be pairwise distinct), its property test, and the
+/// (the outputs must be pairwise distinct), its property test, and the
 /// frozen vectors the KAT generator writes.
 ///
 /// The **catalog-freezing / separation surface**, not the production derivation
@@ -516,6 +584,18 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         EdgeProbeOutput {
             name: "settings-ipns-keypair",
             output: b(settings_ipns_keypair_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "bin-index-ipns-keypair",
+            output: b(bin_index_ipns_keypair_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "bin-index-seal-key",
+            output: b(bin_index_seal_key_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "bin-held-key",
+            output: b(bin_held_key_bytes(probe.seed, probe.id, probe.index)),
         },
         EdgeProbeOutput {
             name: "genesis-read-scope-seed",
@@ -610,12 +690,59 @@ mod tests {
                 .to_bytes()
         );
         assert_eq!(
+            bin_index_ipns_keypair(&seed).verifying_key().to_bytes(),
+            Ed25519Signer::from_seed(by("bin-index-ipns-keypair"))
+                .verifying_key()
+                .to_bytes()
+        );
+        assert_eq!(
+            bin_index_seal_key(&seed).as_bytes(),
+            &by("bin-index-seal-key")
+        );
+        assert_eq!(bin_held_key(&seed, &id, 0).as_bytes(), &by("bin-held-key"));
+        assert_eq!(
             genesis_read_scope_seed(&seed).as_bytes(),
             &by("genesis-read-scope-seed")
         );
         assert_eq!(
             genesis_write_scope_seed(&seed).as_bytes(),
             &by("genesis-write-scope-seed")
+        );
+    }
+
+    /// The bin edges are the owner's alone, and the held key is per-delete: the
+    /// access cut ADR 0010 item 3 rests on is that nothing a grantee holds is an
+    /// input, and that a second binning of one node draws fresh bytes.
+    #[test]
+    fn the_bin_edges_separate_by_secret_node_and_delete_time() {
+        let secret = b"login-secret".as_slice();
+        let other = b"another-secret".as_slice();
+        let node = [7u8; 16];
+
+        assert_ne!(
+            bin_index_ipns_keypair(secret).verifying_key().to_bytes(),
+            bin_index_ipns_keypair(other).verifying_key().to_bytes(),
+        );
+        assert_ne!(
+            bin_index_seal_key(secret).as_bytes(),
+            bin_index_seal_key(other).as_bytes(),
+        );
+        assert_ne!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(other, &node, 10).as_bytes(),
+        );
+        assert_ne!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(secret, &[8u8; 16], 10).as_bytes(),
+        );
+        assert_ne!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(secret, &node, 11).as_bytes(),
+            "a re-bin of one node must not reuse the first binning's key",
+        );
+        assert_eq!(
+            bin_held_key(secret, &node, 10).as_bytes(),
+            bin_held_key(secret, &node, 10).as_bytes(),
         );
     }
 

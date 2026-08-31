@@ -79,6 +79,11 @@ pub const STRUCT_TAG_OWNER_LOCAL: u8 = 0x0d;
 /// grammar under different constructions at independently-clocked epochs, so the
 /// tag is what keeps them structurally unswappable.
 pub const STRUCT_TAG_WRITE_HISTORY_LINK: u8 = 0x0e;
+/// `bin-index` — the owner-sealed, vault-level recycle-bin index
+/// ([`super::bin_index`]). Published like the settings record, but sealed
+/// symmetrically under the `bin-index-seal-key` edge, so it binds its own clear
+/// header instead of an [`AadContext`] (FSM1/cipher-box-next ADR 0010).
+pub const STRUCT_TAG_BIN_INDEX: u8 = 0x0f;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's
 /// stable name and its domain-separation byte. The KAT manifest freezes this
@@ -89,7 +94,7 @@ pub struct StructTagSpec {
     pub tag: u8,
 }
 
-/// The fourteen structure tags, in registry (byte) order. Every new tag extends
+/// The fifteen structure tags, in registry (byte) order. Every new tag extends
 /// this table and its manifest vectors before merge (blueprint/core.md).
 pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
@@ -147,6 +152,10 @@ pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "write-history-link",
         tag: STRUCT_TAG_WRITE_HISTORY_LINK,
+    },
+    StructTagSpec {
+        name: "bin-index",
+        tag: STRUCT_TAG_BIN_INDEX,
     },
 ];
 
@@ -207,8 +216,8 @@ mod tests {
         }
         assert_eq!(
             STRUCT_TAGS.len(),
-            14,
-            "the frozen byte-space is fourteen tags"
+            15,
+            "the frozen byte-space is fifteen tags"
         );
     }
 

@@ -119,6 +119,10 @@ pub enum TrustViolation {
     /// the owner did not attest this tag/pseudonym set — the forgery the
     /// mandatory recipient-side commitment verify rejects fail-closed.
     CommitmentInvalid,
+    /// A bin index plaintext was off every frozen rung, or its `pad` carried a
+    /// byte that was not zero. *Trust*: the padded form is the only canonical
+    /// one, so either is a writer that did not follow the profile.
+    NonCanonicalPadding,
     /// An ascent link's plaintext public half did not match the X25519 public
     /// key re-derived from the parent node seed (the ascent-keypair edge). The
     /// derive-and-verify check (blueprint/core.md "Envelope and structures"):
@@ -149,6 +153,7 @@ impl TrustViolation {
         "identity-signature-invalid",
         "structure-signature-invalid",
         "commitment-invalid",
+        "non-canonical-padding",
         "ascent-link-mismatch",
     ];
 
@@ -173,6 +178,7 @@ impl TrustViolation {
             Self::IdentitySignatureInvalid => "identity-signature-invalid",
             Self::StructureSignatureInvalid => "structure-signature-invalid",
             Self::CommitmentInvalid => "commitment-invalid",
+            Self::NonCanonicalPadding => "non-canonical-padding",
             Self::AscentLinkMismatch => "ascent-link-mismatch",
         }
     }
@@ -209,6 +215,7 @@ impl fmt::Display for TrustViolation {
             | Self::IdentitySignatureInvalid
             | Self::StructureSignatureInvalid
             | Self::CommitmentInvalid
+            | Self::NonCanonicalPadding
             | Self::AscentLinkMismatch => {
                 write!(f, "trust violation [{}]", self.check())
             }
