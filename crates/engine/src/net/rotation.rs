@@ -75,7 +75,7 @@ use crate::rotation::{
     derive_write_name, published_override_seed, reseal_scope_root, rotate_scope, seed_at_epoch,
 };
 use crate::seams::{
-    BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
+    BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
     SharerScopedFloorStore,
 };
 use crate::session::SessionIdentity;
@@ -1059,6 +1059,9 @@ pub struct GranteeRotationKeys<'a> {
     pub owner_enc_pub: &'a X25519Public,
     /// The contact-anchored owner identity: the adoption gate's stage-2 anchor.
     pub owner_identity: &'a EcdsaVerifier,
+    /// This account's contact-label seed — what the granting identity is
+    /// labelled under before it keys that scope's durable floors.
+    pub contact_label_seed: &'a SecretBytes,
 }
 
 /// One scope root this device holds a grant for.
@@ -1188,7 +1191,10 @@ where
     /// the floors of scopes it actually granted. `granted` spans several
     /// sharers, so the view is per scope root and never per net.
     fn granted_floors(&self, granted: &GrantedScopeRoot) -> SharerScopedFloorStore<'_, F> {
-        SharerScopedFloorStore::granted_by(self.floors, granted.sharer_identity_pk)
+        SharerScopedFloorStore::granted_by(
+            self.floors,
+            ContactLabel::of(self.keys.contact_label_seed, &granted.sharer_identity_pk),
+        )
     }
 
     /// This device's pairwise ECDH with the verified contact and the blinded tag
@@ -5079,6 +5085,10 @@ mod tests {
         X25519Secret::from_scalar([0xa1; 32])
     }
 
+    fn grantee_label_seed() -> SecretBytes {
+        kdf::contact_label_seed(&[0xa2; 32])
+    }
+
     /// The row the owner mints for this device at the granted root's own name —
     /// the tag it self-locates under and the pseudonym its re-seal signs with.
     fn grantee_row(name: &IpnsName, permission: Permission) -> GrantRow {
@@ -5147,6 +5157,7 @@ mod tests {
         granted: Vec<GrantedScopeRoot>,
         enc_secret: X25519Secret,
         owner_enc_pub: X25519Public,
+        contact_label_seed: SecretBytes,
         /// The sweep `rotate_scope` enqueues; these cases assert the cut, not
         /// the lazy wave it hands the scheduler.
         sweep: Box<dyn Fn([u8; 16]) -> BoxedTask>,
@@ -5167,7 +5178,10 @@ mod tests {
         ) -> Self {
             harness.stage(GRANTEE_SCOPE, &root, None);
             block_on(floor::advance_write_epoch_on_sight(
-                &SharerScopedFloorStore::granted_by(&harness.floors, sharer),
+                &SharerScopedFloorStore::granted_by(
+                    &harness.floors,
+                    ContactLabel::of(&grantee_label_seed(), &sharer),
+                ),
                 &GRANTEE_SCOPE,
                 OWNER_ROOT_EPOCH,
             ))
@@ -5182,6 +5196,7 @@ mod tests {
                 root,
                 enc_secret: grantee_enc(),
                 owner_enc_pub: owner_enc().public(),
+                contact_label_seed: grantee_label_seed(),
                 sweep: Box::new(|_| Box::pin(async {})),
             }
         }
@@ -5200,6 +5215,7 @@ mod tests {
                     enc_secret: &self.enc_secret,
                     owner_enc_pub: &self.owner_enc_pub,
                     owner_identity: &self.harness.identity,
+                    contact_label_seed: &self.contact_label_seed,
                 },
                 granted: &self.granted,
                 sweep: self.sweep.as_ref(),
@@ -5306,7 +5322,10 @@ mod tests {
 
         let world = plain_world(Permission::Write);
         let floors = &world.harness.floors;
-        let other = SharerScopedFloorStore::granted_by(floors, OTHER_SHARER);
+        let other = SharerScopedFloorStore::granted_by(
+            floors,
+            ContactLabel::of(&grantee_label_seed(), &OTHER_SHARER),
+        );
 
         // A contact with no authority over this scope pins its own view as high
         // as the ratchet goes.
@@ -5314,7 +5333,10 @@ mod tests {
 
         world.cut().expect("the flat cut completes");
 
-        let mine = SharerScopedFloorStore::granted_by(floors, world.harness.identity.to_sec1());
+        let mine = SharerScopedFloorStore::granted_by(
+            floors,
+            ContactLabel::of(&grantee_label_seed(), &world.harness.identity.to_sec1()),
+        );
         assert_eq!(
             block_on(floor::read_epoch_floor(&mine, &GRANTEE_SCOPE)).expect("floor read"),
             Some(OWNER_ROOT_EPOCH + 1),

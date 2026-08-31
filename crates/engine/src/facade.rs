@@ -32,7 +32,7 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 use futures_core::Stream;
@@ -3567,6 +3567,11 @@ pub struct Engine<T: SeamTypes> {
     /// recheck on the same terms as [`tick_bin_keys`](Self::tick_bin_keys). The
     /// recheck enrols what it resolved, and the renewal re-signs with this.
     tick_settings_signer: Rc<RefCell<Option<Rc<Ed25519Signer>>>>,
+    /// The received-share leg's: the contact-label seed that leg's
+    /// sharer-scoped floor reads are keyed under
+    /// ([`ContactLabel`](crate::seams::ContactLabel)). Same cell discipline as
+    /// [`tick_enc_subkey`](Self::tick_enc_subkey).
+    tick_contact_label_seed: Rc<RefCell<Option<SecretBytes>>>,
     /// Built at [`start`](Self::start), where the seam bounds its task needs
     /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
@@ -3683,6 +3688,7 @@ impl<T: SeamTypes> Engine<T> {
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
                 tick_bin_keys: Rc::new(RefCell::new(None)),
                 tick_settings_signer: Rc::new(RefCell::new(None)),
+                tick_contact_label_seed: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
                 sweep_tasks: RefCell::new(None),
                 sweep_keys: Rc::new(RefCell::new(None)),
@@ -3962,6 +3968,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut signer) = self.tick_settings_signer.try_borrow_mut() {
             *signer = None;
+        }
+        if let Ok(mut seed) = self.tick_contact_label_seed.try_borrow_mut() {
+            *seed = None;
         }
         if let Ok(mut spawner) = self.tick_loop_spawner.try_borrow_mut() {
             *spawner = None;
@@ -4591,6 +4600,7 @@ where {
         let tick_settings = self.settings_summary.clone();
         let observed_unlinks = self.observed_unlinks.clone();
         let bin_index_record = self.bin_index_record.clone();
+        let tick_contact_label_seed = self.tick_contact_label_seed.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
         let entropy = self.entropy.clone();
@@ -4662,6 +4672,10 @@ where {
                     // emptied the cell if it is already gone.
                     let enc_subkey = tick_enc_subkey.borrow().clone();
                     let Some(enc_subkey) = enc_subkey else {
+                        return TickControl::Stop;
+                    };
+                    let contact_label_seed = tick_contact_label_seed.borrow().clone();
+                    let Some(contact_label_seed) = contact_label_seed else {
                         return TickControl::Stop;
                     };
                     let bin_keys = tick_bin_keys.borrow().clone();
@@ -4763,7 +4777,14 @@ where {
                     )
                     .await;
                     let grafted = grafted_sharers.borrow().clone();
-                    evict_grafted_read_seeds(&floors, &grafted, &root_id, &scope_read_seeds).await;
+                    evict_grafted_read_seeds(
+                        &floors,
+                        &grafted,
+                        &contact_label_seed,
+                        &root_id,
+                        &scope_read_seeds,
+                    )
+                    .await;
                     let adopter = RootAdopter::new(
                         &gateway,
                         &http,
@@ -4868,9 +4889,13 @@ where {
                         else {
                             continue;
                         };
-                        let Some(scope_floors) =
-                            floor_view(&floors, &grafted, &root_id, &scope_root.0)
-                        else {
+                        let Some(scope_floors) = floor_view(
+                            &floors,
+                            &grafted,
+                            &contact_label_seed,
+                            &root_id,
+                            &scope_root.0,
+                        ) else {
                             continue;
                         };
                         attempted_files.extend(targets.files.iter().copied());
@@ -5015,6 +5040,7 @@ where {
                         http: &http,
                         floors: &floors,
                         enc_secret: &enc_subkey,
+                        contact_label_seed: &contact_label_seed,
                         vault_root_scope: root_id,
                     }
                     .pull(&staging, &entropy, ENVELOPE_V, &events)
@@ -5025,6 +5051,7 @@ where {
                         http: &http,
                         floors: &floors,
                         enc_secret: &enc_subkey,
+                        contact_label_seed: &contact_label_seed,
                     }
                     .refresh(
                         &staging,
@@ -5092,6 +5119,7 @@ where {
             Some(Rc::new(BinIndexKeys::derive(session.login_secret())));
         *self.tick_settings_signer.borrow_mut() =
             Some(Rc::new(kdf::settings_ipns_keypair(session.login_secret())));
+        *self.tick_contact_label_seed.borrow_mut() = Some(session.contact_label_seed());
         spawn();
     }
 
@@ -6992,8 +7020,14 @@ where {
     async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
         let own_root = self.snapshot.borrow().root.0;
         let sharers = self.grafted_sharers.borrow().clone();
-        let Some(floors) = floor_view(&self.seams.floor_store, &sharers, &own_root, scope_id)
-        else {
+        let session = self.session.as_ref()?;
+        let Some(floors) = floor_view(
+            &self.seams.floor_store,
+            &sharers,
+            &session.contact_label_seed(),
+            &own_root,
+            scope_id,
+        ) else {
             self.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
@@ -13027,7 +13061,6 @@ mod tests {
         /// and the one the polled consult reads.
         use cipherbox_core::seal::Permission as CorePermission;
         use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
-        use cipherbox_core::suite::secret::SecretBytes;
 
         use crate::grants::ReceivedSharesList;
 

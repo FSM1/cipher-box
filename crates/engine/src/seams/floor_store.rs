@@ -4,7 +4,9 @@ use core::cell::Cell;
 use std::borrow::Cow;
 use std::rc::Rc;
 
+use cipherbox_core::kdf;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::{SeamError, SeamResult};
@@ -242,9 +244,35 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
     }
 }
 
+/// One contact identity under this account's own `contact-label` edge.
+///
+/// Floor-store keys are plaintext in IndexedDB on web and in the local journal
+/// on desktop, so a raw identity prefix would name every party that shared with
+/// this account to anyone who can read local storage. The label is fixed-width
+/// and deterministic on one device, the two properties
+/// [`SharerScopedFloorStore`] depends on, and unlinkable off it, because the
+/// seed is the account's alone.
+///
+/// Device-local only. Publishing a label makes it the cross-scope correlator
+/// the blinded tag exists to deny ([`kdf::contact_label`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ContactLabel([u8; SECRET_LEN]);
+
+impl ContactLabel {
+    /// The label `identity_pk` takes under `contact_label_seed`, this account's
+    /// `contact-label-seed`.
+    #[must_use]
+    pub fn of(contact_label_seed: &SecretBytes, identity_pk: &[u8; IDENTITY_PUBLIC_LEN]) -> Self {
+        Self(kdf::contact_label(
+            contact_label_seed.as_bytes(),
+            identity_pk,
+        ))
+    }
+}
+
 /// A [`FloorStore`] view for a scope this device reads under **another party's**
-/// authority: every epoch-namespace key carries that party's identity key, so
-/// the ratchet is per-granting-authority.
+/// authority: every epoch-namespace key carries that party's [`ContactLabel`],
+/// so the ratchet is per-granting-authority.
 ///
 /// A scope root's `scopeId` is authored by its owner and bound to nothing
 /// outside its own record, so two unrelated grants may carry one id — and a
@@ -264,9 +292,9 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
 #[derive(Clone, Copy)]
 pub struct SharerScopedFloorStore<'a, F> {
     inner: &'a F,
-    /// The granting owner's compressed SEC1 identity key, or `None` for a scope
-    /// this vault owns.
-    sharer: Option<[u8; IDENTITY_PUBLIC_LEN]>,
+    /// The granting owner's device-local label, or `None` for a scope this vault
+    /// owns.
+    sharer: Option<ContactLabel>,
 }
 
 impl<'a, F> SharerScopedFloorStore<'a, F> {
@@ -279,22 +307,22 @@ impl<'a, F> SharerScopedFloorStore<'a, F> {
         }
     }
 
-    /// The view for a scope `sharer` granted this device.
-    pub fn granted_by(inner: &'a F, sharer: [u8; IDENTITY_PUBLIC_LEN]) -> Self {
+    /// The view for a scope the contact `sharer` labels granted this device.
+    pub fn granted_by(inner: &'a F, sharer: ContactLabel) -> Self {
         Self {
             inner,
             sharer: Some(sharer),
         }
     }
 
-    /// `scope_id` under the granting identity, borrowed unchanged on the owner
-    /// arm. The prefix is fixed-width, so no (identity, scope) pair can spell
-    /// another pair's stored key.
+    /// `scope_id` under the granting contact's label, borrowed unchanged on the
+    /// owner arm. The prefix is fixed-width, so no (contact, scope) pair can
+    /// spell another pair's stored key.
     fn scoped<'k>(&self, scope_id: &'k [u8]) -> Cow<'k, [u8]> {
         let Some(sharer) = &self.sharer else {
             return Cow::Borrowed(scope_id);
         };
-        Cow::Owned(prefixed(sharer, scope_id))
+        Cow::Owned(prefixed(&sharer.0, scope_id))
     }
 }
 
@@ -354,6 +382,11 @@ mod tests {
     /// account, which is why the two views below collide without the tag.
     const ROOT_SCOPE: [u8; 16] = [0u8; 16];
     const NAME: &[u8] = b"k51-scope-root-name";
+    const LOGIN_SECRET: [u8; SECRET_LEN] = [0x4c; SECRET_LEN];
+
+    fn label(identity_pk: [u8; IDENTITY_PUBLIC_LEN]) -> ContactLabel {
+        ContactLabel::of(&kdf::contact_label_seed(&LOGIN_SECRET), &identity_pk)
+    }
 
     fn view(
         shared: &InMemoryFloorStore,
@@ -415,8 +448,9 @@ mod tests {
     #[test]
     fn a_sharer_cannot_raise_a_scope_it_did_not_grant() {
         let store = InMemoryFloorStore::default();
-        let hostile = SharerScopedFloorStore::granted_by(&store, [0x03; IDENTITY_PUBLIC_LEN]);
-        let honest = SharerScopedFloorStore::granted_by(&store, [0x02; IDENTITY_PUBLIC_LEN]);
+        let hostile =
+            SharerScopedFloorStore::granted_by(&store, label([0x03; IDENTITY_PUBLIC_LEN]));
+        let honest = SharerScopedFloorStore::granted_by(&store, label([0x02; IDENTITY_PUBLIC_LEN]));
         let mine = SharerScopedFloorStore::own(&store);
 
         block_on(hostile.raise_epoch_floor(&ROOT_SCOPE, u64::MAX)).expect("the floor raises");
@@ -435,10 +469,32 @@ mod tests {
         );
     }
 
+    /// The at-rest disclosure the label closes: no durable key may carry a
+    /// contact's identity key verbatim.
+    #[test]
+    fn no_durable_floor_key_names_the_contact_identity() {
+        let store = InMemoryFloorStore::default();
+        let identity_pk = [0x02; IDENTITY_PUBLIC_LEN];
+        let sharer = SharerScopedFloorStore::granted_by(&store, label(identity_pk));
+
+        block_on(sharer.raise_epoch_floor(&ROOT_SCOPE, 4)).expect("the floor raises");
+        block_on(sharer.commit_floors(&[FloorRaise::epoch(ROOT_SCOPE.as_slice(), 5)]))
+            .expect("the batch commits");
+
+        let keys = store.epoch_keys();
+        assert!(!keys.is_empty(), "the raises stored something to inspect");
+        for key in keys {
+            assert!(
+                !key.windows(identity_pk.len()).any(|w| w == identity_pk),
+                "a durable floor key carries the contact identity key in the clear"
+            );
+        }
+    }
+
     #[test]
     fn sequence_floors_stay_shared_across_sharers() {
         let store = InMemoryFloorStore::default();
-        let sharer = SharerScopedFloorStore::granted_by(&store, [0x02; IDENTITY_PUBLIC_LEN]);
+        let sharer = SharerScopedFloorStore::granted_by(&store, label([0x02; IDENTITY_PUBLIC_LEN]));
 
         block_on(sharer.raise_sequence_floor(NAME, 7)).expect("the floor raises");
         block_on(sharer.commit_floors(&[FloorRaise::sequence(NAME, 9)]))
