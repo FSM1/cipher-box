@@ -632,7 +632,9 @@ mod tests {
     use super::*;
     use crate::seams::{HttpMethod, HttpResponse};
     use crate::testkit::fakes::{InMemoryCredentialStore, InMemoryStagingStore, ScriptedHttp};
-    use crate::testkit::{SeededEntropy, block_on, doomed_version, gateway, requested_cid};
+    use crate::testkit::{
+        SeededEntropy, block_on, doomed_version, gateway, requested_cid, retire_targets,
+    };
 
     fn client() -> (
         ScriptedHttp,
@@ -695,8 +697,7 @@ mod tests {
         let sent: Vec<String> = requests
             .iter()
             .flat_map(|request| {
-                let body = request.body.as_deref().expect("a retire call has a body");
-                serde_json::from_slice::<Vec<String>>(body).expect("a retire body is a JSON array")
+                retire_targets(request.body.as_deref().expect("a retire call has a body"))
             })
             .collect();
         assert_eq!(
@@ -800,10 +801,7 @@ mod tests {
             .iter()
             .filter(|request| request.url.ends_with("/registry/retire"))
             .map(|request| {
-                serde_json::from_slice::<Vec<String>>(
-                    request.body.as_deref().expect("a retire call has a body"),
-                )
-                .expect("a retire body is a JSON array")
+                retire_targets(request.body.as_deref().expect("a retire call has a body"))
             })
             .collect()
     }
@@ -905,9 +903,7 @@ mod tests {
             let (cid, leaves, root_block) = (cid.clone(), leaves.clone(), root_block.clone());
             http.enqueue_derived(move |request| {
                 if request.url.ends_with("/registry/retire") {
-                    let sent: Vec<String> =
-                        serde_json::from_slice(request.body.as_deref().unwrap_or_default())
-                            .unwrap_or_default();
+                    let sent = retire_targets(request.body.as_deref().unwrap_or_default());
                     return Ok(retire_answer((sent == leaves).then_some(1)));
                 }
                 if requested_cid(&request.url) == cid {

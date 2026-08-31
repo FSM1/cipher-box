@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use cipherbox_engine::api::RetireEntry;
 use cipherbox_engine::seams::{Http, HttpMethod, HttpRequest, HttpResponse, SeamResult};
 
 /// One request the harness issued, keyed the way a test wants to read it.
@@ -101,12 +102,18 @@ impl StubHttp {
     pub(crate) fn retired(&self) -> Vec<String> {
         self.bodies_for("/registry/retire")
             .iter()
-            .flat_map(|body| {
-                serde_json::from_slice::<Vec<String>>(body)
-                    .expect("a retire body is a JSON array of targets")
-            })
+            .flat_map(|body| retire_targets(body))
             .collect()
     }
+}
+
+/// Every target a retire batch names, across its entries.
+fn retire_targets(body: &[u8]) -> Vec<String> {
+    serde_json::from_slice::<Vec<RetireEntry>>(body)
+        .expect("a retire body is a JSON array of entries")
+        .into_iter()
+        .flat_map(|entry| entry.targets)
+        .collect()
 }
 
 /// The path portion of an absolute URL, query string included.
@@ -145,7 +152,7 @@ fn route(method: HttpMethod, path: &str, body: &[u8]) -> HttpResponse {
         }
         (HttpMethod::Post, "/registry/register") => empty(201),
         (HttpMethod::Post, "/registry/retire") => {
-            let retired = serde_json::from_slice::<Vec<String>>(body).map_or(0, |t| t.len());
+            let retired = retire_targets(body).len();
             json(200, &format!(r#"{{"retired":{retired},"unpinned":0}}"#))
         }
         (HttpMethod::Get, "/account/quota") => json(

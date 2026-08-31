@@ -12,6 +12,7 @@ import {
   withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
 import { NameInventory } from '../entities/name-inventory.entity';
+import { PinReference } from '../entities/pin-reference.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
 import { byteConfigBigInt, DEFAULT_QUOTA_BYTES, quotaSums, resolveLimitBytes } from '../quota';
@@ -33,10 +34,31 @@ async function lockTokens(
   await boundedAcquire(manager, tokens.map(advisoryLockKey), timeoutMs);
 }
 
+/**
+ * Postgres binds at most 65535 parameters per statement, so a bulk write is
+ * sliced rather than issued whole: a max batch would otherwise fail outright
+ * once its row count crossed the bind ceiling.
+ */
+const BIND_CHUNK_ROWS = 5000;
+
+function chunked<T>(rows: T[]): T[][] {
+  const slices: T[][] = [];
+  for (let start = 0; start < rows.length; start += BIND_CHUNK_ROWS) {
+    slices.push(rows.slice(start, start + BIND_CHUNK_ROWS));
+  }
+  return slices;
+}
+
 export interface RegisterEntry {
   ipnsName: string;
   headCid?: string;
   contentCids: string[];
+}
+
+/** One retire entry; see [`RegistryService.retire`] for the two forms. */
+export interface RetireEntry {
+  ipnsName?: string;
+  targets: string[];
 }
 
 export interface RegisterResult {
@@ -103,10 +125,12 @@ export class RegistryService {
     const nameOrder: string[] = [];
     const cidOrder: string[] = [];
     const cids = new Set<string>();
+    const referenced = new Map<string, Set<string>>();
     for (const entry of entries) {
       if (!heads.has(entry.ipnsName)) {
         nameOrder.push(entry.ipnsName);
         heads.set(entry.ipnsName, undefined);
+        referenced.set(entry.ipnsName, new Set());
       }
       if (entry.headCid !== undefined) {
         heads.set(entry.ipnsName, entry.headCid);
@@ -116,6 +140,7 @@ export class RegistryService {
           cids.add(cid);
           cidOrder.push(cid);
         }
+        referenced.get(entry.ipnsName)?.add(cid);
       }
     }
 
@@ -166,6 +191,22 @@ export class RegistryService {
           await nameRepo.save(nameWrites);
         }
 
+        // Claim this batch's reference edges. The unique index carries the
+        // idempotency, so a replay re-claims the same edges and changes nothing.
+        const refRepo = manager.getRepository(PinReference);
+        const edges = [...referenced].flatMap(([ipnsName, named]) =>
+          [...named].map((cid) => ({ accountId, ipnsName, cid }))
+        );
+        for (const slice of chunked(edges)) {
+          await refRepo
+            .createQueryBuilder()
+            .insert()
+            .into(PinReference)
+            .values(slice)
+            .orIgnore()
+            .execute();
+        }
+
         const existingPins = cidOrder.length
           ? await pinRepo.find({ where: { accountId, cid: In(cidOrder) } })
           : [];
@@ -175,8 +216,8 @@ export class RegistryService {
         const pinWrites = cidOrder
           .filter((cid) => !knownCids.has(cid))
           .map((cid) => ({ accountId, cid, size: '0', advisory }));
-        if (pinWrites.length) {
-          await pinRepo.insert(pinWrites);
+        for (const slice of chunked(pinWrites)) {
+          await pinRepo.insert(slice);
         }
       });
     }
@@ -187,44 +228,96 @@ export class RegistryService {
   }
 
   /**
-   * Batch retire `[ipnsName | cid]` for the caller's account. A target may be
-   * either a name or a CID; the API is zero-knowledge about which, so it
-   * removes the caller's matching row from BOTH tables (their namespaces do
-   * not collide). Union liveness: a retired CID is physically unpinned only
-   * when the LAST account's row for it is gone (global refcount zero).
+   * Batch retire `[{ipnsName?, targets[]}]` for the caller's account. A target
+   * may be either a name or a CID; the API is zero-knowledge about which, so it
+   * removes the caller's matching row from BOTH tables (their namespaces do not
+   * collide).
+   *
+   * An entry's `ipnsName` scopes the drop to that record's reference edges
+   * ([`PinReference`]); an entry with no `ipnsName` drops every record's edge
+   * and is the only form whose targets may name a record. Union liveness across
+   * accounts is unchanged: a CID is physically unpinned only when the LAST
+   * account's pin row for it is gone (global refcount zero).
    */
-  async retire(accountId: string, targets: string[]): Promise<RetireResult> {
+  async retire(accountId: string, entries: RetireEntry[]): Promise<RetireResult> {
+    const targets = [...new Set(entries.flatMap((entry) => entry.targets))];
     if (targets.length === 0) {
       return { retired: 0, unpinned: 0 };
     }
 
-    // All-or-nothing, and serialized per CID against concurrent register and
-    // retire: the advisory lock (not a row lock, which can't see an unborn
-    // INSERT) makes the delete → survivor check the authority for unpinning.
+    // One target set per record scope; an entry with no scope folds into the
+    // account-wide set.
+    const scoped = new Map<string, Set<string>>();
+    const unscoped = new Set<string>();
+    for (const entry of entries) {
+      let into = unscoped;
+      if (entry.ipnsName !== undefined) {
+        into = scoped.get(entry.ipnsName) ?? new Set();
+        scoped.set(entry.ipnsName, into);
+      }
+      for (const target of entry.targets) {
+        into.add(target);
+      }
+    }
+
+    // All-or-nothing, and serialized per CID and per record scope against
+    // concurrent register and retire: the advisory lock (not a row lock, which
+    // can't see an unborn INSERT) makes the delete → survivor check the
+    // authority for unpinning.
     const { retired, unpinCids } = await runLockGuardedTransaction(
       this.dataSource,
       async (manager) => {
-        await lockTokens(manager, targets, this.lockTimeoutMs);
+        await lockTokens(manager, [...new Set([...targets, ...scoped.keys()])], this.lockTimeoutMs);
 
         const nameRepo = manager.getRepository(NameInventory);
         const pinRepo = manager.getRepository(PinnedCid);
+        const refRepo = manager.getRepository(PinReference);
 
         const held = await pinRepo.find({ where: { accountId, cid: In(targets) } });
-        const heldByCaller = new Set(held.map((row) => row.cid));
-        const heldCids = [...new Set(targets)].filter((target) => heldByCaller.has(target));
+        const heldCids = held.map((row) => row.cid);
 
-        const nameDeleted = await nameRepo.delete({ accountId, ipnsName: In(targets) });
-        const pinDeleted = await pinRepo.delete({ accountId, cid: In(targets) });
+        // Only an unscoped target may name a record: a scoped entry says the
+        // record stops referencing CIDs, never that the record itself is dead.
+        const retiredNames = [...unscoped];
+        const nameDeleted = retiredNames.length
+          ? await nameRepo.delete({ accountId, ipnsName: In(retiredNames) })
+          : { affected: 0 };
 
-        // Under the lock, a held CID with no surviving row is at global zero.
-        const survivors = heldCids.length
-          ? await pinRepo.find({ where: { cid: In(heldCids) } })
+        // Every edge this batch can touch: the ones a retired name anchored,
+        // and the ones that name a target CID. Read once, so the batch costs a
+        // fixed number of statements however its entries are split.
+        const anchored = retiredNames.length
+          ? await refRepo.find({ where: { accountId, ipnsName: In(retiredNames) } })
+          : [];
+        const naming = await refRepo.find({ where: { accountId, cid: In(targets) } });
+        const doomed = new Set(anchored.map((row) => row.id));
+        for (const edge of naming) {
+          if (unscoped.has(edge.cid) || scoped.get(edge.ipnsName)?.has(edge.cid)) {
+            doomed.add(edge.id);
+          }
+        }
+        for (const slice of chunked([...doomed])) {
+          await refRepo.delete({ id: In(slice) });
+        }
+
+        // A pin row goes only once no record of the account names it any more.
+        const stillNamed = new Set(
+          naming.filter((edge) => !doomed.has(edge.id)).map((edge) => edge.cid)
+        );
+        const dropCids = heldCids.filter((cid) => !stillNamed.has(cid));
+        const pinDeleted = dropCids.length
+          ? await pinRepo.delete({ accountId, cid: In(dropCids) })
+          : { affected: 0 };
+
+        // Under the lock, a dropped CID with no surviving row is at global zero.
+        const survivors = dropCids.length
+          ? await pinRepo.find({ where: { cid: In(dropCids) } })
           : [];
         const surviving = new Set(survivors.map((row) => row.cid));
 
         return {
           retired: (nameDeleted.affected ?? 0) + (pinDeleted.affected ?? 0),
-          unpinCids: heldCids.filter((cid) => !surviving.has(cid)),
+          unpinCids: dropCids.filter((cid) => !surviving.has(cid)),
         };
       }
     );

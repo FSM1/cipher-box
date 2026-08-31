@@ -95,12 +95,14 @@ republisher inventory; its invariant is the central v1 lesson (silent enrollment
 decay) inverted into structure.
 
 - **Endpoints**: batch register `[{ipnsName, headCid?, contentCids[]}]` and batch
-  retire `[ipnsName | cid]`. Ordinary writes send single-item batches; name waves
-  and sweeps send bulk. v1's BYO-only `register-cid` folds into the same register
-  call.
+  retire `[{ipnsName?, targets[]}]`, where each target is an `ipnsName` or a
+  `cid`. Ordinary writes send single-item batches; name waves and sweeps send
+  bulk. v1's BYO-only `register-cid` folds into the same register call.
 - **Batch bounds**: both batches cap at **1000 items** (register additionally
-  caps `contentCids` at 1000 per entry), enforced fail-closed with `400` before
-  per-item validation and published as `maxItems` in the OpenAPI document. A bulk
+  caps `contentCids` at 1000 per entry; retire caps its TOTAL target count
+  across the batch at 1000, so splitting into entries buys no extra work),
+  enforced fail-closed with `400` before per-item validation and published as
+  `maxItems` in the OpenAPI document. A bulk
   caller — a name wave, or an abandoned version whose leaves all need retiring —
   chunks to the cap; retire is idempotent, so a replayed chunk is a no-op. A
   version with more leaves than the per-entry cap registers as several entries
@@ -119,6 +121,17 @@ decay) inverted into structure.
   nothing across accounts. The republisher walks **distinct** names; a name
   leaves the inventory when its last row is retired; physical unpin fires at
   global refcount zero (v1's `guardedUnpin` survives).
+- **Per-referencing-record refcount**: register also writes a reference row
+  `(account, ipnsName, cid)` per record that names the CID, head included. A
+  retire entry that carries an `ipnsName` drops only that record's reference,
+  and the account's pin row survives while any other record of the account still
+  names the CID; retiring a name drops every reference it anchored. An entry
+  with no `ipnsName` drops every reference of the account, and is the only form
+  whose targets may also name a record to retire — the account-wide path an
+  orphaned head block and a name wave need. This is what stops a doomed root that
+  aliases a live leaf of a **different** node from unpinning that leaf: only the
+  registry holds an account-wide live view and a linearization point, so no
+  client can decide it. Refcounting across accounts is unchanged.
 - **Shared scopes**: a write-grantee's uploads register (and count) under the
   grantee's account until the owner's client syncs, sees the new children, and
   registers them too — rows then coexist. Self-healing, permissionless.
@@ -128,6 +141,9 @@ decay) inverted into structure.
   plus per-account override column; no billing (out of scope).
 - **Accepted exposure**: the server sees each account's flat name/CID counts,
   sizes, and churn timing — never tree structure, kinds, or names' relationships.
+  The reference rows make the name-to-CID association it already reads on every
+  register **durable**, so it can also count each record's content set and see
+  which CIDs two records share. Still no tree structure and no kinds.
 
 ### Write-rotation name churn
 
@@ -314,7 +330,8 @@ rate limiting must be verified effective in e2e); staging test hooks
 
 `users`, `auth_methods`, `identity_subjects`, `refresh_tokens`, `account_devices`,
 `device_approvals`, `name_inventory (account, ipnsName)`,
-`pinned_cids (account, cid, size, advisory)`, `mailbox_messages`,
+`pinned_cids (account, cid, size, advisory)`,
+`pin_references (account, ipnsName, cid)`, `mailbox_messages`,
 `record_cache` (non-canonical). Nothing else. No crypto-bearing rows outlive
 their consumer; revocation-adjacent state is hard-deleted, never soft-flagged.
 

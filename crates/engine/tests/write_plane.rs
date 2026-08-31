@@ -60,7 +60,7 @@ use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_PSEUDONYM_SEED,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
-    poll_tasks_once, poll_tasks_until_parked,
+    poll_tasks_once, poll_tasks_until_parked, retire_targets as body_targets,
 };
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
@@ -7539,11 +7539,12 @@ fn retire_batches(device: &FakeDevice) -> Vec<Vec<String>> {
         .iter()
         .filter(|request| request.url.ends_with("/registry/retire"))
         .map(|request| {
-            let body = request
-                .body
-                .as_deref()
-                .expect("a retire call carries a body");
-            serde_json::from_slice::<Vec<String>>(body).expect("a retire body is a name array")
+            body_targets(
+                request
+                    .body
+                    .as_deref()
+                    .expect("a retire call carries a body"),
+            )
         })
         .collect()
 }

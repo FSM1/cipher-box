@@ -7,6 +7,7 @@ import { User } from '../../auth/entities/user.entity';
 import { pinDurabilityLockKey, withSessionAdvisoryLock } from '../../common/advisory-lock';
 import { fakeConfig } from '../../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
+import { PinReference } from '../entities/pin-reference.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
 import { RegistryService } from './registry.service';
@@ -92,6 +93,7 @@ interface GateHooks {
   afterUserRead?: () => Promise<void>;
   afterPinFind?: () => Promise<void>;
   afterPinInsert?: () => Promise<void>;
+  afterRefInsert?: () => Promise<void>;
 }
 
 /**
@@ -132,6 +134,41 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
             if (hooks.afterPinInsert) await hooks.afterPinInsert();
             return result;
           };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+  // The edge claim rides an `insert().orIgnore()` builder, so the pause point is
+  // that builder's execute. Each chained call answers a NEW builder object, so
+  // the wrapper follows the chain rather than the first object alone.
+  const gateBuilder = <B extends object>(builder: B): B =>
+    new Proxy(builder, {
+      get(inner, key, receiver) {
+        if (key === 'execute') {
+          return async () => {
+            const result = await (inner as { execute: () => Promise<unknown> }).execute();
+            if (hooks.afterRefInsert) await hooks.afterRefInsert();
+            return result;
+          };
+        }
+        const nested = Reflect.get(inner, key, receiver) as unknown;
+        if (typeof nested !== 'function') return nested;
+        return (...args: never[]) => {
+          const answered = (nested as (...a: never[]) => unknown).apply(inner, args);
+          return answered && typeof answered === 'object'
+            ? gateBuilder(answered as object)
+            : answered;
+        };
+      },
+    });
+
+  const wrapRefRepo = (repo: Repository<PinReference>): Repository<PinReference> =>
+    new Proxy(repo, {
+      get(target, prop, receiver) {
+        if (prop === 'createQueryBuilder') {
+          return (...args: never[]) => gateBuilder(target.createQueryBuilder(...args));
         }
         const value = Reflect.get(target, prop, receiver);
         return typeof value === 'function' ? value.bind(target) : value;
@@ -179,6 +216,7 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
                 const repo = target.getRepository(entity as never);
                 if (entity === User) return wrapUserRepo(repo as Repository<User>);
                 if (entity === PinnedCid) return wrapPinRepo(repo as Repository<PinnedCid>);
+                if (entity === PinReference) return wrapRefRepo(repo as Repository<PinReference>);
                 return repo;
               };
             }
@@ -336,7 +374,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
 
       let retireDone = false;
       const retired = buildService(db.dataSource, pinStore)
-        .retire(a, [cid])
+        .retire(a, [{ targets: [cid] }])
         .then((r) => {
           retireDone = true;
           return r;
@@ -382,7 +420,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
       const retireResult = await buildService(
         gatedDataSource(db.dataSource, { stripLock: true }),
         pinStore
-      ).retire(a, [cid]);
+      ).retire(a, [{ targets: [cid] }]);
 
       gate.release();
       await registerB;
@@ -393,6 +431,75 @@ describe('RegistryService concurrency (real Postgres)', () => {
       expect(pinStore.unpinned).toEqual([cid]);
       const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
       expect(survivors.map((r) => r.accountId)).toEqual([b]);
+    });
+  });
+
+  describe('per-referencing-record refcount', () => {
+    it('a doomed record retiring an aliased leaf leaves it pinned for the live record that also names it', async () => {
+      const a = await seedAccount(false);
+      const cid = token();
+      const live = token();
+      const doomed = token();
+      const pinStore = new RecordingPinStore();
+      const service = buildService(db.dataSource, pinStore);
+      await service.register(a, [{ ipnsName: live, contentCids: [cid] }]);
+      await service.register(a, [{ ipnsName: doomed, contentCids: [cid] }]);
+
+      const aliased = await service.retire(a, [{ ipnsName: doomed, targets: [cid] }]);
+
+      expect(aliased).toEqual({ retired: 0, unpinned: 0 });
+      expect(pinStore.unpinned).toEqual([]);
+      expect(await db.dataSource.getRepository(PinnedCid).find({ where: { cid } })).toHaveLength(1);
+      expect(
+        (
+          await db.dataSource.getRepository(PinReference).find({ where: { accountId: a, cid } })
+        ).map((row) => row.ipnsName)
+      ).toEqual([live]);
+
+      const last = await service.retire(a, [{ ipnsName: live, targets: [cid] }]);
+      expect(last).toEqual({ retired: 1, unpinned: 1 });
+      expect(pinStore.unpinned).toEqual([cid]);
+      expect(await db.dataSource.getRepository(PinnedCid).find({ where: { cid } })).toHaveLength(0);
+    });
+
+    it('a register anchoring a SECOND record to the CID blocks the scoped retire, which then keeps the pin', async () => {
+      const a = await seedAccount(false);
+      const cid = token();
+      const first = token();
+      const second = token();
+      const pinStore = new RecordingPinStore();
+      await buildService(db.dataSource, pinStore).register(a, [
+        { ipnsName: first, contentCids: [cid] },
+      ]);
+
+      const gate = makeGate();
+      const registerSecond = buildService(
+        gatedDataSource(db.dataSource, { afterRefInsert: gate.onReach }),
+        pinStore
+      ).register(a, [{ ipnsName: second, contentCids: [cid] }]);
+
+      // The second record's edge is inserted and uncommitted, still holding the
+      // CID's advisory lock.
+      await gate.reached;
+
+      let retireDone = false;
+      const retired = buildService(db.dataSource, pinStore)
+        .retire(a, [{ ipnsName: first, targets: [cid] }])
+        .then((result) => {
+          retireDone = true;
+          return result;
+        });
+
+      await delay(200);
+      expect(retireDone).toBe(false);
+
+      gate.release();
+      await registerSecond;
+      const result = await retired;
+
+      expect(result).toEqual({ retired: 0, unpinned: 0 });
+      expect(pinStore.unpinned).toEqual([]);
+      expect(await db.dataSource.getRepository(PinnedCid).find({ where: { cid } })).toHaveLength(1);
     });
   });
 
@@ -505,7 +612,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
       await seedPin(a, cid);
 
       const pinStore = new RecordingPinStore();
-      const result = await buildService(db.dataSource, pinStore).retire(a, [cid]);
+      const result = await buildService(db.dataSource, pinStore).retire(a, [{ targets: [cid] }]);
 
       expect(result.unpinned).toBe(1);
       expect(pinStore.unpinned).toEqual([cid]);
@@ -540,7 +647,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
       const pinStore = new RecordingPinStore();
       let retireDone = false;
       const retired = buildService(db.dataSource, pinStore)
-        .retire(a, [cid])
+        .retire(a, [{ targets: [cid] }])
         .then((r) => {
           retireDone = true;
           return r;
@@ -592,7 +699,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
 
       // retire's delete commits; the post-commit unpin can't acquire the held
       // durability lock within 200ms, so it skips the unpin and returns.
-      const result = await service.retire(a, [cid]);
+      const result = await service.retire(a, [{ targets: [cid] }]);
 
       gate.release();
       await holder;
@@ -616,7 +723,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
       const retired = buildService(
         gatedDataSource(db.dataSource, { stripSessionLock: true }),
         pinStore
-      ).retire(a, [cid]);
+      ).retire(a, [{ targets: [cid] }]);
 
       // retire committed, recounted (no survivor), and is now paused inside unpin.
       await gate.reached;

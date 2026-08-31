@@ -21,7 +21,7 @@ use super::signer::ChallengeSigner;
 use super::types::{
     AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
     MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
-    RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweLoginRequest, SiweNonce,
+    RetireEntry, RetireResult, SiweChallengeResponse, SiweLinkRequest, SiweLoginRequest, SiweNonce,
     StepUpChallengeRequest, StepUpOperation, TestLoginOutcome, TestLoginRequest, TestLoginResponse,
     TokenResponse, UnlinkMethodRequest, UploadResult,
 };
@@ -395,11 +395,35 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         ok_or_err(response).map(drop)
     }
 
-    /// Batch retire names or CIDs (`[ipnsName | cid]`), reporting what the
-    /// registry deleted for this account.
+    /// Batch retire names or CIDs account-wide, reporting what the registry
+    /// deleted for this account. Every record of the account stops referencing
+    /// the targets; see [`RetireEntry`] for the record-scoped form.
     pub async fn retire(&self, targets: &[String]) -> Result<RetireResult, ApiError> {
+        self.retire_entries(&[RetireEntry {
+            ipns_name: None,
+            targets: targets.to_vec(),
+        }])
+        .await
+    }
+
+    /// Batch retire targets on behalf of ONE referencing record: the registry
+    /// drops that record's reference and keeps a CID another live record of the
+    /// account still names.
+    pub async fn retire_for_record(
+        &self,
+        ipns_name: &str,
+        targets: &[String],
+    ) -> Result<RetireResult, ApiError> {
+        self.retire_entries(&[RetireEntry {
+            ipns_name: Some(ipns_name.to_owned()),
+            targets: targets.to_vec(),
+        }])
+        .await
+    }
+
+    async fn retire_entries(&self, entries: &[RetireEntry]) -> Result<RetireResult, ApiError> {
         let response = self
-            .json_authed(HttpMethod::Post, "/registry/retire", targets)
+            .json_authed(HttpMethod::Post, "/registry/retire", entries)
             .await?;
         let response = ok_or_err(response)?;
         decode(&response)
@@ -1408,6 +1432,30 @@ mod tests {
         assert_eq!(body[0]["ipnsName"], "k51abc");
         assert_eq!(body[0]["headCid"], "bafyhead");
         assert_eq!(body[0]["contentCids"], json!(["bafyc1", "bafyc2"]));
+    }
+
+    #[test]
+    fn retire_sends_entries_and_names_the_record_only_when_scoped() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(200, json!({"retired": 1, "unpinned": 0})));
+        http.enqueue_response(json_response(200, json!({"retired": 0, "unpinned": 0})));
+
+        let targets = vec!["bafyleaf".to_owned()];
+        block_on(client.retire(&targets)).expect("account-wide retire");
+        block_on(client.retire_for_record("k51doomed", &targets)).expect("record-scoped retire");
+
+        let mut requests = http.requests();
+        let scoped = body_json(&requests.pop().unwrap());
+        assert_eq!(scoped[0]["ipnsName"], "k51doomed");
+        assert_eq!(scoped[0]["targets"], json!(["bafyleaf"]));
+
+        let account_wide = body_json(&requests.pop().unwrap());
+        assert_eq!(account_wide[0]["targets"], json!(["bafyleaf"]));
+        assert!(
+            account_wide[0].get("ipnsName").is_none(),
+            "an account-wide retire names no record, so every reference goes"
+        );
     }
 
     #[test]

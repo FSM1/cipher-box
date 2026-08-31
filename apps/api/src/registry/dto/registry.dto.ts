@@ -64,17 +64,43 @@ export const REGISTER_ARRAY_OPTIONS = {
   forbidNonWhitelisted: true,
 } as const;
 
-/** The retire batch: a top-level JSON array of `[ipnsName | cid]` strings. */
-export const RETIRE_ARRAY_OPTIONS = {
-  items: String,
-} as const;
-
 /**
- * Per-target length cap. `ParseArrayPipe`'s `maxLength` never reaches items, so
- * the guard is enforced explicitly in the controller — 256 matches the widest
- * target column (`pinned_cids.cid`).
+ * Per-target length cap; 256 matches the widest target column
+ * (`pinned_cids.cid`).
  */
 export const RETIRE_TARGET_MAX_LENGTH = 256;
+
+export class RetireEntryDto {
+  @ApiProperty({
+    required: false,
+    description:
+      'The record that drops the reference. Present: only this record stops naming the targets, so a target another live record still names stays pinned. Absent: every record of the account stops naming them, and a target may also name a record to retire.',
+  })
+  // Omitted, never null: an account-wide retire leaves the field out.
+  @ValidateIf((entry: RetireEntryDto) => entry.ipnsName !== undefined)
+  @IsString()
+  @MaxLength(128)
+  @Matches(CID_OR_NAME, { message: 'ipnsName must be a bare CID/name token' })
+  ipnsName?: string;
+
+  @ApiProperty({
+    type: [String],
+    description: 'The `[ipnsName | cid]` targets this entry retires.',
+  })
+  @IsArray()
+  @ArrayMaxSize(MAX_BATCH)
+  @IsString({ each: true })
+  @MaxLength(RETIRE_TARGET_MAX_LENGTH, { each: true })
+  @Matches(CID_OR_NAME, { each: true, message: 'each target must be a bare CID/name token' })
+  targets!: string[];
+}
+
+/** The retire batch: a top-level JSON array `[{ipnsName?, targets[]}]`. */
+export const RETIRE_ARRAY_OPTIONS = {
+  items: RetireEntryDto,
+  whitelist: true,
+  forbidNonWhitelisted: true,
+} as const;
 
 export class RegisterResponseDto {
   @ApiProperty({ description: 'Distinct names registered or refreshed in this batch' })
@@ -85,7 +111,10 @@ export class RegisterResponseDto {
 }
 
 export class RetireResponseDto {
-  @ApiProperty({ description: 'Inventory + pin rows removed for the caller account' })
+  @ApiProperty({
+    description:
+      'Inventory + pin rows removed for the caller account. A pin row goes only when the account has no record left that names the CID, so a scoped retire of an aliased CID answers 0',
+  })
   retired!: number;
 
   @ApiProperty({ description: 'CIDs physically unpinned because global refcount reached zero' })

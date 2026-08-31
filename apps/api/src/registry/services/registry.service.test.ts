@@ -6,6 +6,7 @@ import { User } from '../../auth/entities/user.entity';
 import { FakeRepository } from '../../testing/fake-repo';
 import { fakeConfig } from '../../testing/fakes';
 import { NameInventory } from '../entities/name-inventory.entity';
+import { PinReference } from '../entities/pin-reference.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
 import { RegistryService } from './registry.service';
@@ -66,7 +67,7 @@ class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
    * `quota.ts`, serving every alias they select: `used`/`hosted` narrow to
    * authoritative rows, `pinned` counts all of them.
    */
-  createQueryBuilder(_alias?: string): SumQueryBuilder {
+  createQueryBuilder(_alias?: string): SumQueryBuilder | InsertQueryBuilder {
     const allRows = this.rows;
     let accountId: string | undefined;
     const qb: SumQueryBuilder = {
@@ -91,6 +92,47 @@ class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
     };
     return qb;
   }
+}
+
+/**
+ * `InAwareRepository` plus the `insert().orIgnore()` builder the edge claim
+ * uses, honouring the table's unique key the way `ON CONFLICT DO NOTHING` does.
+ */
+class EdgeRepository extends InAwareRepository<PinReference> {
+  override createQueryBuilder(): InsertQueryBuilder {
+    let pending: PinReference[] = [];
+    const builder: InsertQueryBuilder = {
+      insert: () => builder,
+      into: () => builder,
+      values: (rows) => {
+        pending = rows;
+        return builder;
+      },
+      orIgnore: () => builder,
+      execute: async () => {
+        for (const row of pending) {
+          const clash = this.rows.some(
+            (held) =>
+              held.accountId === row.accountId &&
+              held.ipnsName === row.ipnsName &&
+              held.cid === row.cid
+          );
+          if (!clash) {
+            await this.insert(row);
+          }
+        }
+      },
+    };
+    return builder;
+  }
+}
+
+interface InsertQueryBuilder {
+  insert: () => InsertQueryBuilder;
+  into: () => InsertQueryBuilder;
+  values: (rows: PinReference[]) => InsertQueryBuilder;
+  orIgnore: () => InsertQueryBuilder;
+  execute: () => Promise<void>;
 }
 
 interface SumQueryBuilder {
@@ -140,6 +182,7 @@ const GIB = 1024 * 1024 * 1024;
 describe('RegistryService', () => {
   let names: InAwareRepository<NameInventory>;
   let pins: InAwareRepository<PinnedCid>;
+  let refs: EdgeRepository;
   let users: FakeRepository<User>;
   let pinStore: FakePinStore;
   let service: RegistryService;
@@ -147,6 +190,7 @@ describe('RegistryService', () => {
   function build(config: Record<string, string | undefined> = {}) {
     names = new InAwareRepository<NameInventory>();
     pins = new InAwareRepository<PinnedCid>();
+    refs = new EdgeRepository();
     users = new FakeRepository<User>();
     pinStore = new FakePinStore();
     service = new RegistryService(
@@ -155,6 +199,7 @@ describe('RegistryService', () => {
       fakeDataSource([
         [User, users],
         [NameInventory, names],
+        [PinReference, refs],
         [PinnedCid, pins],
       ]),
       pinStore,
@@ -250,13 +295,13 @@ describe('RegistryService', () => {
       await service.register(bob, [{ ipnsName: 'k51b', contentCids: ['bafyShared'] }]);
 
       // Alice retires her row: the CID survives (Bob still references it).
-      const first = await service.retire(alice, ['bafyShared']);
+      const first = await service.retire(alice, [{ targets: ['bafyShared'] }]);
       expect(first).toEqual({ retired: 1, unpinned: 0 });
       expect(pinStore.unpinned).toEqual([]);
       expect(pins.rows.filter((r) => r.cid === 'bafyShared')).toHaveLength(1);
 
       // Bob retires the last row: global refcount hits zero → physical unpin.
-      const second = await service.retire(bob, ['bafyShared']);
+      const second = await service.retire(bob, [{ targets: ['bafyShared'] }]);
       expect(second).toEqual({ retired: 1, unpinned: 1 });
       expect(pinStore.unpinned).toEqual(['bafyShared']);
       expect(pins.rows.filter((r) => r.cid === 'bafyShared')).toHaveLength(0);
@@ -265,7 +310,7 @@ describe('RegistryService', () => {
     it('retires a name row without any unpin (names never carry bytes)', async () => {
       const acct = await account();
       await service.register(acct, [{ ipnsName: 'k51name', headCid: 'bafyHead', contentCids: [] }]);
-      const result = await service.retire(acct, ['k51name']);
+      const result = await service.retire(acct, [{ targets: ['k51name'] }]);
       // The name row is gone; the head CID pin is untouched (retire targeted the name only).
       expect(result.retired).toBe(1);
       expect(result.unpinned).toBe(0);
@@ -279,15 +324,102 @@ describe('RegistryService', () => {
       const stranger = await account();
       await service.register(owner, [{ ipnsName: 'k51o', contentCids: ['bafyOwned'] }]);
 
-      const result = await service.retire(stranger, ['bafyOwned']);
+      const result = await service.retire(stranger, [{ targets: ['bafyOwned'] }]);
       expect(result).toEqual({ retired: 0, unpinned: 0 });
       expect(pinStore.unpinned).toEqual([]);
       expect(pins.rows.filter((r) => r.cid === 'bafyOwned')).toHaveLength(1);
     });
 
+    it('records one reference edge per referencing record, head CID included', async () => {
+      const acct = await account();
+      await service.register(acct, [
+        { ipnsName: 'k51a', headCid: 'bafyHeadA', contentCids: ['bafyLeaf'] },
+        { ipnsName: 'k51b', contentCids: ['bafyLeaf'] },
+      ]);
+
+      expect(refs.rows.map((r) => `${r.ipnsName} ${r.cid}`).sort()).toEqual([
+        'k51a bafyHeadA',
+        'k51a bafyLeaf',
+        'k51b bafyLeaf',
+      ]);
+      // A replay adds nothing.
+      await service.register(acct, [{ ipnsName: 'k51a', contentCids: ['bafyLeaf'] }]);
+      expect(refs.rows).toHaveLength(3);
+    });
+
+    it('a record-scoped retire keeps a leaf a DIFFERENT record of the same account still names', async () => {
+      const acct = await account();
+      // A doomed root of k51doomed aliases a leaf the live record k51live names.
+      await service.register(acct, [{ ipnsName: 'k51live', contentCids: ['bafyAliased'] }]);
+      await service.register(acct, [{ ipnsName: 'k51doomed', contentCids: ['bafyAliased'] }]);
+
+      const result = await service.retire(acct, [
+        { ipnsName: 'k51doomed', targets: ['bafyAliased'] },
+      ]);
+
+      expect(result).toEqual({ retired: 0, unpinned: 0 });
+      expect(pinStore.unpinned).toEqual([]);
+      expect(pins.rows.filter((r) => r.cid === 'bafyAliased')).toHaveLength(1);
+      expect(refs.rows.map((r) => r.ipnsName)).toEqual(['k51live']);
+
+      // The last record to stop naming it takes the pin row and the bytes.
+      const last = await service.retire(acct, [{ ipnsName: 'k51live', targets: ['bafyAliased'] }]);
+      expect(last).toEqual({ retired: 1, unpinned: 1 });
+      expect(pinStore.unpinned).toEqual(['bafyAliased']);
+      expect(pins.rows.filter((r) => r.cid === 'bafyAliased')).toHaveLength(0);
+    });
+
+    it('an unscoped retire drops every record reference the account holds', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51one', contentCids: ['bafyBoth'] }]);
+      await service.register(acct, [{ ipnsName: 'k51two', contentCids: ['bafyBoth'] }]);
+
+      const result = await service.retire(acct, [{ targets: ['bafyBoth'] }]);
+
+      expect(result).toEqual({ retired: 1, unpinned: 1 });
+      expect(refs.rows).toHaveLength(0);
+      expect(pins.rows.filter((r) => r.cid === 'bafyBoth')).toHaveLength(0);
+    });
+
+    it('retiring a name also drops the edges that name anchored, so its sole leaf unpins', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51gone', contentCids: ['bafySole'] }]);
+
+      const result = await service.retire(acct, [{ targets: ['k51gone', 'bafySole'] }]);
+
+      expect(result).toEqual({ retired: 2, unpinned: 1 });
+      expect(refs.rows).toHaveLength(0);
+      expect(names.rows).toHaveLength(0);
+      expect(pinStore.unpinned).toEqual(['bafySole']);
+    });
+
+    it('a scoped entry never retires a name row, only that record edges', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51scoped', contentCids: ['bafyScoped'] }]);
+
+      const result = await service.retire(acct, [
+        { ipnsName: 'k51scoped', targets: ['k51scoped', 'bafyScoped'] },
+      ]);
+
+      expect(result).toEqual({ retired: 1, unpinned: 1 });
+      // The record survives; only its reference to the CID went.
+      expect(names.rows.map((row) => row.ipnsName)).toEqual(['k51scoped']);
+      expect(refs.rows).toHaveLength(0);
+    });
+
+    it('retires a pin row no record references — the orphaned head an aborted publish left', async () => {
+      const acct = await account();
+      await pins.save({ accountId: acct, cid: 'bafyOrphan', size: '0', advisory: false } as never);
+
+      const result = await service.retire(acct, [{ targets: ['bafyOrphan'] }]);
+
+      expect(result).toEqual({ retired: 1, unpinned: 1 });
+      expect(pinStore.unpinned).toEqual(['bafyOrphan']);
+    });
+
     it('is idempotent: retiring an already-gone target succeeds as a no-op', async () => {
       const acct = await account();
-      const result = await service.retire(acct, ['never-registered']);
+      const result = await service.retire(acct, [{ targets: ['never-registered'] }]);
       expect(result).toEqual({ retired: 0, unpinned: 0 });
     });
 
@@ -309,13 +441,14 @@ describe('RegistryService', () => {
         fakeDataSource([
           [User, users],
           [NameInventory, names],
+          [PinReference, refs],
           [PinnedCid, pins],
         ]),
         throwing,
         fakeConfig({}).service
       );
 
-      const result = await service.retire(acct, ['bafyUnpinFails']);
+      const result = await service.retire(acct, [{ targets: ['bafyUnpinFails'] }]);
 
       expect(result).toEqual({ retired: 1, unpinned: 0 });
       expect(pins.rows.filter((r) => r.cid === 'bafyUnpinFails')).toHaveLength(0);
@@ -339,13 +472,14 @@ describe('RegistryService', () => {
         fakeDataSource([
           [User, users],
           [NameInventory, names],
+          [PinReference, refs],
           [PinnedCid, pins],
         ]),
         noopStore,
         fakeConfig({}).service
       );
 
-      const result = await service.retire(acct, ['bafyUnpinNoop']);
+      const result = await service.retire(acct, [{ targets: ['bafyUnpinNoop'] }]);
 
       expect(result).toEqual({ retired: 1, unpinned: 0 });
       expect(pins.rows.filter((r) => r.cid === 'bafyUnpinNoop')).toHaveLength(0);

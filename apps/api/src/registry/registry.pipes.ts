@@ -1,11 +1,6 @@
 import { BadRequestException, ParseArrayPipe, PipeTransform } from '@nestjs/common';
 import { ValidationError } from 'class-validator';
-import {
-  MAX_BATCH,
-  REGISTER_ARRAY_OPTIONS,
-  RETIRE_ARRAY_OPTIONS,
-  RETIRE_TARGET_MAX_LENGTH,
-} from './dto/registry.dto';
+import { MAX_BATCH, REGISTER_ARRAY_OPTIONS, RETIRE_ARRAY_OPTIONS } from './dto/registry.dto';
 import { batchRefusedBody } from './registry-error-codes';
 
 /** The constraint strings alone: a validation error also carries the rejected
@@ -45,14 +40,23 @@ class BatchSizePipe implements PipeTransform {
   }
 }
 
-/** Cap each retire target's length; ParseArrayPipe never reaches items. */
-class TargetLengthPipe implements PipeTransform {
+/**
+ * Cap the retire batch on its TOTAL target count: an entry carries a target
+ * list, so the entry count alone bounds nothing.
+ */
+class TargetCountPipe implements PipeTransform {
   constructor(private readonly max: number) {}
 
-  transform(value: string[]): string[] {
-    for (const target of value) {
-      if (target.length > this.max) {
-        throw refuse(`target exceeds ${this.max} characters`);
+  transform(value: unknown): unknown {
+    if (!Array.isArray(value)) {
+      return value;
+    }
+    let total = 0;
+    for (const entry of value) {
+      const targets = (entry as { targets?: unknown })?.targets;
+      total += Array.isArray(targets) ? targets.length : 0;
+      if (total > this.max) {
+        throw refuse(`Batch exceeds ${this.max} targets`);
       }
     }
     return value;
@@ -65,9 +69,9 @@ export const registerBodyPipes = [
   new ParseArrayPipe({ ...REGISTER_ARRAY_OPTIONS, exceptionFactory: refuse }),
 ];
 
-/** Size guard first, then array parse, then the per-target length cap. */
+/** Size guards first, then the retire DTO validation. */
 export const retireBodyPipes = [
-  new BatchSizePipe(MAX_BATCH, 'targets'),
+  new BatchSizePipe(MAX_BATCH, 'entries'),
+  new TargetCountPipe(MAX_BATCH),
   new ParseArrayPipe({ ...RETIRE_ARRAY_OPTIONS, exceptionFactory: refuse }),
-  new TargetLengthPipe(RETIRE_TARGET_MAX_LENGTH),
 ];

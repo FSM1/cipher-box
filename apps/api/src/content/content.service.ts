@@ -22,6 +22,7 @@ import {
 } from '../common/advisory-lock';
 import { resolveDbPoolSize } from '../common/db-pool';
 import { Semaphore } from '../common/semaphore';
+import { PinReference } from '../registry/entities/pin-reference.entity';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { PinCidMismatchError, PinStore } from '../registry/pin-store';
 import {
@@ -300,6 +301,8 @@ export class ContentService {
           return false;
         }
         await pinRepo.delete({ accountId, cid });
+        // An edge without its pin row would hold a later unpin open forever.
+        await manager.getRepository(PinReference).delete({ accountId, cid });
         const survivors = await pinRepo.find({ where: { cid } });
         return survivors.length === 0;
       });

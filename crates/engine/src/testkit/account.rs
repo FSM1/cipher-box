@@ -23,7 +23,7 @@ use super::{
     SeededEntropy, owner_root_fixture, requested_cid,
 };
 use crate::NodeId;
-use crate::api::REGISTRY_BATCH_REFUSED;
+use crate::api::{REGISTRY_BATCH_REFUSED, RetireEntry};
 use crate::content::DAG_ROOT_CODEC;
 use crate::net::REGISTRY_BATCH_MAX;
 use crate::seams::{HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult};
@@ -93,6 +93,15 @@ fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
             Vec::new()
         },
     })
+}
+
+/// Every target a retire batch names, across its entries.
+pub fn retire_targets(body: &[u8]) -> Vec<String> {
+    serde_json::from_slice::<Vec<RetireEntry>>(body)
+        .expect("a retire body is a JSON array of entries")
+        .into_iter()
+        .flat_map(|entry| entry.targets)
+        .collect()
 }
 
 /// The one file part out of a `multipart/form-data` body, framed against the
@@ -468,9 +477,7 @@ impl Blocks {
                 .body
                 .as_deref()
                 .expect("a retire call carries a body");
-            let retired = serde_json::from_slice::<Vec<String>>(body)
-                .expect("a retire body is a name array")
-                .len();
+            let retired = retire_targets(body).len();
             self.retired
                 .lock()
                 .expect("lock")
