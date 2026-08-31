@@ -47,7 +47,7 @@ use crate::content::{
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
 use crate::grants::inbox::ShareInbox;
-use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts};
+use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
 use crate::grants::{
     AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
     ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
@@ -124,8 +124,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
-    focus_files, focus_folders, focus_folders_due, focus_window_expired, on_access_refresh_due,
-    resolve_mode, run_tick_loop,
+    focus_by_scope, focus_files, focus_folders, focus_folders_due, focus_window_expired,
+    on_access_refresh_due, resolve_mode, run_tick_loop, scope_root_of,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2389,14 +2389,14 @@ struct SyncStatus {
 /// floor past it revokes that epoch, so the seed is evicted rather than left
 /// resident for the rest of the session. Least privilege is a retention rule,
 /// not only an install rule.
-struct CachedSeed {
+pub(crate) struct CachedSeed {
     seed: Zeroizing<[u8; 32]>,
     floor: u64,
 }
 
 /// One of the engine's in-memory per-scope seed cells: scope id → the recovered
 /// seed (zeroized on removal/drop).
-type ScopeSeeds = BTreeMap<[u8; 16], CachedSeed>;
+pub(crate) type ScopeSeeds = BTreeMap<[u8; 16], CachedSeed>;
 
 /// Which of a scope's two independent durable floors bounds a cached seed
 /// (`gate::floor`: the read-epoch floor is the revocation boundary, the
@@ -2457,7 +2457,7 @@ async fn refresh_seed_floor<F: FloorStore>(
 ///
 /// `None` skips the deposit — the floor could not be read, so nothing can be
 /// stamped and the eviction pass has already cleared the cell.
-fn deposit_seed(
+pub(crate) fn deposit_seed(
     cell: &RefCell<ScopeSeeds>,
     scope_id: [u8; 16],
     seed: Zeroizing<[u8; 32]>,
@@ -4042,13 +4042,25 @@ where {
                         focus.borrow_mut().open_folder = None;
                         focus_touched.set(None);
                     }
-                    // The focus window's folders below the root — the read leg for a
-                    // subtree this device did not author. It runs before the drain,
-                    // so the queue rebases onto the deepest state this pass
-                    // reconciled, not just the root's.
-                    let open = focus_folders(&base.borrow(), &focus.borrow());
+                    // The focus window's folders below each scope root — the read
+                    // leg for a subtree this device did not author. It runs before
+                    // the drain, so the queue rebases onto the deepest state this
+                    // pass reconciled, not just the root's.
+                    //
+                    // Grouped by scope: a leg holds one scope's read material, so a
+                    // record sealed under another would fail its AAD-bound unseal
+                    // and be reported as abuse by an honest writer. A scope whose
+                    // seed this device has not recovered serves nothing, and its
+                    // files stay queued for the pass that can.
                     let mut folder_verdict = RefreshVerdict::Reconciled;
-                    if let Some(read_seed) = &read_seed {
+                    let mut queued_files: Vec<NodeId> = Vec::new();
+                    let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
+                    for (scope_root, targets) in by_scope {
+                        let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
+                        else {
+                            queued_files.extend(targets.files);
+                            continue;
+                        };
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
@@ -4057,27 +4069,13 @@ where {
                             gateway: &gateway,
                             base: &base,
                             events: &events,
-                            scope_id: root_id,
-                            scope_read_seed: read_seed,
+                            scope_id: scope_root.0,
+                            scope_read_seed: &scope_read_seed,
                             mode,
                         };
-                        // This leg holds one scope's read material, so a file
-                        // sealed under another would fail its AAD-bound unseal
-                        // and be reported as abuse by an honest writer. Files
-                        // outside it stay queued for the leg that can serve them.
-                        let due_files = {
-                            let base = base.borrow();
-                            let queued = focus_files(&base, &focus.borrow());
-                            let (mine, theirs): (Vec<NodeId>, Vec<NodeId>) =
-                                queued.into_iter().partition(|file| {
-                                    base.ancestors(*file).last() == Some(&NodeId(root_id))
-                                });
-                            focus.borrow_mut().open_files = theirs;
-                            mine
-                        };
                         for (nodes, report) in [
-                            (&open, refresh.run(&open).await),
-                            (&due_files, refresh.run_files(&due_files).await),
+                            (&targets.folders, refresh.run(&targets.folders).await),
+                            (&targets.files, refresh.run_files(&targets.files).await),
                         ] {
                             if nodes.is_empty() {
                                 continue;
@@ -4089,6 +4087,7 @@ where {
                             folder_verdict = folder_verdict.worst(report.verdict);
                         }
                     }
+                    focus.borrow_mut().open_files = queued_files;
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
                     // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -4187,7 +4186,18 @@ where {
                         floors: &floors,
                         enc_secret: &enc_subkey,
                     }
-                    .refresh(&staging, &entropy, &received_verdicts, now, &profile)
+                    .refresh(
+                        &staging,
+                        &entropy,
+                        &received_verdicts,
+                        &ScopeRender {
+                            base: &base,
+                            read_seeds: &scope_read_seeds,
+                            events: &events,
+                        },
+                        now,
+                        &profile,
+                    )
                     .await;
                     let mut status = sync_status.borrow_mut();
                     status.reconcile_in_flight = false;
@@ -5992,10 +6002,20 @@ where {
             now,
             &self.profile,
         );
+        // One leg holds one scope's read material, so a folder in a shared scope
+        // this vault accepted refreshes on the tick's own leg for that scope,
+        // never here under the vault's seed.
+        let (scope_id, due) = {
+            let base = self.snapshot.borrow();
+            let mine = due
+                .into_iter()
+                .filter(|node| scope_root_of(&base, *node) == base.root)
+                .collect::<Vec<_>>();
+            (base.root.0, mine)
+        };
         if due.is_empty() {
             return false;
         }
-        let scope_id = self.snapshot.borrow().root.0;
         let Some(scope_read_seed) = self.scope_read_seed(&scope_id).await else {
             return false;
         };

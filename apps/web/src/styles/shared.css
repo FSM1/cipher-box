@@ -28,3 +28,10 @@
 .shared-standing[data-tone='warning'] {
   color: var(--color-warning);
 }
+
+/* A link wearing the button chrome: it navigates, so it is an anchor. */
+.shared-open {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  text-decoration: none;
+}
