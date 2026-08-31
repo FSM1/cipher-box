@@ -19,7 +19,7 @@ mod adoption;
 
 pub use adoption::{
     Adopted, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage, PendingAdoption,
-    ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred,
+    ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred, record_cut_epoch_floor,
 };
 // `#[doc(hidden)]` at their definitions: `pub` only for the gate KAT generator
 // and suite, which are external crates. Stage 3 alone is a partial verdict.

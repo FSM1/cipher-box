@@ -569,7 +569,6 @@ where
             pointer_read_key: root.pointer_read_key,
         },
         &CommittedSet {
-            owner_identity: &plan.owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],
@@ -1179,7 +1178,7 @@ mod tests {
     // The invariants the provisioning slice already carried.
     // -----------------------------------------------------------------------
 
-    /// **The join.** The pseudonym provisioning commits, epoch-free and for ever,
+    /// **The join.** The pseudonym provisioning commits, for ever,
     /// must be the one the production `OwnerScopeKeys` arm derives — the key every
     /// later re-seal detach-signs under and the gate checks against the
     /// commitment. The two halves are written in different modules and nothing

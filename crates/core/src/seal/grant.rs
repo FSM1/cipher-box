@@ -46,8 +46,8 @@ use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    PreservedFields, assert_grant_recipients_unique, assert_grant_tags_unique,
-    assert_unknown_disjoint, assert_within_bound, bytes_fixed, collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_ids_unique, assert_unknown_disjoint, assert_within_bound,
+    bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::section::MAX_GRANT_BLOBS;
 
@@ -773,6 +773,12 @@ pub fn open_owner_history_link(
 /// but under the owner's own signature rather than the write-grantee-authored
 /// ledger. A cut names the party it revokes from here, so a committed write
 /// grantee cannot relabel its own row and leave the cut naming nobody.
+///
+/// `tag` and `recipient_enc_pk` MUST come from one owner-recipient ECDH: a
+/// consumer seals to the key and files the blob under the tag, so a pair that
+/// disagrees sends the scope seed to one party while another self-locates it.
+/// Only a holder of the owner encryption subkey can check that, so the
+/// invariant belongs to the mint rather than to this codec.
 #[derive(Clone, PartialEq, Eq)]
 pub struct GrantSetEntry {
     /// The recipient's blinded tag.
@@ -912,8 +918,14 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
     for item in raw_entries {
         entries.push(GrantSetEntry::from_value(item)?);
     }
-    assert_grant_tags_unique(entries.iter().map(|e| e.tag))?;
-    assert_grant_recipients_unique(entries.iter().map(|e| e.recipient_enc_pk))?;
+    assert_grant_ids_unique(
+        entries.iter().map(|e| e.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
+    assert_grant_ids_unique(
+        entries.iter().map(|e| e.recipient_enc_pk),
+        TrustViolation::DuplicateGrantRecipient,
+    )?;
     Ok(GrantSetCommitment {
         ipns_name,
         owner_pseudonym_pk,
@@ -934,8 +946,14 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, Co
     // Bound first, the order the decoder checks them in, so a value violating
     // both invariants gets the same verdict from either side.
     assert_within_bound("entries", c.entries.len(), MAX_GRANT_BLOBS)?;
-    assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
-    assert_grant_recipients_unique(c.entries.iter().map(|e| e.recipient_enc_pk))?;
+    assert_grant_ids_unique(
+        c.entries.iter().map(|e| e.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
+    assert_grant_ids_unique(
+        c.entries.iter().map(|e| e.recipient_enc_pk),
+        TrustViolation::DuplicateGrantRecipient,
+    )?;
     let mut m = Map::new();
     m.insert("cutEpoch", Value::Unsigned(c.cut_epoch));
     m.insert(
@@ -990,14 +1008,10 @@ pub enum GrantSetBindingError {
     ScopeMismatch,
 }
 
-/// Refuse a grant-set commitment the owner signed before a cut the reader has
-/// already recorded at this scope root — the check that turns a replayed
-/// pre-cut set from an indistinguishable one into a trust violation.
-///
-/// `cut_epoch_floor` is the reader's own durable record of the newest cut it
-/// saw here, and zero where it recorded none. Fails closed with
-/// [`TrustViolation::CommitmentInvalid`]: the owner-signed set is authentic, and
-/// it is still not the set that governs this scope now.
+/// Refuse a commitment below `cut_epoch_floor`, the reader's own durable record
+/// of the newest cut it saw at this scope root, and zero where it recorded none.
+/// See [`GrantSetCommitment::cut_epoch`]. An authentic owner signature over a
+/// superseded set is still a trust violation, never staleness.
 pub fn refuse_stale_cut_epoch(
     c: &GrantSetCommitment,
     cut_epoch_floor: u64,
@@ -1578,31 +1592,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn encode_and_sign_reject_duplicate_recipients() {
-        // Release-active guard (AGENTS.md rule 8), so no build signs a set its
-        // own decoder refuses.
-        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
-        let c = GrantSetCommitment {
-            ipns_name: b"n".to_vec(),
-            owner_pseudonym_pk: [0x88; 32],
-            cut_epoch: 0,
-            entries: vec![
-                GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
-                GrantSetEntry::new([0x02; 32], [0x41; 32], Permission::Write, [0x04; 32]),
-            ],
-            unknown: PreservedFields::new(),
-        };
-        assert_eq!(
-            encode_grant_set_commitment(&c).unwrap_err().check(),
-            "duplicate-grant-recipient"
-        );
-        assert_eq!(
-            sign_grant_set(&owner, &c).unwrap_err().check(),
-            "duplicate-grant-recipient"
-        );
-    }
-
     /// The whole of the recipient binding: the field is inside the preimage the
     /// owner signs, so relabelling it detaches the entry from the owner
     /// signature instead of passing under the committed tag.
@@ -1732,29 +1721,38 @@ mod tests {
     }
 
     #[test]
-    fn encode_and_sign_reject_duplicate_tags() {
-        // Release-active guard: a caller-built dup-tag commitment never encodes
-        // or gets signed, so the sign path cannot publish bytes decode rejects.
-        // Exercised without relying on a `debug_assert`.
+    fn encode_and_sign_reject_a_repeated_grant_identifier() {
+        // Release-active guard: a caller-built commitment the decoder refuses
+        // never encodes or gets signed, so the sign path cannot publish bytes
+        // its own readers reject. Exercised without relying on a
+        // `debug_assert`.
         let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
-        let c = GrantSetCommitment {
-            ipns_name: b"n".to_vec(),
-            owner_pseudonym_pk: [0x88; 32],
-            cut_epoch: 0,
-            entries: vec![
-                GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
-                GrantSetEntry::new([0x01; 32], [0x42; 32], Permission::Write, [0x04; 32]),
-            ],
-            unknown: PreservedFields::new(),
-        };
-        assert_eq!(
-            encode_grant_set_commitment(&c).unwrap_err().check(),
-            "duplicate-grant-tag"
-        );
-        assert_eq!(
-            sign_grant_set(&owner, &c).unwrap_err().check(),
-            "duplicate-grant-tag"
-        );
+        for (entries, check) in [
+            (
+                vec![
+                    GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                    GrantSetEntry::new([0x01; 32], [0x42; 32], Permission::Write, [0x04; 32]),
+                ],
+                "duplicate-grant-tag",
+            ),
+            (
+                vec![
+                    GrantSetEntry::new([0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                    GrantSetEntry::new([0x02; 32], [0x41; 32], Permission::Write, [0x04; 32]),
+                ],
+                "duplicate-grant-recipient",
+            ),
+        ] {
+            let c = GrantSetCommitment {
+                ipns_name: b"n".to_vec(),
+                owner_pseudonym_pk: [0x88; 32],
+                cut_epoch: 0,
+                entries,
+                unknown: PreservedFields::new(),
+            };
+            assert_eq!(encode_grant_set_commitment(&c).unwrap_err().check(), check);
+            assert_eq!(sign_grant_set(&owner, &c).unwrap_err().check(), check);
+        }
     }
 
     /// A commitment of `n` distinct-tag, distinct-recipient read entries.

@@ -971,10 +971,10 @@ pub fn locate_invite_link(
 }
 
 /// The produce-side mirror of what a resolver hard-rejects: the grant-set
-/// ceiling, duplicate tags, and a ledger diverging from the commitment (core
-/// rejects the first two at decode and before signing; the third is the adoption
-/// gate's owner-authority check). Release-active, so no build can emit a set its
-/// own readers refuse.
+/// ceiling, a repeated tag or recipient key, and a ledger diverging from the
+/// commitment (core rejects the first three at decode and before signing; the
+/// last is the adoption gate's owner-authority check). Release-active, so no
+/// build can emit a set its own readers refuse.
 pub(super) fn check_publishable(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
@@ -982,17 +982,18 @@ pub(super) fn check_publishable(
     if commitment.entries.len() > MAX_GRANT_BLOBS || ledger.len() > MAX_GRANT_BLOBS {
         return Err(InviteError::GrantSetFull);
     }
-    if !tags_are_unique(commitment.entries.iter().map(|e| e.tag))
-        || !tags_are_unique(ledger.iter().map(|e| e.tag))
+    if !ids_are_unique(commitment.entries.iter().map(|e| e.tag))
+        || !ids_are_unique(ledger.iter().map(|e| e.tag))
+        || !ids_are_unique(commitment.entries.iter().map(|e| e.recipient_enc_pk))
     {
         return Err(InviteError::DuplicateTag);
     }
     enforce_committed_ledger(commitment, ledger).map_err(InviteError::Authority)
 }
 
-fn tags_are_unique(tags: impl Iterator<Item = [u8; 32]>) -> bool {
+fn ids_are_unique(ids: impl Iterator<Item = [u8; 32]>) -> bool {
     let mut seen = BTreeSet::new();
-    tags.into_iter().all(|t| seen.insert(t))
+    ids.into_iter().all(|id| seen.insert(id))
 }
 
 #[cfg(test)]
@@ -1102,7 +1103,6 @@ mod tests {
                 write_history: WriteHistory::Carried(&[]),
             },
             &CommittedSet {
-                owner_identity: &owner_identity().verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &sig,
                 grant_ledger: &ledger,

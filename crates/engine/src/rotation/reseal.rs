@@ -46,7 +46,7 @@ use cipherbox_core::seal::{
     open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob, seal_history_link,
     seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -106,10 +106,8 @@ pub struct ScopeRootIdentity<'a> {
     /// recipient (the owner is an implicit, unrevokable grantee of every scope).
     pub owner_enc_pub: &'a X25519Public,
     /// The owner's X25519 encryption-subkey secret, when the re-sealer holds it.
-    /// Required only to mint the write-plane history link a write cut owes
-    /// ([`ResealError::OwnerKeyRequiredForWriteCut`]); the grant blobs need it
-    /// for nothing, since their recipients come from the owner-signed
-    /// commitment ([`adopt_recipients`]).
+    /// Required to mint the write-plane history link a write cut owes
+    /// ([`ResealError::OwnerKeyRequiredForWriteCut`]).
     pub owner_enc_secret: Option<&'a X25519Secret>,
     /// What this re-seal mints the ascent link under; `None` at the vault root,
     /// which carries no ascent link.
@@ -214,18 +212,14 @@ impl ResealSeeds<'_> {
 /// The owner-committed grant set plus the write-body content a re-seal carries.
 #[derive(Clone, Copy)]
 pub struct CommittedSet<'a> {
-    /// The vault owner's identity public key — the authority every carried
-    /// signature in this set answers to: the commitment's, and each ledger row's
-    /// recipient binding ([`row_is_owner_attested`](crate::grants::row_is_owner_attested)).
-    pub owner_identity: &'a EcdsaVerifier,
-    /// The owner-signed commitment (reused verbatim on a grantee
-    /// rotation; owner-re-signed by the read-revoke trigger before it reaches
-    /// here).
+    /// The owner-signed commitment (reused verbatim on a grantee rotation;
+    /// owner-re-signed by the read-revoke trigger before it reaches here). One
+    /// grant blob is re-wrapped per entry.
     pub commitment: &'a GrantSetCommitment,
     /// The 64-byte compact ECDSA owner signature over `commitment`.
     pub commitment_sig: &'a [u8; ECDSA_SIG_LEN],
-    /// The authoritative grant ledger — one grant blob is re-wrapped per entry.
-    /// MUST equal `commitment` as a `(tag → permission)` set (enforced closed).
+    /// The authoritative grant ledger. MUST equal `commitment` as a
+    /// `(tag → permission)` set (enforced closed).
     pub grant_ledger: &'a [GrantLedgerEntry],
     /// The directly-descendant scope roots (the F-4 cascade index, #38 D6).
     pub direct_child_scope_index: &'a [ChildScopeRef],
@@ -552,13 +546,11 @@ fn mint_owner_history_link<E: Entropy>(
 }
 
 /// Adopt every committed entry's `recipientEncPk` once, in commitment order —
-/// the keys the grant-blob loop wraps to.
+/// the keys the grant-blob loop wraps to. See [`GrantSetEntry`] for why the
+/// recipient comes from the commitment.
 ///
-/// The owner signs the commitment, so the recipient is owner authority. A
-/// committed write grantee authors the grant ledger, so a re-seal that took the
-/// key off a row would wrap that grantee's blob to a key it chose. A committed
-/// key core refuses to adopt is the owner attesting a key nothing can seal to,
-/// so the whole re-seal fails closed rather than skip the entry.
+/// A committed key core refuses to adopt is the owner attesting a key nothing
+/// can seal to, so the whole re-seal fails closed rather than skip the entry.
 fn adopt_recipients(committed: &CommittedSet<'_>) -> Result<Vec<X25519Public>, ResealError> {
     committed
         .commitment
@@ -660,8 +652,8 @@ pub fn reseal_scope_root<E: Entropy>(
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
 
-    // Fail-closed BEFORE any seal, and the ledger's only adoption pass: the blob
-    // loop below wraps to these keys rather than re-adopting the same bytes.
+    // Fail-closed BEFORE any seal, and the only adoption pass: the blob loop
+    // below wraps to these keys rather than re-adopting the same bytes.
     let recipients = adopt_recipients(committed)?;
 
     let scope_id = identity.scope_id;
@@ -1067,7 +1059,6 @@ mod tests {
         owner_enc: X25519Secret,
         pseudonym: Ed25519Signer,
         owner_ecdsa: EcdsaSigner,
-        owner_identity: EcdsaVerifier,
         parent_node_seed: [u8; 32],
         write_scope_seed: [u8; 32],
         pointer_read_key: [u8; 32],
@@ -1081,7 +1072,6 @@ mod tests {
             Self {
                 owner_enc: X25519Secret::from_scalar([0x11; 32]),
                 pseudonym: Ed25519Signer::from_seed([0x22; 32]),
-                owner_identity: owner_ecdsa.verifying_key(),
                 owner_ecdsa,
                 parent_node_seed: [0x44; 32],
                 write_scope_seed: [0x55; 32],
@@ -1270,13 +1260,11 @@ mod tests {
     }
 
     fn committed_set<'a>(
-        fx: &'a Fixture,
         commitment: &'a GrantSetCommitment,
         sig: &'a [u8; ECDSA_SIG_LEN],
         ledger: &'a [GrantLedgerEntry],
     ) -> CommittedSet<'a> {
         CommittedSet {
-            owner_identity: &fx.owner_identity,
             commitment,
             commitment_sig: sig,
             grant_ledger: ledger,
@@ -1318,7 +1306,7 @@ mod tests {
                 &fx.write_scope_seed,
                 &fx.pointer_read_key,
             ),
-            &committed_set(&fx, &commitment, &sig, &ledger),
+            &committed_set(&commitment, &sig, &ledger),
             &[],
         )
         .expect("the re-seal completes without an ancestor seed");
@@ -1364,7 +1352,7 @@ mod tests {
                     &fx.write_scope_seed,
                     &fx.pointer_read_key
                 ),
-                &committed_set(&fx, &commitment, &sig, &ledger),
+                &committed_set(&commitment, &sig, &ledger),
                 &[],
             )
             .unwrap_err(),
@@ -1392,7 +1380,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
 
         let mut e = SeededEntropy::new(1);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");
@@ -1527,7 +1515,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let minted = reseal_scope_root(&mut SeededEntropy::new(13), &id, &s, &cs, &[])
             .expect("reseal")
             .ascent_link
@@ -1621,7 +1609,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let section =
             reseal_scope_root(&mut SeededEntropy::new(17), &id, &s, &cs, &[]).expect("reseal");
 
@@ -1656,7 +1644,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"root", None);
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(2);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");
         assert!(
@@ -1676,7 +1664,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", Some(&fx.parent_node_seed));
         let seed = [0x0e; 32];
         let s = seeds(&seed, 7, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let carried = vec![SignedSealed {
             sealed: b"prior-epoch-link".to_vec(),
             signature: [0x01; 64],
@@ -1750,7 +1738,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         reseal_scope_root(&mut SeededEntropy::new(11), &id, &s, &cs, carried)
     }
 
@@ -1852,7 +1840,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let carried = real_chain(MAX_HISTORY_LINKS as u64 + 3);
         let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
             .expect_err("past the bound");
@@ -1921,7 +1909,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let mut cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let mut cs = committed_set(&commitment, &sig, &ledger);
         cs.direct_child_scope_index = &children;
         let carried = real_chain(MAX_HISTORY_LINKS as u64);
         let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
@@ -1959,7 +1947,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(1);
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let mut cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let mut cs = committed_set(&commitment, &sig, &ledger);
         cs.direct_child_scope_index = &children;
 
         let section = reseal_scope_root(&mut SeededEntropy::new(11), &id, &s, &cs, &[])
@@ -2000,7 +1988,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let section = reseal_scope_root(&mut SeededEntropy::new(21), &id, &s, &cs, &[])
             .expect("the rotation mints one fresh link");
 
@@ -2043,7 +2031,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(3);
         let s = seeds(&seed, 3, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
 
         let honest = |byte: u8| SignedSealed {
             sealed: vec![byte; MAX_RETAINED_HISTORY_LINK_BYTES],
@@ -2092,7 +2080,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &[])
             .expect_err("past the bound");
         assert_eq!(err.check(), "too-many-committed-grants");
@@ -2121,7 +2109,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let err =
             reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[]).expect_err("past the bound");
         assert_eq!(err.check(), "too-many-committed-grants");
@@ -2138,7 +2126,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = chain_seed(9);
         let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         // Past the retained window, so a reinstated sweep prune would show up.
         let carried = real_chain(MAX_RETAINED_HISTORY_LINKS as u64 + 8);
         let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
@@ -2257,7 +2245,6 @@ mod tests {
             &fx.pointer_read_key,
         );
         let cs = CommittedSet {
-            owner_identity: &fx.owner_identity,
             commitment: &cut.commitment,
             commitment_sig: &cut.commitment_sig,
             grant_ledger: &cut.grant_ledger,
@@ -2315,7 +2302,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(5);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("diverging ledger");
         assert_eq!(err.check(), "ledger-diverges-from-commitment");
@@ -2343,7 +2330,7 @@ mod tests {
         };
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(7);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("signer mismatch");
         assert_eq!(err.check(), "signer-not-committed");
@@ -2365,7 +2352,7 @@ mod tests {
         };
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(11);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("no link to bind it");
         assert_eq!(err.check(), "ascent-link-dropped");
@@ -2410,7 +2397,7 @@ mod tests {
         };
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(11);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("a link it does not owe");
         assert_eq!(err.check(), "ascent-link-not-owed");
@@ -2441,7 +2428,7 @@ mod tests {
         let (commitment, sig, ledger) = fx.minted();
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
 
         let section = reseal_scope_root(
             &mut SeededEntropy::new(21),
@@ -2475,7 +2462,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let ctx = ctx_for(V, SCOPE, read_epoch, STRUCT_TAG_GRANT_BLOB);
 
         // Both legs agree, which is the point: the write-grantee re-sealer holds
@@ -2532,7 +2519,7 @@ mod tests {
             &fx.write_scope_seed,
             &fx.pointer_read_key,
         );
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let ctx = ctx_for(V, SCOPE, read_epoch, STRUCT_TAG_GRANT_BLOB);
 
         for id in [
@@ -2582,7 +2569,7 @@ mod tests {
                 .to_compact();
             let seed = [0x01; 32];
             let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-            let cs = committed_set(&fx, &commitment, &sig, &ledger);
+            let cs = committed_set(&commitment, &sig, &ledger);
 
             // Both legs agree: holding the owner secret buys no way to wrap a
             // grant to a key core will not adopt.
@@ -2628,7 +2615,7 @@ mod tests {
         let id = identity(&fx, &owner_pub, b"n", None);
         let seed = [0x01; 32];
         let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(6);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("bad key");
         assert_eq!(err.check(), "unusable-recipient-key");
@@ -2653,7 +2640,7 @@ mod tests {
                 &fx.write_scope_seed,
                 &fx.pointer_read_key,
             );
-            let cs = committed_set(&fx, &commitment, &sig, &ledger);
+            let cs = committed_set(&commitment, &sig, &ledger);
             let mut e = SeededEntropy::new(42);
             encode_grant_section(&reseal_scope_root(&mut e, &id, &s, &cs, &[]).unwrap()).unwrap()
         };
@@ -2721,7 +2708,7 @@ mod tests {
             },
             5,
         );
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let mut e = SeededEntropy::new(70);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("reseal");
 
@@ -2762,7 +2749,7 @@ mod tests {
                 &mut UndrawnEntropy,
                 &id,
                 &s,
-                &committed_set(&fx, &commitment, &sig, &ledger),
+                &committed_set(&commitment, &sig, &ledger),
                 &[]
             )
             .expect_err("a keyless cut seals nothing")
@@ -2780,7 +2767,7 @@ mod tests {
         let owner_pub = fx.owner_enc.public();
         let id = identity(&fx, &owner_pub, MINTED_NAME, None);
         let override_seed = [0x0e; 32];
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         let bloated = vec![0x7c; MAX_WRITE_HISTORY_LINK_BYTES + 1];
         let s = ResealSeeds {
             write_history: WriteHistory::Carried(&bloated),
@@ -2812,7 +2799,7 @@ mod tests {
         let owner_pub = fx.owner_enc.public();
         let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
         let override_seed = [0x0e; 32];
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
         for prev_epoch in [5, 6] {
             let write_cut = cut_seeds(
                 &override_seed,
@@ -2859,7 +2846,7 @@ mod tests {
             ..identity(&fx, &owner_pub, MINTED_NAME, None)
         };
         let override_seed = [0x0e; 32];
-        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let cs = committed_set(&commitment, &sig, &ledger);
 
         let read_cut = seeds(
             &override_seed,

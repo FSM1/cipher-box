@@ -805,7 +805,6 @@ where
                     pseudonym_signer: &target.pseudonym_signer,
                 },
                 committed: CommittedSet {
-                    owner_identity: root_plan.committed.owner_identity,
                     commitment: &target.commitment,
                     commitment_sig: &target.commitment_sig,
                     grant_ledger: &target.grant_ledger,
@@ -878,7 +877,7 @@ mod tests {
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
         sign_recipient_binding,
     };
-    use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::{Cell, RefCell};
@@ -1210,7 +1209,6 @@ mod tests {
         net: FakeNet,
         holds_owner_enc_secret: bool,
         owner_pub: X25519Public,
-        owner_identity: EcdsaVerifier,
         commitment: GrantSetCommitment,
         commitment_sig: [u8; ECDSA_SIG_LEN],
         grant_ledger: Vec<GrantLedgerEntry>,
@@ -1223,13 +1221,11 @@ mod tests {
     impl RootFx {
         fn new(net: FakeNet) -> Self {
             let owner_pub = net.owner.enc.public();
-            let owner_identity = net.owner.ecdsa.verifying_key();
             let (commitment, commitment_sig, grant_ledger) = net.owner.committed(0x00);
             Self {
                 net,
                 holds_owner_enc_secret: true,
                 owner_pub,
-                owner_identity,
                 commitment,
                 commitment_sig,
                 grant_ledger,
@@ -1266,7 +1262,6 @@ mod tests {
                     pseudonym_signer: &self.net.owner.pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &self.owner_identity,
                     commitment: &self.commitment,
                     commitment_sig: &self.commitment_sig,
                     grant_ledger: &self.grant_ledger,

@@ -522,7 +522,6 @@ where
 
     // 2) Build the committed set around the row — one entry, so the scope's
     // whole grant set is the one this mint authorises.
-    let owner_identity = owner.identity_signer.verifying_key();
     let tag = row.tag;
     let commitment = GrantSetCommitment {
         ipns_name: name_bytes.to_vec(),
@@ -571,7 +570,6 @@ where
         // shape the convergence pass would later have to repair.
         let grantee_child_index = canonicalize(grantee.subtree_child_index);
         let committed = CommittedSet {
-            owner_identity: &owner_identity,
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
@@ -642,7 +640,6 @@ where
         };
         let canonical_index = canonicalize(&target.direct_child_scope_index);
         let committed = CommittedSet {
-            owner_identity: &owner_identity,
             commitment: &target.commitment,
             commitment_sig: &target.commitment_sig,
             grant_ledger: &target.grant_ledger,
@@ -688,7 +685,6 @@ where
 
     let parent_section = {
         let committed = CommittedSet {
-            owner_identity: &owner_identity,
             commitment: parent.commitment,
             commitment_sig: parent.commitment_sig,
             grant_ledger: parent.grant_ledger,

@@ -792,8 +792,9 @@ fn a_commitment_below_the_adopted_cut_epoch_is_a_whole_record_rejection() {
             .expect("the owner re-signs the cut set")
             .to_compact();
     block_on(adopt(&floors, &fx.reader(), &cut)).expect("the post-cut record adopts");
+    let cut_epoch_key = [fx.scope_id.as_slice(), b"/cut-epoch"].concat();
     assert_eq!(
-        block_on(floors.epoch_floor(&cut_epoch_floor_key(&fx.scope_id))).unwrap(),
+        block_on(floors.epoch_floor(&cut_epoch_key)).unwrap(),
         Some(3),
         "adopting the cut raises the cut-epoch floor"
     );
@@ -804,13 +805,6 @@ fn a_commitment_below_the_adopted_cut_epoch_is_a_whole_record_rejection() {
     let rejection = err.rejection().expect("a trust rejection");
     assert_eq!(rejection.stage, GateStage::CommitmentVerify);
     assert_eq!(rejection.check(), "commitment-invalid");
-}
-
-/// The floor key shape the gate files the cut epoch under. Asserted from the
-/// store rather than from a private helper, so the test pins the durable key a
-/// second device would have to reproduce.
-fn cut_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
-    [scope_id.as_slice(), b"/cut-epoch"].concat()
 }
 
 fn run_floor_scenario(rule: &str) {
@@ -1743,7 +1737,6 @@ impl ResealedFixture {
             pseudonym_signer: &owner_pseudonym,
         };
         let committed = CommittedSet {
-            owner_identity: &owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],

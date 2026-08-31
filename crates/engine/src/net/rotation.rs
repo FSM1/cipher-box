@@ -1441,7 +1441,6 @@ where
                 pseudonym_signer: &source.pseudonym,
             },
             committed: CommittedSet {
-                owner_identity: self.keys.owner_identity,
                 commitment: &source.section.commitment,
                 commitment_sig: &source.section.commitment_sig,
                 grant_ledger: &source.write_body.grant_ledger,
@@ -1930,7 +1929,6 @@ where
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: self.keys.identity,
                 commitment: &source.commitment,
                 commitment_sig: &source.commitment_sig,
                 grant_ledger: &source.grant_ledger,
@@ -2607,9 +2605,6 @@ where
         for committed_entry in &commitment.entries {
             let recipient_enc = X25519Public::from_bytes(committed_entry.recipient_enc_pk)
                 .ok_or(WritePublishError::Rejected)?;
-            // `enforce_committed_ledger` proved the two tag sets equal, so the
-            // row is present; the carried fields it holds are under no owner
-            // signature.
             let row = rows
                 .get(&committed_entry.tag)
                 .ok_or(WritePublishError::Rejected)?;
@@ -2715,7 +2710,6 @@ where
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: &self.owner.verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &remint.ledger,
@@ -3956,7 +3950,6 @@ mod tests {
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {
-                owner_identity: &owner_identity().verifying_key(),
                 commitment: &fixture.grant_section.commitment,
                 commitment_sig: &fixture.grant_section.commitment_sig,
                 grant_ledger: &[],
@@ -4304,7 +4297,6 @@ mod tests {
                     pseudonym_signer: &pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &owner_identity().verifying_key(),
                     commitment: &root.grant_section.commitment,
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
@@ -4415,7 +4407,6 @@ mod tests {
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: &owner_identity().verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
@@ -4823,7 +4814,6 @@ mod tests {
                     pseudonym_signer: &pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &owner_identity().verifying_key(),
                     commitment: &root.grant_section.commitment,
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
@@ -5778,7 +5768,6 @@ mod tests {
                             pseudonym_signer: &pseudonym,
                         },
                         committed: CommittedSet {
-                            owner_identity: &owner_identity().verifying_key(),
                             commitment: &world.root.grant_section.commitment,
                             commitment_sig: &world.root.grant_section.commitment_sig,
                             grant_ledger: &[grantee_row(&name, Permission::Write).ledger_entry],
@@ -8986,7 +8975,6 @@ mod tests {
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {
-                owner_identity: &owner.verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],

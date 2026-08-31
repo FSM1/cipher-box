@@ -27,14 +27,14 @@ use std::collections::BTreeSet;
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, Value, decode, encode, encoded_len};
-use crate::error::{CodecError, Malformed};
+use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use crate::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
 use crate::suite::hpke::ENC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    PreservedFields, assert_grant_ids_unique, assert_unknown_disjoint, assert_within_bound,
     bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::envelope::{MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES};
@@ -413,7 +413,10 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
     }
     // A recipient tag names at most one grant blob; a duplicate is a confused
     // deputy over read-vs-write authority (#39 D7), rejected at decode.
-    assert_grant_tags_unique(grant_blobs.iter().map(|b| b.tag))?;
+    assert_grant_ids_unique(
+        grant_blobs.iter().map(|b| b.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
 
     let owner_blob = SignedOwnerBlob::from_value(req(map, "ownerBlob")?)?;
     let owner_write_blob = match map.get("ownerWriteBlob") {
@@ -469,7 +472,10 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
         section.history_links.len(),
         MAX_HISTORY_LINKS,
     )?;
-    assert_grant_tags_unique(section.grant_blobs.iter().map(|b| b.tag))?;
+    assert_grant_ids_unique(
+        section.grant_blobs.iter().map(|b| b.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
     assert_history_links_unique(&section.history_links)?;
     let commitment_bytes = encode_grant_set_commitment(&section.commitment)?;
 

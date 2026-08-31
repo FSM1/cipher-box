@@ -312,6 +312,28 @@ fn cut_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
     [scope_id.as_slice(), CUT_EPOCH_SUFFIX].concat()
 }
 
+/// Raise `scope_id`'s cut-epoch floor to the epoch a cut this device just
+/// published carries.
+///
+/// The gate raises the same floor from any record it adopts, which is what
+/// makes a rollback refusable everywhere. This is the cutting device's own
+/// raise, and without it the owner keeps accepting the set it just cut until
+/// its next resolve of that scope — long enough for the revokee to republish
+/// the pre-cut root and have the next cut sign off that base.
+///
+/// Call it **after** the cut publishes. A raise ahead of the publish would
+/// leave this device refusing the record the scope still carries, with the
+/// fresh set nowhere on the network to replace it.
+pub async fn record_cut_epoch_floor<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    cut_epoch: u64,
+) -> Result<u64, SeamError> {
+    floors
+        .raise_epoch_floor(&cut_epoch_floor_key(scope_id), cut_epoch)
+        .await
+}
+
 impl PendingAdoption {
     /// Commit the deferred floor-law advance (the AAD-confirmed-unseal rule),
     /// then yield the [`Adopted`] result. Call only after the accepted state is
@@ -322,12 +344,10 @@ impl PendingAdoption {
     /// cross-writer contention is resolved on the publish plane, never on the
     /// local floor read.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, GateError> {
-        // The restrictive floor goes first (`FloorStore::commit_floors`'s
-        // revocation-before-liveness rule): an interrupt between the two leaves
-        // this device refusing a pre-cut set it would otherwise re-adopt, where
-        // the reverse order would leave the cut forgotten. A scope the owner
-        // never cut carries zero, which an absent key already reads as, so it
-        // files nothing.
+        // The restrictive floor goes first, so an interrupt between the two
+        // leaves this device refusing a pre-cut set it would otherwise
+        // re-adopt, never the reverse. A scope the owner never cut carries
+        // zero, which an absent key already reads as, so it files nothing.
         if self.cut_epoch > 0 {
             floors
                 .raise_epoch_floor(&cut_epoch_floor_key(&self.scope_id), self.cut_epoch)

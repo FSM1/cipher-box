@@ -29,7 +29,7 @@ use crate::suite::ecdsa::{
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    PreservedFields, assert_grant_ids_unique, assert_unknown_disjoint, assert_within_bound,
     bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::envelope::MAX_BLOCK_BYTES;
@@ -442,7 +442,10 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     for item in raw_ledger {
         grant_ledger.push(GrantLedgerEntry::from_value(item)?);
     }
-    assert_grant_tags_unique(grant_ledger.iter().map(|e| e.tag))?;
+    assert_grant_ids_unique(
+        grant_ledger.iter().map(|e| e.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
     let mut direct_child_scope_index = Vec::with_capacity(raw_children.len());
     for item in raw_children {
         direct_child_scope_index.push(ChildScopeRef::from_value(item)?);
@@ -487,7 +490,10 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
         MAX_DIRECT_CHILD_SCOPES,
     )?;
     assert_within_bound("grantLedger", body.grant_ledger.len(), MAX_GRANT_BLOBS)?;
-    assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
+    assert_grant_ids_unique(
+        body.grant_ledger.iter().map(|e| e.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
     assert_unknown_disjoint(&body.unknown, WRITE_BODY_KNOWN)?;
     for entry in &body.grant_ledger {
         assert_unknown_disjoint(&entry.unknown, LEDGER_ENTRY_KNOWN)?;

@@ -6251,7 +6251,6 @@ fn rotate_read_epoch(records: &InMemoryRecordStore, blocks: &Blocks) {
             pointer_read_key: &POINTER_READ_KEY,
         },
         &CommittedSet {
-            owner_identity: &owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],

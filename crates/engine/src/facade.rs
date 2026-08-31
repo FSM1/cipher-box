@@ -46,7 +46,7 @@ use crate::content::{
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
-use crate::gate::{GateError, floor};
+use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
     BookmarkedScopeRoots, GraftedSharers, NamedNodes, evict_grafted_read_seeds, floor_view,
 };
@@ -5547,7 +5547,6 @@ where {
                         pseudonym_signer: &current.pseudonym_signer,
                     },
                     committed: CommittedSet {
-                        owner_identity: &owner_identity,
                         commitment: &current.commitment,
                         commitment_sig: &current.commitment_sig,
                         grant_ledger: &current.grant_ledger,
@@ -5772,6 +5771,17 @@ where {
         let report = rotate_on_cut(&rotator, node, cut)
             .await
             .map_err(EngineError::from_rotation)?;
+        // The planes have published the cut set, so this device now refuses the
+        // set it just cut. The gate raises the same floor from any adopted
+        // record; without this raise the owner keeps accepting the pre-cut root
+        // a surviving write grantee republishes, until its next resolve here.
+        record_cut_epoch_floor(
+            &self.seams.floor_store,
+            &target.scope.scope_id,
+            cut.commitment.cut_epoch,
+        )
+        .await
+        .map_err(EngineError::from_seam)?;
         if let Some(write) = report.write.as_ref() {
             // First, and before anything fallible: the wave already published,
             // so every later step in this method can fail without leaving the
@@ -6231,7 +6241,6 @@ where {
                 pointer_read_key: &current.pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: &owner_identity,
                 commitment: &current.commitment,
                 commitment_sig: &current.commitment_sig,
                 grant_ledger: &current.grant_ledger,
@@ -6681,7 +6690,6 @@ where {
                 pointer_read_key: &current.pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: &session.owner_identity(),
                 commitment,
                 commitment_sig: &signature.to_compact(),
                 grant_ledger: ledger,

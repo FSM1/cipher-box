@@ -239,11 +239,6 @@ pub enum RevokeError {
     /// rejects (`enforce_committed_ledger`). Release-active, so no build signs a
     /// set its own readers refuse.
     LedgerDiverges(AuthorityViolation),
-    /// A dropped commitment entry names a recipient encryption key core refuses
-    /// to adopt. The owner signed that key, so the cut refuses rather than name
-    /// a recipient the cascade could never match — the verdict
-    /// [`adopt_recipients`](super::reseal) reaches on the re-seal side.
-    UnusableRecipientKey,
     /// The scope's cut epoch cannot step again without wrapping. A wrapped
     /// counter would let a later replay sit above the floor a cut installed, so
     /// the cut refuses instead. Release-active (AGENTS.md rule 8).
@@ -270,9 +265,6 @@ impl core::fmt::Display for RevokeError {
                 f.write_str("the committed grant under the tag carries write permission")
             }
             RevokeError::LedgerDiverges(v) => write!(f, "cut set rejected: {}", v.description),
-            RevokeError::UnusableRecipientKey => {
-                f.write_str("a dropped commitment entry names an unusable recipient key")
-            }
             RevokeError::CutEpochExhausted => {
                 f.write_str("the scope cut epoch cannot step again without wrapping")
             }
@@ -293,7 +285,6 @@ impl RevokeError {
             RevokeError::NotWriteGranted => "not-write-granted",
             RevokeError::WriteGranted => "write-granted",
             RevokeError::LedgerDiverges(v) => v.check(),
-            RevokeError::UnusableRecipientKey => "unusable-recipient-key",
             RevokeError::CutEpochExhausted => "cut-epoch-exhausted",
             RevokeError::Sign(_) => "commitment-sign-failed",
         }
@@ -339,18 +330,17 @@ fn drop_tags(
     tags: &BTreeSet<[u8; 32]>,
 ) -> Result<DroppedSet, RevokeError> {
     let mut commitment = plan.commitment.clone();
-    // The owner signs `recipientEncPk` into every committed entry, so the cut
-    // names the parties it revokes from the owner's own attestation. A committed
-    // write grantee authors the ledger row, so a harvest off the row let it
-    // relabel its own grant and leave the cascade naming nobody.
+    // The cut names the parties it revokes from the owner's own attestation
+    // (see [`GrantSetEntry`]), never from a ledger row. A key core will not
+    // adopt names nobody rather than refuse: no blob was ever sealed to it, and
+    // refusing would leave the cut that removes the bad entry the one operation
+    // the scope cannot run.
     let dropped: Vec<X25519Public> = commitment
         .entries
         .iter()
         .filter(|e| tags.contains(&e.tag))
-        .map(|e| {
-            X25519Public::from_bytes(e.recipient_enc_pk).ok_or(RevokeError::UnusableRecipientKey)
-        })
-        .collect::<Result<_, _>>()?;
+        .filter_map(|e| X25519Public::from_bytes(e.recipient_enc_pk))
+        .collect();
     commitment.entries.retain(|e| !tags.contains(&e.tag));
     Ok(DroppedSet {
         commitment,
@@ -1071,11 +1061,12 @@ mod tests {
     }
 
     /// A cofactor twin and a non-canonical spelling both blind to the honest
-    /// key's tag, so nothing but core's adoption gate separates them from it. A
-    /// twin in `revoked_recipients` would match no recipient the cascade re-keys,
-    /// so the cut refuses rather than name a party the cascade cannot reach.
+    /// key's tag, so nothing but core's adoption gate separates them from it.
+    /// The cut still lands and names nobody for that entry: no blob was ever
+    /// sealed to a key core will not adopt, and a refusal would leave the cut
+    /// that removes the bad entry the one operation the scope cannot run.
     #[test]
-    fn a_cut_refuses_a_committed_key_core_will_not_adopt() {
+    fn a_cut_names_nobody_off_a_committed_key_core_will_not_adopt() {
         let honest = recipient_enc(LINK_RECIPIENT).public();
         let mut high_bit = honest.to_bytes();
         high_bit[31] |= 0x80;
@@ -1087,8 +1078,9 @@ mod tests {
             let mut fx = Fixture::new();
             relabel_link_entry(&mut fx, enc_pk);
 
-            let err = revoke_read_grant(&fx.plan(), &link_tag()).expect_err("an unusable key");
-            assert_eq!(err.check(), "unusable-recipient-key");
+            let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("the cut still lands");
+            assert!(cut.revoked_recipients.is_empty());
+            assert!(cut.commitment.entries.iter().all(|e| e.tag != link_tag()));
         }
     }
 
@@ -1154,6 +1146,21 @@ mod tests {
 
         let reused = cut_for_write_grant(&fx.plan()).expect("write-grant cut");
         assert_eq!(reused.commitment.cut_epoch, before);
+    }
+
+    /// A wrapped counter would sit below the floor the previous cut installed,
+    /// so every later replay of a pre-cut set would pass. Release-active, never
+    /// a debug_assert.
+    #[test]
+    fn a_cut_at_the_counter_ceiling_fails_closed() {
+        let mut fx = Fixture::new();
+        fx.commitment.cut_epoch = u64::MAX;
+        fx.commitment_sig = sign_grant_set(&fx.owner, &fx.commitment)
+            .expect("signs")
+            .to_compact();
+
+        let err = revoke_read_grant(&fx.plan(), &read_tag()).expect_err("the ceiling");
+        assert_eq!(err.check(), "cut-epoch-exhausted");
     }
 
     #[test]
