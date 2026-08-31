@@ -38,7 +38,9 @@ use cipherbox_engine::grants::{
 };
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 use cipherbox_engine::net::MAX_RECORD_BYTES;
-use cipherbox_engine::seams::{FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport};
+use cipherbox_engine::seams::{
+    FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport, SharerScopedFloorStore,
+};
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
@@ -83,10 +85,18 @@ struct GrantFixture {
 
 impl GrantFixture {
     fn new() -> Self {
-        let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar");
+        Self::under_owner(0, 1)
+    }
+
+    /// The same scope id and the same recipient, under a different owner and at
+    /// that owner's chosen epoch: the collision a `scopeId` invites, since the
+    /// sharer authors both and nothing outside its own record binds them.
+    fn under_owner(owner: u8, epoch: u64) -> Self {
+        let owner_identity =
+            EcdsaSigner::from_scalar(&[0x11u8.wrapping_add(owner); 32]).expect("valid scalar");
         let owner_identity_pub = owner_identity.verifying_key();
-        let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
-        let owner_enc = X25519Secret::from_scalar([0x33; 32]);
+        let owner_pseudonym = Ed25519Signer::from_seed([0x22u8.wrapping_add(owner); 32]);
+        let owner_enc = X25519Secret::from_scalar([0x33u8.wrapping_add(owner); 32]);
         let recipient_enc = X25519Secret::from_scalar([0x44; 32]);
         let recipient_identity = EcdsaSigner::from_scalar(&[0x45; 32])
             .expect("valid scalar")
@@ -95,8 +105,7 @@ impl GrantFixture {
         let scope_id = [0x55; 16];
         let root_id = [0x55; 16];
         let scope_seed = [0x66; 32];
-        let write_scope_seed = [0x77; 32];
-        let epoch = 1;
+        let write_scope_seed = [0x77u8.wrapping_add(owner); 32];
 
         let node_seed = kdf::node_seed(&scope_seed, &root_id);
         let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
@@ -437,7 +446,11 @@ fn two_instance_share_accept_end_to_end() {
     assert_eq!(outcome.permission, Permission::Read, "committed permission");
     assert_eq!(outcome.sequence, 1);
     assert!(outcome.newly_added);
-    assert!(received.contains(fx.name.as_str().as_bytes()));
+    assert!(
+        received
+            .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
+            .is_some()
+    );
     // The pointer read key was persisted from the unsealed grant blob.
     assert!(
         ct_eq(
@@ -822,7 +835,11 @@ fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
     .expect("redelivery re-adopts once the store recovers");
     assert!(outcome.newly_added, "the share was appended, not stranded");
     assert_eq!(outcome.sequence, 1);
-    assert!(received.contains(name_bytes));
+    assert!(
+        received
+            .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
+            .is_some()
+    );
     // The floor advanced exactly now, and the item is acked.
     assert_eq!(
         block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
@@ -877,7 +894,11 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
 
     // The share IS durably recorded and the floor DID advance to the record's
     // sequence — the accepted state is committed.
-    assert!(received.contains(name_bytes));
+    assert!(
+        received
+            .find(&(fx.owner_identity_pub.to_sec1(), fx.scope_id))
+            .is_some()
+    );
     assert_eq!(recipient.received_share_store.persist_count(), 1);
     assert_eq!(
         block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
@@ -981,6 +1002,157 @@ fn a_sequence_replay_for_an_unheld_scope_stays_rejected() {
         inbox_len(&fx, &recipient),
         1,
         "un-acked: a genuine replay is not swallowed"
+    );
+}
+
+/// The ack-only short-circuit needs durable proof of prior adoption **under
+/// this sharer**. A bookmark for the same scope id granted by somebody else is
+/// no such proof, so the strict-sequence reject propagates un-acked instead of
+/// acking a share this contact never got past the gate.
+#[test]
+fn a_sequence_replay_is_not_reacked_off_another_sharers_bookmark() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let contact = import_contact(&fx.owner_contact).unwrap();
+
+    // A second sharer grants the recipient a scope carrying the SAME scope id.
+    // Accepting it bookmarks that id under the other identity.
+    let other = GrantFixture::under_owner(1, 1);
+    let other_item = deliver_pointer(
+        &other,
+        &recipient,
+        &poster,
+        &other.owner_identity,
+        &other.share_pointer(),
+    );
+    let mut received = ReceivedSharesList::new();
+    block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &other_item,
+        &import_contact(&other.owner_contact).unwrap(),
+        &other.recipient_enc,
+        &other.candidate(),
+        &other.grant_blobs(),
+        &mut received,
+    ))
+    .expect("the other sharer's grant of the same scope id is accepted on its own terms");
+
+    block_on(
+        recipient
+            .floor_store
+            .raise_sequence_floor(fx.name.as_str().as_bytes(), 1),
+    )
+    .unwrap();
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+
+    let rejection = match &err {
+        AcceptError::Gate(e) => e.rejection().expect("a fail-closed gate rejection"),
+        other => panic!("expected a gate rejection, got {other}"),
+    };
+    assert_eq!(rejection.check(), "sequence-not-newer");
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        1,
+        "un-acked: another sharer's bookmark proves nothing about this one"
+    );
+}
+
+/// The permanent third-party lockout the sharer-scoped floor exists to stop: a
+/// contact grants a scope whose `scopeId` collides with one the recipient holds
+/// from somebody else, at a far higher epoch. The floors are filed per granting
+/// identity, so the honest scope still resolves at its own epoch afterwards.
+#[test]
+fn a_contact_cannot_ratchet_the_floor_of_a_scope_another_sharer_granted() {
+    let honest = GrantFixture::new();
+    let hostile = GrantFixture::under_owner(1, 1_000_000);
+    let world = FakeWorld::new();
+    let recipient = world.device(&honest.recipient_identity.to_sec1());
+    let poster = world.device(b"owner-inbox");
+    let mut received = ReceivedSharesList::new();
+
+    // The hostile grant lands first and adopts at a far-future epoch.
+    let hostile_item = deliver_pointer(
+        &hostile,
+        &recipient,
+        &poster,
+        &hostile.owner_identity,
+        &hostile.share_pointer(),
+    );
+    block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &hostile_item,
+        &import_contact(&hostile.owner_contact).unwrap(),
+        &hostile.recipient_enc,
+        &hostile.candidate(),
+        &hostile.grant_blobs(),
+        &mut received,
+    ))
+    .expect("the hostile grant is a valid grant of its own scope");
+
+    // The honest grant of the same scope id still adopts at epoch 1.
+    let honest_item = deliver_pointer(
+        &honest,
+        &recipient,
+        &poster,
+        &honest.owner_identity,
+        &honest.share_pointer(),
+    );
+    let outcome = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &honest_item,
+        &import_contact(&honest.owner_contact).unwrap(),
+        &honest.recipient_enc,
+        &honest.candidate(),
+        &honest.grant_blobs(),
+        &mut received,
+    ))
+    .expect("a contact with no authority over this scope cannot lock it out");
+
+    assert_eq!(outcome.scope_id, honest.scope_id);
+    assert_eq!(received.len(), 2, "both grants of the id are bookmarked");
+    assert_eq!(
+        block_on(
+            SharerScopedFloorStore::granted_by(
+                &recipient.floor_store,
+                honest.owner_identity_pub.to_sec1(),
+            )
+            .epoch_floor(&honest.scope_id)
+        )
+        .unwrap(),
+        Some(honest.epoch),
+        "the honest scope's floor is its own, not the hostile grant's"
+    );
+    assert_eq!(
+        block_on(recipient.floor_store.epoch_floor(&honest.scope_id)).unwrap(),
+        None,
+        "and neither grant reaches the floor this vault's own scopes read"
     );
 }
 
@@ -1120,7 +1292,9 @@ fn deliver_pointer(
         V,
         signer,
         &pointer.encode(),
-        "share",
+        // Per scope root, so two sharers' pointers to one inbox are two items
+        // rather than one idempotent replay of the first.
+        &format!("share-{}", fx.name.as_str()),
     ))
     .expect("post");
     let mut items =

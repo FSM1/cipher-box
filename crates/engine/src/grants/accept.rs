@@ -7,10 +7,11 @@
 //! ECDH peer is the verified contact's encryption subkey, not the pointer's
 //! claimed `sharerPub`.
 //!
-//! Both share lists are self-healing bookmarks keyed by scope-root name: the
-//! published metadata is authority, so a re-accept heals a drifted permission or
-//! rotated pointer read key in place; only a byte-identical re-accept is a true
-//! no-op. Persist durably before ack (the flow order lives on [`accept_share`]).
+//! Both share lists are self-healing bookmarks: the published metadata is
+//! authority, so a re-accept heals a drifted permission, a rotated pointer read
+//! key or a re-pointed scope-root name in place; only a byte-identical
+//! re-accept is a true no-op. Persist durably before ack (the flow order lives
+//! on [`accept_share`]).
 
 use core::fmt;
 
@@ -19,7 +20,7 @@ use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ChildScopeRef, Permission, STRUCT_TAG_GRANT_BLOB, name_cmp, open_grant_blob,
+    AadContext, ChildScopeRef, Permission, STRUCT_TAG_GRANT_BLOB, open_grant_blob,
 };
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
@@ -30,7 +31,7 @@ use crate::entropy::EntropyError;
 use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
 use crate::net::GrantedScopeRoot;
-use crate::seams::{FloorStore, Mailbox, SeamError};
+use crate::seams::{FloorStore, Mailbox, SeamError, SharerScopedFloorStore};
 
 use super::contact::Contact;
 use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
@@ -90,6 +91,14 @@ impl SharePointer {
     }
 }
 
+/// A received share's identity: the scope id, under the sharer who granted it.
+///
+/// `scopeId` survives a `rotateScopeWrite` re-point while `ipnsName` does not,
+/// so the id is the stable half. The sharer authors it and nothing outside its
+/// own record binds it, so it identifies a scope only **under** that sharer.
+/// Every per-share map and every durable per-share key uses this pair.
+pub type BookmarkKey = ([u8; IDENTITY_PUBLIC_LEN], [u8; 16]);
+
 /// One received share in the recipient's own vault: the discovery fields plus
 /// the persisted `pointerReadKey` (secret). Redacted `Debug`.
 #[derive(Clone)]
@@ -118,14 +127,19 @@ impl ReceivedShare {
         self.pointer_read_key.as_bytes()
     }
 
+    /// This bookmark's [`BookmarkKey`].
+    pub fn key(&self) -> BookmarkKey {
+        (self.sharer_identity_pk, self.scope_id)
+    }
+
     /// Whether two bookmarks for the same scope carry identical authority and
     /// discovery bytes — the "true no-op re-accept" test. A drift in the
-    /// committed permission, the rotated pointer read key, or the courtesy
-    /// display fields means the freshly-verified metadata is authority and the
-    /// stored entry must self-heal to it.
+    /// re-pointed scope-root name, the committed permission, the rotated pointer
+    /// read key, or the courtesy display fields means the freshly-verified
+    /// metadata is authority and the stored entry must self-heal to it.
     fn same_bookmark(&self, other: &ReceivedShare) -> bool {
-        self.scope_id == other.scope_id
-            && self.sharer_identity_pk == other.sharer_identity_pk
+        self.key() == other.key()
+            && self.scope_root_name == other.scope_root_name
             && self.display_name == other.display_name
             && self.permission == other.permission
             && self.pointer_read_key == other.pointer_read_key
@@ -145,9 +159,9 @@ impl fmt::Debug for ReceivedShare {
 }
 
 /// The recipient's received-shares list — a self-healing bookmark keyed by
-/// scope-root name. The published metadata is the authority; this list only
-/// speeds discovery, so a re-accept heals a drifted entry in place rather than
-/// duplicating or keeping stale authority.
+/// [`ReceivedShare::key`]. The published metadata is the authority; this list
+/// only speeds discovery, so a re-accept heals a drifted entry in place rather
+/// than duplicating or keeping stale authority.
 #[derive(Default)]
 pub struct ReceivedSharesList {
     entries: Vec<ReceivedShare>,
@@ -159,24 +173,24 @@ impl ReceivedSharesList {
         Self::default()
     }
 
-    /// Whether a share for this scope-root name is already bookmarked.
-    pub fn contains(&self, scope_root_name: &[u8]) -> bool {
-        self.entries
-            .iter()
-            .any(|e| e.scope_root_name == scope_root_name)
+    /// Where the bookmark under `key` sits, if one is held.
+    fn position(&self, key: &BookmarkKey) -> Option<usize> {
+        self.entries.iter().position(|e| e.key() == *key)
+    }
+
+    /// The bookmark under `key`, if one is held.
+    pub fn find(&self, key: &BookmarkKey) -> Option<&ReceivedShare> {
+        self.position(key).map(|i| &self.entries[i])
     }
 
     /// Reconcile a freshly-verified share into the self-healing bookmark: append
-    /// if absent, heal in place if the committed permission or pointer read key
-    /// drifted, no-op if byte-identical (blueprint/engine.md "self-healing
-    /// bookmarks"). The returned [`Reconciled`] carries the pre-image
-    /// [`revert`](Self::revert) needs if the durable persist then fails.
+    /// if absent, heal in place if the re-pointed scope-root name, the committed
+    /// permission or the pointer read key drifted, no-op if byte-identical
+    /// (blueprint/engine.md "self-healing bookmarks"). The returned
+    /// [`Reconciled`] carries the pre-image [`revert`](Self::revert) needs if the
+    /// durable persist then fails.
     pub(crate) fn reconcile(&mut self, share: ReceivedShare) -> Reconciled {
-        match self
-            .entries
-            .iter_mut()
-            .position(|e| e.scope_root_name == share.scope_root_name)
-        {
+        match self.position(&share.key()) {
             None => {
                 self.entries.push(share);
                 Reconciled::Added
@@ -193,20 +207,15 @@ impl ReceivedSharesList {
     /// restoring the list to its pre-accept state so a persist failure is
     /// redelivery-safe exactly like a gate failure (the in-memory bookmark never
     /// gets ahead of durable storage).
-    fn revert(&mut self, scope_root_name: &[u8], reconciled: Reconciled) {
+    fn revert(&mut self, key: &BookmarkKey, reconciled: Reconciled) {
+        let Some(at) = self.position(key) else {
+            return;
+        };
         match reconciled {
-            Reconciled::Added => self
-                .entries
-                .retain(|e| e.scope_root_name != scope_root_name),
-            Reconciled::Healed(previous) => {
-                if let Some(e) = self
-                    .entries
-                    .iter_mut()
-                    .find(|e| e.scope_root_name == scope_root_name)
-                {
-                    *e = *previous;
-                }
+            Reconciled::Added => {
+                self.entries.remove(at);
             }
+            Reconciled::Healed(previous) => self.entries[at] = *previous,
             Reconciled::Unchanged => {}
         }
     }
@@ -218,12 +227,11 @@ impl ReceivedSharesList {
     ///
     /// Two exclusions, both fail-closed. A stored name that is not a well-formed
     /// IPNS name resolves nothing, so it names no rotation destination. And a
-    /// scope id carried by more than one bookmark is **ambiguous**: `scopeId` is
-    /// authored by the sharer and bound to nothing outside its own record, so two
-    /// sharers can present the same one. Since this list is keyed by name, both
-    /// entries are legitimately held — but neither may answer for the id, or a
-    /// rotation would be aimed at whichever sorted first while the revokee on the
-    /// other scope keeps a live seed.
+    /// scope id carried by more than one bookmark is **ambiguous**: the list is
+    /// keyed by [`ReceivedShare::key`], so two sharers may each hold a bookmark
+    /// for one id legitimately — but the rotation arm addresses a scope by id
+    /// alone, so neither may answer, or a rotation would be aimed at whichever
+    /// sorted first while the revokee on the other scope keeps a live seed.
     pub fn granted_scope_roots(&self) -> Vec<GrantedScopeRoot> {
         self.paired(|_| true)
     }
@@ -335,23 +343,20 @@ pub(super) fn within(field: &'static str, len: usize, limit: usize) -> Result<()
     Ok(())
 }
 
-/// Encode the durable received-shares body to det-CBOR, entries in scope-root
-/// order so one list has one spelling.
+/// Encode the durable received-shares body to det-CBOR, entries in
+/// [`ReceivedShare::key`] order so one list has one spelling.
 ///
-/// Rejects a duplicate scope root release-active, the invariant
-/// [`decode_stored_list`] hard-rejects (AGENTS.md rule 8): a list with two
-/// bookmarks for one scope has no defined authority, and emitting one would
-/// durably store bytes this build's own reader refuses.
+/// Rejects a duplicate key release-active, the invariant [`decode_stored_list`]
+/// hard-rejects (AGENTS.md rule 8): a list with two bookmarks for one sharer's
+/// scope has no defined authority, and emitting one would durably store bytes
+/// this build's own reader refuses.
 pub(crate) fn encode_stored_list(
     shares: &ReceivedSharesList,
 ) -> Result<Zeroizing<Vec<u8>>, ReceivedSharesCodecError> {
     let mut sorted: Vec<&ReceivedShare> = shares.entries.iter().collect();
-    sorted.sort_by(|a, b| name_cmp(&a.scope_root_name, &b.scope_root_name));
-    if sorted
-        .windows(2)
-        .any(|pair| pair[0].scope_root_name == pair[1].scope_root_name)
-    {
-        return Err(ReceivedSharesCodecError::DuplicateScopeRoot);
+    sorted.sort_by_key(|share| share.key());
+    if sorted.windows(2).any(|pair| pair[0].key() == pair[1].key()) {
+        return Err(ReceivedSharesCodecError::DuplicateScope);
     }
     within("shares", sorted.len(), MAX_RECEIVED_SHARES)?;
     for share in &sorted {
@@ -442,12 +447,9 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
             scope_root_name.len(),
             MAX_SCOPE_ROOT_NAME_BYTES,
         )?;
-        if entries.iter().any(|e| e.scope_root_name == scope_root_name) {
-            return Err(ReceivedSharesCodecError::DuplicateScopeRoot);
-        }
         let display_name = req(share, "displayName")?.as_text()?.to_string();
         within("displayName", display_name.len(), MAX_DISPLAY_NAME_BYTES)?;
-        entries.push(ReceivedShare {
+        let decoded = ReceivedShare {
             sharer_identity_pk: fixed::<IDENTITY_PUBLIC_LEN>(
                 req(share, "sharerIdentityPk")?,
                 "sharerIdentityPk",
@@ -461,7 +463,12 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
             )?),
             scope_id: fixed::<16>(req(share, "scopeId")?, "scopeId")?,
             scope_root_name,
-        });
+        };
+        let key = decoded.key();
+        if entries.iter().any(|e| e.key() == key) {
+            return Err(ReceivedSharesCodecError::DuplicateScope);
+        }
+        entries.push(decoded);
     }
     Ok(ReceivedSharesList { entries })
 }
@@ -479,9 +486,13 @@ pub enum ReceivedSharesCodecError {
     /// `received-shares` blob — tampered, another identity's, or another
     /// owner-local store's.
     DidNotOpen(CodecError),
-    /// Two bookmarks named one scope root — a list with no defined authority
-    /// for that scope, refused in both directions (AGENTS.md rule 8).
-    DuplicateScopeRoot,
+    /// Two bookmarks named one sharer's scope — a list with no defined
+    /// authority for that scope, refused in both directions (AGENTS.md rule 8).
+    ///
+    /// A pre-cutover list can trip this: the key was the scope-root name then,
+    /// so a re-pointed scope left two entries this key refuses. Under the
+    /// greenfield rule such a store is forgotten, never upgraded.
+    DuplicateScope,
     /// A stored body written at a grammar version this build does not read.
     /// Never treated as empty: the bookmarks are there, this build just cannot
     /// interpret them.
@@ -500,8 +511,8 @@ impl fmt::Display for ReceivedSharesCodecError {
             ReceivedSharesCodecError::DidNotOpen(e) => {
                 write!(f, "received-shares list did not open: {}", e.check())
             }
-            ReceivedSharesCodecError::DuplicateScopeRoot => {
-                f.write_str("received-shares list names one scope root twice")
+            ReceivedSharesCodecError::DuplicateScope => {
+                f.write_str("received-shares list names one sharer's scope twice")
             }
             ReceivedSharesCodecError::UnsupportedVersion { version } => {
                 write!(f, "received-shares body version {version} is not readable")
@@ -611,7 +622,7 @@ pub enum ReceivedShareStoreError {
     /// bytes are fine — the offered list is the one past the bound.
     Full,
     /// The offered list is not one this build may store: two bookmarks for one
-    /// scope root, or a field past its bound. A write-path refusal, so never
+    /// sharer's scope, or a field past its bound. A write-path refusal, so never
     /// [`Unreadable`](Self::Unreadable) — nothing was read.
     Encode(ReceivedSharesCodecError),
     /// Entropy acquisition failed, so no list is sealed and none is written.
@@ -874,6 +885,9 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
             aad: grant_aad,
         }),
     };
+    let bookmark_key: BookmarkKey = (pointer.sharer_identity_pk, candidate.envelope.scope);
+    let floors = &SharerScopedFloorStore::granted_by(floors, pointer.sharer_identity_pk);
+
     // Gate the record but DEFER the floor-law advance so the durable sequence
     // floor never moves ahead of the bookmark it accepts (see `PendingAdoption`).
     // The share-accept flow does not hold the scope for liveness here, so the
@@ -882,21 +896,17 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         Ok((pending, _)) => pending,
         Err(e) => {
             // Idempotent ack-only short-circuit. A strict-sequence anti-replay
-            // reject for a scope we ALREADY durably hold is a redelivery whose
-            // floor advance already committed (e.g. a prior ack failed): the
-            // bookmark is proof of prior adoption, so just re-ack and never
-            // re-adopt or downgrade it. Any OTHER rejection, a scope we do not
-            // hold (a genuine replay), or a retryable `GateError::Seam` (whose
-            // `rejection()` is `None`) falls through and propagates unchanged —
-            // anti-replay stays intact.
+            // reject for a scope we ALREADY durably hold **under this sharer** is
+            // a redelivery whose floor advance already committed (e.g. a prior
+            // ack failed): the bookmark is proof of prior adoption, so just
+            // re-ack and never re-adopt or downgrade it. Any OTHER rejection, a
+            // scope this sharer did not grant us (a genuine replay), or a
+            // retryable `GateError::Seam` (whose `rejection()` is `None`) falls
+            // through and propagates unchanged — anti-replay stays intact.
             if let Some(RejectionReason::SequenceNotNewer { floor, .. }) =
                 e.rejection().map(|r| &r.reason)
             {
-                if let Some(permission) = received
-                    .iter()
-                    .find(|s| s.scope_root_name == pointer.scope_root_name)
-                    .map(|s| s.permission)
-                {
+                if let Some(permission) = received.find(&bookmark_key).map(|s| s.permission) {
                     mailbox.ack(&item.item_id).await.map_err(AcceptError::Ack)?;
                     return Ok(AcceptOutcome {
                         scope_id: candidate.envelope.scope,
@@ -924,7 +934,7 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     // in-memory bookmark back and returns un-acked, so the item redelivers.
     if reconciled.is_durable_change() {
         if let Err(e) = store.persist(received).await {
-            received.revert(&pointer.scope_root_name, reconciled);
+            received.revert(&bookmark_key, reconciled);
             return Err(AcceptError::Persist(e));
         }
     }
@@ -1059,11 +1069,12 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
         };
+        let key = base.key();
 
         // Revert an append → the list is empty again (persist-failure rollback).
         let added = list.reconcile(base.clone());
         assert!(matches!(added, Reconciled::Added));
-        list.revert(b"n", added);
+        list.revert(&key, added);
         assert!(list.is_empty());
 
         // Revert a heal → the stored entry returns to its pre-heal values.
@@ -1074,7 +1085,7 @@ mod tests {
             ..base
         });
         assert!(matches!(healed, Reconciled::Healed(_)));
-        list.revert(b"n", healed);
+        list.revert(&key, healed);
         let stored = list.iter().next().unwrap();
         assert_eq!(
             stored.permission,
@@ -1109,10 +1120,54 @@ mod tests {
         }
     }
 
+    /// The same bookmark under a second sharer — the only way one scope id ends
+    /// up claimed twice, since one sharer's re-point heals its entry in place.
+    fn from_another_sharer(mut share: ReceivedShare) -> ReceivedShare {
+        share.sharer_identity_pk = [0x03; IDENTITY_PUBLIC_LEN];
+        share
+    }
+
     fn a_name(seed: u8) -> IpnsName {
         IpnsName::from_public_key(
             &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([seed; 32]).verifying_key(),
         )
+    }
+
+    /// A `rotateScopeWrite` re-point moves the scope root to a freshly derived
+    /// name. The bookmark is keyed by the scope id under its sharer, so the new
+    /// pointer heals the entry rather than adding a second one that would make
+    /// the id ambiguous and stall the rotation arm.
+    #[test]
+    fn a_repointed_scope_root_heals_its_bookmark_in_place() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+
+        let repointed = list.reconcile(share_at([0x5c; 16], &a_name(0x32), Permission::Write));
+
+        assert!(matches!(repointed, Reconciled::Healed(_)));
+        assert_eq!(list.len(), 1);
+        let granted = list.granted_scope_roots();
+        assert_eq!(granted.len(), 1);
+        assert_eq!(
+            granted[0].ipns_name,
+            a_name(0x32),
+            "the rotation arm is aimed at the live name, never the superseded one"
+        );
+    }
+
+    /// A `scopeId` is authored by the sharer, so a hostile contact can present
+    /// one a victim already holds from somebody else. Keying the bookmark on the
+    /// pair keeps both, so the hostile grant cannot heal over — and overwrite —
+    /// the authority of a grant it has none over.
+    #[test]
+    fn a_second_sharer_cannot_heal_over_the_first_sharers_bookmark() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
+
+        let hostile = from_another_sharer(share_at([0x5c; 16], &a_name(0x32), Permission::Write));
+        assert!(matches!(list.reconcile(hostile), Reconciled::Added));
+
+        assert_eq!(list.len(), 2, "the honest bookmark is still held");
     }
 
     #[test]
@@ -1131,7 +1186,11 @@ mod tests {
     fn a_scope_id_two_bookmarks_claim_answers_for_neither() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
-        list.reconcile(share_at([0x5c; 16], &a_name(0x32), Permission::Write));
+        list.reconcile(from_another_sharer(share_at(
+            [0x5c; 16],
+            &a_name(0x32),
+            Permission::Write,
+        )));
         list.reconcile(share_at([0x77; 16], &a_name(0x33), Permission::Write));
 
         let granted = list.granted_scope_roots();
@@ -1146,7 +1205,11 @@ mod tests {
     fn a_read_only_claimant_still_makes_the_id_ambiguous_for_the_sweep_round() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
-        list.reconcile(share_at([0x5c; 16], &a_name(0x32), Permission::Read));
+        list.reconcile(from_another_sharer(share_at(
+            [0x5c; 16],
+            &a_name(0x32),
+            Permission::Read,
+        )));
 
         assert!(
             list.writable_scope_refs().is_empty(),
@@ -1159,7 +1222,7 @@ mod tests {
     fn a_claimant_with_an_unusable_name_still_makes_the_id_ambiguous() {
         let mut list = ReceivedSharesList::new();
         list.reconcile(share_at([0x5c; 16], &a_name(0x31), Permission::Write));
-        let mut junk = share_at([0x5c; 16], &a_name(0x32), Permission::Write);
+        let mut junk = from_another_sharer(share_at([0x5c; 16], &a_name(0x32), Permission::Write));
         junk.scope_root_name = b"not-an-ipns-name".to_vec();
         list.reconcile(junk);
 
@@ -1216,18 +1279,18 @@ mod tests {
         assert!(ct_eq(first.pointer_read_key(), &[0x8A; 32]));
     }
 
-    /// Rule 8: the decoder hard-rejects two bookmarks for one scope, so the
-    /// encoder must refuse to emit them — with a returned `Err` that survives a
-    /// release build, never a stripped assert.
+    /// Rule 8: the decoder hard-rejects two bookmarks for one sharer's scope, so
+    /// the encoder must refuse to emit them — with a returned `Err` that
+    /// survives a release build, never a stripped assert.
     #[test]
-    fn a_duplicate_scope_root_is_refused_in_both_directions() {
+    fn a_duplicate_scope_is_refused_in_both_directions() {
         let mut duplicated = ReceivedSharesList::new();
         duplicated.entries.push(share(b"n", 0x8A));
-        duplicated.entries.push(share(b"n", 0x9C));
+        duplicated.entries.push(share(b"m", 0x8A));
         assert!(
             matches!(
                 encode_stored_list(&duplicated),
-                Err(ReceivedSharesCodecError::DuplicateScopeRoot)
+                Err(ReceivedSharesCodecError::DuplicateScope)
             ),
             "the encoder refuses a list with no defined authority for a scope"
         );
@@ -1242,7 +1305,7 @@ mod tests {
         assert!(
             matches!(
                 decode_stored_list(&encode(&Value::Map(map)).unwrap()),
-                Err(ReceivedSharesCodecError::DuplicateScopeRoot)
+                Err(ReceivedSharesCodecError::DuplicateScope)
             ),
             "the decoder refuses the same list it would never emit"
         );
@@ -1364,7 +1427,9 @@ mod tests {
     fn a_list_past_the_share_bound_is_refused() {
         let mut list = ReceivedSharesList::new();
         for i in 0..=MAX_RECEIVED_SHARES {
-            list.reconcile(share(format!("n{i}").as_bytes(), 0x8A));
+            let mut entry = share(format!("n{i}").as_bytes(), 0x8A);
+            entry.scope_id[..2].copy_from_slice(&(i as u16).to_be_bytes());
+            list.reconcile(entry);
         }
         assert!(matches!(
             encode_stored_list(&list),

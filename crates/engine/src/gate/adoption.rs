@@ -239,7 +239,9 @@ pub struct Candidate {
 pub struct ReaderContext<'a> {
     /// The contact-code-anchored owner identity (stage-2 verification anchor).
     pub owner_identity: &'a EcdsaVerifier,
-    /// The scope id (the read-epoch floor key and the AAD scope binding).
+    /// The scope id (the read-epoch floor key and the AAD scope binding). The
+    /// caller supplies floors already namespaced to the authority it reads under
+    /// ([`SharerScopedFloorStore`](crate::seams::SharerScopedFloorStore)).
     pub scope_id: [u8; 16],
     /// The reader's own derived scope read key for the read-body unseal.
     pub read_key: &'a [u8; 32],

@@ -23,11 +23,13 @@ use crate::gate::floor;
 use crate::net::rotation::scope_name;
 use crate::net::{assemble_candidate, fanout_get_verify};
 use crate::profile::SyncTimingProfile;
-use crate::seams::{FloorStore, Http, RecordTransport, StagingStore, UnixMillis};
+use crate::seams::{
+    FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore, UnixMillis,
+};
 use crate::sync::tick::on_access_refresh_due;
 
-use super::accept::ReceivedShare;
 use super::accept::ReceivedShareStore;
+use super::accept::{BookmarkKey, ReceivedShare};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
@@ -50,8 +52,10 @@ pub(crate) struct ReceivedVerdict {
     pub at: UnixMillis,
 }
 
-/// Each bookmarked shared scope's latest verdict, keyed by scope id.
-pub(crate) type ReceivedVerdicts = BTreeMap<[u8; 16], ReceivedVerdict>;
+/// Each bookmarked shared scope's latest verdict, keyed the way the bookmark
+/// itself is ([`BookmarkKey`]). Two sharers may hold one scope id, and the id
+/// alone would collapse their rows onto one verdict cell.
+pub(crate) type ReceivedVerdicts = BTreeMap<BookmarkKey, ReceivedVerdict>;
 
 /// The seams one received-share resolve reads, plus this device's own
 /// encryption subkey — the self-locating tag's other half. Borrowed: the
@@ -122,11 +126,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let mut refreshed = BTreeMap::new();
         let mut budget = MAX_RESOLVES_PER_PASS;
         for share in received.iter() {
-            let held = verdicts.borrow().get(&share.scope_id).copied();
+            let key = share.key();
+            let held = verdicts.borrow().get(&key).copied();
             let due = held.is_none_or(|held| on_access_refresh_due(now, held.at, profile));
             if !due || budget == 0 {
                 if let Some(held) = held {
-                    refreshed.insert(share.scope_id, held);
+                    refreshed.insert(key, held);
                 }
                 continue;
             }
@@ -141,7 +146,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 // verified identity to hold the record to.
                 None => ResolutionClass::Unresolvable,
             };
-            refreshed.insert(share.scope_id, ReceivedVerdict { class, at: now });
+            refreshed.insert(key, ReceivedVerdict { class, at: now });
         }
         *verdicts.borrow_mut() = refreshed;
     }
@@ -161,7 +166,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // A floor this pass could not read is availability, not a verdict: with
         // no floor the epoch-lag rung cannot fire, so a stale record would read
         // as granted. Absent (`Ok(None)`) is a genuine zero.
-        let Ok(epoch_floor) = floor::read_epoch_floor(self.floors, &share.scope_id).await else {
+        let sharer_floors =
+            SharerScopedFloorStore::granted_by(self.floors, share.sharer_identity_pk);
+        let Ok(epoch_floor) = floor::read_epoch_floor(&sharer_floors, &share.scope_id).await else {
             return ResolutionFacts::unresolved(0);
         };
         let epoch_floor = epoch_floor.unwrap_or(0);

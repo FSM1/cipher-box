@@ -447,9 +447,11 @@ pub struct SharingView {
 /// says whether the share still stands.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReceivedShareRow {
-    /// The shared scope's id — this row's stable identity, and the handle a
-    /// browse opens it under. The scope root's `ipnsName` is deliberately not
-    /// projected: a write rotation moves it, and the durable list seals it.
+    /// The shared scope's id. The sharer authors it, so it identifies this row
+    /// only together with [`sharer_identity_public_key`](Self::sharer_identity_public_key):
+    /// two sharers may each grant one id, and a host must key a row on the pair.
+    /// The scope root's `ipnsName` is deliberately not projected: a write
+    /// rotation moves it, and the durable list seals it.
     pub scope: NodeId,
     /// The sharer's identity key as the accepted bookmark holds it, which the
     /// accept flow bound to a verified contact before writing.
@@ -1131,9 +1133,11 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
-    /// A fail-closed trust violation on the read path — a rejected child
-    /// record, or a CID/manifest/unseal disagreement. Never retried, never
-    /// rendered (rule 6).
+    /// A fail-closed verdict no retry can clear: a rejected child record, a
+    /// CID/manifest/unseal disagreement, or a local rotation refusal on this
+    /// vault's own material ([`from_rotation`](EngineError::from_rotation)).
+    /// Never retried, never rendered (rule 6), and never an accusation against
+    /// a peer — a host cannot tell the two sources apart.
     TrustViolation {
         /// The verdict classification; never carries key material.
         message: String,
@@ -1235,8 +1239,11 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
-    /// A host seam failed (durable op-queue I/O). Availability, never a trust
-    /// decision — trust classification happens below the facade.
+    /// Retry later: a host seam failed (durable op-queue I/O), or a rotation
+    /// stalled on something a later pass repairs
+    /// ([`from_rotation`](EngineError::from_rotation), the cross-parent
+    /// child-label conflict included). Never a trust decision — trust
+    /// classification happens below the facade.
     Seam {
         /// Diagnostic message; never carries key material.
         message: String,
@@ -2974,6 +2981,9 @@ impl<T: SeamTypes> Engine<T> {
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
                 // the base snapshot; children come from the pending-op overlay.
+                // Shared by every account on purpose: a well-known anchor, never
+                // an account discriminator — separation lives in the KDFs and in
+                // the per-identity seam views that consume it.
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 settings_record: Rc::new(RefCell::new(None)),
@@ -6584,7 +6594,7 @@ where {
                 sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
                 display_name: share.display_name.clone(),
                 permission: share.permission.into(),
-                resolution: verdicts.get(&share.scope_id).map(|v| v.class),
+                resolution: verdicts.get(&share.key()).map(|v| v.class),
             })
             .collect())
     }
