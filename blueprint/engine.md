@@ -865,6 +865,18 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   public trustless gateway is the no-auth fallback. The engine verifies CIDs
   client-side via core on every block/CAR response; media uses ranged fetches
   (the service-worker decryption layer is web-blueprint territory) (FSM1/cipher-box-next#34 D7).
+  - **The staging store is the local-first leg, ahead of every gateway.** A
+    version this device staged reaches no gateway until the drain uploads it,
+    so a read of one is served locally or not at all — which is what lets a
+    partial write compose over a version it just wrote, and what pairs the
+    length the rendered view reports with the bytes the write composes over.
+    The leg is safe because the staging key **is** the block's own
+    `contentCid`: a local hit is byte-identical to what a gateway would serve
+    for that address, and a version half-uploaded reads across both legs. A
+    locally held block clears exactly the bars a fetched one clears — the
+    plane anchor, then the CID verify against the same binary anchor — and a
+    mismatch is the same terminal trust violation, never a rotation to the
+    gateway. The nearer source is not the more trusted one.
 - **Chunking and retention** — owned here per core.md's hand-off, resolved as
   engineering judgment: the engine frames content into fixed-size chunks,
   seals each with core's content-seal primitive (fresh random per-version
