@@ -70,9 +70,10 @@ use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldKey, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
     PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, VaultProvisionNet,
-    assemble_candidate, eol_renew_pass, fanout_get_verify, keyless_re_put,
-    refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
+    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
+    VaultProvisionNet, assemble_candidate, enrol_owned_scope_pointers, eol_renew_pass,
+    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
+    run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -3701,6 +3702,11 @@ where {
         let settings_record = self.settings_record.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
+        let gateway = self.gateway.clone();
+        let http = self.seams.http.clone();
+        let entropy = self.entropy.clone();
+        let pointer_keys = self.sweep_keys.clone();
+        let root_id = self.snapshot.borrow().root.0;
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
@@ -3708,6 +3714,29 @@ where {
                 }
                 let settings = live_settings_record(&transport, &settings_record).await;
                 drop_superseded_pointers(&transport, &held).await;
+                // The flip is the only other producer of a held scope pointer,
+                // so a session that runs no rotation must re-enrol what it owns
+                // or the pointer lapses at its EOL.
+                let session_keys = pointer_keys.borrow().clone();
+                if let Some(keys) = session_keys {
+                    enrol_owned_scope_pointers(ScopePointerEnrolment {
+                        api: &api,
+                        transport: &transport,
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        scheduler: &scheduler,
+                        profile: &profile,
+                        entropy: &entropy,
+                        enc_secret: &keys.enc_secret,
+                        identity: &keys.owner_identity,
+                        keys: &keys.scope_keys,
+                        held: &held,
+                        root_id,
+                        payload_version: POINTER_PAYLOAD_VERSION,
+                    })
+                    .await;
+                }
                 let records: Vec<HeldRecord> =
                     held.borrow().values().cloned().chain(settings).collect();
                 keyless_re_put(&transport, &records).await;
@@ -4745,6 +4774,7 @@ where {
             grant_ledger: &current.grant_ledger,
             scope_root_name: &scope_root_name,
             owner_signer: session.identity(),
+            owner_enc_secret: session.enc_subkey(),
         };
         let cut = match kind {
             // A write grant is cut by `revoke_write_grant`, never by a read
@@ -5112,6 +5142,7 @@ where {
             grant_ledger: &current.grant_ledger,
             scope_root_name,
             owner_signer: session.identity(),
+            owner_enc_secret: session.enc_subkey(),
         })
         .map_err(EngineError::from_revoke)?;
         self.drive_cut(node, &target, scope_root_name, &cut)

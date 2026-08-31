@@ -111,6 +111,15 @@ pub trait OwnerPointerRead {
     fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName;
 }
 
+/// The pointer plane's **write** edge, split out from [`OwnerPointerRead`] for
+/// the same reason that trait exists: `ownerPointerSeed` derives both, and only
+/// the enrolment that renews a pointer this session owns needs the signer.
+pub trait OwnerPointerSign {
+    /// `scope-pointer` for this scope — the Ed25519 key its IPNS record is
+    /// signed under.
+    fn pointer_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer;
+}
+
 /// Whether a rotation pass may run the sweep's scope-pointer consult
 /// (`crate::sync::pointer` "Consult discipline: polled, not fallback").
 ///
@@ -3136,6 +3145,179 @@ where
     }
 }
 
+/// The seams and owner material one scope-pointer enrolment pass runs on.
+pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F, Sch, E> {
+    /// The API client the vault-root resolve's head fetch registers against.
+    pub api: &'a ApiClient<H, C>,
+    /// The record-plane transport every pointer read rides.
+    pub transport: &'a T,
+    /// Content read sources for the vault root's head block.
+    pub gateway: &'a Gateway,
+    /// The HTTP seam the content fetch rides.
+    pub http: &'a H,
+    /// The durable floors the adoption gate and the consult read and advance.
+    pub floors: &'a F,
+    /// The scheduler the resolve's publish pipeline rides.
+    pub scheduler: &'a Sch,
+    /// The resolve's timing policy.
+    pub profile: &'a SyncTimingProfile,
+    /// Injected entropy (determinism law).
+    pub entropy: &'a RefCell<E>,
+    /// Opens the vault root's owner blob — the resolve's read-seed source.
+    pub enc_secret: &'a X25519Secret,
+    /// The contact-anchored owner identity: the adoption gate's stage-2 anchor,
+    /// and the identity every re-point payload is signed under.
+    pub identity: &'a EcdsaVerifier,
+    /// The owner's per-scope derivations, including the pointer plane's read and
+    /// signing edges.
+    pub keys: &'a K,
+    /// The session's held-record set — where an enrolled pointer lands.
+    pub held: &'a RefCell<HeldRecords>,
+    /// The vault root's node id, which is also its scope id.
+    pub root_id: [u8; 16],
+    /// The pointer-payload envelope version a consulted re-point is read under.
+    pub payload_version: u64,
+}
+
+/// Hold every scope pointer this owner session owns for renewal.
+///
+/// A scope pointer carries a 90-day client-signed EOL, and the flip enrols only
+/// the pointer it moves ([`publish_repoint`](WriteWavePublisher::publish_repoint)).
+/// A scope the owner never rotates again therefore lapses, and only the owner
+/// can renew it — a grantee derives neither the pointer name nor its signer.
+///
+/// The enumeration walks the whole owned scope tree from the vault root's
+/// write-body `directChildScopeIndex` down, because a share of an ancestor
+/// folder reparents the scope roots below it into the fresh scope
+/// (`facade.rs`: `subtree_child_scopes`), so an owned scope sits at any depth.
+/// A deeper index is writer-authored, but it steers nothing here: the owner
+/// derives every pointer name from its own seed, so a fabricated scope id finds
+/// no record, and an omitted one only leaves the lapse this pass repairs. Each
+/// scope runs through [`PointerConsult`] before it is held, which keeps the
+/// pointer plane's trust rules in one place.
+pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E>(
+    pass: ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E>,
+) where
+    K: OwnerScopeKeys + OwnerPointerSign,
+    T: RecordTransport,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler,
+    E: Entropy,
+{
+    // The tick replaces the vault root's held record in place, so its routing
+    // key is the name this session last adopted the root at.
+    let Some(root_name) = pass
+        .held
+        .borrow()
+        .get(&HeldKey::node(pass.root_id))
+        .map(|record| record.routing_key.as_bytes().to_vec())
+    else {
+        return;
+    };
+    let vault_root = ChildScopeRef::new(pass.root_id, root_name);
+    let net = OwnerRotationNet {
+        transport: pass.transport,
+        api: pass.api,
+        gateway: pass.gateway,
+        http: pass.http,
+        floors: pass.floors,
+        scheduler: pass.scheduler,
+        profile: pass.profile,
+        entropy: pass.entropy,
+        keys: OwnerRotationKeys {
+            enc_secret: pass.enc_secret,
+            identity: pass.identity,
+            scope_keys: pass.keys,
+        },
+        ancestry: RotationAncestry::default(),
+        pointer_consult: PointerConsultArm::Refused,
+        payload_version: pass.payload_version,
+        gated: GatedRoots::default(),
+        swept: SweptScopeState::default(),
+    };
+    let Ok(root) = net.resolve_vault_root(&vault_root).await else {
+        return;
+    };
+    let consult = PointerConsult {
+        scope_keys: pass.keys,
+        owner_identity: pass.identity,
+        payload_version: pass.payload_version,
+    };
+    // Best-effort, unlike the eager-set walk: a descendant this pass cannot
+    // resolve costs its own subtree, and an abort would lapse every other
+    // pointer. The visited set pre-seeded with the root also ends a cycle.
+    let mut scopes: BTreeSet<[u8; 16]> = BTreeSet::from([pass.root_id]);
+    let mut frontier = root.direct_child_scope_index;
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for child in frontier {
+            if !scopes.insert(child.scope_id) {
+                continue;
+            }
+            if let Ok(grandchildren) = net.direct_child_index(&child).await {
+                next.extend(grandchildren);
+            }
+        }
+        frontier = next;
+    }
+    for scope_id in scopes {
+        // The flip's own entry is the fresher one, and the liveness pass drops a
+        // superseded entry before this runs rather than replaces it here.
+        if pass
+            .held
+            .borrow()
+            .contains_key(&HeldKey::scope_pointer(scope_id))
+        {
+            continue;
+        }
+        if matches!(
+            consult.run(pass.transport, pass.floors, &scope_id).await,
+            Ok(Some(_))
+        ) {
+            enrol_scope_pointer(pass.transport, pass.keys, &scope_id, pass.held).await;
+        }
+    }
+}
+
+/// Hold one scope's pointer record, under the same name-to-signer bind
+/// [`resolve_and_hold`](super::resolve::resolve_and_hold) applies: the derived
+/// signer must sign for the name the read edge named, or a later renewal would
+/// re-sign a routing key this session cannot own. It catches a key arm whose
+/// read and signing edges disagree, and it is the one check that stands between
+/// a held pointer and a name no seed here derives.
+async fn enrol_scope_pointer<K, T>(
+    transport: &T,
+    keys: &K,
+    scope_id: &[u8; 16],
+    held: &RefCell<HeldRecords>,
+) where
+    K: OwnerPointerRead + OwnerPointerSign,
+    T: RecordTransport,
+{
+    let name = keys.pointer_name(scope_id);
+    let Some((verified, record_bytes)) = fanout_get_verify(transport, &name).await else {
+        return;
+    };
+    let signer = keys.pointer_signer(scope_id);
+    if IpnsName::from_public_key(&signer.verifying_key()) != name {
+        return;
+    }
+    // A flip that landed across the fetch installed its own confirmed entry, and
+    // overwriting it with the record read before it would drop the fresh pointer
+    // out of the renewal.
+    if let Entry::Vacant(slot) = held.borrow_mut().entry(HeldKey::scope_pointer(*scope_id)) {
+        slot.insert(HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes,
+            signer,
+            value: HeldValue::Inline(verified.value),
+            content_cids: Vec::new(),
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::cell::Cell;
@@ -3220,6 +3402,12 @@ mod tests {
 
         fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
             scope_pointer_name(&OWNER_POINTER_SEED, scope_id)
+        }
+    }
+
+    impl OwnerPointerSign for OwnerSeeds {
+        fn pointer_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+            scope_pointer_signer(&OWNER_POINTER_SEED, scope_id)
         }
     }
     const FRESH_SEED: [u8; 32] = [0xf0; 32];
@@ -8815,6 +9003,246 @@ mod tests {
                 .store
                 .seed_record(&endpoint, pointer.as_str(), record.clone());
         }
+    }
+
+    /// A session that reads the owner's pointer names but derives its signers
+    /// from another seed — what a grantee session looks like to the enrolment,
+    /// which must hold nothing for a name it could never renew.
+    struct ForeignPointerSigner;
+
+    impl OwnerPointerRead for ForeignPointerSigner {
+        fn pointer_read_key(&self, scope_id: &[u8; 16]) -> Zeroizing<[u8; SECRET_LEN]> {
+            OwnerSeeds.pointer_read_key(scope_id)
+        }
+
+        fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
+            OwnerSeeds.pointer_name(scope_id)
+        }
+    }
+
+    impl OwnerScopeKeys for ForeignPointerSigner {
+        fn writer_pseudonym(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+            OwnerSeeds.writer_pseudonym(scope_id)
+        }
+    }
+
+    impl OwnerPointerSign for ForeignPointerSigner {
+        fn pointer_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+            scope_pointer_signer(&[0x2e; 32], scope_id)
+        }
+    }
+
+    /// Publish `repoint` at `scope_id`'s scope-pointer name, sealed under the
+    /// pointer read key the owner arm re-derives and owner-signed.
+    fn stage_pointer_at<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        scope_id: [u8; 16],
+        repoint: &RepointObject,
+    ) {
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &scope_id);
+        let read_key = OwnerSeeds.pointer_read_key(&scope_id);
+        let mut entropy = SeededEntropy::new(11);
+        let block = seal_repoint(
+            SessionRole::Owner,
+            &mut entropy,
+            &read_key,
+            PAYLOAD_VERSION,
+            &owner_identity(),
+            repoint,
+        )
+        .expect("owner seals the re-point");
+        let signer = scope_pointer_signer(&OWNER_POINTER_SEED, &scope_id);
+        let record = IpnsRecord::create_v2(&signer, &block, 1, TTL_NANOS, EOL).marshal();
+        for endpoint in harness.store.endpoints() {
+            harness
+                .store
+                .seed_record(&endpoint, pointer.as_str(), record.clone());
+        }
+    }
+
+    fn repoint_at(scope_id: [u8; 16], write_epoch: u64) -> RepointObject {
+        RepointObject {
+            scope_id,
+            current_root: vault_root([0xb0; 16], Vec::new()).name,
+            write_epoch,
+            min_read_epoch: OWNER_ROOT_EPOCH,
+            prev_root: None,
+        }
+    }
+
+    /// An owner session that has resolved its vault root: the root's record is
+    /// staged and held under the node plane, and its committed child-scope index
+    /// names `children`.
+    fn owner_session_at_root(
+        children: Vec<ChildScopeRef>,
+    ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
+        let root = vault_root(SCOPE, children);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE);
+        harness.held.borrow_mut().insert(
+            HeldKey::node(SCOPE),
+            HeldRecord {
+                routing_key: root.name.as_str().to_owned(),
+                record_bytes: record_for(&SCOPE, &root.head_cid_str, 1),
+                signer: kdf::ipns_keypair(write_seed.as_bytes()),
+                value: HeldValue::Head(root.head_cid_str.clone()),
+                content_cids: Vec::new(),
+            },
+        );
+        (harness, root)
+    }
+
+    fn run_enrolment<K: OwnerScopeKeys + OwnerPointerSign>(
+        harness: &Harness<InMemoryRecordStore>,
+        keys: &K,
+    ) {
+        block_on(enrol_owned_scope_pointers(ScopePointerEnrolment {
+            api: &harness.api,
+            transport: &harness.transport,
+            gateway: &harness.gateway,
+            http: &harness.http,
+            floors: &harness.floors,
+            scheduler: &harness.world.scheduler,
+            profile: &harness.profile,
+            entropy: &harness.entropy,
+            enc_secret: &harness.enc_secret,
+            identity: &harness.identity,
+            keys,
+            held: &harness.held,
+            root_id: SCOPE,
+            payload_version: PAYLOAD_VERSION,
+        }))
+    }
+
+    /// The flip enrols only the pointer it moves, so a later session that runs
+    /// no rotation would let every scope pointer lapse at its client-signed EOL.
+    /// The enumeration is the vault root's own committed child-scope index, plus
+    /// the vault root scope itself.
+    #[test]
+    fn an_owner_session_that_rotates_nothing_re_enrols_every_pointer_it_owns() {
+        let child = vault_root(CHILD_SCOPE, Vec::new());
+        let (harness, _) = owner_session_at_root(vec![child_ref(CHILD_SCOPE, &child)]);
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, CHILD_SCOPE, &repoint_at(CHILD_SCOPE, 1));
+
+        run_enrolment(&harness, &OwnerSeeds);
+
+        let held = harness.held.borrow();
+        for scope_id in [SCOPE, CHILD_SCOPE] {
+            let entry = held
+                .get(&HeldKey::scope_pointer(scope_id))
+                .expect("the owner holds this scope's pointer for renewal");
+            let name = scope_pointer_name(&OWNER_POINTER_SEED, &scope_id);
+            assert_eq!(entry.routing_key, name.as_str());
+            assert!(
+                matches!(entry.value, HeldValue::Inline(_)),
+                "a pointer record carries its block inline, which the renewal re-signs"
+            );
+            assert_eq!(
+                IpnsName::from_public_key(&entry.signer.verifying_key()),
+                name,
+                "the held signer renews exactly the routing key it was filed under"
+            );
+        }
+    }
+
+    /// A share of an ancestor folder reparents the scope roots below it into the
+    /// fresh scope, so an owned scope sits at any depth under the vault root. A
+    /// walk that stopped at the vault root's own index would lapse every deeper
+    /// pointer. The leaf root here is unstaged, so the walk also proves it is
+    /// best-effort: an unresolvable descendant still enrols its own pointer.
+    #[test]
+    fn the_enrolment_reaches_a_scope_root_nested_under_another() {
+        let (child, child_ref, grandchild) = one_level();
+        let (harness, _) = owner_session_at_root(vec![child_ref]);
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, CHILD_SCOPE, &repoint_at(CHILD_SCOPE, 1));
+        stage_pointer_at(
+            &harness,
+            grandchild.scope_id,
+            &repoint_at(grandchild.scope_id, 1),
+        );
+
+        run_enrolment(&harness, &OwnerSeeds);
+
+        let held = harness.held.borrow();
+        for scope_id in [SCOPE, CHILD_SCOPE, grandchild.scope_id] {
+            assert!(
+                held.contains_key(&HeldKey::scope_pointer(scope_id)),
+                "the owner renews the pointer of every scope it owns"
+            );
+        }
+    }
+
+    /// The hold is only worth anything if the session can renew what it holds.
+    /// A key arm whose read edge names one record and whose signing edge signs
+    /// another files a routing key no renewal can ever re-sign.
+    #[test]
+    fn a_session_that_cannot_sign_the_pointer_name_it_read_holds_nothing() {
+        let (harness, _) = owner_session_at_root(Vec::new());
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+
+        run_enrolment(&harness, &ForeignPointerSigner);
+        assert!(
+            harness
+                .held
+                .borrow()
+                .get(&HeldKey::scope_pointer(SCOPE))
+                .is_none()
+        );
+    }
+
+    /// A flip that lands across the enrolment's own fetch installs the fresher
+    /// entry. Overwriting it with the record read before it would take the fresh
+    /// pointer out of the renewal — the lapse this whole pass exists to stop.
+    #[test]
+    fn an_enrolment_never_overwrites_a_pointer_entry_already_in_the_held_set() {
+        let (harness, _) = owner_session_at_root(Vec::new());
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+        let flipped = HeldRecord {
+            routing_key: scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE)
+                .as_str()
+                .to_owned(),
+            record_bytes: Vec::new(),
+            signer: scope_pointer_signer(&OWNER_POINTER_SEED, &SCOPE),
+            value: HeldValue::Inline(b"the flip's own confirmed block".to_vec()),
+            content_cids: Vec::new(),
+        };
+        harness
+            .held
+            .borrow_mut()
+            .insert(HeldKey::scope_pointer(SCOPE), flipped.clone());
+
+        block_on(enrol_scope_pointer(
+            &harness.transport,
+            &OwnerSeeds,
+            &SCOPE,
+            &harness.held,
+        ));
+
+        assert_eq!(
+            harness.held.borrow()[&HeldKey::scope_pointer(SCOPE)].value,
+            flipped.value,
+        );
+    }
+
+    /// A scope the owner never re-pointed has no pointer record to hold, so the
+    /// enumeration costs a fetch and nothing else.
+    #[test]
+    fn a_scope_that_was_never_re_pointed_enrols_no_pointer() {
+        let child = vault_root(CHILD_SCOPE, Vec::new());
+        let (harness, _) = owner_session_at_root(vec![child_ref(CHILD_SCOPE, &child)]);
+
+        run_enrolment(&harness, &OwnerSeeds);
+        assert!(
+            harness
+                .held
+                .borrow()
+                .keys()
+                .all(|key| key.plane == crate::net::RecordPlane::Node)
+        );
     }
 
     #[test]

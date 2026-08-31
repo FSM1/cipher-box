@@ -7,9 +7,9 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
-use crate::net::rotation::{OwnerPointerRead, OwnerScopeKeys};
+use crate::net::rotation::{OwnerPointerRead, OwnerPointerSign, OwnerScopeKeys};
 use crate::session::SessionIdentity;
-use crate::sync::pointer::scope_pointer_name;
+use crate::sync::pointer::{scope_pointer_name, scope_pointer_signer};
 
 /// The two per-scope owner derivations a re-seal needs, resolved off the live
 /// session.
@@ -75,6 +75,12 @@ impl OwnerPointerRead for OwnerSeedKeys {
 
     fn pointer_name(&self, scope_id: &[u8; 16]) -> IpnsName {
         scope_pointer_name(self.pointer_seed.as_bytes(), scope_id)
+    }
+}
+
+impl OwnerPointerSign for OwnerSeedKeys {
+    fn pointer_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+        scope_pointer_signer(self.pointer_seed.as_bytes(), scope_id)
     }
 }
 

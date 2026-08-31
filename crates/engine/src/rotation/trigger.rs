@@ -21,12 +21,15 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::cascade::{CascadeError, CascadeOutcome};
 use super::rotate::{RotateError, RotationOutcome};
 use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
-use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger, row_is_owner_attested};
+use crate::grants::ledger::{
+    AuthorityViolation, bound_recipient, enforce_committed_ledger, row_is_owner_attested,
+};
 use crate::seams::UnixMillis;
 
 /// Which trigger fired a rotation — a host-facing classifier carrying no key
@@ -139,6 +142,11 @@ pub struct GrantCutPlan<'a> {
     /// The owner identity signer — MUST be the identity that produced
     /// `commitment_sig`, and re-signs the cut set.
     pub owner_signer: &'a EcdsaSigner,
+    /// The owner encryption subkey the committed tags were blinded under. A tag
+    /// is `blind(ECDH(this, recipientEncPk), scopeRootName)`, so it is the only
+    /// authority that can name a dropped tag's recipient without trusting a
+    /// field a write grantee authored ([`drop_tags`]).
+    pub owner_enc_secret: &'a X25519Secret,
 }
 
 /// Which planes a committed-set cut must rotate before it is a real revocation.
@@ -238,6 +246,12 @@ pub enum RevokeError {
     /// rejects (`enforce_committed_ledger`). Release-active, so no build signs a
     /// set its own readers refuse.
     LedgerDiverges(AuthorityViolation),
+    /// A dropped ledger row carries the owner's own binding signature, yet its
+    /// `recipientEncPk` derives none of the committed tags. The owner's two
+    /// authorities over that field contradict each other, so the cut refuses
+    /// rather than name a recipient neither proves — the verdict
+    /// [`adopt_recipients`](super::reseal) reaches on the re-seal side.
+    TagNotBoundToRecipient,
     /// Re-signing the cut commitment failed (a duplicate tag or an oversized set
     /// — never possible, since no cut adds a tag, but propagated fail-closed).
     Sign(cipherbox_core::error::CodecError),
@@ -260,6 +274,9 @@ impl core::fmt::Display for RevokeError {
                 f.write_str("the committed grant under the tag carries write permission")
             }
             RevokeError::LedgerDiverges(v) => write!(f, "cut set rejected: {}", v.description),
+            RevokeError::TagNotBoundToRecipient => {
+                f.write_str("an owner-signed dropped row derives no committed tag")
+            }
             RevokeError::Sign(e) => write!(f, "commitment re-sign failed: {}", e.check()),
         }
     }
@@ -277,6 +294,7 @@ impl RevokeError {
             RevokeError::NotWriteGranted => "not-write-granted",
             RevokeError::WriteGranted => "write-granted",
             RevokeError::LedgerDiverges(v) => v.check(),
+            RevokeError::TagNotBoundToRecipient => "tag-not-bound-to-recipient",
             RevokeError::Sign(_) => "commitment-sign-failed",
         }
     }
@@ -316,7 +334,10 @@ fn committed_permission(
 
 /// Drop `tags` from both halves of the committed set — what every cut but a
 /// downgrade does.
-fn drop_tags(plan: &GrantCutPlan<'_>, tags: &BTreeSet<[u8; 32]>) -> DroppedSet {
+fn drop_tags(
+    plan: &GrantCutPlan<'_>,
+    tags: &BTreeSet<[u8; 32]>,
+) -> Result<DroppedSet, RevokeError> {
     let mut commitment = plan.commitment.clone();
     commitment.entries.retain(|e| !tags.contains(&e.tag));
     let (dropped, kept): (Vec<_>, Vec<_>) = plan
@@ -324,20 +345,33 @@ fn drop_tags(plan: &GrantCutPlan<'_>, tags: &BTreeSet<[u8; 32]>) -> DroppedSet {
         .iter()
         .cloned()
         .partition(|e| tags.contains(&e.tag));
-    // Any committed writer authors a ledger row, so a key the owner never
-    // signed would carry a bystander down the cascade and strip their grants
-    // vault-wide.
+    // Any committed writer authors a ledger row, and the row's own `ownerSig` is
+    // the writer's to strip. The owner-committed tag is not: only the key the
+    // owner blinded it under re-derives it, so the tag is the stronger of the
+    // owner's two authorities over `recipientEncPk` wherever the owner secret is
+    // in hand — the same split `rotation::reseal::adopt_recipients` applies.
     let owner_identity = plan.owner_signer.verifying_key();
     let name = plan.scope_root_name.as_str().as_bytes();
-    DroppedSet {
+    let mut revoked_recipients = Vec::with_capacity(dropped.len());
+    for entry in dropped {
+        match bound_recipient(plan.owner_enc_secret, &entry, name) {
+            Some(proven) => revoked_recipients.push(proven.to_bytes()),
+            // A row the owner attested but whose key derives no committed tag is
+            // the two authorities disagreeing. A writer cannot mint the owner's
+            // signature, so refusing here hands it no veto over its own cut.
+            None if row_is_owner_attested(&owner_identity, &entry, name) => {
+                return Err(RevokeError::TagNotBoundToRecipient);
+            }
+            // Writer-authored noise under a committed tag: skipped, never
+            // refused, or the grantee under cut could veto its own revocation.
+            None => {}
+        }
+    }
+    Ok(DroppedSet {
         commitment,
         grant_ledger: kept,
-        revoked_recipients: dropped
-            .into_iter()
-            .filter(|e| row_is_owner_attested(&owner_identity, e, name))
-            .map(|e| e.recipient_enc_pk)
-            .collect(),
-    }
+        revoked_recipients,
+    })
 }
 
 /// A committed set with a cut applied, and who the cut removed.
@@ -390,7 +424,7 @@ pub fn revoke_read_grant(
     }
 
     resign(
-        drop_tags(plan, &BTreeSet::from([*revoked_tag])),
+        drop_tags(plan, &BTreeSet::from([*revoked_tag]))?,
         RotationPlanes {
             read: true,
             write: false,
@@ -437,7 +471,7 @@ pub fn revoke_write_grant(
     }
 
     let set = match kind {
-        WriteRevokeKind::Full => drop_tags(plan, &BTreeSet::from([*revoked_tag])),
+        WriteRevokeKind::Full => drop_tags(plan, &BTreeSet::from([*revoked_tag]))?,
         WriteRevokeKind::DowngradeToRead => {
             let mut commitment = plan.commitment.clone();
             let mut grant_ledger = plan.grant_ledger.to_vec();
@@ -551,7 +585,7 @@ pub fn prune_expired_grants(
     }
 
     resign(
-        drop_tags(plan, &expired),
+        drop_tags(plan, &expired)?,
         RotationPlanes {
             read: true,
             write: pruned_write_link,
@@ -716,10 +750,10 @@ mod tests {
     use crate::seams::Scheduler;
     use crate::testkit::block_on;
     use crate::testkit::fakes::VirtualScheduler;
-    use cipherbox_core::seal::{
-        GrantSetEntry, PreservedFields, sign_recipient_binding, verify_grant_set,
-    };
+    use cipherbox_core::seal::{PreservedFields, sign_recipient_binding, verify_grant_set};
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
+
+    use crate::grants::ledger::{mint_grant_row, recipient_blinded_tag};
 
     /// Records the roots it was asked to cut, failing the ones named in
     /// `refuse` — the driver's only view of the rotation edge.
@@ -798,18 +832,54 @@ mod tests {
         );
     }
 
-    const READ_TAG: [u8; 32] = [0xa1; 32];
-    const LINK_TAG: [u8; 32] = [0xb2; 32];
-    const WRITE_TAG: [u8; 32] = [0xc3; 32];
     const DEADLINE: UnixMillis = UnixMillis(1_000);
+    const NO_SIG: [u8; ECDSA_SIG_LEN] = [0u8; ECDSA_SIG_LEN];
+
+    /// The three recipients the fixture commits, by their X25519 scalar seed.
+    const READ_RECIPIENT: u8 = 0x11;
+    const LINK_RECIPIENT: u8 = 0x12;
+    const WRITE_RECIPIENT: u8 = 0x13;
+
+    fn owner_enc() -> X25519Secret {
+        X25519Secret::from_scalar([0x5b; 32])
+    }
+
+    fn recipient_enc(seed: u8) -> X25519Secret {
+        X25519Secret::from_scalar([seed; 32])
+    }
+
+    fn scope_name() -> IpnsName {
+        derive_write_name(&[0x5a; 32], &[0x01; 16])
+    }
+
+    /// The tag the owner commits `seed`'s recipient under at [`scope_name`].
+    fn tag_of(seed: u8) -> [u8; 32] {
+        recipient_blinded_tag(
+            &owner_enc(),
+            &recipient_enc(seed).public(),
+            scope_name().as_str().as_bytes(),
+        )
+        .expect("a contributory recipient key")
+    }
+
+    fn read_tag() -> [u8; 32] {
+        tag_of(READ_RECIPIENT)
+    }
+
+    fn link_tag() -> [u8; 32] {
+        tag_of(LINK_RECIPIENT)
+    }
+
+    fn write_tag() -> [u8; 32] {
+        tag_of(WRITE_RECIPIENT)
+    }
 
     /// Three grants the owner committed at one scope root: a plain read grant, a
     /// read link the owner minted with a deadline, and a write grant.
-    const NO_SIG: [u8; ECDSA_SIG_LEN] = [0u8; ECDSA_SIG_LEN];
-
     struct Fixture {
         owner: EcdsaSigner,
         name: IpnsName,
+        owner_enc: X25519Secret,
         commitment: GrantSetCommitment,
         commitment_sig: [u8; ECDSA_SIG_LEN],
         ledger: Vec<GrantLedgerEntry>,
@@ -818,36 +888,36 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let owner = EcdsaSigner::from_scalar(&[0x33; 32]).unwrap();
-            let name = derive_write_name(&[0x5a; 32], &[0x01; 16]);
+            let name = scope_name();
+            let mint = |seed: u8, identity: [u8; 33], permission| {
+                mint_grant_row(
+                    &owner,
+                    &owner_enc(),
+                    identity,
+                    &recipient_enc(seed).public(),
+                    &[0x01; 16],
+                    name.as_str().as_bytes(),
+                    permission,
+                )
+                .expect("a contributory recipient key")
+            };
+            let rows = [
+                mint(READ_RECIPIENT, [0x02; 33], Permission::Read),
+                mint(LINK_RECIPIENT, [0x04; 33], Permission::Read),
+                mint(WRITE_RECIPIENT, [0x03; 33], Permission::Write),
+            ];
             let commitment = GrantSetCommitment {
                 ipns_name: name.as_str().as_bytes().to_vec(),
                 owner_pseudonym_pk: [0x88; 32],
-                entries: vec![
-                    GrantSetEntry::new(READ_TAG, Permission::Read, [0x02; 32]),
-                    GrantSetEntry::new(LINK_TAG, Permission::Read, [0x04; 32]),
-                    GrantSetEntry::new(WRITE_TAG, Permission::Write, [0x03; 32]),
-                ],
+                entries: rows.iter().map(|r| r.commitment_entry.clone()).collect(),
                 unknown: PreservedFields::new(),
             };
             let commitment_sig = sign_grant_set(&owner, &commitment).unwrap().to_compact();
-            // The rows carry no real recipient key — a cut plan is a
-            // `(tag, permission)` comparison — but they are owner-attested,
-            // because a cut reads the identity key off the row it drops.
-            let attest = |identity: [u8; 33], enc: [u8; 32], perm, tag| {
-                let mut row = GrantLedgerEntry::new(identity, enc, perm, tag, NO_SIG);
-                row.owner_sig = sign_recipient_binding(&owner, name.as_str().as_bytes(), &row)
-                    .expect("the owner attests the row it minted")
-                    .to_compact();
-                row
-            };
-            let ledger = vec![
-                attest([0x02; 33], [0x11; 32], Permission::Read, READ_TAG),
-                attest([0x04; 33], [0x12; 32], Permission::Read, LINK_TAG),
-                attest([0x03; 33], [0x13; 32], Permission::Write, WRITE_TAG),
-            ];
+            let ledger = rows.into_iter().map(|r| r.ledger_entry).collect();
             Self {
                 owner,
                 name,
+                owner_enc: owner_enc(),
                 commitment,
                 commitment_sig,
                 ledger,
@@ -861,6 +931,7 @@ mod tests {
                 grant_ledger: &self.ledger,
                 scope_root_name: &self.name,
                 owner_signer: &self.owner,
+                owner_enc_secret: &self.owner_enc,
             }
         }
 
@@ -899,10 +970,10 @@ mod tests {
     #[test]
     fn revoke_removes_tag_from_both_and_resigns() {
         let fx = Fixture::new();
-        let cut = revoke_read_grant(&fx.plan(), &LINK_TAG).expect("revoke");
+        let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("revoke");
 
-        assert!(!cut.commitment.entries.iter().any(|e| e.tag == LINK_TAG));
-        assert!(!cut.grant_ledger.iter().any(|e| e.tag == LINK_TAG));
+        assert!(!cut.commitment.entries.iter().any(|e| e.tag == link_tag()));
+        assert!(!cut.grant_ledger.iter().any(|e| e.tag == link_tag()));
         assert_eq!(cut.commitment.entries.len(), 2);
         assert_eq!(cut.grant_ledger.len(), 2);
         fx.verify(&cut);
@@ -913,11 +984,14 @@ mod tests {
         // The cascade carries this down every descendant, where a blinded tag
         // cannot reach: a tag is per-scope, a recipient key is vault-wide.
         let fx = Fixture::new();
-        let cut = revoke_read_grant(&fx.plan(), &LINK_TAG).expect("revoke");
-        assert_eq!(cut.revoked_recipients, vec![[0x12; 32]]);
+        let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("revoke");
+        assert_eq!(
+            cut.revoked_recipients,
+            vec![recipient_enc(LINK_RECIPIENT).public().to_bytes()]
+        );
 
         let downgraded =
-            revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+            revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
                 .expect("downgrade");
         assert!(
             downgraded.revoked_recipients.is_empty(),
@@ -925,34 +999,106 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_cut_names_no_recipient_off_a_row_the_owner_never_signed() {
-        // Any committed writer authors a ledger row. Harvesting a key off an
-        // unsigned one would let a writer point the cascade at a bystander and
-        // strip their grants vault-wide.
-        let mut fx = Fixture::new();
+    /// `attest` picks which of the two authority states the swapped row lands
+    /// in: an unsigned row is writer-authored noise the cut skips, an
+    /// owner-signed one is the conflict the cut refuses.
+    fn relabel_link_row(fx: &mut Fixture, enc_pk: [u8; 32], attest: bool) {
+        let owner = EcdsaSigner::from_scalar(&[0x33; 32]).unwrap();
+        let name = fx.name.as_str().as_bytes().to_vec();
         for row in &mut fx.ledger {
-            if row.tag == LINK_TAG {
-                row.recipient_enc_pk = [0x99; 32];
+            if row.tag == link_tag() {
+                row.recipient_enc_pk = enc_pk;
+                if attest {
+                    row.owner_sig = sign_recipient_binding(&owner, &name, row)
+                        .expect("the owner signs the row as presented")
+                        .to_compact();
+                }
             }
         }
-        let cut = revoke_read_grant(&fx.plan(), &LINK_TAG).expect("revoke");
+    }
+
+    #[test]
+    fn a_cut_names_no_recipient_off_a_row_whose_key_derives_no_committed_tag() {
+        // Any committed writer authors a ledger row. Harvesting a key the
+        // committed tag does not prove would let a writer point the cascade at a
+        // bystander and strip their grants vault-wide.
+        let mut fx = Fixture::new();
+        relabel_link_row(&mut fx, recipient_enc(0x99).public().to_bytes(), false);
+
+        let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("revoke");
         assert!(
             cut.revoked_recipients.is_empty(),
-            "a forged row names nobody the cascade will cut"
+            "a relabelled row names nobody the cascade will cut"
         );
         assert!(
-            !cut.commitment.entries.iter().any(|e| e.tag == LINK_TAG),
+            !cut.commitment.entries.iter().any(|e| e.tag == link_tag()),
             "the tag still leaves the owner-signed set"
+        );
+    }
+
+    /// The row's own owner signature does not outrank the owner-committed tag:
+    /// where the two disagree the cut refuses, rather than name a party neither
+    /// authority proves.
+    #[test]
+    fn a_cut_refuses_an_owner_signed_row_that_derives_no_committed_tag() {
+        let mut fx = Fixture::new();
+        relabel_link_row(&mut fx, recipient_enc(0x99).public().to_bytes(), true);
+
+        let err = revoke_read_grant(&fx.plan(), &link_tag()).expect_err("the two disagree");
+        assert_eq!(err.check(), "tag-not-bound-to-recipient");
+    }
+
+    /// A cofactor twin and a non-canonical spelling both re-derive the honest
+    /// key's tag, so the shared secret alone cannot tell them apart. Only the
+    /// adoption lift inside `bound_recipient` refuses them, and a twin in
+    /// `revoked_recipients` would match no recipient the cascade re-keys.
+    #[test]
+    fn a_cut_names_no_recipient_off_a_key_core_will_not_adopt() {
+        let honest = recipient_enc(LINK_RECIPIENT).public();
+        let mut high_bit = honest.to_bytes();
+        high_bit[31] |= 0x80;
+
+        for enc_pk in cipherbox_core::suite::x25519::cofactor_twins(&honest)
+            .into_iter()
+            .chain([high_bit])
+        {
+            let mut fx = Fixture::new();
+            relabel_link_row(&mut fx, enc_pk, false);
+
+            let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("revoke");
+            assert!(
+                cut.revoked_recipients.is_empty(),
+                "a key core will not adopt binds no tag, so it names nobody"
+            );
+        }
+    }
+
+    /// A committed write grantee authors its own ledger row, so it can strip the
+    /// `ownerSig` off it before the owner reads the record for the cut. The
+    /// owner-committed tag it cannot touch, and that alone names the recipient.
+    #[test]
+    fn a_cut_names_the_recipient_the_committed_tag_proves_with_no_owner_signature() {
+        let mut fx = Fixture::new();
+        for row in &mut fx.ledger {
+            if row.tag == write_tag() {
+                row.owner_sig = NO_SIG;
+            }
+        }
+        let cut = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::Full)
+            .expect("full write revoke");
+        assert_eq!(
+            cut.revoked_recipients,
+            vec![recipient_enc(WRITE_RECIPIENT).public().to_bytes()],
+            "the tag proves the recipient the stripped signature no longer names"
         );
     }
 
     #[test]
     fn revoke_preserves_survivors_and_owner_fields() {
         let fx = Fixture::new();
-        let cut = revoke_read_grant(&fx.plan(), &READ_TAG).expect("revoke");
-        assert!(cut.commitment.entries.iter().any(|e| e.tag == LINK_TAG));
-        assert!(cut.commitment.entries.iter().any(|e| e.tag == WRITE_TAG));
+        let cut = revoke_read_grant(&fx.plan(), &read_tag()).expect("revoke");
+        assert!(cut.commitment.entries.iter().any(|e| e.tag == link_tag()));
+        assert!(cut.commitment.entries.iter().any(|e| e.tag == write_tag()));
         assert_eq!(cut.commitment.ipns_name, fx.commitment.ipns_name);
         assert_eq!(
             cut.commitment.owner_pseudonym_pk,
@@ -973,7 +1119,7 @@ mod tests {
     #[test]
     fn read_revoking_a_write_grantee_fails_closed() {
         let fx = Fixture::new();
-        let err = revoke_read_grant(&fx.plan(), &WRITE_TAG).expect_err("write granted");
+        let err = revoke_read_grant(&fx.plan(), &write_tag()).expect_err("write granted");
         assert_eq!(err.check(), "write-granted");
     }
 
@@ -983,7 +1129,7 @@ mod tests {
         // cut — the encode-side mirror of the gate's owner-identity verify.
         let fx = Fixture::new();
         let stranger = stranger();
-        let err = revoke_read_grant(&fx.plan_signed_by(&stranger), &LINK_TAG)
+        let err = revoke_read_grant(&fx.plan_signed_by(&stranger), &link_tag())
             .expect_err("unauthorized signer");
         assert_eq!(err.check(), "unauthorized-signer");
     }
@@ -1006,7 +1152,7 @@ mod tests {
             commitment_sig: &tampered_sig,
             ..fx.plan()
         };
-        let err = revoke_read_grant(&plan, &LINK_TAG).expect_err("tampered commitment preimage");
+        let err = revoke_read_grant(&plan, &link_tag()).expect_err("tampered commitment preimage");
         assert_eq!(err.check(), "unauthorized-signer");
     }
 
@@ -1021,9 +1167,10 @@ mod tests {
         let plan = fx.plan_at(&other);
 
         for err in [
-            revoke_read_grant(&plan, &LINK_TAG).expect_err("read revoke"),
-            revoke_write_grant(&plan, &WRITE_TAG, WriteRevokeKind::Full).expect_err("write revoke"),
-            prune_expired_grants(&plan, &owner_deadlines(&[(LINK_TAG, DEADLINE)]), DEADLINE)
+            revoke_read_grant(&plan, &link_tag()).expect_err("read revoke"),
+            revoke_write_grant(&plan, &write_tag(), WriteRevokeKind::Full)
+                .expect_err("write revoke"),
+            prune_expired_grants(&plan, &owner_deadlines(&[(link_tag(), DEADLINE)]), DEADLINE)
                 .expect_err("expiry prune"),
         ] {
             assert_eq!(err.check(), "commitment-scope-mismatch");
@@ -1048,18 +1195,18 @@ mod tests {
             grant_ledger: &injected,
             ..fx.plan()
         };
-        let err = revoke_read_grant(&plan, &LINK_TAG).expect_err("diverging ledger");
+        let err = revoke_read_grant(&plan, &link_tag()).expect_err("diverging ledger");
         assert_eq!(err.check(), "ledger-diverges-from-commitment");
     }
 
     #[test]
     fn a_full_write_revoke_removes_the_writer_and_rotates_both_planes() {
         let fx = Fixture::new();
-        let cut = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::Full)
+        let cut = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::Full)
             .expect("full write revoke");
 
-        assert!(!cut.commitment.entries.iter().any(|e| e.tag == WRITE_TAG));
-        assert!(!cut.grant_ledger.iter().any(|e| e.tag == WRITE_TAG));
+        assert!(!cut.commitment.entries.iter().any(|e| e.tag == write_tag()));
+        assert!(!cut.grant_ledger.iter().any(|e| e.tag == write_tag()));
         fx.verify(&cut);
         assert_eq!(
             cut.planes,
@@ -1073,7 +1220,7 @@ mod tests {
     #[test]
     fn a_downgrade_demotes_the_writer_and_rotates_the_write_plane_only() {
         let fx = Fixture::new();
-        let cut = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+        let cut = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
             .expect("downgrade");
 
         // The downgraded recipient keeps a live grant at the same tag — the read
@@ -1082,17 +1229,23 @@ mod tests {
             .commitment
             .entries
             .iter()
-            .find(|e| e.tag == WRITE_TAG)
+            .find(|e| e.tag == write_tag())
             .expect("the downgraded grant is still committed");
         assert_eq!(entry.permission, Permission::Read);
+        let committed = fx
+            .commitment
+            .entries
+            .iter()
+            .find(|e| e.tag == write_tag())
+            .expect("the write grant the fixture committed");
         assert_eq!(
-            entry.pseudonym_pk, [0x03; 32],
+            entry.pseudonym_pk, committed.pseudonym_pk,
             "the pseudonym authorizes structure signing and is the owner's to keep"
         );
         let row = cut
             .grant_ledger
             .iter()
-            .find(|e| e.tag == WRITE_TAG)
+            .find(|e| e.tag == write_tag())
             .expect("the downgraded ledger row survives");
         assert_eq!(row.permission, Permission::Read);
         assert_eq!(cut.commitment.entries.len(), fx.commitment.entries.len());
@@ -1112,7 +1265,10 @@ mod tests {
         // Rotating the write plane for a read-only tag would move every name in
         // the scope without cutting anything.
         let fx = Fixture::new();
-        for (tag, check) in [(READ_TAG, "not-write-granted"), ([0xff; 32], "not-granted")] {
+        for (tag, check) in [
+            (read_tag(), "not-write-granted"),
+            ([0xff; 32], "not-granted"),
+        ] {
             let err = revoke_write_grant(&fx.plan(), &tag, WriteRevokeKind::Full)
                 .expect_err("no write grant");
             assert_eq!(err.check(), check);
@@ -1126,7 +1282,7 @@ mod tests {
         assert!(
             prune_expired_grants(
                 &fx.plan(),
-                &owner_deadlines(&[(LINK_TAG, DEADLINE)]),
+                &owner_deadlines(&[(link_tag(), DEADLINE)]),
                 clock.now()
             )
             .expect("owner prune")
@@ -1138,7 +1294,7 @@ mod tests {
     #[test]
     fn a_link_expires_at_its_deadline_instant_not_a_tick_later() {
         let fx = Fixture::new();
-        let deadlines = owner_deadlines(&[(LINK_TAG, DEADLINE)]);
+        let deadlines = owner_deadlines(&[(link_tag(), DEADLINE)]);
         let clock = VirtualScheduler::starting_at(UnixMillis(DEADLINE.0 - 1));
         assert!(
             prune_expired_grants(&fx.plan(), &deadlines, clock.now())
@@ -1150,7 +1306,7 @@ mod tests {
         let cut = prune_expired_grants(&fx.plan(), &deadlines, clock.now())
             .expect("owner prune")
             .expect("the deadline instant expires the link");
-        assert!(!cut.commitment.entries.iter().any(|e| e.tag == LINK_TAG));
+        assert!(!cut.commitment.entries.iter().any(|e| e.tag == link_tag()));
     }
 
     #[test]
@@ -1158,15 +1314,15 @@ mod tests {
         let fx = Fixture::new();
         let cut = prune_expired_grants(
             &fx.plan(),
-            &owner_deadlines(&[(LINK_TAG, DEADLINE)]),
+            &owner_deadlines(&[(link_tag(), DEADLINE)]),
             DEADLINE,
         )
         .expect("owner prune")
         .expect("the read link expired");
 
-        assert!(!cut.commitment.entries.iter().any(|e| e.tag == LINK_TAG));
-        assert!(!cut.grant_ledger.iter().any(|e| e.tag == LINK_TAG));
-        assert!(cut.commitment.entries.iter().any(|e| e.tag == READ_TAG));
+        assert!(!cut.commitment.entries.iter().any(|e| e.tag == link_tag()));
+        assert!(!cut.grant_ledger.iter().any(|e| e.tag == link_tag()));
+        assert!(cut.commitment.entries.iter().any(|e| e.tag == read_tag()));
         fx.verify(&cut);
 
         assert_eq!(
@@ -1185,13 +1341,13 @@ mod tests {
         let fx = Fixture::new();
         let cut = prune_expired_grants(
             &fx.plan(),
-            &owner_deadlines(&[(LINK_TAG, DEADLINE), (WRITE_TAG, DEADLINE)]),
+            &owner_deadlines(&[(link_tag(), DEADLINE), (write_tag(), DEADLINE)]),
             DEADLINE,
         )
         .expect("owner prune")
         .expect("both links expired");
 
-        assert!(!cut.commitment.entries.iter().any(|e| e.tag == WRITE_TAG));
+        assert!(!cut.commitment.entries.iter().any(|e| e.tag == write_tag()));
         assert_eq!(
             cut.planes,
             RotationPlanes {
@@ -1215,9 +1371,13 @@ mod tests {
             ..fx.plan()
         };
 
-        let cut = prune_expired_grants(&plan, &owner_deadlines(&[(WRITE_TAG, DEADLINE)]), DEADLINE)
-            .expect("owner prune")
-            .expect("the write link expired");
+        let cut = prune_expired_grants(
+            &plan,
+            &owner_deadlines(&[(write_tag(), DEADLINE)]),
+            DEADLINE,
+        )
+        .expect("owner prune")
+        .expect("the write link expired");
         assert!(
             cut.planes.write,
             "the plane set is read off the owner-signed commitment"
@@ -1253,7 +1413,7 @@ mod tests {
         let grantee = stranger();
         let err = prune_expired_grants(
             &fx.plan_signed_by(&grantee),
-            &owner_deadlines(&[(LINK_TAG, DEADLINE)]),
+            &owner_deadlines(&[(link_tag(), DEADLINE)]),
             DEADLINE,
         )
         .expect_err("a grantee cannot prune");
@@ -1261,7 +1421,7 @@ mod tests {
     }
 
     /// Records which arms fired, in call order, failing the ones named. Each
-    /// arm also records the permission the cut carries at [`WRITE_TAG`], so a
+    /// arm also records the permission the cut carries at [`write_tag()`], so a
     /// test can prove the write wave ran over the demoted set rather than the
     /// set the cut replaced.
     struct FakeCutRotator {
@@ -1285,7 +1445,7 @@ mod tests {
 
         fn record(&self, arm: &'static str, cut: &RevokedCommittedSet) {
             self.seen.borrow_mut().push(arm);
-            if let Some(entry) = cut.commitment.entries.iter().find(|e| e.tag == WRITE_TAG) {
+            if let Some(entry) = cut.commitment.entries.iter().find(|e| e.tag == write_tag()) {
                 self.committed_at_write_tag
                     .borrow_mut()
                     .push((arm, entry.permission));
@@ -1349,7 +1509,7 @@ mod tests {
 
     fn full_write_revoke() -> RevokedCommittedSet {
         let fx = Fixture::new();
-        revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::Full).expect("cut")
+        revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::Full).expect("cut")
     }
 
     #[test]
@@ -1370,7 +1530,7 @@ mod tests {
     #[test]
     fn a_downgrade_leaves_the_read_plane_alone() {
         let fx = Fixture::new();
-        let cut = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+        let cut = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
             .expect("downgrade");
         let rotator = FakeCutRotator::new();
         let report = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("write plane");
@@ -1386,7 +1546,7 @@ mod tests {
     #[test]
     fn a_downgrade_publishes_the_demoted_set_before_the_wave_runs() {
         let fx = Fixture::new();
-        let cut = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+        let cut = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
             .expect("downgrade");
         let rotator = FakeCutRotator::new();
         block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("write plane");
@@ -1404,7 +1564,7 @@ mod tests {
     #[test]
     fn a_refused_cut_set_publish_never_reaches_the_write_plane() {
         let fx = Fixture::new();
-        let cut = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::DowngradeToRead)
+        let cut = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
             .expect("downgrade");
         let mut rotator = FakeCutRotator::new();
         rotator.refuse_publish = true;
@@ -1457,7 +1617,7 @@ mod tests {
     fn a_write_grant_cut_refuses_a_set_committing_no_write_row() {
         // Read-only: the wave would move every name and cut nothing.
         let fx = Fixture::new();
-        let read_only = revoke_write_grant(&fx.plan(), &WRITE_TAG, WriteRevokeKind::Full)
+        let read_only = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::Full)
             .expect("the write row leaves the set");
         let sig = read_only.commitment_sig;
         let err = cut_for_write_grant(&GrantCutPlan {
@@ -1473,7 +1633,7 @@ mod tests {
     #[test]
     fn a_read_revoke_leaves_the_write_plane_alone() {
         let fx = Fixture::new();
-        let cut = revoke_read_grant(&fx.plan(), &LINK_TAG).expect("cut");
+        let cut = revoke_read_grant(&fx.plan(), &link_tag()).expect("cut");
         let rotator = FakeCutRotator::new();
         let report = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("read plane");
 
