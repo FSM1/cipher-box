@@ -999,9 +999,9 @@ mod tests {
         );
     }
 
-    /// Replace `link_tag`'s recipient key with `enc_pk`, and re-attest the row
-    /// with `owner` when the caller wants the owner's signature to stand behind
-    /// the swap.
+    /// `attest` picks which of the two authority states the swapped row lands
+    /// in: an unsigned row is writer-authored noise the cut skips, an
+    /// owner-signed one is the conflict the cut refuses.
     fn relabel_link_row(fx: &mut Fixture, enc_pk: [u8; 32], attest: bool) {
         let owner = EcdsaSigner::from_scalar(&[0x33; 32]).unwrap();
         let name = fx.name.as_str().as_bytes().to_vec();
