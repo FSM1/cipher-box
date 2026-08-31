@@ -47,6 +47,7 @@
   },
   "structureTags": {
     "ascent-link": 5,
+    "bin-index": 15,
     "content-key": 12,
     "grant-blob": 3,
     "history-link": 6,
@@ -63,7 +64,7 @@
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
-    "count": 18,
+    "count": 21,
     "edges": [
       {
         "name": "node-seed",
@@ -144,6 +145,21 @@
         "name": "settings-ipns-keypair",
         "context": "cipherbox/v2/settings-ipns-keypair",
         "inputLayout": "ed25519_from_seed(derive_key(ctx, loginSecret[var]))"
+      },
+      {
+        "name": "bin-index-ipns-keypair",
+        "context": "cipherbox/v2/bin-index-ipns-keypair",
+        "inputLayout": "ed25519_from_seed(derive_key(ctx, loginSecret[var]))"
+      },
+      {
+        "name": "bin-index-seal-key",
+        "context": "cipherbox/v2/bin-index-seal-key",
+        "inputLayout": "derive_key(ctx, loginSecret[var])"
+      },
+      {
+        "name": "bin-held-key",
+        "context": "cipherbox/v2/bin-held-key",
+        "inputLayout": "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16])"
       },
       {
         "name": "genesis-read-scope-seed",
@@ -600,6 +616,30 @@
         "hpke-open-failed",
         "hpke-non-contributory",
         "missing-field",
+        "invalid-field-length",
+        "unknown-record-field",
+        "unsupported-record-version"
+      ]
+    }
+  },
+  "binIndex": {
+    "structTag": 15,
+    "v": 1,
+    "maxBytes": 2096128,
+    "accept": {
+      "file": "vectors/bin_index/bin_index_accept.json",
+      "count": 2
+    },
+    "reject": {
+      "file": "vectors/bin_index/bin_index_reject.json",
+      "count": 13,
+      "checks": [
+        "seal-open-failed",
+        "duplicate-id",
+        "truncated",
+        "too-many-structures",
+        "missing-field",
+        "invalid-node-kind",
         "invalid-field-length",
         "unknown-record-field",
         "unsupported-record-version"

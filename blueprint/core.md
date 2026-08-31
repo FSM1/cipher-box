@@ -394,8 +394,9 @@ manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
 `owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
 `pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
 (`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`), `content-key`
-(`0x0c`), `owner-local` (`0x0d`), `write-history-link` (`0x0e`). Every new tag
-extends the manifest and its vectors before merge; the `write-history-link` KAT
+(`0x0c`), `owner-local` (`0x0d`), `write-history-link` (`0x0e`), `bin-index`
+(`0x0f`). Every new tag extends the manifest and its vectors before merge; the
+`write-history-link` KAT
 set is `write_history_link_accept` (the flat `enc || ciphertext||tag` envelope
 reproduced from a fixed owner keypair and ephemeral, then reopened) and
 `write_history_link_reject` (tampered ciphertext/tag, truncation, and
@@ -479,6 +480,35 @@ field, and a base-mode forgery — plus a **cross-kind negative for every ordere
 pair of kinds**, which is what proves the discriminator earns the separation that
 distinct per-store `info` strings used to give for free).
 
+### Bin index
+
+The recycle bin is one owner-sealed, vault-level index record
+([ADR 0010](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0010-recycle-bin-is-an-owner-sealed-index.md)).
+It is
+published at the `bin-index-ipns-keypair` name and sealed **symmetrically**
+under `bin-index-seal-key` — the only published record in the corpus that does
+not seal HPKE-to-self, because both keys derive from the login secret and the
+record has exactly one reader. Its clear header is two keys, `v` and `sealed`,
+frozen across format versions; the version is bound into the AAD
+`[cipherbox/v2/aad, v, 0x0f]`, so rewriting the clear copy fails the tag.
+
+The body is `{entries[], revision}`. Each entry carries `nodeId`, `ipnsName`,
+`kind`, `originParent`, `originName`, `deletedAt`, `scopeId`, and an optional
+`heldKey`. `ipnsName` is the only remaining route to a record no folder names,
+and `heldKey` is present only when the delete re-keyed the doomed subtree out of
+a shared scope's derivation. `revision` is what the floor law orders two records
+by when the outer IPNS sequence cannot tell them apart. Duplicate `nodeId` is
+fail-closed at decode: two entries for one node would let restore and purge pick
+a winner by position.
+
+The KAT set is `bin_index_accept` (an empty and a populated index, each
+reproducing its exact plaintext and record from a fixed seal key and nonce, then
+opening) and `bin_index_reject` (tampered ciphertext, a foreign seal key, a
+**structure-tag transplant** of the same plaintext under the read-body tag, a
+duplicate `nodeId`, a short sealed blob, a wrong-length `heldKey`, a missing
+`originParent`, a missing `sealed` and a missing `v`, an unrecognised `kind`, an
+over-bound `ipnsName`, a forward `v`, and an unknown clear-header field).
+
 ## KDF edge catalog
 
 Frozen per FSM1/cipher-box-next#39 D8 (F-9). Per-node material takes the shape
@@ -487,26 +517,34 @@ are fixed-length message input, **never** variable context. Context strings
 follow `cipherbox/v2/<edge>`; the exact string table and input layouts freeze
 in the KAT manifest.
 
-| Edge                     | Inputs                                                          | Output                                    |
-| ------------------------ | --------------------------------------------------------------- | ----------------------------------------- |
-| node-seed                | scopeSeed, node id                                              | nodeSeed (flat within scope)              |
-| read-key                 | nodeSeed                                                        | readKey                                   |
-| structure-key            | nodeSeed or scope seed, structTag                               | per-structure sealing keys                |
-| write-seed               | writeScopeSeed, node id                                         | writeSeed (flat)                          |
-| write-key                | writeSeed                                                       | writeKey                                  |
-| ipns-keypair             | writeSeed                                                       | Ed25519 keypair → ipnsName                |
-| ascent-keypair           | parent nodeSeed                                                 | X25519 keypair for the ascent link        |
-| enc-subkey               | login secret                                                    | X25519 encryption subkey                  |
-| blinded-tag              | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName                | grant-blob tag                            |
-| owner-pseudonym-seed     | login secret                                                    | ownerPseudonymSeed                        |
-| pseudonym-sign           | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: ownerPseudonymSeed) | Ed25519 pseudonym keypair                 |
-| owner-pointer-seed       | login secret                                                    | ownerPointerSeed                          |
-| scope-pointer            | ownerPointerSeed, scope id                                      | per-scope pointer Ed25519 keypair         |
-| pointer-read-key         | ownerPointerSeed, scope id                                      | pointerReadKey                            |
-| vault-pointer-index      | login secret, index i (0 default)                               | pointer Ed25519 keypair chain             |
-| settings-ipns-keypair    | login secret                                                    | vault settings Ed25519 keypair → ipnsName |
-| genesis-read-scope-seed  | login secret                                                    | the genesis scope's read (override) seed  |
-| genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                |
+| Edge                     | Inputs                                                          | Output                                        |
+| ------------------------ | --------------------------------------------------------------- | --------------------------------------------- |
+| node-seed                | scopeSeed, node id                                              | nodeSeed (flat within scope)                  |
+| read-key                 | nodeSeed                                                        | readKey                                       |
+| structure-key            | nodeSeed or scope seed, structTag                               | per-structure sealing keys                    |
+| write-seed               | writeScopeSeed, node id                                         | writeSeed (flat)                              |
+| write-key                | writeSeed                                                       | writeKey                                      |
+| ipns-keypair             | writeSeed                                                       | Ed25519 keypair → ipnsName                    |
+| ascent-keypair           | parent nodeSeed                                                 | X25519 keypair for the ascent link            |
+| enc-subkey               | login secret                                                    | X25519 encryption subkey                      |
+| blinded-tag              | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName                | grant-blob tag                                |
+| owner-pseudonym-seed     | login secret                                                    | ownerPseudonymSeed                            |
+| pseudonym-sign           | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: ownerPseudonymSeed) | Ed25519 pseudonym keypair                     |
+| owner-pointer-seed       | login secret                                                    | ownerPointerSeed                              |
+| scope-pointer            | ownerPointerSeed, scope id                                      | per-scope pointer Ed25519 keypair             |
+| pointer-read-key         | ownerPointerSeed, scope id                                      | pointerReadKey                                |
+| vault-pointer-index      | login secret, index i (0 default)                               | pointer Ed25519 keypair chain                 |
+| settings-ipns-keypair    | login secret                                                    | vault settings Ed25519 keypair → ipnsName     |
+| bin-index-ipns-keypair   | login secret                                                    | bin index Ed25519 keypair → ipnsName          |
+| bin-index-seal-key       | login secret                                                    | the bin index body's sealing key              |
+| bin-held-key             | login secret, node id                                           | the key a soft delete re-keys a subtree under |
+| genesis-read-scope-seed  | login secret                                                    | the genesis scope's read (override) seed      |
+| genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                    |
+
+The three bin edges are the owner's alone: no grant carries them, which is what
+makes a soft delete cut a grantee's access that key regression cannot undo
+(ADR 0010). `bin-held-key` derives rather than draws at random so a binned
+subtree stays recoverable when the index body is lost.
 
 Non-edges, stated to stay non-edges: content keys (random per version), and
 every scope seed a rotation or a grant cut mints (random). The genesis pair is

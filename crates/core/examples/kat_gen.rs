@@ -33,37 +33,39 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V,
-    CRITICAL_KEY_PREFIX, ChildRef, ChildScopeRef, GRANT_SECTION_ENVELOPE_HEADROOM_BYTES,
-    GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,
-    MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS,
-    MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES, MAX_WRITE_BODY_BYTES,
-    MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
-    OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader, OverrideSeedPayload,
-    OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission, PreservedFields,
-    READ_SEALED_ENVELOPE_HEADROOM_BYTES, ReadBody, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
-    SettingsRecordHeader, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed,
-    StructureSigInput, UNCUTTABLE_KEYS, Version, WRITE_BODY_RESEAL_HEADROOM_BYTES, WriteBody,
-    ascent_link_sig_body, build_aad, content_key_aad, decode_ascent_link, decode_envelope,
-    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
-    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
-    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
-    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
-    encode_recipient_binding, encode_write_body, op_record_aad, open_ascent_link, open_content_key,
-    open_grant_blob, open_history_link, open_op_record, open_owner_blob, open_owner_history_link,
-    open_owner_local, open_owner_write_blob, open_read_body, open_settings_record, owner_local_aad,
-    seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link, seal_op_record,
-    seal_owner_blob, seal_owner_history_link, seal_owner_local, seal_owner_write_blob,
-    seal_read_body, seal_settings_record, settings_record_aad, sign_grant_set,
-    sign_recipient_binding, sign_structure, structure_sig_preimage, verify_grant_set,
-    verify_recipient_binding, verify_structure,
+    self, AAD_DOMAIN, AadContext, AscentLink, BIN_INDEX_V, BinEntry, BinIndex,
+    CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, CRITICAL_KEY_PREFIX, ChildRef, ChildScopeRef,
+    GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment,
+    GrantSetEntry, HistoryLinkPayload, MAX_BIN_INDEX_BYTES, MAX_BLOCK_BYTES,
+    MAX_CRITICAL_CARRIED_BYTES, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS, MAX_GRANT_SECTION_BYTES,
+    MAX_READ_SEALED_BYTES, MAX_WRITE_BODY_BYTES, MAX_WRITE_HISTORY_LINK_BYTES, NodeKind,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader,
+    OverrideSeedPayload, OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission,
+    PreservedFields, READ_SEALED_ENVELOPE_HEADROOM_BYTES, ReadBody, SETTINGS_RECORD_HPKE_INFO,
+    SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_BIN_INDEX, STRUCT_TAG_CONTENT_KEY,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
+    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, SettingsRecordHeader,
+    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput,
+    UNCUTTABLE_KEYS, Version, WRITE_BODY_RESEAL_HEADROOM_BYTES, WriteBody, ascent_link_sig_body,
+    bin_index_aad, build_aad, content_key_aad, decode_ascent_link, decode_bin_index,
+    decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
+    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_bin_index, encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
+    encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
+    encode_read_body, encode_recipient_binding, encode_write_body, op_record_aad, open_ascent_link,
+    open_bin_index, open_content_key, open_grant_blob, open_history_link, open_op_record,
+    open_owner_blob, open_owner_history_link, open_owner_local, open_owner_write_blob,
+    open_read_body, open_settings_record, owner_local_aad, seal_ascent_link, seal_bin_index,
+    seal_content_key, seal_grant_blob, seal_history_link, seal_op_record, seal_owner_blob,
+    seal_owner_history_link, seal_owner_local, seal_owner_write_blob, seal_read_body,
+    seal_settings_record, settings_record_aad, sign_grant_set, sign_recipient_binding,
+    sign_structure, structure_sig_preimage, verify_grant_set, verify_recipient_binding,
+    verify_structure,
 };
-use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
+use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
@@ -243,6 +245,46 @@ struct Manifest {
     settings_record: SettingsRecordSection,
     content_key: ContentKeySection,
     owner_local: OwnerLocalSection,
+    bin_index: BinIndexSection,
+}
+
+// --- Bin-index section: the owner-sealed, vault-level recycle-bin index,
+// --- sealed symmetrically under the `bin-index-seal-key` edge with its own
+// --- clear header as the AAD.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BinIndexSection {
+    struct_tag: u8,
+    v: u64,
+    max_bytes: usize,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+/// A bin-index accept vector: the fixed seal key and nonce, the body plaintext
+/// (which must re-encode byte-stably), and the whole record — a re-seal must
+/// reproduce `record` byte-for-byte.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BinIndexAcceptVector {
+    name: String,
+    seal_key: String,
+    nonce: String,
+    plaintext: String,
+    record: String,
+}
+
+/// A bin-index reject vector: a record that must fail closed when opened under
+/// `sealKey`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BinIndexRejectVector {
+    name: String,
+    seal_key: String,
+    record: String,
+    check: String,
+    class: String,
 }
 
 // --- Owner-local section: every durable store the owner alone authors and
@@ -1041,6 +1083,7 @@ fn main() {
     let settings_record_dir = vectors_dir.join("settings_record");
     let content_key_dir = vectors_dir.join("content_key");
     let owner_local_dir = vectors_dir.join("owner_local");
+    let bin_index_dir = vectors_dir.join("bin_index");
     for dir in [
         &codec_dir,
         &kdf_dir,
@@ -1055,6 +1098,7 @@ fn main() {
         &settings_record_dir,
         &content_key_dir,
         &owner_local_dir,
+        &bin_index_dir,
     ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
@@ -1264,6 +1308,18 @@ fn main() {
         &owner_local_reject,
     );
 
+    let bin_index_accept = build_bin_index_accept();
+    let bin_index_reject = build_bin_index_reject();
+
+    write_pretty(
+        &bin_index_dir.join("bin_index_accept.json"),
+        &bin_index_accept,
+    );
+    write_pretty(
+        &bin_index_dir.join("bin_index_reject.json"),
+        &bin_index_reject,
+    );
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -1303,6 +1359,8 @@ fn main() {
         content_key_reject: &content_key_reject,
         owner_local_accept: &owner_local_accept,
         owner_local_reject: &owner_local_reject,
+        bin_index_accept: &bin_index_accept,
+        bin_index_reject: &bin_index_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -1316,8 +1374,8 @@ fn main() {
          {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject, \
          {} op-record-accept, {} op-record-reject, {} settings-record-accept, \
          {} settings-record-reject, {} content-key-accept, {} content-key-reject, \
-         {} owner-local-accept, \
-         {} owner-local-reject vectors + manifest.json",
+         {} owner-local-accept, {} owner-local-reject, {} bin-index-accept, \
+         {} bin-index-reject vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -1356,6 +1414,8 @@ fn main() {
         content_key_reject.len(),
         owner_local_accept.len(),
         owner_local_reject.len(),
+        bin_index_accept.len(),
+        bin_index_reject.len(),
     );
 }
 
@@ -2123,6 +2183,8 @@ struct ManifestInputs<'a> {
     content_key_reject: &'a [ContentKeyRejectVector],
     owner_local_accept: &'a [OwnerLocalAcceptVector],
     owner_local_reject: &'a [OwnerLocalRejectVector],
+    bin_index_accept: &'a [BinIndexAcceptVector],
+    bin_index_reject: &'a [BinIndexRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -2395,6 +2457,25 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                 count: m.owner_local_reject.len(),
                 checks: checks_surface_ordered(
                     &m.owner_local_reject
+                        .iter()
+                        .map(|v| v.check.as_str())
+                        .collect(),
+                ),
+            },
+        },
+        bin_index: BinIndexSection {
+            struct_tag: STRUCT_TAG_BIN_INDEX,
+            v: BIN_INDEX_V,
+            max_bytes: MAX_BIN_INDEX_BYTES,
+            accept: FileCount {
+                file: "vectors/bin_index/bin_index_accept.json".to_string(),
+                count: m.bin_index_accept.len(),
+            },
+            reject: RejectSection {
+                file: "vectors/bin_index/bin_index_reject.json".to_string(),
+                count: m.bin_index_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.bin_index_reject
                         .iter()
                         .map(|v| v.check.as_str())
                         .collect(),
@@ -7903,6 +7984,328 @@ fn owner_local_reject_vector(
         kind: kind.name().to_string(),
         owner_secret: hexstr(&opener_scalar),
         blob: hexstr(blob),
+        check: check.to_string(),
+        class: class.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bin-index vectors: the owner-sealed recycle-bin index, sealed symmetrically
+// under the `bin-index-seal-key` edge with its own clear header.
+// ---------------------------------------------------------------------------
+
+/// The frozen seal key the bin-index vectors seal under.
+fn bin_index_seal_key() -> [u8; KEY_LEN] {
+    std::array::from_fn(|i| (0x51 + i) as u8)
+}
+
+/// A bin entry with every field populated; `held` decides the optional key.
+fn bin_entry(seed: u8, kind: NodeKind, held: bool) -> BinEntry {
+    BinEntry::new(
+        [seed; 16],
+        format!("k51q{seed}").into_bytes(),
+        kind,
+        [seed.wrapping_add(0x10); 16],
+        format!("report-{seed}.pdf"),
+        1_764_000_000_000 + u64::from(seed),
+        [seed.wrapping_add(0x20); 16],
+        held.then(|| std::array::from_fn(|i| (usize::from(seed) + i) as u8)),
+    )
+}
+
+/// The bin-index AAD layout under an arbitrary structure tag — the transplant
+/// vector's only lever.
+fn bin_index_aad_under(struct_tag: u8) -> Vec<u8> {
+    cipherbox_core::codec::encode_fixed_depth(&Value::Array(vec![
+        Value::Text(AAD_DOMAIN.to_string()),
+        Value::Unsigned(BIN_INDEX_V),
+        Value::Unsigned(u64::from(struct_tag)),
+    ]))
+}
+
+/// Frame a sealed blob into the bin-index clear header.
+fn bin_index_header(sealed: Vec<u8>) -> Vec<u8> {
+    let mut m = Map::new();
+    m.insert("sealed", Value::Bytes(sealed));
+    m.insert("v", Value::Unsigned(BIN_INDEX_V));
+    encode(&Value::Map(m)).expect("bin index header re-encodes")
+}
+
+/// Seal an arbitrary plaintext under `aad`, so a hand-framed body reaches the
+/// grammar decoder instead of failing the tag first.
+fn framed_bin_record(nonce: &[u8; NONCE_LEN], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
+    let mut sealed = nonce.to_vec();
+    sealed.extend(aead::encrypt(&bin_index_seal_key(), nonce, aad, plaintext));
+    bin_index_header(sealed)
+}
+
+/// One bin entry's canonical map, the base for the hand-framed reject bodies.
+fn bin_entry_map(entry: &BinEntry) -> Map {
+    let mut m = Map::new();
+    m.insert("nodeId", Value::Bytes(entry.node_id.to_vec()));
+    m.insert("ipnsName", Value::Bytes(entry.ipns_name().to_vec()));
+    m.insert("kind", Value::Text(entry.kind.as_wire().to_string()));
+    m.insert("originParent", Value::Bytes(entry.origin_parent.to_vec()));
+    m.insert("originName", Value::Text(entry.origin_name().to_string()));
+    m.insert("deletedAt", Value::Unsigned(entry.deleted_at));
+    m.insert("scopeId", Value::Bytes(entry.scope_id.to_vec()));
+    if let Some(key) = entry.held_key() {
+        m.insert("heldKey", Value::Bytes(key.to_vec()));
+    }
+    m
+}
+
+/// A bin index body framed from entry maps the encoder refuses to emit.
+fn framed_bin_body(entries: Vec<Value>, revision: u64) -> Vec<u8> {
+    let mut m = Map::new();
+    m.insert("entries", Value::Array(entries));
+    m.insert("revision", Value::Unsigned(revision));
+    encode(&Value::Map(m)).expect("bin index body re-encodes")
+}
+
+/// One reject body: the sole entry of a valid index, edited past what the
+/// encoder emits.
+fn bin_reject_body(nonce: &[u8; NONCE_LEN], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
+    let mut m = bin_entry_map(&bin_entry(0x04, NodeKind::File, true));
+    edit(&mut m);
+    framed_bin_record(
+        nonce,
+        &bin_index_aad(),
+        &framed_bin_body(vec![Value::Map(m)], 3),
+    )
+}
+
+fn build_bin_index_accept() -> Vec<BinIndexAcceptVector> {
+    let empty = BinIndex::new(0);
+    let mut populated = BinIndex::new(5);
+    populated
+        .entries
+        .push(bin_entry(0x01, NodeKind::File, true));
+    populated
+        .entries
+        .push(bin_entry(0x02, NodeKind::Folder, false));
+
+    vec![
+        bin_index_accept_vector(
+            "empty-index",
+            std::array::from_fn(|i| (0x11 + i) as u8),
+            &empty,
+        ),
+        bin_index_accept_vector(
+            "populated-index",
+            std::array::from_fn(|i| (0x31 + i) as u8),
+            &populated,
+        ),
+    ]
+}
+
+/// Build + self-check one bin-index accept vector: the plaintext re-encodes
+/// byte-stably, the seal is deterministic, and the open recovers the index.
+fn bin_index_accept_vector(
+    name: &str,
+    nonce: [u8; NONCE_LEN],
+    index: &BinIndex,
+) -> BinIndexAcceptVector {
+    let key = bin_index_seal_key();
+    let plaintext =
+        encode_bin_index(index).unwrap_or_else(|e| panic!("bin-index {name}: encode ({e})"));
+    let decoded =
+        decode_bin_index(&plaintext).unwrap_or_else(|e| panic!("bin-index {name}: decode ({e})"));
+    assert_eq!(
+        encode_bin_index(&decoded).unwrap(),
+        plaintext,
+        "bin-index {name}: not byte-stable"
+    );
+
+    let record = seal_bin_index(&key, &nonce, index)
+        .unwrap_or_else(|e| panic!("bin-index {name}: seal ({e})"));
+    assert_eq!(
+        seal_bin_index(&key, &nonce, index).unwrap(),
+        record,
+        "bin-index {name}: not deterministic"
+    );
+    assert_eq!(
+        &open_bin_index(&key, &record).unwrap_or_else(|e| panic!("bin-index {name}: open ({e})")),
+        index,
+        "bin-index {name}: index round-trip"
+    );
+
+    BinIndexAcceptVector {
+        name: name.to_string(),
+        seal_key: hexstr(&key),
+        nonce: hexstr(&nonce),
+        plaintext: hexstr(&plaintext),
+        record: hexstr(&record),
+    }
+}
+
+fn build_bin_index_reject() -> Vec<BinIndexRejectVector> {
+    let key = bin_index_seal_key();
+    let nonce: [u8; NONCE_LEN] = std::array::from_fn(|i| (0x71 + i) as u8);
+    let mut index = BinIndex::new(3);
+    index.entries.push(bin_entry(0x04, NodeKind::File, true));
+    let record = seal_bin_index(&key, &nonce, &index).unwrap();
+
+    let tampered = reframe_record(&record, |m| {
+        let mut sealed = m.get("sealed").unwrap().as_bytes().unwrap().to_vec();
+        let last = sealed.len() - 1;
+        sealed[last] ^= 0x01;
+        m.insert("sealed", Value::Bytes(sealed));
+    });
+    let forward_version = reframe_record(&record, |m| {
+        m.insert("v", Value::Unsigned(BIN_INDEX_V + 1));
+    });
+    // A third key at this version: outside the AAD, so it opens cleanly unless
+    // the two clear-header keys are enforced as exhaustive.
+    let unknown_field = reframe_record(&record, |m| {
+        m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
+    });
+    let missing_sealed = reframe_record(&record, |m| {
+        m.remove("sealed");
+    });
+    let missing_v = reframe_record(&record, |m| {
+        m.remove("v");
+    });
+    let short_sealed = reframe_record(&record, |m| {
+        m.insert("sealed", Value::Bytes(vec![0u8; NONCE_LEN + TAG_LEN - 1]));
+    });
+    // The read-body tag over the same key, nonce, and plaintext: only the tag
+    // in the AAD separates the two families, so the AEAD must refuse it.
+    let struct_tag_transplant = framed_bin_record(
+        &nonce,
+        &bin_index_aad_under(STRUCT_TAG_READ_BODY),
+        &encode_bin_index(&index).unwrap(),
+    );
+
+    // Bodies the encoder refuses to emit, framed by hand and sealed correctly
+    // so the grammar decoder — not the tag — is what refuses them.
+    let one = Value::Map(bin_entry_map(&bin_entry(0x04, NodeKind::File, true)));
+    let duplicate_node_id = framed_bin_record(
+        &nonce,
+        &bin_index_aad(),
+        &framed_bin_body(vec![one.clone(), one], 3),
+    );
+    let short_held_key = bin_reject_body(&nonce, |m| {
+        m.insert("heldKey", Value::Bytes(vec![0u8; SECRET_LEN - 1]));
+    });
+    let unknown_kind = bin_reject_body(&nonce, |m| {
+        m.insert("kind", Value::Text("shortcut".to_string()));
+    });
+    let missing_origin_parent = bin_reject_body(&nonce, |m| {
+        m.remove("originParent");
+    });
+    let over_bound_ipns_name = bin_reject_body(&nonce, |m| {
+        m.insert(
+            "ipnsName",
+            Value::Bytes(vec![0x6b; MAX_IPNS_NAME_BYTES + 1]),
+        );
+    });
+
+    // A stranger's seal key derives a different AEAD key, so the tag refuses it.
+    let stranger_key: [u8; KEY_LEN] = std::array::from_fn(|i| (0x91 + i) as u8);
+
+    vec![
+        bin_index_reject_vector(
+            "tampered-ciphertext",
+            key,
+            &tampered,
+            "seal-open-failed",
+            "trust",
+        ),
+        bin_index_reject_vector(
+            "foreign-seal-key",
+            stranger_key,
+            &record,
+            "seal-open-failed",
+            "trust",
+        ),
+        bin_index_reject_vector(
+            "struct-tag-transplant",
+            key,
+            &struct_tag_transplant,
+            "seal-open-failed",
+            "trust",
+        ),
+        bin_index_reject_vector(
+            "duplicate-node-id",
+            key,
+            &duplicate_node_id,
+            "duplicate-id",
+            "trust",
+        ),
+        bin_index_reject_vector("short-sealed", key, &short_sealed, "truncated", "malformed"),
+        bin_index_reject_vector(
+            "short-held-key",
+            key,
+            &short_held_key,
+            "invalid-field-length",
+            "malformed",
+        ),
+        bin_index_reject_vector(
+            "missing-origin-parent",
+            key,
+            &missing_origin_parent,
+            "missing-field",
+            "malformed",
+        ),
+        bin_index_reject_vector(
+            "missing-sealed",
+            key,
+            &missing_sealed,
+            "missing-field",
+            "malformed",
+        ),
+        bin_index_reject_vector("missing-v", key, &missing_v, "missing-field", "malformed"),
+        bin_index_reject_vector(
+            "unknown-kind",
+            key,
+            &unknown_kind,
+            "invalid-node-kind",
+            "malformed",
+        ),
+        bin_index_reject_vector(
+            "over-bound-ipns-name",
+            key,
+            &over_bound_ipns_name,
+            "too-many-structures",
+            "malformed",
+        ),
+        bin_index_reject_vector(
+            "forward-version",
+            key,
+            &forward_version,
+            "unsupported-record-version",
+            "malformed",
+        ),
+        bin_index_reject_vector(
+            "unknown-header-field",
+            key,
+            &unknown_field,
+            "unknown-record-field",
+            "malformed",
+        ),
+    ]
+}
+
+/// Build + self-check one bin-index reject vector.
+fn bin_index_reject_vector(
+    name: &str,
+    seal_key: [u8; KEY_LEN],
+    record: &[u8],
+    check: &str,
+    class: &str,
+) -> BinIndexRejectVector {
+    let err = match open_bin_index(&seal_key, record) {
+        Err(e) => e,
+        Ok(_) => panic!("bin-index reject {name}: open accepted it"),
+    };
+    assert_eq!(err.check(), check, "bin-index reject {name}: check ({err})");
+    assert_eq!(err.class(), class, "bin-index reject {name}: class ({err})");
+
+    BinIndexRejectVector {
+        name: name.to_string(),
+        seal_key: hexstr(&seal_key),
+        record: hexstr(record),
         check: check.to_string(),
         class: class.to_string(),
     }

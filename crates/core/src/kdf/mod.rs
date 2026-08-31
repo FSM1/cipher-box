@@ -1,6 +1,6 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these eighteen edges. Every edge
+//! Nothing in CipherBox derives a key outside these twenty-one edges. Every edge
 //! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
@@ -46,6 +46,9 @@ const CTX_SCOPE_POINTER: &str = "cipherbox/v2/scope-pointer";
 const CTX_POINTER_READ_KEY: &str = "cipherbox/v2/pointer-read-key";
 const CTX_VAULT_POINTER_INDEX: &str = "cipherbox/v2/vault-pointer-index";
 const CTX_SETTINGS_IPNS_KEYPAIR: &str = "cipherbox/v2/settings-ipns-keypair";
+const CTX_BIN_INDEX_IPNS_KEYPAIR: &str = "cipherbox/v2/bin-index-ipns-keypair";
+const CTX_BIN_INDEX_SEAL_KEY: &str = "cipherbox/v2/bin-index-seal-key";
+const CTX_BIN_HELD_KEY: &str = "cipherbox/v2/bin-held-key";
 const CTX_GENESIS_READ_SCOPE_SEED: &str = "cipherbox/v2/genesis-read-scope-seed";
 const CTX_GENESIS_WRITE_SCOPE_SEED: &str = "cipherbox/v2/genesis-write-scope-seed";
 
@@ -59,7 +62,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The eighteen edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The twenty-one edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -141,6 +144,21 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "settings-ipns-keypair",
         context: CTX_SETTINGS_IPNS_KEYPAIR,
         input_layout: "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
+    },
+    EdgeSpec {
+        name: "bin-index-ipns-keypair",
+        context: CTX_BIN_INDEX_IPNS_KEYPAIR,
+        input_layout: "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
+    },
+    EdgeSpec {
+        name: "bin-index-seal-key",
+        context: CTX_BIN_INDEX_SEAL_KEY,
+        input_layout: "derive_key(ctx, loginSecret[var])",
+    },
+    EdgeSpec {
+        name: "bin-held-key",
+        context: CTX_BIN_HELD_KEY,
+        input_layout: "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16])",
     },
     EdgeSpec {
         name: "genesis-read-scope-seed",
@@ -250,6 +268,21 @@ fn vault_pointer_index_bytes(login_secret: &[u8], index: u64) -> SecretBytes {
 
 fn settings_ipns_keypair_bytes(login_secret: &[u8]) -> SecretBytes {
     derive_key(CTX_SETTINGS_IPNS_KEYPAIR, login_secret)
+}
+
+fn bin_index_ipns_keypair_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_BIN_INDEX_IPNS_KEYPAIR, login_secret)
+}
+
+fn bin_index_seal_key_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_BIN_INDEX_SEAL_KEY, login_secret)
+}
+
+fn bin_held_key_bytes(login_secret: &[u8], node_id: &[u8; 16]) -> SecretBytes {
+    keyed_hash(
+        derive_key(CTX_BIN_HELD_KEY, login_secret).as_bytes(),
+        node_id,
+    )
 }
 
 fn genesis_read_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
@@ -364,6 +397,30 @@ pub fn settings_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
     Ed25519Signer::from_seed(*settings_ipns_keypair_bytes(login_secret).as_bytes())
 }
 
+/// `bin-index-ipns-keypair`: the bin index record's Ed25519 keypair
+/// (→ `ipnsName`), derived from the login secret so the owner's bin resolves at
+/// cold start without CipherBox infrastructure (ADR 0010).
+pub fn bin_index_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
+    Ed25519Signer::from_seed(*bin_index_ipns_keypair_bytes(login_secret).as_bytes())
+}
+
+/// `bin-index-seal-key`: the symmetric key that seals the bin index body. The
+/// index is owner-sealed, so it derives from the login secret and no grant
+/// carries it.
+pub fn bin_index_seal_key(login_secret: &[u8]) -> SecretBytes {
+    bin_index_seal_key_bytes(login_secret)
+}
+
+/// `bin-held-key`: the per-entry seed a soft delete re-keys a doomed subtree
+/// under (ADR 0010 item 3). It sits outside every scope's derivation, which is
+/// what cuts a grantee's access; deriving it from the login secret rather than
+/// drawing it at random keeps a binned subtree recoverable when the index body
+/// is lost, and the entry carries the same bytes so a reader never re-derives
+/// under a value the index does not record.
+pub fn bin_held_key(login_secret: &[u8], node_id: &[u8; 16]) -> SecretBytes {
+    bin_held_key_bytes(login_secret, node_id)
+}
+
 /// `genesis-read-scope-seed`: the vault root scope's read (override) seed at the
 /// genesis epoch, from the login secret.
 ///
@@ -441,7 +498,7 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the eighteen outputs must be pairwise distinct), its property test, and the
+/// (the outputs must be pairwise distinct), its property test, and the
 /// frozen vectors the KAT generator writes.
 ///
 /// The **catalog-freezing / separation surface**, not the production derivation
@@ -516,6 +573,18 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         EdgeProbeOutput {
             name: "settings-ipns-keypair",
             output: b(settings_ipns_keypair_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "bin-index-ipns-keypair",
+            output: b(bin_index_ipns_keypair_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "bin-index-seal-key",
+            output: b(bin_index_seal_key_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "bin-held-key",
+            output: b(bin_held_key_bytes(probe.seed, probe.id)),
         },
         EdgeProbeOutput {
             name: "genesis-read-scope-seed",
@@ -609,6 +678,17 @@ mod tests {
                 .verifying_key()
                 .to_bytes()
         );
+        assert_eq!(
+            bin_index_ipns_keypair(&seed).verifying_key().to_bytes(),
+            Ed25519Signer::from_seed(by("bin-index-ipns-keypair"))
+                .verifying_key()
+                .to_bytes()
+        );
+        assert_eq!(
+            bin_index_seal_key(&seed).as_bytes(),
+            &by("bin-index-seal-key")
+        );
+        assert_eq!(bin_held_key(&seed, &id).as_bytes(), &by("bin-held-key"));
         assert_eq!(
             genesis_read_scope_seed(&seed).as_bytes(),
             &by("genesis-read-scope-seed")

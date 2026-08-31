@@ -11,6 +11,7 @@
 //! AAD, which binds only `(v, id, scope, epoch, structTag)` ([`aad`]).
 
 pub mod aad;
+pub mod bin_index;
 pub mod body;
 pub mod content_key;
 pub mod envelope;
@@ -23,11 +24,16 @@ pub mod structure;
 pub mod write_body;
 
 pub use aad::{
-    AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
-    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructTagSpec, build_aad,
+    AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_BIN_INDEX, STRUCT_TAG_CONTENT_KEY,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS,
+    StructTagSpec, build_aad,
+};
+pub use bin_index::{
+    BIN_INDEX_V, BinEntry, BinIndex, MAX_BIN_INDEX_BYTES, bin_index_aad, decode_bin_index,
+    encode_bin_index, open_bin_index, seal_bin_index,
 };
 pub use body::{
     ChildRef, NodeKind, PreservedFields, ReadBody, Version, decode_read_body, encode_read_body,

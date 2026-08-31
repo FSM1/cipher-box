@@ -31,29 +31,31 @@ use cipherbox_core::payload::pointer::{
     RepointObject, open_pointer_payload, repoint_preimage, seal_pointer_payload,
 };
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, CRITICAL_KEY_PREFIX,
-    GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
-    MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
+    self, AAD_DOMAIN, AadContext, BIN_INDEX_V, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V,
+    CRITICAL_KEY_PREFIX, GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry,
+    GrantSetCommitment, GrantSetEntry, MAX_BIN_INDEX_BYTES, MAX_BLOCK_BYTES,
+    MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
     MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX,
     OWNER_LOCAL_V, OwnerLocalKind, Permission, PreservedFields,
     READ_SEALED_ENVELOPE_HEADROOM_BYTES, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_BIN_INDEX, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
     STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, StructureSigInput,
     UNCUTTABLE_KEYS, WRITE_BODY_RESEAL_HEADROOM_BYTES, ascent_link_sig_body, build_aad,
-    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
-    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
-    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
-    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
-    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
-    encode_recipient_binding, encode_write_body, open_ascent_link, open_content_key,
-    open_grant_blob, open_op_record, open_owner_blob, open_owner_history_link, open_owner_local,
-    open_owner_write_blob, open_read_body, open_settings_record, seal_content_key, seal_op_record,
+    decode_ascent_link, decode_bin_index, decode_envelope, decode_grant_blob_payload,
+    decode_grant_section, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_bin_index, encode_envelope,
+    encode_grant_section, encode_grant_set_commitment, encode_override_seed_payload,
+    encode_read_body, encode_recipient_binding, encode_write_body, open_ascent_link,
+    open_bin_index, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
+    open_owner_history_link, open_owner_local, open_owner_write_blob, open_read_body,
+    open_settings_record, seal_bin_index, seal_content_key, seal_op_record,
     seal_owner_history_link, seal_owner_local, seal_settings_record, structure_sig_preimage,
     verify_grant_set, verify_recipient_binding, verify_structure,
 };
-use cipherbox_core::suite::aead::NONCE_LEN;
+use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
 use cipherbox_core::suite::contact::{import_contact_code, subkey_binding_preimage};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
@@ -299,6 +301,14 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/owner_local/owner_local_reject.json",
         include_str!("../kat/vectors/owner_local/owner_local_reject.json"),
     ),
+    (
+        "vectors/bin_index/bin_index_accept.json",
+        include_str!("../kat/vectors/bin_index/bin_index_accept.json"),
+    ),
+    (
+        "vectors/bin_index/bin_index_reject.json",
+        include_str!("../kat/vectors/bin_index/bin_index_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -324,6 +334,37 @@ struct Manifest {
     settings_record: SettingsRecordManifest,
     content_key: ContentKeyManifest,
     owner_local: OwnerLocalManifest,
+    bin_index: BinIndexManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BinIndexManifest {
+    struct_tag: u8,
+    v: u64,
+    max_bytes: usize,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BinIndexAcceptVector {
+    name: String,
+    seal_key: String,
+    nonce: String,
+    plaintext: String,
+    record: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BinIndexRejectVector {
+    name: String,
+    seal_key: String,
+    record: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -1322,6 +1363,14 @@ fn owner_local_reject_vectors(m: &Manifest) -> Vec<OwnerLocalRejectVector> {
     serde_json::from_str(fixture(&m.owner_local.reject.file)).expect("owner_local_reject shape")
 }
 
+fn bin_index_accept_vectors(m: &Manifest) -> Vec<BinIndexAcceptVector> {
+    serde_json::from_str(fixture(&m.bin_index.accept.file)).expect("bin_index_accept shape")
+}
+
+fn bin_index_reject_vectors(m: &Manifest) -> Vec<BinIndexRejectVector> {
+    serde_json::from_str(fixture(&m.bin_index.reject.file)).expect("bin_index_reject shape")
+}
+
 /// The kind a vector names, or a failure — an unknown kind is manifest drift,
 /// never a vector to skip.
 fn owner_local_kind(name: &str) -> OwnerLocalKind {
@@ -1502,6 +1551,8 @@ fn fixture_table_matches_manifest_files() {
         m.content_key.reject.file.as_str(),
         m.owner_local.accept.file.as_str(),
         m.owner_local.reject.file.as_str(),
+        m.bin_index.accept.file.as_str(),
+        m.bin_index.reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -1778,6 +1829,7 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     );
     covered.extend(content_key_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(owner_local_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(bin_index_reject_vectors(&m).into_iter().map(|v| v.check));
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -1992,6 +2044,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("content-key", 12),
     ("owner-local", 13),
     ("write-history-link", 14),
+    ("bin-index", 15),
 ];
 
 #[test]
@@ -2370,7 +2423,7 @@ fn envelope_reject_vectors_fire_the_named_check() {
 }
 
 // ---------------------------------------------------------------------------
-// KDF edge catalog: the eighteen frozen edges, their contexts + layouts, the
+// KDF edge catalog: the frozen edges, their contexts + layouts, the
 // per-edge output freeze, and the mechanical separation KAT.
 // ---------------------------------------------------------------------------
 
@@ -2395,6 +2448,9 @@ const ALL_EDGE_NAMES: &[&str] = &[
     "pointer-read-key",
     "vault-pointer-index",
     "settings-ipns-keypair",
+    "bin-index-ipns-keypair",
+    "bin-index-seal-key",
+    "bin-held-key",
     "genesis-read-scope-seed",
     "genesis-write-scope-seed",
 ];
@@ -4524,6 +4580,162 @@ fn settings_record_reject_vectors_fire_the_named_check() {
             err.class(),
             v.class,
             "settings-record reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn bin_index_accept_vectors_seal_reproduce_and_open() {
+    let m = manifest();
+    assert_eq!(m.bin_index.struct_tag, STRUCT_TAG_BIN_INDEX);
+    assert_eq!(m.bin_index.v, BIN_INDEX_V);
+    assert_eq!(m.bin_index.max_bytes, MAX_BIN_INDEX_BYTES);
+
+    let vectors = bin_index_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.bin_index.accept.count,
+        "bin-index accept count drift"
+    );
+
+    let mut names = BTreeSet::new();
+    let mut entry_counts = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate bin-index accept {}",
+            v.name
+        );
+        let key: [u8; KEY_LEN] = unhex32(&v.name, &v.seal_key);
+        let nonce: [u8; NONCE_LEN] = unhex_n(&v.name, &v.nonce);
+        let plaintext = unhex(&v.name, &v.plaintext);
+
+        let index = decode_bin_index(&plaintext)
+            .unwrap_or_else(|e| panic!("bin-index accept {}: decode ({e})", v.name));
+        assert_eq!(
+            hex::encode(encode_bin_index(&index).unwrap()),
+            v.plaintext,
+            "bin-index accept {}: plaintext is not byte-stable",
+            v.name
+        );
+
+        let sealed = seal_bin_index(&key, &nonce, &index)
+            .unwrap_or_else(|e| panic!("bin-index accept {}: seal ({e})", v.name));
+        assert_eq!(
+            hex::encode(&sealed),
+            v.record,
+            "bin-index accept {}: record drift",
+            v.name
+        );
+
+        let record = unhex(&v.name, &v.record);
+        let decoded =
+            decode(&record).unwrap_or_else(|e| panic!("bin-index accept {}: decode ({e})", v.name));
+        let keys: Vec<&str> = decoded
+            .as_map()
+            .unwrap_or_else(|e| panic!("bin-index accept {}: map ({e})", v.name))
+            .entries()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["v", "sealed"],
+            "bin-index accept {}: the clear header is exactly two keys",
+            v.name
+        );
+
+        let reopened = open_bin_index(&key, &record)
+            .unwrap_or_else(|e| panic!("bin-index accept {}: open ({e})", v.name));
+        assert_eq!(reopened, index, "bin-index accept {}: index", v.name);
+        entry_counts.insert(index.entries.len());
+
+        // The index is owner-sealed, so no entry's held key may appear in the
+        // clear bytes a zero-knowledge server stores.
+        for entry in &index.entries {
+            if let Some(held) = entry.held_key() {
+                assert!(
+                    !record.windows(held.len()).any(|w| w == held),
+                    "bin-index accept {}: a held key rode the wire in the clear",
+                    v.name
+                );
+            }
+        }
+    }
+    assert!(
+        entry_counts.contains(&0) && entry_counts.iter().any(|n| *n > 0),
+        "bin-index accept must cover both an empty and a populated index"
+    );
+}
+
+#[test]
+fn bin_index_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = bin_index_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.bin_index.reject.count,
+        "bin-index reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .bin_index
+        .reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs bin-index reject.json"
+    );
+    for required in [
+        "seal-open-failed",
+        "duplicate-id",
+        "truncated",
+        "invalid-field-length",
+        "invalid-node-kind",
+        "missing-field",
+        "too-many-structures",
+        "unsupported-record-version",
+        "unknown-record-field",
+    ] {
+        assert!(
+            listed.contains(required),
+            "bin-index reject must cover the {required} check"
+        );
+    }
+    // The tag is the whole separation claim: the same key, nonce, and plaintext
+    // under the read-body tag must not open here.
+    assert!(
+        vectors.iter().any(|v| v.name == "struct-tag-transplant"),
+        "bin-index reject must pin a structure-tag transplant"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate bin-index reject {}",
+            v.name
+        );
+        let key: [u8; KEY_LEN] = unhex32(&v.name, &v.seal_key);
+        let record = unhex(&v.name, &v.record);
+        let err = match open_bin_index(&key, &record) {
+            Err(e) => e,
+            Ok(_) => panic!("bin-index reject {}: open accepted it", v.name),
+        };
+        assert_eq!(
+            err.check(),
+            v.check,
+            "bin-index reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "bin-index reject {}: class ({err})",
             v.name
         );
     }

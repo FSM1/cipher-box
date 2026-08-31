@@ -104,6 +104,24 @@
       "output": "2e696a4097ec1bb360623faa4373cd27cdd7f3ea223ffa867e611549d03de98d"
     },
     {
+      "name": "bin-index-ipns-keypair",
+      "context": "cipherbox/v2/bin-index-ipns-keypair",
+      "inputLayout": "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
+      "output": "2e2b39da071bf6297b21f97f63dbe353dbbc6c11f76fba1e4fb13b5ec5bca2cc"
+    },
+    {
+      "name": "bin-index-seal-key",
+      "context": "cipherbox/v2/bin-index-seal-key",
+      "inputLayout": "derive_key(ctx, loginSecret[var])",
+      "output": "6f759c46088f90b7d8fdd8029ecdb49334ce6977755e6be350c484b0483b02f3"
+    },
+    {
+      "name": "bin-held-key",
+      "context": "cipherbox/v2/bin-held-key",
+      "inputLayout": "keyed_hash(derive_key(ctx, loginSecret[var]), nodeId[16])",
+      "output": "3450ac89ce3e893e465b45ace1f2098ad40b5b9d64ed986942730fd06bfd54d6"
+    },
+    {
       "name": "genesis-read-scope-seed",
       "context": "cipherbox/v2/genesis-read-scope-seed",
       "inputLayout": "derive_key(ctx, loginSecret[var])",
