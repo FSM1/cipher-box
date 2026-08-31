@@ -76,8 +76,9 @@ pub fn current_user_sid() -> io::Result<Vec<u8>> {
     }
     // SAFETY: `GetTokenInformation(TokenUser, ..)` fills the buffer with a
     // `TOKEN_USER` followed by the SID it points at, and the length check above
-    // covers the struct itself.
-    let user = unsafe { &*information.as_ptr().cast::<TOKEN_USER>() };
+    // covers the struct itself. A `Vec<u8>` carries no `TOKEN_USER` alignment,
+    // so the struct is copied out unaligned rather than borrowed in place.
+    let user = unsafe { information.as_ptr().cast::<TOKEN_USER>().read_unaligned() };
     let sid = user.User.Sid;
     if sid.is_null() {
         return Err(io::Error::other("the process token carried no user SID"));

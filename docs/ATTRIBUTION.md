@@ -18,7 +18,7 @@ host adapter over the [winfsp-rs](https://github.com/SnowflakePowered/winfsp-rs)
 binding. WinFsp and winfsp-rs are both **GPLv3**, and the Windows build is a
 combined work with them: it is distributed under GPLv3, with WinFsp's
 [commercial licence](https://winfsp.dev/) as the alternative for a distribution
-that cannot be.
+that cannot be made under GPLv3.
 
 The notice above is shown to the user as well as stated here — the desktop
 shell carries it and the project address on every screen
