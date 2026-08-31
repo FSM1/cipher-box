@@ -3158,13 +3158,9 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
     }
 }
 
-/// A folder delete reclaims its whole subtree, and leaves no parentless node
-/// behind — but a descendant's half waits out the quarantine.
-///
-/// The delete's own target is detached by a record this pass resolved and
-/// republished. A descendant's name and pins wait for the proof: one converged
-/// poll tick, then its own resolved record re-checked against the owner's
-/// manifest (blueprint/engine.md "Retirement").
+/// A folder delete reclaims its own target at once and leaves no parentless
+/// node behind, but a descendant's name and pins wait a converged poll tick for
+/// the proof (blueprint/engine.md "Retirement").
 #[test]
 fn a_folder_delete_quarantines_a_descendant_for_a_converged_tick() {
     let world = FakeWorld::new();
@@ -3388,13 +3384,9 @@ fn a_delete_leaves_a_node_the_surviving_parent_still_names() {
     );
 }
 
-/// The quarantine is bounded on both axes. An unlinked node joins no eager set,
-/// so a rotation can leave a doomed descendant sealed at an epoch the gate
-/// refuses, for good. Without a ceiling that one entry holds its journal entry
-/// open and spends a proof slot on every pass, which starves every entry sorting
-/// behind it. Past the ceiling it drops unspent: the name stays registered and
-/// the content stays pinned, which is where the delete path stood before the
-/// proof existed.
+/// A descendant whose record no pass can establish never decides, so
+/// MAX_QUARANTINE_ATTEMPTS drops it unspent: the name stays registered and the
+/// content stays pinned.
 #[test]
 fn a_descendant_no_pass_can_establish_drops_out_of_the_quarantine() {
     let world = FakeWorld::new();

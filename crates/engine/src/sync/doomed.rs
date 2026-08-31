@@ -546,9 +546,11 @@ mod tests {
         );
 
         // And the same shapes planted directly in the store read as no journal.
+        // The CID bytes alone: the attempt count is the byte after them, and one
+        // planted field per case keeps the refusal pinned to the check it names.
         let mut planted = encode_reclamation(&sample()).expect("encode");
-        let at = planted.len() - cid(5).len() - 1;
-        planted[at..].fill(b'!');
+        let end = planted.len() - 1;
+        planted[end - cid(5).len()..end].fill(b'!');
         assert_eq!(decode_reclamation(&planted), None, "a planted debt target");
     }
 

@@ -1883,6 +1883,9 @@ where
         quarantined: &[Quarantined],
         budget: &mut usize,
     ) -> (Vec<Quarantined>, Vec<Quarantined>) {
+        if quarantined.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
         // One root read serves every proof this entry spends. A root this pass
         // cannot establish decides nothing: the whole quarantine waits rather
         // than settling against an epoch this pass never read.
