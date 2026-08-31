@@ -93,8 +93,8 @@ use crate::seams::{
 use crate::session::SessionIdentity;
 use crate::settings::{
     PlacementRefusal, PlacementSource, SessionPlacement, SettingsOrigin, SettingsPublishError,
-    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, placement_of,
-    publish_settings, summarize_settings,
+    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, load_settings_at,
+    placement_of, publish_settings, redecide_placement, settings_name, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -122,9 +122,9 @@ use crate::sync::staging::{
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, focus_files,
-    focus_folders, focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode,
-    run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
+    focus_files, focus_folders, focus_folders_due, focus_window_expired, on_access_refresh_due,
+    resolve_mode, run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2947,14 +2947,17 @@ pub struct Engine<T: SeamTypes> {
     /// carries the member's provider bearer.
     placement: Rc<RefCell<Option<SessionPlacement>>>,
     /// The host-visible summary of the settings this session loaded, refreshed
-    /// by a confirmed save. Redacted at construction
+    /// by a confirmed save and by the tick's re-decide. Redacted at construction
     /// ([`VaultSettings::summary`]), so the provider bearer never enters it.
-    settings_summary: RefCell<Option<VaultSettingsSummary>>,
+    /// Shared with the tick loop, which must never move the placement without
+    /// moving what the host is told the session writes under.
+    settings_summary: Rc<RefCell<Option<VaultSettingsSummary>>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
-    /// it — a saved settings change is the one event that re-arms it.
-    byo_reconciled: Cell<bool>,
+    /// it — a settings change this session adopts is the one event that re-arms
+    /// it, whether the member saved it here or on another device.
+    byo_reconciled: Rc<Cell<bool>>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
     /// publish/renew (no redundant 401→refresh). `None` until then.
@@ -3030,8 +3033,8 @@ impl<T: SeamTypes> Engine<T> {
                 sweep_tasks: RefCell::new(None),
                 sweep_keys: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
-                settings_summary: RefCell::new(None),
-                byo_reconciled: Cell::new(false),
+                settings_summary: Rc::new(RefCell::new(None)),
+                byo_reconciled: Rc::new(Cell::new(false)),
                 api: None,
                 started: false,
                 forgotten: false,
@@ -3825,6 +3828,14 @@ where {
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
         let placement = self.placement.clone();
+        let settings_summary = self.settings_summary.clone();
+        let byo_reconciled = self.byo_reconciled.clone();
+        // Non-secret: the published name, not the seed that derives it. Paired
+        // with the tick's own enc-subkey copy, this reaches the settings record
+        // without a second copy of the login secret in a `'static` task.
+        let settings_name = settings_name(session.login_secret());
+        // Start has just decided, so the first re-decide comes one interval on.
+        let settings_rechecked = Cell::new(self.seams.scheduler.now());
         let held = self.held_records.clone();
         let base = self.snapshot.clone();
         let events = self.events.clone();
@@ -3868,6 +3879,38 @@ where {
                     let Some(enc_subkey) = enc_subkey else {
                         return TickControl::Stop;
                     };
+                    let now = scheduler.now();
+                    // A member who revokes a provider, moves their endpoint, or
+                    // switches mode on another device must stop feeding the old
+                    // destination inside this interval — a session that never
+                    // re-decides keeps presenting a withdrawn credential to the
+                    // endpoint it was withdrawn from until the process restarts.
+                    if elapsed_at_least(
+                        now,
+                        settings_rechecked.get(),
+                        profile.settings_recheck_interval,
+                    ) {
+                        settings_rechecked.set(now);
+                        let load = load_settings_at(
+                            &transport,
+                            &gateway,
+                            &http,
+                            &floors,
+                            &snapshot_cache,
+                            &scheduler,
+                            &profile,
+                            &enc_subkey,
+                            &settings_name,
+                        )
+                        .await;
+                        if let Some(decided) = redecide_placement(&load) {
+                            *placement.borrow_mut() = Some(decided);
+                            *settings_summary.borrow_mut() = Some(summarize_settings(&load));
+                            // The account flag is latched per decision, so a
+                            // re-decide re-arms the reconcile a save re-arms.
+                            byo_reconciled.set(false);
+                        }
+                    }
                     // Carries the member's BYO bearer, so the pass owns a copy on the
                     // same terms as the enc subkey above.
                     let Some(SessionPlacement { decision, .. }) = placement.borrow().clone() else {
@@ -3876,7 +3919,6 @@ where {
                     // The polled pointer consult (#38 D4), ahead of the floor
                     // refresh below so a write epoch this pass sights evicts the
                     // seed it retired in the same pass.
-                    let now = scheduler.now();
                     // A manual refresh resolves nocache everywhere, so it
                     // consults every scope in the window rather than waiting out
                     // the interval the poll leg is paced by.

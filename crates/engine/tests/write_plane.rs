@@ -8415,6 +8415,86 @@ fn the_session_reconciles_the_accounts_byo_flag_to_the_vaulted_mode() {
     assert_eq!(byo_toggles(&bob), 0, "nothing to reconcile once they agree");
 }
 
+/// Ticks past the settings re-check interval, so a pass runs one re-decide.
+fn tick_past_the_settings_recheck(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) {
+    let profile = *engine.profile();
+    let passes = profile
+        .settings_recheck_interval
+        .div_duration_f64(profile.poll_cadence)
+        .ceil() as usize;
+    for _ in 0..=passes {
+        tick(world, engine, tasks);
+    }
+}
+
+/// The version blocks one node published, sorted and deduped — the set a
+/// placement assertion compares a destination against.
+fn version_blocks(device: &FakeDevice, engine: &Engine<FakeSeamTypes>, name: &str) -> Vec<String> {
+    let node = child_id(engine, ROOT, name);
+    let mut cids = registered_content_cids(device, &write_name(node));
+    cids.sort();
+    cids.dedup();
+    assert!(!cids.is_empty(), "{name} registered its version's blocks");
+    cids
+}
+
+/// A member who moves their bytes off a provider must stop feeding it inside a
+/// bounded window, not at the next process start. A desktop mount stays up for
+/// days: a session that never re-decides keeps placing every later block on the
+/// endpoint the member revoked, and keeps presenting the withdrawn credential
+/// to it.
+#[test]
+fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::External);
+
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_photo(&mut engine, "photo.bin");
+    tick(&world, &engine, &mut tasks);
+    let first = version_blocks(&alice, &engine, "photo.bin");
+    assert_eq!(
+        blocks.member_node_cids(),
+        first,
+        "the first version went to the member's own node"
+    );
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        first.iter().all(|cid| !hosted.contains(cid)),
+        "and not one byte of it to the hosted store"
+    );
+    assert!(blocks.advisory(), "the account follows the external mode");
+
+    // The member switches the account to hosted from another device. This
+    // session is never restarted.
+    seed_settings(&world, &alice, &blocks, PinMode::Hosted);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+
+    write_photo(&mut engine, "photo2.bin");
+    tick(&world, &engine, &mut tasks);
+    let second = version_blocks(&alice, &engine, "photo2.bin");
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        second.iter().all(|cid| hosted.contains(cid)),
+        "the next version takes the hosted path the live record names"
+    );
+    assert_eq!(
+        blocks.member_node_cids(),
+        first,
+        "and the revoked provider receives nothing further"
+    );
+    assert!(
+        !blocks.advisory(),
+        "the re-decide re-armed the account flag reconcile, as a save does"
+    );
+}
+
 /// The once-a-session guard latches on the reconcile *landing*, not on the
 /// attempt. The hosted ingress rejects a BYO account, so a flag left disagreeing
 /// by one transient PATCH failure would fail every hosted upload the session

@@ -69,6 +69,14 @@ pub struct SyncTimingProfile {
     /// yields the device's last-known-good settings, or the documented defaults
     /// where it has none (v1's 10 s, carried forward).
     pub settings_load_budget: Duration,
+    /// How often a running session re-loads the vault settings record to
+    /// re-decide its placement. Bounds what the re-decide costs: one record
+    /// resolve per interval, not one per poll tick. Coarser than
+    /// [`poll_cadence`] because it bounds a revocation window measured in
+    /// minutes, not the freshness of a folder listing.
+    ///
+    /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
+    pub settings_recheck_interval: Duration,
 }
 
 impl SyncTimingProfile {
@@ -93,6 +101,7 @@ impl SyncTimingProfile {
         migration_window: Duration::from_secs(7 * 24 * 60 * 60),
         preserved_dead_letter_ttl: Duration::from_secs(30 * 24 * 60 * 60),
         settings_load_budget: Duration::from_secs(10),
+        settings_recheck_interval: Duration::from_secs(300),
     };
 
     /// CI policy: record TTL 1–5 s (small but nonzero) and compressed
@@ -108,6 +117,7 @@ impl SyncTimingProfile {
         migration_window: Duration::from_secs(5),
         preserved_dead_letter_ttl: Duration::from_secs(60),
         settings_load_budget: Duration::from_secs(1),
+        settings_recheck_interval: Duration::from_secs(2),
     };
 }
 

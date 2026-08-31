@@ -812,9 +812,15 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
     make a routine credential rotation leave the version unpublishable.
     Residual: two accounts on one multi-tenant pin service tag alike, which
     only ever reaches the best-effort mirror report.
-  - The placement is decided once at start and holds for the session, so a
-    provider or credential revoked elsewhere still receives blocks until the
-    process restarts. Stated, not closed.
+  - **The placement is re-decided while the session runs**, on the resolve
+    tick and paced by `settings_recheck_interval`, so a provider or credential
+    revoked elsewhere stops receiving blocks inside that window rather than at
+    the next process start. Only a positively **resolved** record re-decides:
+    a degraded re-load is no evidence that the member changed anything, and
+    the unproven-first-run default resolves to `Hosted`, so honouring one
+    would widen a live `External` session onto the hosted store — the very
+    widening the settings-load policy above exists to prevent. A re-decide
+    that lands re-arms the account-flag reconcile exactly as a save does.
 - **A publish refuses settings no reader could place under** (AGENTS.md rule
   8): the produce path runs the consumer's own placement predicate, so a
   record naming a mode with no usable byte destination — an external leg with
