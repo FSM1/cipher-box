@@ -21,6 +21,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{
     Map, RedactedBytes, RedactedText, Value, decode, encode, encode_fixed_depth, encoded_len,
+    head_len,
 };
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::MAX_IPNS_NAME_BYTES;
@@ -48,6 +49,64 @@ const BIN_INDEX_SEAL_HEADROOM_BYTES: usize = 1024;
 /// is one published block, so the bound is the block ceiling less what the seal
 /// adds; entry counts follow from it rather than from a second number.
 pub const MAX_BIN_INDEX_BYTES: usize = MAX_BLOCK_BYTES - BIN_INDEX_SEAL_HEADROOM_BYTES;
+
+/// The frozen sizes every bin index plaintext pads up to, so the published
+/// ciphertext length discloses the rung and nothing finer (blueprint/core.md
+/// "Bin index"). Ascending, and topped by [`MAX_BIN_INDEX_BYTES`]. Scoped to
+/// [`BIN_INDEX_V`]: a reader refuses an off-rung length fail-closed, so a change
+/// to the ladder is a version bump.
+pub const BIN_INDEX_RUNGS: &[usize] = &[
+    4 * 1024,
+    16 * 1024,
+    64 * 1024,
+    256 * 1024,
+    1024 * 1024,
+    MAX_BIN_INDEX_BYTES,
+];
+
+/// The totals `head_len(n) + n` never takes, because the byte-string head steps
+/// width between them under the shortest-form rule. [`pad_len`] cannot land a
+/// body on a rung that sits exactly this far above it.
+const PAD_GAPS: [usize; 4] = [25, 258, 65539, 65540];
+
+/// The largest *unpadded* body a rung admits.
+///
+/// A rung cannot absorb a body that sits a [`PAD_GAPS`] distance below it, so
+/// the cap sits below the lowest such body. That is what makes the rung a body
+/// takes rise monotonically with the body: without it, one byte of growth can
+/// push a body over a gap and up a whole rung, and the 4x spike in the published
+/// length would disclose the body size to the byte — the very thing the padding
+/// exists to hide.
+const fn rung_cap(rung: usize) -> usize {
+    let mut largest = 0;
+    let mut i = 0;
+    while i < PAD_GAPS.len() {
+        if PAD_GAPS[i] <= rung && PAD_GAPS[i] > largest {
+            largest = PAD_GAPS[i];
+        }
+        i += 1;
+    }
+    rung - largest
+}
+
+/// The frozen bound on a bin index body *before* its pad. A body above it is
+/// refused; every body at or below it reaches a rung.
+pub const MAX_BIN_INDEX_BODY_BYTES: usize = rung_cap(MAX_BIN_INDEX_BYTES);
+
+const _: () = {
+    let mut i = 1;
+    while i < BIN_INDEX_RUNGS.len() {
+        // fit_rung takes the first rung at or above a body, so order is load-bearing.
+        assert!(BIN_INDEX_RUNGS[i - 1] < BIN_INDEX_RUNGS[i]);
+        i += 1;
+    }
+    assert!(BIN_INDEX_RUNGS[BIN_INDEX_RUNGS.len() - 1] == MAX_BIN_INDEX_BYTES);
+};
+
+/// The wire key holding the pad bytes. Known rather than preserved: a decode
+/// drops it and the next encode recomputes it, so a rewrite re-pads to the rung
+/// its own body needs.
+const PAD_KEY: &str = "pad";
 
 // ---------------------------------------------------------------------------
 // One bin entry.
@@ -218,7 +277,7 @@ pub struct BinIndex {
     pub unknown: PreservedFields,
 }
 
-const INDEX_KNOWN: &[&str] = &["entries", "revision"];
+const INDEX_KNOWN: &[&str] = &["entries", PAD_KEY, "revision"];
 
 impl BinIndex {
     /// An empty index at `revision` — what a cold start with no published
@@ -257,9 +316,15 @@ impl BinIndex {
 /// symmetric with [`encode_bin_index`]).
 pub fn decode_bin_index(bytes: &[u8]) -> Result<BinIndex, CodecError> {
     assert_within_bound(BIN_INDEX_SIZE_CHECK, bytes.len(), MAX_BIN_INDEX_BYTES)?;
+    if !BIN_INDEX_RUNGS.contains(&bytes.len()) {
+        return Err(TrustViolation::NonCanonicalPadding.into());
+    }
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
 
+    if req(map, PAD_KEY)?.as_bytes()?.iter().any(|b| *b != 0) {
+        return Err(TrustViolation::NonCanonicalPadding.into());
+    }
     let items = req(map, "entries")?.as_array()?;
     let mut entries = Vec::with_capacity(items.len());
     for item in items {
@@ -285,19 +350,73 @@ pub fn encode_bin_index(index: &BinIndex) -> Result<Vec<u8>, CodecError> {
         "entries",
         Value::Array(index.entries.iter().map(BinEntry::to_value).collect()),
     );
+    m.insert(PAD_KEY, Value::Bytes(Vec::new()));
     m.insert("revision", Value::Unsigned(index.revision));
     merge_unknown(&mut m, &index.unknown);
 
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
-    // Measured rather than encoded first: an over-bound body never materializes
-    // the plaintext buffer it would only be refused and wiped for.
-    assert_within_bound(
-        BIN_INDEX_SIZE_CHECK,
-        encoded_len(guard.0)?,
-        MAX_BIN_INDEX_BYTES,
-    )?;
-    encode(guard.0)
+    // Measured rather than encoded first: a body no rung admits never
+    // materializes the plaintext buffer it would only be refused and wiped for.
+    let bare = encoded_len(guard.0)?;
+    let (rung, pad) = match fit_rung(bare) {
+        Some(fit) => fit,
+        None => {
+            return Err(Malformed::TooManyStructures {
+                collection: BIN_INDEX_SIZE_CHECK,
+                count: bare,
+                limit: MAX_BIN_INDEX_BODY_BYTES,
+            }
+            .into());
+        }
+    };
+    if let Value::Map(map) = &mut *guard.0 {
+        map.insert(PAD_KEY, Value::Bytes(vec![0; pad]));
+    }
+
+    let mut bytes = encode(guard.0)?;
+    // The encode-side mirror of the decode's rung check (AGENTS.md rule 8). A
+    // self-check on this build's own arithmetic, never a verdict on remote
+    // bytes. The buffer carries every `heldKey`, and only the success path hands
+    // the wipe to a caller, so this arm is its terminal owner.
+    if bytes.len() != rung {
+        bytes.zeroize();
+        return Err(TrustViolation::NonCanonicalPadding.into());
+    }
+    Ok(bytes)
+}
+
+/// The rung a body measured at `bare` pads onto, and the pad byte count that
+/// lands it there exactly. `None` when no rung admits the body.
+///
+/// The smallest rung whose [`rung_cap`] admits the body, so the result rises
+/// monotonically with `bare`.
+///
+/// `#[doc(hidden)]`: `pub` only for the `kat_gen` example, which pads the
+/// deliberately malformed bodies its reject vectors need and cannot go through
+/// [`encode_bin_index`] to do it. Not supported API.
+#[doc(hidden)]
+pub fn fit_rung(bare: usize) -> Option<(usize, usize)> {
+    let rung = BIN_INDEX_RUNGS
+        .iter()
+        .copied()
+        .find(|rung| bare <= rung_cap(*rung))?;
+    pad_len(bare, rung).map(|pad| (rung, pad))
+}
+
+/// The pad byte count that takes a body measured at `bare` — with `pad` present
+/// and empty — to exactly `rung`.
+///
+/// Growing the pad by `n` bytes grows the body by `n` plus the byte-string
+/// head's own growth, and that head is a step function under the shortest-form
+/// rule, so this solves for the one head width that lands the total on the rung.
+fn pad_len(bare: usize, rung: usize) -> Option<usize> {
+    let room = rung.checked_sub(bare)? + head_len(0);
+    [1usize, 2, 3, 5, 9]
+        .into_iter()
+        .filter_map(|width| room.checked_sub(width).map(|n| (width, n)))
+        .find(|(width, n)| head_len(*n as u64) == *width)
+        .map(|(_, n)| n)
 }
 
 /// The collection label the total-size refusal reports.
@@ -421,6 +540,20 @@ mod tests {
         encode(&Value::Map(map)).unwrap()
     }
 
+    /// A hand-built body padded to its rung, so a decode reaches the grammar
+    /// check under test rather than the padding check in front of it.
+    fn padded_body(mut m: Map) -> Vec<u8> {
+        m.insert(PAD_KEY, Value::Bytes(Vec::new()));
+        let mut value = Value::Map(m);
+        let bare = encoded_len(&value).unwrap();
+        let (_, pad) = fit_rung(bare).unwrap();
+        match &mut value {
+            Value::Map(map) => map.insert(PAD_KEY, Value::Bytes(vec![0; pad])),
+            _ => unreachable!(),
+        }
+        encode(&value).unwrap()
+    }
+
     #[test]
     fn an_index_round_trips_with_every_field_preserved() {
         let index = populated();
@@ -528,9 +661,8 @@ mod tests {
         let mut m = Map::new();
         m.insert("entries", Value::Array(vec![one.clone(), one]));
         m.insert("revision", Value::Unsigned(1));
-        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
-            decode_bin_index(&bytes).unwrap_err().check(),
+            decode_bin_index(&padded_body(m)).unwrap_err().check(),
             "duplicate-id"
         );
     }
@@ -540,7 +672,7 @@ mod tests {
         let mut index = BinIndex::new(1);
         index.entries.push(entry(1));
         index.unknown = core::iter::once((
-            "pad".to_string(),
+            "filler".to_string(),
             Value::Bytes(vec![0; MAX_BIN_INDEX_BYTES]),
         ))
         .collect();
@@ -552,7 +684,7 @@ mod tests {
         // The same body framed past the encoder: decode must refuse it too.
         let mut m = Map::new();
         m.insert("entries", Value::Array(vec![entry(1).to_value()]));
-        m.insert("pad", Value::Bytes(vec![0; MAX_BIN_INDEX_BYTES]));
+        m.insert("filler", Value::Bytes(vec![0; MAX_BIN_INDEX_BYTES]));
         m.insert("revision", Value::Unsigned(1));
         let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
@@ -576,9 +708,8 @@ mod tests {
         let mut m = Map::new();
         m.insert("entries", Value::Array(vec![framed]));
         m.insert("revision", Value::Unsigned(1));
-        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
-            decode_bin_index(&bytes).unwrap_err().check(),
+            decode_bin_index(&padded_body(m)).unwrap_err().check(),
             "too-many-structures"
         );
     }
@@ -607,7 +738,7 @@ mod tests {
         m.insert("entries", Value::Array(vec![Value::Map(entry_map)]));
         m.insert("futureTop", Value::Text("x".to_string()));
         m.insert("revision", Value::Unsigned(3));
-        let bytes = encode(&Value::Map(m)).unwrap();
+        let bytes = padded_body(m);
 
         let index = decode_bin_index(&bytes).unwrap();
         assert_eq!(
@@ -663,6 +794,171 @@ mod tests {
         }
     }
 
+    /// The privacy claim: two indexes whose entry counts differ inside one rung
+    /// seal to records of equal length, so the ciphertext discloses the rung and
+    /// nothing finer.
+    #[test]
+    fn bodies_on_one_rung_seal_to_equal_lengths() {
+        let with = |count: usize| {
+            let mut index = BinIndex::new(4);
+            for seed in 1..=count {
+                index.entries.push(entry(seed as u8));
+            }
+            index
+        };
+        for count in 0..=2 {
+            assert_eq!(
+                encode_bin_index(&with(count)).unwrap().len(),
+                BIN_INDEX_RUNGS[0],
+                "{count} entries must pad to the first rung",
+            );
+        }
+
+        let key = [4u8; KEY_LEN];
+        assert_eq!(
+            seal_bin_index(&key, &[1; NONCE_LEN], &with(0))
+                .unwrap()
+                .len(),
+            seal_bin_index(&key, &[2; NONCE_LEN], &with(2))
+                .unwrap()
+                .len(),
+            "the record length must not track the entry count",
+        );
+    }
+
+    /// The property the rung caps exist for. Without them a body that grows one
+    /// byte over a head-step gap climbs a whole rung, and the 4x jump in the
+    /// published length names the body size to the byte.
+    #[test]
+    fn the_rung_a_body_takes_never_falls_as_it_grows() {
+        let build = |fill: usize| {
+            let mut index = BinIndex::new(9);
+            let mut e = entry(1);
+            e.origin_name = "x".repeat(fill);
+            index.entries.push(e);
+            index
+        };
+        let mut last = 0usize;
+        for fill in 0..(BIN_INDEX_RUNGS[0] + 600) {
+            let len = encode_bin_index(&build(fill)).unwrap().len();
+            assert!(
+                len >= last,
+                "one more byte of body shrank the record at fill={fill}",
+            );
+            last = len;
+        }
+        assert_eq!(last, BIN_INDEX_RUNGS[1], "the walk must cross one rung");
+    }
+
+    /// [`PAD_GAPS`] is a hand-written constant that the caps derive from, so it
+    /// is pinned against the head widths rather than trusted.
+    #[test]
+    fn the_pad_gaps_are_exactly_the_unreachable_totals() {
+        let ceiling = PAD_GAPS[PAD_GAPS.len() - 1] + 8;
+        let reachable: BTreeSet<usize> = (0..ceiling)
+            .map(|n| head_len(n as u64) + n)
+            .filter(|room| *room < ceiling)
+            .collect();
+        let gaps: Vec<usize> = (1..ceiling).filter(|r| !reachable.contains(r)).collect();
+        assert_eq!(gaps, PAD_GAPS, "the head-step gaps moved");
+    }
+
+    /// Every rung cap is reachable, and a body one byte past it climbs exactly
+    /// one rung. The caps are what the ladder promises, not the raw rung sizes.
+    #[test]
+    fn a_body_at_a_rung_cap_pads_and_one_past_it_climbs() {
+        for pair in BIN_INDEX_RUNGS.windows(2) {
+            let (rung, next) = (pair[0], pair[1]);
+            let cap = rung_cap(rung);
+            assert_eq!(fit_rung(cap).map(|(r, _)| r), Some(rung));
+            assert_eq!(fit_rung(cap + 1).map(|(r, _)| r), Some(next));
+        }
+        assert_eq!(fit_rung(MAX_BIN_INDEX_BODY_BYTES + 1), None);
+    }
+
+    /// The decoder tests rung membership, not minimality: an over-padded body
+    /// opens, and the rewrite pads it back down. Checking minimality would make
+    /// every later encoder change a hard break.
+    #[test]
+    fn a_body_padded_to_a_larger_rung_opens_and_re_pads_down() {
+        let index = populated();
+        let bytes = encode_bin_index(&index).unwrap();
+        assert_eq!(bytes.len(), BIN_INDEX_RUNGS[0]);
+
+        let decoded = decode(&bytes).unwrap();
+        let mut m = decoded.as_map().unwrap().clone();
+        let pad = m.get(PAD_KEY).unwrap().as_bytes().unwrap().len();
+        m.insert(
+            PAD_KEY,
+            Value::Bytes(vec![0; pad + BIN_INDEX_RUNGS[1] - BIN_INDEX_RUNGS[0]]),
+        );
+        let over = encode(&Value::Map(m)).unwrap();
+        assert_eq!(over.len(), BIN_INDEX_RUNGS[1]);
+
+        let reopened = decode_bin_index(&over).unwrap();
+        assert_eq!(reopened, index);
+        assert_eq!(
+            encode_bin_index(&reopened).unwrap().len(),
+            BIN_INDEX_RUNGS[0],
+            "a rewrite must fall back to the rung the body needs",
+        );
+    }
+
+    #[test]
+    fn an_off_rung_length_is_refused() {
+        let bytes = encode_bin_index(&populated()).unwrap();
+        let decoded = decode(&bytes).unwrap();
+        let mut m = decoded.as_map().unwrap().clone();
+        let pad = m.get(PAD_KEY).unwrap().as_bytes().unwrap().len();
+        m.insert(PAD_KEY, Value::Bytes(vec![0; pad - 1]));
+        assert_eq!(
+            decode_bin_index(&encode(&Value::Map(m)).unwrap())
+                .unwrap_err()
+                .check(),
+            "non-canonical-padding"
+        );
+    }
+
+    #[test]
+    fn a_non_zero_pad_byte_is_refused() {
+        let bytes = encode_bin_index(&populated()).unwrap();
+        let decoded = decode(&bytes).unwrap();
+        let mut m = decoded.as_map().unwrap().clone();
+        let mut pad = m.get(PAD_KEY).unwrap().as_bytes().unwrap().to_vec();
+        pad[0] = 1;
+        m.insert(PAD_KEY, Value::Bytes(pad));
+        assert_eq!(
+            decode_bin_index(&encode(&Value::Map(m)).unwrap())
+                .unwrap_err()
+                .check(),
+            "non-canonical-padding"
+        );
+    }
+
+    #[test]
+    fn a_missing_pad_field_is_malformed() {
+        let bytes = encode_bin_index(&populated()).unwrap();
+        let decoded = decode(&bytes).unwrap();
+        let mut m = decoded.as_map().unwrap().clone();
+        let pad = m.get(PAD_KEY).unwrap().as_bytes().unwrap().len();
+        m.remove(PAD_KEY);
+        // Keep the body on its rung through an unknown field of the same key
+        // width and size, so the length check cannot fire before this one.
+        m.insert("zzz", Value::Bytes(vec![0; pad]));
+        assert_eq!(
+            decode_bin_index(&encode(&Value::Map(m)).unwrap())
+                .unwrap_err()
+                .check(),
+            "missing-field"
+        );
+    }
+
+    #[test]
+    fn the_pad_never_survives_into_the_preserved_set() {
+        let index = decode_bin_index(&encode_bin_index(&populated()).unwrap()).unwrap();
+        assert!(index.unknown.is_empty());
+    }
+
     #[test]
     fn an_over_bound_record_never_reaches_the_decoder() {
         let over = vec![0u8; MAX_BLOCK_BYTES + 1];
@@ -693,9 +989,8 @@ mod tests {
         let mut m = Map::new();
         m.insert("entries", Value::Array(vec![Value::Map(entry_map)]));
         m.insert("revision", Value::Unsigned(1));
-        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
-            decode_bin_index(&bytes).unwrap_err().check(),
+            decode_bin_index(&padded_body(m)).unwrap_err().check(),
             "invalid-field-length"
         );
     }
@@ -707,9 +1002,8 @@ mod tests {
         let mut m = Map::new();
         m.insert("entries", Value::Array(vec![Value::Map(entry_map)]));
         m.insert("revision", Value::Unsigned(1));
-        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
-            decode_bin_index(&bytes).unwrap_err().check(),
+            decode_bin_index(&padded_body(m)).unwrap_err().check(),
             "invalid-node-kind"
         );
     }

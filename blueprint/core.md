@@ -493,23 +493,76 @@ HPKE-to-self. Its clear header is two keys, `v` and `sealed`, frozen across
 format versions; the version is bound into the AAD
 `[cipherbox/v2/aad, v, 0x0f]`, so rewriting the clear copy fails the tag.
 
-The body is `{entries[], revision}`. Each entry carries `nodeId`, `ipnsName`,
-`kind`, `originParent`, `originName`, `deletedAt`, `scopeId`, and an optional
-`heldKey`. `ipnsName` is the only remaining route to a record no folder names,
-and `heldKey` is present only when the delete re-keyed the doomed subtree out of
-a shared scope's derivation. `revision` is what the floor law orders two records
-by when the outer IPNS sequence cannot tell them apart. Duplicate `nodeId` is
-fail-closed at decode: two entries for one node would let restore and purge pick
-a winner by position.
+The body is `{entries[], pad, revision}`. Each entry carries `nodeId`,
+`ipnsName`, `kind`, `originParent`, `originName`, `deletedAt`, `scopeId`, and an
+optional `heldKey`. `ipnsName` is the only remaining route to a record no folder
+names, and `heldKey` is present only when the delete re-keyed the doomed subtree
+out of a shared scope's derivation. `revision` is what the floor law orders two
+records by when the outer IPNS sequence cannot tell them apart. Duplicate
+`nodeId` is fail-closed at decode: two entries for one node would let restore and
+purge pick a winner by position.
 
-The KAT set is `bin_index_accept` (an empty and a populated index, each
-reproducing its exact plaintext and record from a fixed seal key and nonce, then
-opening) and `bin_index_reject` (tampered ciphertext, a foreign seal key, a
-**structure-tag transplant** of the same plaintext under the read-body tag, a
-tampered nonce prefix, a duplicate `nodeId`, a short sealed blob, a wrong-length
-`heldKey`, a missing `originParent`, a missing `sealed` and a missing `v`, an
-unrecognised `kind`, an over-bound `ipnsName`, a forward `v`, and an unknown
-clear-header field). Each vector that seals a distinct plaintext gets its own
+**The body pads to a fixed rung before the seal.** The record is published, so
+its ciphertext length is server-visible, and an unpadded body would disclose the
+soft-delete count to within one entry and — because a `heldKey` is present only
+after a shared-scope re-key — the share of those deletes that came from a shared
+scope. That is a sharing-activity count, not a size. The rungs are 4 KiB,
+16 KiB, 64 KiB, 256 KiB, 1 MiB, and the block ceiling less the seal, so the
+ladder steps by 4x until the last rung, which the block ceiling cuts short. It
+starts at 4 KiB, which holds roughly two dozen entries at the ~170 bytes a
+populated entry costs: a floor that already covers the great majority of vaults,
+against a cost paid on every publish and every 90-day re-PUT. Its top rung is the
+largest body a published block admits, so a body no rung takes is refused rather
+than published unpadded.
+
+Each rung admits bodies only up to its **cap**, which sits below the rung by the
+largest distance the pad cannot span. Where the CBOR byte-string head steps
+width, a handful of totals are unreachable, and without the caps a body that grew
+one byte across such a gap would climb a whole rung. That 4x jump in the
+published length would name the body size to the byte — worse than the bounded
+leak the padding closes, and steerable by a write grantee, who chooses the file
+names that become `originName`. The caps make the rung a body takes rise
+monotonically with the body, which is the property the KAT walks.
+
+`pad` is schema, not payload: a decode drops it rather than preserving it, so a
+rewrite re-pads to the rung its own body needs. Both halves of the padded form
+are fail-closed and symmetric across encode and decode — a plaintext whose length
+is off every rung, and a `pad` byte that is not zero, are both
+`non-canonical-padding`, a trust violation. The zero rule is what makes the
+padded form canonical and deterministic, which the fixed-parameter KAT regime
+needs; it is also fail-safe, because an unwiped buffer could otherwise carry
+`heldKey` bytes into a published record. The decoder tests rung membership, not
+minimality: an over-padded body opens and the next rewrite pads it back down, so
+a later encoder change is not a hard break.
+
+The ladder is scoped to the record version. A reader refuses an off-rung length
+as a trust violation, not as an unsupported version, so **any change to the rungs
+is a `BIN_INDEX_V` bump** — otherwise an older client reads a newer record as
+tampering.
+
+Three channels the padding does not close, stated so the freeze does not imply
+otherwise. The bin record's IPNS **sequence** is signed cleartext, so one resolve
+bounds the number of bin publishes the owner ever made — a cumulative count along
+the same axis as the one the pad hides. A bin publish that **coincides** with a
+scope-side republish marks that delete as a shared-scope delete, which is the bit
+`heldKey` presence used to leak through the length. And the record's **existence**
+says the bin is non-empty, so the client publishes an empty bin index at vault
+genesis whatever the retention setting. Mitigating the first two is engine work:
+a fresh nonce per seal makes a no-op republish byte-indistinguishable from a real
+edit, so a decoy publish blunts both.
+
+The KAT set is `bin_index_accept` (an empty index, a populated one, and the two
+**rung edges** — a body at the first rung's cap and the one character more that
+climbs to the second — each reproducing its exact plaintext
+and record from a fixed seal key and nonce, then opening) and `bin_index_reject`
+(tampered ciphertext, a foreign seal key, a **structure-tag transplant** of the
+same plaintext under the read-body tag, a tampered nonce prefix, an off-rung
+length, a non-zero pad byte, a missing `pad`, a duplicate `nodeId`, a short
+sealed blob, a wrong-length `heldKey`, a missing `originParent`, a missing
+`sealed` and a missing `v`, an unrecognised `kind`, an over-bound `ipnsName`, a
+forward `v`, and an unknown clear-header field). The accept family also asserts
+the property the padding buys: two bodies on one rung seal to records of one
+length, whatever their entry counts. Each vector that seals a distinct plaintext gets its own
 nonce, so the corpus models the nonce rule the seal path states rather than the
 reuse it forbids.
 
@@ -557,7 +610,9 @@ the bin index, on every device, seals under it, and two devices publish that
 record concurrently under one CAS guard. Each seal's nonce must therefore be
 drawn from a CSPRNG: a counter or a `revision`-derived nonce is unique on one
 device and collides across two, and reuse discloses every held key the two
-bodies carry.
+bodies carry. The padding raises that stake: most of a padded plaintext is known
+zeros at a known offset, so a colliding pair yields raw keystream and decrypts
+the other body outright rather than leaving an XOR to separate.
 
 Non-edges, stated to stay non-edges: content keys (random per version), and
 every scope seed a rotation or a grant cut mints (random). The genesis pair is

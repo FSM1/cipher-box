@@ -626,16 +626,26 @@
     "structTag": 15,
     "v": 1,
     "maxBytes": 2096128,
+    "bodyMaxBytes": 2030588,
+    "rungs": [
+      4096,
+      16384,
+      65536,
+      262144,
+      1048576,
+      2096128
+    ],
     "accept": {
       "file": "vectors/bin_index/bin_index_accept.json",
-      "count": 2
+      "count": 4
     },
     "reject": {
       "file": "vectors/bin_index/bin_index_reject.json",
-      "count": 14,
+      "count": 17,
       "checks": [
         "seal-open-failed",
         "duplicate-id",
+        "non-canonical-padding",
         "truncated",
         "too-many-structures",
         "missing-field",

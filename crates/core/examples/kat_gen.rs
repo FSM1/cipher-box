@@ -22,7 +22,7 @@ use std::path::Path;
 
 use cipherbox_core::codec::{
     MAX_DEPTH, Map, Value, decode, decode_map_partial, encode, encode_fixed_depth,
-    encode_map_partial,
+    encode_map_partial, encoded_len,
 };
 use cipherbox_core::content::{
     CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, decode_content_cid_str,
@@ -34,29 +34,30 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, AscentLink, BIN_INDEX_V, BinEntry, BinIndex,
+    self, AAD_DOMAIN, AadContext, AscentLink, BIN_INDEX_RUNGS, BIN_INDEX_V, BinEntry, BinIndex,
     CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, CRITICAL_KEY_PREFIX, ChildRef, ChildScopeRef,
     GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment,
-    GrantSetEntry, HistoryLinkPayload, MAX_BIN_INDEX_BYTES, MAX_BLOCK_BYTES,
-    MAX_CRITICAL_CARRIED_BYTES, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS, MAX_GRANT_SECTION_BYTES,
-    MAX_READ_SEALED_BYTES, MAX_WRITE_BODY_BYTES, MAX_WRITE_HISTORY_LINK_BYTES, NodeKind,
-    OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader,
-    OverrideSeedPayload, OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission,
-    PreservedFields, READ_SEALED_ENVELOPE_HEADROOM_BYTES, ReadBody, SETTINGS_RECORD_HPKE_INFO,
-    SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_BIN_INDEX, STRUCT_TAG_CONTENT_KEY,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
-    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
-    STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, SettingsRecordHeader,
-    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput,
-    UNCUTTABLE_KEYS, Version, WRITE_BODY_RESEAL_HEADROOM_BYTES, WriteBody, ascent_link_sig_body,
-    bin_index_aad, build_aad, content_key_aad, decode_ascent_link, decode_bin_index,
-    decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
-    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
-    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
-    encode_bin_index, encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
-    encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
-    encode_read_body, encode_recipient_binding, encode_write_body, op_record_aad, open_ascent_link,
+    GrantSetEntry, HistoryLinkPayload, MAX_BIN_INDEX_BODY_BYTES, MAX_BIN_INDEX_BYTES,
+    MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS,
+    MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES, MAX_WRITE_BODY_BYTES,
+    MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader, OverrideSeedPayload,
+    OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission, PreservedFields,
+    READ_SEALED_ENVELOPE_HEADROOM_BYTES, ReadBody, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_BIN_INDEX, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL, STRUCT_TAG_OWNER_WRITE_BLOB,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY,
+    STRUCT_TAG_WRITE_HISTORY_LINK, STRUCT_TAGS, SettingsRecordHeader, SignedAscentLink,
+    SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, UNCUTTABLE_KEYS, Version,
+    WRITE_BODY_RESEAL_HEADROOM_BYTES, WriteBody, ascent_link_sig_body, bin_index_aad, build_aad,
+    content_key_aad, decode_ascent_link, decode_bin_index, decode_envelope,
+    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_bin_index, encode_envelope,
+    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
+    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
+    encode_recipient_binding, encode_write_body, fit_rung, op_record_aad, open_ascent_link,
     open_bin_index, open_content_key, open_grant_blob, open_history_link, open_op_record,
     open_owner_blob, open_owner_history_link, open_owner_local, open_owner_write_blob,
     open_read_body, open_settings_record, owner_local_aad, seal_ascent_link, seal_bin_index,
@@ -259,6 +260,8 @@ struct BinIndexSection {
     struct_tag: u8,
     v: u64,
     max_bytes: usize,
+    body_max_bytes: usize,
+    rungs: Vec<usize>,
     accept: FileCount,
     reject: RejectSection,
 }
@@ -2468,6 +2471,8 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
             struct_tag: STRUCT_TAG_BIN_INDEX,
             v: BIN_INDEX_V,
             max_bytes: MAX_BIN_INDEX_BYTES,
+            body_max_bytes: MAX_BIN_INDEX_BODY_BYTES,
+            rungs: BIN_INDEX_RUNGS.to_vec(),
             accept: FileCount {
                 file: "vectors/bin_index/bin_index_accept.json".to_string(),
                 count: m.bin_index_accept.len(),
@@ -8053,16 +8058,31 @@ fn bin_edited_entry(edit: impl FnOnce(&mut Map)) -> Value {
     Value::Map(entry)
 }
 
+/// Re-pad an edited body onto its rung, through core's own solver.
+///
+/// An edit moves the body off the rung the live encoder chose, and the length
+/// check sits in front of the grammar, so a reject vector that skipped this
+/// would pin the padding refusal rather than the check it names.
+fn repad_bin_body(body: &Map) -> Vec<u8> {
+    let mut m = body.clone();
+    m.insert("pad", Value::Bytes(Vec::new()));
+    let value = Value::Map(m);
+    let (_, pad) = fit_rung(encoded_len(&value).expect("bin body measures"))
+        .expect("no bin index rung admits this body");
+    let mut m = match value {
+        Value::Map(m) => m,
+        _ => unreachable!(),
+    };
+    m.insert("pad", Value::Bytes(vec![0; pad]));
+    encode(&Value::Map(m)).expect("bin body re-encodes")
+}
+
 /// A record whose body carries `entries` — bodies the encoder refuses to emit,
 /// sealed correctly so the grammar decoder is what refuses them.
 fn bin_reject_body(nonce: &[u8; NONCE_LEN], entries: Vec<Value>) -> Vec<u8> {
     let mut body = bin_probe_body();
     body.insert("entries", Value::Array(entries));
-    framed_bin_record(
-        nonce,
-        &bin_index_aad(BIN_INDEX_V),
-        &encode(&Value::Map(body)).expect("bin reject body re-encodes"),
-    )
+    framed_bin_record(nonce, &bin_index_aad(BIN_INDEX_V), &repad_bin_body(&body))
 }
 
 /// The `n`-th reject nonce. One seal key covers this whole family, so every
@@ -8070,6 +8090,43 @@ fn bin_reject_body(nonce: &[u8; NONCE_LEN], entries: Vec<Value>) -> Vec<u8> {
 /// `seal_bin_index` states, not the reuse it forbids.
 fn bin_reject_nonce(n: u8) -> [u8; NONCE_LEN] {
     std::array::from_fn(|i| (0x71 + i) as u8 ^ (n << 4))
+}
+
+/// A one-entry index whose `originName` carries `fill` filler characters — the
+/// dial the rung-edge vectors turn.
+fn bin_index_of_width(fill: usize) -> BinIndex {
+    let mut index = BinIndex::new(9);
+    index.entries.push(BinEntry::new(
+        [0x0a; 16],
+        b"k51qedge".to_vec(),
+        NodeKind::File,
+        [0x1a; 16],
+        "e".repeat(fill),
+        1_764_000_099_000,
+        [0x2a; 16],
+        None,
+    ));
+    index
+}
+
+/// The largest filler width whose body still pads onto the first rung. The two
+/// rung-edge vectors bracket it, so they pin the step rather than its interior.
+fn bin_first_rung_edge() -> usize {
+    let padded = |fill: usize| {
+        encode_bin_index(&bin_index_of_width(fill))
+            .expect("a rung-edge body encodes")
+            .len()
+    };
+    // One filler character costs one byte, so the pad an empty body carries is
+    // the distance to the edge. Walk the last few bytes for the head-width step.
+    let mut fill = BIN_INDEX_RUNGS[0] - encode_bin_index(&bin_index_of_width(0)).unwrap().len();
+    while padded(fill) != BIN_INDEX_RUNGS[0] {
+        fill -= 1;
+    }
+    while padded(fill + 1) == BIN_INDEX_RUNGS[0] {
+        fill += 1;
+    }
+    fill
 }
 
 fn build_bin_index_accept() -> Vec<BinIndexAcceptVector> {
@@ -8082,6 +8139,7 @@ fn build_bin_index_accept() -> Vec<BinIndexAcceptVector> {
         .entries
         .push(bin_entry(0x02, NodeKind::Folder, false));
 
+    let edge = bin_first_rung_edge();
     vec![
         bin_index_accept_vector(
             "empty-index",
@@ -8092,6 +8150,16 @@ fn build_bin_index_accept() -> Vec<BinIndexAcceptVector> {
             "populated-index",
             std::array::from_fn(|i| (0x31 + i) as u8),
             &populated,
+        ),
+        bin_index_accept_vector(
+            "rung-edge-fills-first-rung",
+            std::array::from_fn(|i| (0xb1 + i) as u8),
+            &bin_index_of_width(edge),
+        ),
+        bin_index_accept_vector(
+            "rung-edge-climbs-to-second-rung",
+            std::array::from_fn(|i| (0xd1 + i) as u8),
+            &bin_index_of_width(edge + 1),
         ),
     ]
 }
@@ -8185,6 +8253,47 @@ fn build_bin_index_reject() -> Vec<BinIndexRejectVector> {
         &encode_bin_index(&index).unwrap(),
     );
 
+    // Padding refusals: the rung length and the all-zero pad are the canonical
+    // form, so an edit to either must fail closed before the grammar runs.
+    let probe_body = bin_probe_body();
+    let probe_pad = probe_body
+        .get("pad")
+        .and_then(|p| p.as_bytes().ok())
+        .expect("the encoder pads every body")
+        .len();
+    let off_rung_length = {
+        let mut body = probe_body.clone();
+        body.insert("pad", Value::Bytes(vec![0; probe_pad - 1]));
+        framed_bin_record(
+            &bin_reject_nonce(7),
+            &bin_index_aad(BIN_INDEX_V),
+            &encode(&Value::Map(body)).unwrap(),
+        )
+    };
+    let non_zero_pad = {
+        let mut body = probe_body.clone();
+        let mut pad = vec![0u8; probe_pad];
+        pad[0] = 1;
+        body.insert("pad", Value::Bytes(pad));
+        framed_bin_record(
+            &bin_reject_nonce(8),
+            &bin_index_aad(BIN_INDEX_V),
+            &encode(&Value::Map(body)).unwrap(),
+        )
+    };
+    // A three-character key of the same width keeps the body on its rung, so
+    // the length check cannot fire in front of the missing-field one.
+    let missing_pad = {
+        let mut body = probe_body.clone();
+        body.remove("pad");
+        body.insert("zzz", Value::Bytes(vec![0; probe_pad]));
+        framed_bin_record(
+            &bin_reject_nonce(9),
+            &bin_index_aad(BIN_INDEX_V),
+            &encode(&Value::Map(body)).unwrap(),
+        )
+    };
+
     let one = bin_edited_entry(|_| {});
     let duplicate_node_id = bin_reject_body(&bin_reject_nonce(2), vec![one.clone(), one]);
     let short_held_key = bin_reject_body(
@@ -8253,6 +8362,27 @@ fn build_bin_index_reject() -> Vec<BinIndexRejectVector> {
             &duplicate_node_id,
             "duplicate-id",
             "trust",
+        ),
+        bin_index_reject_vector(
+            "off-rung-length",
+            key,
+            &off_rung_length,
+            "non-canonical-padding",
+            "trust",
+        ),
+        bin_index_reject_vector(
+            "non-zero-pad",
+            key,
+            &non_zero_pad,
+            "non-canonical-padding",
+            "trust",
+        ),
+        bin_index_reject_vector(
+            "missing-pad",
+            key,
+            &missing_pad,
+            "missing-field",
+            "malformed",
         ),
         bin_index_reject_vector("short-sealed", key, &short_sealed, "truncated", "malformed"),
         bin_index_reject_vector(

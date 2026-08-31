@@ -31,10 +31,10 @@ use cipherbox_core::payload::pointer::{
     RepointObject, open_pointer_payload, repoint_preimage, seal_pointer_payload,
 };
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, BIN_INDEX_V, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V,
-    CRITICAL_KEY_PREFIX, GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry,
-    GrantSetCommitment, GrantSetEntry, MAX_BIN_INDEX_BYTES, MAX_BLOCK_BYTES,
-    MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
+    self, AAD_DOMAIN, AadContext, BIN_INDEX_RUNGS, BIN_INDEX_V, CONTENT_KEY_HPKE_INFO,
+    CONTENT_KEY_V, CRITICAL_KEY_PREFIX, GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry,
+    GrantSetCommitment, GrantSetEntry, MAX_BIN_INDEX_BODY_BYTES, MAX_BIN_INDEX_BYTES,
+    MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
     MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX,
     OWNER_LOCAL_V, OwnerLocalKind, Permission, PreservedFields,
     READ_SEALED_ENVELOPE_HEADROOM_BYTES, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
@@ -343,6 +343,8 @@ struct BinIndexManifest {
     struct_tag: u8,
     v: u64,
     max_bytes: usize,
+    body_max_bytes: usize,
+    rungs: Vec<usize>,
     accept: FileCount,
     reject: RejectSection,
 }
@@ -4591,6 +4593,11 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
     assert_eq!(m.bin_index.struct_tag, STRUCT_TAG_BIN_INDEX);
     assert_eq!(m.bin_index.v, BIN_INDEX_V);
     assert_eq!(m.bin_index.max_bytes, MAX_BIN_INDEX_BYTES);
+    assert_eq!(
+        m.bin_index.rungs, BIN_INDEX_RUNGS,
+        "the frozen rung ladder must match the crate"
+    );
+    assert_eq!(m.bin_index.body_max_bytes, MAX_BIN_INDEX_BODY_BYTES);
 
     let vectors = bin_index_accept_vectors(&m);
     assert_eq!(
@@ -4604,6 +4611,7 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
     // ephemeral-freshness check.
     let mut nonces = BTreeSet::new();
     let mut names = BTreeSet::new();
+    let mut by_rung: BTreeMap<usize, BTreeSet<(usize, usize)>> = BTreeMap::new();
     let mut saw_empty = false;
     let mut saw_populated = false;
     for v in &vectors {
@@ -4659,6 +4667,15 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
         let reopened = open_bin_index(&key, &record)
             .unwrap_or_else(|e| panic!("bin-index accept {}: open ({e})", v.name));
         assert_eq!(reopened, index, "bin-index accept {}: index", v.name);
+        assert!(
+            BIN_INDEX_RUNGS.contains(&plaintext.len()),
+            "bin-index accept {}: the plaintext must land on a rung, not between",
+            v.name
+        );
+        by_rung
+            .entry(plaintext.len())
+            .or_default()
+            .insert((index.entries.len(), record.len()));
         saw_empty |= index.entries.is_empty();
         saw_populated |= !index.entries.is_empty();
 
@@ -4677,6 +4694,24 @@ fn bin_index_accept_vectors_seal_reproduce_and_open() {
     assert!(
         saw_empty && saw_populated,
         "bin-index accept must cover both an empty and a populated index"
+    );
+    // The privacy claim the padding exists for: bodies on one rung seal to
+    // records of one length, whatever their entry counts.
+    for (rung, seen) in &by_rung {
+        let lengths: BTreeSet<usize> = seen.iter().map(|(_, len)| *len).collect();
+        assert_eq!(lengths.len(), 1, "rung {rung} sealed to two record lengths");
+    }
+    assert!(
+        by_rung.len() >= 2,
+        "bin-index accept must cover at least two rungs"
+    );
+    // Anti-vacuity: one rung must carry two vectors of differing entry counts,
+    // or the equal-length check above compares a vector with itself.
+    assert!(
+        by_rung
+            .values()
+            .any(|seen| seen.iter().map(|(n, _)| *n).collect::<BTreeSet<_>>().len() >= 2),
+        "one rung must carry two entry counts, or the equal-length check is vacuous"
     );
 }
 
@@ -4711,6 +4746,7 @@ fn bin_index_reject_vectors_fire_the_named_check() {
         "too-many-structures",
         "unsupported-record-version",
         "unknown-record-field",
+        "non-canonical-padding",
     ] {
         assert!(
             listed.contains(required),
@@ -4723,6 +4759,13 @@ fn bin_index_reject_vectors_fire_the_named_check() {
         vectors.iter().any(|v| v.name == "struct-tag-transplant"),
         "bin-index reject must pin a structure-tag transplant"
     );
+    // Both halves of the canonical padded form: the rung length and the pad.
+    for required in ["off-rung-length", "non-zero-pad"] {
+        assert!(
+            vectors.iter().any(|v| v.name == required),
+            "bin-index reject must pin {required}"
+        );
+    }
 
     let mut names = BTreeSet::new();
     for v in &vectors {
