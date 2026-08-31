@@ -55,6 +55,8 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
     let endpoint = Arc::new(control::Control::over(app, token, control_file));
     tauri::async_runtime::spawn(control::serve(listener, endpoint));
 
+    announce_paths(app);
+
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         // The secret is the engine's from here: `start` takes it by value and
@@ -68,4 +70,20 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// Names the directories this instance resolved, on standard error.
+///
+/// The suite gives each instance its own `HOME`, and every store and the mount
+/// point hang off what the shell resolves from it. A failure that reports only
+/// a path the suite asked for cannot show that the shell used another one.
+fn announce_paths(app: &AppHandle) {
+    let path = app.path();
+    let home = path.home_dir().map(|dir| dir.display().to_string());
+    let data = path.local_data_dir().map(|dir| dir.display().to_string());
+    eprintln!(
+        "e2e: home={} data_local={}",
+        home.as_deref().unwrap_or("<none>"),
+        data.as_deref().unwrap_or("<none>"),
+    );
 }

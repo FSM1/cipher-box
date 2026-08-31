@@ -1126,6 +1126,7 @@ jobs:
       # refusal parity and its byte ceilings. The mounted suite runs on the main
       # gate only, so those would otherwise reach main unlinted and untested.
       - name: Cargo clippy and test with the e2e hook
+        shell: bash
         run: |
           set -euo pipefail
           cargo clippy -p cipherbox-desktop --all-targets --features e2e-hook -- -D warnings
@@ -1134,6 +1135,7 @@ jobs:
       # The hook must never ship. A default feature set that pulled it in would
       # put a control endpoint in a member's build.
       - name: The e2e hook is off by default
+        shell: bash
         run: |
           set -euo pipefail
           cargo metadata --no-deps --format-version 1 \

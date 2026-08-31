@@ -192,9 +192,6 @@ jobs:
           CIPHERBOX_E2E_WORKDIR: ${{ runner.temp }}/desktop-e2e
           CIPHERBOX_API_URL: http://localhost:3000
           NODE_ENV: test
-          # The shell's own log is the only account of what the engine did with
-          # a kernel operation, and the failure artifact carries it.
-          RUST_LOG: info
 
       - name: Collect the logs a failure leaves
         if: failure()

@@ -57,16 +57,17 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            // After the tray: this opens a directory with an fsync barrier, and
-            // nothing before the menu-bar icon should wait on a disk.
-            tray::build(app.handle())?;
-
+            // Ahead of the tray: a headless runner has no status-notifier
+            // host, and the tray waits on one that never answers.
             #[cfg(feature = "e2e-hook")]
             if let Some(headless) = headless {
                 e2e::arm(app.handle(), headless)?;
                 return Ok(());
             }
 
+            tray::build(app.handle())?;
+            // After the tray: this opens a directory with an fsync barrier, and
+            // nothing before the menu-bar icon should wait on a disk.
             session::open_key_custody(app.handle())?;
             Ok(())
         })
