@@ -90,7 +90,8 @@ jobs:
             fuse3 \
             pkg-config \
             build-essential \
-            xvfb
+            xvfb \
+            x11-utils
           sudo modprobe fuse
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -143,7 +144,10 @@ jobs:
           curl -fsSL --retry 3 \
             "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.tar.gz" \
             | tar -xz
-          sudo ./kubo/install.sh
+          # On PATH rather than installed: the release ships no installer for
+          # every platform, and this job needs no system-wide binary.
+          echo "$PWD/kubo" >> "$GITHUB_PATH"
+          export PATH="$PWD/kubo:$PATH"
           ipfs init --profile server
           ipfs daemon > "$RUNNER_TEMP/kubo.log" 2>&1 &
           curl -fsS --retry 60 --retry-connrefused --retry-delay 1 \
@@ -172,6 +176,14 @@ jobs:
             Xvfb :99 -screen 0 1024x768x24 > "$RUNNER_TEMP/xvfb.log" 2>&1 &
             export DISPLAY=:99
             export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            # The shell is a webview app. It blocks on a display that does not
+            # answer yet, and then writes no control file at all.
+            for _ in $(seq 1 30); do
+              xdpyinfo -display :99 > /dev/null 2>&1 && break
+              sleep 1
+            done
+            xdpyinfo -display :99 > /dev/null \
+              || { echo '--- Xvfb log ---'; cat "$RUNNER_TEMP/xvfb.log"; exit 1; }
           fi
           pnpm --filter @cipherbox/desktop-e2e run test:e2e
         env:

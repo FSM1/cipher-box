@@ -142,37 +142,45 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
     shell.exit = { code: null, signal: error.message };
   });
 
-  const endpoint = await poll(
-    async () => {
-      await refuseIfDead(shell, name);
-      return readEndpoint(controlFile);
-    },
-    (found): found is ControlEndpoint => found !== null,
-    {
-      what: `${name} to write its control file at ${controlFile}`,
-      timeoutMs: budget.controlFileMs,
-      intervalMs: budget.intervalMs,
-    }
-  );
-
-  const opened = await poll(
-    async () => {
-      await refuseIfDead(shell, name);
-      const status = await readStatus(endpoint, budget.refreshMs);
-      if (status.mount.state === 'refused') {
-        throw new Error(`${name} refused to mount: ${status.mount.reason}`);
+  // A start that fails owns the child: no `Instance` exists yet, so nothing
+  // else can stop it, and its open pipes would hold the whole run alive.
+  try {
+    const endpoint = await poll(
+      async () => {
+        await refuseIfDead(shell, name);
+        return readEndpoint(controlFile);
+      },
+      (found): found is ControlEndpoint => found !== null,
+      {
+        what: `${name} to write its control file at ${controlFile}`,
+        timeoutMs: budget.controlFileMs,
+        intervalMs: budget.intervalMs,
       }
-      return status.mount;
-    },
-    (mount): mount is { state: 'mounted'; path: string } => mount.state === 'mounted',
-    {
-      what: `${name}: the mount to open`,
-      timeoutMs: budget.mountMs,
-      intervalMs: budget.intervalMs,
-    }
-  );
+    );
 
-  return new Instance(name, opened.path, shell, endpoint, budget);
+    const opened = await poll(
+      async () => {
+        await refuseIfDead(shell, name);
+        const status = await readStatus(endpoint, budget.refreshMs);
+        if (status.mount.state === 'refused') {
+          throw new Error(`${name} refused to mount: ${status.mount.reason}`);
+        }
+        return status.mount;
+      },
+      (mount): mount is { state: 'mounted'; path: string } => mount.state === 'mounted',
+      {
+        what: `${name}: the mount to open`,
+        timeoutMs: budget.mountMs,
+        intervalMs: budget.intervalMs,
+      }
+    );
+
+    return new Instance(name, opened.path, shell, endpoint, budget);
+  } catch (error) {
+    if (!shell.exit) child.kill('SIGKILL');
+    await forceUnmount(join(home, DEFAULT_MOUNT_NAME));
+    throw error;
+  }
 }
 
 async function liveStatus(shell: Shell, instance: Instance): Promise<VaultStatus> {

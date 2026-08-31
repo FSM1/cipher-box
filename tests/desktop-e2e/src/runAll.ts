@@ -188,13 +188,13 @@ function describe(error: unknown): string {
   return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 
+// An explicit exit, because a killed shell can leave a handle open and Node
+// would then wait on it rather than end the run.
 main().then(
-  (code) => {
-    process.exitCode = code;
-  },
+  (code) => process.exit(code),
   (error: unknown) => {
     // A setup failure names a thing to fix. Its stack names only this file.
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    process.exit(1);
   }
 );
