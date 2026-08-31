@@ -299,7 +299,6 @@ mod op {
     /// Implementations allocate and assign [INodeNo]s in this request.  Learn more
     /// about INode lifecycle and the relationship between [Lookup] and [Forget] in the
     /// documentation for [INodeNo].
-    #[derive(Debug)]
     pub struct Lookup<'a> {
         header: &'a fuse_in_header,
         name: &'a OsStr,
@@ -512,7 +511,6 @@ mod op {
     impl_request!(ReadLink<'_>);
 
     /// Create a symbolic link.
-    #[derive(Debug)]
     pub struct SymLink<'a> {
         header: &'a fuse_in_header,
         target: &'a Path,
@@ -530,7 +528,6 @@ mod op {
 
     /// Create file node.
     /// Create a regular file, character device, block device, fifo or socket node.
-    #[derive(Debug)]
     pub struct MkNod<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_mknod_in,
@@ -553,7 +550,6 @@ mod op {
     }
 
     /// Create a directory.
-    #[derive(Debug)]
     pub struct MkDir<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_mkdir_in,
@@ -573,7 +569,6 @@ mod op {
     }
 
     /// Remove a file.
-    #[derive(Debug)]
     pub struct Unlink<'a> {
         header: &'a fuse_in_header,
         name: &'a Path,
@@ -586,7 +581,6 @@ mod op {
     }
 
     /// Remove a directory.
-    #[derive(Debug)]
     pub struct RmDir<'a> {
         header: &'a fuse_in_header,
         pub name: &'a Path,
@@ -599,7 +593,6 @@ mod op {
     }
 
     /// Rename a file.
-    #[derive(Debug)]
     pub struct Rename<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_rename_in,
@@ -623,7 +616,6 @@ mod op {
     }
 
     /// Create a hard link.
-    #[derive(Debug)]
     pub struct Link<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_link_in,
@@ -811,7 +803,6 @@ mod op {
     }
 
     /// Set an extended attribute.
-    #[derive(Debug)]
     pub struct SetXAttr<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_setxattr_in,
@@ -844,7 +835,6 @@ mod op {
     ///
     /// If the requested XAttr doesn't exist return [Err(Errno::NO_XATTR)] which will
     /// map to the right platform-specific error code.
-    #[derive(Debug)]
     pub struct GetXAttr<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_getxattr_in,
@@ -914,7 +904,6 @@ mod op {
     ///
     /// Return [Err(Errno::NO_XATTR)] if the xattr doesn't exist
     /// Return [Err(Errno::ENOTSUP)] if this filesystem doesn't support XAttrs
-    #[derive(Debug)]
     pub struct RemoveXAttr<'a> {
         header: &'a fuse_in_header,
         name: &'a OsStr,
@@ -1195,7 +1184,6 @@ mod op {
     /// structure in <fuse_common.h> for more details. If this method is not
     /// implemented or under Linux kernel versions earlier than 2.6.15, the [MkNod]
     /// and [Open] methods will be called instead.
-    #[derive(Debug)]
     pub struct Create<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_create_in,
@@ -1444,7 +1432,6 @@ mod op {
     ///
     /// TODO: Document the differences to [Rename] and [Exchange]
     #[cfg(feature = "abi-7-23")]
-    #[derive(Debug)]
     pub struct Rename2<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_rename2_in,
@@ -1553,7 +1540,6 @@ mod op {
     /// MacOS only: Rename the volume. Set `fuse_init_out.flags` during init to
     /// `FUSE_VOL_RENAME` to enable
     #[cfg(target_os = "macos")]
-    #[derive(Debug)]
     pub struct SetVolName<'a> {
         header: &'a fuse_in_header,
         name: &'a OsStr,
@@ -1579,7 +1565,6 @@ mod op {
     // API TODO: Consider rename2(RENAME_EXCHANGE)
     /// macOS only (undocumented)
     #[cfg(target_os = "macos")]
-    #[derive(Debug)]
     pub struct Exchange<'a> {
         header: &'a fuse_in_header,
         arg: &'a fuse_exchange_in,
@@ -1862,6 +1847,14 @@ mod op {
             }),
         })
     }
+    crate::redact::opaque_debug!(
+        Lookup, SymLink, MkNod, MkDir, Unlink, RmDir, Rename, Link, SetXAttr, GetXAttr,
+        RemoveXAttr, Create,
+    );
+    #[cfg(feature = "abi-7-23")]
+    crate::redact::opaque_debug!(Rename2);
+    #[cfg(target_os = "macos")]
+    crate::redact::opaque_debug!(SetVolName, Exchange);
 }
 use op::*;
 
@@ -2332,6 +2325,18 @@ mod tests {
         // name in a form no substring check catches. One render path shuts both.
         assert_eq!(format!("{req:?}"), format!("{req}"));
         assert_eq!(format!("{op:?}"), format!("{op}"));
+    }
+
+    /// A caller that takes the payload out of the enum holds the name directly,
+    /// so the payload needs its own opaque render.
+    #[test]
+    fn debug_of_a_request_payload_redacts_the_name() {
+        let req = AnyRequest::try_from(&MKNOD_REQUEST[..]).unwrap();
+        let Ok(Operation::MkNod(payload)) = req.operation() else {
+            panic!("Unexpected request operation");
+        };
+
+        assert_eq!(format!("{payload:?}"), "MkNod { .. }");
     }
 
     #[test]

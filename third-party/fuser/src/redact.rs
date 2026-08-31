@@ -3,9 +3,9 @@
 use std::ffi::OsStr;
 use std::fmt;
 
-/// A file, link or xattr name is user plaintext in a zero-knowledge vault, so no
-/// log sink may receive one (AGENTS.md rule 2). This renders the byte length and
-/// nothing else, and a re-vendor has one definition to re-apply.
+/// A file, link or xattr name is user plaintext, so no log sink may receive one.
+/// This renders the byte length and nothing else, and a re-vendor has one
+/// definition to re-apply.
 pub(crate) struct RedactedName<'a>(&'a OsStr);
 
 /// Wraps a name so `&OsStr` and `&Path` call sites read the same.
@@ -24,3 +24,20 @@ impl fmt::Debug for RedactedName<'_> {
         fmt::Display::fmt(self, f)
     }
 }
+
+/// A request payload borrows the name straight out of the kernel buffer, so a
+/// derived `Debug` prints it. These payloads render their type and nothing more;
+/// the redacted `Display for Operation` is the render that carries the detail.
+macro_rules! opaque_debug {
+    ($($payload:ident),+ $(,)?) => {
+        $(
+            impl ::std::fmt::Debug for $payload<'_> {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    write!(f, concat!(stringify!($payload), " {{ .. }}"))
+                }
+            }
+        )+
+    };
+}
+
+pub(crate) use opaque_debug;

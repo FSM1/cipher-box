@@ -126,6 +126,10 @@ describe('the shell bootstrap', () => {
   });
 
   it('keeps the prompt when the phrase itself did not open the account', async () => {
+    shell.loginWithGoogle.mockRejectedValueOnce(new RecoveryRequired());
+    shell.actions!.google();
+    await vi.waitFor(() => expect(shell.redraws.at(-1)?.phase).toBe('recovery'));
+
     shell.recoverWithPhrase.mockRejectedValueOnce(new Error('that phrase did not open it'));
     const drawn = shell.redraws.length;
 

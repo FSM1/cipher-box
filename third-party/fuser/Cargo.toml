@@ -21,7 +21,8 @@
 # and the tests in `src/lib_impl.rs` and `src/ll/request.rs` assert no name
 # reaches a log record or a render. `Operation` and `AnyRequest` also lose their
 # derived `Debug`, which printed the raw name and the raw argument bytes; both
-# now delegate to the redacted `Display`.
+# now delegate to the redacted `Display`. Each name-bearing request payload in
+# `op` loses its derived `Debug` too, through the `opaque_debug` macro.
 #
 # Trimmed against upstream: the examples, the mount-requiring integration
 # tests, and their dev-dependencies are gone — this is a library the product
