@@ -33,8 +33,10 @@
 //! This primitive is the root cut alone; the descendant re-key runs through the
 //! same [`reseal_scope_root`] helper in [`cascade`](super::cascade).
 
+use cipherbox_core::codec::RedactedBytes;
 use cipherbox_core::seal::{GrantSection, SignedSealed};
 use cipherbox_core::suite::secret::SECRET_LEN;
+use core::fmt;
 
 use super::eager_set::ResolveFailure;
 use super::reseal::{
@@ -50,7 +52,7 @@ use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 /// CAS over the content plane + `/routing/v1` transport is the publisher's job.
 /// It carries no seed: the publisher recovers the freshly minted override seed
 /// from `section`'s own owner blob, so this type is not a key-material carrier.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResealedScopeRoot {
     /// The scope-root node id (== scope id).
     pub scope_id: [u8; 16],
@@ -62,6 +64,18 @@ pub struct ResealedScopeRoot {
     pub write_epoch: u64,
     /// The freshly re-sealed, structure-signed grant section.
     pub section: GrantSection,
+}
+
+impl fmt::Debug for ResealedScopeRoot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResealedScopeRoot")
+            .field("scope_id", &self.scope_id)
+            .field("ipns_name", &RedactedBytes::of(&self.ipns_name))
+            .field("read_epoch", &self.read_epoch)
+            .field("write_epoch", &self.write_epoch)
+            .field("section", &self.section)
+            .finish()
+    }
 }
 
 /// Why a **rotation's** publish did not durably land as the freshest record at

@@ -18,8 +18,8 @@ use cipherbox_engine::sync::case_fold;
 
 /// The longest name the projection admits, in bytes. `statfs` advertises this
 /// same constant, so what is advertised is what is enforced. Aliased from the
-/// engine's own command boundary rather than restated, so the mount cannot
-/// admit a name the facade then refuses.
+/// engine's command boundary rather than restated, so a name this mount admits
+/// at create is one the facade takes.
 pub const MAX_NAME_BYTES: usize = cipherbox_engine::MAX_NODE_NAME_BYTES;
 
 /// Why a name was refused.
@@ -220,15 +220,6 @@ mod tests {
         );
     }
 
-    /// The narrow tier holds the same length, because a peer commits names this
-    /// device's own command boundary would refuse, and an over-long one is a
-    /// dirent no host protocol carries.
-    #[test]
-    fn an_over_long_name_is_not_even_emittable() {
-        assert!(is_emittable(&"a".repeat(MAX_NAME_BYTES)));
-        assert!(!is_emittable(&"a".repeat(MAX_NAME_BYTES + 1)));
-    }
-
     #[test]
     fn length_is_counted_in_bytes_not_characters() {
         // 128 two-byte characters: well under 255 chars, over 255 bytes.
@@ -334,9 +325,21 @@ mod tests {
     #[test]
     fn emittability_is_the_narrow_tier_of_admission() {
         // Names no kernel protocol can carry — the read path drops these.
-        for name in ["", ".", "..", "a/b", "a\\b", "a\0b", &"x".repeat(256)] {
+        for name in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "a\0b",
+            &"x".repeat(MAX_NAME_BYTES + 1),
+        ] {
             assert!(!is_emittable(name), "{name:?} is not emittable");
         }
+        assert!(
+            is_emittable(&"x".repeat(MAX_NAME_BYTES)),
+            "the advertised length is emittable"
+        );
         // Refused at create, but still listable so they stay removable.
         for name in [".DS_Store", "re:port", "COM1", "report.", "a\u{202E}b"] {
             assert!(is_emittable(name), "{name:?} must stay reachable");

@@ -36,6 +36,8 @@
 //! [`run_sweep`] re-runs while either is non-empty for a reason a retry could
 //! clear; a caller needing the subtree proven converged refuses on both.
 
+use cipherbox_core::codec::RedactedBytes;
+use core::fmt;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,12 +54,21 @@ pub(crate) mod sim;
 
 /// One node inside a scope, as the gated parent body named it. A node id locates
 /// nothing on its own — only a gated parent's read body binds it to a name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct NodeRef {
     /// The node id the parent's `ChildRef` carried.
     pub node_id: [u8; 16],
     /// That ref's opaque `ipnsName` bytes.
     pub ipns_name: Vec<u8>,
+}
+
+impl fmt::Debug for NodeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeRef")
+            .field("node_id", &self.node_id)
+            .field("ipns_name", &RedactedBytes::of(&self.ipns_name))
+            .finish()
+    }
 }
 
 /// The swept scope as its scope root's gated read found it. Carries no key

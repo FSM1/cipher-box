@@ -526,7 +526,7 @@ impl fmt::Debug for ReceivedShareRow {
                 "sharer_identity_public_key",
                 &RedactedBytes::of(&self.sharer_identity_public_key),
             )
-            .field("display_name", &self.display_name)
+            .field("display_name", &RedactedText::of(&self.display_name))
             .field("permission", &self.permission)
             .field("resolution", &self.resolution)
             .finish()
@@ -768,28 +768,32 @@ impl std::error::Error for BlankApiBaseUrl {}
 ///
 /// Bounded here rather than at a host: the projection's own limit runs above the
 /// facade, so a web caller reaches this boundary with no bound in front of it.
-/// A name a *peer* committed is not held to this — it stays listable and
-/// removable, the same two-tier rule `crates/fuse/src/name.rs` states.
+/// Peer-committed names take the two-tier rule in `crates/fuse/src/name.rs`.
 pub const MAX_NODE_NAME_BYTES: usize = 255;
 
-/// The det-CBOR cost of one `ChildRef` this device authors, at worst: its five
-/// known keys, a name at [`MAX_NODE_NAME_BYTES`], a base36 `ipnsName`, and a
+/// The det-CBOR cost of one `ChildRef` beyond its `name` and its `ipnsName`:
+/// the five known keys, the map and byte-string heads, the kind, and a
 /// `linkCounter` at `u64::MAX`. Pinned by
 /// `a_full_folder_of_worst_case_children_still_seals`.
-const MAX_AUTHORED_CHILD_REF_BYTES: usize = 512;
+const CHILD_REF_FIXED_BYTES: usize = 128;
 
-/// The most children a folder this device authors may hold.
+/// The cost of one `ChildRef` this device authors, at worst — a name at
+/// [`MAX_NODE_NAME_BYTES`] and a base36 `ipnsName`.
+const MAX_AUTHORED_CHILD_REF_BYTES: usize =
+    CHILD_REF_FIXED_BYTES + MAX_NODE_NAME_BYTES + MAX_IPNS_NAME_BYTES;
+
+/// The base36 CIDv1 text of an Ed25519 key, which is what the author path
+/// writes into a `ChildRef`.
+const MAX_IPNS_NAME_BYTES: usize = 64;
+
+/// The most children a command may leave a folder holding.
 ///
-/// A folder's read-body seals into one block, so `MAX_READ_SEALED_BYTES` is the
-/// real budget and the ceiling is derived from it rather than picked. A picked
-/// number sits either above that budget, which makes this refusal unreachable,
-/// or far below it, which refuses folders that seal.
-///
-/// The derivation covers the children this device authors. Nothing budgets a
-/// child's carried unknown fields inside the read body — the frozen
-/// `MAX_CRITICAL_CARRIED_BYTES` truncation budget is charged at the envelope,
-/// one level up — so a folder that re-emits a peer's carried fields can still
-/// exceed the seal bound, and that refusal stays the backstop.
+/// The cheap half of the bound. A folder's read-body seals into one block, so
+/// the ceiling is derived from `MAX_READ_SEALED_BYTES` rather than picked, and
+/// it holds where every child is one this device authored. A peer sizes its own
+/// children, so [`refuse_full_parent`] charges the listing's real bytes as well
+/// — a count alone would admit a further child into a folder of 1000 names of
+/// 2 KiB that no re-author can publish.
 pub const MAX_FOLDER_CHILDREN: usize = MAX_READ_SEALED_BYTES / MAX_AUTHORED_CHILD_REF_BYTES;
 
 /// Every command a host can issue — the intent ops, grant/rotation/share
@@ -1096,7 +1100,10 @@ impl CommandOutcome {
 /// Events the engine emits on the one-way stream out
 /// (blueprint/engine.md "Facade"). Payloads are scaffold-minimal and harden
 /// with the pipeline slices; the variant set is the contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written for the same reason [`Command`]'s is: this is the
+/// stream a host logs, and two variants name a record.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Event {
     /// A new gate-passing snapshot (with pending-op overlay applied) is
     /// available.
@@ -1130,7 +1137,7 @@ pub enum Event {
     /// fail-closed publish failure. Surfaced, never silent (blueprint/engine.md
     /// "never a silent failure"); a later rebase/retry slice acts on it.
     RenewalFailed {
-        /// The record's routing key (`ipnsName`); non-secret.
+        /// The record's routing key (`ipnsName`).
         routing_key: String,
         /// Human-readable classification (no key material).
         detail: String,
@@ -1163,6 +1170,58 @@ pub enum Event {
         /// Failure classification for a failed phase (no key material).
         error: Option<String>,
     },
+}
+
+impl fmt::Debug for Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SnapshotUpdated => f.write_str("SnapshotUpdated"),
+            Self::StalenessChanged { level } => f
+                .debug_struct("StalenessChanged")
+                .field("level", level)
+                .finish(),
+            Self::WithheldUpdateEscalation { ipns_name } => f
+                .debug_struct("WithheldUpdateEscalation")
+                .field("ipns_name", &RedactedBytes::of(ipns_name))
+                .finish(),
+            Self::DeadLetter { op_id, reason } => f
+                .debug_struct("DeadLetter")
+                .field("op_id", op_id)
+                .field("reason", reason)
+                .finish(),
+            Self::AttributableAbuse { description } => f
+                .debug_struct("AttributableAbuse")
+                .field("description", description)
+                .finish(),
+            Self::RenewalFailed {
+                routing_key,
+                detail,
+            } => f
+                .debug_struct("RenewalFailed")
+                .field("routing_key", &RedactedText::of(routing_key))
+                .field("detail", detail)
+                .finish(),
+            Self::VaultUnprovisioned { retryable, detail } => f
+                .debug_struct("VaultUnprovisioned")
+                .field("retryable", retryable)
+                .field("detail", detail)
+                .finish(),
+            Self::OpProgress {
+                op_id,
+                node,
+                phase,
+                progress,
+                error,
+            } => f
+                .debug_struct("OpProgress")
+                .field("op_id", op_id)
+                .field("node", node)
+                .field("phase", phase)
+                .field("progress", progress)
+                .field("error", error)
+                .finish(),
+        }
+    }
 }
 
 /// How far a content transfer has got, in whole blocks of the version's DAG
@@ -1875,9 +1934,13 @@ impl EngineView {
             .collect()
     }
 
-    /// The child of `parent` a case-insensitive host resolves `name` to: the one
-    /// stored under exactly `name` when it exists, and otherwise the first whose
-    /// name folds equal under the strict comparator (FUSE lookup).
+    /// The child of `parent` a case-insensitive host resolves `name` to: the
+    /// first stored under exactly `name` when one exists, and otherwise the
+    /// first whose name folds equal under the strict comparator (FUSE lookup).
+    ///
+    /// "First" is by node id in both arms, because a decoded listing may hold
+    /// two children under one exact name — `assert_children_unique` binds `id`
+    /// and `ipnsName`, never `name`.
     ///
     /// The exact match wins whatever the id order. A write grantee mints its own
     /// node ids, so without the preference it could plant a folding twin beside
@@ -1885,17 +1948,14 @@ impl EngineView {
     /// first, and shadow the owner's file at every lookup. The two names render
     /// differently, so the deceptive-character filter never sees the pair.
     pub fn lookup(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
-        let key = collation_key(name);
-        let mut folded = None;
-        for child in self.rendered.children(parent) {
-            if child.name() == name {
-                return Some(node_attrs(child));
-            }
-            if folded.is_none() && collation_key(child.name()) == key {
-                folded = Some(child);
-            }
-        }
-        folded.map(node_attrs)
+        self.lookup_exact(parent, name).or_else(|| {
+            let key = collation_key(name);
+            self.rendered
+                .children(parent)
+                .into_iter()
+                .find(|child| collation_key(child.name()) == key)
+                .map(node_attrs)
+        })
     }
 
     /// The child of `parent` stored under exactly `name`, if any — what a host
@@ -2000,20 +2060,42 @@ fn refuse_over_bound_name(name: &str) -> Result<(), EngineError> {
 /// a staging reservation and surfaces as a dead letter, where the ceiling reads
 /// as a failure rather than as a limit the caller can act on. `arriving` names
 /// the node being placed, so a relink inside its own parent is not refused for a
-/// child the folder already holds.
+/// child the folder already holds, and `replacing` names the child a move frees.
 fn refuse_full_parent(
     rendered: &Snapshot,
     parent: NodeId,
     arriving: Option<NodeId>,
+    replacing: Option<NodeId>,
 ) -> Result<(), EngineError> {
     let children = rendered.children(parent);
-    let held = arriving.is_some_and(|node| children.iter().any(|child| child.id == node));
-    if !held && children.len() >= MAX_FOLDER_CHILDREN {
-        return Err(EngineError::MalformedInput {
-            check: "folder-child-ceiling",
-        });
+    if arriving.is_some_and(|node| children.iter().any(|child| child.id == node)) {
+        return Ok(());
     }
-    Ok(())
+    let retained = children.iter().filter(|child| Some(child.id) != replacing);
+    let (count, listing) = retained.fold((0usize, 0usize), |(count, bytes), child| {
+        (
+            count + 1,
+            bytes.saturating_add(child_ref_bytes(child.name(), child.ipns_name.as_deref())),
+        )
+    });
+    let admits = count < MAX_FOLDER_CHILDREN
+        && listing.saturating_add(MAX_AUTHORED_CHILD_REF_BYTES) <= MAX_READ_SEALED_BYTES;
+    if admits {
+        return Ok(());
+    }
+    Err(EngineError::MalformedInput {
+        check: "folder-child-ceiling",
+    })
+}
+
+/// What one child costs the folder body it sits in. The two attacker-sized
+/// fields are charged as they stand; the rest is [`CHILD_REF_FIXED_BYTES`].
+///
+/// A child's carried unknown fields are not charged: the rendered view does not
+/// carry them, while the drain re-emits them. That gap is what leaves the seal
+/// bound the backstop it is.
+fn child_ref_bytes(name: &str, ipns_name: Option<&[u8]>) -> usize {
+    CHILD_REF_FIXED_BYTES + name.len() + ipns_name.map_or(0, <[u8]>::len)
 }
 
 /// The label a share pointer carries for `node`.
@@ -4508,7 +4590,7 @@ where {
                 refuse_over_bound_name(&name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, parent)?;
-                refuse_full_parent(&rendered, parent, None)?;
+                refuse_full_parent(&rendered, parent, None, None)?;
                 let target = self.mint_node_id()?;
                 let base_sequence = rendered.record_sequence(parent).unwrap_or(1);
                 let node = match kind {
@@ -4536,7 +4618,7 @@ where {
                 refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
-                refuse_full_parent(&rendered, new_parent, Some(node))?;
+                refuse_full_parent(&rendered, new_parent, Some(node), None)?;
                 let op = Op::relink(
                     node,
                     from_parent,
@@ -4558,7 +4640,7 @@ where {
                 refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
-                refuse_full_parent(&rendered, new_parent, Some(node))?;
+                refuse_full_parent(&rendered, new_parent, Some(node), replacing)?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
                     // The conditional-delete anchor: a concurrent edit that
@@ -6500,7 +6582,7 @@ where {
                 refuse_over_bound_name(name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, *parent)?;
-                refuse_full_parent(&rendered, *parent, None)?;
+                refuse_full_parent(&rendered, *parent, None, None)?;
                 None
             }
             WriteTarget::Version { node } => {
@@ -6775,6 +6857,12 @@ where {
                 declared: declared_size,
                 observed,
             });
+        }
+        // Re-checked here, not only at `begin_write`: a `NewFile` handle takes no
+        // place in the folder until it commits, so handles opened together all
+        // see the same free one.
+        if let WriteTarget::NewFile { parent, .. } = &target {
+            refuse_full_parent(&self.render().await?, *parent, None, None)?;
         }
         let finished = writer
             .finish(&mut *self.entropy.borrow_mut())
@@ -8002,10 +8090,6 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
-    /// A write grantee mints its own node ids, so it can plant a name that folds
-    /// equal to an owner's and choose an id that sorts first. The exact spelling
-    /// wins, or the grantee shadows the owner's file at every lookup on a
-    /// case-insensitive host.
     #[test]
     fn lookup_prefers_the_exact_name_over_a_folding_twin_that_sorts_first() {
         let root = NodeId([0; 16]);
@@ -8092,8 +8176,6 @@ mod tests {
             name: NAME.to_string(),
         };
 
-        // The view is rendered last so the nested child and breadcrumb
-        // renderings are covered through it.
         for (shape, rendered) in [
             ("NodeAttrs", format!("{attrs:?}")),
             ("SnapshotChild", format!("{:?}", view.children[0])),
@@ -9294,16 +9376,15 @@ mod tests {
     #[test]
     fn a_full_folder_of_worst_case_children_still_seals() {
         use cipherbox_core::seal::{ChildRef, PreservedFields, encode_read_body};
+        use cipherbox_core::suite::aead::{NONCE_LEN, TAG_LEN};
 
         let children: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN)
             .map(|i| ChildRef {
                 id: (i as u128).to_be_bytes(),
                 name: format!("{i:0>MAX_NODE_NAME_BYTES$}"),
-                // The base36 CIDv1 text of an Ed25519 key, which is what the
-                // author path writes into a `ChildRef`, and distinct per child
-                // because the encoder refuses a duplicate.
+                // Distinct per child, because the encoder refuses a duplicate.
                 ipns_name: {
-                    let mut name = vec![b'k'; 64];
+                    let mut name = vec![b'k'; MAX_IPNS_NAME_BYTES];
                     name[..16].copy_from_slice(&(i as u128).to_be_bytes());
                     name
                 },
@@ -9320,17 +9401,16 @@ mod tests {
         };
 
         let encoded = encode_read_body(&body).expect("a full folder encodes");
+        let sealed = encoded.len() + NONCE_LEN + TAG_LEN;
         assert!(
-            encoded.len() <= MAX_READ_SEALED_BYTES,
-            "{} children of {MAX_AUTHORED_CHILD_REF_BYTES} bytes encode to {}, over {MAX_READ_SEALED_BYTES}",
-            MAX_FOLDER_CHILDREN,
-            encoded.len()
+            sealed <= MAX_READ_SEALED_BYTES,
+            "{MAX_FOLDER_CHILDREN} worst-case children seal to {sealed}, over {MAX_READ_SEALED_BYTES}"
         );
     }
 
-    /// A folder at its ceiling refuses another child at the boundary. A node
-    /// the folder already holds is not a new child, so a relink inside its own
-    /// parent is not refused by a count it does not change.
+    /// A node the folder already holds is not a new child, so a relink inside
+    /// its own parent is not refused by a count it does not change, and neither
+    /// is a move that frees the name it replaces.
     #[test]
     fn a_folder_at_its_ceiling_refuses_a_new_child_but_not_one_it_holds() {
         let root = NodeId([0; 16]);
@@ -9341,20 +9421,54 @@ mod tests {
             rendered.link(root, child, 1);
         }
         let held = NodeId(1u128.to_be_bytes());
+        let full = Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        });
 
+        assert_eq!(refuse_full_parent(&rendered, root, None, None), full);
         assert_eq!(
-            refuse_full_parent(&rendered, root, None),
-            Err(EngineError::MalformedInput {
-                check: "folder-child-ceiling",
-            })
+            refuse_full_parent(&rendered, root, Some(held), None),
+            Ok(()),
+            "a relink inside its own parent adds nothing"
         );
-        assert_eq!(refuse_full_parent(&rendered, root, Some(held)), Ok(()));
+        assert_eq!(
+            refuse_full_parent(&rendered, root, None, Some(held)),
+            Ok(()),
+            "a move frees the place it replaces"
+        );
 
         rendered.unlink(root, held);
         assert_eq!(
-            refuse_full_parent(&rendered, root, None),
+            refuse_full_parent(&rendered, root, None, None),
             Ok(()),
             "one place freed admits one new child"
+        );
+    }
+
+    /// A peer sizes its own children, so a count far below the ceiling can still
+    /// name a listing no re-author can publish. The byte charge is what refuses
+    /// it — the count alone would admit one more.
+    #[test]
+    fn a_folder_of_peer_sized_names_refuses_on_bytes_far_below_the_count() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let name = "n".repeat(2048);
+        let children = MAX_READ_SEALED_BYTES / (CHILD_REF_FIXED_BYTES + name.len()) + 1;
+        for i in 0..children {
+            let child = NodeId((i as u128 + 1).to_be_bytes());
+            rendered.upsert_node(NodeMeta::new(child, name.clone(), NodeKind::File));
+            rendered.link(root, child, 1);
+        }
+
+        assert!(
+            children < MAX_FOLDER_CHILDREN,
+            "the count ceiling alone would admit this listing"
+        );
+        assert_eq!(
+            refuse_full_parent(&rendered, root, None, None),
+            Err(EngineError::MalformedInput {
+                check: "folder-child-ceiling",
+            })
         );
     }
 

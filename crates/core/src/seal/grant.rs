@@ -32,7 +32,9 @@
 
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::codec::{Map, Value, decode, encode};
+use core::fmt;
+
+use crate::codec::{Map, RedactedBytes, Value, decode, encode};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::kdf;
 use crate::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
@@ -822,7 +824,7 @@ impl GrantSetEntry {
 /// `(tag, permission, pseudonymPk)` entries. A recipient verifies their tag is
 /// committed before trusting a grant. Deliberately epoch-free, so a
 /// grantee-triggered rotation needs no fresh owner signature.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct GrantSetCommitment {
     /// The scope root's opaque `ipnsName` bytes.
     pub ipns_name: Vec<u8>,
@@ -832,6 +834,17 @@ pub struct GrantSetCommitment {
     pub entries: Vec<GrantSetEntry>,
     /// Preserved unknown top-level fields (never any of the known keys).
     pub unknown: PreservedFields,
+}
+
+impl fmt::Debug for GrantSetCommitment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantSetCommitment")
+            .field("ipns_name", &RedactedBytes::of(&self.ipns_name))
+            .field("owner_pseudonym_pk", &self.owner_pseudonym_pk)
+            .field("entries", &self.entries)
+            .field("unknown", &self.unknown)
+            .finish()
+    }
 }
 
 const GRANT_SET_KNOWN: &[&str] = &["entries", "ipnsName", "ownerPseudonymPk"];

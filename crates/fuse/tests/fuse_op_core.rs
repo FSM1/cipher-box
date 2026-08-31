@@ -1475,9 +1475,8 @@ fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
 #[test]
 fn a_name_no_kernel_could_carry_never_reaches_a_listing() {
     // A peer on any client can commit whatever text string it likes, and this
-    // crate is what keeps one out of a listing. The over-long case is covered at
-    // `is_emittable`, which this seeding route cannot reach: the facade refuses
-    // to author a name past its own bound.
+    // crate is what keeps one out of a listing. The over-long case is at
+    // `name::emittability_is_the_narrow_tier_of_admission`.
     let hostile = ["a/b", "a\\b", "..", ".", "", "a\0b", "a\nb"];
     let seed: Vec<(&str, NodeKind)> = hostile
         .iter()

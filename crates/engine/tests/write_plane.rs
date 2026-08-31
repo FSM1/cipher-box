@@ -11,14 +11,17 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use cipherbox_core::codec::Value;
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
+use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
 use cipherbox_core::seal::{
     ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
-    Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section, open_read_body,
-    seal_settings_record, set_grant_section, sign_grant_set,
+    Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section,
+    encode_read_body, open_read_body, seal_settings_record, set_grant_section, sign_grant_set,
 };
+use cipherbox_core::suite::aead::{NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
@@ -1898,6 +1901,117 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
         }]
     );
 }
+
+/// A head over the block ceiling is refused identically on every retry: a fresh
+/// nonce moves the sealed bytes and never their count, so no re-author shrinks
+/// it. Uncharged it would hold the strict-FIFO queue head forever with nothing
+/// reported anywhere, so it spends the budget and every op behind it drains —
+/// but only the record was over the ceiling, so ending it keeps the version it
+/// would have named rather than unpinning and erasing it, and owes back only the
+/// child name no parent record ever reached. It ends under its own reason: the
+/// remedy is to split the listing, which a transport outage's "try again" never
+/// reaches.
+#[test]
+fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    concurrent_root_extend(
+        &world.record_store,
+        &blocks,
+        vec![child_at_the_block_ceiling()],
+    );
+    tick(&world, &engine, &mut tasks);
+
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "one-child-too-many.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+    let doomed = child_id(&engine, ROOT, "one-child-too-many.bin");
+
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert!(
+        passes > 1,
+        "a size refusal is charged against the budget, not permanent on sight"
+    );
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::HeadTooLarge
+        }]
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the head no retry could publish leaves the queue"
+    );
+    assert_eq!(
+        retire_targets(&alice),
+        vec![write_name(doomed).as_str().to_owned()],
+        "the version the oversized record would have named stays pinned — unpinning \
+         it is loss no retry undoes — while the child name the parent never came to \
+         reference is owed back like any abandoned create's"
+    );
+}
+
+/// A peer-authored child carrying preserved bulk that leaves the root one child
+/// short of the block ceiling.
+///
+/// This is the route the facade bounds cannot close: the rendered view drops a
+/// child's carried fields, so `refuse_full_parent` cannot charge them, while the
+/// drain re-emits them into the record it authors.
+fn child_at_the_block_ceiling() -> ChildRef {
+    let padded = |pad: usize| {
+        let mut child = file_ref([0xB1; 16], "peer-authored.bin");
+        child.unknown = [("pad".to_owned(), Value::Bytes(vec![0u8; pad]))]
+            .into_iter()
+            .collect();
+        child
+    };
+    let sealed = |child: &ChildRef| {
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: vec![child.clone()],
+            unknown: PreservedFields::new(),
+        };
+        encode_read_body(&body).expect("the body encodes").len() + NONCE_LEN + TAG_LEN
+    };
+
+    // Sized against the encoder, because a CBOR length head grows with what it
+    // measures. The headroom left is smaller than one child ref, so the next
+    // child this device authors puts the record over.
+    let target = MAX_READ_SEALED_BYTES - 64;
+    let mut pad = target - sealed(&padded(0));
+    for _ in 0..8 {
+        let short = target as isize - sealed(&padded(pad)) as isize;
+        if short == 0 {
+            break;
+        }
+        pad = pad.saturating_add_signed(short);
+    }
+    let child = padded(pad);
+    let at = sealed(&child);
+    assert!(
+        at <= MAX_READ_SEALED_BYTES && MAX_READ_SEALED_BYTES - at < CHILD_REF_FLOOR,
+        "the seed must open and leave less than one child ref: {at}"
+    );
+    child
+}
+
+/// Smaller than any child ref the engine authors, so the seed above is provably
+/// one child short of the ceiling rather than approximately so.
+const CHILD_REF_FLOOR: usize = 96;
 
 /// The child ceiling is what keeps a folder this device authors inside the IPFS
 /// block ceiling, and a peer decides how many children a folder already holds.

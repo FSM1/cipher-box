@@ -46,7 +46,7 @@ use crate::sync::record::{RecordClass, RecordReader};
 const MAX_SUFFIX_PROBE: u32 = 10_000;
 
 /// How one op resolved against the working base.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum OpResolution {
     /// The op applied onto the (possibly advanced) base.
     Applied {
@@ -75,6 +75,35 @@ pub enum OpResolution {
     },
     /// The op is terminally unrebasable; the caller preserves its staged bytes.
     DeadLetter(DeadLetterReason),
+}
+
+impl fmt::Debug for OpResolution {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Applied {
+                effective_name,
+                suffixed,
+                scope_exit_trigger,
+            } => f
+                .debug_struct("Applied")
+                .field(
+                    "effective_name",
+                    &effective_name.as_deref().map(|name| RedactedText::of(name)),
+                )
+                .field("suffixed", suffixed)
+                .field("scope_exit_trigger", scope_exit_trigger)
+                .finish(),
+            Self::Dropped {
+                reason,
+                scope_exit_trigger,
+            } => f
+                .debug_struct("Dropped")
+                .field("reason", reason)
+                .field("scope_exit_trigger", scope_exit_trigger)
+                .finish(),
+            Self::DeadLetter(reason) => f.debug_tuple("DeadLetter").field(reason).finish(),
+        }
+    }
 }
 
 /// Why a rebasing op was dropped.
