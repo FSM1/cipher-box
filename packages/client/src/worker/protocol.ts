@@ -27,9 +27,6 @@ import { isBuffer } from '../buffers.js';
  */
 export const MAX_FRAGMENT_CHARS = 4096;
 
-/** The longest bin retention the settings record admits: mirrors the engine bar. */
-export const MAX_BIN_RETENTION_DAYS = 3650;
-
 /** Grant permission level (mirrors the facade `Permission`). */
 export type Permission = 'read' | 'write';
 

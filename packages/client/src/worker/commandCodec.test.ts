@@ -401,8 +401,10 @@ describe('buildCommand', () => {
       expect(settings[0][3]).toBe(90);
     });
 
+    // The policy bar is the engine's, and the builder names the field when it
+    // refuses. What this layer owns is the `u32` the number ABI would wrap.
     it.each([
-      ['a retention past the engine bar', 3651],
+      ['a retention past the u32 the builder takes', 0x1_0000_0000],
       ['a negative retention', -1],
       ['a fractional retention', 1.5],
     ])('refuses %s', (_name, binRetentionDays) => {

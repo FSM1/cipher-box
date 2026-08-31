@@ -148,14 +148,14 @@ pub fn owner_tag(enc_secret: &X25519Secret) -> [u8; 32] {
     RecordReader::new(enc_secret).owner_tag()
 }
 
-/// One staged block, admitted on the read path's two checks in the read path's
-/// order.
+/// One staged block, admitted on the read path's two checks.
 ///
-/// The cap comes first because hash work is linear in the byte count. The
-/// address then binds the bytes to the key the sealed op record names, so a
-/// rewritten staging sidecar can neither publish other plaintext under this
-/// version's content key nor hand the upload a block this build's own reader
-/// would refuse (AGENTS.md rule 8).
+/// The cap comes before the hash, because hash work is linear in the byte
+/// count. The address then binds the bytes to the key the sealed op record
+/// names, so a rewritten staging sidecar can neither publish other plaintext
+/// under this version's content key nor hand the upload a block this build's
+/// own reader would refuse (AGENTS.md rule 8). The staging seam reads a whole
+/// value, so the cap bounds the hash and not the read itself.
 fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> {
     if block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(CONTENT_LOST);
@@ -166,11 +166,14 @@ fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> 
 
 /// Whether `child` publishes under the name this scope's write seed derives.
 ///
-/// A child that does not is a scope root. Its subtree is sealed under a
+/// A child that does not is a scope root: its subtree is sealed under a
 /// grantee's own seed, and cutting that grantee needs a re-key the bin does not
-/// carry, so a delete of it stays hard (ADR 0010 item 3).
-fn names_this_scope(scope: &DrainScope<'_>, node: NodeId, child: &ChildRef) -> bool {
-    derive_write_name(scope.write_scope_seed, &node.0)
+/// carry, so a delete of it stays hard (ADR 0010 item 3). Every other reader in
+/// the delete path derives the child's name the same way and never reads this
+/// field, so a child the comparison rejects is one this scope's write plane
+/// does not name either.
+fn names_this_scope(scope: &DrainScope<'_>, child: &ChildRef) -> bool {
+    derive_write_name(scope.write_scope_seed, &child.id)
         .as_str()
         .as_bytes()
         == child.ipns_name
@@ -201,9 +204,13 @@ fn halt_for_bin_publish(error: &BinIndexPublishError) -> Halt {
     match error {
         BinIndexPublishError::Codec(_)
         | BinIndexPublishError::Preflight(_)
-        | BinIndexPublishError::Unconfirmed
         | BinIndexPublishError::Revision => Halt::Attempt,
-        BinIndexPublishError::Entropy(_)
+        // A lost CAS race is the ordinary outcome of two devices soft-deleting
+        // at once, and a confirm the plane could not answer is availability
+        // ([`PublishOutcome`](crate::net::publish::PublishOutcome)). Charging
+        // either would let a remote party refuse the owner's delete for good.
+        BinIndexPublishError::Unconfirmed
+        | BinIndexPublishError::Entropy(_)
         | BinIndexPublishError::Publish(_)
         | BinIndexPublishError::Floor(_) => Halt::Unclassified,
     }
@@ -1514,7 +1521,15 @@ where
         Ok(())
     }
 
-    /// Delete: drop the parent's ref, then stop paying for what it detached.
+    /// Delete: drop the parent's ref, and either bin the node or stop paying
+    /// for what the unlink detached (blueprint/engine.md "Delete branch").
+    ///
+    /// `to_bin` selects the soft branch, which writes one bin entry and
+    /// reclaims nothing: the record stays published and the content stays
+    /// pinned, so a revoked grantee who holds the node's read key keeps reading
+    /// it for as long as the entry stands. That is the cost the re-key buys
+    /// back, and the re-key is not landed. The rest of this block describes the
+    /// hard branch.
     ///
     /// Everything reclaimable happens **after** the unlink publishes, which is
     /// the opposite of [`Self::publish_prune`]'s journal-first ordering and for
@@ -1556,36 +1571,23 @@ where
         else {
             return Ok(());
         };
-        let kind = child.kind;
 
-        if to_bin && names_this_scope(scope, target, &child) {
-            // The entry lands before the unlink: a crash between the two leaves
-            // a node that is both binned and still linked, which the retry
-            // settles. The reverse order leaves one that no folder names and no
-            // bin entry finds.
+        // The soft branch earns its bin entry before the unlink; the hard
+        // branch earns its doomed manifest. Both then unlink and republish the
+        // parent, which is where the op completes.
+        let doomed = if to_bin && names_this_scope(scope, &child) {
             self.record_bin_entry(scope, parent, &child, applied.op.authored_at.0)
                 .await?;
-            pass.folder_mut(parent)?
-                .children
-                .retain(|entry| entry.id != target.0);
-            self.publish_folder(
-                scope,
-                pass,
-                parent,
-                applied.op.authored_at.0,
-                Some(applied.op_id),
+            None
+        } else {
+            Some(
+                self.enumerate_doomed(scope, pass.epoch, parent, target, child.kind)
+                    .await?,
             )
-            .await
-            .map_err(Halt::from)?;
-            return Ok(());
-        }
-
-        let doomed = self
-            .enumerate_doomed(scope, pass.epoch, parent, target, kind)
-            .await?;
+        };
         pass.folder_mut(parent)?
             .children
-            .retain(|child| child.id != target.0);
+            .retain(|entry| entry.id != target.0);
         self.publish_folder(
             scope,
             pass,
@@ -1595,6 +1597,9 @@ where
         )
         .await
         .map_err(Halt::from)?;
+        let Some(doomed) = doomed else {
+            return Ok(());
+        };
         let reclamation = self.owed_by_delete(target, &doomed);
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
@@ -1840,7 +1845,17 @@ where
         )
         .await
         .writable()
-        .map_err(halt_for_bin_load)?;
+        .map_err(|reason| {
+            let halt = halt_for_bin_load(reason);
+            if halt == Halt::Attempt {
+                emit_trust_violation(
+                    self.events,
+                    self.bin_keys.name().as_str(),
+                    format!("bin index refused: {reason:?}"),
+                );
+            }
+            halt
+        })?;
         // A duplicate node id is a hard reject at encode, so a retry whose
         // entry already landed publishes nothing.
         if index.entries.iter().any(|entry| entry.node_id == child.id) {
@@ -1854,8 +1869,6 @@ where
             child.name.clone(),
             deleted_at,
             scope.root.0,
-            // A scope that needs the re-key takes the hard path, so this entry
-            // holds no key of its own.
             None,
         ));
         let held = publish_bin_index(
@@ -3991,7 +4004,57 @@ mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 
+    use crate::seams::SeamError;
     use crate::settings::PlacementRefusal;
+
+    /// The bin index split decides retry against charge for every soft delete,
+    /// so a wrong arm either abandons a delete the plane would have taken or
+    /// holds the queue head for good. A plane this pass could not read waits
+    /// uncharged; a refusal of bytes the plane actually served is charged.
+    #[test]
+    fn only_a_refusal_of_bytes_the_plane_served_is_charged_against_the_bin_index() {
+        for reason in [
+            DefaultsReason::RolledBack {
+                floor: 4,
+                sequence: 2,
+            },
+            DefaultsReason::RevisionRolledBack {
+                floor: 4,
+                revision: 2,
+            },
+            DefaultsReason::Unreadable,
+        ] {
+            assert_eq!(halt_for_bin_load(reason), Halt::Attempt, "{reason:?}");
+        }
+        for reason in [
+            DefaultsReason::UnprovenFirstRun,
+            DefaultsReason::Suppressed,
+            DefaultsReason::Expired,
+            DefaultsReason::TimedOut,
+            DefaultsReason::FloorUnreadable,
+        ] {
+            assert_eq!(halt_for_bin_load(reason), Halt::Unclassified, "{reason:?}");
+        }
+    }
+
+    /// The publish half of the same split. A lost race and an unanswered
+    /// confirm are availability, so a remote party cannot spend the attempt
+    /// budget and refuse the owner's delete for good.
+    #[test]
+    fn a_bin_index_publish_charges_only_what_this_build_authored() {
+        assert_eq!(
+            halt_for_bin_publish(&BinIndexPublishError::Revision),
+            Halt::Attempt
+        );
+        assert_eq!(
+            halt_for_bin_publish(&BinIndexPublishError::Unconfirmed),
+            Halt::Unclassified
+        );
+        assert_eq!(
+            halt_for_bin_publish(&BinIndexPublishError::Floor(SeamError::new("offline"))),
+            Halt::Unclassified
+        );
+    }
 
     /// The publish leg admits exactly what the read path admits. A block past
     /// the ceiling is refused even though it addresses to its own key, so a

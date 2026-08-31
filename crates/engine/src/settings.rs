@@ -71,13 +71,14 @@ pub struct VaultSettings {
 
 /// The longest bin retention the settings record admits, ten years in days.
 ///
-/// It bounds the expiry instant a retention evaluation derives from
-/// `deletedAt`, and it is the same bar on both sides of the codec: the wasm
-/// boundary, the encode path, and the decode path all refuse above it
-/// (AGENTS.md rule 8).
+/// The same bar stands on both sides of the codec: the wasm boundary, the
+/// encode path, and the decode path all refuse above it (AGENTS.md rule 8).
 pub const MAX_BIN_RETENTION_DAYS: u32 = 3650;
 
 /// The retention a vault gets before its owner chooses one (ADR 0010 item 6).
+///
+/// The delete branch reads it. The expiry sweep that would act on the window it
+/// names is not landed, so a soft-deleted node waits in the bin without bound.
 pub const DEFAULT_BIN_RETENTION_DAYS: u32 = 30;
 
 impl Default for VaultSettings {

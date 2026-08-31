@@ -432,7 +432,7 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
             retention: RetentionPolicy::KeepAll,
             bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         },
-        "the documented defaults: hosted pinning, no member provider, keep all,          and a bin that keeps a soft-deleted node for the default window",
+        "the documented defaults: hosted pinning, no member provider, keep all, and the default bin window",
     );
 }
 

@@ -8018,12 +8018,9 @@ where {
     }
 
     /// The bin retention this session loaded, which decides whether a delete is
-    /// soft (ADR 0010 item 2).
-    ///
-    /// A session with no settings summary yet takes the documented default, and
-    /// so does one whose load degraded. The two errors are not equal: a soft
-    /// delete reclaims nothing and stays reversible, while a hard delete the
-    /// owner did not ask for destroys the node.
+    /// soft (blueprint/engine.md "Delete branch"). A session with no settings
+    /// summary yet takes the documented default, and so does one whose load
+    /// degraded.
     fn bin_retention_days(&self) -> u32 {
         self.settings_summary
             .borrow()

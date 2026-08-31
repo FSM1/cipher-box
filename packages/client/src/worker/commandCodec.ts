@@ -7,7 +7,7 @@
  * No interpretation, no crypto — the engine below the facade owns all of that.
  */
 
-import { MAX_BIN_RETENTION_DAYS, MAX_FRAGMENT_CHARS } from './protocol.js';
+import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
@@ -175,12 +175,14 @@ function retentionCap(value: unknown, field: string): number {
 }
 
 /**
- * A bin retention in days. Bounded here as well as in the engine so the refusal
- * names the field, and so a wrapping `u32` cannot arrive as an unrelated span.
+ * A bin retention in days, bounded to the `u32` the builder takes for the same
+ * reason [`retentionCap`] is: the number ABI wraps rather than rejects. The
+ * policy bar itself is the engine's, and the builder names the field when it
+ * refuses.
  */
 function binRetentionDays(value: unknown, field: string): number {
   const days = count(value, field);
-  if (days > MAX_BIN_RETENTION_DAYS) throw invalidField(field, value);
+  if (days > 0xffff_ffff) throw invalidField(field, value);
   return days;
 }
 

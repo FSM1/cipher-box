@@ -120,6 +120,9 @@ describe('prefillFromSummary', () => {
           byoKind: 'psa',
           byoCredentialStored: true,
           keepLatestVersions: 5,
+          // A save replaces the whole record, so a choice the form renders no
+          // control for still has to come back out of the summary.
+          binRetentionDays: 0,
         })
       )
     ).toEqual({
@@ -127,6 +130,7 @@ describe('prefillFromSummary', () => {
       byoEndpoint: 'https://kubo.example',
       byoKind: 'psa',
       keepLatestVersions: '5',
+      binRetentionDays: 0,
       credentialStored: true,
     });
   });
@@ -137,6 +141,7 @@ describe('prefillFromSummary', () => {
       byoEndpoint: '',
       byoKind: 'kubo',
       keepLatestVersions: '',
+      binRetentionDays: 30,
       credentialStored: false,
     });
   });

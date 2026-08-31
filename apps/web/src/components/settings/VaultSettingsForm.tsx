@@ -58,8 +58,16 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
   // the vault now carries rather than what was typed at it. The credential is
   // blanked rather than prefilled: no read can carry one.
   useEffect(() => {
-    const { pinMode, byoEndpoint, byoKind, keepLatestVersions } = prefillFromSummary(summary);
-    setFields({ pinMode, byoEndpoint, byoKind, keepLatestVersions, byoAccessToken: '' });
+    const { pinMode, byoEndpoint, byoKind, keepLatestVersions, binRetentionDays } =
+      prefillFromSummary(summary);
+    setFields({
+      pinMode,
+      byoEndpoint,
+      byoKind,
+      keepLatestVersions,
+      binRetentionDays,
+      byoAccessToken: '',
+    });
     setClearCredential(false);
     setLoadAcknowledged(false);
   }, [summary]);

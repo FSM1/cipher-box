@@ -408,9 +408,11 @@ delete does.
   The reverse order leaves a node that no folder names and no bin entry finds.
   The retry is idempotent because a duplicate node id is a hard reject at
   encode, so an entry that already landed publishes nothing.
-- **A degraded settings load takes the soft branch.** The two errors are not
-  equal: a soft delete reclaims nothing and stays reversible, while a hard
-  delete the owner did not ask for destroys the node.
+- **A load that carries no member choice takes the soft branch.** A cached
+  copy is still the member's choice and still decides the branch; it is the
+  documented defaults that fall to the bin. The two errors are not equal: a
+  soft delete reclaims nothing and stays reversible, while a hard delete the
+  owner did not ask for destroys the node.
 - **A child that is a scope root stays hard.** Such a child publishes under a
   name this scope's write seed does not derive. Its subtree is sealed under a
   grantee's own seed, and cutting that grantee needs a re-key the bin does not

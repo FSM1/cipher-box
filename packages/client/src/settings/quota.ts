@@ -55,6 +55,7 @@ export function prefillFromSummary(summary: VaultSettingsSummaryDescriptor): {
   byoEndpoint: string;
   byoKind: ByoKind;
   keepLatestVersions: string;
+  binRetentionDays: number;
   credentialStored: boolean;
 } {
   return {
@@ -62,6 +63,7 @@ export function prefillFromSummary(summary: VaultSettingsSummaryDescriptor): {
     byoEndpoint: summary.byoEndpoint ?? '',
     byoKind: summary.byoKind ?? 'kubo',
     keepLatestVersions: summary.keepLatestVersions?.toString() ?? '',
+    binRetentionDays: summary.binRetentionDays,
     credentialStored: summary.byoCredentialStored,
   };
 }

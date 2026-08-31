@@ -7,8 +7,6 @@
 //! properties that do not are stated where they bite: the nonce rule at
 //! [`publish_bin_index`], and the rewrite guard at [`BinIndexLoad::writable`].
 
-use core::fmt;
-
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -106,7 +104,6 @@ pub enum BinIndexPublishError {
 /// The publish and load paths take this rather than the login secret, so the
 /// spawned task that writes a bin entry holds only what the bin index needs
 /// (AGENTS.md security rule 1).
-#[derive(Clone)]
 pub struct BinIndexKeys {
     signer: Ed25519Signer,
     seal_key: SecretBytes,
@@ -130,14 +127,6 @@ impl BinIndexKeys {
     #[must_use]
     pub fn name(&self) -> &IpnsName {
         &self.name
-    }
-}
-
-impl fmt::Debug for BinIndexKeys {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BinIndexKeys")
-            .field("name", &self.name)
-            .finish_non_exhaustive()
     }
 }
 
