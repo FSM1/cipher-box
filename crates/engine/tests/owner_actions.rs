@@ -34,7 +34,9 @@ use cipherbox_engine::net::author::{
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
-use cipherbox_engine::seams::{BoxedTask, Mailbox, RecordTransport, Scheduler, UnixMillis};
+use cipherbox_engine::seams::{
+    BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, UnixMillis,
+};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{
     open_repoint, scope_pointer_name, seal_repoint, vault_pointer_name,
@@ -1668,11 +1670,13 @@ impl ShareScenario {
     }
 }
 
-/// The recipient's own engine, on nothing but the shared record store and the
-/// sealed item on its inbox, adopts the share — at the permission the owner
-/// committed on the record, never the one the pointer advertises.
+/// `scopeId` is authored by the sharer and bound to nothing outside its own
+/// record, and every vault anchors its own root at the same id. A share that
+/// names that anchor would have the recipient adopt a foreign record as its own
+/// vault, so it is refused before the gate keys a durable floor on it. The
+/// fixture's sharer grants at its own root, which is exactly that id.
 #[test]
-fn the_recipient_accepts_a_shared_scope_at_the_owner_committed_permission() {
+fn a_share_naming_this_vaults_own_root_scope_is_refused_and_poisons_no_floor() {
     let fx = ShareScenario::new();
     let (mut recipient, _events, sealed) = fx.recipient_engine();
     block_on(recipient.command(Command::ImportContact {
@@ -1680,23 +1684,23 @@ fn the_recipient_accepts_a_shared_scope_at_the_owner_committed_permission() {
     }))
     .expect("the sharer's code imports");
 
-    let outcome = block_on(recipient.command(Command::AcceptShare {
-        sealed_share_pointer: sealed,
-    }))
-    .expect("the share is accepted end to end");
-    let CommandOutcome::ShareAccepted(accepted) = outcome else {
-        panic!("accepting a share answers with the adopted share");
-    };
-    assert_eq!(accepted.scope_id, SCOPE);
     assert_eq!(
-        accepted.permission,
-        CorePermission::Read,
-        "the committed ledger is authority, not the pointer's claim"
+        block_on(recipient.command(Command::AcceptShare {
+            sealed_share_pointer: sealed,
+        })),
+        Err(EngineError::TrustViolation {
+            message: "the record names this vault's own root scope".to_owned(),
+        }),
     );
-    assert!(accepted.newly_added);
-    assert!(
-        inbox(&fx.recipient_device).is_empty(),
-        "the item is acked only once the share is durable"
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        1,
+        "a refused accept acks nothing"
+    );
+    assert_eq!(
+        block_on(fx.recipient_device.floor_store.epoch_floor(&SCOPE)),
+        Ok(None),
+        "and the refusal lands before anything moves this vault's own floor"
     );
 }
 

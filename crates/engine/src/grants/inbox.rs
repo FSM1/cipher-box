@@ -58,6 +58,9 @@ pub(crate) struct ShareInbox<'a, M, T, H, F> {
     pub floors: &'a F,
     /// This device's encryption subkey.
     pub enc_secret: &'a X25519Secret,
+    /// This session's own root scope, which no received share may name
+    /// ([`AcceptError::OwnVaultScope`]).
+    pub vault_root_scope: [u8; 16],
 }
 
 impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T, H, F> {
@@ -82,12 +85,10 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
         };
         // Ahead of both durable loads, which cost a seal-open each: an inbox
         // carrying nothing for this arm spends neither.
-        let pointers: Vec<(&VerifiedMailboxItem, SharePointer)> = items
+        if !items
             .iter()
-            .filter_map(|item| Some((item, SharePointer::decode(&item.payload).ok()?)))
-            .take(MAX_ACCEPTS_PER_PASS)
-            .collect();
-        if pointers.is_empty() {
+            .any(|item| SharePointer::decode(&item.payload).is_ok())
+        {
             return;
         }
         let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
@@ -100,16 +101,28 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             .iter()
             .map(|contact| (contact.identity_pk().to_sec1(), contact))
             .collect();
+        // The budget is spent only on items this arm can retire. An item it
+        // leaves un-acked stays on the inbox, so budgeting before the sender
+        // filter would let a stranger's pointers hold every slot for good.
+        let pointers: Vec<(&VerifiedMailboxItem, SharePointer, &Contact)> = items
+            .iter()
+            .filter_map(|item| {
+                let pointer = SharePointer::decode(&item.payload).ok()?;
+                let contact = by_identity.get(&item.sender_identity.to_sec1())?;
+                Some((item, pointer, *contact))
+            })
+            .take(MAX_ACCEPTS_PER_PASS)
+            .collect();
+        if pointers.is_empty() {
+            return;
+        }
 
         let store = StagingReceivedShareStore::new(staging, self.enc_secret, entropy);
         let Ok(mut received) = store.load().await else {
             return;
         };
 
-        for (item, pointer) in pointers {
-            let Some(contact) = by_identity.get(&item.sender_identity.to_sec1()) else {
-                continue;
-            };
+        for (item, pointer, contact) in pointers {
             let Ok(name) = scope_name(&pointer.scope_root_name) else {
                 continue;
             };
@@ -131,6 +144,7 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
                 self.enc_secret,
                 &candidate,
                 &blobs,
+                &self.vault_root_scope,
                 &mut received,
             )
             .await
@@ -187,6 +201,8 @@ mod tests {
     /// The envelope version the fixture authors and the pointer seals under.
     const V: u64 = 1;
     const SCOPE: [u8; 16] = [0x5c; 16];
+    /// This vault's own root scope — the anchor no received share may name.
+    const VAULT_ROOT_SCOPE: [u8; 16] = [0u8; 16];
 
     fn sharer() -> EcdsaSigner {
         EcdsaSigner::from_scalar(&[0x31; 32]).expect("valid scalar")
@@ -345,6 +361,7 @@ mod tests {
                     http: &self.http,
                     floors: &self.floors,
                     enc_secret: &my_enc(),
+                    vault_root_scope: VAULT_ROOT_SCOPE,
                 }
                 .pull(&self.staging, &self.entropy, V, &sender),
             );
@@ -433,6 +450,28 @@ mod tests {
         assert!(
             matches!(events.as_slice(), [Event::AttributableAbuse { .. }]),
             "a bind failure is surfaced, never silent: {events:?}"
+        );
+    }
+
+    /// An item this arm leaves un-acked stays on the inbox for its transport TTL,
+    /// so a budget spent before the sender filter would let a stranger's pointers
+    /// hold every slot for good and starve every real share behind them.
+    #[test]
+    fn strangers_at_the_head_of_the_inbox_do_not_starve_a_contacts_share() {
+        let fx = Inbox::new();
+        fx.import(&sharer(), &sharer_enc());
+        for i in 0..MAX_ACCEPTS_PER_PASS {
+            fx.post(&stranger(), &fx.pointer(), &format!("stranger-{i}"));
+        }
+        fx.post(&sharer(), &fx.pointer(), "share-1");
+
+        fx.pull();
+
+        assert_eq!(fx.bookmarked(), vec![SCOPE], "the real share still lands");
+        assert_eq!(
+            fx.inbox_len(),
+            MAX_ACCEPTS_PER_PASS,
+            "and only the un-anchored items are left"
         );
     }
 

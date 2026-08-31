@@ -45,6 +45,10 @@ use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 
+/// The recipient's own vault root scope — the anchor a received share may never
+/// name. The fixture's shared scope is `[0x55; 16]`, so no accept here collides.
+const VAULT_ROOT_SCOPE: [u8; 16] = [0u8; 16];
+
 const V: u64 = 1;
 const TTL_NANOS: u64 = 2_000_000_000;
 const EOL: &str = "2027-01-01T00:00:00Z";
@@ -388,7 +392,13 @@ fn two_instance_share_accept_end_to_end() {
         &EPH_MAILBOX,
         V,
         &fx.owner_identity,
-        &fx.share_pointer().encode(),
+        // The pointer advertises more than the record commits, so an accept that
+        // believed it would show in the outcome.
+        &SharePointer {
+            permission: Permission::Write,
+            ..fx.share_pointer()
+        }
+        .encode(),
         "share-1",
     ))
     .expect("post");
@@ -439,11 +449,16 @@ fn two_instance_share_accept_end_to_end() {
         &fx.recipient_enc,
         &candidate,
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("accept succeeds end to end");
 
-    assert_eq!(outcome.permission, Permission::Read, "committed permission");
+    assert_eq!(
+        outcome.permission,
+        Permission::Read,
+        "the owner-signed commitment is authority, never the pointer's claim"
+    );
     assert_eq!(outcome.sequence, 1);
     assert!(outcome.newly_added);
     assert!(
@@ -500,6 +515,7 @@ fn two_instance_share_accept_end_to_end() {
         &fx.recipient_enc,
         &fx.candidate_with_record(fx.record_bytes(2)),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("re-accept");
@@ -560,6 +576,7 @@ fn uncommitted_tag_is_rejected_before_the_gate() {
         &fx.recipient_enc,
         &candidate,
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -638,6 +655,7 @@ fn unauthenticated_sender_is_dropped_and_wrong_contact_is_rejected() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -690,6 +708,7 @@ fn a_failed_gate_never_acks_the_item() {
         &fx.recipient_enc,
         &candidate,
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -743,6 +762,7 @@ fn a_failed_persist_never_acks_the_item() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -798,6 +818,7 @@ fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -830,6 +851,7 @@ fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("redelivery re-adopts once the store recovers");
@@ -887,6 +909,7 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -925,6 +948,7 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("redelivery takes the idempotent ack-only path");
@@ -988,6 +1012,7 @@ fn a_sequence_replay_for_an_unheld_scope_stays_rejected() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1037,6 +1062,7 @@ fn a_sequence_replay_is_not_reacked_off_another_sharers_bookmark() {
         &other.recipient_enc,
         &other.candidate(),
         &other.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("the other sharer's grant of the same scope id is accepted on its own terms");
@@ -1064,6 +1090,7 @@ fn a_sequence_replay_is_not_reacked_off_another_sharers_bookmark() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1110,6 +1137,7 @@ fn a_contact_cannot_ratchet_the_floor_of_a_scope_another_sharer_granted() {
         &hostile.recipient_enc,
         &hostile.candidate(),
         &hostile.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("the hostile grant is a valid grant of its own scope");
@@ -1131,6 +1159,7 @@ fn a_contact_cannot_ratchet_the_floor_of_a_scope_another_sharer_granted() {
         &honest.recipient_enc,
         &honest.candidate(),
         &honest.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("a contact with no authority over this scope cannot lock it out");
@@ -1193,6 +1222,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("first accept");
@@ -1238,6 +1268,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         &fx.recipient_enc,
         &candidate2,
         &blobs2,
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("re-accept self-heals");
@@ -1338,6 +1369,7 @@ fn pointer_sharer_mismatch_is_rejected_and_unacked() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1382,6 +1414,7 @@ fn tampered_commitment_is_rejected_at_the_gate_and_unacked() {
         &fx.recipient_enc,
         &candidate,
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1418,6 +1451,7 @@ fn no_blob_at_tag_is_rejected_and_unacked() {
         &fx.recipient_enc,
         &fx.candidate(),
         &no_blobs,
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1459,6 +1493,7 @@ fn tampered_grant_blob_fails_open_and_is_unacked() {
         &fx.recipient_enc,
         &fx.candidate(),
         &blobs,
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1498,6 +1533,7 @@ fn resolved_name_mismatch_is_rejected_and_unacked() {
         &fx.recipient_enc,
         &candidate,
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1714,6 +1750,7 @@ fn an_accepted_share_survives_a_restart_and_redelivery_reaccepts_against_the_per
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("accept");
@@ -1769,6 +1806,7 @@ fn an_accepted_share_survives_a_restart_and_redelivery_reaccepts_against_the_per
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("redelivery re-accepts against the persisted list");
@@ -1822,6 +1860,7 @@ fn a_recovered_persist_lands_in_the_durable_list() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .unwrap_err();
@@ -1851,6 +1890,7 @@ fn a_recovered_persist_lands_in_the_durable_list() {
         &fx.recipient_enc,
         &fx.candidate(),
         &fx.grant_blobs(),
+        &VAULT_ROOT_SCOPE,
         &mut received,
     ))
     .expect("redelivery re-adopts once the store recovers");

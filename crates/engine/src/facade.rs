@@ -1838,6 +1838,28 @@ fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), Engi
     Ok(())
 }
 
+/// Refuse a journal target the write plane cannot author under.
+///
+/// An accepted shared scope is grafted into the render tree with no parent link
+/// (`grants::received_status`), so a browse reaches it but the drain cannot:
+/// an op there names a chain that walks to no root this session publishes under.
+/// Refusing at journal time is the only order that works, on the same grounds as
+/// [`refuse_scope_exit`].
+///
+/// A node the render does not hold at all keeps its existing verdict — the
+/// rebase decides what a stale target means, and that is not this check's call.
+fn refuse_outside_vault(rendered: &Snapshot, node: NodeId) -> Result<(), EngineError> {
+    if rendered.contains(node)
+        && node != rendered.root
+        && !rendered.ancestors(node).contains(&rendered.root)
+    {
+        return Err(EngineError::ScopeExitRefused {
+            message: "that folder is not in this session's scope".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// The owner rotation arm over one engine's seam family.
 type OwnerNet<'a, T> = OwnerRotationNet<
     'a,
@@ -4176,6 +4198,7 @@ where {
                         http: &http,
                         floors: &floors,
                         enc_secret: &enc_subkey,
+                        vault_root_scope: root_id,
                     }
                     .pull(&staging, &entropy, ENVELOPE_V, &events)
                     .await;
@@ -5844,6 +5867,7 @@ where {
             .await
             .map_err(EngineError::from_received_share_store)?;
         let blobs = published_grant_blobs(&candidate.grant_section);
+        let vault_root_scope = self.snapshot.borrow().root.0;
         accept_share(
             &self.seams.floor_store,
             api.as_ref(),
@@ -5853,6 +5877,7 @@ where {
             session.enc_subkey(),
             &candidate,
             &blobs,
+            &vault_root_scope,
             &mut received,
         )
         .await
@@ -6058,9 +6083,14 @@ where {
         // no file for would journal an `updateContent` the drain can only halt
         // on, after a whole upload's worth of staging, entropy and budget.
         let base_version_cid = match &target {
-            WriteTarget::NewFile { .. } => None,
+            WriteTarget::NewFile { parent, .. } => {
+                refuse_outside_vault(&self.render().await?, *parent)?;
+                None
+            }
             WriteTarget::Version { node } => {
-                match self.render().await?.node(*node).map(|meta| meta.kind) {
+                let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, *node)?;
+                match rendered.node(*node).map(|meta| meta.kind) {
                     Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
                     Some(_) => self.write_anchor(*node).await?,
                     None => return Err(EngineError::UnknownNode),
@@ -7388,7 +7418,9 @@ where {
     /// the rendered view, defaulting to 1 for a node not yet in gate-passing
     /// state (a pending create).
     async fn base_sequence_for(&self, node: NodeId) -> Result<u64, EngineError> {
-        Ok(self.render().await?.record_sequence(node).unwrap_or(1))
+        let rendered = self.render().await?;
+        refuse_outside_vault(&rendered, node)?;
+        Ok(rendered.record_sequence(node).unwrap_or(1))
     }
 
     /// Mint a fresh random 16-byte node id from the injected entropy seam
@@ -7620,6 +7652,37 @@ mod tests {
             refuse_scope_exit(&rendered, orphan),
             Err(EngineError::ScopeExitRefused { .. })
         ));
+    }
+
+    /// An accepted shared scope is grafted in parentless, so a browse reaches it
+    /// but the write plane cannot author under it. A mutation there must be
+    /// refused where the caller can still be told, not journaled into a queue
+    /// whose drain can never walk its chain to a root.
+    #[test]
+    fn a_journal_target_outside_this_vaults_tree_is_refused() {
+        let root = NodeId([1; 16]);
+        let inside = NodeId([2; 16]);
+        let shared_root = NodeId([3; 16]);
+        let shared_child = NodeId([4; 16]);
+        let mut rendered = Snapshot::new(root);
+        rendered.upsert_node(NodeMeta::new(inside, "mine", NodeKind::Folder));
+        rendered.link_next(root, inside);
+        rendered.upsert_node(NodeMeta::new(shared_root, "theirs", NodeKind::Folder));
+        rendered.upsert_node(NodeMeta::new(shared_child, "theirs/sub", NodeKind::Folder));
+        rendered.link_next(shared_root, shared_child);
+
+        assert!(refuse_outside_vault(&rendered, root).is_ok());
+        assert!(refuse_outside_vault(&rendered, inside).is_ok());
+        assert!(
+            refuse_outside_vault(&rendered, NodeId([9; 16])).is_ok(),
+            "a node the render never held keeps the verdict the rebase gives it"
+        );
+        for node in [shared_root, shared_child] {
+            assert!(matches!(
+                refuse_outside_vault(&rendered, node),
+                Err(EngineError::ScopeExitRefused { .. })
+            ));
+        }
     }
 
     /// A transport that lands a settings save into `slot` before the resolve it

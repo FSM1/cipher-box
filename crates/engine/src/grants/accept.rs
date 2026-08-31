@@ -741,6 +741,12 @@ pub enum AcceptError {
     /// mis-paired pointer/record. KDF tag-binding already fails closed on this,
     /// so this is a defense-in-depth early reject.
     NameMismatch,
+    /// The record names this vault's own root scope. `scopeId` is authored by
+    /// the sharer and bound to nothing outside its own record, so a sender who
+    /// mints a scope root at the anchor would have this device adopt a foreign
+    /// record as its own vault — its durable floors, its render tree, and the
+    /// seed its own writes seal under. No share may ever name it.
+    OwnVaultScope,
     /// The sharer's contact encryption subkey is non-contributory — an unusable
     /// key for the blinded-tag ECDH.
     UnusableSharerKey,
@@ -773,6 +779,9 @@ impl fmt::Display for AcceptError {
             AcceptError::NameMismatch => {
                 f.write_str("resolved record name is not the pointer's scope root")
             }
+            AcceptError::OwnVaultScope => {
+                f.write_str("the record names this vault's own root scope")
+            }
             AcceptError::UnusableSharerKey => f.write_str("sharer contact key is non-contributory"),
             AcceptError::NoBlobAtTag => f.write_str("no grant blob at tag (revocation signal)"),
             AcceptError::UncommittedTag => f.write_str("tag is not in the owner-signed commitment"),
@@ -802,9 +811,10 @@ impl std::error::Error for AcceptError {}
 ///
 /// `candidate` is the resolved record (hand-fed here; the resolve pipeline is a
 /// sibling slice); `grant_blobs` is its published grant section for self-
-/// location. `received` must be the list `store` handed out — see
-/// [`ReceivedShareStore`] for why one live list per store is a caller
-/// invariant.
+/// location. `vault_root_scope` is this session's own root scope, which no
+/// received share may name ([`AcceptError::OwnVaultScope`]). `received` must be
+/// the list `store` handed out — see [`ReceivedShareStore`] for why one live
+/// list per store is a caller invariant.
 #[allow(clippy::too_many_arguments)]
 pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     floors: &F,
@@ -815,6 +825,7 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     my_enc_secret: &X25519Secret,
     candidate: &Candidate,
     grant_blobs: &[PublishedGrantBlob],
+    vault_root_scope: &[u8; 16],
     received: &mut ReceivedSharesList,
 ) -> Result<AcceptOutcome, AcceptError> {
     let pointer = SharePointer::decode(&item.payload).map_err(AcceptError::MalformedPointer)?;
@@ -835,6 +846,10 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     // opaque miss.
     if candidate.name.as_str().as_bytes() != pointer.scope_root_name.as_slice() {
         return Err(AcceptError::NameMismatch);
+    }
+    // Before the gate, which keys its durable floors on this very scope id.
+    if &candidate.envelope.scope == vault_root_scope {
+        return Err(AcceptError::OwnVaultScope);
     }
 
     // Self-locate: the ECDH peer is the VERIFIED contact enc subkey, never the

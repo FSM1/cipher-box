@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
+    AadContext, ChildRef, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
     verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
@@ -281,6 +281,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         if candidate.envelope.id != share.scope_id || candidate.envelope.scope != share.scope_id {
             return;
         }
+        // A bookmark at this vault's own anchor is one the accept flow refuses
+        // ([`AcceptError::OwnVaultScope`]); one persisted before that refusal
+        // existed must not reach the tree it would overwrite.
+        if render.base.borrow().root == NodeId(share.scope_id) {
+            return;
+        }
         let Some(tag) = recipient_blinded_tag(
             self.enc_secret,
             &contact.enc_subkey(),
@@ -352,6 +358,16 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let root = NodeId(share.scope_id);
         let mut base = render.base.borrow_mut();
+        // A sharer names their own children. An id this vault's own tree already
+        // holds is not one of them, so it is dropped rather than relinked out of
+        // the vault and under the shared root.
+        let children: Vec<ChildRef> = children
+            .into_iter()
+            .filter(|child| {
+                let id = NodeId(child.id);
+                id != base.root && !base.is_descendant_of(id, base.root)
+            })
+            .collect();
         // The scope root has no parent here to name it, so the pointer's label
         // is the only name a browse can show.
         let named = match base.node_mut(root) {
@@ -424,7 +440,7 @@ mod tests {
 
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
     use cipherbox_core::kdf;
-    use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, Permission, PreservedFields};
+    use cipherbox_core::seal::{NodeKind as CoreNodeKind, Permission, PreservedFields};
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::secret::SecretBytes;
@@ -843,6 +859,11 @@ mod tests {
 
     impl RenderedScope {
         fn new(children: Vec<ChildRef>) -> Self {
+            Self::rooted_at(children, VAULT_ROOT)
+        }
+
+        /// The same world, with this vault's own root anchored at `vault_root`.
+        fn rooted_at(children: Vec<ChildRef>, vault_root: [u8; 16]) -> Self {
             let sharer = sharer_signer();
             let name = scope_root_name();
             let grants = vec![
@@ -896,7 +917,7 @@ mod tests {
                 floors: InMemoryFloorStore::default(),
                 staging: InMemoryStagingStore::default(),
                 entropy: RefCell::new(SeededEntropy::new(9)),
-                base: RefCell::new(Snapshot::new(NodeId(VAULT_ROOT))),
+                base: RefCell::new(Snapshot::new(NodeId(vault_root))),
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
             };
@@ -910,20 +931,29 @@ mod tests {
 
         /// Bookmark the shared scope, as an accept would have.
         fn bookmark(&self) {
+            self.bookmark_sharers(&[sharer_signer().verifying_key().to_sec1()]);
+        }
+
+        /// Bookmark the shared scope once per identity in `sharers` — the same
+        /// `scopeId` claimed by each, which is what a second sharer minting that
+        /// id looks like from here.
+        fn bookmark_sharers(&self, sharers: &[[u8; IDENTITY_PUBLIC_LEN]]) {
             let mut list = ReceivedSharesList::new();
-            list.reconcile(ReceivedShare {
-                scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
-                scope_id: SCOPE,
-                sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
-                display_name: "shared-folder".to_owned(),
-                permission: Permission::Read,
-                pointer_read_key: SecretBytes::new([0x9a; 32]),
-            });
+            for sharer in sharers {
+                list.reconcile(ReceivedShare {
+                    scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
+                    scope_id: SCOPE,
+                    sharer_identity_pk: *sharer,
+                    display_name: "shared-folder".to_owned(),
+                    permission: Permission::Read,
+                    pointer_read_key: SecretBytes::new([0x9a; 32]),
+                });
+            }
             block_on(
                 StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy)
                     .persist(&list),
             )
-            .expect("the bookmark persists");
+            .expect("the bookmarks persist");
         }
 
         /// One received-share pass, with the head block its resolve fetches
@@ -1029,6 +1059,96 @@ mod tests {
             "an unbookmarked scope is no part of the tree"
         );
         assert!(fx.read_seeds.borrow().is_empty());
+    }
+
+    /// `scopeId` is the sharer's to author and every vault anchors its own root
+    /// at the same id, so a bookmark that names this vault's anchor must render
+    /// nothing — it would otherwise rename the vault root and unlink every child
+    /// the sharer's body does not list.
+    #[test]
+    fn a_bookmark_at_this_vaults_own_root_scope_grafts_nothing() {
+        let fx = RenderedScope::rooted_at(vec![shared_child(0xa1, "photos")], SCOPE);
+        fx.base.borrow_mut().upsert_node(NodeMeta::new(
+            NodeId([0x11; 16]),
+            "mine",
+            NodeKind::Folder,
+        ));
+        fx.base
+            .borrow_mut()
+            .link_next(NodeId(SCOPE), NodeId([0x11; 16]));
+        fx.bookmark();
+
+        fx.pass(0);
+
+        assert_eq!(
+            fx.listing(),
+            vec!["mine".to_owned()],
+            "this vault's own tree stands"
+        );
+        assert!(
+            fx.read_seeds.borrow().is_empty(),
+            "and its seed is untouched"
+        );
+    }
+
+    /// A sharer names their own children. An id this vault already owns is not
+    /// one of them, so a foreign body cannot relink a node out of the vault and
+    /// under the shared root.
+    #[test]
+    fn a_child_id_this_vault_already_owns_is_not_grafted() {
+        let mine = [0x11; 16];
+        let fx = RenderedScope::new(vec![
+            shared_child(0xa1, "photos"),
+            ChildRef {
+                id: mine,
+                name: "stolen".to_owned(),
+                ipns_name: vec![0x11],
+                kind: CoreNodeKind::Folder,
+                link_counter: 9,
+                unknown: PreservedFields::new(),
+            },
+        ]);
+        fx.base
+            .borrow_mut()
+            .upsert_node(NodeMeta::new(NodeId(mine), "mine", NodeKind::Folder));
+        fx.base
+            .borrow_mut()
+            .link_next(NodeId(VAULT_ROOT), NodeId(mine));
+        fx.bookmark();
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+        let base = fx.base.borrow();
+        assert_eq!(base.parent_of(NodeId(mine)), Some(NodeId(VAULT_ROOT)));
+        assert_eq!(
+            base.node(NodeId(mine)).expect("still held").name(),
+            "mine",
+            "and the sharer could not rename it either"
+        );
+    }
+
+    /// A browse addresses a scope by its id alone, but the sharer authors that
+    /// id, so two sharers can each claim one. Neither subtree may then render:
+    /// an open on that id could only guess which sharer it meant.
+    #[test]
+    fn a_scope_id_two_sharers_claim_renders_for_neither() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark_sharers(&[
+            sharer_signer().verifying_key().to_sec1(),
+            SHARER_IDENTITY_PK,
+        ]);
+
+        fx.pass(0);
+
+        assert!(
+            fx.base.borrow().node(NodeId(SCOPE)).is_none(),
+            "the contested id is no part of the tree"
+        );
+        assert!(
+            fx.read_seeds.borrow().is_empty(),
+            "and no sharer's seed is cached under it"
+        );
     }
 
     /// The steady state: the transport re-serves the record this vault already
