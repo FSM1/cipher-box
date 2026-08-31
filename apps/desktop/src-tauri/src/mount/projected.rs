@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cipherbox_engine::{Engine, Event};
-use cipherbox_fuse::{CacheBudget, FuseInvalidator, FuseMount, OperationCore, SpillArea};
+use cipherbox_fuse::{
+    CacheBudget, FuseInvalidator, FuseMount, OperationCore, Publication, SpillArea,
+};
 use tokio::task::JoinHandle;
 
 use super::{FromMount, MountStatus};
@@ -27,6 +29,12 @@ const NO_HOME: &str = "this device has no home directory to mount the vault unde
 
 /// Shown when the mounting thread ended without a verdict.
 const NO_VERDICT: &str = "the mount stopped before it said whether it had been made";
+
+/// Shown when the backend never published the mount at the mount point. Until
+/// it does, that path is the directory under the mount, and a write there
+/// reaches no engine — so the session says the vault is not projected rather
+/// than name a mount point that takes writes and loses them.
+const NOT_PUBLISHED: &str = "the mount was made but the backend never published it";
 
 /// How long a session that is ending waits for a mount still being made. The
 /// mount unmounts itself when the handle it lands in is dropped, so the wait
@@ -119,8 +127,16 @@ impl Projection {
             Self::Opening { .. } => MountStatus::Opening,
             Self::Detached { refusal, .. } => MountStatus::refused(refusal),
             Self::Projected { mount: None, .. } => MountStatus::refused(ENDED),
-            Self::Projected { at, .. } => MountStatus::Mounted {
-                path: at.display().to_string(),
+            Self::Projected {
+                mount: Some(mount),
+                at,
+                ..
+            } => match mount.publication() {
+                Publication::Live => MountStatus::Mounted {
+                    path: at.display().to_string(),
+                },
+                Publication::Pending => MountStatus::Opening,
+                Publication::Refused => MountStatus::refused(NOT_PUBLISHED),
             },
         }
     }

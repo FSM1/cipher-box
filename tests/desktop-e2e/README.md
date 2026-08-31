@@ -11,24 +11,19 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - `mount-lifecycle` — a headless shell starts on a dev key, mints the vault,
   projects it as a filesystem, answers a manual refresh, and gives the mount
   back on `quit`
+- `write-round-trip` — a folder, a file at the mount root, and a file inside
+  the folder all reach the engine and read back; a platform-junk name is
+  refused and stays out of every listing
+- `conflict-outcomes` — a call that conflicts with the vault reaches the
+  caller as an error and leaves the vault as it was
+- `cross-client-convergence` — two instances of one vault, and what one writes
+  through its mount the other reads through its own
+- `offline-replay` — the orchestrator stops the API, the mount keeps taking
+  writes, and the second instance reads them once the API returns
 
-## What it does not cover yet
-
-The filesystem scenarios — a write round trip, cross-client convergence, the
-conflict outcomes the projection renders, and offline replay — are not here.
-The mount opens and answers, but the operations a scenario needs do not behave
-yet on any host this suite can run:
-
-- On macOS a `mkdir` at the mount root returns success and the vault root still
-  renders no child. A file created directly at the mount root answers `EISDIR`,
-  and a platform-junk name is taken rather than refused.
-- On Linux the shell reaches GTK and then never runs its setup hook, so it
-  arms no control endpoint and mounts nothing.
-- On Windows the shell builds the detached projection, so it makes no mount.
-
-Each one is a host-side defect rather than a harness defect, and each has its
-own issue. The harness here — the instance, the control client, the poll, the
-stack and the orchestrator — is what those scenarios will stand on.
+The mount root is the case `write-round-trip` exists for. A backend that has
+not published its mount yet leaves that path serving the directory under it,
+and a write there returns success and reaches no engine.
 
 ## How the suite logs in
 

@@ -28,7 +28,7 @@ mod ntstatus;
 mod ops;
 mod spill;
 
-pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use adapters::fuse::{FuseInvalidator, FuseMount, KernelOp};
 /// Mount the vault under this platform's backend. One name for every platform,

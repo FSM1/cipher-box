@@ -331,6 +331,22 @@ fn statfs_counts_reachable_nodes_and_the_advertised_name_limit_is_enforced() {
 
 // --- the never-block law ---
 
+/// Zero is the FUSE-family null handle. FUSE-T's SMB backend reads a `fh` of
+/// zero as a file that was never opened and drops the write that follows the
+/// create which handed it out, so the first handle of a session — the one a
+/// member's first file at the mount root gets — must not be zero.
+#[test]
+fn no_handle_a_host_is_given_is_the_null_handle() {
+    let (mut core, _adapter) = mount();
+
+    let (_, created) = block_on(core.create(ROOT_INO, "first.txt", Access::ReadWrite))
+        .expect("the first file of the session");
+    assert_ne!(created.0, 0, "a created handle must not read as no handle");
+
+    let walk = block_on(core.opendir(ROOT_INO)).expect("the first walk of the session");
+    assert_ne!(walk.0, 0, "a directory handle must not read as no handle");
+}
+
 #[test]
 fn the_read_surface_never_yields() {
     let (mut core, _adapter) = mount();

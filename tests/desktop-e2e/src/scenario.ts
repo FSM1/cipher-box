@@ -2,9 +2,12 @@
  * What every scenario gets, and the assertions they share.
  */
 
+import { strict as assert } from 'node:assert';
 import { stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { VaultStatus } from './control';
 import type { Instance } from './instance';
+import { poll } from './poll';
 import type { Deadlines } from './profile';
 import type { Stack } from './stack';
 
@@ -72,4 +75,49 @@ function withDeadline<T>(body: Promise<T>, timeoutMs: number): Promise<T> {
     timer.unref();
   });
   return Promise.race([body, expiry]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Waits until `instance` renders `items` children at the vault root, and fails
+ * if the engine dead-lettered anything on the way.
+ *
+ * The rendered root carries the pending-op overlay, so this proves the engine
+ * accepted the work rather than that it published it. Only a second instance
+ * that refreshes and reads proves a publish.
+ */
+export async function rendersItems(
+  context: ScenarioContext,
+  instance: Instance,
+  items: number,
+  what: string
+): Promise<VaultStatus> {
+  return poll(
+    () => instance.status(),
+    (status) => status.items === items && status.deadLetters === 0,
+    {
+      what: `${instance.name}: ${what}`,
+      timeoutMs: context.deadlines.refreshMs,
+      intervalMs: context.deadlines.intervalMs,
+    }
+  );
+}
+
+/**
+ * Asserts that a filesystem call the projection must refuse did refuse, and
+ * hands back the error it refused with.
+ *
+ * An operation the engine did not accept must reach the caller as an error. A
+ * call that returns success and reaches no engine is silent loss, which is
+ * worse than any refusal.
+ */
+export async function refuses(
+  call: Promise<unknown>,
+  what: string
+): Promise<NodeJS.ErrnoException> {
+  try {
+    await call;
+  } catch (error) {
+    return error as NodeJS.ErrnoException;
+  }
+  assert.fail(`${what} must be refused, and it succeeded`);
 }
