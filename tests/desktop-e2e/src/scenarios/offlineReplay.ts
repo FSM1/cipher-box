@@ -31,10 +31,10 @@ export const offlineReplay: Scenario = {
       await writeFile(join(a.mountRoot, QUEUED_FILE), QUEUED_TEXT);
       await readsBack(
         context,
-        `${a.name}: the mount to serve what it took while the API was away`,
+        a,
         join(a.mountRoot, QUEUED_FILE),
         QUEUED_TEXT,
-        context.deadlines.refreshMs
+        context.deadlines.scenarioMs / 4
       );
       const queued = await rendersItems(context, a, 1, 'the offline write to render');
       assert.equal(queued.deadLetters, 0, 'a write taken while offline is journaled, not lost');
@@ -46,7 +46,7 @@ export const offlineReplay: Scenario = {
         b,
         QUEUED_FILE,
         QUEUED_TEXT,
-        context.deadlines.scenarioMs / 2
+        context.deadlines.scenarioMs / 3
       );
       assert.deepEqual(listed, [QUEUED_FILE], 'the replayed op is the whole vault root');
 

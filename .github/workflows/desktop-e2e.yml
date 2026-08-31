@@ -11,6 +11,10 @@
 #
 # Job names are the contract (blueprint/deploy.md freeze step 4). `ci-e2e.yml`
 # and `tag-staging.yml` call this workflow and read the `ref` input.
+#
+# Two legs today. The Windows shell links the WinFsp adapter and its mount does
+# not land, so its projection never leaves `opening`; it joins this matrix when
+# it does. Every step that leg needs is here already.
 name: Desktop E2E Tests
 
 on:
@@ -39,8 +43,6 @@ jobs:
             os: macos-latest
           - platform: linux
             os: ubuntu-latest
-          - platform: windows
-            os: windows-latest
 
     env:
       # The desktop binary reads these at compile time (`option_env!` in

@@ -53,26 +53,28 @@ export async function withInstances<T>(
   try {
     // In order: two cold starts of one secret must not race to mint one vault.
     for (const name of names) started.push(await context.start(name));
-    return await withDeadline(body(started), context.deadlines.scenarioMs);
+    return await withDeadline(body(started), context.deadlines.scenarioMs, started);
   } finally {
     for (const instance of started.reverse()) await instance.stop();
   }
 }
 
 /**
- * Fails the scenario when its whole body outlasts the budget.
+ * Fails the scenario when its whole body outlasts the budget, and takes its
+ * mounts away when it does.
  *
- * A kernel call on a mount has no timeout of its own, so a mount that stops
- * answering hangs the process rather than the wait. The teardown that follows
- * unmounts, which is what releases the call.
+ * A kernel call on a mount has no timeout of its own. Rejecting the race leaves
+ * every blocked call holding one of the few filesystem threads Node has, and
+ * the teardown that follows needs those threads — so the mounts go first, which
+ * is what returns the calls.
  */
-function withDeadline<T>(body: Promise<T>, timeoutMs: number): Promise<T> {
+function withDeadline<T>(body: Promise<T>, timeoutMs: number, started: Instance[]): Promise<T> {
   let timer: NodeJS.Timeout;
   const expiry = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`the scenario did not finish within ${timeoutMs}ms`)),
-      timeoutMs
-    );
+    timer = setTimeout(() => {
+      void Promise.all(started.map((instance) => instance.abandon()));
+      reject(new Error(`the scenario did not finish within ${timeoutMs}ms`));
+    }, timeoutMs);
     timer.unref();
   });
   return Promise.race([body, expiry]).finally(() => clearTimeout(timer));
@@ -134,16 +136,16 @@ export async function refuses(
  */
 export async function readsBack(
   context: ScenarioContext,
-  what: string,
+  instance: Instance,
   path: string,
   text: string,
   timeoutMs: number
 ): Promise<void> {
   await poll(
-    () => contentOf(path),
-    (read) => read === text,
+    async () => ({ read: await contentOf(path), vault: await instance.status() }),
+    (found) => found.read === text,
     {
-      what: `${what} to read back what was written`,
+      what: `${instance.name}: ${path} to read back what was written`,
       timeoutMs,
       intervalMs: context.deadlines.intervalMs,
     }
@@ -173,7 +175,7 @@ export async function readsThrough(
       const read = listed.includes(name)
         ? await contentOf(join(instance.mountRoot, name))
         : 'not listed';
-      return { listed, read };
+      return { listed, read, vault: await instance.status() };
     },
     (found) => found.read === text,
     {

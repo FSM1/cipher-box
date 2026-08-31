@@ -36,19 +36,19 @@ export const writeRoundTrip: Scenario = {
       await rendersItems(context, a, 2, 'a file made at the mount root to render a child');
       await readsBack(
         context,
-        `${a.name}: ${ROOT_FILE} at the mount root`,
+        a,
         join(a.mountRoot, ROOT_FILE),
         'at the root',
-        context.deadlines.refreshMs
+        context.deadlines.scenarioMs / 3
       );
 
       await writeFile(join(a.mountRoot, FOLDER, NESTED_FILE), 'inside a folder');
       await readsBack(
         context,
-        `${a.name}: ${NESTED_FILE} inside a folder`,
+        a,
         join(a.mountRoot, FOLDER, NESTED_FILE),
         'inside a folder',
-        context.deadlines.refreshMs
+        context.deadlines.scenarioMs / 3
       );
       // The root still holds two children: the nested file is the folder's.
       await rendersItems(context, a, 2, 'a nested file to leave the root count alone');

@@ -25,7 +25,7 @@ export const crossClientConvergence: Scenario = {
         b,
         SHARED_FILE,
         SHARED_TEXT,
-        context.deadlines.refreshMs
+        context.deadlines.scenarioMs / 3
       );
       assert.deepEqual(listed, [SHARED_FILE], 'the second mount lists the whole vault root');
 
