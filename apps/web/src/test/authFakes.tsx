@@ -88,7 +88,6 @@ export function fakeEngineClient(
     /** What the storage pane reads back; `null` stands for a probe that failed. */
     vaultStorage: () => Promise<VaultStorageDescriptor>;
     authMethods: () => Promise<AuthMethodDescriptor[]>;
-    /** The accepted shares the `/shared` route reads back. */
     receivedShares: () => Promise<ReceivedShareDescriptor[]>;
   }> = {}
 ) {

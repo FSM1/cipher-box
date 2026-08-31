@@ -37,7 +37,6 @@ async function renderShared(receivedShares?: () => Promise<ReceivedShareDescript
   return engine;
 }
 
-/** Every rendered standing, in list order: the engine's class and its weight. */
 function standings(): { resolution: string | undefined; tone: string | undefined }[] {
   return screen
     .getAllByTestId('shared-standing')
