@@ -5561,37 +5561,41 @@ where {
         }
         let links = records.links.clone();
 
+        // The cut names the tag the set carries now; the record set files the
+        // link under the tag it was minted at, and a write wave between the two
+        // moves them apart ([`CommittedLink`]).
+        let mut recorded_tag = None;
         // Owner-only, and derived from the owner's own records: the tag comes
         // from a record this session's encryption subkey re-derives, never from
         // the command.
-        let tag = self
-            .cut_and_rotate(
-                node,
-                "revoke-link-target-is-not-a-scope-root",
-                UnindexedScope::Derive,
-                CutKind::Revoke,
-                async |target: &OwnerScope, current: &CascadeTarget| {
-                    let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
-                    locate_invite_link(
-                        &OwnerAuthority {
-                            identity_signer: session.identity(),
-                            enc_secret: session.enc_subkey(),
-                        },
-                        &CommittedScope {
-                            scope_id: &target.scope.scope_id,
-                            commitment: &current.commitment,
-                            commitment_sig: &commitment_sig,
-                            ledger: &current.grant_ledger,
-                        },
-                        &links,
-                    )
-                    .map(|link| link.tag)
-                    .map_err(EngineError::from_invite)
-                },
-            )
-            .await?;
+        self.cut_and_rotate(
+            node,
+            "revoke-link-target-is-not-a-scope-root",
+            UnindexedScope::Derive,
+            CutKind::Revoke,
+            async |target: &OwnerScope, current: &CascadeTarget| {
+                let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
+                let link = locate_invite_link(
+                    &OwnerAuthority {
+                        identity_signer: session.identity(),
+                        enc_secret: session.enc_subkey(),
+                    },
+                    &CommittedScope {
+                        scope_id: &target.scope.scope_id,
+                        commitment: &current.commitment,
+                        commitment_sig: &commitment_sig,
+                        ledger: &current.grant_ledger,
+                    },
+                    &links,
+                )
+                .map_err(EngineError::from_invite)?;
+                recorded_tag = Some(link.record.tag);
+                Ok(link.tag)
+            },
+        )
+        .await?;
 
-        records.forget_links(&BTreeSet::from([tag]));
+        records.forget_links(&BTreeSet::from_iter(recorded_tag));
         store
             .persist(&records)
             .await
@@ -7087,15 +7091,17 @@ where {
         // permanent and needs no action, while this one does — and while it
         // stands, a link minted here would only mint claims that cannot convert.
         let invite_link_refusal = match live {
-            Some(link) if link_budget_full(sources, &link.tag) => Some(LINK_CONTACT_BUDGET_FULL),
+            Some(link) if link_budget_full(sources, &link.record.tag) => {
+                Some(LINK_CONTACT_BUDGET_FULL)
+            }
             _ => invite_link_refusal,
         };
         let now = self.seams.scheduler.now();
         let invite_links = split.as_ref().map(|split| SharingInviteLinks {
             live: live.is_some(),
-            expires_at: live.and_then(|link| link.expires_at),
+            expires_at: live.and_then(|link| link.record.expires_at),
             expired: live
-                .and_then(|link| link.expires_at)
+                .and_then(|link| link.record.expires_at)
                 .is_some_and(|deadline| now.0 >= deadline.0),
             spent: u32::try_from(split.spent.len()).unwrap_or(u32::MAX),
         });

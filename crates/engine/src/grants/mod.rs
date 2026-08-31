@@ -46,10 +46,10 @@ pub use create::{
     mint_grantee_scope,
 };
 pub use invite::{
-    CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,
-    EphemeralInvitee, InviteClaim, InviteError, InviteFragment, MAX_INVITE_FRAGMENT_BYTES,
-    MintedInvite, OwnerAuthority, RecordedInvite, ScopeLinks, convert_invite_claim,
-    link_binds_scope, locate_invite_link, mint_invite_grant, partition_scope_links,
+    CLAIM_ID_LEN, ClaimOutcome, CommittedLink, CommittedScope, ConvertedClaim,
+    ConvertedClaimRecord, EphemeralInvitee, InviteClaim, InviteError, InviteFragment,
+    MAX_INVITE_FRAGMENT_BYTES, MintedInvite, OwnerAuthority, RecordedInvite, ScopeLinks,
+    convert_invite_claim, locate_invite_link, mint_invite_grant, partition_scope_links,
     post_invite_claim,
 };
 pub use invite_mint::{InviteMintError, InviteMintPlan, MintedInviteLink, mint_invite_link};
