@@ -2979,6 +2979,9 @@ impl<T: SeamTypes> Engine<T> {
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
                 // the base snapshot; children come from the pending-op overlay.
+                // Shared by every account on purpose: a well-known anchor, never
+                // an account discriminator — separation lives in the KDFs and in
+                // the per-identity seam views that consume it.
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 settings_record: Rc::new(RefCell::new(None)),
