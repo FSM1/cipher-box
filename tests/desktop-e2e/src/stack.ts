@@ -70,10 +70,10 @@ export class Stack {
 
     try {
       await poll(
-        () => answers(this.options.apiUrl),
+        () => serves(this.options.apiUrl),
         (up) => up,
         {
-          what: `the API to answer ${this.options.apiUrl}; its log is ${logPath}`,
+          what: `the API to serve a login at ${this.options.apiUrl}; its log is ${logPath}`,
           timeoutMs: this.options.deadlines.apiReadyMs,
           intervalMs: this.options.deadlines.intervalMs,
         }
@@ -113,12 +113,40 @@ export class Stack {
   }
 }
 
+const PROBE_TIMEOUT_MS = 2_000;
+
+/** Liveness: a process holds the port. `/health` is static and answers nothing else. */
 async function answers(apiUrl: string): Promise<boolean> {
   try {
     const response = await fetch(new URL('/health', apiUrl), {
-      signal: AbortSignal.timeout(2_000),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Readiness: the login surface is mapped.
+ *
+ * A host logs in as its first act, so liveness is the wrong barrier: `/health`
+ * carries no guard, no pipe and no route of the auth controller, and a scenario
+ * that starts on it alone can meet a 404 on the route it needs. A refusal the
+ * route itself made proves it is mapped, so any answer below 404 or between 405
+ * and 499 counts; the empty body draws a validation refusal that leaves no
+ * state behind, and a 5xx is an API still on its way.
+ */
+export async function serves(apiUrl: string): Promise<boolean> {
+  if (!(await answers(apiUrl))) return false;
+  try {
+    const response = await fetch(new URL('/auth/challenge', apiUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    return response.status !== 404 && response.status < 500;
   } catch {
     return false;
   }

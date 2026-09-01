@@ -1,10 +1,12 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { poll } from './poll';
 import type { Deadlines } from './profile';
-import { Stack } from './stack';
+import { Stack, serves } from './stack';
 
 /** Small budgets: these tests prove the refusal path, not a real API start. */
 const BUDGET: Deadlines = {
@@ -73,13 +75,13 @@ describe('Stack.start', () => {
     expect((refusal as Error).message).toContain('the built API is absent');
   });
 
-  it('refuses a start whose API never answers its health probe', async () => {
+  it('refuses a start whose API never serves', async () => {
     const { entry } = await silentApi();
 
     const refusal = await startSilent(entry);
 
     expect(refusal).toBeInstanceOf(Error);
-    expect((refusal as Error).message).toContain('the API to answer');
+    expect((refusal as Error).message).toContain('the API to serve a login');
   });
 
   it('leaves no API process behind when that start is refused', async () => {
@@ -103,5 +105,54 @@ describe('Stack.start', () => {
       { what: 'the refused API process to be gone', timeoutMs: 2_000, intervalMs: 25 }
     );
     leftover = null;
+  });
+});
+
+describe('the readiness gate', () => {
+  let running: Server | null = null;
+
+  afterEach(async () => {
+    const server = running;
+    running = null;
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  /** An API stand-in that answers each path with the status this map names. */
+  async function serving(routes: Record<string, number>): Promise<string> {
+    const server = createServer((request, response) => {
+      const path = (request.url ?? '/').split('?')[0];
+      response.writeHead(routes[path] ?? 404).end();
+    });
+    running = server;
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  it('refuses a port nothing holds', async () => {
+    expect(await serves(SILENT_URL)).toBe(false);
+  });
+
+  it('refuses an API that answers its health probe and maps no login route', async () => {
+    const url = await serving({ '/health': 200 });
+
+    expect(await serves(url)).toBe(false);
+  });
+
+  it('accepts an API whose login route refuses the probe body', async () => {
+    const url = await serving({ '/health': 200, '/auth/challenge': 400 });
+
+    expect(await serves(url)).toBe(true);
+  });
+
+  it('refuses an API whose login route is mapped and still failing', async () => {
+    const url = await serving({ '/health': 200, '/auth/challenge': 503 });
+
+    expect(await serves(url)).toBe(false);
+  });
+
+  it('refuses an API whose health probe fails, however it maps the login route', async () => {
+    const url = await serving({ '/health': 503, '/auth/challenge': 400 });
+
+    expect(await serves(url)).toBe(false);
   });
 });

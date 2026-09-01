@@ -203,12 +203,33 @@ export async function sendOrThrow(
   return answer;
 }
 
-export async function status(endpoint: ControlEndpoint, timeoutMs: number): Promise<VaultStatus> {
-  const answer = await sendOrThrow(endpoint, 'status', timeoutMs);
+/**
+ * The refusal the shell answers a status with while its headless start is still
+ * in flight. The `e2e-hook` entry publishes the control endpoint before it
+ * starts the engine, so a status can reach the shell before a session exists.
+ */
+export const NO_SESSION = 'no session is live on this device';
+
+/** The status, or null while the shell holds no session yet. */
+export async function statusOrPending(
+  endpoint: ControlEndpoint,
+  timeoutMs: number
+): Promise<VaultStatus | null> {
+  const answer = await send(endpoint, 'status', timeoutMs);
+  if (!answer.ok) {
+    if (answer.error === NO_SESSION) return null;
+    throw new Error(`the control endpoint refused status: ${answer.error}`);
+  }
   if (!answer.status) {
     throw new ControlProtocolError('the control endpoint accepted status but sent no status');
   }
   return answer.status;
+}
+
+export async function status(endpoint: ControlEndpoint, timeoutMs: number): Promise<VaultStatus> {
+  const read = await statusOrPending(endpoint, timeoutMs);
+  if (!read) throw new Error(`the control endpoint refused status: ${NO_SESSION}`);
+  return read;
 }
 
 export async function refresh(endpoint: ControlEndpoint, timeoutMs: number): Promise<void> {

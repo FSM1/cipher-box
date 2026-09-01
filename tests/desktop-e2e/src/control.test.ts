@@ -1,10 +1,12 @@
 import { createServer, type AddressInfo, type Server } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  NO_SESSION,
   formatRequest,
   parseControlFile,
   parseResponse,
   status,
+  statusOrPending,
   type VaultStatus,
 } from './control';
 
@@ -186,6 +188,26 @@ describe('the answer a socket delivers', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     return (server.address() as AddressInfo).port;
   }
+
+  /** A stand-in endpoint that answers every request with one whole line. */
+  function answering(line: string): Promise<number> {
+    const answer = Buffer.from(`${line}\n`, 'utf8');
+    return serving(answer, answer.length);
+  }
+
+  it('reads the cold start as pending rather than as a failure', async () => {
+    const port = await answering(JSON.stringify({ ok: false, error: NO_SESSION }));
+
+    expect(await statusOrPending({ port, token: TOKEN }, 5_000)).toBeNull();
+  });
+
+  it('raises every other refusal at once', async () => {
+    const port = await answering(JSON.stringify({ ok: false, error: 'the token is wrong' }));
+
+    await expect(statusOrPending({ port, token: TOKEN }, 5_000)).rejects.toThrow(
+      /the token is wrong/
+    );
+  });
 
   it('keeps a character whose bytes cross two chunks', async () => {
     const mount = { state: 'mounted', path: '/tmp/home/CipherBøx' };
