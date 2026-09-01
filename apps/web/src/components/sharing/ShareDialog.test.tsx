@@ -36,6 +36,7 @@ const folder: ListingRow = {
   id: DOCS,
   key: toHex(DOCS),
   name: 'docs',
+  storedName: 'docs',
   kind: 'folder',
   icon: '[DIR]',
   size: '-',

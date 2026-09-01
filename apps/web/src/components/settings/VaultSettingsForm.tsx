@@ -67,7 +67,7 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
       byoEndpoint,
       byoKind,
       keepLatestVersions,
-      binRetentionDays,
+      binRetentionDays: String(binRetentionDays),
       byoAccessToken: '',
     });
     setAcknowledged(false);
@@ -204,6 +204,20 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
           onChange={(event) => set('keepLatestVersions', event.target.value)}
         />
       </label>
+
+      <label className="settings-field" htmlFor="settings-bin-retention">
+        <span>days a deleted item is kept</span>
+        <input
+          id="settings-bin-retention"
+          className="dialog-input"
+          type="text"
+          inputMode="numeric"
+          value={fields.binRetentionDays}
+          onChange={(event) => set('binRetentionDays', event.target.value)}
+        />
+      </label>
+
+      <p className="sharing-note">{'// 0 deletes outright and keeps no bin'}</p>
 
       {/* A `defaults` load knows nothing about the record, so it can claim
           nothing about what the vault holds. */}

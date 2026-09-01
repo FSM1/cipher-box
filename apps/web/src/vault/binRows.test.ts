@@ -15,6 +15,12 @@ describe('the bin rows', () => {
     expect(row.key).toBe('07'.repeat(16));
   });
 
+  it('neutralises the name a purge dialog reads back', () => {
+    const [row] = binRows([entry({ originName: 'report\u202Efdp.exe' })], 30);
+
+    expect(row.name).toBe('reportfdp.exe');
+  });
+
   it('marks a folder apart from a file', () => {
     expect(binRows([entry({ kind: 'folder' })], 30)[0].icon).toBe('[DIR]');
   });
@@ -64,5 +70,18 @@ describe('the bin rows', () => {
     );
 
     expect(rows.map((row) => row.name)).toEqual(['c', 'a', 'b']);
+  });
+
+  it('ties by the name it shows, so a stripped control cannot move a row', () => {
+    // A leading tab sorts ahead of every letter but renders as nothing.
+    const rows = binRows(
+      [
+        entry({ originName: '\tzebra', deletedAt: NEW_YEAR }),
+        entry({ originName: 'apple', deletedAt: NEW_YEAR }),
+      ],
+      30
+    );
+
+    expect(rows.map((row) => row.name)).toEqual(['apple', 'zebra']);
   });
 });

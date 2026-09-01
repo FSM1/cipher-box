@@ -9,6 +9,7 @@ import type { SnapshotDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { sameNode } from '../lib/nodeId';
 import { useEngine, useSnapshotStore } from '../providers/EngineProvider';
+import { displayName } from '../vault/displayName';
 import { listingRows, type ListingRow } from '../vault/listing';
 
 export interface FolderPicker {
@@ -17,7 +18,7 @@ export interface FolderPicker {
   folders: ListingRow[];
   /** The folder a command would target, or `null` until the listing lands. */
   destination: Uint8Array | null;
-  /** Name of that folder, or `null` until the listing lands. */
+  /** That folder's name, neutralised for display, or `null` until it lands. */
   destinationName: string | null;
   isLoading: boolean;
   error: string | null;
@@ -91,7 +92,7 @@ export function useFolderPicker(
     atHome: sameNode(cursor, home),
     folders,
     destination: listing?.folder ?? null,
-    destinationName: listing?.folderName ?? null,
+    destinationName: listing === null ? null : displayName(listing.folderName),
     isLoading: listing === null && error === null,
     error,
     canLeave: descended.length > 0 || (listing !== null && !sameNode(listing.folder, listing.root)),

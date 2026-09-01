@@ -29,6 +29,13 @@ describe('listingRows', () => {
     expect(rows.map((row) => row.name)).toEqual(['archive', 'zeta', 'Alpha.txt', 'beta.txt']);
   });
 
+  it('neutralises a name for display, and keeps the stored one beside it', () => {
+    const [row] = listingRows([child({ name: 'report\u202Efdp.exe' })]);
+
+    expect(row.name).toBe('reportfdp.exe');
+    expect(row.storedName).toBe('report\u202Efdp.exe');
+  });
+
   it('renders name and kind before the projection lands', () => {
     const [row] = listingRows([child({ name: 'holiday.jpg' })]);
 

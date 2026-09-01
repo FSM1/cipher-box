@@ -5,6 +5,7 @@ import { AppShell } from '../components/layout/AppShell';
 import { useReceivedShares } from '../hooks/useReceivedShares';
 import { folderPath } from '../lib/nodeId';
 import { shareStanding, type ReceivedShareStanding } from '../sharing/receivedShares';
+import { displayName } from '../vault/displayName';
 
 interface Row {
   scope: string;
@@ -32,7 +33,7 @@ export function SharedPage() {
         scope: toHex(share.scope),
         path: folderPath(share.scope),
         sharer: toHex(share.sharerIdentityPublicKey),
-        displayName: share.displayName,
+        displayName: displayName(share.displayName),
         permission: share.permission,
         resolution: share.resolution ?? 'none',
         standing: shareStanding(share.resolution),

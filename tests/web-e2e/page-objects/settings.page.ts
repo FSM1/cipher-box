@@ -63,6 +63,10 @@ export class SettingsPage {
     return this.page.getByLabel('keep newest versions');
   }
 
+  get binRetention(): Locator {
+    return this.page.getByLabel('days a deleted item is kept');
+  }
+
   /**
    * Offered only once the read says a provider credential is stored, so its
    * presence is the engine reporting a bearer it will never read back out.

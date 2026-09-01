@@ -7,6 +7,7 @@
 import { toHex } from '@cipherbox/client';
 import type { BinRowDescriptor, NodeKind } from '@cipherbox/client';
 import { formatEpochMillis } from '../utils/format';
+import { displayName } from './displayName';
 import { kindIcon } from './listing';
 
 const MILLIS_PER_DAY = 86_400_000n;
@@ -27,6 +28,11 @@ export interface BinRow {
   expires: string | null;
 }
 
+interface SortedRow {
+  deletedAt: bigint;
+  row: BinRow;
+}
+
 /**
  * Newest deletion first, then by name.
  *
@@ -37,14 +43,17 @@ export function binRows(
   entries: readonly BinRowDescriptor[],
   retentionDays: number | null
 ): BinRow[] {
-  return [...entries].sort(byDeletedThenName).map((entry) => toRow(entry, retentionDays));
+  return entries
+    .map((entry) => ({ deletedAt: entry.deletedAt, row: toRow(entry, retentionDays) }))
+    .sort(byDeletedThenName)
+    .map(({ row }) => row);
 }
 
 function toRow(entry: BinRowDescriptor, retentionDays: number | null): BinRow {
   return {
     id: entry.node,
     key: toHex(entry.node),
-    name: entry.originName,
+    name: displayName(entry.originName),
     kind: entry.kind,
     icon: kindIcon(entry.kind),
     deleted: formatEpochMillis(entry.deletedAt, OUT_OF_RANGE),
@@ -59,7 +68,12 @@ function expiryOf(deletedAt: bigint, retentionDays: number | null): string | nul
   return formatEpochMillis(deletedAt + BigInt(retentionDays) * MILLIS_PER_DAY, OUT_OF_RANGE);
 }
 
-function byDeletedThenName(a: BinRowDescriptor, b: BinRowDescriptor): number {
+/**
+ * The tie-break reads the shown name, not the stored one. A leading tab or line
+ * break sorts ahead of every letter but renders as nothing, so a stored-name
+ * order puts a row where its own name says it does not belong.
+ */
+function byDeletedThenName(a: SortedRow, b: SortedRow): number {
   if (a.deletedAt !== b.deletedAt) return a.deletedAt > b.deletedAt ? -1 : 1;
-  return a.originName.localeCompare(b.originName, undefined, { sensitivity: 'base' });
+  return a.row.name.localeCompare(b.row.name, undefined, { sensitivity: 'base' });
 }

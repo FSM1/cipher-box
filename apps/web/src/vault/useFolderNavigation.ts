@@ -12,6 +12,7 @@ import type { SnapshotError } from '../engine/snapshotStore';
 import { useSnapshot } from '../engine/useSnapshot';
 import { folderPath, folderRoute, sameNode } from '../lib/nodeId';
 import { useSnapshotStore } from '../providers/EngineProvider';
+import { displayName } from './displayName';
 import { listingRows, type ListingRow } from './listing';
 
 const NOT_A_FOLDER: SnapshotError = { message: 'that is not a folder id' };
@@ -69,7 +70,10 @@ export function useFolderNavigation(): FolderNavigation {
     () =>
       listed === null
         ? []
-        : [...listed.ancestors].reverse().concat({ id: listed.folder, name: listed.folderName }),
+        : [...listed.ancestors]
+            .reverse()
+            .concat({ id: listed.folder, name: listed.folderName })
+            .map(({ id, name }) => ({ id, name: displayName(name) })),
     [listed]
   );
 

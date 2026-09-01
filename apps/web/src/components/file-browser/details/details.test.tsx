@@ -10,6 +10,7 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
     id: NODE,
     key: 'abababab',
     name: 'notes.txt',
+    storedName: 'notes.txt',
     kind: 'file',
     icon: '[FILE]',
     size: '12 B',
@@ -26,6 +27,7 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
 function folderRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return fileRow({
     name: 'documents',
+    storedName: 'documents',
     kind: 'folder',
     icon: '[DIR]',
     size: '-',
@@ -104,6 +106,19 @@ describe('the details panel', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('copy node id').getAttribute('aria-pressed')).toBe('true')
     );
+  });
+
+  it('shows a neutralised name and copies the one the engine holds', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const row = fileRow({ name: 'reportfdp.exe', storedName: 'report\u202Efdp.exe' });
+
+    render(<DetailsDialog row={row} onClose={() => undefined} />);
+
+    expect(rowText('name')).toContain('reportfdp.exe');
+    fireEvent.click(screen.getByLabelText('copy name'));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('report\u202Efdp.exe'));
   });
 
   it('never confirms a copy the browser refused', async () => {

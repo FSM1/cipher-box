@@ -21,7 +21,7 @@ interface TextEditorDialogProps {
 
 export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
   const client = useEngine();
-  const loaded = useFilePreview(row.key, row.name, row.bytes);
+  const loaded = useFilePreview(row.key, row.storedName, row.bytes);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);

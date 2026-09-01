@@ -165,6 +165,12 @@ describe('the shared route', () => {
     expect(screen.queryByTestId('shared-unread')).toBeNull();
   });
 
+  it('renders a name the sharing vault chose in the order it stores it', async () => {
+    await renderShared(() => Promise.resolve([share(1, 'granted', 'report\u202Efdp.exe')]));
+
+    expect(screen.getByTestId('shared-name').textContent).toBe('reportfdp.exe');
+  });
+
   it('re-reads on demand, so a standing moves without a reload', async () => {
     let resolution: ReceivedShareResolution = 'granted';
     await renderShared(() => Promise.resolve([share(1, resolution)]));

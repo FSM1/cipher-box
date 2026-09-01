@@ -14,6 +14,7 @@ function row(overrides: Partial<ListingRow> = {}): ListingRow {
     id: NODE,
     key: 'abababab',
     name: 'notes.txt',
+    storedName: 'notes.txt',
     kind: 'file',
     icon: '[FILE]',
     size: '24 B',
