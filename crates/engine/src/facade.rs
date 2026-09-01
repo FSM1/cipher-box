@@ -27,8 +27,8 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, MAX_READ_SEALED_BYTES,
-    ReadBody, Version, open_content_key, seal_content_key, sign_grant_set,
+    BinIndex, ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment,
+    MAX_READ_SEALED_BYTES, ReadBody, Version, open_content_key, seal_content_key, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
@@ -38,7 +38,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
-use crate::bin_index::{BinIndexKeys, BinIndexLoad, BinnedNode, load_bin_index};
+use crate::bin_index::{BinIndexKeys, BinIndexLoad, BinnedNode, load_bin_index, publish_bin_index};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
@@ -101,10 +101,10 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
-    DEFAULT_BIN_RETENTION_DAYS, PlacementRefusal, PlacementSource, SessionPlacement,
-    SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary, decide_placement,
-    load_settings, load_settings_at, placement_of, publish_settings, redecide_placement,
-    settings_name, summarize_settings,
+    DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, PlacementRefusal, PlacementSource,
+    SessionPlacement, SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary,
+    decide_placement, load_settings, load_settings_at, placement_of, publish_settings,
+    redecide_placement, settings_name, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -3804,6 +3804,7 @@ impl<T: SeamTypes> Engine<T> {
         self.install_cold_start(outcome, root_scope_id);
         if let Some(provisioned) = provisioned {
             self.install_mint(provisioned);
+            self.publish_genesis_bin_index(&api).await;
         }
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
@@ -4306,6 +4307,61 @@ where {
             },
         )
         .await
+    }
+
+    /// Publish this account's empty bin index at vault genesis and enrol it in
+    /// the session's renewal set, so the record exists from the start.
+    ///
+    /// Without it the record first appears at the first soft delete, and the
+    /// register-first step tells the API both that this account has binned
+    /// something and when (blueprint/engine.md "Bin index record").
+    ///
+    /// Idempotent on ADR 0007's derived terms: the name comes from the login
+    /// secret alone, and only a load that finds neither a record nor a durable
+    /// mark mints one — so a repeated first run publishes nothing. A publish
+    /// that does not land leaves the first soft delete to mint the record, which
+    /// is where `main` stood.
+    async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let keys = BinIndexKeys::derive(session.login_secret());
+        let read = load_bin_index(
+            &self.seams.record_transport,
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            &keys,
+        )
+        .await;
+        if !matches!(
+            read.load,
+            BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun)
+        ) {
+            if let Some(renewable) = read.renewable {
+                *self.bin_index_record.borrow_mut() = Some(renewable);
+            }
+            return;
+        }
+        if let Ok(held) = publish_bin_index(
+            &self.seams.record_transport,
+            api,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            &mut SharedEntropy(&self.entropy),
+            &self.orphan_heads,
+            &keys,
+            &BinIndex::new(0),
+        )
+        .await
+        {
+            *self.bin_index_record.borrow_mut() = Some(held);
+        }
     }
 
     /// Build the factory for the lazy-wave sweep task every rotation enqueues
@@ -6917,7 +6973,10 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
         let root = self.snapshot.borrow().root;
         match self.provision_first_run_vault(&api, root.0).await {
-            Ok(ProvisionOutcome::Minted(vault)) => self.install_mint(*vault),
+            Ok(ProvisionOutcome::Minted(vault)) => {
+                self.install_mint(*vault);
+                self.publish_genesis_bin_index(&api).await;
+            }
             // The account published from another device between this session's
             // failed mint and this retry — caught by the vacancy probe before
             // minting, or by the pointer walk after. Its root is the one to

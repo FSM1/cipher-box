@@ -397,7 +397,18 @@ per-name sequence floor. Only what differs is stated here.
 - **An empty bin is the bottom rung, not an error.** A vault that has never
   soft-deleted anything has no entries to load, so the ladder bottoms out at an
   empty index. The record still exists from vault genesis, because its very
-  existence would otherwise say the bin is non-empty.
+  existence would otherwise say the bin is non-empty. The genesis publish runs
+  on ADR 0007's derived-idempotent first-run terms: the name comes from the
+  login secret alone, and only a load that finds neither a record nor a durable
+  mark mints one.
+- **The publish cadence is an accepted residual for v2.0.0.** The frozen rungs
+  hide the entry count, and a record present from genesis hides the fact of the
+  first delete. Neither hides _when_ a revision lands, and the IPNS sequence is
+  public and monotone, so an observer of the record plane reads a lower bound on
+  the account's lifetime bin publishes and the times of the recent ones. A decoy
+  publish cadence is what closes that, and the fresh-nonce rule above is what
+  makes one work — a no-op republish is byte-indistinguishable from a real
+  edit — but no decoy is scheduled in v2.0.0.
 - **The queue head never waits on the bin plane in silence.** Every state the
   load can leave the head in has an exit and a reported cause. A refusal of
   bytes the plane served is charged against the attempt budget. Every other

@@ -18,7 +18,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
 use cipherbox_core::seal::{
-    ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
+    BinIndex, ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
     Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section,
     encode_read_body, open_read_body, seal_settings_record, set_grant_section, sign_grant_set,
 };
@@ -75,7 +75,7 @@ use cipherbox_engine::{
     LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
     OpKind, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordReader,
     RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory,
-    WriteTarget, decode_queue, load_bin_index, reseal_scope_root, stage_op,
+    WriteTarget, decode_queue, load_bin_index, publish_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -3505,6 +3505,129 @@ fn load_bin(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) -> BinIndex
         &BinIndexKeys::derive(&SECRET),
     ))
     .load
+}
+
+/// The name the account's bin index publishes under.
+fn bin_name() -> IpnsName {
+    BinIndexKeys::derive(&SECRET).name().clone()
+}
+
+/// Provision a first-run vault against the API and run the tasks its start
+/// spawned, so the genesis publishes have all landed.
+fn provision_first_run(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>) {
+    serve_http(device, blocks, 64);
+    let (mut engine, _events) = engine_on_api(device, 42);
+    block_on(engine.start(secret())).expect("start provisions the first-run vault");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    (engine, tasks)
+}
+
+/// The record's existence would otherwise say the bin is non-empty, and the
+/// register-first step would tell the API both that this account has binned
+/// something and when. So the vault publishes the empty index at genesis.
+#[test]
+fn a_first_run_vault_publishes_its_empty_bin_index_at_genesis() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "a vault that has binned nothing still publishes the record",
+    );
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the genesis record resolves off the network");
+    };
+    assert!(
+        index.entries.is_empty(),
+        "and the body is the bottom rung: an empty index",
+    );
+}
+
+/// What the API observes at the first soft delete is a revision of a record it
+/// already registered, so the publish times nothing.
+#[test]
+fn the_first_soft_delete_revises_the_genesis_bin_index_rather_than_minting_one() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let (mut engine, mut tasks) = provision_first_run(&world, &blocks, &alice);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..40u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks),
+        vec![doomed.0],
+        "the delete binned the node",
+    );
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        2,
+        "and it published the second revision of a record that already existed",
+    );
+}
+
+/// The genesis publish is derived-idempotent on ADR 0007's terms: the name comes
+/// from the login secret alone, so a first run that already ran once finds the
+/// record and mints no second one. A publish over it would drop every entry the
+/// standing index holds.
+#[test]
+fn a_repeated_first_run_leaves_the_bin_index_the_last_run_published() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let previous = world.device(b"alice-previous-install");
+    serve_http(&previous, &blocks, 8);
+    block_on(publish_bin_index(
+        &previous.record_store,
+        &ApiClient::new(
+            previous.http.clone(),
+            previous.credential_store.clone(),
+            "http://api.test",
+        ),
+        &previous.floors(&SECRET),
+        &previous.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(9),
+        &OrphanHeads::default(),
+        &BinIndexKeys::derive(&SECRET),
+        &BinIndex::new(0),
+    ))
+    .expect("the previous install published the record");
+    let standing = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], bin_name().as_str())
+        .expect("a bin index record stands at the name");
+
+    let alice = world.device(b"alice");
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+
+    assert_eq!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], bin_name().as_str()),
+        Some(standing),
+        "the repeated first run published no second record over it",
+    );
 }
 
 /// The soft delete is an unlink and nothing more: the parent stops naming the
