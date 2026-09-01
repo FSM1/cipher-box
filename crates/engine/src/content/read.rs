@@ -351,6 +351,54 @@ pub async fn read_block(
     }
 }
 
+/// Blocks this device already holds, consulted ahead of every gateway.
+///
+/// A staged version's blocks live in the staging store and reach no gateway
+/// until the drain uploads them, so a read of one is served from here or not at
+/// all (blueprint/engine.md "Content plane").
+pub trait LocalBlocks {
+    /// The block held under `cid`, or `None` when this device holds none.
+    async fn block(&self, cid: &[u8]) -> Option<Vec<u8>>;
+}
+
+/// No local blocks: every block of the read comes from a gateway.
+pub struct GatewayOnly;
+
+impl LocalBlocks for GatewayOnly {
+    async fn block(&self, _cid: &[u8]) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// [`read_block`] with a local-first leg: a block `local` holds is returned
+/// without a fetch, and anything else falls through to the gateway.
+///
+/// A local hit is nearer, never more trusted. It clears the same bars a fetched
+/// block clears, and a mismatch is terminal rather than a rotation to the
+/// gateway (blueprint/engine.md "Content plane").
+pub async fn read_block_local_first<L: LocalBlocks, H: Http>(
+    local: &L,
+    gateway: &Gateway,
+    http: &H,
+    cid_str: &str,
+    expected_cid: &[u8],
+    plane: ContentPlane,
+) -> Result<Vec<u8>, ReadError> {
+    if !is_plane_anchor(cid_str, expected_cid, plane) {
+        return Err(ReadError::TrustViolation(
+            TrustViolation::ContentCidMismatch.into(),
+        ));
+    }
+    match local.block(expected_cid).await {
+        Some(block) if block.len() <= MAX_RESOLVED_RECORD_BYTES => verify_cid(expected_cid, &block)
+            .map(|()| block)
+            .map_err(ReadError::TrustViolation),
+        // No block the engine frames exceeds the cap, so an over-cap value is a
+        // miss — never something to hash.
+        _ => read_block(gateway, http, cid_str, expected_cid, plane).await,
+    }
+}
+
 /// Whether `cid_str` is the canonical CIDv1 base32 string of a content CID: the
 /// multibase base32-lower prefix `b` over the fixed [`CONTENT_CID_LEN`] bytes.
 /// A pure format check (base encoders live in core), tied to the CID length so
@@ -1089,5 +1137,130 @@ mod tests {
             0..0,
             "zero length touches nothing"
         );
+    }
+
+    /// A block source holding exactly one block, the shape a staging store
+    /// presents to the read plane.
+    struct OneBlock(Vec<u8>, Vec<u8>);
+
+    impl LocalBlocks for OneBlock {
+        async fn block(&self, cid: &[u8]) -> Option<Vec<u8>> {
+            (cid == self.0).then(|| self.1.clone())
+        }
+    }
+
+    #[test]
+    fn a_locally_held_block_is_served_without_a_fetch() {
+        let leaf = one_leaf();
+        let local = OneBlock(leaf.cid.clone(), leaf.sealed.clone());
+        let http = ScriptedHttp::default();
+
+        let out = block_on(read_block_local_first(
+            &local,
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+        assert!(
+            http.requests().is_empty(),
+            "a local hit spends no network at all"
+        );
+    }
+
+    #[test]
+    fn a_block_the_local_store_lacks_falls_through_to_the_gateway() {
+        let leaf = one_leaf();
+        let local = OneBlock(vec![9u8; CONTENT_CID_LEN], b"another block".to_vec());
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let out = block_on(read_block_local_first(
+            &local,
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+        assert_eq!(http.requests().len(), 1, "the miss reaches one source");
+    }
+
+    #[test]
+    fn a_locally_held_block_that_does_not_address_is_a_terminal_trust_violation() {
+        let leaf = one_leaf();
+        let mut tampered = leaf.sealed.clone();
+        *tampered.last_mut().unwrap() ^= 0x01;
+        let local = OneBlock(leaf.cid.clone(), tampered);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let err = block_on(read_block_local_first(
+            &local,
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap_err();
+        match err {
+            ReadError::TrustViolation(e) => assert_eq!(e.check(), "content-cid-mismatch"),
+            other => panic!("expected a trust violation, got {other:?}"),
+        }
+        // The nearer source is not the more trusted one: a mismatch is terminal
+        // here exactly as it is on a fetched block, never a reason to fetch.
+        assert!(
+            http.requests().is_empty(),
+            "a local mismatch does not rotate to the gateway"
+        );
+    }
+
+    #[test]
+    fn an_over_cap_local_block_is_skipped_before_it_is_hashed() {
+        let leaf = one_leaf();
+        // Over-cap and addressing to nothing: the gateway serves the real block,
+        // so reaching it proves the size gate fired ahead of `verify_cid`.
+        let local = OneBlock(leaf.cid.clone(), vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let out = block_on(read_block_local_first(
+            &local,
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+        assert_eq!(http.requests().len(), 1, "the over-cap value rotated");
+    }
+
+    #[test]
+    fn a_wrong_plane_codec_is_refused_before_the_local_store_is_consulted() {
+        let leaf = one_leaf();
+        let local = OneBlock(leaf.cid.clone(), leaf.sealed.clone());
+        let http = ScriptedHttp::default();
+
+        let err = block_on(read_block_local_first(
+            &local,
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Root,
+        ))
+        .unwrap_err();
+        match err {
+            ReadError::TrustViolation(e) => assert_eq!(e.check(), "content-cid-mismatch"),
+            other => panic!("expected a trust violation, got {other:?}"),
+        }
     }
 }

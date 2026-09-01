@@ -435,6 +435,21 @@ pub fn decide_placement(load: &SettingsLoad) -> SessionPlacement {
     }
 }
 
+/// The placement a **running** session adopts from a re-load, or `None` to keep
+/// the one it already holds.
+///
+/// Only a positively resolved record re-decides. A degraded load is not evidence
+/// that the member changed anything, and [`DefaultsReason::UnprovenFirstRun`]
+/// resolves to [`Placement::Hosted`] — honouring one would widen a live
+/// `External` session to CipherBox on a transient outage, which is exactly the
+/// widening the settings-load policy exists to prevent (blueprint/engine.md).
+/// A re-decide is therefore never a second route to a placement the load itself
+/// would refuse at start.
+#[must_use]
+pub fn redecide_placement(load: &SettingsLoad) -> Option<SessionPlacement> {
+    matches!(load, SettingsLoad::Resolved(_)).then(|| decide_placement(load))
+}
+
 /// The byte destinations `settings` name, in the two places that must agree:
 /// the reader deciding where this session's bytes go, and the writer refusing
 /// to publish settings no reader could place under (AGENTS.md rule 8).
@@ -721,8 +736,45 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler,
 {
-    let name = settings_name(login_secret);
-    let enc_secret = kdf::enc_subkey(login_secret);
+    load_settings_at(
+        transport,
+        gateway,
+        http,
+        floors,
+        snapshots,
+        scheduler,
+        profile,
+        &kdf::enc_subkey(login_secret),
+        &settings_name(login_secret),
+    )
+    .await
+}
+
+/// [`load_settings`] against a name and enc subkey the caller already holds.
+///
+/// The login secret derives exactly these two and nothing else the load needs,
+/// so a caller that re-loads on a background loop reaches the record without a
+/// second copy of the master secret resident for that loop's whole life
+/// (AGENTS.md rules 1 and 7).
+#[allow(clippy::too_many_arguments)]
+pub async fn load_settings_at<T, H, F, Sn, Sch>(
+    transport: &T,
+    gateway: &Gateway,
+    http: &H,
+    floors: &F,
+    snapshots: &Sn,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    enc_secret: &X25519Secret,
+    name: &IpnsName,
+) -> SettingsLoad
+where
+    T: RecordTransport,
+    H: Http,
+    F: FloorStore,
+    Sn: SnapshotCache,
+    Sch: Scheduler,
+{
     // Held outside the budget so a load that runs out of it mid-resolve still
     // has the cached ciphertext the resolve read on its way in.
     let mut cached = None;
@@ -733,8 +785,8 @@ where
         floors,
         snapshots,
         &mut cached,
-        &enc_secret,
-        &name,
+        enc_secret,
+        name,
         scheduler.now(),
     );
     let reason = match within(scheduler, profile.settings_load_budget, load).await {
@@ -744,7 +796,7 @@ where
     };
     // A rollback takes this arm like every other reason: pinning last-known-good
     // is what the record plane already owes a gate failure (blueprint/engine.md).
-    match cached.and_then(|block| open_settings_head(&enc_secret, &block)) {
+    match cached.and_then(|block| open_settings_head(enc_secret, &block)) {
         Some(body) => SettingsLoad::Stale {
             settings: body.settings,
             reason,
@@ -1342,6 +1394,45 @@ mod tests {
                     .unwrap_err(),
                 PlacementRefusal::SettingsUnavailable(reason),
                 "{reason:?} must not widen placement"
+            );
+        }
+    }
+
+    /// A running session re-decides only on a positively resolved record. Every
+    /// degraded arm keeps the placement the session already holds, so a
+    /// transient settings outage neither widens a live `External` onto the
+    /// hosted store nor halts a session that is placing correctly.
+    #[test]
+    fn only_a_resolved_record_re_decides_a_running_sessions_placement() {
+        assert_eq!(
+            redecide_placement(&SettingsLoad::Resolved(placed(
+                PinMode::External,
+                Some(kubo())
+            )))
+            .expect("a resolved record re-decides")
+            .decision
+            .unwrap(),
+            Placement::External(kubo())
+        );
+        assert!(
+            redecide_placement(&SettingsLoad::Stale {
+                settings: placed(PinMode::Hosted, None),
+                reason: DefaultsReason::Suppressed,
+            })
+            .is_none(),
+            "a stale copy is not evidence that the member changed anything"
+        );
+        for reason in [
+            DefaultsReason::UnprovenFirstRun,
+            DefaultsReason::Suppressed,
+            DefaultsReason::Expired,
+            DefaultsReason::TimedOut,
+            DefaultsReason::Unreadable,
+            DefaultsReason::FloorUnreadable,
+        ] {
+            assert!(
+                redecide_placement(&SettingsLoad::Defaults(reason)).is_none(),
+                "{reason:?} must not re-decide a running session"
             );
         }
     }

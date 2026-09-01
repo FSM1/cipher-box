@@ -1352,20 +1352,16 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     engine_b.close_stream(stream);
 }
 
-/// The bytes a read serves and the length the rendered view reports must come
-/// from one version, on both readers: the stream a mount composes over and the
-/// whole-file read the web download takes. Availability, not trust — the very
-/// next drain admits them.
-#[test]
-fn no_reader_serves_a_version_the_rendered_size_does_not_name() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
-
-    let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+/// A node whose first version is published and whose second is staged and not
+/// drained, with the durable id of the op that owes the staged one.
+fn a_staged_second_version(
+    world: &FakeWorld,
+    alice: &FakeDevice,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, OpId) {
     write_file(
-        &mut engine,
+        engine,
         WriteTarget::NewFile {
             parent: ROOT,
             name: "clip.bin".into(),
@@ -1373,43 +1369,137 @@ fn no_reader_serves_a_version_the_rendered_size_does_not_name() {
         &(0..200u8).collect::<Vec<_>>(),
     )
     .expect("the first version commits");
-    tick(&world, &engine, &mut tasks);
+    tick(world, engine, tasks);
     let node = block_on(engine.view()).unwrap().children(ROOT)[0].id;
-    let published = block_on(engine.open_content_stream(node)).expect("the published head opens");
-    engine.close_stream(published);
-
-    // A second version, journaled and not yet drained.
-    write_file(&mut engine, WriteTarget::Version { node }, &vec![0xBB; 323])
+    write_file(engine, WriteTarget::Version { node }, &vec![0xBB; 323])
         .expect("the second version commits");
+    let op_id = block_on(alice.staging_store.queued_ops()).unwrap()[0].0;
+    (node, op_id)
+}
+
+/// The bytes a read serves and the length the rendered view reports must come
+/// from one version, on both readers: the stream a mount composes over and the
+/// whole-file read the web download takes. A staged version pairs them off the
+/// staging store, so a file just written reads back before the drain publishes
+/// it.
+#[test]
+fn both_readers_serve_the_staged_version_the_rendered_size_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, _) = a_staged_second_version(&world, &alice, &mut engine, &mut tasks);
 
     assert_eq!(
         block_on(engine.view()).unwrap().attrs(node).unwrap().size,
         Some(323),
         "the rendered size is the staged version's"
     );
-    assert!(
-        matches!(
-            block_on(engine.open_content_stream(node)),
-            Err(EngineError::ContentUnavailable { .. })
-        ),
-        "no stream serves the version the rendered size does not name"
-    );
-    assert!(
-        matches!(
-            block_on(engine.read_content(node)),
-            Err(EngineError::ContentUnavailable { .. })
-        ),
-        "nor does the whole-file read — the same mispairing, one surface out"
-    );
 
+    let staged = block_on(engine.open_content_stream(node)).expect("the staged version opens");
+    assert_eq!(
+        engine.stream_size(staged),
+        Some(323),
+        "the stream pins the length the rendered view reports"
+    );
+    assert_eq!(
+        engine.stream_version_cid(staged),
+        block_on(engine.rendered_version_cid(node)).unwrap(),
+        "the stream pins the very version the rendered size names"
+    );
+    assert_eq!(
+        block_on(engine.read_stream(staged, 0, 323)).expect("the window serves it"),
+        vec![0xBB; 323],
+        "the stream serves the staged bytes, never the published version's"
+    );
+    assert_eq!(
+        block_on(engine.read_content(node)).expect("the whole-file read serves it"),
+        vec![0xBB; 323],
+        "the same version on the other surface"
+    );
+    engine.close_stream(staged);
+
+    // The drain moves nothing the reader could see: the same bytes, now
+    // published, and the reader stops paying the staging store for them.
     tick(&world, &engine, &mut tasks);
     let opened = block_on(engine.open_content_stream(node)).expect("the drained version opens");
     assert_eq!(
         block_on(engine.read_stream(opened, 0, 323)).expect("the window serves it"),
         vec![0xBB; 323],
-        "the same open serves the staged version once it is published"
+        "the same open serves the version once it is published"
     );
     engine.close_stream(opened);
+}
+
+/// A staged version this device can no longer assemble is availability, and the
+/// refusal names the queued op that still owes it: a bare "unavailable" leaves
+/// the host nothing to route the member to.
+#[test]
+fn a_staged_version_missing_a_block_refuses_and_names_the_queued_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, op_id) = a_staged_second_version(&world, &alice, &mut engine, &mut tasks);
+    // One leaf lost: no gateway serves what no drain has uploaded.
+    evict_leaf(&alice, |_| 0);
+
+    // The root manifest is still staged, so the stream opens on the version the
+    // rendered length names; only the window that needs the lost leaf refuses.
+    let stream = block_on(engine.open_content_stream(node)).expect("the staged root opens");
+    for refusal in [
+        block_on(engine.read_content(node)),
+        block_on(engine.read_stream(stream, 0, 323)),
+    ] {
+        match refusal {
+            Err(EngineError::ContentUnavailable { message }) => assert!(
+                message.contains(&format!("queued op {}", op_id.0)),
+                "the refusal names the op that owes the version: {message}"
+            ),
+            other => panic!("expected an availability refusal, got {other:?}"),
+        }
+    }
+    engine.close_stream(stream);
+}
+
+/// A staged block that does not content-address is a trust violation, and it is
+/// terminal: the nearer source is not the more trusted one, so the read never
+/// asks a gateway for what its own store got wrong. The verdict names the op,
+/// because every byte a staged read judges came from that one op.
+#[test]
+fn a_staged_block_that_does_not_address_is_terminal_and_names_the_queued_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (node, op_id) = a_staged_second_version(&world, &alice, &mut engine, &mut tasks);
+    let (root_cid, _) = staged_version(&alice);
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(&root_cid, b"not the root this cid names"),
+    )
+    .expect("the store takes it");
+
+    let before = alice.http.requests().len();
+    match block_on(engine.read_content(node)) {
+        Err(EngineError::TrustViolation { message }) => assert!(
+            message.contains(&format!("queued op {}", op_id.0)),
+            "the verdict names the op whose staged bytes disagree: {message}"
+        ),
+        other => panic!("expected a trust violation, got {other:?}"),
+    }
+    assert_eq!(
+        alice.http.requests().len(),
+        before,
+        "a local mismatch is terminal: it never rotates to a gateway"
+    );
 }
 
 /// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a
@@ -8353,6 +8443,86 @@ fn the_session_reconciles_the_accounts_byo_flag_to_the_vaulted_mode() {
     let (mut engine_b, _events, _tasks) = boot(&world, &blocks, &bob, 43);
     write_photo(&mut engine_b, "photo3.bin");
     assert_eq!(byo_toggles(&bob), 0, "nothing to reconcile once they agree");
+}
+
+/// Ticks past the settings re-check interval, so a pass runs one re-decide.
+fn tick_past_the_settings_recheck(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) {
+    let profile = *engine.profile();
+    let passes = profile
+        .settings_recheck_interval
+        .div_duration_f64(profile.poll_cadence)
+        .ceil() as usize;
+    for _ in 0..=passes {
+        tick(world, engine, tasks);
+    }
+}
+
+/// The version blocks one node published, sorted and deduped — the set a
+/// placement assertion compares a destination against.
+fn version_blocks(device: &FakeDevice, engine: &Engine<FakeSeamTypes>, name: &str) -> Vec<String> {
+    let node = child_id(engine, ROOT, name);
+    let mut cids = registered_content_cids(device, &write_name(node));
+    cids.sort();
+    cids.dedup();
+    assert!(!cids.is_empty(), "{name} registered its version's blocks");
+    cids
+}
+
+/// A member who moves their bytes off a provider must stop feeding it inside a
+/// bounded window, not at the next process start. A desktop mount stays up for
+/// days: a session that never re-decides keeps placing every later block on the
+/// endpoint the member revoked, and keeps presenting the withdrawn credential
+/// to it.
+#[test]
+fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::External);
+
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_photo(&mut engine, "photo.bin");
+    tick(&world, &engine, &mut tasks);
+    let first = version_blocks(&alice, &engine, "photo.bin");
+    assert_eq!(
+        blocks.member_node_cids(),
+        first,
+        "the first version went to the member's own node"
+    );
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        first.iter().all(|cid| !hosted.contains(cid)),
+        "and not one byte of it to the hosted store"
+    );
+    assert!(blocks.advisory(), "the account follows the external mode");
+
+    // The member switches the account to hosted from another device. This
+    // session is never restarted.
+    seed_settings(&world, &alice, &blocks, PinMode::Hosted);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+
+    write_photo(&mut engine, "photo2.bin");
+    tick(&world, &engine, &mut tasks);
+    let second = version_blocks(&alice, &engine, "photo2.bin");
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        second.iter().all(|cid| hosted.contains(cid)),
+        "the next version takes the hosted path the live record names"
+    );
+    assert_eq!(
+        blocks.member_node_cids(),
+        first,
+        "and the revoked provider receives nothing further"
+    );
+    assert!(
+        !blocks.advisory(),
+        "the re-decide re-armed the account flag reconcile, as a save does"
+    );
 }
 
 /// The once-a-session guard latches on the reconcile *landing*, not on the

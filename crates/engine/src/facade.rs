@@ -28,7 +28,7 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, ReadBody, Version,
-    seal_content_key, sign_grant_set,
+    open_content_key, seal_content_key, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
@@ -93,8 +93,8 @@ use crate::seams::{
 use crate::session::SessionIdentity;
 use crate::settings::{
     PlacementRefusal, PlacementSource, SessionPlacement, SettingsOrigin, SettingsPublishError,
-    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, placement_of,
-    publish_settings, summarize_settings,
+    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, load_settings_at,
+    placement_of, publish_settings, redecide_placement, settings_name, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -118,13 +118,13 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    LiveBlocks, PreservedBounds, reconcile_staging, release_version_blocks, stage_op,
+    LiveBlocks, PreservedBounds, StagedBlocks, reconcile_staging, release_version_blocks, stage_op,
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, focus_files,
-    focus_folders, focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode,
-    run_tick_loop,
+    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
+    focus_files, focus_folders, focus_folders_due, focus_window_expired, on_access_refresh_due,
+    resolve_mode, run_tick_loop,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2649,9 +2649,24 @@ struct LiveWrites {
 struct LiveStream {
     version: Version,
     manifest: RootManifest,
+    /// The queued op that staged this version ([`staged_open_error`]).
+    staged_op: Option<OpId>,
     /// Released when the last [`Rc`] drops, which an in-flight
     /// [`read_stream`](Engine::read_stream) can outlive the map entry by.
     _slot: StreamSlot,
+}
+
+/// The version one read pins, and where it came from.
+struct PinnedVersion {
+    /// The version every block of the read is verified and unsealed under.
+    version: Version,
+    /// The queued op that staged it, for a version this device has authored and
+    /// not yet published. `None` for a published head.
+    staged_op: Option<OpId>,
+    /// The retained version count to repaint the base node with. `None` for a
+    /// staged version: it is not gate-passing state, so pinning one repaints
+    /// nothing.
+    version_count: Option<u64>,
 }
 
 /// One of the [`MAX_OPEN_STREAMS`] slots, reserved before
@@ -2930,14 +2945,17 @@ pub struct Engine<T: SeamTypes> {
     /// carries the member's provider bearer.
     placement: Rc<RefCell<Option<SessionPlacement>>>,
     /// The host-visible summary of the settings this session loaded, refreshed
-    /// by a confirmed save. Redacted at construction
+    /// by a confirmed save and by the tick's re-decide. Redacted at construction
     /// ([`VaultSettings::summary`]), so the provider bearer never enters it.
-    settings_summary: RefCell<Option<VaultSettingsSummary>>,
+    /// Shared with the tick loop, which must never move the placement without
+    /// moving what the host is told the session writes under.
+    settings_summary: Rc<RefCell<Option<VaultSettingsSummary>>>,
     /// Whether this session has already held the account's `byo` flag to the
     /// vaulted mode. Latched per placement decision, not per write: the flag is
     /// account-wide, so re-deriving it on every write would let two devices flap
-    /// it — a saved settings change is the one event that re-arms it.
-    byo_reconciled: Cell<bool>,
+    /// it — a settings change this session adopts is the one event that re-arms
+    /// it, whether the member saved it here or on another device.
+    byo_reconciled: Rc<Cell<bool>>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
     /// publish/renew (no redundant 401→refresh). `None` until then.
@@ -3013,8 +3031,8 @@ impl<T: SeamTypes> Engine<T> {
                 sweep_tasks: RefCell::new(None),
                 sweep_keys: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
-                settings_summary: RefCell::new(None),
-                byo_reconciled: Cell::new(false),
+                settings_summary: Rc::new(RefCell::new(None)),
+                byo_reconciled: Rc::new(Cell::new(false)),
                 api: None,
                 started: false,
                 forgotten: false,
@@ -3808,6 +3826,14 @@ where {
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
         let placement = self.placement.clone();
+        let settings_summary = self.settings_summary.clone();
+        let byo_reconciled = self.byo_reconciled.clone();
+        // Non-secret: the published name, not the seed that derives it. Paired
+        // with the tick's own enc-subkey copy, this reaches the settings record
+        // without a second copy of the login secret in a `'static` task.
+        let settings_name = settings_name(session.login_secret());
+        // Start has just decided, so the first re-decide comes one interval on.
+        let settings_rechecked = Cell::new(self.seams.scheduler.now());
         let held = self.held_records.clone();
         let base = self.snapshot.clone();
         let events = self.events.clone();
@@ -3851,6 +3877,41 @@ where {
                     let Some(enc_subkey) = enc_subkey else {
                         return TickControl::Stop;
                     };
+                    let now = scheduler.now();
+                    // What this paces is a revocation window
+                    // ([`redecide_placement`]), so a backward clock step must
+                    // not park the next check on a future stamp.
+                    let last_checked = settings_rechecked.get();
+                    if now.0 < last_checked.0
+                        || elapsed_at_least(now, last_checked, profile.settings_recheck_interval)
+                    {
+                        settings_rechecked.set(now);
+                        let load = load_settings_at(
+                            &transport,
+                            &gateway,
+                            &http,
+                            &floors,
+                            &snapshot_cache,
+                            &scheduler,
+                            &profile,
+                            &enc_subkey,
+                            &settings_name,
+                        )
+                        .await;
+                        // A teardown that landed inside the load already
+                        // cleared the placement cell, which holds the member's
+                        // provider bearer. Writing the re-decide over that
+                        // would make it resident again and re-arm the pass the
+                        // cleared cell stops below (security rules 1 and 7).
+                        if !alive.get() {
+                            return TickControl::Stop;
+                        }
+                        if let Some(decided) = redecide_placement(&load) {
+                            *placement.borrow_mut() = Some(decided);
+                            *settings_summary.borrow_mut() = Some(summarize_settings(&load));
+                            byo_reconciled.set(false);
+                        }
+                    }
                     // Carries the member's BYO bearer, so the pass owns a copy on the
                     // same terms as the enc subkey above.
                     let Some(SessionPlacement { decision, .. }) = placement.borrow().clone() else {
@@ -3859,7 +3920,6 @@ where {
                     // The polled pointer consult (#38 D4), ahead of the floor
                     // refresh below so a write epoch this pass sights evicts the
                     // seed it retired in the same pass.
-                    let now = scheduler.now();
                     // A manual refresh resolves nocache everywhere, so it
                     // consults every scope in the window rather than waiting out
                     // the interval the poll leg is paced by.
@@ -6788,15 +6848,69 @@ where {
 
     /// [`read_content`](Engine::read_content) without its progress phases.
     async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
-        let (version, version_count) = self.head_version(node).await?;
-        self.refuse_unpaired_version(node, &version).await?;
+        let PinnedVersion {
+            version,
+            staged_op,
+            version_count,
+        } = self.pinned_version(node).await?;
         // The range clamps to the version's size, so the whole file is the
         // unbounded window.
-        let bytes = open_content_range(&self.gateway, &self.seams.http, &version, 0, u64::MAX)
-            .await
-            .map_err(open_engine_error)?;
-        self.project_head(node, &version, version_count);
+        let bytes = open_content_range(
+            &self.staged_blocks(),
+            &self.gateway,
+            &self.seams.http,
+            &version,
+            0,
+            u64::MAX,
+        )
+        .await
+        .map_err(|error| staged_open_error(staged_op, error))?;
+        self.project_pinned_head(node, &version, version_count);
         Ok(bytes)
+    }
+
+    /// The block sources a content read runs over: this device's staging store,
+    /// then the gateway.
+    ///
+    /// One set for every read, because the staging key **is** the block's
+    /// `contentCid` — a local hit is byte-identical to what a gateway would
+    /// serve for that address, so a half-uploaded version reads across the two
+    /// legs (blueprint/engine.md "Content plane").
+    fn staged_blocks(&self) -> StagedBlocks<'_, T::StagingStore> {
+        StagedBlocks(&self.seams.staging_store)
+    }
+
+    /// Repaint the base node from a read that pinned a published head.
+    /// A staged version carries no count and repaints nothing: it is this
+    /// device's own and not gate-passing state.
+    fn project_pinned_head(&self, node: NodeId, version: &Version, version_count: Option<u64>) {
+        if let Some(version_count) = version_count {
+            self.project_head(node, version, version_count);
+        }
+    }
+
+    /// The version a read of `node` pins: the one a queued op staged when there
+    /// is one, else the published head.
+    ///
+    /// Serving the staged version is what pairs the length the rendered view
+    /// reports with the bytes a partial write composes over
+    /// ([`rendered_version_cid`](Self::rendered_version_cid)).
+    async fn pinned_version(&self, node: NodeId) -> Result<PinnedVersion, EngineError> {
+        match self.staged_version(node).await? {
+            Some((op_id, version)) => Ok(PinnedVersion {
+                version,
+                staged_op: Some(op_id),
+                version_count: None,
+            }),
+            None => {
+                let (version, count) = self.head_version(node).await?;
+                Ok(PinnedVersion {
+                    version,
+                    staged_op: None,
+                    version_count: Some(count),
+                })
+            }
+        }
     }
 
     /// Open a ranged-read stream over a file node, pinning the head version and
@@ -6811,12 +6925,20 @@ where {
         // network and no open that reaches the insert can be refused there.
         let slot =
             StreamSlot::acquire(&self.streams.borrow().live).ok_or(EngineError::TooManyStreams)?;
-        let (version, version_count) = self.head_version(node).await?;
-        self.refuse_unpaired_version(node, &version).await?;
-        let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
-            .await
-            .map_err(open_engine_error)?;
-        self.project_head(node, &version, version_count);
+        let PinnedVersion {
+            version,
+            staged_op,
+            version_count,
+        } = self.pinned_version(node).await?;
+        let manifest = open_content_root(
+            &self.staged_blocks(),
+            &self.gateway,
+            &self.seams.http,
+            &version,
+        )
+        .await
+        .map_err(|error| staged_open_error(staged_op, error))?;
+        self.project_pinned_head(node, &version, version_count);
         let mut streams = self.streams.borrow_mut();
         streams.next += 1;
         let handle = StreamHandle(streams.next);
@@ -6825,6 +6947,7 @@ where {
             Rc::new(LiveStream {
                 version,
                 manifest,
+                staged_op,
                 _slot: slot,
             }),
         );
@@ -6853,6 +6976,7 @@ where {
             .map(Rc::clone)
             .ok_or(EngineError::UnknownStreamHandle)?;
         read_pinned_range(
+            &self.staged_blocks(),
             &self.gateway,
             &self.seams.http,
             &stream.version,
@@ -6861,7 +6985,7 @@ where {
             length,
         )
         .await
-        .map_err(open_engine_error)
+        .map_err(|error| staged_open_error(stream.staged_op, error))
     }
 
     /// The `contentCid` of the version a live stream pinned: the identity of
@@ -6939,13 +7063,13 @@ where {
             None => {
                 // Absent from gate-passing state: a queued op targeting the node
                 // means a pending (unpublished) create; anything else is unknown.
-                let pending = self.pending_ops().await?;
-                return Err(if pending.iter().any(|op| op.target == node) {
-                    EngineError::ContentUnavailable {
-                        message: "content not yet published".to_owned(),
-                    }
-                } else {
-                    EngineError::UnknownNode
+                let pending = self.scan_queue().await?;
+                let owed = pending.mine.iter().find(|(_, op)| op.target == node);
+                return Err(match owed {
+                    Some((op_id, _)) => EngineError::ContentUnavailable {
+                        message: format!("content not yet published by queued op {}", op_id.0),
+                    },
+                    None => EngineError::UnknownNode,
                 });
             }
         };
@@ -7132,39 +7256,67 @@ where {
         }
     }
 
-    /// Refuse to serve `version` when the queue has staged a different one: the
-    /// read-side half of the pairing rule
-    /// [`rendered_version_cid`](Self::rendered_version_cid) states.
+    /// The version the read plane pins for `node` when the queue has staged one,
+    /// with the durable id of the op that owes it.
     ///
-    /// Availability, not trust — the drain publishes the staged version and the
-    /// read lands. Judged on the staged cid alone, so a refusal costs no
-    /// resolve.
-    async fn refuse_unpaired_version(
+    /// This is the read half of the pairing rule
+    /// [`rendered_version_cid`](Self::rendered_version_cid) states: the reader
+    /// serves the very version the rendered length describes, so a partial write
+    /// composes its tail over the bytes it measured against.
+    async fn staged_version(&self, node: NodeId) -> Result<Option<(OpId, Version)>, EngineError> {
+        let Some((op_id, staged, authored_at)) = self.staged_content(node).await? else {
+            return Ok(None);
+        };
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let scope = self.snapshot.borrow().root;
+        let key = open_content_key(
+            session.enc_subkey(),
+            &scope.0,
+            staged.epoch,
+            &staged.root_cid,
+            &staged.sealed_content_key,
+        )
+        .map_err(|error| EngineError::ContentUnavailable {
+            message: format!(
+                "the staged content key of queued op {} did not open: [{}]",
+                op_id.0,
+                error.check()
+            ),
+        })?;
+        Ok(Some((
+            op_id,
+            Version::new(staged.root_cid, *key, staged.plaintext_size, authored_at.0),
+        )))
+    }
+
+    /// The newest queued op that stages content for `node`: its durable id, what
+    /// it staged, and the time it was authored — the `modifiedAt` the drain will
+    /// publish the version under, so the reader and the publisher agree.
+    async fn staged_content(
         &self,
         node: NodeId,
-        version: &Version,
-    ) -> Result<(), EngineError> {
-        match self
-            .staged_version_cid(node)
+    ) -> Result<Option<(OpId, StagedContent, UnixMillis)>, EngineError> {
+        Ok(self
+            .scan_queue()
             .await?
-            .is_some_and(|staged| staged != version.content_cid)
-        {
-            true => Err(EngineError::ContentUnavailable {
-                message: "a newer content version is staged and not yet published".to_owned(),
-            }),
-            false => Ok(()),
-        }
+            .mine
+            .into_iter()
+            .rev()
+            .find_map(|(op_id, op)| {
+                (op.target == node)
+                    .then(|| op.staged_content().cloned())
+                    .flatten()
+                    .map(|staged| (op_id, staged, op.authored_at))
+            }))
     }
 
     /// The `contentCid` of the newest version a queued op has staged for `node`,
     /// `None` when the queue authors none.
     async fn staged_version_cid(&self, node: NodeId) -> Result<Option<Vec<u8>>, EngineError> {
-        Ok(self.pending_ops().await?.iter().rev().find_map(|op| {
-            (op.target == node)
-                .then(|| op.content_root_cid())
-                .flatten()
-                .map(<[u8]>::to_vec)
-        }))
+        Ok(self
+            .staged_content(node)
+            .await?
+            .map(|(_, staged, _)| staged.root_cid))
     }
 
     /// The `contentCid` of the version the rendered view's size and mtime
@@ -7305,6 +7457,25 @@ where {
     /// The measured storage split this engine runs under.
     pub fn storage_policy(&self) -> &StoragePolicy {
         &self.storage_policy
+    }
+}
+
+/// [`open_engine_error`], with the queued op named: every byte and every length
+/// a staged read judges came from that one op, so the host has an op to route
+/// on rather than a bare verdict.
+fn staged_open_error(staged_op: Option<OpId>, error: OpenError) -> EngineError {
+    let Some(op_id) = staged_op else {
+        return open_engine_error(error);
+    };
+    let naming = |message: String| format!("{message}; staged by queued op {}", op_id.0);
+    match open_engine_error(error) {
+        EngineError::ContentUnavailable { message } => EngineError::ContentUnavailable {
+            message: naming(message),
+        },
+        EngineError::TrustViolation { message } => EngineError::TrustViolation {
+            message: naming(message),
+        },
+        verdict => verdict,
     }
 }
 
@@ -9218,6 +9389,7 @@ mod tests {
                     size: 0,
                     leaf_cids: Vec::new().into_boxed_slice(),
                 },
+                staged_op: None,
                 _slot: StreamSlot::acquire(&streams.live).expect("a free slot"),
             }),
         );

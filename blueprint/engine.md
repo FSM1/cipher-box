@@ -812,9 +812,15 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
     make a routine credential rotation leave the version unpublishable.
     Residual: two accounts on one multi-tenant pin service tag alike, which
     only ever reaches the best-effort mirror report.
-  - The placement is decided once at start and holds for the session, so a
-    provider or credential revoked elsewhere still receives blocks until the
-    process restarts. Stated, not closed.
+  - **The placement is re-decided while the session runs**, on the resolve
+    tick and paced by `settings_recheck_interval`, so a provider or credential
+    revoked elsewhere stops receiving blocks inside that window rather than at
+    the next process start. Only a positively **resolved** record re-decides:
+    a degraded re-load is no evidence that the member changed anything, and
+    the unproven-first-run default resolves to `Hosted`, so honouring one
+    would widen a live `External` session onto the hosted store — the very
+    widening the settings-load policy above exists to prevent. A re-decide
+    that lands re-arms the account-flag reconcile exactly as a save does.
 - **A publish refuses settings no reader could place under** (AGENTS.md rule
   8): the produce path runs the consumer's own placement predicate, so a
   record naming a mode with no usable byte destination — an external leg with
@@ -859,6 +865,26 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   public trustless gateway is the no-auth fallback. The engine verifies CIDs
   client-side via core on every block/CAR response; media uses ranged fetches
   (the service-worker decryption layer is web-blueprint territory) (FSM1/cipher-box-next#34 D7).
+  - **The staging store is the local-first leg, ahead of every gateway.** A
+    version this device staged reaches no gateway until the drain uploads it,
+    so a read of one is served locally or not at all — which is what lets a
+    partial write compose over a version it just wrote, and what pairs the
+    length the rendered view reports with the bytes the write composes over.
+    The leg is safe because the staging key **is** the block's own
+    `contentCid`: a local hit is byte-identical to what a gateway would serve
+    for that address, and a version half-uploaded reads across both legs. A
+    locally held block clears exactly the bars a fetched one clears, in the
+    same order — the plane anchor, the block-size cap before anything is
+    hashed, then the CID verify against the same binary anchor. A mismatch is
+    the same terminal trust violation, never a rotation to the gateway: the
+    nearer source is not the more trusted one. An over-cap value rotates,
+    exactly as an over-cap body does, because no block the engine frames can
+    exceed the cap.
+    Residual: a local miss on a staged version asks the gateway for the
+    address of ciphertext no drain has uploaded, so a version the member later
+    cancels can leak its `contentCid` — a ciphertext hash, never bytes — to
+    the accelerator. Bounding the gateway leg by the durable upload mark would
+    close it; stated, not closed.
 - **Chunking and retention** — owned here per core.md's hand-off, resolved as
   engineering judgment: the engine frames content into fixed-size chunks,
   seals each with core's content-seal primitive (fresh random per-version
