@@ -68,14 +68,15 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     pub(crate) transport: &'a T,
     pub(crate) snapshot_cache: &'a S,
     pub(crate) http: &'a H,
+    /// This scope's own floor namespace
+    /// ([`SharerScopedFloorStore`](crate::seams::SharerScopedFloorStore)).
     pub(crate) floors: &'a F,
     pub(crate) gateway: &'a Gateway,
     /// The gate-passing base snapshot, merged into in place.
     pub(crate) base: &'a RefCell<Snapshot>,
     /// Where a fail-closed rejection on a focused folder is surfaced.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
-    /// The scope every focus folder is sealed under — the vault root scope;
-    /// granted-subscope focus is a later slice.
+    /// The scope every focus folder is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
     /// How this pass resolves each folder's record: a manual refresh forces

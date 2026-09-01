@@ -15,6 +15,7 @@ pub mod child_index;
 pub mod contact;
 pub mod contact_store;
 pub mod create;
+pub(crate) mod grafted;
 pub(crate) mod inbox;
 pub mod invite;
 pub mod invite_mint;
