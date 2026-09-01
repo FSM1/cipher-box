@@ -4725,14 +4725,15 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
     // The registry refcounts a pin per referencing record, so what each batch
     // names decides whose edge goes. Only the content batches own a record.
     let batches = retire_entries(&alice);
-    assert!(
-        batch_naming(&batches, name.as_str()).is_none(),
+    assert_eq!(
+        batch_namings(&batches, name.as_str()),
+        vec![None],
         "a name retire names no owning record, so every reference to it goes"
     );
     for cid in &content {
         assert_eq!(
-            batch_naming(&batches, cid).as_deref(),
-            Some(name.as_str()),
+            batch_namings(&batches, cid),
+            vec![Some(name.as_str().to_owned())],
             "the owed retire drops this record's edge and no other's"
         );
     }
@@ -9513,17 +9514,21 @@ fn retire_targets(device: &FakeDevice) -> Vec<String> {
     retire_batches(device).into_iter().flatten().collect()
 }
 
-/// The record a batch naming `target` scoped itself to, `None` for the
-/// account-wide form. Panics when no batch named it.
-fn batch_naming(batches: &[(Option<String>, Vec<String>)], target: &str) -> Option<String> {
+/// Every batch that named `target`, as the record each scoped itself to and
+/// `None` for the account-wide form. Every batch rather than the first, because
+/// a second batch naming the same CID account-wide takes the edge the first one
+/// kept.
+fn batch_namings(batches: &[(Option<String>, Vec<String>)], target: &str) -> Vec<Option<String>> {
     batches
         .iter()
-        .find(|(_, targets)| targets.iter().any(|sent| sent == target))
+        .filter(|(_, targets)| targets.iter().any(|sent| sent == target))
         .map(|(record, _)| record.clone())
-        .expect("the target reaches the registry")
+        .collect()
 }
 
-/// Every retire batch this device sent, as the record it names and its targets.
+/// Every retire batch this device sent, as the record it names — which is what
+/// separates a record-scoped retire from the account-wide form — and its
+/// targets.
 fn retire_entries(device: &FakeDevice) -> Vec<(Option<String>, Vec<String>)> {
     device
         .http

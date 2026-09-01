@@ -3409,10 +3409,10 @@ where
     ///
     /// A quote, not a promise: what the retire may actually name is decided at
     /// drain time against the node's own published record
-    /// ([`Self::live_node_cids`]), so the figure here is the ceiling a pass that
-    /// cannot re-expand falls back on ([`OwedRetire::owed_bytes`]). It is quoted
-    /// once per CID — a leaf two doomed roots both name is one pin row, and
-    /// quoting it twice would over-report pending reclaim.
+    /// ([`Self::live_owing_record`]), so the figure here is the ceiling a pass
+    /// that cannot re-expand falls back on ([`OwedRetire::owed_bytes`]). It is
+    /// quoted once per CID — a leaf two doomed roots both name is one pin row,
+    /// and quoting it twice would over-report pending reclaim.
     ///
     /// Only *doomed* roots are fetched. A retained version is never expanded
     /// here: it is the drain's business what is live, and a version this device

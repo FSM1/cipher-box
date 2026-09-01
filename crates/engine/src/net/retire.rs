@@ -1317,8 +1317,8 @@ mod tests {
             &gateway(),
             &http,
             &ContentProfile::CI,
-            // What `live_node_cids` answers for a node the delete unlinked: no
-            // live listing reaches it, whatever its lingering record names.
+            // What `live_owing_record` answers for a node the delete unlinked:
+            // no live listing reaches it, whatever its lingering record names.
             async |_, owing| {
                 asked.borrow_mut().push(owing);
                 Some(owning(BTreeSet::new()))
