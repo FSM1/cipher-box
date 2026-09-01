@@ -25,6 +25,15 @@ export class FilesPage {
   }
 
   /**
+   * Navigates through the sidebar, not the address bar: this suite's session is
+   * in-memory, so a document load would land the tab back on the front door.
+   */
+  async openFromSidebar(): Promise<void> {
+    await this.page.getByTestId('nav-item-files').click();
+    await expect(this.browser).toBeVisible();
+  }
+
+  /**
    * Opens the header menu and signs out. Hover, not click: the menu opens on
    * pointer entry and the trigger *toggles*, so a click races itself shut.
    */

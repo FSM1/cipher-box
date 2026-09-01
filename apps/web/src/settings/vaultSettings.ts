@@ -14,7 +14,7 @@ import type { ByoKind, PinMode, VaultSettingsDescriptor } from '@cipherbox/clien
  * The window a vault keeps before its owner chooses one, mirroring the engine
  * default. Only a form that has loaded no summary ever uses it.
  */
-const DEFAULT_BIN_RETENTION_DAYS = 30;
+const DEFAULT_BIN_RETENTION_DAYS = '30';
 
 export interface VaultSettingsFields {
   pinMode: PinMode;
@@ -24,11 +24,12 @@ export interface VaultSettingsFields {
   /** Newest-n retention; blank keeps every version within quota. */
   keepLatestVersions: string;
   /**
-   * Days a soft-deleted node stays in the bin. No control renders it yet, so
-   * the form carries the loaded value untouched: a save replaces the whole
-   * record, and a field this form drops is a choice the member loses.
+   * Days a soft-deleted node stays in the bin. `0` makes every delete a hard
+   * delete, so a blank is refused rather than read as a default: a save
+   * replaces the whole record, and a guessed value is a choice the member
+   * never made (ADR 0010).
    */
-  binRetentionDays: number;
+  binRetentionDays: string;
 }
 
 export const DEFAULT_VAULT_SETTINGS_FORM: VaultSettingsFields = {
@@ -51,10 +52,17 @@ export type VaultSettingsDraft =
  */
 export function buildVaultSettings(form: VaultSettingsFields): VaultSettingsDraft {
   const keep = form.keepLatestVersions.trim();
-  if (keep !== '' && !/^\d+$/.test(keep)) {
+  if (keep !== '' && !isCount(keep)) {
     return {
       ok: false,
       problem: 'keep-latest wants a whole number of versions, or nothing at all',
+    };
+  }
+  const binDays = form.binRetentionDays.trim();
+  if (!isCount(binDays)) {
+    return {
+      ok: false,
+      problem: 'bin retention wants a whole number of days, where 0 deletes outright',
     };
   }
   const endpoint = form.byoEndpoint.trim();
@@ -67,9 +75,13 @@ export function buildVaultSettings(form: VaultSettingsFields): VaultSettingsDraf
           ? null
           : { endpoint, kind: form.byoKind, accessToken: bearer(form.byoAccessToken) },
       keepLatestVersions: keep === '' ? null : Number(keep),
-      binRetentionDays: form.binRetentionDays,
+      binRetentionDays: Number(binDays),
     },
   };
+}
+
+function isCount(raw: string): boolean {
+  return /^\d+$/.test(raw);
 }
 
 /** The bearer in a buffer of its own, so the send transfers it out of this realm. */

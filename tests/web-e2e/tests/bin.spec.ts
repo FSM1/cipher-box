@@ -14,6 +14,7 @@
 
 import { expect, test } from '../fixtures';
 import { BinPage } from '../page-objects/bin.page';
+import { SettingsPage } from '../page-objects/settings.page';
 import { coldStart, drained } from '../vault';
 
 test('@full a fresh vault holds no bin index, which is not an empty bin', async ({ page }) => {
@@ -73,5 +74,31 @@ test('@full a purge takes the entry off the bin for good', async ({ page }) => {
   await bin.gone('drafts');
 
   await expect(bin.empty).toBeVisible();
+  await expect(bin.error).toHaveCount(0);
+});
+
+test('@full a retention of 0 saved on the form makes the next delete a hard delete', async ({
+  page,
+}) => {
+  const { vault, files } = await coldStart(page);
+  const settings = new SettingsPage(page);
+  const bin = new BinPage(page);
+
+  await settings.open();
+  await settings.binRetention.fill('0');
+  await settings.save();
+  await expect(settings.savedMark).toBeVisible();
+  await expect(settings.saveError).toHaveCount(0);
+
+  await files.openFromSidebar();
+  await files.createFolder('drafts');
+  await vault.settled();
+  await files.remove('drafts');
+  expect(await drained(files, vault)).not.toContain('folder drafts');
+
+  await bin.open();
+
+  await expect(bin.retention).toHaveAttribute('data-days', '0');
+  await expect(bin.row('drafts')).toHaveCount(0);
   await expect(bin.error).toHaveCount(0);
 });

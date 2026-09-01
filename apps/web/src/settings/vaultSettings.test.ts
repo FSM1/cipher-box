@@ -84,12 +84,28 @@ describe('the vault settings a save publishes', () => {
     );
   });
 
-  // A save replaces the whole record, so a value no control renders must still
-  // ride the round trip. A zero the form dropped would turn the member's
-  // erasure back into a soft delete without their asking.
-  it.each([0, 7, 3650])('carries the loaded bin retention of %i through a save', (days) => {
-    expect(settings(buildVaultSettings(form({ binRetentionDays: days }))).binRetentionDays).toBe(
-      days
+  it.each([0, 7, 3650])('carries a bin retention of %i through a save', (days) => {
+    expect(
+      settings(buildVaultSettings(form({ binRetentionDays: String(days) }))).binRetentionDays
+    ).toBe(days);
+  });
+
+  it('carries a bin retention the member typed with spaces around it', () => {
+    expect(settings(buildVaultSettings(form({ binRetentionDays: ' 7 ' }))).binRetentionDays).toBe(
+      7
+    );
+  });
+
+  it.each(['', '   ', 'lots', '-1', '1.5'])(
+    'refuses the bin retention %j rather than sending one',
+    (binRetentionDays) => {
+      expect(buildVaultSettings(form({ binRetentionDays })).ok).toBe(false);
+    }
+  );
+
+  it('leaves the bar on a well-formed bin retention to the engine', () => {
+    expect(settings(buildVaultSettings(form({ binRetentionDays: '4000' }))).binRetentionDays).toBe(
+      4000
     );
   });
 });

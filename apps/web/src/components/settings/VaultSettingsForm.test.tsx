@@ -186,6 +186,42 @@ describe('the vault settings form', () => {
     expect(taking.saves).toEqual([]);
     expect(screen.getByTestId('settings-error')).toBeTruthy();
   });
+
+  it('shows the bin retention the vault holds', () => {
+    renderForm(engineTaking(), summary({ binRetentionDays: 7 }));
+
+    expect((screen.getByLabelText('days a deleted item is kept') as HTMLInputElement).value).toBe(
+      '7'
+    );
+  });
+
+  it('publishes the bin retention the member typed', async () => {
+    const taking = renderForm(engineTaking(), summary({ binRetentionDays: 7 }));
+
+    type('days a deleted item is kept', '0');
+    await save();
+
+    expect(taking.saves[0].binRetentionDays).toBe(0);
+  });
+
+  it('keeps the loaded bin retention through a save that never touches it', async () => {
+    const taking = renderForm(engineTaking(), summary({ binRetentionDays: 7 }));
+
+    type('keep newest versions', '5');
+    await save();
+
+    expect(taking.saves[0].binRetentionDays).toBe(7);
+  });
+
+  it('never sends a bin retention the descriptor cannot carry', async () => {
+    const taking = renderForm();
+
+    type('days a deleted item is kept', '');
+    await save();
+
+    expect(taking.saves).toEqual([]);
+    expect(screen.getByTestId('settings-error').textContent).toMatch(/bin retention/i);
+  });
 });
 
 describe('a save over a credential the form cannot show', () => {
