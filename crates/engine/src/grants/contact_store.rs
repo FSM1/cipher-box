@@ -483,6 +483,15 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
                 origin: Some(mut origin),
                 ..
             }) => {
+                // A claim moves the entry onto the link it came in on, so the
+                // move is a charge on that link. Without it a holder of two
+                // links empties one by re-claiming its entries on the other,
+                // then refills it, past the per-link share.
+                if origin.link_tag != *link_tag && link_budget_full(&sources(&book), link_tag) {
+                    return Err(ContactStoreError::LinkBookFull {
+                        link_tag: *link_tag,
+                    });
+                }
                 origin.link_tag = *link_tag;
                 origin.hold(scope_id)?;
                 Some(origin)
@@ -1424,6 +1433,77 @@ mod tests {
             block_on(store.contacts()).expect("load").len(),
             MAX_LINK_CONTACTS + 1,
             "and every earlier claimant stays resolvable for a cut"
+        );
+    }
+
+    /// A move between links is charged to the link the entry lands on. Without
+    /// that charge a holder of two links empties one by re-claiming its entries
+    /// on the other, then refills it, past the share either link may take.
+    #[test]
+    fn a_claim_that_moves_an_entry_onto_a_full_link_is_refused() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x7A);
+        let entropy = seeded(122);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        let moved = u16::try_from(MAX_LINK_CONTACTS).expect("in range");
+        block_on(store.record_from_link(&claimant_code(moved), &LINK, &SCOPE_A))
+            .expect("a claim on the first link converts");
+        for i in 0..MAX_LINK_CONTACTS {
+            block_on(store.record_from_link(
+                &claimant_code(u16::try_from(i).expect("in range")),
+                &OTHER_LINK,
+                &SCOPE_A,
+            ))
+            .expect("a claim under the second link's bound records");
+        }
+
+        assert!(
+            matches!(
+                block_on(store.record_from_link(&claimant_code(moved), &OTHER_LINK, &SCOPE_B)),
+                Err(ContactStoreError::LinkBookFull { link_tag }) if link_tag == OTHER_LINK
+            ),
+            "the refusal names the link the entry would move onto"
+        );
+        let sources = block_on(store.contacts_with_sources())
+            .expect("book")
+            .into_iter()
+            .map(|(_, source)| source)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sources.iter().filter(|s| **s == Some(LINK)).count(),
+            1,
+            "the refused move left the entry charged to the link it came from"
+        );
+        assert_eq!(
+            sources.iter().filter(|s| **s == Some(OTHER_LINK)).count(),
+            MAX_LINK_CONTACTS,
+            "and the full link took no further share"
+        );
+    }
+
+    /// A repeat claim on the link that already sources the entry adds a scope,
+    /// not an entry, so a link at its own bound must still convert it.
+    #[test]
+    fn a_repeat_claim_on_the_sourcing_link_converts_at_the_bound() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x7B);
+        let entropy = seeded(123);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        for i in 0..MAX_LINK_CONTACTS {
+            block_on(store.record_from_link(
+                &claimant_code(u16::try_from(i).expect("in range")),
+                &LINK,
+                &SCOPE_A,
+            ))
+            .expect("a claim under the bound records");
+        }
+
+        block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_B))
+            .expect("the same link's repeat claim takes a scope, not a share");
+        assert_eq!(
+            block_on(store.contacts()).expect("load").len(),
+            MAX_LINK_CONTACTS,
+            "and the book grew by no entry"
         );
     }
 
