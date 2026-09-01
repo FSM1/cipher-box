@@ -55,6 +55,26 @@ pub trait Adopter {
     ) -> Result<Option<OwnScopeMaterial>, SeamError> {
         Ok(None)
     }
+
+    /// Gate the record fetched under `name` **without** advancing the name's
+    /// sequence floor, and hand back the read scope seed the gate recovered from
+    /// its owner blob (`None` when the reader's arm recovers none). Same
+    /// fail-closed verdicts as [`adopt`](Self::adopt); only the floor advance is
+    /// dropped.
+    ///
+    /// For a caller that discards the sighting — the mint's confirm-by-adopt
+    /// root step — so the session's first real resolve of that name is still the
+    /// adopt that projects and caches it. The default suits a stub that keeps no
+    /// durable floors.
+    async fn probe_read_scope_seed(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        self.adopt(name, record_bytes)
+            .await
+            .map(|outcome| outcome.read_scope_seed)
+    }
 }
 
 /// The owner's own-scope seeds, recovered from a record already at the durable

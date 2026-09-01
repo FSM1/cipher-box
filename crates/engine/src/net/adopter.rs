@@ -38,8 +38,8 @@ use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
 use crate::content::limits::{resealable_root_rest_bytes, scope_root_rest_bytes};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
-    Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
-    SeedBlob, adopt, floor,
+    Adopted, Candidate, GateError, GateRejection, GateStage, PendingAdoption, ReaderContext,
+    RejectionReason, SeedBlob, adopt_deferred, floor,
 };
 use crate::grants::{recipient_blinded_tag, self_locate_signed};
 use crate::seams::{FloorStore, Http, SeamError};
@@ -289,6 +289,17 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
                 },
             }))
     }
+
+    async fn probe_read_scope_seed(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        // The floor moves on the AAD-confirmed unseal of a *kept* adopt; this
+        // sighting is discarded, so its pending advance is dropped with it.
+        let gated = self.gate_root(name, record_bytes).await?;
+        Ok(Some(gated.read_scope_seed))
+    }
 }
 
 /// The owner's own scope root as recovered at exactly the durable sequence
@@ -416,6 +427,37 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<(Candidate, AdoptOutcome), GateError> {
+        let GatedRoot {
+            candidate,
+            pending,
+            read_scope_seed,
+            grant_write_scope_seed,
+        } = self.gate_root(name, record_bytes).await?;
+        let adopted = pending.commit(self.floors).await?;
+
+        let env = &candidate.envelope;
+        let write_scope_seed = self
+            .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
+            .await?;
+        let node_id = env.id;
+        Ok((
+            candidate,
+            AdoptOutcome {
+                adopted,
+                write_scope_seed,
+                node_id,
+                read_scope_seed: Some(read_scope_seed),
+            },
+        ))
+    }
+
+    /// Stages 1-7 with the floor advance still deferred, so a caller that
+    /// discards the sighting leaves the name's sequence floor where it found it.
+    async fn gate_root(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<GatedRoot, GateError> {
         let candidate = self.assemble_candidate(name, record_bytes).await?;
 
         // Step 6 — the reader's own seed source. Whichever arm supplies it, the
@@ -447,9 +489,9 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         };
 
         // Step 7 — the gate owns all trust. The write seed it surfaces for a
-        // write grantee, and the owner-write-blob recovery below, are the same
-        // capability reached through each arm's own material.
-        let (adopted, _) = match adopt(self.floors, &reader, &candidate).await {
+        // write grantee, and the owner-write-blob recovery in `adopt_root`, are
+        // the same capability reached through each arm's own material.
+        let (pending, _) = match adopt_deferred(self.floors, &reader, &candidate).await {
             Ok(pass) => pass,
             Err(err) => {
                 // Keep the candidate for the equal-floor recovery path — it
@@ -471,20 +513,23 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             }
         };
 
-        let write_scope_seed = self
-            .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
-            .await?;
-        let node_id = env.id;
-        Ok((
+        Ok(GatedRoot {
             candidate,
-            AdoptOutcome {
-                adopted,
-                write_scope_seed,
-                node_id,
-                read_scope_seed: Some(read_scope_seed),
-            },
-        ))
+            pending,
+            read_scope_seed,
+            grant_write_scope_seed,
+        })
     }
+}
+
+/// A gate pass whose floor advance has not been committed yet, plus the seeds
+/// the reader's own blob wrapped. Terminal owner of both seeds — they zeroize on
+/// drop unless a caller takes them.
+struct GatedRoot {
+    candidate: Candidate,
+    pending: PendingAdoption,
+    read_scope_seed: Zeroizing<[u8; 32]>,
+    grant_write_scope_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
 /// The reader's own seed source inside one record: the blob the gate re-opens,

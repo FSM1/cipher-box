@@ -84,11 +84,13 @@ where
         // so a pass proves an owner-readable root stands here — not that it is the
         // one this run derived. The read rotation that re-keys a scope republishes
         // at this same name, so the two must be compared.
-        match self.adopter.adopt(name, &bytes).await {
-            Ok(outcome) => match outcome.read_scope_seed {
-                Some(recovered) if ct_eq(&recovered, read_scope_seed) => GenesisRoot::Adopted,
-                _ => GenesisRoot::Foreign,
-            },
+        //
+        // Non-committing: the sighting is discarded, and the floor this probe
+        // would burn is the one the session's first resolve adopts against
+        // ([`landed`]).
+        match self.adopter.probe_read_scope_seed(name, &bytes).await {
+            Ok(Some(recovered)) if ct_eq(&recovered, read_scope_seed) => GenesisRoot::Adopted,
+            Ok(_) => GenesisRoot::Foreign,
             Err(_) => GenesisRoot::Unclaimed,
         }
     }
