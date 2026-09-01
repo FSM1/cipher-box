@@ -11,7 +11,9 @@
 use cipherbox_core::codec::decode;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{BinEntry, BinIndex, NodeKind, seal_bin_index};
+use cipherbox_core::seal::{
+    BinEntry, BinIndex, MAX_BIN_INDEX_BODY_BYTES, NodeKind, seal_bin_index,
+};
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::secret::SECRET_LEN;
 
@@ -23,8 +25,9 @@ use cipherbox_engine::testkit::account::{Blocks, serve_http};
 use cipherbox_engine::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    BinIndexKeys, BinIndexLoad, BinIndexPublishError, DefaultsReason, Gateway, GatewayConfig,
-    OrphanHeads, SessionBearer, SyncTimingProfile, load_bin_index, publish_bin_index,
+    BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinIndexRead, DefaultsReason, Gateway,
+    GatewayConfig, OrphanHeads, SessionBearer, SyncTimingProfile, load_bin_index,
+    publish_bin_index,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -113,6 +116,15 @@ fn load(
     blocks: &Blocks,
     keys: &BinIndexKeys,
 ) -> BinIndexLoad {
+    read(world, device, blocks, keys).load
+}
+
+fn read(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    keys: &BinIndexKeys,
+) -> BinIndexRead {
     serve_http(device, blocks, 4);
     block_on(load_bin_index(
         &device.record_store,
@@ -142,6 +154,18 @@ fn published_block(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> Vec
     blocks.get(cid).expect("block on the plane")
 }
 
+/// The signed `Validity` bytes the record currently published at `name` carries.
+fn published_validity(device: &FakeDevice, name: &IpnsName) -> Vec<u8> {
+    let record = device
+        .record_store
+        .record_at(&device.record_store.endpoints()[0], name.as_str())
+        .expect("published");
+    IpnsRecord::unmarshal(&record)
+        .and_then(|r| r.verify(name))
+        .expect("verifiable")
+        .validity
+}
+
 /// The nonce the record at `name` was sealed under: the prefix of the framed
 /// `sealed` blob its clear header carries.
 fn published_nonce(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> [u8; NONCE_LEN] {
@@ -161,7 +185,14 @@ fn published_nonce(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> [u8
 /// at the account's bin name and `sequence`, bypassing the publish path. Each
 /// fixture body gets its own nonce: two bodies sealed under one key must never
 /// share one, in fixtures as in production.
-fn seed_bin(device: &FakeDevice, blocks: &Blocks, index: &BinIndex, sequence: u64, key: &[u8; 32]) {
+fn seed_bin(
+    device: &FakeDevice,
+    blocks: &Blocks,
+    index: &BinIndex,
+    sequence: u64,
+    key: &[u8; 32],
+    eol: &str,
+) {
     let mut nonce = [8u8; NONCE_LEN];
     nonce[0] = u8::try_from(sequence).expect("fixture sequences are small");
     let block = seal_bin_index(key, &nonce, index).expect("seal");
@@ -171,7 +202,7 @@ fn seed_bin(device: &FakeDevice, blocks: &Blocks, index: &BinIndex, sequence: u6
         format!("/ipfs/{cid}").as_bytes(),
         sequence,
         TTL_NANOS,
-        EOL,
+        eol,
     )
     .marshal();
     for endpoint in device.record_store.endpoints() {
@@ -232,7 +263,14 @@ fn a_second_account_cannot_open_the_first_accounts_bin() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"shared-device");
-    seed_bin(&device, &blocks, &binned(&[1]), 1, &seal_key(&OTHER_SECRET));
+    seed_bin(
+        &device,
+        &blocks,
+        &binned(&[1]),
+        1,
+        &seal_key(&OTHER_SECRET),
+        EOL,
+    );
 
     assert_eq!(
         load(&world, &device, &blocks, &keys()),
@@ -347,7 +385,7 @@ fn a_replayed_sequence_is_refused_and_the_cached_copy_answers() {
     publish(&world, &device, &blocks, &binned(&[1]), 1);
     publish(&world, &device, &blocks, &binned(&[1, 2]), 2);
 
-    seed_bin(&device, &blocks, &binned(&[9]), 1, &seal_key(&SECRET));
+    seed_bin(&device, &blocks, &binned(&[9]), 1, &seal_key(&SECRET), EOL);
     let load = load(&world, &device, &blocks, &keys());
     let BinIndexLoad::Stale { index, reason } = load.clone() else {
         panic!("the load falls back to this device's last-known-good copy: {load:?}");
@@ -383,7 +421,7 @@ fn a_same_sequence_fork_below_the_adopted_revision_is_refused() {
 
     let mut fork = binned(&[9]);
     fork.revision = 1;
-    seed_bin(&device, &blocks, &fork, 2, &seal_key(&SECRET));
+    seed_bin(&device, &blocks, &fork, 2, &seal_key(&SECRET), EOL);
     let BinIndexLoad::Stale { reason, .. } = load(&world, &device, &blocks, &keys()) else {
         panic!("the load falls back to this device's last-known-good copy");
     };
@@ -410,7 +448,7 @@ fn a_newer_sequence_is_adopted_whatever_this_devices_revision_counter_holds() {
 
     let mut newer = binned(&[9]);
     newer.revision = 1;
-    seed_bin(&device, &blocks, &newer, 3, &seal_key(&SECRET));
+    seed_bin(&device, &blocks, &newer, 3, &seal_key(&SECRET), EOL);
     let BinIndexLoad::Resolved(index) = load(&world, &device, &blocks, &keys()) else {
         panic!("a record above the sequence floor is adopted");
     };
@@ -591,5 +629,139 @@ fn a_body_naming_one_node_twice_is_never_published() {
             .record_at(&device.record_store.endpoints()[0], name().as_str())
             .is_none(),
         "a refused body never reaches the network",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Exits from the states that hold the queue head
+// ---------------------------------------------------------------------------
+
+/// An EOL already lapsed at the virtual clock's own epoch.
+const LAPSED_EOL: &str = "1970-01-01T00:00:00Z";
+
+/// The lapse is the state the rewrite has to lift, so the record it builds on
+/// carries the lapsed EOL and the whole floor law still passes.
+///
+/// The rewrite the load admits stamps the fresh EOL. Nothing else does: the
+/// keyless re-PUT carries the record's own validity, and the sub-EOL renewal
+/// skips a record already past its EOL.
+#[test]
+fn a_lapsed_bin_record_still_establishes_the_index_the_rewrite_builds_on() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &binned(&[1]), 1);
+    seed_bin(
+        &device,
+        &blocks,
+        &binned(&[1, 2]),
+        2,
+        &seal_key(&SECRET),
+        LAPSED_EOL,
+    );
+
+    let index = read(&world, &device, &blocks, &keys())
+        .load
+        .writable()
+        .expect("a lapse never refuses the rewrite");
+    assert_eq!(
+        index.entries.len(),
+        2,
+        "and the rewrite carries the entries the lapsed record named",
+    );
+
+    publish(&world, &device, &blocks, &binned(&[1, 2, 3]), 3);
+    assert_ne!(
+        published_validity(&device, &name()),
+        LAPSED_EOL.as_bytes(),
+        "the rewrite the load admitted is what re-signs the name",
+    );
+}
+
+/// A read-only session keeps the name alive: the load enrols what it resolved,
+/// so a vault that soft-deletes nothing never reaches the lapse at all.
+#[test]
+fn a_resolved_bin_record_is_offered_for_renewal_by_the_load_alone() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &binned(&[1]), 1);
+
+    let read = read(&world, &device, &blocks, &keys());
+    assert!(matches!(read.load, BinIndexLoad::Resolved(_)));
+    assert_eq!(
+        read.renewable
+            .expect("resolved records are renewable")
+            .routing_key,
+        name().as_str(),
+    );
+}
+
+/// The renewal re-signs at `floor + 1`, so a record the floor law rejected must
+/// never enter the set: renewing a replay would make it win record selection.
+#[test]
+fn a_replayed_bin_record_is_never_offered_for_renewal() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &binned(&[1]), 1);
+    publish(&world, &device, &blocks, &binned(&[1, 2]), 2);
+    seed_bin(&device, &blocks, &binned(&[9]), 1, &seal_key(&SECRET), EOL);
+
+    let read = read(&world, &device, &blocks, &keys());
+    assert!(matches!(
+        read.load.writable().unwrap_err(),
+        DefaultsReason::RolledBack { .. },
+    ));
+    assert!(
+        read.renewable.is_none(),
+        "a replay the load refused is not this session's to re-sign",
+    );
+}
+
+/// A bin no rung admits is the member's own state, and the publish names it as
+/// one. Read as a codec fault it would spend the delete's attempt budget five
+/// times over and dead-letter with nothing naming the cause.
+#[test]
+fn a_bin_past_the_top_rung_is_refused_as_a_full_bin_and_not_as_a_codec_fault() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    // Sized off the ceiling itself rather than a fixed count, so the test keeps
+    // meaning if the rungs move: every entry costs well over these bytes.
+    let entries = (0..u32::try_from(MAX_BIN_INDEX_BODY_BYTES / 64).expect("fits"))
+        .map(|i| {
+            let mut node_id = [0u8; 16];
+            node_id[..4].copy_from_slice(&i.to_be_bytes());
+            BinEntry::new(
+                node_id,
+                vec![1, 2],
+                NodeKind::File,
+                [7u8; 16],
+                format!("note-{i}.txt"),
+                1_000,
+                [3u8; 16],
+                Some([5u8; SECRET_LEN]),
+            )
+        })
+        .collect();
+    let over = BinIndex {
+        entries,
+        ..BinIndex::new(0)
+    };
+
+    let outcome = publish_with(
+        &world,
+        &device,
+        &Blocks::default(),
+        &over,
+        &mut SeededEntropy::new(5),
+    );
+    assert_eq!(outcome, Err(BinIndexPublishError::Full));
+    assert!(
+        device
+            .record_store
+            .record_at(&device.record_store.endpoints()[0], name().as_str())
+            .is_none(),
+        "a refused publish never reaches the network",
     );
 }

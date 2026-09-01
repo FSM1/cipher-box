@@ -569,6 +569,25 @@ pub enum DefaultsReason {
     FloorUnreadable,
 }
 
+impl DefaultsReason {
+    /// The stable check name a host renders, carrying no record figures — the
+    /// floors and sequences the data-carrying variants hold are this device's
+    /// own state, and a host has no use for them.
+    #[must_use]
+    pub fn check(self) -> &'static str {
+        match self {
+            Self::UnprovenFirstRun => "unproven-first-run",
+            Self::Suppressed => "suppressed",
+            Self::RolledBack { .. } => "rolled-back",
+            Self::RevisionRolledBack { .. } => "revision-rolled-back",
+            Self::Expired => "expired",
+            Self::TimedOut => "timed-out",
+            Self::Unreadable => "unreadable",
+            Self::FloorUnreadable => "floor-unreadable",
+        }
+    }
+}
+
 /// What a load produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsLoad {

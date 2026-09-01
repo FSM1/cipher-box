@@ -364,9 +364,8 @@ The bin index (`CONTEXT.md`) is the owner's vault-level record of every
 soft-deleted node. Its record plane is the settings record's, so everything
 above under "Vault settings load" holds unchanged: the same three-rung ladder
 (the published record, this device's last-known-good copy, then an empty bin),
-the same three durable marks, the same per-attempt body revision beside the
-per-name sequence floor, and the same carve-out that refuses a lapsed EOL
-because the reader is always the signer. Only what differs is stated here.
+the same three durable marks, and the same per-attempt body revision beside the
+per-name sequence floor. Only what differs is stated here.
 
 - **The seal key never rotates, so the nonce is always entropy.**
   `bin-index-seal-key` takes no epoch input and no per-record input, so one key
@@ -399,6 +398,30 @@ because the reader is always the signer. Only what differs is stated here.
   soft-deleted anything has no entries to load, so the ladder bottoms out at an
   empty index. The record still exists from vault genesis, because its very
   existence would otherwise say the bin is non-empty.
+- **The queue head never waits on the bin plane in silence.** Every state the
+  load can leave the head in has an exit and a reported cause. A refusal of
+  bytes the plane served is charged against the attempt budget. Every other
+  outcome takes a reported hold the host reads beside the quota and settings
+  holds, and the hold clears when the record resolves. A body no rung admits is
+  its own dead-letter reason rather than a codec fault, because no retry shrinks
+  it.
+- **A lapsed EOL is availability here, and the settings carve-out does not carry
+  over.** Nothing on this plane re-signs the record but the rewrite a refusal
+  blocks: the API re-PUT carries the record's own validity, and the sub-EOL
+  renewal passes over a record already past its EOL. A refusal would therefore
+  hold the queue head for good on a vault that soft-deleted nothing for ninety
+  days. The load establishes the index instead, and the rewrite it feeds stamps
+  the fresh EOL. Two things bound what that admits. The load enrols every record
+  it reads in the session's renewal set, so a live account never reaches the
+  lapse. And the residual is narrow: only a device holding none of the three
+  durable marks has nothing else to judge age by, and the settings record's own
+  reason for refusing — the record it would adopt carries a bearer credential —
+  has no counterpart in a bin index.
+- **One load serves a pass, one publish serves an operation.** The index a pass
+  establishes — resolved, or left standing by its own confirmed publish — is
+  carried across the operations of that pass, so a bulk soft delete costs one
+  resolve rather than one per node. The publish stays per operation, which is
+  what keeps each entry ahead of its own unlink.
 
 ## Delete branch
 

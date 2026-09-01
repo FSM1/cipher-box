@@ -3504,6 +3504,7 @@ fn load_bin(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) -> BinIndex
         &SyncTimingProfile::CI,
         &BinIndexKeys::derive(&SECRET),
     ))
+    .load
 }
 
 /// The soft delete is an unlink and nothing more: the parent stops naming the
@@ -4309,6 +4310,129 @@ fn a_purge_after_a_dual_link_soft_delete_finds_no_link_to_refuse_it() {
     assert!(
         bin_entries(&world, &alice, &blocks).is_empty(),
         "and the entry goes with it"
+    );
+}
+
+/// A withheld bin index otherwise stops every queued operation for the account
+/// and reports nothing: the head waits, the member sees a stalled queue, and no
+/// budget is spent that would ever end it. The hold names the cause and clears
+/// when the record resolves.
+#[test]
+fn a_withheld_bin_index_reports_a_named_hold_that_clears_when_it_resolves() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    for name in ["a.txt", "b.txt"] {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.into(),
+            },
+            &(0..40u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    // The first delete publishes the record, so this device holds the durable
+    // marks that make a later withholding a suppression and not a first run.
+    let first = child_id(&engine, ROOT, "a.txt");
+    block_on(engine.command(Command::Delete { node: first })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let second = child_id(&engine, ROOT, "b.txt");
+    let bin_name = BinIndexKeys::derive(&SECRET).name().clone();
+    world.record_store.fail_get_for(bin_name.as_str());
+    block_on(engine.command(Command::Delete { node: second })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    let hold = view
+        .bin_index_hold
+        .expect("a bin index the pass cannot read holds the head");
+    assert_eq!(hold.node, second);
+    assert_eq!(hold.reason.check(), "suppressed");
+    assert!(
+        view.dead_letters.is_empty(),
+        "a withheld record is not a failed op"
+    );
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).contains(&"b.txt".to_owned()),
+        "and nothing publishes behind the held head"
+    );
+
+    world.record_store.heal_get_for(bin_name.as_str());
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.bin_index_hold.is_none(),
+        "the hold clears when the record resolves"
+    );
+    assert!(
+        !published_names(&world.record_store, &blocks, ROOT).contains(&"b.txt".to_owned()),
+        "and the delete lands"
+    );
+}
+
+/// Soft-delete `count` files from the root in one pass, reporting how many GETs
+/// that cost at the bin index name.
+fn bin_gets_for_a_pass_deleting(count: usize) -> usize {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let names: Vec<String> = (0..count).map(|i| format!("f{i}.txt")).collect();
+    for name in &names {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.clone(),
+            },
+            &(0..40u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    let doomed: Vec<NodeId> = names
+        .iter()
+        .map(|name| child_id(&engine, ROOT, name))
+        .collect();
+    let bin_name = BinIndexKeys::derive(&SECRET).name().clone();
+    let before = world.record_store.get_count(bin_name.as_str());
+    for node in doomed {
+        block_on(engine.command(Command::Delete { node })).unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks).len(),
+        count,
+        "every delete of the pass landed its entry"
+    );
+    world.record_store.get_count(bin_name.as_str()) - before
+}
+
+/// One pass establishes the index once and carries it; only the per-operation
+/// publish and its confirm scale with the node count. Deleting a folder of two
+/// hundred files would otherwise resolve a record padded to its rung two
+/// hundred times over.
+#[test]
+fn a_bulk_soft_delete_resolves_the_bin_index_once_for_the_whole_pass() {
+    let endpoints = FakeWorld::new().device(b"alice").record_store.endpoints();
+    let fanout = endpoints.len();
+    let one = bin_gets_for_a_pass_deleting(1);
+    let four = bin_gets_for_a_pass_deleting(4);
+    assert_eq!(
+        four - one,
+        3 * fanout,
+        "three more deletes cost three more confirms and no further load",
     );
 }
 

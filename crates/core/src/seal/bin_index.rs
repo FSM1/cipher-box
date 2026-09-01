@@ -419,8 +419,9 @@ fn pad_len(bare: usize, rung: usize) -> Option<usize> {
         .map(|(_, n)| n)
 }
 
-/// The collection label the total-size refusal reports.
-const BIN_INDEX_SIZE_CHECK: &str = "binIndex";
+/// The collection label the total-size refusal reports, so a caller can tell a
+/// bin that no rung admits from any other refusal [`encode_bin_index`] makes.
+pub const BIN_INDEX_SIZE_CHECK: &str = "binIndex";
 
 // ---------------------------------------------------------------------------
 // The sealed record.

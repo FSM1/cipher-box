@@ -189,14 +189,16 @@ fn names_this_scope(scope: &DrainScope<'_>, child: &ChildRef) -> bool {
 
 /// A bin index load that did not establish the current index.
 ///
-/// A plane this pass could not read is availability and waits uncharged. A
-/// refusal of bytes the plane actually served is charged, so a jammed bin index
-/// cannot hold the queue head for good.
+/// A refusal of bytes the plane actually served is charged, so a jammed bin
+/// index cannot hold the queue head for good. A plane this pass could not read
+/// is availability and waits uncharged — but it waits as a *reported* hold, so
+/// a party who withholds one record does not stall the queue in silence
+/// ([`BinIndexHold`]).
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
     if bin_load_is_a_verdict(reason) {
         Halt::Attempt
     } else {
-        Halt::Unclassified
+        Halt::HeldByBinIndex(reason)
     }
 }
 
@@ -224,6 +226,10 @@ fn halt_for_bin_publish(error: &BinIndexPublishError) -> Halt {
         BinIndexPublishError::Codec(_)
         | BinIndexPublishError::Preflight(_)
         | BinIndexPublishError::Revision => Halt::Attempt,
+        // A bin at its top rung takes no further entry until the expiry sweep
+        // frees one, and no retry of this op shrinks the body. Its own reason,
+        // so the host reads a full bin rather than a spent attempt budget.
+        BinIndexPublishError::Full => Halt::Permanent(DeadLetterReason::BinIndexFull),
         // A lost CAS race is the ordinary outcome of two devices soft-deleting
         // at once, and a confirm the plane could not answer is availability
         // ([`PublishOutcome`](crate::net::publish::PublishOutcome)). Charging
@@ -375,6 +381,11 @@ enum Halt {
         /// resume probe must find room for.
         needed_bytes: u64,
     },
+    /// The bin index plane did not establish the current index, and the reason
+    /// is availability rather than a verdict on bytes it served. Not a failure
+    /// of the op — it holds the head and its staging reservation until the
+    /// record resolves ([`BinIndexHold`]).
+    HeldByBinIndex(DefaultsReason),
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass.
     Cancelled,
@@ -479,6 +490,23 @@ pub struct SettingsHold {
     /// Which rule refused. Render it through [`SettingsRefusal::check`], which
     /// names the rule and never the endpoint or the bearer the settings carry.
     pub refusal: SettingsRefusal,
+}
+
+/// The queue head is held over rather than failed: the bin index plane did not
+/// establish the current index, so the op that needs it keeps its place and its
+/// staging reservation until the record resolves.
+///
+/// Reported, because a party who withholds the record — or one head block of it
+/// — otherwise stops every queued operation for the account with no cause the
+/// member can see (blueprint/engine.md "Bin index record").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BinIndexHold {
+    /// The held op.
+    pub op_id: OpId,
+    /// The node the op targets, so a host can point at it.
+    pub node: NodeId,
+    /// Why the load did not establish the index.
+    pub reason: DefaultsReason,
 }
 
 /// The captures one pass adopts into the bin. A peer chooses both the trigger
@@ -627,9 +655,18 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// bin entry has landed: the merge that saw it has already dropped the node
     /// from the base, so a set this pass emptied on failure would lose it.
     pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
-    /// The bin index record this session published, shared with the facade's
-    /// renewal slot.
+    /// The bin index record this session last published or resolved, shared
+    /// with the facade's renewal slot. A load fills it too, so the sub-EOL
+    /// renewal keeps the record alive on a session that publishes nothing.
     pub(crate) bin_index_record: &'a RefCell<Option<HeldRecord>>,
+    /// The bin-index-refused hold, shared with the facade's read surface. It
+    /// clears only here, on a load that establishes the index.
+    pub(crate) bin_index_hold: &'a RefCell<Option<BinIndexHold>>,
+    /// The bin index this pass has established: the one it resolved, or the one
+    /// its last confirmed publish left standing. Carried so a bulk soft delete
+    /// costs one resolve rather than one per operation; the publish stays per
+    /// operation, which is what keeps the entry ahead of its unlink.
+    pub(crate) established_bin_index: RefCell<Option<BinIndex>>,
 }
 
 /// One folder's current published state, carried across the ops of one pass so
@@ -923,7 +960,17 @@ where
         if queued.is_empty() {
             self.clear_block();
             self.clear_settings_hold();
+            self.clear_bin_index_hold();
             return (report, Some(Vec::new()));
+        }
+        // The hold names one op, so it goes as soon as that op does; the load
+        // itself is the only probe the bin plane has, so nothing else gates it.
+        if self
+            .bin_index_hold
+            .borrow()
+            .is_some_and(|hold| !still_queued(&queued, hold.op_id))
+        {
+            self.clear_bin_index_hold();
         }
         let purges = queued
             .iter()
@@ -1109,6 +1156,7 @@ where
             // cells claiming the same head for different reasons.
             Halt::Blocked { needed_bytes } => {
                 self.clear_settings_hold();
+                self.clear_bin_index_hold();
                 *self.blocked.borrow_mut() = Some(BlockedOp {
                     op_id,
                     node: op.target,
@@ -1117,10 +1165,20 @@ where
             }
             Halt::HeldBySettings(refusal) => {
                 self.clear_block();
+                self.clear_bin_index_hold();
                 *self.settings_hold.borrow_mut() = Some(SettingsHold {
                     op_id,
                     node: op.target,
                     refusal,
+                });
+            }
+            Halt::HeldByBinIndex(reason) => {
+                self.clear_block();
+                self.clear_settings_hold();
+                *self.bin_index_hold.borrow_mut() = Some(BinIndexHold {
+                    op_id,
+                    node: op.target,
+                    reason,
                 });
             }
         }
@@ -1159,6 +1217,10 @@ where
 
     fn clear_block(&self) {
         *self.blocked.borrow_mut() = None;
+    }
+
+    fn clear_bin_index_hold(&self) {
+        *self.bin_index_hold.borrow_mut() = None;
     }
 
     /// Whether a settings-held head may be tried again this tick: only once the
@@ -2424,21 +2486,13 @@ where
     /// entry stamped otherwise. Retention is measured in days, so a copy that is
     /// a pass or two behind costs nothing but a pass or two.
     async fn expiry_bin_index(&self) -> Option<BinIndex> {
+        if let Some(index) = self.established_bin_index.borrow().clone() {
+            return Some(index);
+        }
         if let Some(index) = cached_bin_index(self.snapshot_cache, self.bin_keys).await {
             return Some(index);
         }
-        match load_bin_index(
-            self.transport,
-            self.gateway,
-            self.http,
-            self.floors,
-            self.snapshot_cache,
-            self.scheduler,
-            self.profile,
-            self.bin_keys,
-        )
-        .await
-        {
+        match self.read_bin_index().await {
             BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => Some(index),
             BinIndexLoad::Empty(_) => None,
         }
@@ -2482,9 +2536,14 @@ where
         hold_captures(self.observed_unlinks, unfinished);
     }
 
-    /// The current bin index, ready to be written over.
-    async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
-        load_bin_index(
+    /// Load the bin index, enrolling the record the plane served in the
+    /// session's renewal set.
+    ///
+    /// A session that only reads keeps the record's EOL alive this way, and a
+    /// record already past its EOL is renewed rather than left refused for good
+    /// — the rewrite guard admits no publish that would re-sign it.
+    async fn read_bin_index(&self) -> BinIndexLoad {
+        let read = load_bin_index(
             self.transport,
             self.gateway,
             self.http,
@@ -2494,9 +2553,20 @@ where
             self.profile,
             self.bin_keys,
         )
-        .await
-        .writable()
-        .map_err(|reason| {
+        .await;
+        if let Some(renewable) = read.renewable {
+            *self.bin_index_record.borrow_mut() = Some(renewable);
+        }
+        read.load
+    }
+
+    /// The current bin index, ready to be written over — the one this pass has
+    /// already established, or a fresh load.
+    async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
+        if let Some(index) = self.established_bin_index.borrow().clone() {
+            return Ok(index);
+        }
+        let index = self.read_bin_index().await.writable().map_err(|reason| {
             let halt = halt_for_bin_load(reason);
             if halt == Halt::Attempt {
                 emit_trust_violation(
@@ -2506,11 +2576,23 @@ where
                 );
             }
             halt
-        })
+        })?;
+        self.establish_bin_index(index.clone());
+        Ok(index)
+    }
+
+    /// Record the index this pass may build its next rewrite on, and let go of
+    /// the hold a refused load took.
+    fn establish_bin_index(&self, index: BinIndex) {
+        *self.established_bin_index.borrow_mut() = Some(index);
+        self.clear_bin_index_hold();
     }
 
     /// Publish the bin index and hold the confirmed record for renewal.
     async fn publish_bin(&self, index: &BinIndex) -> Result<(), Halt> {
+        // A publish that does not confirm leaves the standing index unknown, so
+        // the next rewrite resolves rather than building on this attempt.
+        *self.established_bin_index.borrow_mut() = None;
         let held = publish_bin_index(
             self.transport,
             self.api,
@@ -2526,6 +2608,9 @@ where
         .await
         .map_err(|error| halt_for_bin_publish(&error))?;
         *self.bin_index_record.borrow_mut() = Some(held);
+        // The confirm re-resolved this session's own bytes at its own sequence,
+        // so the published entries are the standing index.
+        self.establish_bin_index(index.clone());
         Ok(())
     }
 
@@ -4746,13 +4831,16 @@ fn blocks(count: usize) -> u32 {
 }
 
 /// The key-free classification an [`OpPhase::UploadFailed`] carries, or `None`
-/// where the halt is not a failed attempt: either hold keeps the op and its
-/// reservation, and the host reads them from `SnapshotView::blocked` and
-/// `SnapshotView::settings_hold`.
+/// where the halt is not a failed attempt: a hold keeps the op and its
+/// reservation, and the host reads them from `SnapshotView::blocked`,
+/// `SnapshotView::settings_hold` and `SnapshotView::bin_index_hold`.
 fn upload_failure(halt: Halt) -> Option<&'static str> {
     match halt {
         // A cancel reports `UploadCancelled` from the facade that ordered it.
-        Halt::Blocked { .. } | Halt::HeldBySettings(_) | Halt::Cancelled => None,
+        Halt::Blocked { .. }
+        | Halt::HeldBySettings(_)
+        | Halt::HeldByBinIndex(_)
+        | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
@@ -4861,7 +4949,8 @@ mod tests {
     /// The bin index split decides retry against charge for every soft delete,
     /// so a wrong arm either abandons a delete the plane would have taken or
     /// holds the queue head for good. A plane this pass could not read waits
-    /// uncharged; a refusal of bytes the plane actually served is charged.
+    /// uncharged, and it waits as a reported hold rather than in silence; a
+    /// refusal of bytes the plane actually served is charged.
     #[test]
     fn only_a_refusal_of_bytes_the_plane_served_is_charged_against_the_bin_index() {
         for reason in [
@@ -4884,8 +4973,28 @@ mod tests {
             DefaultsReason::TimedOut,
             DefaultsReason::FloorUnreadable,
         ] {
-            assert_eq!(halt_for_bin_load(reason), Halt::Unclassified, "{reason:?}");
+            assert_eq!(
+                halt_for_bin_load(reason),
+                Halt::HeldByBinIndex(reason),
+                "{reason:?}",
+            );
+            assert_eq!(
+                upload_failure(halt_for_bin_load(reason)),
+                None,
+                "{reason:?}: a hold keeps the op rather than reporting a failed attempt",
+            );
         }
+    }
+
+    /// A bin the top rung no longer admits is the member's own state, not a
+    /// codec defect and not a spent attempt budget: no re-author shrinks the
+    /// body, so the op ends with a reason that names the full bin.
+    #[test]
+    fn a_bin_index_at_its_ceiling_dead_letters_under_its_own_reason() {
+        assert_eq!(
+            halt_for_bin_publish(&BinIndexPublishError::Full),
+            Halt::Permanent(DeadLetterReason::BinIndexFull),
+        );
     }
 
     /// The publish half of the same split. A lost race and an unanswered

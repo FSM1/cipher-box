@@ -76,7 +76,8 @@ export type DeadLetterReason =
   | 'preservationRefused'
   | 'alreadyPublished'
   | 'targetStillLinked'
-  | 'scopeRootNotResealable';
+  | 'scopeRootNotResealable'
+  | 'binIndexFull';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {

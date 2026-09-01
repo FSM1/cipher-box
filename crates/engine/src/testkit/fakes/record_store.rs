@@ -41,6 +41,9 @@ pub struct InMemoryRecordStore {
     /// Routing keys whose GET is refused at every endpoint, so one node of a
     /// tree can be unresolvable while the rest of it reads normally.
     get_failing_keys: Arc<Mutex<HashSet<String>>>,
+    /// GETs served per routing key, so a test can count what a pass spends on
+    /// one name rather than inferring it from what the pass published.
+    gets: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl InMemoryRecordStore {
@@ -63,6 +66,7 @@ impl InMemoryRecordStore {
             put_failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
+            gets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -164,6 +168,17 @@ impl InMemoryRecordStore {
             .remove(routing_key);
     }
 
+    /// How many GETs this store has been asked for at `routing_key`, across
+    /// every endpoint and whatever fault is injected.
+    pub fn get_count(&self, routing_key: &str) -> usize {
+        self.gets
+            .lock()
+            .expect("lock")
+            .get(routing_key)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Whether `routing_key`'s GET is currently injected to fail everywhere.
     fn get_failing_key(&self, routing_key: &str) -> bool {
         self.get_failing_keys
@@ -184,6 +199,12 @@ impl RecordTransport for InMemoryRecordStore {
         routing_key: &str,
         max_bytes: usize,
     ) -> SeamResult<Option<Vec<u8>>> {
+        *self
+            .gets
+            .lock()
+            .expect("lock")
+            .entry(routing_key.to_owned())
+            .or_default() += 1;
         if self.get_failing(endpoint) {
             return Err(SeamError::new(format!(
                 "endpoint unreachable: {}",
