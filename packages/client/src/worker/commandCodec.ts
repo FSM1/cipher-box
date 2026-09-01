@@ -63,7 +63,7 @@ export function record(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function bytes(value: unknown, field: string): Uint8Array {
+export function bytes(value: unknown, field: string): Uint8Array {
   if (!(value instanceof Uint8Array)) throw invalidField(field, value);
   return value;
 }
@@ -276,6 +276,10 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       );
     case 'cancelUpload':
       return wasm.Command.cancelUpload(minted(descriptor.opId, 'opId'));
+    case 'discardDeadLetter':
+      return wasm.Command.discardDeadLetter(minted(descriptor.opId, 'opId'));
+    case 'recoverDeadLetter':
+      return wasm.Command.recoverDeadLetter(minted(descriptor.opId, 'opId'));
     case 'setFocus':
       return wasm.Command.setFocus(
         descriptor.node === null ? undefined : nodeId(wasm, descriptor.node, 'node')
@@ -315,17 +319,10 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.claimInviteLink(fragment(descriptor.fragment, 'fragment'));
     case 'convertInviteClaims':
       return wasm.Command.convertInviteClaims(nodeId(wasm, descriptor.node, 'node'));
-    case 'acceptShare':
-      return wasm.Command.acceptShare(bytes(descriptor.sealedSharePointer, 'sealedSharePointer'));
     case 'rotateNow':
       return wasm.Command.rotateNow(nodeId(wasm, descriptor.node, 'node'));
     case 'saveVaultSettings':
       return wasm.Command.saveVaultSettings(vaultSettings(wasm, descriptor.settings));
-    case 'siweLogin':
-      return wasm.Command.siweLogin(
-        text(descriptor.message, 'message'),
-        bytes(descriptor.signature, 'signature')
-      );
     case 'siweLink':
       return wasm.Command.siweLink(
         text(descriptor.message, 'message'),
@@ -471,6 +468,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
         opId: event.opId ?? 0n,
         reason: deadLetterReason(wasm, event.deadLetterReason),
       };
+    case 'parkedWritesUnreadable':
+      return { kind: 'parkedWritesUnreadable' };
     case 'attributableAbuse':
       return { kind: 'attributableAbuse', description: event.description ?? '' };
     case 'renewalFailed':
@@ -517,6 +516,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       pending: pendingClass(wasm, child.pending),
       deadLetter: child.deadLetter,
       contentVersion: child.contentVersion ?? null,
+      contentCid: child.contentCid ?? null,
     })),
     ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
     deadLetters: view.deadLetters.map((dead) => ({

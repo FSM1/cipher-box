@@ -342,24 +342,6 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
         "the live API issues a nonce inside the EIP-4361 class the client enforces, got {:?}",
         nonce.nonce
     );
-
-    // A well-formed-but-unlinked SIWE login is refused (the wallet is not
-    // linked to any account). The signature is shaped to pass DTO validation
-    // (65-byte 0x-hex) so the request reaches the SIWE service.
-    let message = format!(
-        "localhost:5173 wants you to sign in with your Ethereum account:\n\
-         0x0000000000000000000000000000000000000000\n\nNonce: {}\n",
-        nonce.nonce
-    );
-    let signature = format!("0x{}", "ab".repeat(65));
-    let error = client
-        .siwe_login(&message, &signature)
-        .await
-        .expect_err("an unlinked SIWE login must fail");
-    assert!(
-        matches!(error, ApiError::Unauthorized | ApiError::Status { .. }),
-        "unlinked/invalid SIWE is refused, got {error:?}"
-    );
 }
 
 /// A link message the live API's DTO and SIWE parser both accept.

@@ -12,6 +12,7 @@ function child(overrides: Partial<SnapshotChildDescriptor> = {}): SnapshotChildD
     pending: 'none',
     deadLetter: false,
     contentVersion: null,
+    contentCid: null,
     ...overrides,
   };
 }

@@ -25,11 +25,11 @@ import type { EngineWasm, WasmCommandOutcome, WasmEngineHandle } from './engineW
 import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import {
   buffer,
+  bytes,
   buildCommand,
   count,
   minted,
   nodeId,
-  permissionFrom,
   readAuthMethods,
   readEvent,
   readReceivedShare,
@@ -94,7 +94,7 @@ function present<T>(value: T | undefined, kind: string, field: string): T {
 }
 
 /** Reads a wasm-bindgen `CommandOutcome`'s getters into a descriptor. */
-function readOutcome(wasm: EngineWasm, outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
+function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
   const kind = outcome.kind;
   switch (kind) {
     case 'done':
@@ -109,14 +109,6 @@ function readOutcome(wasm: EngineWasm, outcome: WasmCommandOutcome): CommandOutc
       };
     case 'inviteLinkMinted':
       return { kind: 'inviteLinkMinted', fragment: present(outcome.fragment, kind, 'fragment') };
-    case 'shareAccepted':
-      return {
-        kind: 'shareAccepted',
-        scopeId: present(outcome.scopeId, kind, 'scopeId'),
-        sequence: present(outcome.sequence, kind, 'sequence'),
-        permission: permissionFrom(wasm, present(outcome.permission, kind, 'permission')),
-        newlyAdded: present(outcome.newlyAdded, kind, 'newlyAdded'),
-      };
   }
   throw new Error(`unknown command outcome ${kind}`);
 }
@@ -213,7 +205,7 @@ export class EngineHost implements EngineHostLike {
     try {
       const outcome = await this.handle.command(buildCommand(this.wasm, command));
       try {
-        return readOutcome(this.wasm, outcome);
+        return readOutcome(outcome);
       } finally {
         outcome.free();
       }
@@ -230,14 +222,18 @@ export class EngineHost implements EngineHostLike {
         undefined,
         undefined,
         nodeId(this.wasm, fields.node, 'node'),
-        reserved
+        reserved,
+        fields.expectedVersion === undefined
+          ? undefined
+          : bytes(fields.expectedVersion, 'expectedVersion')
       );
     }
     return this.handle.beginWrite(
       nodeId(this.wasm, fields.parent, 'parent'),
       text(fields.name, 'name'),
       undefined,
-      reserved
+      reserved,
+      undefined
     );
   }
 

@@ -37,8 +37,8 @@ use super::publish::head_cid_from_value;
 use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
-    Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
-    adopt, floor,
+    Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
+    SeedBlob, adopt, floor,
 };
 use crate::grants::{recipient_blinded_tag, self_locate_signed};
 use crate::seams::{FloorStore, Http, SeamError};
@@ -262,6 +262,11 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
                 node_id: root.envelope.id,
                 read_scope_seed: root.read_scope_seed,
                 write_scope_seed: root.write_scope_seed,
+                at_floor: Adopted {
+                    read_body: root.read_body,
+                    sequence: root.sequence,
+                    epoch: root.envelope.epoch,
+                },
             }))
     }
 }
@@ -272,6 +277,8 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
 pub(crate) struct RecoveredScopeRoot {
     /// The record's envelope.
     pub(crate) envelope: Envelope,
+    /// The sequence the recovery re-verified and re-imposed the floor at.
+    pub(crate) sequence: u64,
     /// Its grant section, authenticated by the gate's stages 1-3.
     pub(crate) grant_section: GrantSection,
     /// The read-body the recovery re-unsealed under the recovered seed.
@@ -371,6 +378,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         };
         Ok(Some(RecoveredScopeRoot {
             envelope: candidate.envelope,
+            sequence,
             grant_section: candidate.grant_section,
             read_body,
             read_scope_seed,

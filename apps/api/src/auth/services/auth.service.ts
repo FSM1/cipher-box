@@ -26,7 +26,7 @@ import {
   type StepUpOperation,
 } from './challenge.service';
 import { IdentityService } from './identity.service';
-import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './siwe.service';
+import { SIWE_LINK_STATEMENT, SiweService } from './siwe.service';
 import { TokenPair, TokenService } from './token.service';
 
 export interface LoginResult {
@@ -146,41 +146,6 @@ export class AuthService {
     const canonicalKey =
       publicKey === undefined ? undefined : this.identityService.normalizePublicKey(publicKey);
     return this.challengeService.issueSiweNonce(kind, { publicKey: canonicalKey });
-  }
-
-  async siweLogin(message: string, signature: `0x${string}`): Promise<LoginResult> {
-    const nonce = parseSiweMessage(message).nonce;
-    if (!nonce) {
-      throw new UnauthorizedException('Invalid SIWE message: missing nonce');
-    }
-    this.challengeService.consume(nonce, 'siwe-login');
-    const address = await this.siweService.verifySiweMessage(
-      message,
-      signature,
-      nonce,
-      SIWE_LOGIN_STATEMENT
-    );
-
-    const identifierHash = this.siweService.hashWalletAddress(address);
-    const method = await this.authMethodRepository.findOne({
-      where: { kind: 'wallet', identifierHash },
-    });
-    if (!method) {
-      // No implicit creation through SIWE: accounts are keyed by the
-      // identity publicKey, which a bare wallet signature cannot prove.
-      throw new UnauthorizedException('Wallet is not linked to an account');
-    }
-
-    const user = await this.userRepository.findOne({ where: { id: method.userId } });
-    if (!user) {
-      throw new UnauthorizedException('Wallet is not linked to an account');
-    }
-
-    method.lastUsedAt = this.clock.now();
-    await this.authMethodRepository.save(method);
-
-    const pair = await this.tokenService.createTokenPair(user.id, user.publicKey);
-    return { pair, isNewUser: false };
   }
 
   /**

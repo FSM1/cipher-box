@@ -102,6 +102,8 @@ export interface SnapshotChildDescriptor {
   pending: PendingClass;
   deadLetter: boolean;
   contentVersion: bigint | null;
+  /** The head version's content root CID; `null` until projected. */
+  contentCid: Uint8Array | null;
 }
 
 /**
@@ -327,6 +329,8 @@ export type CommandDescriptor =
   | { kind: 'rename'; node: Uint8Array; newName: string }
   | { kind: 'relink'; node: Uint8Array; newParent: Uint8Array }
   | { kind: 'cancelUpload'; opId: bigint }
+  | { kind: 'discardDeadLetter'; opId: bigint }
+  | { kind: 'recoverDeadLetter'; opId: bigint }
   | { kind: 'setFocus'; node: Uint8Array | null }
   | { kind: 'manualRefresh' }
   | { kind: 'importContact'; contactCode: Uint8Array }
@@ -354,10 +358,8 @@ export type CommandDescriptor =
    */
   | { kind: 'claimInviteLink'; fragment: string }
   | { kind: 'convertInviteClaims'; node: Uint8Array }
-  | { kind: 'acceptShare'; sealedSharePointer: Uint8Array }
   | { kind: 'rotateNow'; node: Uint8Array }
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
-  | { kind: 'siweLogin'; message: string; signature: Uint8Array }
   /** Links a host-collected wallet signature to the account already signed in. */
   | { kind: 'siweLink'; message: string; signature: Uint8Array }
   | { kind: 'unlinkAuthMethod'; methodId: string }
@@ -396,21 +398,17 @@ export type CommandOutcomeDescriptor =
   | { kind: 'contactImported'; identityPublicKey: Uint8Array; encPublicKey: Uint8Array }
   /** The whole bearer capability: a host puts `fragment` in a URL and hands the
    * same characters back to `claimInviteLink`, reading none of it. */
-  | { kind: 'inviteLinkMinted'; fragment: string }
-  | {
-      kind: 'shareAccepted';
-      scopeId: Uint8Array;
-      sequence: bigint;
-      /** What the owner's ledger commits, never what the share pointer claimed. */
-      permission: Permission;
-      newlyAdded: boolean;
-    };
+  | { kind: 'inviteLinkMinted'; fragment: string };
 
 /**
  * Where a streaming write lands: a new file named `name` under `parent`, or a
  * new version of the existing file `node`. Never both (the engine rejects it).
  */
-export type WriteTarget = { parent: Uint8Array; name: string } | { node: Uint8Array };
+export type WriteTarget =
+  | { parent: Uint8Array; name: string }
+  /** `expectedVersion` is the `contentCid` the caller read; omit it to take
+   * the engine's own anchor derivation. */
+  | { node: Uint8Array; expectedVersion?: Uint8Array };
 
 /** An open write handle's id — the engine's `u64`, opaque to this layer. */
 export type WriteHandle = bigint;
@@ -439,6 +437,8 @@ export type EventDescriptor =
   | { kind: 'stalenessChanged'; staleness: Staleness }
   | { kind: 'withheldUpdateEscalation'; ipnsName: Uint8Array }
   | { kind: 'deadLetter'; opId: bigint; reason: DeadLetterReason }
+  /** This device holds a preserved dead-letter record another build wrote. */
+  | { kind: 'parkedWritesUnreadable' }
   | { kind: 'attributableAbuse'; description: string }
   | { kind: 'renewalFailed'; routingKey: string; detail: string }
   | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }

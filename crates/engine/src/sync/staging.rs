@@ -102,16 +102,65 @@ pub(crate) const PRESERVED_DEAD_LETTERS_KEY: &[u8] = b"cipherbox/preserved-dead-
 
 /// The preserved record's format tag. The staging store is shared with whatever
 /// build wrote it, so bytes that merely happen to be well-shaped must not parse.
-const PRESERVED_FORMAT_V2: u8 = 2;
+const PRESERVED_FORMAT_V3: u8 = 3;
 
-/// One preserved dead letter: the op record, and when the engine parked it.
+/// One preserved dead letter: which op it was, why it parked, the op record,
+/// and when the engine parked it.
 ///
-/// The stamp is durable for the same reason the record is — a reboot must not
-/// reset the clock on a version that has been parked for a month.
+/// The op id is the entry's durable identity — the one name a host can discard
+/// or recover it by, and the same id the [`Event::DeadLetter`] that announced it
+/// carried. The reason travels with it because a boot that rehydrates the set
+/// has no other way to say what happened. The stamp is durable for the same
+/// reason the record is: a reboot must not reset the clock on a version that has
+/// been parked for a month.
+///
+/// [`Event::DeadLetter`]: crate::facade::Event::DeadLetter
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreservedDeadLetter {
-    preserved_at: UnixMillis,
-    record: Vec<u8>,
+    pub(crate) op_id: OpId,
+    pub(crate) reason: DeadLetterReason,
+    pub(crate) preserved_at: UnixMillis,
+    pub(crate) record: Vec<u8>,
+}
+
+/// The durable tag for a parked op's reason. Exhaustive by construction, so a
+/// reason added without a tag fails the build rather than parking as another.
+fn reason_tag(reason: DeadLetterReason) -> u8 {
+    match reason {
+        DeadLetterReason::TargetGone => 1,
+        DeadLetterReason::DestinationGone => 2,
+        DeadLetterReason::DestinationInsideTarget => 3,
+        DeadLetterReason::SuffixExhausted => 4,
+        DeadLetterReason::Undecodable => 5,
+        DeadLetterReason::PayloadRefused => 6,
+        DeadLetterReason::AttemptsExhausted => 7,
+        DeadLetterReason::HeadTooLarge => 8,
+        DeadLetterReason::BaseSuperseded => 9,
+        DeadLetterReason::ContentUnrecoverable => 10,
+        DeadLetterReason::PreservationRefused => 11,
+        DeadLetterReason::AlreadyPublished => 12,
+    }
+}
+
+/// The reason a tag names, or `None` for a tag this build does not know — which
+/// makes the whole set unreadable, the fail-safe direction. Kept in step with
+/// [`reason_tag`] by `every_parked_reason_round_trips_its_tag`.
+fn reason_of_tag(tag: u8) -> Option<DeadLetterReason> {
+    Some(match tag {
+        1 => DeadLetterReason::TargetGone,
+        2 => DeadLetterReason::DestinationGone,
+        3 => DeadLetterReason::DestinationInsideTarget,
+        4 => DeadLetterReason::SuffixExhausted,
+        5 => DeadLetterReason::Undecodable,
+        6 => DeadLetterReason::PayloadRefused,
+        7 => DeadLetterReason::AttemptsExhausted,
+        8 => DeadLetterReason::HeadTooLarge,
+        9 => DeadLetterReason::BaseSuperseded,
+        10 => DeadLetterReason::ContentUnrecoverable,
+        11 => DeadLetterReason::PreservationRefused,
+        12 => DeadLetterReason::AlreadyPublished,
+        _ => return None,
+    })
 }
 
 /// What the preserved dead-letter set is held to on one reconcile pass: the
@@ -252,6 +301,8 @@ impl Preservation {
 /// Only a seam failure is an `Err`, and only that retries.
 pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     store: &S,
+    op_id: OpId,
+    reason: DeadLetterReason,
     record: &[u8],
     now: UnixMillis,
 ) -> SeamResult<Preservation> {
@@ -275,10 +326,12 @@ pub(crate) async fn preserve_dead_letter<S: StagingStore>(
             }
         }
     }
-    if kept.iter().any(|held| held.record == record) {
+    if kept.iter().any(|held| held.op_id == op_id) {
         return Ok(Preservation::Kept);
     }
     kept.push(PreservedDeadLetter {
+        op_id,
+        reason,
         preserved_at: now,
         record: record.to_vec(),
     });
@@ -427,18 +480,27 @@ fn trim_preserved(
 /// The dead letters the store holds. `None` when the record is present but not
 /// one this build wrote — the fail-safe direction is to preserve what is already
 /// there, so no caller may treat it as empty and overwrite it.
-async fn read_preserved_dead_letters<S: StagingStore>(
+pub(crate) async fn read_preserved_dead_letters<S: StagingStore>(
     store: &S,
 ) -> SeamResult<Option<Vec<PreservedDeadLetter>>> {
     let Some(stored) = store.staged_bytes(PRESERVED_DEAD_LETTERS_KEY).await? else {
         return Ok(Some(Vec::new()));
     };
-    let Some(mut rest) = stored.strip_prefix(&[PRESERVED_FORMAT_V2]) else {
+    let Some(mut rest) = stored.strip_prefix(&[PRESERVED_FORMAT_V3]) else {
         return Ok(None);
     };
     let mut kept = Vec::new();
     while !rest.is_empty() {
-        let Some((stamp, tail)) = rest.split_first_chunk::<{ size_of::<u64>() }>() else {
+        let Some((op_id, tail)) = rest.split_first_chunk::<{ size_of::<u64>() }>() else {
+            return Ok(None);
+        };
+        let Some((tag, tail)) = tail.split_first() else {
+            return Ok(None);
+        };
+        let Some(reason) = reason_of_tag(*tag) else {
+            return Ok(None);
+        };
+        let Some((stamp, tail)) = tail.split_first_chunk::<{ size_of::<u64>() }>() else {
             return Ok(None);
         };
         let Some((len, tail)) = tail.split_first_chunk::<4>() else {
@@ -450,12 +512,36 @@ async fn read_preserved_dead_letters<S: StagingStore>(
             return Ok(None);
         };
         kept.push(PreservedDeadLetter {
+            op_id: OpId(u64::from_be_bytes(*op_id)),
+            reason,
             preserved_at: UnixMillis(u64::from_be_bytes(*stamp)),
             record: record.to_vec(),
         });
         rest = next;
     }
     Ok(Some(kept))
+}
+
+/// Remove the entry `op_id` names and hand it back, or `None` when the set does
+/// not hold it — which a host asking twice, or asking after an eviction, sees.
+///
+/// The shortened list is durable before the caller acts on what it removed:
+/// re-queueing the version and then failing to shorten the list costs a second
+/// reference to blocks nothing has released, where the reverse order would
+/// release blocks the list still names.
+pub(crate) async fn take_preserved_dead_letter<S: StagingStore>(
+    store: &S,
+    op_id: OpId,
+) -> SeamResult<Option<PreservedDeadLetter>> {
+    let Some(mut kept) = read_preserved_dead_letters(store).await? else {
+        return Ok(None);
+    };
+    let Some(at) = kept.iter().position(|held| held.op_id == op_id) else {
+        return Ok(None);
+    };
+    let taken = kept.remove(at);
+    write_preserved_dead_letters(store, &kept).await?;
+    Ok(Some(taken))
 }
 
 /// Fails closed on a record too long to length-prefix, and on an empty one:
@@ -471,12 +557,14 @@ async fn write_preserved_dead_letters<S: StagingStore>(
     if kept.is_empty() {
         return store.remove_staged_bytes(PRESERVED_DEAD_LETTERS_KEY).await;
     }
-    let mut bytes = vec![PRESERVED_FORMAT_V2];
+    let mut bytes = vec![PRESERVED_FORMAT_V3];
     for entry in kept {
         let len = u32::try_from(entry.record.len())
             .ok()
             .filter(|len| *len > 0)
             .ok_or_else(|| SeamError::new("preserved dead letter is not length-prefixable"))?;
+        bytes.extend_from_slice(&entry.op_id.0.to_be_bytes());
+        bytes.push(reason_tag(entry.reason));
         bytes.extend_from_slice(&entry.preserved_at.0.to_be_bytes());
         bytes.extend_from_slice(&len.to_be_bytes());
         bytes.extend_from_slice(&entry.record);
@@ -817,6 +905,25 @@ mod tests {
         reconcile_preserved_dead_letters(store, &staged, bounds).await;
     }
 
+    /// Parks `record` under an op id derived from its own bytes.
+    async fn park<S: StagingStore>(store: &S, record: &[u8]) -> Preservation {
+        preserve_dead_letter(
+            store,
+            record_op_id(record),
+            DeadLetterReason::AttemptsExhausted,
+            record,
+            NOW,
+        )
+        .await
+        .unwrap()
+    }
+
+    fn record_op_id(record: &[u8]) -> OpId {
+        OpId(record.iter().fold(1u64, |acc, byte| {
+            acc.wrapping_mul(31).wrapping_add(u64::from(*byte))
+        }))
+    }
+
     /// The op records the preserved set holds, oldest first.
     async fn kept_records<S: StagingStore>(store: &S) -> Vec<Vec<u8>> {
         read_preserved_dead_letters(store)
@@ -1134,7 +1241,7 @@ mod tests {
             let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
             put_blocks(&store, &blocks, &root_block, &staged).await;
             let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
-            preserve_dead_letter(&store, &record, NOW).await.unwrap();
+            park(&store, &record).await;
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
 
             assert_eq!(
@@ -1155,9 +1262,7 @@ mod tests {
             let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
             put_blocks(&store, &blocks, &root_block, &staged).await;
             let op = content_op(1, staged);
-            preserve_dead_letter(&store, &encode_op_record(seal(1), &op).unwrap(), NOW)
-                .await
-                .unwrap();
+            park(&store, &encode_op_record(seal(1), &op).unwrap()).await;
 
             let kept = kept_records(&store).await;
             assert_eq!(
@@ -1194,7 +1299,7 @@ mod tests {
                 }
 
                 assert_eq!(
-                    preserve_dead_letter(&store, &record, NOW).await.unwrap(),
+                    park(&store, &record).await,
                     Preservation::ContentGone,
                     "corrupt root: {corrupt}"
                 );
@@ -1235,12 +1340,12 @@ mod tests {
             let held =
                 encode_op_record(seal(2), &content_op(2, foreign_staged(&foreign_cid))).unwrap();
             assert_eq!(
-                preserve_dead_letter(&store, &held, NOW).await.unwrap(),
+                park(&store, &held).await,
                 Preservation::Kept,
                 "the record that holds the key is kept, holes undecided"
             );
             assert_eq!(
-                preserve_dead_letter(&store, &record, NOW).await.unwrap(),
+                park(&store, &record).await,
                 Preservation::Kept,
                 "a decodable version alongside it is unaffected"
             );
@@ -1285,7 +1390,7 @@ mod tests {
                 }
 
                 assert_eq!(
-                    preserve_dead_letter(&store, &record, NOW).await.unwrap(),
+                    park(&store, &record).await,
                     expected,
                     "marked {marked:?} of {} leaves, tail kept: {keep_tail}",
                     blocks.len()
@@ -1318,9 +1423,7 @@ mod tests {
             mark_uploaded(&store, &second.root_cid, 2).await;
 
             assert_eq!(
-                preserve_dead_letter(&store, &first_record, NOW)
-                    .await
-                    .unwrap(),
+                park(&store, &first_record).await,
                 Preservation::Kept,
                 "the second op's mark landed beside the first's, not over it"
             );
@@ -1338,7 +1441,7 @@ mod tests {
             let root_cid = staged.root_cid.clone();
             mark_uploaded(&store, &root_cid, 1).await;
             let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
-            preserve_dead_letter(&store, &record, NOW).await.unwrap();
+            park(&store, &record).await;
 
             assert!(
                 !sweep(&store, &[])
@@ -1378,7 +1481,7 @@ mod tests {
                 put_blocks(&store, &blocks, &root_block, &staged).await;
                 roots.push(staged.root_cid.clone());
                 let record = encode_op_record(seal(i as u8), &content_op(i as u8, staged)).unwrap();
-                preserve_dead_letter(&store, &record, NOW).await.unwrap();
+                park(&store, &record).await;
                 records.push(record);
             }
             let kept = kept_records(&store).await;
@@ -1428,17 +1531,13 @@ mod tests {
             let ceiling = one_version + 1;
 
             let first_record = encode_op_record(seal(1), &content_op(1, first)).unwrap();
-            preserve_dead_letter(&store, &first_record, NOW)
-                .await
-                .unwrap();
+            park(&store, &first_record).await;
 
             let (second_blocks, second_root, second) =
                 framed_keyed(b"another forty bytes of content ----------", 11);
             put_blocks(&store, &second_blocks, &second_root, &second).await;
             let second_record = encode_op_record(seal(2), &content_op(2, second)).unwrap();
-            preserve_dead_letter(&store, &second_record, NOW)
-                .await
-                .unwrap();
+            park(&store, &second_record).await;
             reconcile(&store, bounds(ceiling)).await;
 
             assert_eq!(
@@ -1465,17 +1564,13 @@ mod tests {
             put_blocks(&store, &first_blocks, &first_root, &first).await;
             let first_root_cid = first.root_cid.clone();
             let first_record = encode_op_record(seal(1), &content_op(1, first)).unwrap();
-            preserve_dead_letter(&store, &first_record, NOW)
-                .await
-                .unwrap();
+            park(&store, &first_record).await;
 
             let (second_blocks, second_root, second) =
                 framed_keyed(b"another forty bytes of content ----------", 11);
             put_blocks(&store, &second_blocks, &second_root, &second).await;
             let second_record = encode_op_record(seal(2), &content_op(2, second)).unwrap();
-            preserve_dead_letter(&store, &second_record, NOW)
-                .await
-                .unwrap();
+            park(&store, &second_record).await;
             // The list write that would drop the first entry fails; a ceiling of
             // zero is what would otherwise evict it.
             store.interrupt_staged_write_after(PRESERVED_DEAD_LETTERS_KEY, 0);
@@ -1529,12 +1624,8 @@ mod tests {
                 + first_root.len() as u64
                 + second_root.len() as u64;
 
-            preserve_dead_letter(&store, &first_record, NOW)
-                .await
-                .unwrap();
-            preserve_dead_letter(&store, &second_record, NOW)
-                .await
-                .unwrap();
+            park(&store, &first_record).await;
+            park(&store, &second_record).await;
             reconcile(&store, bounds(ceiling)).await;
 
             assert_eq!(
@@ -1558,7 +1649,7 @@ mod tests {
             let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
             put_blocks(&store, &blocks, &root_block, &staged).await;
             let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
-            preserve_dead_letter(&store, &record, NOW).await.unwrap();
+            park(&store, &record).await;
             reconcile(&store, bounds(0)).await;
             assert_eq!(kept_records(&store).await, vec![record]);
         });
@@ -1575,7 +1666,7 @@ mod tests {
             put_blocks(&store, &blocks, &root_block, &staged).await;
             let root_cid = staged.root_cid.clone();
             let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
-            preserve_dead_letter(&store, &record, NOW).await.unwrap();
+            park(&store, &record).await;
 
             // The key is still there, so a presence-only check would keep it.
             store
@@ -1611,7 +1702,7 @@ mod tests {
             for stored in [
                 b"not a preserved record".to_vec(),
                 vec![
-                    PRESERVED_FORMAT_V2,
+                    PRESERVED_FORMAT_V3,
                     0,
                     0,
                     0,
@@ -1627,7 +1718,7 @@ mod tests {
                     1,
                     2,
                 ],
-                vec![PRESERVED_FORMAT_V2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+                vec![PRESERVED_FORMAT_V3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
             ] {
                 store
                     .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, &stored)
@@ -1636,7 +1727,7 @@ mod tests {
                 assert!(read_preserved_dead_letters(&store).await.unwrap().is_none());
                 assert!(sweep(&store, &[]).await.unwrap().is_empty());
                 assert_eq!(
-                    preserve_dead_letter(&store, b"record", NOW).await.unwrap(),
+                    park(&store, b"record").await,
                     Preservation::Refused,
                     "a permanent refusal, not a failure the caller retries"
                 );
@@ -1649,6 +1740,126 @@ mod tests {
                     "and the dead letters it already holds are left standing"
                 );
             }
+        });
+    }
+
+    /// The identity a host discards or recovers by, and the words the restart
+    /// tells the member. Both are durable or the set is unusable after a boot.
+    #[test]
+    fn a_parked_entry_carries_its_op_id_and_its_reason_through_the_store() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+
+            assert_eq!(
+                preserve_dead_letter(
+                    &store,
+                    OpId(4_242),
+                    DeadLetterReason::BaseSuperseded,
+                    &record,
+                    NOW,
+                )
+                .await
+                .unwrap(),
+                Preservation::Kept
+            );
+
+            let read = read_preserved_dead_letters(&store)
+                .await
+                .unwrap()
+                .expect("the set this build wrote reads back");
+            assert_eq!(read.len(), 1);
+            assert_eq!(read[0].op_id, OpId(4_242));
+            assert_eq!(read[0].reason, DeadLetterReason::BaseSuperseded);
+            assert_eq!(read[0].preserved_at, NOW);
+            assert_eq!(read[0].record, record);
+        });
+    }
+
+    /// A tag this build cannot name is a set it cannot list, so it refuses the
+    /// whole set rather than parking an entry under a reason it invented.
+    #[test]
+    fn a_reason_tag_this_build_does_not_know_makes_the_set_unreadable() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let mut stored = vec![PRESERVED_FORMAT_V3];
+            stored.extend_from_slice(&7u64.to_be_bytes());
+            stored.push(u8::MAX);
+            stored.extend_from_slice(&NOW.0.to_be_bytes());
+            stored.extend_from_slice(&1u32.to_be_bytes());
+            stored.push(9);
+            store
+                .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, &stored)
+                .await
+                .unwrap();
+
+            assert!(read_preserved_dead_letters(&store).await.unwrap().is_none());
+        });
+    }
+
+    /// Every reason a park can carry survives the round trip, so no parked write
+    /// comes back under another reason's words.
+    #[test]
+    fn every_parked_reason_round_trips_its_tag() {
+        for reason in [
+            DeadLetterReason::TargetGone,
+            DeadLetterReason::DestinationGone,
+            DeadLetterReason::DestinationInsideTarget,
+            DeadLetterReason::SuffixExhausted,
+            DeadLetterReason::Undecodable,
+            DeadLetterReason::PayloadRefused,
+            DeadLetterReason::AttemptsExhausted,
+            DeadLetterReason::HeadTooLarge,
+            DeadLetterReason::BaseSuperseded,
+            DeadLetterReason::ContentUnrecoverable,
+            DeadLetterReason::PreservationRefused,
+            DeadLetterReason::AlreadyPublished,
+        ] {
+            assert_eq!(
+                reason_of_tag(reason_tag(reason)),
+                Some(reason),
+                "{reason:?} does not round trip"
+            );
+        }
+    }
+
+    /// Discard names one entry and leaves the rest, and an id the set never held
+    /// answers nothing rather than removing whatever is first.
+    #[test]
+    fn taking_a_parked_entry_removes_exactly_the_op_it_names() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let first = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            let (more, more_root, more_staged) =
+                framed_keyed(b"another forty bytes of content ----------", 11);
+            put_blocks(&store, &more, &more_root, &more_staged).await;
+            let second = encode_op_record(seal(2), &content_op(2, more_staged)).unwrap();
+            for (id, record) in [(OpId(1), &first), (OpId(2), &second)] {
+                preserve_dead_letter(&store, id, DeadLetterReason::AttemptsExhausted, record, NOW)
+                    .await
+                    .unwrap();
+            }
+
+            assert!(
+                take_preserved_dead_letter(&store, OpId(9))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "an id the set never held removes nothing"
+            );
+            let taken = take_preserved_dead_letter(&store, OpId(1))
+                .await
+                .unwrap()
+                .expect("the entry it names comes back");
+            assert_eq!(taken.record, first);
+
+            let left = read_preserved_dead_letters(&store).await.unwrap().unwrap();
+            assert_eq!(left.len(), 1, "the other entry stands");
+            assert_eq!(left[0].op_id, OpId(2));
         });
     }
 
@@ -1665,8 +1876,8 @@ mod tests {
             put_blocks(&store, &gone_blocks, &gone_root, &gone).await;
             let gone_root_cid = gone.root_cid.clone();
             let collected = encode_op_record(seal(2), &content_op(2, gone)).unwrap();
-            preserve_dead_letter(&store, &held, NOW).await.unwrap();
-            preserve_dead_letter(&store, &collected, NOW).await.unwrap();
+            park(&store, &held).await;
+            park(&store, &collected).await;
             assert_eq!(kept_records(&store).await, vec![held.clone(), collected]);
 
             release_version_blocks(&store, &gone_root_cid).await;

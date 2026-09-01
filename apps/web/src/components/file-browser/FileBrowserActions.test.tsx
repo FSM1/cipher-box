@@ -37,6 +37,7 @@ function file(id: Uint8Array, name: string, overrides: Partial<Child> = {}): Chi
     pending: 'none',
     deadLetter: false,
     contentVersion: 1n,
+    contentCid: null,
     ...overrides,
   };
 }

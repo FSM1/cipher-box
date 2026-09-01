@@ -263,35 +263,4 @@ describe('AuthService auth-method surface', () => {
       );
     }
   );
-
-  /**
-   * The reverse direction: a nonce minted for a link is worthless at sign-in,
-   * so a link prompt cannot be phished into a session on the victim's account.
-   * The wallet is genuinely linked and the statement is the sign-in one, so the
-   * nonce's own pool is the only thing left that can refuse the first message.
-   */
-  it('refuses a link nonce spent as a wallet sign-in, and accepts a sign-in nonce', async () => {
-    const user = await users.save({ id: USER_ID, publicKey } as Partial<User>);
-    const wallet = privateKeyToAccount(generatePrivateKey());
-    const linkMessage = siweMessage(wallet, SIWE_LINK_STATEMENT, 'siwe-link');
-    const proof = reproof('identity-link');
-    await service.siweLink(
-      user.id,
-      publicKey,
-      linkMessage,
-      await wallet.signMessage({ message: linkMessage }),
-      proof.challenge,
-      proof.challengeSignature
-    );
-
-    const linkNonced = siweMessage(wallet, SIWE_LOGIN_STATEMENT, 'siwe-link');
-    await expect(
-      service.siweLogin(linkNonced, await wallet.signMessage({ message: linkNonced }))
-    ).rejects.toThrow('Unknown or already-used challenge');
-
-    const loginNonced = siweMessage(wallet, SIWE_LOGIN_STATEMENT, 'siwe-login');
-    await expect(
-      service.siweLogin(loginNonced, await wallet.signMessage({ message: loginNonced }))
-    ).resolves.toMatchObject({ isNewUser: false });
-  });
 });

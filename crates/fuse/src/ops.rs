@@ -941,7 +941,13 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let len = pending.len;
         let write = self
             .engine
-            .begin_write(WriteTarget::Version { node: open.node }, len)
+            .begin_write(
+                WriteTarget::Version {
+                    node: open.node,
+                    expected_version: None,
+                },
+                len,
+            )
             .await?;
         if let Err(error) = self.push_version(handle, write, len).await {
             self.engine.abort_write(write).await;

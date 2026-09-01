@@ -56,13 +56,6 @@ pub(crate) struct RefreshRequest {
     pub refresh_token: Option<String>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SiweLoginRequest<'a> {
-    pub message: &'a str,
-    pub signature: &'a str,
-}
-
 /// The link body for [`ApiClient::siwe_link`](super::ApiClient::siwe_link): the
 /// SIWE pair plus the identity re-proof, whose signature is named apart from the
 /// wallet's.

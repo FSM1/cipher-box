@@ -32,9 +32,7 @@ use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByo
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::{UnixMillis, check_bearer};
 use cipherbox_engine::settings::{DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS};
-use cipherbox_engine::{
-    AcceptOutcome, Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy,
-};
+use cipherbox_engine::{Contact, MintedInviteLink, PinMode as EnginePinMode, RetentionPolicy};
 use core::num::NonZeroU64;
 use wasm_bindgen::prelude::*;
 use zeroize::{Zeroize, Zeroizing};
@@ -486,7 +484,6 @@ impl CommandOutcome {
             facade::CommandOutcome::Queued { .. } => "queued",
             facade::CommandOutcome::ContactImported(_) => "contactImported",
             facade::CommandOutcome::InviteLinkMinted(_) => "inviteLinkMinted",
-            facade::CommandOutcome::ShareAccepted(_) => "shareAccepted",
         }
         .to_owned()
     }
@@ -522,35 +519,6 @@ impl CommandOutcome {
     pub fn fragment(&self) -> Option<String> {
         self.link().map(|link| link.fragment.to_string())
     }
-
-    /// `shareAccepted`: the accepted scope's raw 16-byte id, the same
-    /// `NodeId.bytes` shape a command names it by; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = scopeId)]
-    pub fn scope_id(&self) -> Option<Vec<u8>> {
-        self.share().map(|share| share.scope_id.to_vec())
-    }
-
-    /// `shareAccepted`: the record sequence the accept adopted, which the
-    /// strict-sequence floor now holds; otherwise `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn sequence(&self) -> Option<u64> {
-        self.share().map(|share| share.sequence)
-    }
-
-    /// `shareAccepted`: the **owner-committed** permission, never the share
-    /// pointer's claim; otherwise `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn permission(&self) -> Option<Permission> {
-        self.share()
-            .map(|share| facade::Permission::from(share.permission).into())
-    }
-
-    /// `shareAccepted`: whether this accept added a new bookmark rather than
-    /// refreshing one the vault already held; otherwise `undefined`.
-    #[wasm_bindgen(getter, js_name = newlyAdded)]
-    pub fn newly_added(&self) -> Option<bool> {
-        self.share().map(|share| share.newly_added)
-    }
 }
 
 impl CommandOutcome {
@@ -569,13 +537,6 @@ impl CommandOutcome {
     fn contact(&self) -> Option<&Contact> {
         match &self.inner {
             facade::CommandOutcome::ContactImported(contact) => Some(contact),
-            _ => None,
-        }
-    }
-
-    fn share(&self) -> Option<&AcceptOutcome> {
-        match &self.inner {
-            facade::CommandOutcome::ShareAccepted(share) => Some(share),
             _ => None,
         }
     }
@@ -665,6 +626,13 @@ impl SnapshotChild {
     #[wasm_bindgen(getter, js_name = contentVersion)]
     pub fn content_version(&self) -> Option<u64> {
         self.inner.content_version
+    }
+
+    /// The head version's content root CID, or `undefined` until projected.
+    /// A caller hands it back on `beginWrite` to anchor a write where it read.
+    #[wasm_bindgen(getter, js_name = contentCid)]
+    pub fn content_cid(&self) -> Option<Vec<u8>> {
+        self.inner.content_cid.clone()
     }
 }
 
@@ -1482,6 +1450,23 @@ impl Command {
         })
     }
 
+    /// Drop one parked write and release its staged version. Irreversible.
+    #[wasm_bindgen(js_name = discardDeadLetter)]
+    pub fn discard_dead_letter(op_id: u64) -> Command {
+        Self::wrap(facade::Command::DiscardDeadLetter {
+            op_id: cipherbox_engine::seams::OpId(op_id),
+        })
+    }
+
+    /// Re-queue one parked write's staged version as a fresh op anchored on the
+    /// head this device renders now. Resolves `queued` with the new op id.
+    #[wasm_bindgen(js_name = recoverDeadLetter)]
+    pub fn recover_dead_letter(op_id: u64) -> Command {
+        Self::wrap(facade::Command::RecoverDeadLetter {
+            op_id: cipherbox_engine::seams::OpId(op_id),
+        })
+    }
+
     /// Set the open folder driving the focus window (`undefined` clears it).
     #[wasm_bindgen(js_name = setFocus)]
     pub fn set_focus(node: Option<NodeId>) -> Command {
@@ -1581,14 +1566,6 @@ impl Command {
         })
     }
 
-    /// Accept a share from a polled mailbox pointer or claimed invite.
-    #[wasm_bindgen(js_name = acceptShare)]
-    pub fn accept_share(sealed_share_pointer: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::AcceptShare {
-            sealed_share_pointer,
-        })
-    }
-
     /// Manual hygiene rotate-now for a scope.
     #[wasm_bindgen(js_name = rotateNow)]
     pub fn rotate_now(node: &NodeId) -> Command {
@@ -1603,12 +1580,6 @@ impl Command {
         Self::wrap(facade::Command::SaveVaultSettings {
             settings: settings.inner,
         })
-    }
-
-    /// Exchange a host-collected SIWE wallet signature (secondary method).
-    #[wasm_bindgen(js_name = siweLogin)]
-    pub fn siwe_login(message: String, signature: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::SiweLogin { message, signature })
     }
 
     /// Link a host-collected SIWE wallet signature to the signed-in account.
@@ -1676,6 +1647,7 @@ impl Event {
             facade::Event::StalenessChanged { .. } => "stalenessChanged",
             facade::Event::WithheldUpdateEscalation { .. } => "withheldUpdateEscalation",
             facade::Event::DeadLetter { .. } => "deadLetter",
+            facade::Event::ParkedWritesUnreadable => "parkedWritesUnreadable",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
             facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",
@@ -1984,6 +1956,7 @@ mod tests {
                     pending: facade::PendingClass::Content,
                     dead_letter: false,
                     content_version: Some(2),
+                    content_cid: Some(vec![0xC1, 0xD0]),
                 },
                 facade::SnapshotChild {
                     id: facade::NodeId([4u8; 16]),
@@ -1994,6 +1967,7 @@ mod tests {
                     pending: facade::PendingClass::None,
                     dead_letter: true,
                     content_version: None,
+                    content_cid: None,
                 },
             ],
             ancestors: vec![facade::Breadcrumb {

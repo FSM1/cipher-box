@@ -230,9 +230,11 @@ impl EngineHandle {
 
     /// Opens a write handle for a file of `size` plaintext bytes, reserving the
     /// exact sealed total it will occupy. `node` names an existing file for a
-    /// new version; `parent` + `name` create one. Resolves with the handle id;
-    /// rejects with the engine error (an over-budget refusal names which budget
-    /// and how much room is left).
+    /// new version; `parent` + `name` create one. `expectedVersion` is the
+    /// `contentCid` the caller read, which anchors the conditional edit where
+    /// the caller's bytes came from; it belongs to a new version alone.
+    /// Resolves with the handle id; rejects with the engine error (an
+    /// over-budget refusal names which budget and how much room is left).
     #[wasm_bindgen(js_name = beginWrite)]
     pub fn begin_write(
         &self,
@@ -240,20 +242,25 @@ impl EngineHandle {
         name: Option<String>,
         node: Option<NodeId>,
         size: f64,
+        expected_version: Option<Vec<u8>>,
     ) -> Promise {
         let engine = self.engine.clone();
         future_to_promise(async move {
             let target = match (parent, name, node) {
-                (Some(parent), Some(name), None) => WriteTarget::NewFile {
-                    parent: parent.facade(),
-                    name,
-                },
+                (Some(parent), Some(name), None) if expected_version.is_none() => {
+                    WriteTarget::NewFile {
+                        parent: parent.facade(),
+                        name,
+                    }
+                }
                 (None, None, Some(node)) => WriteTarget::Version {
                     node: node.facade(),
+                    expected_version,
                 },
                 _ => {
                     return Err(JsError::new(
-                        "beginWrite takes either (parent, name) or (node), never both",
+                        "beginWrite takes either (parent, name) or (node), never both; \
+                         expectedVersion belongs to (node)",
                     )
                     .into());
                 }
@@ -583,6 +590,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::TooManyStreams => "tooManyStreams",
         EngineError::TooLateToCancel { .. } => "tooLateToCancel",
         EngineError::NotAnUpload { .. } => "notAnUpload",
+        EngineError::UnknownDeadLetter { .. } => "unknownDeadLetter",
         EngineError::ContentTooLarge { .. } => "contentTooLarge",
         EngineError::ContentKeySealFailed { .. } => "contentKeySealFailed",
         EngineError::RefreshFailed { .. } => "refreshFailed",
@@ -602,9 +610,7 @@ fn engine_error(error: EngineError) -> JsValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Permission;
     use cipherbox_core::kdf;
-    use cipherbox_core::seal::Permission as CorePermission;
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_engine::facade;
@@ -612,7 +618,7 @@ mod tests {
     use cipherbox_engine::facade::NodeId as EngineNodeId;
     use cipherbox_engine::import_contact;
     use cipherbox_engine::seams::{OpId, UnixMillis};
-    use cipherbox_engine::{AcceptOutcome, Headroom, MintedInviteLink};
+    use cipherbox_engine::{Headroom, MintedInviteLink};
     use js_sys::{Array, BigInt};
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -630,15 +636,6 @@ mod tests {
 
     fn bytes(value: JsValue) -> Vec<u8> {
         value.unchecked_into::<Uint8Array>().to_vec()
-    }
-
-    fn accepted_share(permission: CorePermission) -> Outcome {
-        Outcome::ShareAccepted(AcceptOutcome {
-            scope_id: [0x5c; 16],
-            sequence: u64::MAX,
-            permission,
-            newly_added: true,
-        })
     }
 
     fn minted_link() -> Outcome {
@@ -748,41 +745,6 @@ mod tests {
         assert!(field(&crossed(Outcome::Done), "identityPublicKey").is_undefined());
     }
 
-    /// An accepted share's payload is what tells a host the scope it may now
-    /// open and on what terms, and the permission crossing is the
-    /// **owner-committed** one — the share pointer's claim never reaches a host.
-    /// The sequence rides the same `bigint` an op id does, so a record past 2^53
-    /// survives.
-    #[wasm_bindgen_test]
-    fn an_accepted_share_crosses_with_its_committed_terms() {
-        for (permission, expected) in [
-            (CorePermission::Read, Permission::Read),
-            (CorePermission::Write, Permission::Write),
-        ] {
-            let accepted = crossed(accepted_share(permission));
-            assert_eq!(bytes(field(&accepted, "scopeId")), vec![0x5c; 16]);
-            assert_eq!(
-                field(&accepted, "permission"),
-                JsValue::from(expected),
-                "the committed permission crosses verbatim"
-            );
-            assert_eq!(field(&accepted, "newlyAdded"), JsValue::from_bool(true));
-
-            let sequence = field(&accepted, "sequence");
-            assert_eq!(sequence.js_typeof(), JsValue::from_str("bigint"));
-            assert_eq!(
-                String::from(
-                    sequence
-                        .unchecked_into::<BigInt>()
-                        .to_string(10)
-                        .expect("bigint renders in base 10")
-                ),
-                u64::MAX.to_string(),
-            );
-        }
-        assert!(field(&crossed(Outcome::Done), "scopeId").is_undefined());
-    }
-
     /// A minted link crosses as one opaque fragment, never as the parts it is
     /// built from.
     #[wasm_bindgen_test]
@@ -801,7 +763,6 @@ mod tests {
             (Outcome::Done, "done"),
             (Outcome::Queued { op_id: OpId(1) }, "queued"),
             (imported_contact(), "contactImported"),
-            (accepted_share(CorePermission::Read), "shareAccepted"),
             (minted_link(), "inviteLinkMinted"),
         ] {
             assert_eq!(field(&crossed(outcome), "kind"), JsValue::from_str(name));

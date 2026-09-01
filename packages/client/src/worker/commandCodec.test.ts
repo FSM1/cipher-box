@@ -69,6 +69,37 @@ describe('buildCommand', () => {
     expect(calls).toEqual([[2n ** 60n]]);
   });
 
+  /** Both name one parked write, and neither may reach the other's builder. */
+  it('routes each parked-write command to its own builder with the bigint op id', () => {
+    const discarded: unknown[][] = [];
+    const recovered: unknown[][] = [];
+    const wasm = {
+      ...fakeWasmEnums,
+      Command: {
+        discardDeadLetter: (...args: unknown[]) => {
+          discarded.push(args);
+          return {};
+        },
+        recoverDeadLetter: (...args: unknown[]) => {
+          recovered.push(args);
+          return {};
+        },
+      },
+    } as unknown as EngineWasm;
+
+    buildCommand(wasm, { kind: 'discardDeadLetter', opId: 2n ** 60n });
+    buildCommand(wasm, { kind: 'recoverDeadLetter', opId: 5n });
+
+    expect(discarded).toEqual([[2n ** 60n]]);
+    expect(recovered).toEqual([[5n]]);
+  });
+
+  it('rejects a parked-write op id that is not the engine bigint', () => {
+    expect(refuses({ kind: 'recoverDeadLetter', opId: 7 })).toThrow(
+      'invalid request field opId: number'
+    );
+  });
+
   it('maps the second literal of each mirror enum, not just the first', () => {
     const calls: unknown[][] = [];
     const record = (...args: unknown[]): object => {
@@ -655,6 +686,12 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps the payload-free parked-writes refusal', () => {
+    expect(readEvent(fakeWasm, { kind: 'parkedWritesUnreadable' })).toEqual({
+      kind: 'parkedWritesUnreadable',
+    });
+  });
+
   it('maps a full opProgress payload to string-literal phase', () => {
     const node = new Uint8Array(16).fill(3);
     const event: WasmEvent = {
@@ -788,6 +825,7 @@ describe('readSnapshot', () => {
           pending: 2,
           deadLetter: false,
           contentVersion: 2n,
+          contentCid: new Uint8Array([0xc1, 0xd0]),
         },
         {
           id: new Uint8Array(16).fill(4),
@@ -832,6 +870,7 @@ describe('readSnapshot', () => {
           pending: 'content',
           deadLetter: false,
           contentVersion: 2n,
+          contentCid: new Uint8Array([0xc1, 0xd0]),
         },
         {
           id: new Uint8Array(16).fill(4),
@@ -842,6 +881,7 @@ describe('readSnapshot', () => {
           pending: 'none',
           deadLetter: true,
           contentVersion: null,
+          contentCid: null,
         },
         {
           id: new Uint8Array(16).fill(5),
@@ -852,6 +892,7 @@ describe('readSnapshot', () => {
           pending: 'metadata',
           deadLetter: false,
           contentVersion: null,
+          contentCid: null,
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],

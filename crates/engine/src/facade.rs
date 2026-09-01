@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
-use cipherbox_core::content::encode_content_cid_str;
+use cipherbox_core::content::{CONTENT_CID_LEN, encode_content_cid_str};
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -53,19 +53,18 @@ use crate::grants::grafted::{
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
 use crate::grants::{
-    AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
-    ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
-    GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
-    InviteStore, InviteStoreError, MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority,
-    OwnerGrantKeys, ParentScopePlan, PendingInviteLink, PublishedGrantBlob, ReceivedShareStore,
-    ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
-    StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, accept_share,
-    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
-    link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
-    post_invite_claim, post_share_pointer, recipient_blinded_tag, resolve_recipient,
-    row_is_owner_attested,
+    ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
+    CreateGrantError, EphemeralInvitee, GrantRecipient, GranteeScopePlan, InviteClaim, InviteError,
+    InviteFragment, InviteMintError, InviteMintPlan, InviteStore, InviteStoreError,
+    MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
+    PendingInviteLink, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
+    ResolutionClass, SharePointer, StagingContactStore, StagingInviteStore,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, convert_invite_claim, create_grant,
+    enforce_committed_ledger, import_contact, insert_child, link_budget_full, locate_invite_link,
+    mint_invite_link, partition_scope_links, post_invite_claim, post_share_pointer,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
-use crate::mailbox::{locate_verified, poll_verified, post_sealed};
+use crate::mailbox::{poll_verified, post_sealed};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
@@ -77,9 +76,8 @@ use crate::net::{
     HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
     PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
     RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
-    VaultProvisionNet, assemble_candidate, enrol_owned_scope_pointers, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, resolve_child,
-    run_liveness_loop,
+    VaultProvisionNet, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify,
+    keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -117,6 +115,7 @@ use crate::sync::provision::{
     VaultPointerProbe, provision_vault,
 };
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
+use crate::sync::record::{RecordClass, record_content_root_cid};
 use cipherbox_core::hex::lower as hex_lower;
 
 pub use crate::sync::drain::{BlockedOp, SettingsHold};
@@ -125,7 +124,8 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    LiveBlocks, PreservedBounds, StagedBlocks, reconcile_staging, release_version_blocks, stage_op,
+    LiveBlocks, PreservedBounds, PreservedDeadLetter, StagedBlocks, read_preserved_dead_letters,
+    reconcile_staging, release_version_blocks, stage_op, take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
@@ -180,6 +180,11 @@ pub enum WriteTarget {
     Version {
         /// Target file node.
         node: NodeId,
+        /// The version the caller's bytes were derived from, when the caller
+        /// read one. The conditional-edit anchor is otherwise derived from this
+        /// device's own rendered view, which a refresh between the read and the
+        /// open can advance past what the caller actually holds.
+        expected_version: Option<Vec<u8>>,
     },
 }
 
@@ -191,7 +196,14 @@ impl fmt::Debug for WriteTarget {
                 .field("parent", parent)
                 .field("name", &RedactedText::of(name))
                 .finish(),
-            Self::Version { node } => f.debug_struct("Version").field("node", node).finish(),
+            Self::Version {
+                node,
+                expected_version,
+            } => f
+                .debug_struct("Version")
+                .field("node", node)
+                .field("expectedVersion", &expected_version.is_some())
+                .finish(),
         }
     }
 }
@@ -310,6 +322,9 @@ pub struct SnapshotChild {
     pub dead_letter: bool,
     /// Retained version count, `None` until projected.
     pub content_version: Option<u64>,
+    /// The head version's content root CID, `None` until projected — what a
+    /// caller hands back on [`WriteTarget::Version::expected_version`].
+    pub content_cid: Option<Vec<u8>>,
 }
 
 impl fmt::Debug for SnapshotChild {
@@ -323,6 +338,7 @@ impl fmt::Debug for SnapshotChild {
             .field("pending", &self.pending)
             .field("dead_letter", &self.dead_letter)
             .field("content_version", &self.content_version)
+            .field("content_cid", &self.content_cid)
             .finish()
     }
 }
@@ -869,6 +885,25 @@ pub enum Command {
         /// The queue id [`Engine::commit_write`] returned.
         op_id: OpId,
     },
+    /// Drop one parked write: the preserved entry goes, and its staged version
+    /// is released. Irreversible, so a host asks first.
+    DiscardDeadLetter {
+        /// The op id the dead letter was announced under, and the identity the
+        /// preserved entry carries.
+        op_id: OpId,
+    },
+    /// Re-queue one parked write's staged version as a **fresh** op, anchored on
+    /// the head this device renders now.
+    ///
+    /// Never a resumed op: the parked one lost its anchor, and re-queueing it as
+    /// authored would replay exactly the conditional-edit refusal that parked
+    /// it. The fresh anchor is the member saying the bytes they parked are the
+    /// ones they want, so the write is theirs to lose, not one this device loses
+    /// for them.
+    RecoverDeadLetter {
+        /// The op id the dead letter was announced under.
+        op_id: OpId,
+    },
 
     // --- focus and refresh ---
     /// Set the open folder driving the focus window; `None` when no folder
@@ -955,11 +990,6 @@ pub enum Command {
         /// The node the link was minted at.
         node: NodeId,
     },
-    /// Accept a share from a polled mailbox pointer or claimed invite.
-    AcceptShare {
-        /// The sealed share pointer payload.
-        sealed_share_pointer: Vec<u8>,
-    },
     /// Manual hygiene rotate-now for a scope (same primitives as every
     /// rotation trigger).
     RotateNow {
@@ -977,14 +1007,6 @@ pub enum Command {
     },
 
     // --- auth ---
-    /// Exchange a host-collected SIWE wallet signature (secondary method;
-    /// the engine performs the exchange through its API client).
-    SiweLogin {
-        /// The signed SIWE message.
-        message: String,
-        /// The wallet signature bytes.
-        signature: Vec<u8>,
-    },
     /// Link a host-collected SIWE wallet signature to the signed-in account.
     SiweLink {
         /// The signed SIWE message.
@@ -1018,6 +1040,8 @@ impl Command {
             Command::Relink { .. } => "relink",
             Command::Move { .. } => "move",
             Command::CancelUpload { .. } => "cancelUpload",
+            Command::DiscardDeadLetter { .. } => "discardDeadLetter",
+            Command::RecoverDeadLetter { .. } => "recoverDeadLetter",
             Command::SetFocus { .. } => "setFocus",
             Command::ManualRefresh => "manualRefresh",
             Command::ImportContact { .. } => "importContact",
@@ -1029,10 +1053,8 @@ impl Command {
             Command::PruneInviteLinks { .. } => "pruneInviteLinks",
             Command::ClaimInviteLink { .. } => "claimInviteLink",
             Command::ConvertInviteClaims { .. } => "convertInviteClaims",
-            Command::AcceptShare { .. } => "acceptShare",
             Command::RotateNow { .. } => "rotateNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
-            Command::SiweLogin { .. } => "siweLogin",
             Command::SiweLink { .. } => "siweLink",
             Command::UnlinkAuthMethod { .. } => "unlinkAuthMethod",
             Command::Logout => "logout",
@@ -1072,11 +1094,6 @@ pub enum CommandOutcome {
     /// ([`MintedInviteLink`]) — a host puts it in a URL fragment and nowhere
     /// durable.
     InviteLinkMinted(MintedInviteLink),
-    /// [`Command::AcceptShare`] adopted a share: the gate passed, the seeds
-    /// opened, and the entry is durable in this vault's received-shares list.
-    /// Carries no key material — the permission is the owner-committed one, not
-    /// the pointer's claim.
-    ShareAccepted(AcceptOutcome),
 }
 
 impl fmt::Debug for CommandOutcome {
@@ -1086,7 +1103,6 @@ impl fmt::Debug for CommandOutcome {
             CommandOutcome::Queued { op_id } => write!(f, "CommandOutcome(queued {})", op_id.0),
             CommandOutcome::ContactImported(_) => f.write_str("CommandOutcome(contactImported)"),
             CommandOutcome::InviteLinkMinted(_) => f.write_str("CommandOutcome(inviteLinkMinted)"),
-            CommandOutcome::ShareAccepted(_) => f.write_str("CommandOutcome(shareAccepted)"),
         }
     }
 }
@@ -1130,6 +1146,11 @@ pub enum Event {
         /// Why it dead-lettered — the four reasons need four different messages.
         reason: DeadLetterReason,
     },
+    /// This device holds a preserved dead-letter record another build wrote.
+    /// Nothing may overwrite it, so the parked writes it holds can be neither
+    /// listed nor released, and no later dead letter may join them. Terminal:
+    /// no pass changes it, and the member is the only one who can.
+    ParkedWritesUnreadable,
     /// Attributable abuse: a fail-closed adoption-gate rejection, or an
     /// owner-blob / ascent-link / unseal cross-check disagreement (#39 D6) —
     /// never a silent failure.
@@ -1193,6 +1214,7 @@ impl fmt::Debug for Event {
                 .field("op_id", op_id)
                 .field("reason", reason)
                 .finish(),
+            Self::ParkedWritesUnreadable => f.write_str("ParkedWritesUnreadable"),
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
                 .field("description", description)
@@ -1373,6 +1395,13 @@ pub enum EngineError {
     /// metadata op is undone by a compensating mutation, not a cancel.
     NotAnUpload {
         /// The op the cancel named.
+        op_id: OpId,
+    },
+    /// [`Command::DiscardDeadLetter`] or [`Command::RecoverDeadLetter`] named an
+    /// op this device holds no parked write for — one already discarded, one
+    /// already recovered, or one the age or byte bound evicted.
+    UnknownDeadLetter {
+        /// The op the command named.
         op_id: OpId,
     },
     /// The file is past the flat-DAG ceiling: its root would inline more leaf
@@ -1673,28 +1702,6 @@ impl EngineError {
         }
     }
 
-    /// Map an accept-flow failure. Every binding arm is a fail-closed trust
-    /// verdict on the pointer or the record it named — never degraded to
-    /// staleness, which would tell a host to keep retrying a forgery.
-    fn from_accept(err: AcceptError) -> Self {
-        match err {
-            AcceptError::MalformedPointer(e) => EngineError::MalformedInput { check: e.check() },
-            AcceptError::Gate(e) => EngineError::from_gate(e),
-            AcceptError::Ack(e) => EngineError::from_seam(e),
-            AcceptError::Persist(e) => EngineError::from_received_share_store(e),
-            // No blob at your tag on an owner-signed record is the definitive
-            // "you were removed" (`grants/revocation.rs`), never a claim that the
-            // record is forged — a host that could not tell them apart would
-            // report a revocation as an attack.
-            AcceptError::NoBlobAtTag => EngineError::MalformedInput {
-                check: "no-grant-at-your-tag",
-            },
-            trust => EngineError::TrustViolation {
-                message: trust.to_string(),
-            },
-        }
-    }
-
     /// Map a contact-book failure. The book is this vault's own state, so a
     /// stored book that will not open is a fail-closed verdict; everything a
     /// host can act on — a code it must re-scan, a book it must prune, a seam it
@@ -1850,6 +1857,11 @@ impl fmt::Display for EngineError {
             EngineError::NotAnUpload { op_id } => write!(
                 f,
                 "queued op {} carries no upload to cancel; undo it with a compensating change",
+                op_id.0
+            ),
+            EngineError::UnknownDeadLetter { op_id } => write!(
+                f,
+                "no parked write is held for op {}",
                 op_id.0
             ),
             EngineError::ContentTooLarge { check } => write!(
@@ -2507,15 +2519,19 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
 
 /// Surface a fail-closed resolve rejection as [`Event::AttributableAbuse`]: a
 /// trust violation is never mere staleness (AGENTS.md rule 6), so it must not
-/// poll silently. `routing_key` is the record's `ipnsName` and `detail` a
-/// classification; neither carries key material.
+/// poll silently.
+///
+/// `routing_key` is the record's `ipnsName`, and this description crosses to a
+/// host verbatim rather than through a rendering policy — so the name renders as
+/// its shape here, the way its own type does. `detail` is a classification and
+/// carries no key material.
 pub(crate) fn emit_trust_violation(
     events: &mpsc::UnboundedSender<Event>,
     routing_key: &str,
     detail: impl fmt::Display,
 ) {
     let _ = events.unbounded_send(Event::AttributableAbuse {
-        description: format!("{routing_key}: {detail}"),
+        description: format!("{:?}: {detail}", RedactedText::of(routing_key)),
     });
 }
 
@@ -3829,6 +3845,33 @@ impl<T: SeamTypes> Engine<T> {
         let scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
         let pending: Vec<_> = scan.mine.into_iter().map(|(_id, op)| op).collect();
 
+        // The preserved set outlives the process and the notice map does not, so
+        // a parked write is only nameable again once the set is read back. A set
+        // this build cannot read holds parked writes it can neither list nor
+        // release, which is the one state a host has to be told about outright.
+        match read_preserved_dead_letters(&self.seams.staging_store)
+            .await
+            .map_err(ColdStartError::Seam)?
+        {
+            Some(parked) => {
+                let reader = RecordReader::new(session.enc_subkey());
+                let mut notices = self.dead_letters.borrow_mut();
+                for entry in parked {
+                    // The same two conditions [`Self::parked_write`] states: one
+                    // account's session lists no other's entries, and an op the
+                    // queue still holds is pending rather than parked.
+                    let mine = matches!(reader.classify(&entry.record), RecordClass::Mine(_));
+                    let queued = raw.iter().any(|(id, _)| *id == entry.op_id);
+                    if mine && !queued {
+                        notices.insert(entry.op_id, (None, entry.reason));
+                    }
+                }
+            }
+            None => {
+                let _ = self.events.unbounded_send(Event::ParkedWritesUnreadable);
+            }
+        }
+
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
         // its op record from the durable queue so a corrupt entry is not
         // re-decoded and re-emitted on every boot.
@@ -4416,7 +4459,7 @@ where {
                         if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
                             emit_trust_violation(&events, root_name.as_str(), rejection);
                         }
-                        if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
+                        if refresh_base_from_resolved(&base, NodeId(root_id), resolved) {
                             let _ = events.unbounded_send(Event::SnapshotUpdated);
                         }
                     }
@@ -4760,6 +4803,11 @@ where {
                 .cancel_upload(op_id)
                 .await
                 .map(|()| CommandOutcome::Done),
+            Command::DiscardDeadLetter { op_id } => self
+                .discard_dead_letter(op_id)
+                .await
+                .map(|()| CommandOutcome::Done),
+            Command::RecoverDeadLetter { op_id } => self.recover_dead_letter(op_id).await,
             Command::SetFocus { node } => {
                 self.focus.borrow_mut().open_folder = node;
                 // Navigation is the tick model's second trigger source (#33 D2):
@@ -4831,25 +4879,12 @@ where {
                 .downgrade_grant(node, &recipient_identity_public_key)
                 .await
                 .map(|()| CommandOutcome::Done),
-            Command::AcceptShare {
-                sealed_share_pointer,
-            } => self
-                .accept_share(&sealed_share_pointer)
-                .await
-                .map(CommandOutcome::ShareAccepted),
             Command::RotateNow { node } => {
                 self.rotate_now(node).await.map(|()| CommandOutcome::Done)
             }
             Command::ManualRefresh => self.manual_refresh().await.map(|()| CommandOutcome::Done),
             Command::SaveVaultSettings { settings } => {
                 self.save_vault_settings(&settings).await?;
-                Ok(CommandOutcome::Done)
-            }
-            Command::SiweLogin { message, signature } => {
-                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-                api.siwe_login(&message, &eth_signature_hex(&signature))
-                    .await
-                    .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
             }
             Command::SiweLink { message, signature } => {
@@ -6398,82 +6433,6 @@ where {
         )
     }
 
-    /// Accept a share the mailbox delivered: bind the pointer to the imported
-    /// contact, resolve and gate the scope root it names, self-locate the grant
-    /// blob by blinded tag, unseal the seeds, and append the entry to this
-    /// vault's sealed received-shares list before acking
-    /// (blueprint/engine.md "Accept flow").
-    ///
-    /// Fail-closed throughout: an unverifiable sender, an uncommitted tag, or a
-    /// gate rejection is a trust verdict, never staleness.
-    async fn accept_share(
-        &self,
-        sealed_share_pointer: &[u8],
-    ) -> Result<AcceptOutcome, EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        // The version the sender sealed under is the envelope version its scope
-        // root was minted at, which is the one this build authors; a payload from
-        // any other is an item that does not open, and is dropped.
-        let item = locate_verified(
-            api.as_ref(),
-            session.enc_subkey(),
-            ENVELOPE_V,
-            sealed_share_pointer,
-        )
-        .await
-        .map_err(EngineError::from_seam)?
-        .ok_or(EngineError::MalformedInput {
-            check: "share-pointer-is-not-on-this-inbox",
-        })?;
-
-        let contact = self
-            .recipient_contact(session, &item.sender_identity.to_sec1())
-            .await?;
-        let pointer = SharePointer::decode(&item.payload)
-            .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
-        // Bind the pointer to the contact before it names anything to fetch, so
-        // one imported peer cannot steer a resolve at a scope root of their
-        // choosing. The accept flow re-checks it against the same contact.
-        if pointer.sharer_identity_pk != contact.identity_pk().to_sec1() {
-            return Err(EngineError::TrustViolation {
-                message: AcceptError::SharerMismatch.to_string(),
-            });
-        }
-        let name = parsed_scope_name(&pointer.scope_root_name)?;
-        let (_, record_bytes) = fanout_get_verify(&self.seams.record_transport, &name)
-            .await
-            .ok_or(EngineError::ContentUnavailable {
-                message: "the shared scope root did not resolve".to_owned(),
-            })?;
-        let candidate =
-            assemble_candidate(&self.gateway, &self.seams.http, &name, &record_bytes, None)
-                .await
-                .map_err(EngineError::from_gate)?;
-
-        let store = self.received_share_store(session);
-        let mut received = store
-            .load()
-            .await
-            .map_err(EngineError::from_received_share_store)?;
-        let blobs = published_grant_blobs(&candidate.grant_section);
-        let vault_root_scope = self.snapshot.borrow().root.0;
-        accept_share(
-            &self.seams.floor_store,
-            api.as_ref(),
-            &store,
-            &item,
-            &contact,
-            session.enc_subkey(),
-            &candidate,
-            &blobs,
-            &vault_root_scope,
-            &mut received,
-        )
-        .await
-        .map_err(EngineError::from_accept)
-    }
-
     /// Seal and publish the vault settings record, then adopt what it
     /// published: the renewal enrolment [`publish_settings`] states the need
     /// for, and the placement this session writes under.
@@ -6682,12 +6641,27 @@ where {
                 refuse_full_parent(&rendered, *parent, None, None)?;
                 None
             }
-            WriteTarget::Version { node } => {
+            WriteTarget::Version {
+                node,
+                expected_version,
+            } => {
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, *node)?;
                 match rendered.node(*node).map(|meta| meta.kind) {
                     Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
-                    Some(_) => self.write_anchor(*node).await?,
+                    Some(_) => match expected_version {
+                        // Shape-checked at the boundary rather than left to fail
+                        // closed on the drain: an anchor that is not a content
+                        // CID can only ever park the write, and a parked write
+                        // spends a slot in a set that evicts oldest-first.
+                        Some(expected) if expected.len() != CONTENT_CID_LEN => {
+                            return Err(EngineError::MalformedInput {
+                                check: "expected-version-is-not-a-content-cid",
+                            });
+                        }
+                        Some(expected) => Some(expected.clone()),
+                        None => self.write_anchor(*node).await?,
+                    },
                     None => return Err(EngineError::UnknownNode),
                 }
             }
@@ -6714,7 +6688,7 @@ where {
         let opened = (|| {
             let node = match &target {
                 WriteTarget::NewFile { .. } => self.mint_node_id()?,
-                WriteTarget::Version { node } => *node,
+                WriteTarget::Version { node, .. } => *node,
             };
             let key = ContentKey::generate(&mut *self.entropy.borrow_mut())
                 .map_err(EngineError::from_entropy)?;
@@ -7014,7 +6988,7 @@ where {
                     authored_at,
                 )
             }
-            WriteTarget::Version { node } => {
+            WriteTarget::Version { node, .. } => {
                 let base_sequence = self.base_sequence_for(node).await?;
                 Op::update_content(node, content, base_version_cid, base_sequence, authored_at)
             }
@@ -7028,9 +7002,9 @@ where {
     /// Issues the single-use nonce an EIP-4361 message must embed, so the host
     /// collects a wallet signature without reaching the API itself
     /// (blueprint/web-client.md: `apps/web` holds no seam of its own). Fails
-    /// `NotStarted` before [`start`](Self::start), like the
-    /// [`Command::SiweLogin`] that spends the nonce — SIWE is a secondary
-    /// method (blueprint/engine.md "API client").
+    /// `NotStarted` before [`start`](Self::start), like the exchange that spends
+    /// the nonce — SIWE is a secondary method (blueprint/engine.md
+    /// "API client").
     ///
     /// The intent picks the pool ([`SiweIntent`]).
     pub async fn siwe_challenge(&self, intent: SiweIntent) -> Result<String, EngineError> {
@@ -7240,6 +7214,7 @@ where {
                 pending: pending.get(&child.id).copied().unwrap_or_default(),
                 dead_letter: dead_nodes.contains(&child.id),
                 content_version: child.content_version,
+                content_cid: child.head_content_cid.clone(),
             })
             .collect();
         let ancestors = rendered
@@ -8054,6 +8029,119 @@ where {
         Ok(NodeId(id))
     }
 
+    /// Drop one parked write ([`Command::DiscardDeadLetter`]).
+    ///
+    /// The parked write `op_id` names, with the op it holds.
+    ///
+    /// Two conditions, both fail-closed, and both because the set is a durable
+    /// surface of a store one account shares with another
+    /// (`crate::sync::drain` owner scoping). The record must open under **this**
+    /// session's own custody, so no session acts on an entry another identity
+    /// parked; and the op must have left the durable queue, because the drain
+    /// writes the preserved entry before it dequeues, so a crash in that gap
+    /// leaves one version named by a live queue entry and by this set at once.
+    /// Releasing it then would drop bytes an op is still going to publish.
+    async fn parked_write(&self, op_id: OpId) -> Result<(PreservedDeadLetter, Op), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let queued = self
+            .seams
+            .staging_store
+            .queued_ops()
+            .await
+            .map_err(EngineError::from_seam)?;
+        if queued.iter().any(|(id, _)| *id == op_id) {
+            return Err(EngineError::UnknownDeadLetter { op_id });
+        }
+        let parked = read_preserved_dead_letters(&self.seams.staging_store)
+            .await
+            .map_err(EngineError::from_seam)?
+            .unwrap_or_default()
+            .into_iter()
+            .find(|entry| entry.op_id == op_id)
+            .ok_or(EngineError::UnknownDeadLetter { op_id })?;
+        match RecordReader::new(session.enc_subkey()).classify(&parked.record) {
+            RecordClass::Mine(op) => Ok((parked, op)),
+            _ => Err(EngineError::UnknownDeadLetter { op_id }),
+        }
+    }
+
+    /// The shortened set is durable before a byte is released, so a failed write
+    /// leaves a list that still names the version rather than one naming blocks
+    /// that are already gone.
+    async fn discard_dead_letter(&self, op_id: OpId) -> Result<(), EngineError> {
+        self.live_session()?;
+        let (parked, _) = self.parked_write(op_id).await?;
+        take_preserved_dead_letter(&self.seams.staging_store, op_id)
+            .await
+            .map_err(EngineError::from_seam)?;
+        // A record whose clear root will not read names no blocks to release;
+        // orphan GC reclaims them once this list no longer holds it.
+        if let Some(root) = record_content_root_cid(&parked.record).ok().flatten() {
+            release_version_blocks(&self.seams.staging_store, root.as_slice()).await;
+        }
+        self.dead_letters.borrow_mut().remove(&op_id);
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        Ok(())
+    }
+
+    /// Re-queue one parked write ([`Command::RecoverDeadLetter`]).
+    ///
+    /// A create mints a fresh node id, so a version the plane already carries is
+    /// never re-authored at its own name. Both arms reuse the parked version's
+    /// staged blocks, which the new queue entry references from the moment it
+    /// lands.
+    async fn recover_dead_letter(&mut self, op_id: OpId) -> Result<CommandOutcome, EngineError> {
+        self.live_session()?;
+        let authored_at = self.seams.scheduler.now();
+        let (_, op) = self.parked_write(op_id).await?;
+
+        // A recover re-stages the parked intent, so it owes the caller the
+        // refusals `begin_write` gives the same intent: a target that went
+        // away while the write was parked, and a parent with no room left.
+        let rendered = self.render().await?;
+        let fresh = match &op.kind {
+            OpKind::UpdateContent { content, .. } => {
+                if !rendered.contains(op.target) {
+                    return Err(EngineError::UnknownNode);
+                }
+                Op::update_content(
+                    op.target,
+                    content.clone(),
+                    self.write_anchor(op.target).await?,
+                    self.base_sequence_for(op.target).await?,
+                    authored_at,
+                )
+            }
+            OpKind::Create { parent, name, node } => {
+                refuse_full_parent(&rendered, *parent, None, None)?;
+                Op::create(
+                    self.mint_node_id()?,
+                    *parent,
+                    name.clone(),
+                    node.clone(),
+                    self.base_sequence_for(*parent).await?,
+                    authored_at,
+                )
+            }
+            // Every other intent is metadata, which a compensating command
+            // expresses directly and which stages no version to recover.
+            _ => {
+                return Err(EngineError::MalformedInput {
+                    check: "parked-write-carries-no-version",
+                });
+            }
+        };
+
+        let outcome = self.stage_and_notify(&fresh).await?;
+        // Only after the queue entry references the blocks: a failure here costs
+        // a second reference to a version nothing released.
+        take_preserved_dead_letter(&self.seams.staging_store, op_id)
+            .await
+            .map_err(EngineError::from_seam)?;
+        self.dead_letters.borrow_mut().remove(&op_id);
+        Ok(outcome)
+    }
+
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,
     /// returning the durable queue id the drain will report the op under.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<CommandOutcome, EngineError> {
@@ -8270,6 +8358,7 @@ mod tests {
                 pending: PendingClass::None,
                 dead_letter: false,
                 content_version: None,
+                content_cid: None,
             }],
             ancestors: vec![Breadcrumb {
                 id: NodeId([4; 16]),
@@ -8312,7 +8401,7 @@ mod tests {
 
     use core::num::NonZeroU64;
 
-    use crate::api::{ChallengeSigner, login_response, new_user_login_response};
+    use crate::api::{ChallengeSigner, new_user_login_response};
     use crate::content::{ByoIpfsConfig, ByoKind, RetentionPolicy};
     use crate::net::retire::ReclaimStallReason;
     use crate::seams::{CredentialStore, EndpointId, HttpResponse, UnixMillis};
@@ -9025,41 +9114,7 @@ mod tests {
             signature.len() == 132
                 && signature.starts_with("0x")
                 && signature[2..].bytes().all(|byte| byte.is_ascii_hexdigit()),
-            "the API's SiweLoginRequestDto refuses this signature: {signature:?}"
-        );
-    }
-
-    #[test]
-    fn siwe_login_command_forwards_message_and_hex_signature() {
-        // Offline: `start` skips cold-start login, so only the SIWE exchange is
-        // scripted here.
-        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
-        device.http.enqueue_response(json_response(
-            200,
-            login_response("jwt-siwe", &"b".repeat(64), "gw-b"),
-        ));
-
-        let signature = WALLET_SIGNATURE_FIXTURE.to_vec();
-        block_on(engine.command(Command::SiweLogin {
-            message: "siwe-message".to_owned(),
-            signature: signature.clone(),
-        }))
-        .expect("siwe login");
-
-        let request = device
-            .http
-            .requests()
-            .pop()
-            .expect("a SIWE request was sent");
-        assert_eq!(request.url, "/auth/siwe/login");
-        let body: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["message"], "siwe-message");
-        assert_eth_signature_wire_shape(&body["signature"]);
-        assert_eq!(
-            body["signature"],
-            format!("0x{}", hex_lower(&signature)),
-            "the wallet signature crosses the wire 0x-prefixed hex"
+            "the API's wallet DTO refuses this signature: {signature:?}"
         );
     }
 
@@ -10425,22 +10480,6 @@ mod tests {
         );
     }
 
-    /// A share pointer the inbox does not hold cannot be accepted: the accept
-    /// acks by transport id, so there would be nothing to ack and the item would
-    /// redeliver forever.
-    #[test]
-    fn a_share_pointer_off_the_inbox_is_refused() {
-        let (mut engine, _events) = started();
-        assert_eq!(
-            block_on(engine.command(Command::AcceptShare {
-                sealed_share_pointer: b"not-a-sealed-item".to_vec(),
-            })),
-            Err(EngineError::MalformedInput {
-                check: "share-pointer-is-not-on-this-inbox"
-            }),
-        );
-    }
-
     #[test]
     fn a_blank_api_base_url_is_unrepresentable() {
         for blank in ["", "   ", "\t\n"] {
@@ -10602,7 +10641,7 @@ mod tests {
         use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody};
 
         use crate::gate::Adopted;
-        use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+        use crate::net::{ResolveOutcome, Resolved, refresh_base_from_resolved};
 
         /// A gate-passing adopted root folder with the given children, mirroring
         /// what a live resolve repaints the base with.
@@ -10634,13 +10673,13 @@ mod tests {
         fn snapshot_lists_base_children_with_no_pending_flags() {
             let (engine, _events) = started();
             let root = engine.root();
-            refresh_base_from_outcome(
+            refresh_base_from_resolved(
                 &engine.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_folder(vec![
+                &Resolved::just(ResolveOutcome::Adopted(adopted_folder(vec![
                     child_ref(1, "a", CoreNodeKind::Folder),
                     child_ref(2, "b.txt", CoreNodeKind::File),
-                ])),
+                ]))),
             );
 
             let view = block_on(engine.snapshot(root)).unwrap();
@@ -10702,7 +10741,15 @@ mod tests {
             create(&mut engine, root, "notes.txt", NodeKind::File);
             let node = block_on(engine.snapshot(root)).unwrap().children[0].id;
 
-            write_file(&mut engine, WriteTarget::Version { node }, b"bytes").unwrap();
+            write_file(
+                &mut engine,
+                WriteTarget::Version {
+                    node,
+                    expected_version: None,
+                },
+                b"bytes",
+            )
+            .unwrap();
 
             let view = block_on(engine.snapshot(root)).unwrap();
             assert_eq!(view.children[0].pending, PendingClass::Content);
@@ -10858,6 +10905,8 @@ mod tests {
         use super::*;
 
         use std::sync::{Arc, Mutex};
+
+        use crate::sync::staging::PRESERVED_DEAD_LETTERS_KEY;
 
         use cipherbox_core::ipns::{IpnsName, IpnsRecord};
         use cipherbox_core::kdf;
@@ -11078,17 +11127,19 @@ mod tests {
 
         #[test]
         fn a_newer_adopted_tick_repaints_the_view_and_emits() {
-            use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+            use crate::net::{ResolveOutcome, Resolved, refresh_base_from_resolved};
 
             let (engine, mut events, _pointers) = started_at(UnixMillis(123_456));
             let root = engine.root();
 
             // One resolve-tick pass over a gate-passing newer `Adopted`: fold it
             // into the shared base cell and emit, exactly as the tick loop does.
-            assert!(refresh_base_from_outcome(
+            assert!(refresh_base_from_resolved(
                 &engine.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_child([0xC1; 16], "live.txt")),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
+                    [0xC1; 16], "live.txt"
+                ))),
             ));
             let _ = engine.events.unbounded_send(Event::SnapshotUpdated);
 
@@ -11103,22 +11154,26 @@ mod tests {
 
         #[test]
         fn tick_repaint_is_clock_independent() {
-            use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+            use crate::net::{ResolveOutcome, Resolved, refresh_base_from_resolved};
 
             let (a, _ea, _pa) = started_at(UnixMillis(0));
             let (b, _eb, _pb) = started_at(UnixMillis(5_000_000));
             let root = a.root();
             assert_eq!(root, b.root());
 
-            refresh_base_from_outcome(
+            refresh_base_from_resolved(
                 &a.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_child([0xD2; 16], "clk.txt")),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
+                    [0xD2; 16], "clk.txt",
+                ))),
             );
-            refresh_base_from_outcome(
+            refresh_base_from_resolved(
                 &b.snapshot,
                 root,
-                &ResolveOutcome::Adopted(adopted_with_child([0xD2; 16], "clk.txt")),
+                &Resolved::just(ResolveOutcome::Adopted(adopted_with_child(
+                    [0xD2; 16], "clk.txt",
+                ))),
             );
 
             // Clock-independent: the two repainted bases are byte-identical, and
@@ -11199,6 +11254,38 @@ mod tests {
                     .unwrap()
                     .is_empty(),
                 "the dead-lettered op is removed from the durable queue"
+            );
+        }
+
+        /// A preserved set this build cannot read holds parked writes it can
+        /// neither list nor release, and no later dead letter may join them.
+        /// Standing down silently would leave the member with a vault that has
+        /// quietly stopped keeping their parked work.
+        #[test]
+        fn an_unreadable_preserved_set_surfaces_on_cold_start() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            block_on(
+                engine
+                    .seams
+                    .staging_store
+                    .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, b"another build wrote this"),
+            )
+            .expect("the store holds it");
+
+            drive(&mut engine, &pointers);
+
+            assert_eq!(block_on(events.next()), Some(Event::ParkedWritesUnreadable));
+            assert_eq!(
+                block_on(
+                    engine
+                        .seams
+                        .staging_store
+                        .staged_bytes(PRESERVED_DEAD_LETTERS_KEY)
+                )
+                .unwrap()
+                .as_deref(),
+                Some(b"another build wrote this".as_slice()),
+                "and nothing overwrites what it already holds"
             );
         }
 
@@ -11806,9 +11893,13 @@ mod tests {
                     .collect();
                 assert_eq!(abuse.len(), 1, "every forged poll raises one abuse event");
                 assert!(
-                    abuse[0].contains(root_name.as_str())
-                        && abuse[0].contains("content-cid-mismatch"),
-                    "the event names the record and the check that rejected it: {}",
+                    abuse[0].contains("content-cid-mismatch"),
+                    "the event names the check that rejected it: {}",
+                    abuse[0]
+                );
+                assert!(
+                    !abuse[0].contains(root_name.as_str()),
+                    "and withholds the live handle it rejected: {}",
                     abuse[0]
                 );
             }
@@ -12125,7 +12216,9 @@ mod tests {
             tick(&world, &device, &mut tasks);
 
             // The record answering there is bound to the name it moved off, so
-            // the gate refuses it — and names what this pass resolved.
+            // the gate refuses it. Only the moved record trips that check, and
+            // the name cold start opened with resolves clean — so one refusal
+            // naming it is what proves where this pass went.
             let abuse: Vec<String> = drain(&mut events)
                 .into_iter()
                 .filter_map(|event| match event {
@@ -12135,7 +12228,7 @@ mod tests {
                 .collect();
             assert_eq!(abuse.len(), 1, "one verdict on the one root resolved");
             assert!(
-                abuse[0].contains(moved.as_str()),
+                abuse[0].contains("commitment-invalid"),
                 "the pass resolved the root its anchor pointer named: {}",
                 abuse[0]
             );

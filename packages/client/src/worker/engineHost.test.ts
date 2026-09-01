@@ -243,11 +243,14 @@ describe('EngineHost request fields', () => {
   it('opens a write on well-typed fields', async () => {
     const { host, calls } = await permissiveHost();
 
+    const readAt = new Uint8Array([0xc1, 0xd0]);
     await host.beginWrite({ parent: node, name: 'a.txt' }, 4);
     await host.beginWrite({ node }, 8);
+    await host.beginWrite({ node, expectedVersion: readAt }, 8);
 
-    expect(calls[0]).toEqual(['beginWrite', { bytes: node }, 'a.txt', undefined, 4]);
-    expect(calls[1]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8]);
+    expect(calls[0]).toEqual(['beginWrite', { bytes: node }, 'a.txt', undefined, 4, undefined]);
+    expect(calls[1]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8, undefined]);
+    expect(calls[2]).toEqual(['beginWrite', undefined, undefined, { bytes: node }, 8, readAt]);
   });
 
   it('reads a stream window on well-typed bounds', async () => {
@@ -441,69 +444,12 @@ describe('EngineHost command outcomes', () => {
     expect(freed()).toBe(1);
   });
 
-  it('carries the accepted share back with the owner-committed permission', async () => {
-    const scopeId = new Uint8Array(16).fill(5);
-    const { outcome, freed } = outcomeHandle({
-      kind: 'shareAccepted',
-      scopeId,
-      sequence: 9007199254740993n,
-      permission: fakeWasmEnums.Permission.Write,
-      newlyAdded: true,
-    });
-
-    await expect(
-      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-    ).resolves.toEqual({
-      kind: 'shareAccepted',
-      scopeId,
-      sequence: 9007199254740993n,
-      permission: 'write',
-      newlyAdded: true,
-    });
-    expect(freed()).toBe(1);
-  });
-
   it('refuses a minted link outcome carrying no fragment, still releasing it', async () => {
     const { outcome, freed } = outcomeHandle({ kind: 'inviteLinkMinted' });
 
     await expect(
       (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
     ).rejects.toThrow('command outcome inviteLinkMinted carries no fragment');
-    expect(freed()).toBe(1);
-  });
-
-  it.each(['scopeId', 'sequence', 'permission', 'newlyAdded'] as const)(
-    'refuses an accepted share carrying no %s, still releasing it',
-    async (field) => {
-      const fields: Record<string, unknown> = {
-        kind: 'shareAccepted',
-        scopeId: new Uint8Array(16),
-        sequence: 4n,
-        permission: fakeWasmEnums.Permission.Read,
-        newlyAdded: false,
-      };
-      delete fields[field];
-      const { outcome, freed } = outcomeHandle(fields);
-
-      await expect(
-        (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-      ).rejects.toThrow(`command outcome shareAccepted carries no ${field}`);
-      expect(freed()).toBe(1);
-    }
-  );
-
-  it('refuses an accepted share whose permission this build cannot map', async () => {
-    const { outcome, freed } = outcomeHandle({
-      kind: 'shareAccepted',
-      scopeId: new Uint8Array(16),
-      sequence: 4n,
-      permission: 42,
-      newlyAdded: false,
-    });
-
-    await expect(
-      (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
-    ).rejects.toThrow('unknown WASM permission value: 42');
     expect(freed()).toBe(1);
   });
 

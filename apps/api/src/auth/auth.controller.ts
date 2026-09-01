@@ -33,7 +33,6 @@ import {
   RefreshRequestDto,
   SiweChallengeResponseDto,
   SiweLinkRequestDto,
-  SiweLoginRequestDto,
   StepUpChallengeRequestDto,
   TestLoginRequestDto,
   TestLoginResponseDto,
@@ -158,23 +157,6 @@ export class AuthController {
   siweLinkChallenge(@Req() request: AuthenticatedRequest): SiweChallengeResponseDto {
     const { nonce, expiresAt } = this.authService.issueSiweNonce('siwe-link', accountKey(request));
     return { nonce, expiresAt: expiresAt.toISOString() };
-  }
-
-  @Post('siwe/login')
-  @UseInterceptors(AuthMetricsInterceptor)
-  @HttpCode(200)
-  @Throttle(THROTTLE_SURFACES.auth)
-  @ApiOperation({
-    summary: 'SIWE wallet login (secondary method; the wallet must already be linked)',
-  })
-  @ApiOkResponse({ type: TokenResponseDto })
-  async siweLogin(
-    @Body() body: SiweLoginRequestDto,
-    @Res({ passthrough: true }) response: Response
-  ): Promise<TokenResponseDto> {
-    const { pair, isNewUser } = await this.authService.siweLogin(body.message, body.signature);
-    this.setRefreshCookie(response, pair.refreshToken);
-    return { ...pair, isNewUser };
   }
 
   @Post('siwe/link')

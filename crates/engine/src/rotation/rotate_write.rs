@@ -844,6 +844,39 @@ mod tests {
         [byte; 16]
     }
 
+    /// A wave order names every node it moves, so one `{:?}` would render the
+    /// whole pre-wave to post-wave mapping. The names carry their own rendering
+    /// policy, so neither struct states one.
+    #[test]
+    fn a_wave_order_and_a_resumed_root_withhold_every_name_they_carry() {
+        let fresh_seed = [0x0f; 32];
+        let current = derive_write_name(&OLD_WRITE_SCOPE_SEED, &nid(1));
+        let new = derive_write_name(&fresh_seed, &nid(1));
+        let child = derive_write_name(&fresh_seed, &nid(2));
+        let order = RepublishedNode {
+            node_id: nid(1),
+            current_name: current.clone(),
+            new_name: new.clone(),
+            child_names: BTreeMap::from([(nid(2), child.clone())]),
+            signer: kdf::ipns_keypair(&[7u8; 32]),
+            write_scope_seed: None,
+            write_epoch: ROTATED_WRITE_EPOCH,
+            is_root: false,
+        };
+        let resumed = ResumedRoot {
+            name: new.clone(),
+            write_epoch: ROTATED_WRITE_EPOCH,
+        };
+
+        let rendered = format!("{order:?}{resumed:?}");
+        for name in [&current, &new, &child] {
+            assert!(
+                !rendered.contains(name.as_str()),
+                "a wave order renders no name: {rendered}"
+            );
+        }
+    }
+
     /// The owner's identity scalar, which in a live session IS the login secret
     /// (`SessionIdentity::derive` adopts it directly).
     const OWNER_SCALAR: [u8; 32] = [0x33; 32];

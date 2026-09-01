@@ -24,11 +24,19 @@ import { AcceleratorToken } from './entities/accelerator-token.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { User } from './entities/user.entity';
 import { GatewayController } from './gateway.controller';
+import { IdentityController } from './identity.controller';
+import { IdentitySubject } from './entities/identity-subject.entity';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { AuthService } from './services/auth.service';
 import { ChallengeService, type StepUpOperation } from './services/challenge.service';
 import { AcceleratorTokenService } from './services/accelerator-token.service';
+import { EmailOtpService } from './services/email-otp.service';
+import { GoogleOAuthService } from './services/google-oauth.service';
+import { IdentityExchangeService } from './services/identity-exchange.service';
 import { IdentityService } from './services/identity.service';
+import { IdentitySubjectService } from './services/identity-subject.service';
+import { IdentityTokenService } from './services/identity-token.service';
+import { MailProvider } from './services/mail.provider';
 import { SIWE_LINK_STATEMENT, SIWE_LOGIN_STATEMENT, SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
 import { TokenService } from './services/token.service';
@@ -75,8 +83,8 @@ describe('auth HTTP flows (real Postgres)', () => {
     ctx = await createHttpIntegrationApp({
       db,
       withOps: false,
-      entities: [User, AuthMethod, RefreshToken, AcceleratorToken],
-      controllers: [AuthController, GatewayController],
+      entities: [User, AuthMethod, RefreshToken, AcceleratorToken, IdentitySubject],
+      controllers: [AuthController, GatewayController, IdentityController],
       providers: [
         MetricsService,
         AuthMetricsInterceptor,
@@ -88,6 +96,27 @@ describe('auth HTTP flows (real Postgres)', () => {
         IdentityService,
         SiweService,
         JwtAuthGuard,
+        // The wallet sign-in that outlives the retired `POST /auth/siwe/login`
+        // draws on the same nonce mint, so the pool tests reach it here. Its
+        // sibling identity methods are wired to refuse: this suite drives none.
+        IdentityExchangeService,
+        IdentitySubjectService,
+        IdentityTokenService,
+        EmailOtpService,
+        {
+          provide: MailProvider,
+          useValue: {
+            sendVerificationCode: () => Promise.reject(new Error('no email in this suite')),
+          },
+        },
+        {
+          provide: GoogleOAuthService,
+          useFactory: (configService: ConfigService) =>
+            new GoogleOAuthService(configService, () =>
+              Promise.reject(new Error('no Google key in this suite'))
+            ),
+          inject: [ConfigService],
+        },
         { provide: Clock, useClass: SystemClock },
         { provide: Entropy, useClass: SystemEntropy },
         { provide: ConfigService, useValue: config.service },
@@ -522,28 +551,6 @@ describe('auth HTTP flows (real Postgres)', () => {
   });
 
   describe('SIWE secondary auth', () => {
-    it('refuses login for an unlinked wallet — no implicit creation through SIWE', async () => {
-      const account = privateKeyToAccount(generatePrivateKey());
-      const { message, signature } = await siweSign(account, SIWE_LOGIN_STATEMENT);
-      await request(http()).post('/auth/siwe/login').send({ message, signature }).expect(401);
-    });
-
-    it('links a wallet to the authenticated account, then logs in with it', async () => {
-      const { identity, loginRes } = await identityLogin();
-      const account = privateKeyToAccount(generatePrivateKey());
-
-      await link(
-        loginRes.body.accessToken,
-        await siweLinkBody(identity, loginRes.body.accessToken, account)
-      ).expect(201);
-
-      const login = await siweSign(account, SIWE_LOGIN_STATEMENT);
-      const siweLoginRes = await request(http()).post('/auth/siwe/login').send(login).expect(200);
-      expect(jwtPayload(siweLoginRes.body.accessToken).sub).toBe(
-        jwtPayload(loginRes.body.accessToken).sub
-      );
-    });
-
     it('refuses to link a wallet already linked to another account', async () => {
       const first = await identityLogin();
       const second = await identityLogin();
@@ -557,13 +564,6 @@ describe('auth HTTP flows (real Postgres)', () => {
         second.loginRes.body.accessToken,
         await siweLinkBody(second.identity, second.loginRes.body.accessToken, account)
       ).expect(409);
-    });
-
-    it('rejects a tampered SIWE signature', async () => {
-      const account = privateKeyToAccount(generatePrivateKey());
-      const other = privateKeyToAccount(generatePrivateKey());
-      const { message, signature } = await siweSign(account, SIWE_LOGIN_STATEMENT, other);
-      await request(http()).post('/auth/siwe/login').send({ message, signature }).expect(401);
     });
 
     /**
@@ -596,7 +596,7 @@ describe('auth HTTP flows (real Postgres)', () => {
       ).expect(201);
 
       const replayed = await siweSign(account, SIWE_LINK_STATEMENT);
-      await request(http()).post('/auth/siwe/login').send(replayed).expect(401);
+      await request(http()).post('/auth/identity/wallet').send(replayed).expect(401);
     });
 
     it('refuses a link whose challenge was signed by another key, and links nothing', async () => {
@@ -656,12 +656,12 @@ describe('auth HTTP flows (real Postgres)', () => {
       await link(accessToken, await siweLinkBody(identity, accessToken, account)).expect(201);
 
       const linkNonced = await siweSign(account, SIWE_LOGIN_STATEMENT, account, accessToken);
-      await request(http()).post('/auth/siwe/login').send(linkNonced).expect(401);
+      await request(http()).post('/auth/identity/wallet').send(linkNonced).expect(401);
 
       // The same wallet and statement over a sign-in nonce still signs in, so
       // the pool is what refused the first attempt.
       const loginNonced = await siweSign(account, SIWE_LOGIN_STATEMENT);
-      await request(http()).post('/auth/siwe/login').send(loginNonced).expect(200);
+      await request(http()).post('/auth/identity/wallet').send(loginNonced).expect(200);
     });
 
     it('refuses a link re-proved with a login challenge, and links nothing', async () => {

@@ -76,14 +76,6 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             },
         ),
         (
-            Command::AcceptShare {
-                sealed_share_pointer: b"sealed-pointer".to_vec(),
-            },
-            EngineError::MalformedInput {
-                check: "share-pointer-is-not-on-this-inbox",
-            },
-        ),
-        (
             Command::RotateNow { node },
             EngineError::UnsupportedTarget {
                 check: "rotate-target-is-not-a-scope-root",

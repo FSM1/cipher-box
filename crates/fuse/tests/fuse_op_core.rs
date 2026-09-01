@@ -18,6 +18,7 @@ use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_o
 use cipherbox_engine::{
     ApiBaseUrl, Command, ContentProfile, DeadLetterReason, Engine, Event, EventStream,
     GatewayConfig, LoginSecret, NodeId, NodeKind, Staleness, StoragePolicy, SyncTimingProfile,
+    WriteTarget,
 };
 use cipherbox_fuse::{
     Access, CacheBudget, DirEntry, HandleId, HostAdapter, HostCapabilities, Invalidation,
@@ -27,6 +28,14 @@ use cipherbox_fuse::{
 /// A spill area in a throwaway directory the mount outlives, so the directory
 /// is kept rather than guarded; every spill file inside it still goes with its
 /// handle.
+/// A new version of `node`, anchored on whatever the engine derives.
+fn version(node: NodeId) -> WriteTarget {
+    WriteTarget::Version {
+        node,
+        expected_version: None,
+    }
+}
+
 fn spill_area() -> SpillArea {
     spill_area_at(&tempfile::tempdir().expect("a spill dir").keep())
 }
@@ -2324,9 +2333,8 @@ mod published {
         let node = mount.node;
         {
             let engine = mount.core.engine_mut();
-            let handle =
-                block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
-                    .expect("the write opens");
+            let handle = block_on(engine.begin_write(version(node), plaintext.len() as u64))
+                .expect("the write opens");
             for slice in plaintext.chunks(7) {
                 block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
             }
@@ -2348,9 +2356,8 @@ mod published {
         let mut tasks = mount.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
 
-        let handle =
-            block_on(engine.begin_write(WriteTarget::Version { node }, plaintext.len() as u64))
-                .expect("the second device's write opens");
+        let handle = block_on(engine.begin_write(version(node), plaintext.len() as u64))
+            .expect("the second device's write opens");
         for slice in plaintext.chunks(7) {
             block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
         }
