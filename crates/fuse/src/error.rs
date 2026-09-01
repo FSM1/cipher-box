@@ -65,7 +65,12 @@ impl From<EngineError> for VfsError {
     /// silently degrades to [`Internal`](VfsError::Internal).
     fn from(error: EngineError) -> Self {
         match error {
-            EngineError::UnknownNode => VfsError::NotFound,
+            // The bin is not projected onto the mount, so a node it holds no
+            // entry for is a node this filesystem cannot find.
+            EngineError::UnknownNode | EngineError::NotBinned => VfsError::NotFound,
+            error @ EngineError::RestoreTargetGone => VfsError::Refused {
+                message: error.to_string(),
+            },
             EngineError::NotAFolder => VfsError::NotADirectory,
             EngineError::NotAFile => VfsError::IsADirectory,
             EngineError::TrustViolation { message } | EngineError::ColdStart { message } => {

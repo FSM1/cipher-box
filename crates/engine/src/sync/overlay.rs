@@ -68,6 +68,17 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
                 op.stamp_authored(node);
             }
         }
+        // The node is binned, so nothing in the base renders it: the overlay
+        // materializes it at the destination the command resolved.
+        OpKind::Restore { into, name, kind } => {
+            let mut meta = NodeMeta::new(op.target, name.clone(), *kind);
+            op.stamp_authored(&mut meta);
+            view.upsert_node(meta);
+            view.link_next(*into, op.target);
+        }
+        // A purged node is already absent from the rendered view; the bin is
+        // not part of the snapshot, so there is nothing to render.
+        OpKind::Purge { .. } => {}
         OpKind::Prune { keep_latest } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node

@@ -232,7 +232,7 @@ pub(crate) fn project_child_version(
 }
 
 /// Map the core wire node kind onto the structurally-identical facade kind.
-fn map_kind(kind: CoreNodeKind) -> NodeKind {
+pub(crate) fn map_kind(kind: CoreNodeKind) -> NodeKind {
     match kind {
         CoreNodeKind::Folder => NodeKind::Folder,
         CoreNodeKind::File => NodeKind::File,

@@ -7,6 +7,7 @@
 
 use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
+use core::time::Duration;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -4051,6 +4052,498 @@ fn a_vault_at_retention_zero_captures_no_unlink() {
     assert!(
         opens_under(&world, &blocks, leaf, &read_key_of(leaf)),
         "and nothing re-keyed the node"
+    );
+}
+
+/// Every entry the owner's bin index currently holds.
+fn bin_entries(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) -> Vec<[u8; 16]> {
+    match load_bin(world, device, blocks) {
+        BinIndexLoad::Resolved(index) => index.entries.iter().map(|entry| entry.node_id).collect(),
+        BinIndexLoad::Empty(_) => Vec::new(),
+        BinIndexLoad::Stale { .. } => panic!("the bin index resolved from the network"),
+    }
+}
+
+/// The key the entry for `node` says its doomed subtree was re-keyed under.
+fn binned_held_key(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    node: NodeId,
+) -> [u8; 32] {
+    let BinIndexLoad::Resolved(index) = load_bin(world, device, blocks) else {
+        panic!("the bin index resolved from the network");
+    };
+    *index
+        .entries
+        .iter()
+        .find(|entry| entry.node_id == node.0)
+        .expect("the node is binned")
+        .held_key()
+        .expect("the entry carries the key the subtree re-keyed under")
+}
+
+/// The default restore: the entry names the folder the node came from, and the
+/// node goes back under the name it had there. The re-key runs in reverse, so
+/// the destination scope reads it again and the bin-held key stops opening it
+/// (ADR 0010 item 4).
+#[test]
+fn a_restore_with_no_destination_returns_the_node_to_the_folder_its_entry_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let held = binned_held_key(&world, &alice, &blocks, doomed);
+
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["notes.txt".to_owned()],
+        "the folder the entry named holds the node again"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "a restored node leaves the bin"
+    );
+    assert!(
+        opens_under(&world, &blocks, doomed, &read_key_of(doomed)),
+        "the destination scope reads the node again"
+    );
+    assert!(
+        !opens_under(&world, &blocks, doomed, &read_key_under(&held, doomed)),
+        "and the bin-held key no longer opens it"
+    );
+}
+
+/// A restore may name any folder in the vault, and the node lands there rather
+/// than at the entry's `originParent`.
+#[test]
+fn a_restore_into_a_chosen_folder_places_the_node_there_and_drops_its_entry() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    create(&mut engine, "elsewhere");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let elsewhere = child_id(&engine, ROOT, "elsewhere");
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: Some(elsewhere),
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, elsewhere),
+        vec!["notes.txt".to_owned()],
+        "the chosen folder holds the node"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["elsewhere".to_owned()],
+        "and the folder it came from does not"
+    );
+    assert!(bin_entries(&world, &alice, &blocks).is_empty());
+}
+
+/// A destination the vault no longer holds is reported apart from every other
+/// refusal, so a host can offer another folder rather than say the restore
+/// failed.
+#[test]
+fn a_restore_whose_destination_is_gone_reports_its_own_outcome() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    create(&mut engine, "box");
+    tick(&world, &engine, &mut tasks);
+    let folder = child_id(&engine, ROOT, "box");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: folder,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, folder, "notes.txt");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::Delete { node: folder })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        matches!(
+            block_on(engine.command(Command::Restore {
+                node: doomed,
+                into: None,
+            })),
+            Err(EngineError::RestoreTargetGone),
+        ),
+        "the folder the entry names is gone, and the refusal says so"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).contains(&doomed.0),
+        "and the refused restore left the entry standing"
+    );
+}
+
+/// A purge is the reclamation a soft delete deferred: the node's name leaves the
+/// republisher inventory and its pinned bytes leave the account, under the
+/// reachability proof the hard delete already runs (ADR 0010 item 7).
+#[test]
+fn a_purge_charges_the_doomed_roots_and_drops_the_entry() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+    let content: Vec<String> = registration_entries(&alice, &name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::Purge { node: doomed })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&name.as_str().to_owned()),
+        "the purged node leaves the inventory the republisher walks"
+    );
+    for cid in &content {
+        assert!(retired.contains(cid), "the purged version unpins: {cid}");
+    }
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "and the entry goes with it"
+    );
+}
+
+/// The entry alone never licenses a purge. A soft delete writes the entry, then
+/// unlinks, then republishes the parent, so a parent publish that spends its
+/// attempt budget leaves an entry standing for a node the user still sees.
+#[test]
+fn a_purge_refuses_a_node_a_live_parent_still_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+
+    // The parent's own republish is what the delete completes at; refusing it
+    // leaves the entry the delete already wrote for a node ROOT still names.
+    blocks.refuse_upload(Box::new(move |block| {
+        decode_envelope(block)
+            .ok()
+            .filter(|envelope| envelope.id == ROOT.0)
+            .map(|_| upload_413(Some("UPLOAD_TOO_LARGE")))
+    }));
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        bin_entries(&world, &alice, &blocks).contains(&doomed.0),
+        "the entry landed ahead of the unlink that never published"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["notes.txt".to_owned()],
+        "and the parent still names the node"
+    );
+    assert!(
+        matches!(
+            block_on(engine.command(Command::Purge { node: doomed })),
+            Err(EngineError::UnsupportedTarget { .. }),
+        ),
+        "so the purge refuses rather than destroying a node the user still sees"
+    );
+}
+
+/// Retention is enforced rather than advisory (ADR 0010 item 6). The poll tick
+/// compares the journaled `deletedAt` against the injected clock and queues a
+/// purge, which is a journaled op like any other.
+#[test]
+fn an_entry_past_the_retention_is_purged_on_a_poll_tick() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let mark = retire_targets(&alice).len();
+    assert!(
+        bin_entries(&world, &alice, &blocks).contains(&doomed.0),
+        "the entry stands while the retention has not elapsed"
+    );
+
+    world.scheduler.advance(Duration::from_secs(
+        u64::from(DEFAULT_BIN_RETENTION_DAYS) * 24 * 60 * 60,
+    ));
+    // One pass queues the purge off the expired entry; the next drains it.
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "the expired entry is purged without an owner command"
+    );
+    assert!(
+        retired_since(&alice, mark).contains(&name.as_str().to_owned()),
+        "and the purge reclaims what the soft delete deferred"
+    );
+}
+
+/// Expiry destroys, so it acts only on a retention this device can show is the
+/// owner's. A settings load that carried no member choice takes the documented
+/// default, which is right for the delete branch because binning is reversible
+/// and wrong here: an owner who set ten years and whose settings record will not
+/// resolve must not have a month applied to their bin.
+#[test]
+fn a_settings_load_with_no_member_choice_expires_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    // No settings record is seeded, so the load falls to the documented
+    // defaults and the delete still bins.
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        bin_entries(&world, &alice, &blocks).contains(&doomed.0),
+        "a defaulted retention still bins, which is the reversible error"
+    );
+
+    world.scheduler.advance(Duration::from_secs(
+        u64::from(DEFAULT_BIN_RETENTION_DAYS) * 2 * 24 * 60 * 60,
+    ));
+    for _ in 0..3 {
+        tick(&world, &engine, &mut tasks);
+    }
+
+    assert!(
+        bin_entries(&world, &alice, &blocks).contains(&doomed.0),
+        "and it expires nothing, because no member ever chose it"
+    );
+}
+
+/// The restore relinks the node and then drops its entry, so a drop that does
+/// not land leaves a node that is both linked and binned. The retry has to
+/// finish it: an entry left standing for a linked node is the entry a later
+/// delete of that node would inherit, already past its retention.
+#[test]
+fn a_restore_whose_entry_drop_does_not_land_finishes_on_the_retry() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let bin = BinIndexKeys::derive(&SECRET).name().as_str().to_owned();
+    world.record_store.fail_put_for(&bin);
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["notes.txt".to_owned()],
+        "the relink landed"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).contains(&doomed.0),
+        "and the entry did not"
+    );
+
+    world.record_store.heal_put_for(&bin);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "the retry drops the entry rather than reading the relink as satisfaction"
+    );
+}
+
+/// The destination's record can already name the target while the base does
+/// not: a folder publish confirms and its own self-adopt fails, which leaves the
+/// link on the network and nothing to repaint the base from. A second ref would
+/// sign a listing the child-envelope author refuses, and the strict-FIFO head
+/// would never move again.
+#[test]
+fn a_restore_retried_over_a_destination_that_already_names_it_publishes_one_ref() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    create(&mut engine, "box");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let folder = child_id(&engine, ROOT, "box");
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // The destination publishes, and only its self-adopt fails.
+    alice
+        .floor_store
+        .fail_floor_raises_for(write_name(folder).as_str().as_bytes());
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: Some(folder),
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, folder),
+        vec!["notes.txt".to_owned()],
+        "the relink landed on the network"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).contains(&doomed.0),
+        "and the op did not complete, so the entry stands"
+    );
+
+    alice.floor_store.heal_floors();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, folder),
+        vec!["notes.txt".to_owned()],
+        "the retry replaces the ref it finds rather than adding a second"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "and the retry finishes the op"
     );
 }
 

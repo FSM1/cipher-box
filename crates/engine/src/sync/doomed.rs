@@ -14,7 +14,7 @@
 //! ([`crate::sync::bookkeeping`]). The key still says *that* this node has a
 //! delete pending; what the seal withholds is the write-plane names the
 //! detached subtree published under, which outlive the delete recording them.
-//! The seal wraps this codec rather than replacing it: [`FORMAT_V2`] versions
+//! The seal wraps this codec rather than replacing it: [`FORMAT_V3`] versions
 //! the journal's own grammar, independently of the ledger's.
 
 use cipherbox_core::content::{decode_content_cid_str, is_wellformed_content_cid};
@@ -45,7 +45,7 @@ const NODE_ID_LEN: usize = 16;
 
 /// The entry format tag. The staging store is shared with whatever build wrote
 /// it, so bytes that merely happen to parse must not read as a reclamation.
-const FORMAT_V2: u8 = 2;
+const FORMAT_V3: u8 = 3;
 
 /// Journal entries one drain pass replays. Each costs a store read and a
 /// registry batch, and a device that deleted a great deal offline holds one per
@@ -124,6 +124,13 @@ pub struct Reclamation {
     /// The descendants still in quarantine: their names stay registered and
     /// their content stays pinned until the proof holds for them.
     pub quarantined: Vec<Quarantined>,
+    /// The `deletedAt` of the bin entry a purge reclaimed, for an entry a purge
+    /// wrote. The whole doomed subtree is sealed under the bin-held key, and
+    /// that key's second input is this value, so a later pass cannot resolve a
+    /// quarantined descendant without it. No key material: the account half of
+    /// the edge is derived from the login secret, and the target the entry's own
+    /// key names is the first input.
+    pub binned_at: Option<u64>,
 }
 
 impl Reclamation {
@@ -243,7 +250,7 @@ pub fn open_reclamation(seal: BookkeepingSeal<'_>, blob: &[u8]) -> Option<Reclam
 /// Zeroizing because the plaintext side of a sealed value is exactly what the
 /// tier exists to keep off the host ([`crate::sync::bookkeeping`]).
 fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Zeroizing<Vec<u8>>> {
-    let mut out = Zeroizing::new(vec![FORMAT_V2]);
+    let mut out = Zeroizing::new(vec![FORMAT_V3]);
     push_len(&mut out, reclamation.doomed.len())?;
     for (node, name) in &reclamation.doomed {
         push_doomed(&mut out, *node, name)?;
@@ -257,6 +264,13 @@ fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Zeroizing<Vec<u8>
             return Err(SeamError::new("quarantine entry is past its attempts"));
         }
         out.push(held.attempts);
+    }
+    match reclamation.binned_at {
+        Some(deleted_at) => {
+            out.push(1);
+            out.extend_from_slice(&deleted_at.to_be_bytes());
+        }
+        None => out.push(0),
     }
     Ok(out)
 }
@@ -292,7 +306,7 @@ fn push_owed(out: &mut Vec<u8>, owed: &[OwedRetire]) -> SeamResult<()> {
 /// One encoded reclamation, or `None` for bytes this build did not write.
 #[must_use]
 fn decode_reclamation(bytes: &[u8]) -> Option<Reclamation> {
-    let mut rest = bytes.strip_prefix(&[FORMAT_V2][..])?;
+    let mut rest = bytes.strip_prefix(&[FORMAT_V3][..])?;
     let mut doomed = Vec::new();
     for _ in 0..take_len(&mut rest)? {
         doomed.push(take_doomed(&mut rest)?);
@@ -313,10 +327,16 @@ fn decode_reclamation(bytes: &[u8]) -> Option<Reclamation> {
             attempts,
         });
     }
+    let binned_at = match take_array::<1>(&mut rest)?[0] {
+        0 => None,
+        1 => Some(u64::from_be_bytes(take_array::<8>(&mut rest)?)),
+        _ => return None,
+    };
     rest.is_empty().then_some(Reclamation {
         doomed,
         owed,
         quarantined,
+        binned_at,
     })
 }
 
@@ -430,6 +450,7 @@ mod tests {
                 owed: vec![OwedRetire::whole_retired(node(4).0, cid(5), 512)],
                 attempts: 3,
             }],
+            binned_at: Some(1_700_000_000_000),
         }
     }
 
@@ -459,21 +480,54 @@ mod tests {
         let mut trailing = encoded.clone();
         trailing.push(0);
         assert_eq!(decode_reclamation(&trailing), None, "trailing bytes");
-        let mut spent = encode_reclamation(&sample()).expect("encode");
-        let at = spent.len() - 1;
+        let mut foreign_flag = encoded;
+        // The stamp is a presence byte and, when present, the eight bytes of the
+        // value behind it.
+        let at = foreign_flag.len() - 9;
+        foreign_flag[at] = 2;
+        assert_eq!(
+            decode_reclamation(&foreign_flag),
+            None,
+            "a bin stamp that is neither present nor absent"
+        );
+        // Planted on the unbinned form, whose absent bin stamp is one byte, so
+        // the offsets below count back from the quarantine rather than over it.
+        let unbinned = Reclamation {
+            binned_at: None,
+            ..sample()
+        };
+        let mut spent = encode_reclamation(&unbinned).expect("encode");
+        let at = spent.len() - 2;
         spent[at] = MAX_QUARANTINE_ATTEMPTS;
         assert_eq!(
             decode_reclamation(&spent),
             None,
             "a quarantine planted past its attempts"
         );
-        let mut bad_class = encoded;
+        let mut bad_class = encode_reclamation(&unbinned).expect("encode");
         // The owing class is the byte before the last length-prefixed target,
         // which the quarantined descendant's own debt carries; the attempt
         // count is the one byte after it.
-        let at = bad_class.len() - cid(5).len() - 4;
+        let at = bad_class.len() - cid(5).len() - 5;
         bad_class[at] = 9;
         assert_eq!(decode_reclamation(&bad_class), None, "an unknown class");
+    }
+
+    /// The bin stamp is what a later pass derives the bin-held key from, so an
+    /// entry a purge wrote must carry it back over the seal unchanged.
+    #[test]
+    fn a_purge_entry_round_trips_the_stamp_its_held_key_derives_from() {
+        for binned_at in [None, Some(0), Some(u64::MAX)] {
+            let reclamation = Reclamation {
+                binned_at,
+                ..sample()
+            };
+            let encoded = encode_reclamation(&reclamation).expect("encode");
+            assert_eq!(
+                decode_reclamation(&encoded).and_then(|decoded| decoded.binned_at),
+                binned_at,
+            );
+        }
     }
 
     /// A name or a debt target the registry would refuse takes every other name
@@ -614,6 +668,7 @@ mod tests {
                 owed: Vec::new(),
                 attempts: 0,
             }],
+            binned_at: None,
         };
         assert!(
             !unproven_debt.is_for(node(1)),

@@ -69,6 +69,7 @@ export const fakeWasmEnums = {
     HeadTooLarge: 9,
     PreservationRefused: 10,
     AlreadyPublished: 11,
+    TargetStillLinked: 12,
   },
 } as const;
 

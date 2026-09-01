@@ -10,10 +10,10 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{BinIndex, open_bin_index, seal_bin_index};
+use cipherbox_core::seal::{BinIndex, NodeKind, open_bin_index, seal_bin_index};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::api::ApiClient;
 use crate::content::Gateway;
@@ -73,6 +73,50 @@ impl BinIndexLoad {
             Self::Empty(DefaultsReason::UnprovenFirstRun) => Ok(BinIndex::new(0)),
             Self::Stale { reason, .. } | Self::Empty(reason) => Err(reason),
         }
+    }
+}
+
+/// What one bin entry says, copied out of the index for a caller that acts on
+/// it — a restore, a purge, or the expiry that queues one.
+///
+/// A copy, so it is a terminal owner in its own right: `ipnsName` and
+/// `originName` are sealed-record plaintext, and the entry they came from wipes
+/// its own buffers while this one outlives the index it was read from.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub(crate) struct BinnedNode {
+    /// The name the node's own record publishes under.
+    pub(crate) ipns_name: Vec<u8>,
+    /// The node's immutable kind.
+    #[zeroize(skip)]
+    pub(crate) kind: NodeKind,
+    /// The scope the node was sealed under at the delete.
+    #[zeroize(skip)]
+    pub(crate) scope_id: [u8; 16],
+    /// The folder the node was unlinked from — a restore's default destination.
+    #[zeroize(skip)]
+    pub(crate) origin_parent: [u8; 16],
+    /// The name the node carried in that folder.
+    pub(crate) origin_name: String,
+    /// The injected deletion time. Also the per-delete half of the bin-held key.
+    #[zeroize(skip)]
+    pub(crate) deleted_at: u64,
+}
+
+impl BinnedNode {
+    /// The standing entry for `node`, or `None` when the index holds none.
+    pub(crate) fn of(index: &BinIndex, node: &[u8; 16]) -> Option<Self> {
+        index
+            .entries
+            .iter()
+            .find(|entry| entry.node_id == *node)
+            .map(|entry| Self {
+                ipns_name: entry.ipns_name().to_vec(),
+                kind: entry.kind,
+                scope_id: entry.scope_id,
+                origin_parent: entry.origin_parent,
+                origin_name: entry.origin_name().to_owned(),
+                deleted_at: entry.deleted_at,
+            })
     }
 }
 
@@ -159,6 +203,25 @@ fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
 /// record-plane keys [`crate::net::resolve()`] writes.
 fn bin_index_cache_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"bin-index-head/", name)
+}
+
+/// This device's last-known-good bin index, off the snapshot cache alone.
+///
+/// For the reader that only needs to know an entry is *due* something, and whose
+/// action re-reads the resolved index before it acts: the expiry sweep runs on
+/// every poll tick, and a record resolve per tick buys a decision that retention
+/// measures in days. Every write path refreshes this cache, so a device that has
+/// ever loaded the bin has a copy.
+pub(crate) async fn cached_bin_index<Sn: SnapshotCache>(
+    snapshots: &Sn,
+    keys: &BinIndexKeys,
+) -> Option<BinIndex> {
+    let block = snapshots
+        .get(&bin_index_cache_key(&keys.name))
+        .await
+        .ok()
+        .flatten()?;
+    open_bin_index(keys.seal_key.as_bytes(), &block).ok()
 }
 
 /// The next body revision for this account's bin index record.

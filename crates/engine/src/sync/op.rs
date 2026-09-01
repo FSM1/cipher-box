@@ -226,6 +226,35 @@ pub enum OpKind {
         /// backwards.
         base_version_cid: Option<Vec<u8>>,
     },
+    /// Put a soft-deleted node back into the tree (ADR 0010 item 4).
+    ///
+    /// The destination and the name are resolved at command time from the bin
+    /// entry, so the rebase can hold this op to the same destination rules a
+    /// move is held to without reading the bin index the record plane carries.
+    Restore {
+        /// The folder the node is relinked into — the caller's choice, or the
+        /// entry's `originParent` when the caller named none.
+        #[zeroize(skip)]
+        into: NodeId,
+        /// The name the node takes at the destination, as the entry recorded
+        /// it. Auto-suffixed on a collision, like a create's.
+        name: String,
+        /// The node's immutable kind, so the overlay renders the restored node
+        /// before the drain publishes it.
+        #[zeroize(skip)]
+        kind: NodeKind,
+    },
+    /// Destroy a soft-deleted node: reclaim what its subtree owes and drop its
+    /// bin entry (ADR 0010 item 7).
+    Purge {
+        /// The `deletedAt` the bin entry carried when this purge was formed.
+        ///
+        /// The conditional-purge anchor, and the second half of the bin-held
+        /// key: an entry re-stamped since is one this op never saw, and the
+        /// purge refuses it rather than reclaiming a subtree sealed under
+        /// another key.
+        deleted_at: u64,
+    },
     /// Drop a file's older versions, keeping the newest `keep_latest`.
     ///
     /// A write-plane mutation like any other — it re-seals and publishes a
@@ -295,6 +324,16 @@ impl fmt::Debug for OpKind {
                 .debug_struct("UpdateContent")
                 .field("content", content)
                 .field("base_version_cid", base_version_cid)
+                .finish(),
+            Self::Restore { into, name, kind } => f
+                .debug_struct("Restore")
+                .field("into", into)
+                .field("name", &RedactedText::of(name))
+                .field("kind", kind)
+                .finish(),
+            Self::Purge { deleted_at } => f
+                .debug_struct("Purge")
+                .field("deleted_at", deleted_at)
                 .finish(),
             Self::Prune { keep_latest } => f
                 .debug_struct("Prune")
@@ -406,6 +445,42 @@ impl Op {
                 replacing,
                 crossing,
             },
+        }
+    }
+
+    /// A `restore` op putting a binned node back at `into` under `name`.
+    pub fn restore(
+        target: NodeId,
+        into: NodeId,
+        name: impl Into<String>,
+        kind: NodeKind,
+        base_sequence: u64,
+        authored_at: UnixMillis,
+    ) -> Self {
+        Self {
+            target,
+            base_sequence,
+            authored_at,
+            kind: OpKind::Restore {
+                into,
+                name: name.into(),
+                kind,
+            },
+        }
+    }
+
+    /// A conditional-`purge` op anchored on the entry's own `deletedAt`.
+    pub fn purge(
+        target: NodeId,
+        deleted_at: u64,
+        base_sequence: u64,
+        authored_at: UnixMillis,
+    ) -> Self {
+        Self {
+            target,
+            base_sequence,
+            authored_at,
+            kind: OpKind::Purge { deleted_at },
         }
     }
 
@@ -653,6 +728,9 @@ mod tests {
                 at(1_005),
                 ScopeCrossing::Intra,
             ),
+            Op::restore(id(10), id(0), "d.txt", NodeKind::File, 10, at(1_007)),
+            Op::restore(id(11), id(9), "box", NodeKind::Folder, 11, at(1_008)),
+            Op::purge(id(12), 1_700_000_000_000, 1, at(1_009)),
         ];
         for op in ops {
             assert_eq!(Op::decode_body(&op.encode_body()).unwrap(), op);
