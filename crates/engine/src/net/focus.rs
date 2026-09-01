@@ -4,14 +4,14 @@
 //! Each node the window names resolves its own record cache-first through
 //! [`resolve_child`], passes the [`ChildAdopter`] gate on this device's floors,
 //! and merges into the base — the root leg's merge model, one level down. A
-//! folder merges its listing with [`project_folder`]; a file merges its head
-//! version with [`project_child_version`], which is the only way its size and
-//! mtime move, since a `ChildRef` mirrors neither.
+//! folder merges its listing with [`project_folder_partial`]; a file merges
+//! its head version with [`project_child_version`], which is the only way its
+//! size and mtime move, since a `ChildRef` mirrors neither.
 
 use core::cell::RefCell;
 
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::ReadBody;
+use cipherbox_core::seal::{ChildRef, ReadBody};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
@@ -19,9 +19,10 @@ use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
 use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError, RejectionReason};
+use crate::grants::grafted::{BookmarkedScopeRoots, GraftedPlane, PlaneSplit};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
-use crate::sync::project::{project_child_version, project_folder};
+use crate::sync::project::{project_child_version, project_folder_partial};
 use crate::sync::refresh::RefreshVerdict;
 use crate::sync::tick::ResolveMode;
 
@@ -61,6 +62,10 @@ fn rejection_verdict(reason: &RejectionReason) -> Option<RefreshVerdict> {
     }
 }
 
+/// The own plane withholds nothing: every child of a body this vault authored is
+/// this vault's own node.
+const NOTHING_WITHHELD: &[[u8; 16]] = &[];
+
 /// The focus-window folder refresh over one owned scope's read material.
 /// Borrows the content/record seams from the live session; the caller's read
 /// seed is borrowed and never zeroized here.
@@ -79,6 +84,9 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// The scope every focus folder is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
+    /// The bookmarked scope-root set this leg's cross-plane rule reads, or
+    /// `None` on this vault's own plane ([`GraftedPlane`]).
+    pub(crate) plane_roots: Option<&'a BookmarkedScopeRoots>,
     /// How this pass resolves each folder's record: a manual refresh forces
     /// [`ResolveMode::NoCache`], so an unreachable record is reported as
     /// staleness rather than re-projected from cached bytes.
@@ -123,15 +131,39 @@ where
                 report.fold(RefreshVerdict::Rejected);
                 continue;
             };
-            report.changed |= project_folder(
+            let split = self.split(children);
+            if split.as_ref().is_some_and(|split| split.names_own_tree) {
+                emit_trust_violation(
+                    self.events,
+                    name.as_str(),
+                    "child ref names a node this vault's own tree holds",
+                );
+            }
+            let (linkable, withheld) = match &split {
+                Some(split) => (split.linkable.as_slice(), split.withheld.as_slice()),
+                None => (children.as_slice(), NOTHING_WITHHELD),
+            };
+            report.changed |= project_folder_partial(
                 &mut self.base.borrow_mut(),
                 *folder,
-                children,
+                linkable,
+                withheld,
                 adopted.sequence,
                 *modified_at,
             );
         }
         report
+    }
+
+    /// How this leg's plane splits a foreign body's children
+    /// ([`GraftedPlane::split`]), or `None` on this vault's own plane.
+    fn split(&self, children: &[ChildRef]) -> Option<PlaneSplit> {
+        let scope_roots = self.plane_roots?;
+        let plane = GraftedPlane {
+            scope_id: self.scope_id,
+            scope_roots,
+        };
+        Some(plane.split(&self.base.borrow(), children))
     }
 
     /// Fold each file's published head into the base, reporting whether the base
@@ -245,6 +277,276 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::kdf;
+    use cipherbox_core::seal::{
+        NodeKind as CoreNodeKind, PreservedFields, encode_envelope, seal_read_body,
+    };
+
+    use crate::content::{DAG_ROOT_CODEC, GatewaySource};
+    use crate::grants::grafted::BookmarkedScopeRoots;
+    use crate::rotation::derive_write_name;
+    use crate::seams::{EndpointId, HttpResponse};
+    use crate::sync::model::NodeMeta;
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::{
+        InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, ScriptedHttp,
+    };
+
+    /// This vault's own anchored root scope.
+    const OWN_ROOT: [u8; 16] = [0u8; 16];
+    /// The scope root a hostile contact granted, grafted into the render tree.
+    const SCOPE_A: [u8; 16] = [0xaa; 16];
+    /// A second contact's scope root, grafted beside it.
+    const SCOPE_B: [u8; 16] = [0xbb; 16];
+    /// The folder record below `SCOPE_A` that the leg refreshes.
+    const FOLDER: [u8; 16] = [0xc1; 16];
+    /// A child of that folder whose id a third bookmark later claims.
+    const CONTESTED: [u8; 16] = [0xc2; 16];
+    /// A child of that folder the body stops naming.
+    const DROPPED: [u8; 16] = [0xc3; 16];
+    /// A node this vault's own tree holds.
+    const OWN_CHILD: [u8; 16] = [0xd1; 16];
+    /// A child of the hostile body that no other plane claims.
+    const HONEST: [u8; 16] = [0xe1; 16];
+
+    const READ_SCOPE_SEED: [u8; 32] = [0x66; 32];
+    const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
+    const EPOCH: u64 = 1;
+
+    fn child_ref(id: [u8; 16], name: &str, link_counter: u64) -> ChildRef {
+        ChildRef {
+            id,
+            name: name.to_owned(),
+            ipns_name: vec![id[0]],
+            kind: CoreNodeKind::Folder,
+            link_counter,
+            unknown: PreservedFields::new(),
+        }
+    }
+
+    /// The world one folder leg reads: the sealed folder record `FOLDER`
+    /// publishes, and the render tree it merges into.
+    struct FolderLeg {
+        records: InMemoryRecordStore,
+        snapshot_cache: InMemorySnapshotCache,
+        http: ScriptedHttp,
+        gateway: Gateway,
+        floors: InMemoryFloorStore,
+        base: RefCell<Snapshot>,
+        read_seed: Zeroizing<[u8; 32]>,
+        head_block: Vec<u8>,
+    }
+
+    impl FolderLeg {
+        /// `FOLDER` sealed under `scope` at `READ_SCOPE_SEED`, serving
+        /// `children`, published at its own write-plane name.
+        fn new(scope: [u8; 16], children: Vec<ChildRef>) -> Self {
+            let node_seed = kdf::node_seed(&READ_SCOPE_SEED, &FOLDER);
+            let envelope = seal_read_body(
+                kdf::read_key(node_seed.as_bytes()).as_bytes(),
+                // Distinct per scope: one key with one nonce over two bodies
+                // would break the seal's uniqueness precondition.
+                &[scope[0]; 24],
+                1,
+                FOLDER,
+                scope,
+                EPOCH,
+                &ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 500,
+                    children,
+                    unknown: PreservedFields::new(),
+                },
+            )
+            .expect("the body seals");
+            let head_block = encode_envelope(&envelope).expect("the envelope encodes");
+            let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+
+            let endpoint = EndpointId::new("e0");
+            let records = InMemoryRecordStore::new(vec![endpoint.clone()]);
+            let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &FOLDER);
+            records.seed_record(
+                &endpoint,
+                folder_name().as_str(),
+                IpnsRecord::create_v2(
+                    &kdf::ipns_keypair(write_seed.as_bytes()),
+                    format!("/ipfs/{head_cid}").as_bytes(),
+                    1,
+                    2_000_000_000,
+                    "2099-01-01T00:00:00Z",
+                )
+                .marshal(),
+            );
+            Self {
+                records,
+                snapshot_cache: InMemorySnapshotCache::default(),
+                http: ScriptedHttp::default(),
+                gateway: Gateway {
+                    accelerator: None,
+                    public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                },
+                floors: InMemoryFloorStore::default(),
+                base: RefCell::new(Snapshot::new(NodeId(OWN_ROOT))),
+                read_seed: Zeroizing::new(READ_SCOPE_SEED),
+                head_block,
+            }
+        }
+
+        /// Place a folder node under `parent`, or parentless when `parent` is
+        /// `None` — the shape a grafted scope root has.
+        fn place(&self, id: [u8; 16], name: &str, parent: Option<[u8; 16]>) {
+            let mut base = self.base.borrow_mut();
+            let mut meta = NodeMeta::new(NodeId(id), name, NodeKind::Folder);
+            if id == FOLDER {
+                meta.ipns_name = Some(folder_name().as_str().as_bytes().to_vec());
+            }
+            base.upsert_node(meta);
+            if let Some(parent) = parent {
+                base.link(NodeId(parent), NodeId(id), 1);
+            }
+        }
+
+        /// One folder-leg pass over `FOLDER`, with the head block its resolve
+        /// fetches served.
+        fn run(&self, scope_id: [u8; 16], plane_roots: Option<&BookmarkedScopeRoots>) -> bool {
+            self.http.enqueue_response(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: self.head_block.clone(),
+            });
+            let (events, mut rx) = mpsc::unbounded();
+            block_on(
+                FolderRefresh {
+                    transport: &self.records,
+                    snapshot_cache: &self.snapshot_cache,
+                    http: &self.http,
+                    floors: &self.floors,
+                    gateway: &self.gateway,
+                    base: &self.base,
+                    events: &events,
+                    scope_id,
+                    scope_read_seed: &self.read_seed,
+                    plane_roots,
+                    mode: ResolveMode::NoCache,
+                }
+                .run(&[NodeId(FOLDER)]),
+            );
+            drop(events);
+            core::iter::from_fn(|| rx.try_recv().ok())
+                .any(|event| matches!(event, Event::AttributableAbuse { .. }))
+        }
+
+        /// The names the render tree lists under `parent`.
+        fn listing(&self, parent: [u8; 16]) -> Vec<String> {
+            self.base
+                .borrow()
+                .children(NodeId(parent))
+                .into_iter()
+                .map(|child| child.name().to_owned())
+                .collect()
+        }
+
+        fn parent_of(&self, id: [u8; 16]) -> Option<NodeId> {
+            self.base.borrow().parent_of(NodeId(id))
+        }
+
+        fn holds(&self, id: [u8; 16]) -> bool {
+            self.base.borrow().contains(NodeId(id))
+        }
+
+        fn name_of(&self, id: [u8; 16]) -> String {
+            self.base
+                .borrow()
+                .node(NodeId(id))
+                .expect("the node is present")
+                .name()
+                .to_owned()
+        }
+    }
+
+    fn folder_name() -> IpnsName {
+        derive_write_name(&WRITE_SCOPE_SEED, &FOLDER)
+    }
+
+    fn scope_roots() -> BookmarkedScopeRoots {
+        BookmarkedScopeRoots::from([SCOPE_A, SCOPE_B])
+    }
+
+    /// A body below one grafted root names a second contact's scope root and a
+    /// node of this vault's own. Neither may change hands: the projection leaves
+    /// the old parent standing, so an accepted link would hand the id to
+    /// whichever plane raised `link_counter` highest, under the name the hostile
+    /// body chose. Naming a node of this vault's own tree is attributable.
+    #[test]
+    fn a_folder_below_a_grafted_root_links_no_other_planes_node() {
+        let leg = FolderLeg::new(
+            SCOPE_A,
+            vec![
+                child_ref(SCOPE_B, "stolen-share", 9),
+                child_ref(OWN_CHILD, "stolen-note", 9),
+                child_ref(HONEST, "a-photo", 1),
+            ],
+        );
+        leg.place(OWN_CHILD, "my-note", Some(OWN_ROOT));
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(SCOPE_B, "from-b", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+
+        let reported = leg.run(SCOPE_A, Some(&scope_roots()));
+
+        assert_eq!(leg.listing(FOLDER), vec!["a-photo".to_owned()]);
+        assert_eq!(
+            leg.parent_of(SCOPE_B),
+            None,
+            "the second contact's root keeps its own place"
+        );
+        assert_eq!(leg.name_of(SCOPE_B), "from-b");
+        assert_eq!(leg.parent_of(OWN_CHILD), Some(NodeId(OWN_ROOT)));
+        assert_eq!(leg.name_of(OWN_CHILD), "my-note");
+        assert!(reported, "a body that names a vault node is attributable");
+    }
+
+    /// A refusal is not a removal. An id a later bookmark contests is already
+    /// linked under this folder, and the leg has no more authority to unlink it
+    /// than to link it — while an id the body simply stops naming still departs.
+    #[test]
+    fn a_withheld_child_is_neither_relinked_nor_removed() {
+        let leg = FolderLeg::new(
+            SCOPE_A,
+            vec![
+                child_ref(CONTESTED, "renamed", 9),
+                child_ref(HONEST, "a-photo", 1),
+            ],
+        );
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        leg.place(CONTESTED, "still-mine", Some(FOLDER));
+        leg.place(DROPPED, "gone", Some(FOLDER));
+        let contested = BookmarkedScopeRoots::from([SCOPE_A, CONTESTED]);
+
+        leg.run(SCOPE_A, Some(&contested));
+
+        assert_eq!(leg.parent_of(CONTESTED), Some(NodeId(FOLDER)));
+        assert_eq!(leg.name_of(CONTESTED), "still-mine");
+        assert!(!leg.holds(DROPPED), "an unnamed child still departs");
+    }
+
+    /// The rule is the grafted plane's alone. On this vault's own plane every
+    /// child is this vault's own node, so applying it there would drop a move
+    /// this vault itself authored.
+    #[test]
+    fn the_vaults_own_leg_still_links_its_own_node() {
+        let leg = FolderLeg::new(OWN_ROOT, vec![child_ref(OWN_CHILD, "my-note", 2)]);
+        leg.place(OWN_CHILD, "my-note", Some(OWN_ROOT));
+        leg.place(FOLDER, "a-folder", Some(OWN_ROOT));
+
+        leg.run(OWN_ROOT, None);
+
+        assert_eq!(leg.listing(FOLDER), vec!["my-note".to_owned()]);
+    }
 
     #[test]
     fn only_an_epoch_lagged_folder_costs_the_pass_nothing() {

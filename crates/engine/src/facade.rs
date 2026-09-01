@@ -47,7 +47,9 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
-use crate::grants::grafted::{GraftedSharers, evict_grafted_read_seeds, floor_view};
+use crate::grants::grafted::{
+    BookmarkedScopeRoots, GraftedSharers, evict_grafted_read_seeds, floor_view,
+};
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
 use crate::grants::{
@@ -3211,6 +3213,10 @@ pub struct Engine<T: SeamTypes> {
     /// Rebuilt by the received-share pass, like
     /// [`received_verdicts`](Self::received_verdicts).
     grafted_sharers: Rc<RefCell<GraftedSharers>>,
+    /// Rebuilt by the same pass: the cross-plane rule the focus window's folder
+    /// leg applies below a grafted root
+    /// ([`GraftedPlane`](crate::grants::grafted::GraftedPlane)).
+    bookmarked_scope_roots: Rc<RefCell<BookmarkedScopeRoots>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -3365,6 +3371,7 @@ impl<T: SeamTypes> Engine<T> {
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
+                bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3689,6 +3696,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut sharers) = self.grafted_sharers.try_borrow_mut() {
             sharers.clear();
+        }
+        if let Ok(mut roots) = self.bookmarked_scope_roots.try_borrow_mut() {
+            roots.clear();
         }
     }
 
@@ -4217,6 +4227,7 @@ where {
         let pointer_consulted = self.pointer_consulted.clone();
         let received_verdicts = self.received_verdicts.clone();
         let grafted_sharers = self.grafted_sharers.clone();
+        let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
         let consult_keys = self.sweep_keys.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -4431,6 +4442,7 @@ where {
                     let mut folder_verdict = RefreshVerdict::Reconciled;
                     let mut queued_files: Vec<NodeId> = Vec::new();
                     let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
+                    let scope_roots = bookmarked_scope_roots.borrow().clone();
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
@@ -4453,6 +4465,7 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
+                            plane_roots: (scope_root.0 != root_id).then_some(&scope_roots),
                             mode,
                         };
                         for (nodes, report) in [
@@ -4579,6 +4592,7 @@ where {
                             base: &base,
                             read_seeds: &scope_read_seeds,
                             grafted_sharers: &grafted_sharers,
+                            scope_roots: &bookmarked_scope_roots,
                             events: &events,
                         },
                         now,
@@ -6631,6 +6645,7 @@ where {
             events: &self.events,
             scope_id,
             scope_read_seed: &scope_read_seed,
+            plane_roots: None,
             mode: ResolveMode::CacheFirst,
         }
         .run(&due)

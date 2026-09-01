@@ -54,6 +54,24 @@ pub(crate) fn project_folder(
     sequence: u64,
     modified_at: u64,
 ) -> bool {
+    project_folder_partial(snapshot, folder, children, &[], sequence, modified_at)
+}
+
+/// [`project_folder`] over a body whose plane may not speak for every id it
+/// names: `withheld` ids are neither linked nor treated as departed.
+///
+/// A body that names an id another plane holds has no authority to add it, and
+/// none to remove it either. Dropping such an id from `children` alone would
+/// unlink whatever already holds it and collect the subtree below, which turns
+/// a refusal into a deletion any second party could aim.
+pub(crate) fn project_folder_partial(
+    snapshot: &mut Snapshot,
+    folder: NodeId,
+    children: &[ChildRef],
+    withheld: &[[u8; 16]],
+    sequence: u64,
+    modified_at: u64,
+) -> bool {
     let mut changed = false;
     if let Some(node) = snapshot.node_mut(folder) {
         changed |= node.record_sequence != sequence || node.mtime != Some(modified_at);
@@ -65,7 +83,7 @@ pub(crate) fn project_folder(
         .children(folder)
         .into_iter()
         .map(|node| node.id)
-        .filter(|id| !children.iter().any(|child| child.id == id.0))
+        .filter(|id| !children.iter().any(|child| child.id == id.0) && !withheld.contains(&id.0))
         .collect();
     changed |= !departed.is_empty();
     for id in departed {

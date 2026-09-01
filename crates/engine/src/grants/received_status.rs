@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ChildRef, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
+    AadContext, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
     verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
@@ -34,14 +34,14 @@ use crate::seams::{
     FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore, UnixMillis,
 };
 use crate::sync::model::{NodeMeta, Snapshot};
-use crate::sync::project::project_folder;
+use crate::sync::project::project_folder_partial;
 use crate::sync::tick::on_access_refresh_due;
 
 use super::accept::ReceivedShareStore;
 use super::accept::{BookmarkKey, ReceivedShare};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
-use super::grafted::GraftedSharers;
+use super::grafted::{BookmarkedScopeRoots, GraftedPlane, GraftedSharers, in_own_tree};
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
 use super::revocation::{ResolutionClass, ResolutionFacts, classify};
@@ -79,6 +79,9 @@ pub(crate) struct ScopeRender<'a> {
     /// Which identity granted each scope root the tree holds by graft — the
     /// floor namespace every leg below such a root must read in.
     pub grafted_sharers: &'a RefCell<GraftedSharers>,
+    /// The bookmarked scope-root set every leg below a grafted root applies its
+    /// cross-plane rule against ([`GraftedPlane`]).
+    pub scope_roots: &'a RefCell<BookmarkedScopeRoots>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -136,6 +139,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         if received.iter().next().is_none() {
             verdicts.borrow_mut().clear();
             render.grafted_sharers.borrow_mut().clear();
+            render.scope_roots.borrow_mut().clear();
             return;
         }
         let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
@@ -160,9 +164,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .into_iter()
             .map(|granted| granted.scope_id)
             .collect();
-        // Every bookmarked scope id, ambiguous ones included: a third sharer may
-        // not name as its own child an id that two others contest.
-        let scope_roots: BTreeSet<[u8; 16]> = received.iter().map(|share| share.scope_id).collect();
+        *render.scope_roots.borrow_mut() = received.iter().map(|share| share.scope_id).collect();
         // Rebuilt each pass, like the verdicts. It covers every renderable
         // scope and not only the ones this pass grafts: a revoked share keeps
         // the listing it last rendered, and the leg below it must keep reading
@@ -214,7 +216,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             if class == ResolutionClass::Granted && renderable.contains(&share.scope_id) {
                 if let Some(candidate) = &candidate {
-                    self.graft(candidate, share, contact, epoch_floor, render, &scope_roots)
+                    self.graft(candidate, share, contact, epoch_floor, render)
                         .await;
                 }
             }
@@ -291,7 +293,6 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         contact: &Contact,
         epoch_floor: u64,
         render: &ScopeRender<'_>,
-        scope_roots: &BTreeSet<[u8; 16]>,
     ) {
         // A scope root is the node its own scope is named for, and the bookmark
         // opens under that id. The reader-scope bind is stage 6's, so state it
@@ -379,12 +380,11 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let root = NodeId(share.scope_id);
         let mut base = render.base.borrow_mut();
-        let children: Vec<ChildRef> = children
-            .into_iter()
-            .filter(|child| {
-                !claimed_elsewhere(&base, NodeId(child.id), share.scope_id, scope_roots)
-            })
-            .collect();
+        let split = GraftedPlane {
+            scope_id: share.scope_id,
+            scope_roots: &render.scope_roots.borrow(),
+        }
+        .split(&base, &children);
         // The scope root has no parent here to name it, so the pointer's label
         // is the only name a browse can show.
         let named = match base.node_mut(root) {
@@ -400,38 +400,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 true
             }
         };
-        if project_folder(&mut base, root, &children, sequence, modified_at) || named {
+        if project_folder_partial(
+            &mut base,
+            root,
+            &split.linkable,
+            &split.withheld,
+            sequence,
+            modified_at,
+        ) || named
+        {
             let _ = render.events.unbounded_send(Event::SnapshotUpdated);
         }
     }
-}
-
-/// Whether `id` is already spoken for by a plane other than the grafted scope
-/// `under`: this vault's own tree, or any other bookmarked scope root and the
-/// subtree below it.
-///
-/// A sharer names their own nodes only. [`project_folder`] never unlinks the old
-/// parent, so a link accepted for an id another tree already holds would leave
-/// the node under both, and the higher `link_counter` would win it
-/// ([`Snapshot::winning_link`]). The rule covers the grafted root as well as its
-/// children: the root is a node id like any other, and a body that names one
-/// another tree holds would rename that node and prune it to its own children.
-///
-/// Ambiguous ids count. A scope id two bookmarks claim renders for neither, so a
-/// third sharer must not reach it either.
-fn claimed_elsewhere(
-    base: &Snapshot,
-    id: NodeId,
-    under: [u8; 16],
-    scope_roots: &BTreeSet<[u8; 16]>,
-) -> bool {
-    let foreign_root = |node: NodeId| node.0 != under && scope_roots.contains(&node.0);
-    in_own_tree(base, id) || foreign_root(id) || base.ancestors(id).into_iter().any(foreign_root)
-}
-
-/// Whether `id` is a node this vault's own tree holds.
-fn in_own_tree(base: &Snapshot, id: NodeId) -> bool {
-    id == base.root || base.is_descendant_of(id, base.root)
 }
 
 /// What a resolved scope root supports, as a pure function of the record and the
@@ -485,6 +465,7 @@ mod tests {
 
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
     use cipherbox_core::kdf;
+    use cipherbox_core::seal::ChildRef;
     use cipherbox_core::seal::{NodeKind as CoreNodeKind, Permission, PreservedFields};
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
@@ -899,6 +880,7 @@ mod tests {
         base: RefCell<Snapshot>,
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
+        scope_roots: RefCell<BookmarkedScopeRoots>,
         verdicts: RefCell<ReceivedVerdicts>,
     }
 
@@ -965,6 +947,7 @@ mod tests {
                 base: RefCell::new(Snapshot::new(NodeId(vault_root))),
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
+                scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
             };
             block_on(
@@ -1055,6 +1038,7 @@ mod tests {
                         base: &self.base,
                         read_seeds: &self.read_seeds,
                         grafted_sharers: &self.grafted_sharers,
+                        scope_roots: &self.scope_roots,
                         events: &events,
                     },
                     UnixMillis(at_millis),
