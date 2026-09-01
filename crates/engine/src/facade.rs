@@ -2895,6 +2895,11 @@ pub struct Engine<T: SeamTypes> {
     /// override seed), keyed by scope id. In-memory only — never persisted,
     /// never crossing the facade (security rules 1/3); the child read pipeline
     /// derives per-node read keys from them (`node-seed` → `read-key`).
+    ///
+    /// Every key is the vault root scope id or a grafted scope id. The eviction
+    /// pass reads that as an invariant: it drops a seed under any other key,
+    /// because no floor namespace answers for one
+    /// ([`evict_grafted_read_seeds`](crate::grants::grafted::evict_grafted_read_seeds)).
     scope_read_seeds: Rc<RefCell<ScopeSeeds>>,
     /// Per-scope write seeds recovered by gate-passing adopts (the
     /// owner-write-blob seed), keyed by scope id. In-memory only, exactly like

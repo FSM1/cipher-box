@@ -300,14 +300,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             return;
         }
         // The scope root is a node id like any other, and a sharer authors it.
-        // An id another plane holds would be renamed here and pruned to the
-        // children this body names.
-        if claimed_elsewhere(
-            &render.base.borrow(),
-            NodeId(share.scope_id),
-            share.scope_id,
-            scope_roots,
-        ) {
+        // One this vault's own tree holds would be renamed here and pruned to the
+        // children this body names. A root another *sharer's* subtree holds is
+        // grafted anyway: a foreign body can link any id under its own folders,
+        // and refusing on that alone would let one contact deny another contact's
+        // share for good.
+        if in_own_tree(&render.base.borrow(), NodeId(share.scope_id)) {
             return;
         }
         let Some(tag) = recipient_blinded_tag(
@@ -427,9 +425,13 @@ fn claimed_elsewhere(
     under: [u8; 16],
     scope_roots: &BTreeSet<[u8; 16]>,
 ) -> bool {
-    let held_elsewhere =
-        |node: NodeId| node == base.root || (node.0 != under && scope_roots.contains(&node.0));
-    held_elsewhere(id) || base.ancestors(id).into_iter().any(held_elsewhere)
+    let foreign_root = |node: NodeId| node.0 != under && scope_roots.contains(&node.0);
+    in_own_tree(base, id) || foreign_root(id) || base.ancestors(id).into_iter().any(foreign_root)
+}
+
+/// Whether `id` is a node this vault's own tree holds.
+fn in_own_tree(base: &Snapshot, id: NodeId) -> bool {
+    id == base.root || base.is_descendant_of(id, base.root)
 }
 
 /// What a resolved scope root supports, as a pure function of the record and the
