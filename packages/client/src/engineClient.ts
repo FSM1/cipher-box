@@ -36,6 +36,7 @@ import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './t
 import { LocalTransport } from './transport.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   OpenedStream,
@@ -465,6 +466,10 @@ export class EngineClient implements EngineTransport {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.current.receivedShares();
+  }
+
+  bin(): Promise<BinDescriptor> {
+    return this.current.bin();
   }
 
   vaultStorage(): Promise<VaultStorageDescriptor> {

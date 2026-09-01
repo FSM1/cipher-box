@@ -13,6 +13,7 @@ import { CorrelatedTransport } from './correlatedTransport.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -70,6 +71,7 @@ export interface EngineTransport {
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
+  bin(): Promise<BinDescriptor>;
   vaultStorage(): Promise<VaultStorageDescriptor>;
   /** Reads the login methods on this account, in the display form the API serves. */
   authMethods(): Promise<AuthMethodDescriptor[]>;
@@ -206,6 +208,12 @@ export class LocalTransport extends CorrelatedTransport {
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.request<ReceivedShareDescriptor[]>(this.ready, (id) =>
       this.worker.postMessage({ type: 'receivedShares', id }, [])
+    );
+  }
+
+  bin(): Promise<BinDescriptor> {
+    return this.request<BinDescriptor>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'bin', id }, [])
     );
   }
 

@@ -161,6 +161,22 @@ export interface WasmReceivedShareRow {
   readonly resolution?: string;
 }
 
+/** wasm-bindgen `BinRow` — one soft-deleted node, key-free by construction. */
+export interface WasmBinRow {
+  readonly node: Uint8Array;
+  readonly kind: number;
+  readonly originParent: Uint8Array;
+  readonly originName: string;
+  readonly deletedAt: bigint;
+  readonly scope: Uint8Array;
+}
+
+/** wasm-bindgen `BinView` — the `/bin` route's whole read. */
+export interface WasmBinView {
+  readonly entries: readonly WasmBinRow[];
+  readonly origin: number;
+}
+
 /**
  * wasm-bindgen `VaultSettingsSummary` — the member's settings minus the provider
  * credential, which has no getter anywhere on the boundary.
@@ -227,6 +243,7 @@ export interface WasmEngineHandle {
   snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
   sharing(scopeRoot?: WasmNodeId): Promise<WasmSharingView>;
   receivedShares(): Promise<readonly WasmReceivedShareRow[]>;
+  bin(): Promise<WasmBinView>;
   vaultStorage(): Promise<WasmVaultStorageView>;
   authMethods(): Promise<readonly WasmAuthMethod[]>;
   siweChallenge(intent: SiweIntent): Promise<string>;
@@ -252,6 +269,8 @@ export interface EngineWasm {
   Command: {
     create(parent: WasmNodeId, name: string, kind: number): WasmCommand;
     delete(node: WasmNodeId): WasmCommand;
+    restore(node: WasmNodeId, into?: WasmNodeId): WasmCommand;
+    purge(node: WasmNodeId): WasmCommand;
     rename(node: WasmNodeId, newName: string): WasmCommand;
     relink(node: WasmNodeId, newParent: WasmNodeId): WasmCommand;
     cancelUpload(opId: bigint): WasmCommand;

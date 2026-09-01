@@ -15,6 +15,7 @@ import type { EngineHostLike } from './worker/engineHost.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -123,6 +124,11 @@ export function emptySharing(scope: Uint8Array = new Uint8Array(16)): SharingDes
   };
 }
 
+/** A bin this device read and found empty, for transport-plumbing assertions. */
+export function emptyBin(): BinDescriptor {
+  return { entries: [], origin: 'resolved' };
+}
+
 /** A hosted vault whose ledger has drained, for transport-plumbing assertions. */
 export function emptyVaultStorage(): VaultStorageDescriptor {
   return {
@@ -184,6 +190,10 @@ export class StubEngineHost implements EngineHostLike {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return notStubbed('receivedShares');
+  }
+
+  bin(): Promise<BinDescriptor> {
+    return notStubbed('bin');
   }
 
   vaultStorage(): Promise<VaultStorageDescriptor> {
@@ -503,6 +513,7 @@ export class FakeEngineTransport implements EngineTransport {
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly sharingReads: Array<Uint8Array | null> = [];
   receivedShareReads = 0;
+  binReads = 0;
   vaultStorageReads = 0;
   authMethodReads = 0;
   readonly downloads: Uint8Array[] = [];
@@ -531,6 +542,7 @@ export class FakeEngineTransport implements EngineTransport {
   respondSharing: (scope: Uint8Array | null) => Promise<SharingDescriptor> = (scope) =>
     Promise.resolve(emptySharing(scope ?? undefined));
   respondReceivedShares: () => Promise<ReceivedShareDescriptor[]> = () => Promise.resolve([]);
+  respondBin: () => Promise<BinDescriptor> = () => Promise.resolve(emptyBin());
   respondVaultStorage: () => Promise<VaultStorageDescriptor> = () =>
     Promise.resolve(emptyVaultStorage());
   respondAuthMethods: () => Promise<AuthMethodDescriptor[]> = () => Promise.resolve([]);
@@ -596,6 +608,11 @@ export class FakeEngineTransport implements EngineTransport {
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     this.receivedShareReads += 1;
     return this.respondReceivedShares();
+  }
+
+  bin(): Promise<BinDescriptor> {
+    this.binReads += 1;
+    return this.respondBin();
   }
 
   vaultStorage(): Promise<VaultStorageDescriptor> {

@@ -15,6 +15,7 @@ import { wipeTransfer } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -145,6 +146,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   abstract sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   abstract receivedShares(): Promise<ReceivedShareDescriptor[]>;
+  abstract bin(): Promise<BinDescriptor>;
   abstract vaultStorage(): Promise<VaultStorageDescriptor>;
   abstract authMethods(): Promise<AuthMethodDescriptor[]>;
   abstract siweChallenge(intent: SiweIntent): Promise<string>;

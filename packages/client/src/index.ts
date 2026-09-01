@@ -75,6 +75,8 @@ export type {
   SharingGrantDescriptor,
   SharingInviteLinksDescriptor,
   ScopeSharingDescriptor,
+  BinRowDescriptor,
+  BinDescriptor,
   WriteTarget,
   WriteHandle,
   StreamHandle,

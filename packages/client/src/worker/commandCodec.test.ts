@@ -4,6 +4,7 @@ import { fakeWasmEnums } from '../testkit.js';
 import {
   buildCommand,
   readAuthMethods,
+  readBin,
   readEvent,
   readReceivedShare,
   readSharing,
@@ -13,6 +14,7 @@ import {
 import type { CommandDescriptor } from './protocol.js';
 import type {
   EngineWasm,
+  WasmBinView,
   WasmEvent,
   WasmSnapshotView,
   WasmVaultStorageView,
@@ -141,6 +143,36 @@ describe('buildCommand', () => {
     () =>
       buildCommand(permissiveWasm, descriptor as CommandDescriptor);
 
+  /**
+   * Records every builder call by name, whichever builder the arm reaches
+   * for. `NodeId.fromBytes` records too: minting a handle is what a refusal
+   * after it would strand, so the guard against that has to see the call.
+   */
+  const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
+    const calls: Record<string, unknown[][]> = {};
+    const wasm = {
+      ...fakeWasmEnums,
+      NodeId: {
+        fromBytes: (bytes: Uint8Array) => {
+          (calls.NodeId ??= []).push([bytes]);
+          return { bytes };
+        },
+      },
+      Command: new Proxy(
+        {},
+        {
+          get:
+            (_target, name: string) =>
+            (...args: unknown[]): object => {
+              (calls[name] ??= []).push(args);
+              return {};
+            },
+        }
+      ),
+    } as unknown as EngineWasm;
+    return { wasm, calls };
+  };
+
   /** An erase routed to the logout beside it would silently keep the seams. */
   it('routes each zero-argument command to the builder of its own name', () => {
     const built: string[] = [];
@@ -207,40 +239,49 @@ describe('buildCommand', () => {
     );
   });
 
+  describe('bin', () => {
+    const node = new Uint8Array(16).fill(5);
+    const into = new Uint8Array(16).fill(6);
+
+    it('carries both the node and the named destination to the restore builder', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'restore', node, into });
+
+      expect(calls.restore).toEqual([[{ bytes: node }, { bytes: into }]]);
+    });
+
+    it('spells an unnamed restore destination as undefined, never as null', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'restore', node, into: null });
+
+      expect(calls.restore).toEqual([[{ bytes: node }, undefined]]);
+    });
+
+    it('builds a purge from the node alone', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'purge', node });
+
+      expect(calls.purge).toEqual([[{ bytes: node }]]);
+    });
+
+    it('names the bad field when a restore or a purge is malformed', () => {
+      expect(refuses({ kind: 'restore', node: [1, 2, 3], into: null })).toThrow(
+        'invalid request field node'
+      );
+      expect(refuses({ kind: 'restore', node, into: 'sixteen bytes!!!' })).toThrow(
+        'invalid request field into: string'
+      );
+      expect(refuses({ kind: 'purge', node: [1, 2, 3] })).toThrow('invalid request field node');
+    });
+  });
+
   describe('invite links', () => {
     /** Stands in for a real fragment, which is a bearer capability. */
     const FRAGMENT = 'placeholder-invite-fragment';
     const node = new Uint8Array(16).fill(7);
-
-    /**
-     * Records every builder call by name, whichever builder the arm reaches
-     * for. `NodeId.fromBytes` records too: minting a handle is what a refusal
-     * after it would strand, so the guard against that has to see the call.
-     */
-    const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
-      const calls: Record<string, unknown[][]> = {};
-      const wasm = {
-        ...fakeWasmEnums,
-        NodeId: {
-          fromBytes: (bytes: Uint8Array) => {
-            (calls.NodeId ??= []).push([bytes]);
-            return { bytes };
-          },
-        },
-        Command: new Proxy(
-          {},
-          {
-            get:
-              (_target, name: string) =>
-              (...args: unknown[]): object => {
-                (calls[name] ??= []).push(args);
-                return {};
-              },
-          }
-        ),
-      } as unknown as EngineWasm;
-      return { wasm, calls };
-    };
 
     it('carries the link deadline through as the engine bigint', () => {
       const { wasm, calls } = spyWasm();
@@ -1045,6 +1086,60 @@ describe('readReceivedShare', () => {
     // A guessed class would paint a revoked share as still granted.
     expect(() => readReceivedShare(fakeWasm, { ...row, resolution: 'granted-ish' })).toThrow(
       'unknown WASM resolution class: granted-ish'
+    );
+  });
+});
+
+describe('readBin', () => {
+  const view = (): WasmBinView => ({
+    entries: [
+      {
+        node: new Uint8Array(16).fill(4),
+        kind: fakeWasmEnums.NodeKind.Folder,
+        originParent: new Uint8Array(16).fill(1),
+        originName: 'holiday',
+        deletedAt: 1_800_000_000_000n,
+        scope: new Uint8Array(16).fill(2),
+      },
+    ],
+    origin: fakeWasmEnums.SettingsOrigin.Resolved,
+  });
+
+  it('reads the rows and the rung the index load reached through', () => {
+    expect(readBin(fakeWasm, view())).toEqual({
+      entries: [
+        {
+          node: new Uint8Array(16).fill(4),
+          kind: 'folder',
+          originParent: new Uint8Array(16).fill(1),
+          originName: 'holiday',
+          deletedAt: 1_800_000_000_000n,
+          scope: new Uint8Array(16).fill(2),
+        },
+      ],
+      origin: 'resolved',
+    });
+  });
+
+  it('reads a bin no index backed as the defaults rung', () => {
+    // The empty entries are the fallback, which a surface renders apart from a
+    // bin it read.
+    expect(
+      readBin(fakeWasm, { entries: [], origin: fakeWasmEnums.SettingsOrigin.Defaults })
+    ).toEqual({ entries: [], origin: 'defaults' });
+  });
+
+  it('fails closed on a row kind it cannot map', () => {
+    const base = view();
+    expect(() =>
+      readBin(fakeWasm, { ...base, entries: [{ ...base.entries[0]!, kind: 42 }] })
+    ).toThrow('unknown WASM node kind value: 42');
+  });
+
+  it('fails closed on an origin it cannot map', () => {
+    // A guessed origin would present the fallback as a bin this device read.
+    expect(() => readBin(fakeWasm, { ...view(), origin: 42 })).toThrow(
+      'unknown WASM settings origin value: 42'
     );
   });
 });

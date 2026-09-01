@@ -220,6 +220,33 @@ export interface ReceivedShareDescriptor {
   resolution: ReceivedShareResolution | null;
 }
 
+/** One soft-deleted node, as data (mirrors the facade `BinRow`). */
+export interface BinRowDescriptor {
+  node: Uint8Array;
+  kind: NodeKind;
+  /** The folder the node was unlinked from, where a restore puts it back. */
+  originParent: Uint8Array;
+  originName: string;
+  /** Deletion time in Unix millis; a host renders expiry from it. */
+  deletedAt: bigint;
+  scope: Uint8Array;
+}
+
+/**
+ * The `/bin` route's whole read, as data (mirrors the facade `BinView`).
+ * A wire projection of view state the engine owns, not the forbidden
+ * hand-mirrored type surface — the wasm-bindgen `.d.ts` stays the contract.
+ */
+export interface BinDescriptor {
+  entries: BinRowDescriptor[];
+  /**
+   * `'defaults'` means this device established no bin index, so an empty
+   * `entries` is the fallback and not a read: a surface must render that apart
+   * from a bin it read.
+   */
+  origin: SettingsOrigin;
+}
+
 /** Where a version's bytes are pinned (mirrors the facade `PinMode`). */
 export type PinMode = 'hosted' | 'external' | 'dual';
 
@@ -327,6 +354,13 @@ export interface AuthMethodDescriptor {
 export type CommandDescriptor =
   | { kind: 'create'; parent: Uint8Array; name: string; nodeKind: NodeKind }
   | { kind: 'delete'; node: Uint8Array }
+  | {
+      kind: 'restore';
+      node: Uint8Array;
+      /** `null` takes the folder the bin entry names. */
+      into: Uint8Array | null;
+    }
+  | { kind: 'purge'; node: Uint8Array }
   | { kind: 'rename'; node: Uint8Array; newName: string }
   | { kind: 'relink'; node: Uint8Array; newParent: Uint8Array }
   | { kind: 'cancelUpload'; opId: bigint }
@@ -475,6 +509,7 @@ export type WorkerRequest =
   | { type: 'snapshot'; id: number; folder: Uint8Array | null }
   | { type: 'sharing'; id: number; scope: Uint8Array | null }
   | { type: 'receivedShares'; id: number }
+  | { type: 'bin'; id: number }
   | { type: 'vaultStorage'; id: number }
   | { type: 'authMethods'; id: number }
   | { type: 'siweChallenge'; id: number; intent: SiweIntent }
@@ -490,8 +525,8 @@ export type WorkerMessage =
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
    * a `SnapshotDescriptor` for `snapshot`, a `SharingDescriptor` for `sharing`,
-   * the rows for `receivedShares`, the storage read for `vaultStorage`, the
-   * rows for `authMethods`, the plaintext `ArrayBuffer`
+   * the rows for `receivedShares`, the bin read for `bin`, the storage read for
+   * `vaultStorage`, the rows for `authMethods`, the plaintext `ArrayBuffer`
    * (transferred, not copied) for `download`/`readStream`, the nonce string
    * for `siweChallenge`, the write handle for `beginWrite`, the `OpenedStream`
    * for `openContentStream`, the durable op id for `commitWrite`, the outcome
@@ -505,6 +540,7 @@ export type WorkerMessage =
         | SnapshotDescriptor
         | SharingDescriptor
         | ReceivedShareDescriptor[]
+        | BinDescriptor
         | VaultStorageDescriptor
         | AuthMethodDescriptor[]
         | CommandOutcomeDescriptor

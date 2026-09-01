@@ -11,6 +11,7 @@ import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
 import type {
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -68,6 +69,20 @@ const SNAPSHOT: SnapshotDescriptor = {
   retainedRecords: 0,
 };
 
+const BIN: BinDescriptor = {
+  entries: [
+    {
+      node: new Uint8Array(16).fill(4),
+      kind: 'file',
+      originParent: new Uint8Array(16).fill(1),
+      originName: 'notes.txt',
+      deletedAt: 1_800_000_000_000n,
+      scope: new Uint8Array(16).fill(2),
+    },
+  ],
+  origin: 'resolved',
+};
+
 class ReadHost extends StubEngineHost {
   readonly snapshots: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
@@ -86,9 +101,15 @@ class ReadHost extends StubEngineHost {
     Promise.resolve(new Uint8Array([5, 4]).buffer);
   siweChallenges = 0;
   siweChallengeIntents: SiweIntent[] = [];
+  binReads = 0;
 
   start(): Promise<void> {
     return Promise.resolve();
+  }
+
+  bin(): Promise<BinDescriptor> {
+    this.binReads += 1;
+    return Promise.resolve(BIN);
   }
 
   /** What the next `command` resolves with; a queued op answers with its id. */
@@ -166,6 +187,17 @@ describe('serveEngine read requests', () => {
     const view = await transport.snapshot(folder);
     expect(view).toEqual(SNAPSHOT);
     expect(host.snapshots).toEqual([folder]);
+  });
+
+  it('serves a bin read end to end over the transport', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    // The structured clone must carry the deletion time back as a bigint.
+    await expect(transport.bin()).resolves.toEqual(BIN);
+    expect(host.binReads).toBe(1);
   });
 
   it('serves a download with the plaintext buffer in the transfer list', async () => {
@@ -397,6 +429,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
       snapshot: () => Promise.reject(new Error('unused')),
       sharing: () => Promise.reject(new Error('unused')),
       receivedShares: () => Promise.reject(new Error('unused')),
+      bin: () => Promise.reject(new Error('unused')),
       vaultStorage: () => Promise.reject(new Error('unused')),
       authMethods: () => Promise.reject(new Error('unused')),
       siweChallenge: () => Promise.reject(new Error('unused')),
