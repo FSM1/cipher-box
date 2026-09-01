@@ -8095,22 +8095,34 @@ where {
         let authored_at = self.seams.scheduler.now();
         let (_, op) = self.parked_write(op_id).await?;
 
+        // A recover re-stages the parked intent, so it owes the caller the
+        // refusals `begin_write` gives the same intent: a target that went
+        // away while the write was parked, and a parent with no room left.
+        let rendered = self.render().await?;
         let fresh = match &op.kind {
-            OpKind::UpdateContent { content, .. } => Op::update_content(
-                op.target,
-                content.clone(),
-                self.write_anchor(op.target).await?,
-                self.base_sequence_for(op.target).await?,
-                authored_at,
-            ),
-            OpKind::Create { parent, name, node } => Op::create(
-                self.mint_node_id()?,
-                *parent,
-                name.clone(),
-                node.clone(),
-                self.base_sequence_for(*parent).await?,
-                authored_at,
-            ),
+            OpKind::UpdateContent { content, .. } => {
+                if !rendered.contains(op.target) {
+                    return Err(EngineError::UnknownNode);
+                }
+                Op::update_content(
+                    op.target,
+                    content.clone(),
+                    self.write_anchor(op.target).await?,
+                    self.base_sequence_for(op.target).await?,
+                    authored_at,
+                )
+            }
+            OpKind::Create { parent, name, node } => {
+                refuse_full_parent(&rendered, *parent, None, None)?;
+                Op::create(
+                    self.mint_node_id()?,
+                    *parent,
+                    name.clone(),
+                    node.clone(),
+                    self.base_sequence_for(*parent).await?,
+                    authored_at,
+                )
+            }
             // Every other intent is metadata, which a compensating command
             // expresses directly and which stages no version to recover.
             _ => {

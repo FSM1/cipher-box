@@ -7727,6 +7727,35 @@ fn recovering_a_parked_write_queues_a_fresh_op_anchored_on_the_head_that_beat_it
     );
 }
 
+/// A recover forms a fresh op against the rendered view, so a target the member
+/// deleted while the write was parked has to be refused the way `begin_write`
+/// refuses one. Staging it instead would carry no anchor and the default base
+/// sequence, and only the drain would end it.
+#[test]
+fn recovering_a_parked_write_onto_a_deleted_target_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (_bob, mut engine_b, _tasks_b, node, op_id) = parked_write(&world, &blocks);
+
+    block_on(engine_b.command(Command::Delete { node })).expect("the delete stages");
+
+    assert_eq!(
+        block_on(engine_b.command(Command::RecoverDeadLetter { op_id })),
+        Err(EngineError::UnknownNode),
+        "the recover is refused at the command, not staged against nothing"
+    );
+    assert_eq!(
+        block_on(engine_b.status())
+            .expect("the status reads")
+            .dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::BaseSuperseded
+        }],
+        "and the parked entry stands, so discard is still open to the member"
+    );
+}
+
 /// The key the preserved set lives under, as the staging module spells it.
 const PRESERVED_KEY: &[u8] = b"cipherbox/preserved-dead-letters";
 
@@ -8134,6 +8163,77 @@ fn a_restored_queue_never_republishes_a_create_the_record_plane_already_carries(
             "the restored version this create staged is kept, not released"
         );
     }
+}
+
+/// A parked create names a parent, and a peer can fill that parent to the child
+/// ceiling while the create waits. The ordinary create path refuses a full
+/// parent at the caller, so a recover onto one owes the member the same answer
+/// rather than a queue entry only the drain can end.
+#[test]
+fn recovering_a_parked_create_into_a_filled_parent_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .expect("the write commits");
+    let backup = back_up(&alice, op_id);
+    tick(&world, &engine, &mut tasks);
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    block_on(engine.command(Command::Delete { node: photo })).expect("the delete stages");
+    tick(&world, &engine, &mut tasks);
+    drop(engine);
+    drop(tasks);
+
+    restore(&alice, &backup);
+    block_on(FloorStore::clear(&alice.floor_store)).expect("the ratchet resets");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &engine, &mut tasks);
+    let parked = block_on(engine.status())
+        .expect("the status reads")
+        .dead_letters;
+    assert_eq!(
+        parked
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AlreadyPublished],
+        "the restored create parks with its version kept"
+    );
+
+    let planted: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN)
+        .map(|i| {
+            let mut id = [0u8; 16];
+            id[..8].copy_from_slice(&(i as u64 + 1).to_be_bytes());
+            file_ref(id, &format!("planted-{i}.bin"))
+        })
+        .collect();
+    concurrent_root_extend(&world.record_store, &blocks, planted);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        block_on(engine.view()).unwrap().children(ROOT).len(),
+        MAX_FOLDER_CHILDREN,
+        "the peer's full listing is in gate-passing state"
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::RecoverDeadLetter {
+            op_id: parked[0].op_id
+        })),
+        Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        }),
+        "the recover is refused at the command, the way a fresh create is"
+    );
 }
 
 // ---------------------------------------------------------------------------
