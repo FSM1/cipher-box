@@ -17,6 +17,7 @@
 //! ([`DefaultsReason`]) — silently reverting a member's placement choice to the
 //! hosted default is what an adversary who can withhold the record gains.
 
+use core::cell::RefCell;
 use core::fmt;
 use core::future::{Future, poll_fn};
 use core::num::NonZeroU64;
@@ -29,6 +30,7 @@ use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{open_settings_record, seal_settings_record};
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -44,7 +46,7 @@ use crate::net::eol::is_expired;
 use crate::net::fanout_get_verify;
 use crate::net::fetch_head_block;
 use crate::net::liveness::{HeldRecord, HeldValue};
-use crate::net::publish::PublishOutcome;
+use crate::net::publish::{PublishOutcome, head_cid_from_value};
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
 };
@@ -607,6 +609,38 @@ pub enum SettingsLoad {
     Defaults(DefaultsReason),
 }
 
+/// A settings load, with the record the plane served at the settings name.
+pub struct SettingsRead {
+    /// What the degradation ladder produced.
+    pub load: SettingsLoad,
+    /// The record standing at the name, for the session's renewal set.
+    ///
+    /// A read alone enrols the record, so a session that only reads keeps the
+    /// EOL alive. Without it an account nobody re-saves lapses on its own, and
+    /// the lapse the resolve refuses is one it caused.
+    ///
+    /// Two bars, because the renewal re-signs at `floor + 1` and so promotes
+    /// whatever it is given. The record must have cleared the whole floor law,
+    /// or a replay or a fork would be re-signed into winning record selection.
+    /// And this device must already hold a sequence floor for the name, or it
+    /// has nothing of its own against which to judge the age of what the plane
+    /// served.
+    pub renewable: Option<HeldRecord>,
+}
+
+impl SettingsRead {
+    /// Put the renewable record in the session's slot and hand back the load.
+    ///
+    /// Every caller enrols: a load that reads and does not enrol is what lets
+    /// the record's EOL lapse under a session that publishes nothing.
+    pub fn enrol(self, slot: &RefCell<Option<HeldRecord>>) -> SettingsLoad {
+        if let Some(renewable) = self.renewable {
+            *slot.borrow_mut() = Some(renewable);
+        }
+        self.load
+    }
+}
+
 /// The IPNS name the vault settings record is published under
 /// (`settings-ipns-keypair`).
 #[must_use]
@@ -773,7 +807,7 @@ pub async fn load_settings<T, H, F, Sn, Sch>(
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     login_secret: &[u8],
-) -> SettingsLoad
+) -> SettingsRead
 where
     T: RecordTransport,
     H: Http,
@@ -790,17 +824,19 @@ where
         scheduler,
         profile,
         &kdf::enc_subkey(login_secret),
-        &settings_name(login_secret),
+        &kdf::settings_ipns_keypair(login_secret),
     )
     .await
 }
 
-/// [`load_settings`] against a name and enc subkey the caller already holds.
+/// [`load_settings`] against the record's own two keys, which the caller already
+/// holds.
 ///
 /// The login secret derives exactly these two and nothing else the load needs,
 /// so a caller that re-loads on a background loop reaches the record without a
 /// second copy of the master secret resident for that loop's whole life
-/// (AGENTS.md rules 1 and 7).
+/// (AGENTS.md rules 1 and 7). The signer is the record's own, and the renewal
+/// [`SettingsRead::enrol`] arms re-signs with it.
 #[allow(clippy::too_many_arguments)]
 pub async fn load_settings_at<T, H, F, Sn, Sch>(
     transport: &T,
@@ -811,8 +847,8 @@ pub async fn load_settings_at<T, H, F, Sn, Sch>(
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     enc_secret: &X25519Secret,
-    name: &IpnsName,
-) -> SettingsLoad
+    signer: &Ed25519Signer,
+) -> SettingsRead
 where
     T: RecordTransport,
     H: Http,
@@ -820,6 +856,7 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler,
 {
+    let name = IpnsName::from_public_key(&signer.verifying_key());
     // Held outside the budget so a load that runs out of it mid-resolve still
     // has the cached ciphertext the resolve read on its way in.
     let mut cached = None;
@@ -831,22 +868,32 @@ where
         snapshots,
         &mut cached,
         enc_secret,
-        name,
+        signer,
+        &name,
         scheduler.now(),
     );
     let reason = match within(scheduler, profile.settings_load_budget, load).await {
-        Some(Ok(settings)) => return SettingsLoad::Resolved(settings),
+        Some(Ok((settings, renewable))) => {
+            return SettingsRead {
+                load: SettingsLoad::Resolved(settings),
+                renewable,
+            };
+        }
         Some(Err(reason)) => reason,
         None => DefaultsReason::TimedOut,
     };
     // A rollback takes this arm like every other reason: pinning last-known-good
     // is what the record plane already owes a gate failure (blueprint/engine.md).
-    match cached.and_then(|block| open_settings_head(enc_secret, &block)) {
+    let load = match cached.and_then(|block| open_settings_head(enc_secret, &block)) {
         Some(body) => SettingsLoad::Stale {
             settings: body.settings,
             reason,
         },
         None => SettingsLoad::Defaults(reason),
+    };
+    SettingsRead {
+        load,
+        renewable: None,
     }
 }
 
@@ -892,9 +939,10 @@ async fn resolve_settings<T, H, F, Sn>(
     snapshots: &Sn,
     cached: &mut Option<Vec<u8>>,
     enc_secret: &X25519Secret,
+    signer: &Ed25519Signer,
     name: &IpnsName,
     now: UnixMillis,
-) -> Result<VaultSettings, DefaultsReason>
+) -> Result<(VaultSettings, Option<HeldRecord>), DefaultsReason>
 where
     T: RecordTransport,
     H: Http,
@@ -963,6 +1011,17 @@ where
             revision: body.revision,
         });
     }
+    // Both bars are behind this point ([`SettingsRead::renewable`]).
+    let renewable = durable
+        .and_then(|_| head_cid_from_value(&verified.value))
+        .map(|head_cid| HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes,
+            signer: signer.clone(),
+            value: HeldValue::Head(head_cid),
+            // The settings record anchors its sealed body and nothing else.
+            content_cids: Vec::new(),
+        });
     // Only a record that cleared its floor and opened becomes last-known-good,
     // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
     let _ = snapshots.put(&cache_key, &block).await;
@@ -971,7 +1030,7 @@ where
     // Neither store failing is a verdict on settings we just authenticated.
     let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
     let _ = floor::advance_sequence_on_unseal(floors, &adopted_key, body.revision).await;
-    Ok(body.settings)
+    Ok((body.settings, renewable))
 }
 
 /// Run `work`, giving up once `budget` has elapsed on the injected scheduler.
@@ -1709,7 +1768,8 @@ mod tests {
                 &world.scheduler,
                 &SyncTimingProfile::CI,
                 &secret,
-            ));
+            ))
+            .load;
             assert_eq!(
                 load,
                 SettingsLoad::Defaults(DefaultsReason::Suppressed),
@@ -1733,7 +1793,8 @@ mod tests {
                 &world.scheduler,
                 &SyncTimingProfile::CI,
                 &secret,
-            )),
+            ))
+            .load,
             SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
         );
 
@@ -1750,7 +1811,8 @@ mod tests {
                 &world.scheduler,
                 &SyncTimingProfile::CI,
                 &secret,
-            )),
+            ))
+            .load,
             SettingsLoad::Defaults(DefaultsReason::FloorUnreadable),
         );
     }

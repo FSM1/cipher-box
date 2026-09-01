@@ -115,8 +115,9 @@ pub use seams::{
 pub use settings::{
     DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, MAX_BIN_RETENTION_DAYS, Placement,
     PlacementDecision, PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad,
-    SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings, VaultSettingsSummary,
-    decide_placement, load_settings, placement_of, publish_settings, settings_name,
+    SettingsOrigin, SettingsPublishError, SettingsRead, SettingsRefusal, VaultSettings,
+    VaultSettingsSummary, decide_placement, load_settings, placement_of, publish_settings,
+    settings_name,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{

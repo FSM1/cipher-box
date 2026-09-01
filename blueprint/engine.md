@@ -310,10 +310,7 @@ degraded outcome applies a different policy rather than showing stale data.
   The lapse degrades through the last-known-good path like every other
   reason. The encode side needs no matching guard: the EOL is `now + 90 days`
   off the injected clock, so a publish structurally cannot mint an
-  already-expired record. Residual until the settings record joins the held set
-  the sub-EOL renewal loop walks: an account whose settings have not been
-  re-saved inside the window lapses on its own, and the placement decision then
-  fails closed for want of a copy it can authenticate.
+  already-expired record.
 - **The sealed body carries a monotonic revision.** The outer sequence cannot
   order two records at the _same_ sequence, and an unconfirmed publish
   followed by a retry mints exactly that: two owner-signed records at one

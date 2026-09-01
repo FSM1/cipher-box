@@ -31,6 +31,7 @@ use cipherbox_core::seal::{
     MAX_READ_SEALED_BYTES, ReadBody, Version, open_content_key, seal_content_key, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
@@ -38,7 +39,10 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
-use crate::bin_index::{BinIndexKeys, BinIndexLoad, BinnedNode, load_bin_index, publish_bin_index};
+use crate::bin_index::{
+    BinIndexKeys, BinIndexLoad, BinnedNode, holds_a_bin_index_mark, load_bin_index,
+    publish_bin_index,
+};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
@@ -104,7 +108,7 @@ use crate::settings::{
     DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, PlacementRefusal, PlacementSource,
     SessionPlacement, SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary,
     decide_placement, load_settings, load_settings_at, placement_of, publish_settings,
-    redecide_placement, settings_name, summarize_settings,
+    redecide_placement, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -3558,6 +3562,10 @@ pub struct Engine<T: SeamTypes> {
     /// [`tick_enc_subkey`](Self::tick_enc_subkey): a spawned task holds the two
     /// edges the bin index needs, never the login secret they came from.
     tick_bin_keys: Rc<RefCell<Option<Rc<BinIndexKeys>>>>,
+    /// The settings record's own signer, shared with the tick's settings
+    /// recheck on the same terms as [`tick_bin_keys`](Self::tick_bin_keys). The
+    /// recheck enrols what it resolved, and the renewal re-signs with this.
+    tick_settings_signer: Rc<RefCell<Option<Rc<Ed25519Signer>>>>,
     /// Built at [`start`](Self::start), where the seam bounds its task needs
     /// hold, and waiting for a root name to poll.
     tick_loop_spawner: RefCell<Option<TickLoopSpawner>>,
@@ -3673,6 +3681,7 @@ impl<T: SeamTypes> Engine<T> {
                 session: None,
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
                 tick_bin_keys: Rc::new(RefCell::new(None)),
+                tick_settings_signer: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
                 sweep_tasks: RefCell::new(None),
                 sweep_keys: Rc::new(RefCell::new(None)),
@@ -3754,7 +3763,8 @@ impl<T: SeamTypes> Engine<T> {
             &self.profile,
             secret.expose(),
         )
-        .await;
+        .await
+        .enrol(&self.settings_record);
         *self.placement.borrow_mut() = Some(decide_placement(&settings));
         *self.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
         // The secret zeroizes on drop here, at its terminal owner.
@@ -3804,6 +3814,10 @@ impl<T: SeamTypes> Engine<T> {
         self.install_cold_start(outcome, root_scope_id);
         if let Some(provisioned) = provisioned {
             self.install_mint(provisioned);
+        }
+        // Register-first has no offline form, so the harness's no-API mode skips
+        // this for the same reason it skips provisioning above.
+        if self.api_base_url.configured().is_some() {
             self.publish_genesis_bin_index(&api).await;
         }
         // A successful cold start is a successful reconcile: stamp it so the
@@ -3939,6 +3953,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut bin_keys) = self.tick_bin_keys.try_borrow_mut() {
             *bin_keys = None;
+        }
+        if let Ok(mut signer) = self.tick_settings_signer.try_borrow_mut() {
+            *signer = None;
         }
         if let Ok(mut spawner) = self.tick_loop_spawner.try_borrow_mut() {
             *spawner = None;
@@ -4316,15 +4333,20 @@ where {
     /// register-first step tells the API both that this account has binned
     /// something and when (blueprint/engine.md "Bin index record").
     ///
-    /// Idempotent on ADR 0007's derived terms: the name comes from the login
-    /// secret alone, and only a load that finds neither a record nor a durable
-    /// mark mints one — so a repeated first run publishes nothing. A publish
-    /// that does not land leaves the first soft delete to mint the record.
+    /// Runs on every session start, because one attempt that does not land
+    /// would otherwise leave the account at that disclosure for good. Idempotent
+    /// on ADR 0007's derived terms: the name comes from the login secret alone,
+    /// and only a load that finds neither a record nor a durable mark mints one.
+    /// A device that holds a mark answers from its own store and spends no
+    /// network at all ([`holds_a_bin_index_mark`]).
     async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
         let Some(session) = self.session.as_ref() else {
             return;
         };
         let keys = BinIndexKeys::derive(session.login_secret());
+        if holds_a_bin_index_mark(&self.seams.floor_store, &keys).await {
+            return;
+        }
         let load = load_bin_index(
             &self.seams.record_transport,
             &self.gateway,
@@ -4553,6 +4575,7 @@ where {
         let session = self.session.as_ref()?;
         let tick_enc_subkey = self.tick_enc_subkey.clone();
         let tick_bin_keys = self.tick_bin_keys.clone();
+        let tick_settings_signer = self.tick_settings_signer.clone();
         let tick_settings = self.settings_summary.clone();
         let observed_unlinks = self.observed_unlinks.clone();
         let bin_index_record = self.bin_index_record.clone();
@@ -4580,10 +4603,7 @@ where {
         let placement = self.placement.clone();
         let settings_summary = self.settings_summary.clone();
         let byo_reconciled = self.byo_reconciled.clone();
-        // Non-secret: the published name, not the seed that derives it. Paired
-        // with the tick's own enc-subkey copy, this reaches the settings record
-        // without a second copy of the login secret in a `'static` task.
-        let settings_name = settings_name(session.login_secret());
+        let settings_record = self.settings_record.clone();
         // Start has just decided, so the first re-decide comes one interval on.
         let settings_rechecked = Cell::new(self.seams.scheduler.now());
         let held = self.held_records.clone();
@@ -4636,6 +4656,10 @@ where {
                     let Some(bin_keys) = bin_keys else {
                         return TickControl::Stop;
                     };
+                    let settings_signer = tick_settings_signer.borrow().clone();
+                    let Some(settings_signer) = settings_signer else {
+                        return TickControl::Stop;
+                    };
                     let now = scheduler.now();
                     // What this paces is a revocation window
                     // ([`redecide_placement`]), so a backward clock step must
@@ -4645,7 +4669,7 @@ where {
                         || elapsed_at_least(now, last_checked, profile.settings_recheck_interval)
                     {
                         settings_rechecked.set(now);
-                        let load = load_settings_at(
+                        let read = load_settings_at(
                             &transport,
                             &gateway,
                             &http,
@@ -4654,17 +4678,19 @@ where {
                             &scheduler,
                             &profile,
                             &enc_subkey,
-                            &settings_name,
+                            &settings_signer,
                         )
                         .await;
                         // A teardown that landed inside the load already
                         // cleared the placement cell, which holds the member's
-                        // provider bearer. Writing the re-decide over that
-                        // would make it resident again and re-arm the pass the
-                        // cleared cell stops below (security rules 1 and 7).
+                        // provider bearer, and the renewal slot, which holds
+                        // the record's signer. Writing either back would make
+                        // it resident again and re-arm the pass the cleared
+                        // cell stops below (security rules 1 and 7).
                         if !alive.get() {
                             return TickControl::Stop;
                         }
+                        let load = read.enrol(&settings_record);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
                             *settings_summary.borrow_mut() = Some(summarize_settings(&load));
@@ -5048,6 +5074,8 @@ where {
         *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
         *self.tick_bin_keys.borrow_mut() =
             Some(Rc::new(BinIndexKeys::derive(session.login_secret())));
+        *self.tick_settings_signer.borrow_mut() =
+            Some(Rc::new(kdf::settings_ipns_keypair(session.login_secret())));
         spawn();
     }
 
