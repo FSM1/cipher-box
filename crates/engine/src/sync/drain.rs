@@ -345,11 +345,8 @@ enum Halt {
     Unclassified,
     /// A node this pass must re-author is still behind the scope's epoch, and
     /// this pass holds no backward ratchet to open it at its own epoch
-    /// (CONTEXT.md "Epoch lag"). A queued write left stale by a cut the gate
-    /// legitimately adopted is neither a trust violation nor a refusal its own
-    /// bytes earn: charged nothing, and re-driven at the pass that reaches the
-    /// node. Charging it would dead-letter a good write whenever a wave outran
-    /// the attempt budget.
+    /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
+    /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
     /// The op's record reached the record plane and did not confirm. Charged
     /// against the attempt budget, because a retry re-signs at the same
@@ -429,16 +426,19 @@ fn seed_for_lagging(
 /// The halt a lagging node earns when this pass's backward ratchet cannot reach
 /// the epoch its record was sealed at.
 ///
-/// With links to walk, the epoch is outside the scope's retained window: those
-/// bytes are unreadable to **every** reader, no later pass grows a key for them,
-/// and the queue is strict FIFO — so holding the head there would stall every op
-/// behind it forever. With no links, this pass simply has no ratchet, which a
-/// pass that reads the root's history links still clears.
+/// A walk this pass cannot complete is not proof the epoch is gone: the adoption
+/// gate authenticates each link's signature and nothing about the chain's order
+/// or walkability, and the anchor is a cached root a fresher one may supersede.
+/// So a held link set that will not walk is charged against the attempt budget —
+/// bounded, and its dead letter keeps the staged version — rather than made
+/// permanent, which would let one publish destroy another device's queued write.
+/// A pass holding no links at all holds no ratchet, so it takes the uncharged
+/// hold that the pass reading those links still clears.
 fn halt_for_unreachable_epoch(history_links: &[SignedSealed]) -> Halt {
     if history_links.is_empty() {
         Halt::EpochLagged
     } else {
-        Halt::Permanent(DeadLetterReason::TargetGone)
+        Halt::UploadAttempt
     }
 }
 
@@ -1456,9 +1456,6 @@ where
             return Err(Halt::Unclassified);
         };
         let epoch = envelope.epoch;
-        // A root whose section will not decode leaves this pass no ratchet,
-        // which [`halt_for_unreachable_epoch`] holds a lagging node on rather
-        // than abandoning it.
         let history_links = grant_section_bytes(&envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
             .map(|section| section.history_links)
@@ -5591,8 +5588,8 @@ mod tests {
     /// the interior behind it, so a node the wave has not reached is below that
     /// floor by construction. The drain carries the wave itself, so the only
     /// lagging node it still holds is one this pass has no ratchet for — held,
-    /// never charged: charging spends the budget on a condition no retry of
-    /// these bytes clears, and dead-letters a write nobody got wrong.
+    /// never charged, because the pass that reads the root's history links
+    /// clears it without the op spending anything.
     #[test]
     fn a_pass_with_no_ratchet_holds_a_lagging_node_rather_than_charging_it() {
         assert_eq!(halt_for_unreachable_epoch(&[]), Halt::EpochLagged);
@@ -5602,17 +5599,22 @@ mod tests {
         );
     }
 
-    /// With a ratchet to walk, an epoch it cannot reach is outside the scope's
-    /// retained window: no reader holds a key for those bytes and no later pass
-    /// grows one. The queue is strict FIFO, so holding the head there would
-    /// stall every op behind it forever — the op is abandoned instead, and the
-    /// member is told.
+    /// A record the retained window does not cover takes the charged verdict —
+    /// the one [`ATTEMPT_BUDGET`] bounds and whose dead letter keeps the staged
+    /// version — however far back it sits, and the member is told rather than
+    /// left with silence.
     #[test]
-    fn a_lagging_node_outside_the_retained_window_is_abandoned_not_stalled() {
-        assert_eq!(
-            halt_for_unreachable_epoch(&[history_link()]),
-            Halt::Permanent(DeadLetterReason::TargetGone),
-        );
+    fn a_lagging_node_outside_the_retained_window_is_charged_and_bounded() {
+        let links = [history_link()];
+        let anchor = Anchor {
+            epoch: 4,
+            history_links: &links,
+        };
+        assert!(matches!(
+            seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 0),
+            Err(Halt::UploadAttempt),
+        ));
+        assert!(upload_failure(Halt::UploadAttempt).is_some());
     }
 
     fn history_link() -> SignedSealed {
@@ -5634,10 +5636,10 @@ mod tests {
             epoch: 4,
             history_links: &links,
         };
-        assert_eq!(
+        assert!(matches!(
             seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 5),
             Err(Halt::Unclassified),
-        );
+        ));
     }
 
     /// The pass's own epoch needs no ratchet step: the session's current seed is
@@ -5651,19 +5653,19 @@ mod tests {
         assert!(seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 4).is_ok());
     }
 
-    /// A link that will not open is a window this reader cannot walk, which is
-    /// the same verdict as one that never covered the epoch — never a seed the
-    /// caller then unseals under.
+    /// A link that will not open is a walk this pass cannot complete, never a
+    /// seed the caller then unseals under — charged and bounded, for the same
+    /// reason a window too short to cover the epoch is.
     #[test]
-    fn a_lagging_record_behind_a_link_that_will_not_open_yields_no_seed() {
+    fn a_lagging_record_behind_a_link_that_will_not_open_is_charged_not_abandoned() {
         let links = [history_link()];
         let anchor = Anchor {
             epoch: 4,
             history_links: &links,
         };
-        assert_eq!(
+        assert!(matches!(
             seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 3),
-            Err(Halt::Permanent(DeadLetterReason::TargetGone)),
-        );
+            Err(Halt::UploadAttempt),
+        ));
     }
 }

@@ -222,11 +222,14 @@ pub enum Strictness {
     /// last-known-good): only exact equality is admitted — lower is a
     /// fail-closed replay, higher is a record that never passed an adopt.
     AtFloor,
-    /// The replay bar alone: the floor or anything above it. The one read that
-    /// takes it ([`crate::rotation::sweep`]'s interior nodes) must reach records
-    /// the **epoch** stage refuses, so it runs [`check_sequence`] rather than
-    /// [`check`] — and its bar is named here, beside the rest of the floor law,
-    /// rather than hand-rolled at the call site.
+    /// The replay bar alone: the floor or anything above it. Both reads that
+    /// take it — [`crate::rotation::sweep`]'s interior nodes and the drain's
+    /// re-author of one ([`ChildAdopter::open_interior_under`]) — must reach
+    /// records the **epoch** stage refuses, so they run [`check_sequence`]
+    /// rather than [`check`], and their bar is named here, beside the rest of
+    /// the floor law, rather than hand-rolled at each call site.
+    ///
+    /// [`ChildAdopter::open_interior_under`]: crate::net::ChildAdopter
     AtOrAboveFloor,
 }
 

@@ -11981,6 +11981,14 @@ mod tests {
                     read_scope_seed: None,
                 })
             }
+
+            async fn probe_read_scope_seed(
+                &self,
+                _name: &IpnsName,
+                _record_bytes: &[u8],
+            ) -> Result<Option<Zeroizing<[u8; 32]>>, crate::gate::GateError> {
+                Ok(None)
+            }
         }
 
         /// Seed a valid signed IPNS record at the root name across the device's

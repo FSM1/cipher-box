@@ -217,19 +217,13 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
     /// carrying the lazy wave can re-seal the body forward at the scope's
     /// current epoch (CONTEXT.md "Lazy wave").
     ///
-    /// This is the one child read that does **not** run the scope's read-epoch
-    /// floor: a node the lazy wave has not reached is below that floor by
-    /// construction. It is safe for an interior record where it would not be
-    /// for a scope root, because an interior record carries no seed, no grant
-    /// blob and no commitment — every key comes from the scope root the caller
-    /// already gated, so nothing the record claims hands a revoked reader
-    /// anything, and [`assemble_envelope`](Self::assemble_envelope) still
-    /// refuses a record that carries a grant section. What the skipped stage
-    /// carried is authorship: the body is authenticated only by the AEAD under
-    /// that epoch's read key, which is the write plane's residual forgery
-    /// window (CONTEXT.md "Forgery window"), closed by a write rotation and not
-    /// by this read. The per-name replay bar still refuses a rolled-back
-    /// record. Moves no floor, like the other re-open paths.
+    /// Skips the scope's read-epoch floor, on the argument the sweep's own
+    /// interior read is documented under
+    /// ([`OwnerRotationNet::interior_node`](crate::net::OwnerRotationNet)).
+    /// Two conditions of that argument are this path's to hold:
+    /// [`assemble_envelope`](Self::assemble_envelope) refuses a record carrying
+    /// a grant section, so nothing gated as a scope root arrives here, and this
+    /// path moves no floor, like the other re-open paths.
     pub(crate) async fn open_interior_under(
         &self,
         name: &IpnsName,
@@ -237,7 +231,15 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         epoch_seed: &[u8; 32],
     ) -> Result<(Adopted, Envelope), GateError> {
         let (sequence, envelope) = self.assembled_head(name, record_bytes).await?;
-        self.check_replay_bar(name, sequence).await?;
+        // The replay bar alone, relaxed with the epoch stage: the lazy wave is
+        // exactly what puts a good record below both.
+        floor::check_sequence(
+            self.floors,
+            name.as_str().as_bytes(),
+            sequence,
+            floor::Strictness::AtOrAboveFloor,
+        )
+        .await?;
         // The AAD binds the envelope's own epoch, so a relabelled record does
         // not open under the seed the caller ratcheted to.
         let node_seed = kdf::node_seed(epoch_seed, &envelope.id);
@@ -252,19 +254,6 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
             },
             envelope,
         ))
-    }
-
-    /// The per-name sequence floor alone, at the bar a below-floor interior read
-    /// takes ([`floor::Strictness::AtOrAboveFloor`]): the epoch stage is what
-    /// the lazy wave relaxes, never this one.
-    async fn check_replay_bar(&self, name: &IpnsName, sequence: u64) -> Result<(), GateError> {
-        floor::check_sequence(
-            self.floors,
-            name.as_str().as_bytes(),
-            sequence,
-            floor::Strictness::AtOrAboveFloor,
-        )
-        .await
     }
 }
 
@@ -355,6 +344,16 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             read_scope_seed: None,
         })
     }
+
+    /// A child record carries no owner blob, so no arm of this adopter ever
+    /// recovers a scope seed.
+    async fn probe_read_scope_seed(
+        &self,
+        _name: &IpnsName,
+        _record_bytes: &[u8],
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -376,7 +375,6 @@ mod tests {
     const NODE: [u8; 16] = [0x55; 16];
     const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
     const V: u64 = 1;
-    const NONCE: [u8; 24] = [0x31; 24];
     const TTL_NANOS: u64 = 2_000_000_000;
     const EOL: &str = "2099-01-01T00:00:00Z";
     /// The epoch a cut moved the scope to, and the older one the interior node
@@ -417,8 +415,23 @@ mod tests {
         }
     }
 
+    /// A nonce derived from the whole spec. The scope UUID is no KDF input, so
+    /// two specs differing only in scope seal under one read key: a fixed nonce
+    /// would put two AAD/ciphertext pairs under one one-time Poly1305 key, the
+    /// reuse blueprint/core.md forbids the corpus to model.
+    fn fixture_nonce(spec: &Spec) -> [u8; 24] {
+        let mut nonce = [0u8; 24];
+        nonce[..8].copy_from_slice(&spec.sequence.to_be_bytes());
+        nonce[8] = u8::from(spec.scope_root);
+        for (i, byte) in spec.node_id.iter().chain(&spec.scope_id).enumerate() {
+            nonce[9 + i % 15] ^= byte.rotate_left(u32::try_from(i % 8).expect("under 8"));
+        }
+        nonce
+    }
+
     /// Publish `spec` at [`LAGGING_EPOCH`], under that epoch's scope read seed.
     fn publish(spec: Spec) -> Published {
+        let nonce = fixture_nonce(&spec);
         let seed = scope_seed(LAGGING_EPOCH);
         let node_seed = kdf::node_seed(&seed, &spec.node_id);
         let read_key = kdf::read_key(node_seed.as_bytes());
@@ -430,7 +443,7 @@ mod tests {
         };
         let mut envelope = seal_read_body(
             read_key.as_bytes(),
-            &NONCE,
+            &nonce,
             V,
             spec.node_id,
             spec.scope_id,

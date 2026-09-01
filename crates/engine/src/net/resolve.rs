@@ -61,20 +61,11 @@ pub trait Adopter {
     /// its owner blob (`None` when the reader's arm recovers none). Same
     /// fail-closed verdicts as [`adopt`](Self::adopt); only the floor advance is
     /// dropped.
-    ///
-    /// For a caller that discards the sighting — the mint's confirm-by-adopt
-    /// root step — so the session's first real resolve of that name is still the
-    /// adopt that projects and caches it. The default suits a stub that keeps no
-    /// durable floors.
     async fn probe_read_scope_seed(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
-        self.adopt(name, record_bytes)
-            .await
-            .map(|outcome| outcome.read_scope_seed)
-    }
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError>;
 }
 
 /// The owner's own-scope seeds, recovered from a record already at the durable
@@ -585,6 +576,14 @@ mod tests {
                     },
                 })),
             }
+        }
+
+        async fn probe_read_scope_seed(
+            &self,
+            _name: &IpnsName,
+            _record_bytes: &[u8],
+        ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+            Ok(None)
         }
 
         async fn recover_own_scope_material(

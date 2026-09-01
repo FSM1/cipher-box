@@ -425,6 +425,14 @@ mod tests {
                 })
         }
 
+        async fn probe_read_scope_seed(
+            &self,
+            _name: &IpnsName,
+            _record_bytes: &[u8],
+        ) -> Result<Option<zeroize::Zeroizing<[u8; 32]>>, GateError> {
+            Ok(None)
+        }
+
         async fn recover_own_scope_material(
             &self,
             _name: &IpnsName,

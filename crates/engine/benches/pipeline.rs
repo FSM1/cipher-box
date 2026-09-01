@@ -13,6 +13,8 @@
 
 use std::hint::black_box;
 
+use zeroize::Zeroizing;
+
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
@@ -251,6 +253,14 @@ impl Adopter for AcceptingAdopter {
             node_id: ROOT_ID,
             read_scope_seed: None,
         })
+    }
+
+    async fn probe_read_scope_seed(
+        &self,
+        _name: &IpnsName,
+        _record_bytes: &[u8],
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        Ok(None)
     }
 }
 
