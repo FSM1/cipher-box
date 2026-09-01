@@ -12,9 +12,10 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    AadContext, GrantSection, GrantSetCommitment, Permission as CorePermission, PreservedFields,
-    ReadBody, STRUCT_TAG_GRANT_BLOB, decode_envelope, decode_grant_section, grant_section_bytes,
-    open_grant_blob, open_read_body, sign_grant_set,
+    AadContext, AscentLink, GrantSection, GrantSetCommitment, Permission as CorePermission,
+    PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, decode_envelope,
+    decode_grant_section, grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body,
+    sign_grant_set,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -29,7 +30,7 @@ use cipherbox_engine::grants::{
     mint_invite_grant, post_invite_claim, recipient_blinded_tag,
 };
 use cipherbox_engine::net::author::{
-    ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
+    ENVELOPE_V, EnvelopeAuthoring, author_child_envelope, author_scope_root_with_section,
 };
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
@@ -246,6 +247,55 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
             .seed_record(&endpoint, pointer_name.as_str(), pointer_record.clone());
     }
     name
+}
+
+/// Re-seal `node`'s record under `scope_id`'s derivation at `epoch` and publish
+/// it past the sequence it answers at now.
+///
+/// A mint promotes a folder to a scope root under a fresh override seed and
+/// leaves the interior nodes it carried sealed under the scope they left, so a
+/// test that needs the granted subtree readable inside the fresh scope stands
+/// that re-seal in here.
+fn reseal_interior_node(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    node: NodeId,
+    scope_id: [u8; 16],
+    override_seed: &[u8; 32],
+    epoch: u64,
+) {
+    let name = write_name(node);
+    let read_key = kdf::read_key(kdf::node_seed(override_seed, &node.0).as_bytes());
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: node.0,
+        scope_id,
+        epoch,
+        read_key: read_key.as_bytes(),
+        nonce: &[0x5e; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        },
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("the interior node re-seals");
+    blocks.put(head.block.clone());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes()),
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        sequence_at(world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
 }
 
 /// A cold-started owner engine over a seeded vault, with the spawned loops
@@ -1188,6 +1238,177 @@ fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
         1,
         "the share pointer reached the recipient"
     );
+}
+
+/// The parent's index is written last, so a mint that published the grantee
+/// scope root and then failed leaves a live scope the index does not name. A
+/// second share of that folder must refuse: republishing at the same derived
+/// name under a fresh override seed would cut the first grantee off a scope
+/// they still hold.
+#[test]
+fn a_second_share_of_a_folder_whose_scope_the_index_lost_is_refused() {
+    let mut fx = GrantScenario::new();
+    // The grantee root publishes first and the parent's index update fails, so
+    // the scope goes live and nothing names it.
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the parent index update fails, so the mint reports the partial commit"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    let stranded = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the grantee scope root is live at its derived name");
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+        "the second share is refused against the name, not the index",
+    );
+    assert_eq!(
+        published_grant_section(&fx.world, &fx.blocks, fx.folder)
+            .expect("the stranded scope still answers")
+            .commitment,
+        stranded.commitment,
+        "and the first grantee's scope is untouched"
+    );
+}
+
+/// A direct-child-scope index carries no signature of its own: it rides the
+/// sealed write body, which any committed writer of that scope may author.
+/// Dropping an entry cannot be forged into a different name, but it would move
+/// the anchor of a later share up a level, and hand whoever dropped it the
+/// derivation of the scope that share mints. The walk refuses instead.
+#[test]
+fn a_share_below_a_scope_root_the_index_lost_is_refused() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    assert!(
+        fx.grant_folder_to_recipient().is_err(),
+        "the parent index update fails, so the scope goes live unnamed"
+    );
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "enclosing-scope-index-lost-a-root"
+        }),
+    );
+}
+
+/// The gate reports a record below this device's own read-epoch floor as a
+/// plain rejection, which the derived-name probe would otherwise read as "no
+/// scope here". Only a scope root ever raises a floor at its own scope id, so
+/// the floor alone refuses the mint.
+#[test]
+fn a_second_share_is_refused_when_the_stranded_root_reads_below_the_floor() {
+    let mut fx = GrantScenario::new();
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_epoch_floor(&fx.folder.0, 9),
+    )
+    .expect("a floor a scope root adopted at this id left behind");
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+}
+
+/// A grant on a folder that already sits inside a granted scope anchors under
+/// **that** scope, not the vault root: its commitment, seeds and index are the
+/// ones the mint re-seals, and the fresh scope's ascent link is sealed to the
+/// derivation only that scope's own reader can walk.
+#[test]
+fn a_grant_inside_a_granted_scope_anchors_under_that_scope() {
+    let mut fx = GrantScenario::new();
+    let inner = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "in");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let enclosing = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder is a scope root");
+    let enclosing_override_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &enclosing,
+    )
+    .expect("the owner blob yields the enclosing scope's override seed");
+    reseal_interior_node(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        fx.folder.0,
+        &enclosing_override_seed,
+        1,
+    );
+
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
+    let enclosing_before = sequence_at(&fx.world, &write_name(fx.folder));
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done),
+    );
+
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(ROOT)),
+        root_before,
+        "the vault root's index never gains a scope it does not directly hold"
+    );
+    assert!(
+        sequence_at(&fx.world, &write_name(fx.folder)) > enclosing_before,
+        "the enclosing scope re-sealed its own index instead"
+    );
+
+    // The ascent link is the decisive binding: it opens only under
+    // `nodeSeed(overrideSeed, inner)` of the scope that encloses `inner`, so a
+    // mint that had anchored at the vault root could not produce it.
+    let section = published_grant_section(&fx.world, &fx.blocks, inner)
+        .expect("the nested folder now answers as a scope root");
+    let ascent = section
+        .ascent_link
+        .as_ref()
+        .expect("a nested scope root carries an ascent link");
+    open_ascent_link(
+        kdf::node_seed(&enclosing_override_seed, &inner.0).as_bytes(),
+        &AadContext {
+            v: ENVELOPE_V,
+            id: inner.0,
+            scope: inner.0,
+            epoch: 1,
+            struct_tag: STRUCT_TAG_ASCENT_LINK,
+        },
+        &AscentLink {
+            ascent_public: ascent.ascent_public,
+            enc: ascent.enc,
+            ciphertext: ascent.ciphertext.clone(),
+            unknown: PreservedFields::new(),
+        },
+    )
+    .expect("the enclosing scope's derivation opens the nested scope's ascent link");
 }
 
 /// The read the share dialog renders from: engine truth, not a tally of the
@@ -2147,6 +2368,96 @@ fn a_redelivered_claim_converts_once() {
 /// Revocation is the immediate-cut control, and `revoke` resolves its recipient
 /// in the contact book alone. A grant an invite link produced is therefore only
 /// real if the conversion recorded the claimant it granted.
+#[test]
+fn the_cut_of_a_converted_grant_returns_the_room_the_claim_took() {
+    /// Whether the owner's book holds `identity_pk`, read the way a host does.
+    fn book_holds(fx: &GrantScenario, identity_pk: &[u8]) -> bool {
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("the sharing read")
+            .contacts
+            .iter()
+            .any(|contact| contact.identity_public_key == identity_pk)
+    }
+
+    let mut fx = GrantScenario::new();
+    let imported = recipient_identity().verifying_key().to_sec1().to_vec();
+    let fragment = fx.mint_link();
+    let claimant_device = fx.device_for(&BYSTANDER_SECRET);
+    let claimant_pk = EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec();
+    let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 33);
+    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    fx.convert().expect("the conversion lands");
+    assert!(
+        book_holds(&fx, &claimant_pk),
+        "the conversion recorded the claimant so its grant can be cut"
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimant_pk.clone(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(
+        !book_holds(&fx, &claimant_pk),
+        "the cut of its last converted grant returns the room the claim took"
+    );
+    assert!(
+        book_holds(&fx, &imported),
+        "and a contact the owner imported by hand is never dropped by a cut"
+    );
+}
+
+/// A grant the owner issues records no scope on a claim-sourced entry, so the
+/// collector must not take that entry out on the next cut: the claimant would
+/// keep a live grant no revoke could name a recipient for. The owner grant is a
+/// vouch, and it outranks whatever the claim wrote.
+#[test]
+fn a_cut_after_an_owner_grant_leaves_the_claimant_revokable() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "second");
+    let fragment = fx.mint_link();
+    let claimant_device = fx.device_for(&BYSTANDER_SECRET);
+    let claimant_pk = EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec();
+    let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 35);
+    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    fx.convert().expect("the conversion lands");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: other,
+            recipient_identity_public_key: claimant_pk.clone(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done),
+        "the owner grants the claimant a second scope"
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimant_pk.clone(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: other,
+            recipient_identity_public_key: claimant_pk,
+        })),
+        Ok(CommandOutcome::Done),
+        "the second grant is still cuttable, so the first cut kept the recipient"
+    );
+}
+
 #[test]
 fn a_converted_claim_records_the_claimant_so_its_grant_can_be_cut() {
     let mut fx = GrantScenario::new();

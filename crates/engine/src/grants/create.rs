@@ -45,6 +45,7 @@ use zeroize::Zeroizing;
 use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::grants::SharePointer;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
+use crate::grants::contact::Contact;
 use crate::grants::{GrantRow, mint_grant_row};
 use crate::mailbox::post_sealed;
 use crate::rotation::{
@@ -130,17 +131,28 @@ impl GranteeScopePlan<'_> {
 
 /// The recipient of the read grant.
 pub struct GrantRecipient<'a> {
-    /// secp256k1 identity key — the ledger entry and the mailbox routing
-    /// address. Source it from the imported [`Contact`], whose binding
-    /// signature is what ties it to `enc_pub`.
+    /// The verified recipient. The identity key is the ledger entry and the
+    /// mailbox routing address; the encryption subkey is the grant-blob and
+    /// mailbox HPKE wrap target. A [`Contact`] is the pair as its holder signed
+    /// it, so the two cannot be sourced apart — the key substitution the
+    /// binding signature exists to deny is unrepresentable here.
     ///
     /// [`Contact`]: super::Contact
-    pub identity_pk: EcdsaVerifier,
-    /// X25519 encryption subkey public key: the grant-blob and mailbox HPKE
-    /// wrap target.
-    pub enc_pub: &'a X25519Public,
+    pub contact: &'a Contact,
     /// Courtesy host label carried in the share pointer.
     pub display_name: String,
+}
+
+impl GrantRecipient<'_> {
+    /// The recipient's identity key: the ledger entry and the mailbox address.
+    fn identity_pk(&self) -> EcdsaVerifier {
+        self.contact.identity_pk()
+    }
+
+    /// The recipient's bound encryption subkey: the HPKE wrap target.
+    fn enc_pub(&self) -> X25519Public {
+        self.contact.enc_subkey()
+    }
 }
 
 /// Owner-held key material for the grant. `pseudonym_signer` must be the
@@ -351,8 +363,9 @@ where
     P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
     M: Mailbox,
 {
+    let recipient_enc_pub = recipient.enc_pub();
     // Refused ahead of the publishing sweep, so a self-grant costs no publish.
-    if *recipient.enc_pub == owner.enc_secret.public() {
+    if recipient_enc_pub == owner.enc_secret.public() {
         return Err(CreateGrantError::RecipientIsTheOwner);
     }
     let ipns_name = grantee.ipns_name();
@@ -361,8 +374,8 @@ where
     let row = mint_grant_row(
         owner.identity_signer,
         owner.enc_secret,
-        recipient.identity_pk.to_sec1(),
-        recipient.enc_pub,
+        recipient.identity_pk().to_sec1(),
+        &recipient_enc_pub,
         &grantee.scope_id,
         name_bytes,
         permission,
@@ -391,8 +404,8 @@ where
     let idempotency_key = format!("grant-{}", hex_lower(&idempotency_bytes));
     post_sealed(
         mailbox,
-        recipient.enc_pub,
-        &recipient.identity_pk,
+        &recipient_enc_pub,
+        &recipient.identity_pk(),
         &ephemeral,
         grantee.v,
         owner.identity_signer,
@@ -699,6 +712,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grants::contact::import_contact;
     use crate::grants::ledger::self_locate;
     use crate::grants::recipient_blinded_tag;
     use crate::grants::{GrantRow, PublishedGrantBlob};
@@ -713,6 +727,7 @@ mod tests {
         AadContext, AscentLink, ChildRef, NodeKind, ReadBody, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob, sign_recipient_binding,
     };
+    use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::secret::ct_eq;
@@ -763,10 +778,18 @@ mod tests {
     fn recipient_enc() -> X25519Secret {
         X25519Secret::from_scalar([0x44; 32])
     }
+    fn recipient_signer() -> EcdsaSigner {
+        EcdsaSigner::from_scalar(&[0x45; 32]).expect("valid scalar")
+    }
     fn recipient_identity() -> EcdsaVerifier {
-        EcdsaSigner::from_scalar(&[0x45; 32])
-            .expect("valid scalar")
-            .verifying_key()
+        recipient_signer().verifying_key()
+    }
+    /// The recipient as the grant path takes them. `enc_pub` is a parameter so a
+    /// test can vary the encryption subkey and still hand over a pair whose
+    /// binding signature verifies.
+    fn contact_for(enc_pub: X25519Public) -> Contact {
+        import_contact(&ContactCode::create(&recipient_signer(), enc_pub).encode())
+            .expect("a freshly created code verifies")
     }
 
     /// The whole net arm the primitive composes over: the convergence sweep's
@@ -1142,9 +1165,10 @@ mod tests {
             pointer_read_key: &grantee_pointer_read_key,
             subtree_child_index: &[],
         };
+        let recipient_contact = contact_for(recipient_pub);
+
         let recipient = GrantRecipient {
-            identity_pk: recipient_identity(),
-            enc_pub: &recipient_pub,
+            contact: &recipient_contact,
             display_name: "Shared Folder".to_string(),
         };
         let owner = OwnerGrantKeys {
@@ -1273,9 +1297,10 @@ mod tests {
                 pointer_read_key: &grantee_pointer_read_key,
                 subtree_child_index: subtree,
             };
+            let recipient_contact = contact_for(recipient_pub);
+
             let recipient = GrantRecipient {
-                identity_pk: recipient_identity(),
-                enc_pub: &recipient_pub,
+                contact: &recipient_contact,
                 display_name: "Shared Folder".to_string(),
             };
             let owner = OwnerGrantKeys {
@@ -1673,6 +1698,27 @@ mod tests {
             crate::mailbox::idempotency_key_is_legal(&delivery.idempotency_key),
             "idempotency key {:?} leaves the transport alphabet",
             delivery.idempotency_key
+        );
+    }
+
+    #[test]
+    fn the_wrap_target_and_the_routing_address_are_one_bound_pair() {
+        // The grant blob conveys the read scope seed and the pointer routes the
+        // grantee to it. Sourcing the two keys apart seals the seed to one party
+        // and tells another to look, which the contact-code binding signature
+        // exists to deny, so both must read off one verified contact.
+        let contact = contact_for(recipient_enc().public());
+        let (delivery, tag) = delivery_for(7, &recipient_enc());
+
+        assert_eq!(
+            delivery.address,
+            contact.identity_pk().to_sec1(),
+            "the pointer is addressed to the contact's identity key"
+        );
+        assert_eq!(
+            Some(tag),
+            recipient_blinded_tag(&owner_enc(), &contact.enc_subkey(), &grantee_name()),
+            "the committed tag is the ECDH with the subkey that identity key bound"
         );
     }
 

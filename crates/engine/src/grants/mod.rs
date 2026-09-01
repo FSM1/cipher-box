@@ -37,7 +37,8 @@ pub use child_index::{
 pub use contact::{Contact, MAX_CONTACT_CODE_BYTES, import_contact};
 pub use contact_store::{
     BookCodecError, CONTACTS_PREFIX, ContactStore, ContactStoreError, MAX_CONTACTS,
-    StagingContactStore, resolve_recipient,
+    MAX_LINK_CONTACT_SCOPES, MAX_LINK_CONTACTS, StagingContactStore, link_budget_full,
+    resolve_recipient,
 };
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan,
