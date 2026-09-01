@@ -2531,6 +2531,11 @@ mod tests {
                     cipherbox_engine::ProviderError::InsecureTransport,
                 ),
             }),
+            bin_index_hold: Some(facade::BinIndexHold {
+                op_id: OpId(14),
+                node: facade::NodeId([7u8; 16]),
+                reason: cipherbox_engine::DefaultsReason::Suppressed,
+            }),
             retained_records: 3,
             staleness: facade::Staleness::Reconciling,
         });
@@ -2557,6 +2562,10 @@ mod tests {
         assert_eq!(held.op_id(), 13);
         assert_eq!(held.node(), vec![6u8; 16]);
         assert_eq!(held.check(), "byo-endpoint-insecure");
+        let bin_held = view.bin_index_hold().expect("the view carries the hold");
+        assert_eq!(bin_held.op_id(), 14);
+        assert_eq!(bin_held.node(), vec![7u8; 16]);
+        assert_eq!(bin_held.check(), "suppressed");
         assert_eq!(view.retained_records(), 3);
         assert_eq!(view.staleness(), Staleness::Reconciling);
 
