@@ -27,6 +27,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
+use cipherbox_engine::api::RetireEntry;
 use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
     ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
@@ -65,7 +66,7 @@ use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_PSEUDONYM_SEED,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
-    poll_tasks_once, poll_tasks_until_parked, retire_targets as body_targets,
+    poll_tasks_once, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BinIndexKeys, BinIndexLoad, BlockProgress, Command, CommandOutcome,
@@ -4720,6 +4721,22 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
             "every block the deleted version pinned is reclaimed"
         );
     }
+
+    // The registry refcounts a pin per referencing record, so what each batch
+    // names decides whose edge goes. Only the content batches own a record.
+    let batches = retire_entries(&alice);
+    assert_eq!(
+        batch_namings(&batches, name.as_str()),
+        vec![None],
+        "a name retire names no owning record, so every reference to it goes"
+    );
+    for cid in &content {
+        assert_eq!(
+            batch_namings(&batches, cid),
+            vec![Some(name.as_str().to_owned())],
+            "the owed retire drops this record's edge and no other's"
+        );
+    }
 }
 
 /// A folder delete reclaims its own target at once and leaves no parentless
@@ -4795,6 +4812,91 @@ fn a_folder_delete_quarantines_a_descendant_for_a_converged_tick() {
     assert!(
         retired.contains(&deep_name.as_str().to_owned()),
         "the proof holds, so the descendant's record leaves the inventory too"
+    );
+    for cid in &content {
+        assert!(
+            retired.contains(cid),
+            "and every block its version pinned is reclaimed"
+        );
+    }
+}
+
+/// The same bound across a restart. A journal entry is durable and the snapshot
+/// is not: a restarted session opens the base empty, so the proof's first half
+/// would read no link for any descendant and release on the record half alone.
+/// The first pass of that session decides nothing (blueprint/engine.md
+/// "Retirement").
+#[test]
+fn a_restart_holds_a_replayed_quarantine_until_one_of_its_own_polls_converges() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let deep = child_id(&engine, photos, "deep.bin");
+    let deep_name = write_name(deep);
+    let content: Vec<String> = registration_entries(&alice, &deep_name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the descendant published a version");
+
+    // The delete journals its quarantine, and the process goes before any pass
+    // of that session replays it.
+    block_on(engine.command(Command::Delete { node: photos })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    drop(engine);
+
+    let mark = retire_targets(&alice).len();
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 43);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        !retired.contains(&deep_name.as_str().to_owned()),
+        "the first pass of the restarted session decides no quarantine"
+    );
+    for cid in &content {
+        assert!(
+            !retired.contains(cid),
+            "so nothing irreversible fires against the base a restart opens"
+        );
+    }
+
+    // That pass converged the base, so the passes behind it decide as a
+    // same-session pass does.
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&deep_name.as_str().to_owned()),
+        "the descendant's record leaves the inventory once a poll has converged"
     );
     for cid in &content {
         assert!(
@@ -9412,21 +9514,45 @@ fn retire_targets(device: &FakeDevice) -> Vec<String> {
     retire_batches(device).into_iter().flatten().collect()
 }
 
-/// The retire calls this device made, one entry per batch.
-fn retire_batches(device: &FakeDevice) -> Vec<Vec<String>> {
+/// Every batch that named `target`, as the record each scoped itself to and
+/// `None` for the account-wide form. Every batch rather than the first, because
+/// a second batch naming the same CID account-wide takes the edge the first one
+/// kept.
+fn batch_namings(batches: &[(Option<String>, Vec<String>)], target: &str) -> Vec<Option<String>> {
+    batches
+        .iter()
+        .filter(|(_, targets)| targets.iter().any(|sent| sent == target))
+        .map(|(record, _)| record.clone())
+        .collect()
+}
+
+/// Every retire batch this device sent, as the record it names — which is what
+/// separates a record-scoped retire from the account-wide form — and its
+/// targets.
+fn retire_entries(device: &FakeDevice) -> Vec<(Option<String>, Vec<String>)> {
     device
         .http
         .requests()
         .iter()
         .filter(|request| request.url.ends_with("/registry/retire"))
-        .map(|request| {
-            body_targets(
+        .flat_map(|request| {
+            serde_json::from_slice::<Vec<RetireEntry>>(
                 request
                     .body
                     .as_deref()
                     .expect("a retire call carries a body"),
             )
+            .expect("a retire body is a JSON array of entries")
         })
+        .map(|entry| (entry.ipns_name, entry.targets))
+        .collect()
+}
+
+/// The retire calls this device made, one entry per batch.
+fn retire_batches(device: &FakeDevice) -> Vec<Vec<String>> {
+    retire_entries(device)
+        .into_iter()
+        .map(|(_, targets)| targets)
         .collect()
 }
 

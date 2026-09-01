@@ -67,7 +67,8 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head, retire,
+    LiveRecord, OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head,
+    retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
@@ -594,6 +595,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) reclaim_stalls: &'a RefCell<Vec<ReclaimStall>>,
     /// Head blocks this session's publishes orphaned, pending retirement.
     pub(crate) orphan_heads: &'a OrphanHeads,
+    /// Whether a poll tick has reconciled the record plane since this session
+    /// started ([`Settle`]).
+    pub(crate) converged_tick: &'a Cell<bool>,
     /// The upload-cancel interlock, shared with the facade's cancel command.
     pub(crate) cancels: &'a RefCell<UploadCancels>,
     /// The facade's outbound event stream, for upload progress.
@@ -682,8 +686,9 @@ enum Verdict {
 /// and so what bounds the quarantine to one converged poll tick
 /// (blueprint/engine.md "Retirement").
 enum Settle<'a> {
-    /// The delete's own pass. The snapshot it just repainted is this device's
-    /// own work rather than a converged view of the plane.
+    /// The delete's own pass, and every pass of a session whose base no poll
+    /// has reconciled yet. The snapshot is this device's own work, or the empty
+    /// one a restart opens, rather than a converged view of the plane.
     Hold,
     /// A later pass, with the proof budget it has left to spend.
     Decide(&'a mut usize),
@@ -884,7 +889,7 @@ where
             self.gateway,
             self.http,
             self.content_profile,
-            async |node, owing| self.live_node_cids(scope, node, owing).await,
+            async |node, owing| self.live_owing_record(scope, node, owing).await,
         )
         .await
         {
@@ -2108,14 +2113,12 @@ where
                 continue;
             };
             replayed += 1;
+            let settle = match self.converged_tick.get() {
+                true => Settle::Decide(&mut proofs),
+                false => Settle::Hold,
+            };
             let residue = self
-                .settle_reclamation(
-                    scope,
-                    seal,
-                    owner,
-                    &reclamation,
-                    Settle::Decide(&mut proofs),
-                )
+                .settle_reclamation(scope, seal, owner, &reclamation, settle)
                 .await;
             self.update_journal(seal, &key, target, &reclamation, residue)
                 .await;
@@ -3285,7 +3288,7 @@ where
     /// names the dropped roots once the shortened history is live, so a journal
     /// lost there is lost for good. Holding the entry early is safe because
     /// [`drain_owed_retires`] retires nothing this node's published record still
-    /// names ([`Self::live_node_cids`]) — an entry whose publish never lands
+    /// names ([`Self::live_owing_record`]) — an entry whose publish never lands
     /// simply never drains.
     async fn publish_prune(
         &self,
@@ -3406,10 +3409,10 @@ where
     ///
     /// A quote, not a promise: what the retire may actually name is decided at
     /// drain time against the node's own published record
-    /// ([`Self::live_node_cids`]), so the figure here is the ceiling a pass that
-    /// cannot re-expand falls back on ([`OwedRetire::owed_bytes`]). It is quoted
-    /// once per CID — a leaf two doomed roots both name is one pin row, and
-    /// quoting it twice would over-report pending reclaim.
+    /// ([`Self::live_owing_record`]), so the figure here is the ceiling a pass
+    /// that cannot re-expand falls back on ([`OwedRetire::owed_bytes`]). It is
+    /// quoted once per CID — a leaf two doomed roots both name is one pin row,
+    /// and quoting it twice would over-report pending reclaim.
     ///
     /// Only *doomed* roots are fetched. A retained version is never expanded
     /// here: it is the drain's business what is live, and a version this device
@@ -3444,8 +3447,10 @@ where
         Ok(owed)
     }
 
-    /// Every content CID one node's **currently published** record still reaches
-    /// — the set a retire against that node may not name.
+    /// The record one node's debts are owed by: its write-plane name, which
+    /// scopes the retire to that record's own reference edges, and every content
+    /// CID its **currently published** record still reaches — the set a retire
+    /// against that node may not name.
     ///
     /// Read on the pass that retires rather than frozen into the ledger, and
     /// resolved from the node's derived name rather than the base tree, which
@@ -3466,14 +3471,18 @@ where
     /// published fact. Reading the node instead would settle nothing — a hard
     /// delete leaves the record resolvable at its own name until its EOL lapses,
     /// and it names its content the whole time.
-    async fn live_node_cids(
+    async fn live_owing_record(
         &self,
         scope: &DrainScope<'_>,
         node: [u8; 16],
         owing: OwingRecord,
-    ) -> Option<BTreeSet<String>> {
+    ) -> Option<LiveRecord> {
+        let name = derive_write_name(scope.write_scope_seed, &node)
+            .as_str()
+            .to_owned();
+        let reaching = |cids| Some(LiveRecord { name, cids });
         if owing == OwingRecord::Retired {
-            return Some(BTreeSet::new());
+            return reaching(BTreeSet::new());
         }
         let (_, epoch) = self.load_scope_root(scope).await.ok()?;
         // Nocache: the retire unpins, so what may be named is decided against
@@ -3485,13 +3494,13 @@ where
             .ok()?;
         // A record carrying no version list reaches no content.
         let ReadBody::File { versions, .. } = loaded.body else {
-            return Some(BTreeSet::new());
+            return reaching(BTreeSet::new());
         };
         let mut live = BTreeSet::new();
         for version in self.pinned_history(&versions).ok()? {
             live.extend(self.expand_version(&version).await.ok()?.cids());
         }
-        Some(live)
+        reaching(live)
     }
 
     /// One published version's whole CID set, off its own fetched root block.
