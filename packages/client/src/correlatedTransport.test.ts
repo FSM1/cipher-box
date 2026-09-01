@@ -9,6 +9,7 @@ import {
 } from './correlatedTransport.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandOutcomeDescriptor,
   OpenedStream,
   ReceivedShareDescriptor,
@@ -82,6 +83,9 @@ class ProbeTransport extends CorrelatedTransport {
     return unsupported();
   }
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
+    return unsupported();
+  }
+  bin(): Promise<BinDescriptor> {
     return unsupported();
   }
   vaultStorage(): Promise<VaultStorageDescriptor> {

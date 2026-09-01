@@ -27,6 +27,7 @@
 
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -54,6 +55,7 @@ export type WireRead =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'sharing'; scope: Uint8Array | null }
   | { kind: 'receivedShares' }
+  | { kind: 'bin' }
   | { kind: 'vaultStorage' }
   | { kind: 'authMethods' }
   | { kind: 'siweChallenge'; intent: SiweIntent }
@@ -136,6 +138,7 @@ export type PortResponse =
         | SnapshotDescriptor
         | SharingDescriptor
         | ReceivedShareDescriptor[]
+        | BinDescriptor
         | VaultStorageDescriptor
         | AuthMethodDescriptor[]
         | CommandOutcomeDescriptor

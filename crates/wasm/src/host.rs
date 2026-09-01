@@ -36,7 +36,7 @@ use crate::seams_bridge::{
     StagingStoreAdapter,
 };
 use crate::{
-    AuthMethod, Command, CommandOutcome, Event, NodeId, OpenedStream, ReceivedShareRow,
+    AuthMethod, BinView, Command, CommandOutcome, Event, NodeId, OpenedStream, ReceivedShareRow,
     SharingView, SnapshotView, VaultStorageView,
 };
 
@@ -380,6 +380,17 @@ impl EngineHandle {
                 .map(JsValue::from)
                 .collect::<js_sys::Array>()
                 .into())
+        })
+    }
+
+    /// Reads the owner's bin for a `/bin` route: one key-free row per
+    /// soft-deleted node, plus the rung the index load reached. Resolves with
+    /// the view; rejects with the engine error.
+    pub fn bin(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let view = engine.read().await.bin().await.map_err(engine_error)?;
+            Ok(BinView::from_facade(view).into())
         })
     }
 

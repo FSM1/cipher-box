@@ -23,6 +23,7 @@ import {
 } from './testkit.js';
 import type { EngineTransport } from './transport.js';
 import type {
+  BinDescriptor,
   CommandDescriptor,
   EventDescriptor,
   OpenedStream,
@@ -632,6 +633,28 @@ describe('broadcast transport ↔ leader relay', () => {
     // must survive the structured clone rather than arrive as a seeded id.
     await expect(follower.snapshot(null)).resolves.toEqual(emptySnapshot());
     expect(engine.snapshots).toEqual([null]);
+  });
+
+  it('round-trips a follower bin read through the leader engine', async () => {
+    const { engine, follower } = wire();
+    const view: BinDescriptor = {
+      entries: [
+        {
+          node: new Uint8Array(16).fill(4),
+          kind: 'file',
+          originParent: new Uint8Array(16).fill(1),
+          originName: 'notes.txt',
+          deletedAt: 1_800_000_000_000n,
+          scope: new Uint8Array(16).fill(2),
+        },
+      ],
+      origin: 'stale',
+    };
+    engine.respondBin = () => Promise.resolve(view);
+
+    // Structured clone across the bus must preserve bytes and bigints intact.
+    await expect(follower.bin()).resolves.toEqual(view);
+    expect(engine.binReads).toBe(1);
   });
 
   it('serves a follower download over the private port and rebuilds identical bytes', async () => {

@@ -136,8 +136,8 @@ pub struct VaultSettingsSummary {
     pub origin: SettingsOrigin,
 }
 
-/// Whose choice a [`VaultSettingsSummary`] reports (blueprint/engine.md
-/// "Settings-load policy").
+/// Which rung a record-plane load reached, for the summary or the view it
+/// produced (blueprint/engine.md "Settings-load policy").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsOrigin {
     /// The published record opened and validated.

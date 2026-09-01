@@ -1101,6 +1101,98 @@ impl ReceivedShareRow {
     }
 }
 
+/// The `/bin` route's whole read: the owner's soft-deleted nodes, and which
+/// rung the bin index load reached.
+#[wasm_bindgen]
+pub struct BinView {
+    inner: facade::BinView,
+}
+
+#[wasm_bindgen]
+impl BinView {
+    /// One row per soft-deleted node.
+    #[wasm_bindgen(getter)]
+    pub fn entries(&self) -> Vec<BinRow> {
+        self.inner
+            .entries
+            .iter()
+            .cloned()
+            .map(BinRow::from_facade)
+            .collect()
+    }
+
+    /// Which rung the load reached. `Defaults` means this device established no
+    /// index, so an empty `entries` is the fallback and not a read: a host must
+    /// render that apart from a bin it read.
+    #[wasm_bindgen(getter)]
+    pub fn origin(&self) -> SettingsOrigin {
+        self.inner.origin.into()
+    }
+}
+
+impl BinView {
+    /// Wraps an engine bin view. Never exported to JS.
+    pub fn from_facade(inner: facade::BinView) -> Self {
+        Self { inner }
+    }
+}
+
+/// One soft-deleted node, as the `/bin` route renders it. Key-free by
+/// construction: the entry's bin-held key and its `ipnsName` have no getter.
+#[wasm_bindgen]
+pub struct BinRow {
+    inner: facade::BinRow,
+}
+
+#[wasm_bindgen]
+impl BinRow {
+    /// The 16 raw bytes of the soft-deleted node. `Command.restore` and
+    /// `Command.purge` both name it.
+    #[wasm_bindgen(getter)]
+    pub fn node(&self) -> Vec<u8> {
+        self.inner.node.0.to_vec()
+    }
+
+    /// The node's immutable kind.
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> NodeKind {
+        self.inner.kind.into()
+    }
+
+    /// The 16 raw bytes of the folder the node was unlinked from — where a
+    /// restore puts it back when the host names no other destination.
+    #[wasm_bindgen(getter, js_name = originParent)]
+    pub fn origin_parent(&self) -> Vec<u8> {
+        self.inner.origin_parent.0.to_vec()
+    }
+
+    /// The name the node carried in that folder.
+    #[wasm_bindgen(getter, js_name = originName)]
+    pub fn origin_name(&self) -> String {
+        self.inner.origin_name.clone()
+    }
+
+    /// The deletion time in milliseconds, a `u64` crossing as a `bigint`. A
+    /// host renders expiry from this and `binRetentionDays`.
+    #[wasm_bindgen(getter, js_name = deletedAt)]
+    pub fn deleted_at(&self) -> u64 {
+        self.inner.deleted_at
+    }
+
+    /// The 16 raw bytes of the scope the node belonged to at the delete.
+    #[wasm_bindgen(getter)]
+    pub fn scope(&self) -> Vec<u8> {
+        self.inner.scope.0.to_vec()
+    }
+}
+
+impl BinRow {
+    /// Wraps an engine bin row. Never exported to JS.
+    pub fn from_facade(inner: facade::BinRow) -> Self {
+        Self { inner }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The storage pane's read surface, and the account's login methods.
 // ---------------------------------------------------------------------------
@@ -1424,6 +1516,25 @@ impl Command {
     /// Delete a node (conditional-delete semantics on rebase).
     pub fn delete(node: &NodeId) -> Command {
         Self::wrap(facade::Command::Delete {
+            node: node.facade(),
+        })
+    }
+
+    /// Put a soft-deleted node back into the tree. `into` is the destination
+    /// folder; `undefined` takes the folder the bin entry names. A destination
+    /// the vault no longer holds rejects with `restoreTargetGone`, and a node
+    /// the bin holds no entry for rejects with `notBinned`.
+    pub fn restore(node: &NodeId, into: Option<NodeId>) -> Command {
+        Self::wrap(facade::Command::Restore {
+            node: node.facade(),
+            into: into.map(|n| n.facade()),
+        })
+    }
+
+    /// Destroy a soft-deleted node and its bin entry. Irreversible. Rejects
+    /// with `notBinned` when the bin holds no entry for the node.
+    pub fn purge(node: &NodeId) -> Command {
+        Self::wrap(facade::Command::Purge {
             node: node.facade(),
         })
     }

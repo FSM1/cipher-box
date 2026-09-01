@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineFacade } from './facade.js';
 import {
   byoSettings,
+  emptyBin,
   emptySharing,
   emptySnapshot,
   emptyVaultStorage,
@@ -13,6 +14,7 @@ import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   OpenedStream,
@@ -42,6 +44,7 @@ class FakeTransport implements EngineTransport {
   snapshots: Uint8Array[] = [];
   sharingReads: Array<Uint8Array | null> = [];
   receivedShareReads = 0;
+  binReads = 0;
   vaultStorageReads = 0;
   authMethodReads = 0;
   downloads: Uint8Array[] = [];
@@ -113,6 +116,11 @@ class FakeTransport implements EngineTransport {
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     this.receivedShareReads += 1;
     return Promise.resolve([]);
+  }
+
+  bin(): Promise<BinDescriptor> {
+    this.binReads += 1;
+    return Promise.resolve(emptyBin());
   }
 
   vaultStorage(): Promise<VaultStorageDescriptor> {
@@ -534,6 +542,14 @@ describe('EngineFacade', () => {
     expect(transport.siweChallengeIntents).toEqual(['link']);
   });
 
+  it('forwards a bin read', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+
+    await expect(facade.bin()).resolves.toEqual(emptyBin());
+    expect(transport.binReads).toBe(1);
+  });
+
   it('forwards a vault-storage read', async () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
@@ -548,6 +564,23 @@ describe('EngineFacade', () => {
 
     await expect(facade.authMethods()).resolves.toEqual([]);
     expect(transport.authMethodReads).toBe(1);
+  });
+
+  it('sends a restore and a purge as their own commands, destination intact', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+    const node = new Uint8Array(16).fill(5);
+    const into = new Uint8Array(16).fill(6);
+
+    await facade.restore(node, into);
+    await facade.restore(node, null);
+    await facade.purge(node);
+
+    expect(transport.commands).toEqual([
+      { kind: 'restore', node, into },
+      { kind: 'restore', node, into: null },
+      { kind: 'purge', node },
+    ]);
   });
 
   it('sends a wallet link as its own command, never as a login', async () => {

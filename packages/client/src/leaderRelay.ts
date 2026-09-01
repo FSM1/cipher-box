@@ -40,6 +40,7 @@ import type { EngineTransport } from './transport.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
   OpenedStream,
@@ -452,6 +453,7 @@ export class LeaderRelay {
       | SnapshotDescriptor
       | SharingDescriptor
       | ReceivedShareDescriptor[]
+      | BinDescriptor
       | VaultStorageDescriptor
       | AuthMethodDescriptor[]
       | CommandOutcomeDescriptor
@@ -493,6 +495,7 @@ export class LeaderRelay {
     | SnapshotDescriptor
     | SharingDescriptor
     | ReceivedShareDescriptor[]
+    | BinDescriptor
     | VaultStorageDescriptor
     | AuthMethodDescriptor[]
     | ArrayBuffer
@@ -505,6 +508,8 @@ export class LeaderRelay {
         return this.transport.sharing(read.scope);
       case 'receivedShares':
         return this.transport.receivedShares();
+      case 'bin':
+        return this.transport.bin();
       case 'vaultStorage':
         return this.transport.vaultStorage();
       case 'authMethods':

@@ -555,6 +555,56 @@ impl fmt::Debug for ReceivedShareRow {
     }
 }
 
+/// The `/bin` route's whole read: the owner's soft-deleted nodes, and where
+/// the index they came from stands on the load ladder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinView {
+    /// One row per soft-deleted node.
+    pub entries: Vec<BinRow>,
+    /// Which rung the bin index load reached.
+    /// [`SettingsOrigin::Defaults`] means this device established no index at
+    /// all, so the empty `entries` is the documented fallback and not a claim
+    /// that the owner has deleted nothing. A host must render that apart from a
+    /// bin it read.
+    pub origin: SettingsOrigin,
+}
+
+/// One soft-deleted node, as the `/bin` route renders it.
+///
+/// The bin entry's `ipnsName` and its bin-held key are deliberately not
+/// projected: the name is the record route a restore or a purge resolves inside
+/// the engine, and the key is the access the entry holds on the owner's behalf.
+/// Neither is a host's to hold (CONTEXT.md "Bin entry").
+#[derive(Clone, PartialEq, Eq)]
+pub struct BinRow {
+    /// The soft-deleted node. A restore and a purge both name it.
+    pub node: NodeId,
+    /// The node's immutable kind.
+    pub kind: NodeKind,
+    /// The folder the node was unlinked from — a restore's default destination.
+    pub origin_parent: NodeId,
+    /// The name the node carried in that folder.
+    pub origin_name: String,
+    /// The injected deletion time, in milliseconds. A host renders expiry from
+    /// this and the owner's `bin_retention_days`.
+    pub deleted_at: u64,
+    /// The scope the node belonged to at the delete.
+    pub scope: NodeId,
+}
+
+impl fmt::Debug for BinRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BinRow")
+            .field("node", &self.node)
+            .field("kind", &self.kind)
+            .field("origin_parent", &self.origin_parent)
+            .field("origin_name", &RedactedText::of(&self.origin_name))
+            .field("deleted_at", &self.deleted_at)
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
 /// The storage pane's whole read: the member's own settings minus the provider
 /// credential, the account quota, and what a published prune still owes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7430,6 +7480,39 @@ where {
             .collect())
     }
 
+    /// The owner's bin, one row per soft-deleted node, for the `/bin` route.
+    ///
+    /// Owner-only by construction: a grantee's session holds no bin index key,
+    /// so this read answers for the owner alone (CONTEXT.md "Bin index").
+    pub async fn bin(&self) -> Result<BinView, EngineError> {
+        self.live_session()?;
+        let (index, origin) = match self.owner_bin_load().await? {
+            BinIndexLoad::Resolved(index) => (index, SettingsOrigin::Resolved),
+            BinIndexLoad::Stale { index, .. } => (index, SettingsOrigin::Stale),
+            BinIndexLoad::Empty(_) => {
+                return Ok(BinView {
+                    entries: Vec::new(),
+                    origin: SettingsOrigin::Defaults,
+                });
+            }
+        };
+        Ok(BinView {
+            entries: index
+                .entries
+                .iter()
+                .map(|entry| BinRow {
+                    node: NodeId(entry.node_id),
+                    kind: map_kind(entry.kind),
+                    origin_parent: NodeId(entry.origin_parent),
+                    origin_name: entry.origin_name().to_owned(),
+                    deleted_at: entry.deleted_at,
+                    scope: NodeId(entry.scope_id),
+                })
+                .collect(),
+            origin,
+        })
+    }
+
     /// The sharing state standing on `scope_root`, key-free: this vault's whole
     /// verified contact book, and the grants the scope root's own owner-signed
     /// ledger commits.
@@ -8256,17 +8339,34 @@ where {
 
     /// What the owner's bin index says about `node`, for the command that acts
     /// on it.
+    async fn binned_node(&self, node: NodeId) -> Result<BinnedNode, EngineError> {
+        // A command acts on an established index only: a load this device could
+        // not resolve proves nothing about the entry it is about to act on.
+        let index = match self.owner_bin_load().await? {
+            BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => index,
+            BinIndexLoad::Empty(reason) => {
+                return Err(EngineError::Seam {
+                    message: format!("bin index unresolved: {reason:?}"),
+                });
+            }
+        };
+        BinnedNode::of(&index, &node.0).ok_or(EngineError::NotBinned)
+    }
+
+    /// The owner's bin index load, with a refusal of bytes the plane actually
+    /// served already turned into the fail-closed trust violation — never the
+    /// availability a caller retries on (AGENTS.md rule 6).
     ///
     /// A cached index answers as readily as a resolved one: the drain re-reads
     /// the entry before it publishes anything, and a purge is conditional on the
-    /// `deletedAt` this read produced.
-    async fn binned_node(&self, node: NodeId) -> Result<BinnedNode, EngineError> {
+    /// `deletedAt` that read produced.
+    async fn owner_bin_load(&self) -> Result<BinIndexLoad, EngineError> {
         let keys = self
             .tick_bin_keys
             .borrow()
             .clone()
             .ok_or(EngineError::NotStarted)?;
-        let index = match load_bin_index(
+        let load = load_bin_index(
             &self.seams.record_transport,
             &self.gateway,
             &self.seams.http,
@@ -8276,23 +8376,15 @@ where {
             &self.profile,
             &keys,
         )
-        .await
+        .await;
+        if let BinIndexLoad::Empty(reason) = load
+            && bin_load_is_a_verdict(reason)
         {
-            BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => index,
-            // A refusal of bytes the plane actually served is a trust verdict,
-            // never the availability a caller retries on (AGENTS.md rule 6).
-            BinIndexLoad::Empty(reason) if bin_load_is_a_verdict(reason) => {
-                let message = format!("bin index refused: {reason:?}");
-                emit_trust_violation(&self.events, keys.name().as_str(), message.clone());
-                return Err(EngineError::TrustViolation { message });
-            }
-            BinIndexLoad::Empty(reason) => {
-                return Err(EngineError::Seam {
-                    message: format!("bin index unresolved: {reason:?}"),
-                });
-            }
-        };
-        BinnedNode::of(&index, &node.0).ok_or(EngineError::NotBinned)
+            let message = format!("bin index refused: {reason:?}");
+            emit_trust_violation(&self.events, keys.name().as_str(), message.clone());
+            return Err(EngineError::TrustViolation { message });
+        }
+        Ok(load)
     }
 
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,

@@ -47,7 +47,8 @@ use cipherbox_engine::seams::{
     SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
-    Destinations, SettingsPublishError, VaultSettings, publish_settings, settings_name,
+    Destinations, SettingsOrigin, SettingsPublishError, VaultSettings, publish_settings,
+    settings_name,
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
@@ -4227,6 +4228,69 @@ fn a_restore_whose_destination_is_gone_reports_its_own_outcome() {
     assert!(
         bin_entries(&world, &alice, &blocks).contains(&doomed.0),
         "and the refused restore left the entry standing"
+    );
+}
+
+/// The `/bin` route's read: one row per soft-deleted node, carrying the origin
+/// folder a restore defaults to and the deletion time expiry is measured from.
+#[test]
+fn the_bin_read_names_every_soft_deleted_node_with_its_origin_and_deletion_time() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    let cold = block_on(engine.bin()).expect("a bin with no index reads");
+    assert!(cold.entries.is_empty());
+    assert_eq!(
+        cold.origin,
+        SettingsOrigin::Defaults,
+        "no index was established, so the emptiness is the fallback and not a read"
+    );
+
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.bin()).expect("the bin reads");
+    assert_eq!(view.origin, SettingsOrigin::Resolved);
+    assert_eq!(view.entries.len(), 1, "one row per soft-deleted node");
+    let row = &view.entries[0];
+    assert_eq!(row.node, doomed);
+    assert_eq!(row.kind, NodeKind::File);
+    assert_eq!(row.origin_parent, ROOT, "a restore defaults to this folder");
+    assert_eq!(row.origin_name, "notes.txt");
+    assert!(row.deleted_at > 0, "expiry is measured from this");
+    assert!(
+        !format!("{row:?}").contains("notes.txt"),
+        "a row's Debug must not put a user's file name in a log"
+    );
+
+    block_on(engine.command(Command::Restore {
+        node: doomed,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        block_on(engine.bin())
+            .expect("the bin reads")
+            .entries
+            .is_empty(),
+        "a restored node leaves the read"
     );
 }
 

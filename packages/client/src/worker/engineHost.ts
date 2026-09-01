@@ -8,6 +8,7 @@ import { wipeTransfer } from '../buffers.js';
 import { commandTransfer } from './protocol.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   EventDescriptor,
@@ -31,6 +32,7 @@ import {
   minted,
   nodeId,
   readAuthMethods,
+  readBin,
   readEvent,
   readReceivedShare,
   readSharing,
@@ -63,6 +65,8 @@ export interface EngineHostLike {
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
   /** Reads this vault's accepted shares and the engine's verdict on each. */
   receivedShares(): Promise<ReceivedShareDescriptor[]>;
+  /** Reads the owner's bin: one key-free row per soft-deleted node. */
+  bin(): Promise<BinDescriptor>;
   vaultStorage(): Promise<VaultStorageDescriptor>;
   authMethods(): Promise<AuthMethodDescriptor[]>;
   siweChallenge(intent: SiweIntent): Promise<string>;
@@ -267,6 +271,10 @@ export class EngineHost implements EngineHostLike {
   async receivedShares(): Promise<ReceivedShareDescriptor[]> {
     const rows = await this.handle.receivedShares();
     return rows.map((row) => readReceivedShare(this.wasm, row));
+  }
+
+  async bin(): Promise<BinDescriptor> {
+    return readBin(this.wasm, await this.handle.bin());
   }
 
   async vaultStorage(): Promise<VaultStorageDescriptor> {

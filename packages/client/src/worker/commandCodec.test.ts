@@ -4,6 +4,7 @@ import { fakeWasmEnums } from '../testkit.js';
 import {
   buildCommand,
   readAuthMethods,
+  readBin,
   readEvent,
   readReceivedShare,
   readSharing,
@@ -13,6 +14,7 @@ import {
 import type { CommandDescriptor } from './protocol.js';
 import type {
   EngineWasm,
+  WasmBinView,
   WasmEvent,
   WasmSnapshotView,
   WasmVaultStorageView,
@@ -205,6 +207,83 @@ describe('buildCommand', () => {
     expect(refuses({ kind: 'cancelUpload', opId: 7 })).toThrow(
       'invalid request field opId: number'
     );
+  });
+
+  describe('bin', () => {
+    const node = new Uint8Array(16).fill(5);
+    const into = new Uint8Array(16).fill(6);
+
+    /** Records every builder call by name, whichever bin arm the codec reaches. */
+    const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
+      const calls: Record<string, unknown[][]> = {};
+      const wasm = {
+        ...fakeWasmEnums,
+        NodeId: {
+          fromBytes: (bytes: Uint8Array) => {
+            (calls.NodeId ??= []).push([bytes]);
+            return { bytes };
+          },
+        },
+        Command: new Proxy(
+          {},
+          {
+            get:
+              (_target, name: string) =>
+              (...args: unknown[]): object => {
+                (calls[name] ??= []).push(args);
+                return {};
+              },
+          }
+        ),
+      } as unknown as EngineWasm;
+      return { wasm, calls };
+    };
+
+    /** Builds off the union, as a version-skewed peer's descriptor arrives. */
+    const build = (wasm: EngineWasm, descriptor: unknown): unknown =>
+      buildCommand(wasm, descriptor as CommandDescriptor);
+
+    it('carries both the node and the named destination to the restore builder', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'restore', node, into });
+
+      expect(calls.restore).toEqual([[{ bytes: node }, { bytes: into }]]);
+    });
+
+    it('spells an unnamed restore destination as undefined, never as null', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'restore', node, into: null });
+
+      expect(calls.restore).toEqual([[{ bytes: node }, undefined]]);
+    });
+
+    it('builds a purge from the node alone', () => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'purge', node });
+
+      expect(calls.purge).toEqual([[{ bytes: node }]]);
+    });
+
+    it('rejects a restore or a purge whose node is not bytes', () => {
+      expect(refuses({ kind: 'restore', node: [1, 2, 3], into: null })).toThrow(
+        'invalid request field node'
+      );
+      expect(refuses({ kind: 'purge', node: [1, 2, 3] })).toThrow('invalid request field node');
+    });
+
+    it('refuses a destination that is not bytes before it mints the node', () => {
+      const { wasm, calls } = spyWasm();
+
+      expect(() => build(wasm, { kind: 'restore', node, into: 'sixteen bytes!!!' })).toThrow(
+        'invalid request field into: string'
+      );
+      // Refused before the node was minted, so no wasm handle is stranded.
+      expect(calls.NodeId).toBeUndefined();
+      expect(calls.restore).toBeUndefined();
+    });
   });
 
   describe('invite links', () => {
@@ -1045,6 +1124,60 @@ describe('readReceivedShare', () => {
     // A guessed class would paint a revoked share as still granted.
     expect(() => readReceivedShare(fakeWasm, { ...row, resolution: 'granted-ish' })).toThrow(
       'unknown WASM resolution class: granted-ish'
+    );
+  });
+});
+
+describe('readBin', () => {
+  const view = (): WasmBinView => ({
+    entries: [
+      {
+        node: new Uint8Array(16).fill(4),
+        kind: fakeWasmEnums.NodeKind.Folder,
+        originParent: new Uint8Array(16).fill(1),
+        originName: 'holiday',
+        deletedAt: 1_800_000_000_000n,
+        scope: new Uint8Array(16).fill(2),
+      },
+    ],
+    origin: fakeWasmEnums.SettingsOrigin.Resolved,
+  });
+
+  it('reads the rows and the rung the index load reached through', () => {
+    expect(readBin(fakeWasm, view())).toEqual({
+      entries: [
+        {
+          node: new Uint8Array(16).fill(4),
+          kind: 'folder',
+          originParent: new Uint8Array(16).fill(1),
+          originName: 'holiday',
+          deletedAt: 1_800_000_000_000n,
+          scope: new Uint8Array(16).fill(2),
+        },
+      ],
+      origin: 'resolved',
+    });
+  });
+
+  it('reads a bin no index backed as the defaults rung', () => {
+    // The empty entries are the fallback, which a surface renders apart from a
+    // bin it read.
+    expect(
+      readBin(fakeWasm, { entries: [], origin: fakeWasmEnums.SettingsOrigin.Defaults })
+    ).toEqual({ entries: [], origin: 'defaults' });
+  });
+
+  it('fails closed on a row kind it cannot map', () => {
+    const base = view();
+    expect(() =>
+      readBin(fakeWasm, { ...base, entries: [{ ...base.entries[0]!, kind: 42 }] })
+    ).toThrow('unknown WASM node kind value: 42');
+  });
+
+  it('fails closed on an origin it cannot map', () => {
+    // A guessed origin would present the fallback as a bin this device read.
+    expect(() => readBin(fakeWasm, { ...view(), origin: 42 })).toThrow(
+      'unknown WASM settings origin value: 42'
     );
   });
 });

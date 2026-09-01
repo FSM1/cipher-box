@@ -16,6 +16,7 @@ import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   NodeKind,
@@ -132,6 +133,11 @@ export class EngineFacade {
     return this.transport.receivedShares();
   }
 
+  /** The `/bin` route's whole read; an `origin` of `'defaults'` is the fallback, not a read. */
+  bin(): Promise<BinDescriptor> {
+    return this.transport.bin();
+  }
+
   /** The storage pane's whole read. */
   vaultStorage(): Promise<VaultStorageDescriptor> {
     return this.transport.vaultStorage();
@@ -197,6 +203,23 @@ export class EngineFacade {
 
   delete(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'delete', node });
+  }
+
+  /**
+   * Puts a soft-deleted node back, into `into` or the folder its bin entry
+   * names for `null`. Rejects with `restoreTargetGone` when the vault no longer
+   * holds that destination, and with `notBinned` when the bin holds no entry.
+   */
+  restore(node: Uint8Array, into: Uint8Array | null): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'restore', node, into });
+  }
+
+  /**
+   * Destroys a soft-deleted node and its bin entry, irreversibly. Rejects with
+   * `notBinned` when the bin holds no entry for the node.
+   */
+  purge(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'purge', node });
   }
 
   rename(node: Uint8Array, newName: string): Promise<CommandOutcomeDescriptor> {

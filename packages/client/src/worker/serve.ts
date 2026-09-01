@@ -85,6 +85,11 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           post({ type: 'response', id: request.id, ok: true, result });
           return;
         }
+        case 'bin': {
+          const result = await host.bin();
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
         case 'vaultStorage': {
           const result = await host.vaultStorage();
           post({ type: 'response', id: request.id, ok: true, result });

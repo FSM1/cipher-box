@@ -11,6 +11,7 @@ import { MAX_FRAGMENT_CHARS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
+  BinDescriptor,
   BlockedOpDescriptor,
   ByoKind,
   CommandDescriptor,
@@ -33,6 +34,7 @@ import type {
 import type {
   EngineWasm,
   WasmAuthMethod,
+  WasmBinView,
   WasmBlockedOp,
   WasmCommand,
   WasmEvent,
@@ -264,6 +266,13 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       );
     case 'delete':
       return wasm.Command.delete(nodeId(wasm, descriptor.node, 'node'));
+    case 'restore': {
+      // The destination first: a refusal after `nodeId` strands the handle it minted.
+      const into = descriptor.into === null ? undefined : nodeId(wasm, descriptor.into, 'into');
+      return wasm.Command.restore(nodeId(wasm, descriptor.node, 'node'), into);
+    }
+    case 'purge':
+      return wasm.Command.purge(nodeId(wasm, descriptor.node, 'node'));
     case 'rename':
       return wasm.Command.rename(
         nodeId(wasm, descriptor.node, 'node'),
@@ -609,6 +618,21 @@ function authMethodKindFrom(wasm: EngineWasm, kind: number): AuthMethodKind {
       // engine already spells a kind this build does not know as `Unknown`.
       throw new Error(`unknown WASM auth method kind value: ${kind}`);
   }
+}
+
+/** Reads a wasm-bindgen `BinView`'s key-free getters into a descriptor. */
+export function readBin(wasm: EngineWasm, view: WasmBinView): BinDescriptor {
+  return {
+    entries: view.entries.map((row) => ({
+      node: row.node,
+      kind: nodeKindFrom(wasm, row.kind),
+      originParent: row.originParent,
+      originName: row.originName,
+      deletedAt: row.deletedAt,
+      scope: row.scope,
+    })),
+    origin: settingsOriginFrom(wasm, view.origin),
+  };
 }
 
 /**

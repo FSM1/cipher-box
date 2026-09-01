@@ -46,6 +46,7 @@ import type { MessagePortLike, PortCourier } from './portRelay.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   OpenedStream,
@@ -257,6 +258,10 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
     return this.read<ReceivedShareDescriptor[]>({ kind: 'receivedShares' });
+  }
+
+  bin(): Promise<BinDescriptor> {
+    return this.read<BinDescriptor>({ kind: 'bin' });
   }
 
   vaultStorage(): Promise<VaultStorageDescriptor> {
