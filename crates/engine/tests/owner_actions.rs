@@ -34,7 +34,9 @@ use cipherbox_engine::net::author::{
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
-use cipherbox_engine::seams::{BoxedTask, Mailbox, RecordTransport, Scheduler, UnixMillis};
+use cipherbox_engine::seams::{
+    BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, UnixMillis,
+};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{
     open_repoint, scope_pointer_name, seal_repoint, vault_pointer_name,
@@ -663,11 +665,28 @@ impl GrantScenario {
 
     /// The bearer's own session, holding nothing but what the fragment carries.
     fn bearer(&self) -> (Engine<FakeSeamTypes>, EventStream) {
-        serve_http(&self.recipient_device, &self.blocks, 64);
-        let (mut engine, events) = engine_with(&self.recipient_device, 21, ApiBaseUrl::offline());
-        block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+        self.bearer_on(&self.recipient_device, &RECIPIENT_SECRET, 21)
+    }
+
+    /// A bearer session for `secret` on `device`. A secret other than the
+    /// recipient's is a claimant this owner's contact book has never held.
+    fn bearer_on(
+        &self,
+        device: &FakeDevice,
+        secret: &[u8; 32],
+        entropy_seed: u64,
+    ) -> (Engine<FakeSeamTypes>, EventStream) {
+        serve_http(device, &self.blocks, 64);
+        let (mut engine, events) = engine_with(device, entropy_seed, ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(secret.to_vec())))
             .expect("the bearer's own session starts");
         (engine, events)
+    }
+
+    /// The device a claimant's identity key addresses, holding its own stores.
+    fn device_for(&self, secret: &[u8; 32]) -> FakeDevice {
+        let identity = EcdsaSigner::from_scalar(secret).expect("valid identity scalar");
+        self.world.device(&identity.verifying_key().to_sec1())
     }
 
     /// The identity keys the folder's own committed set names as grantees.
@@ -1651,11 +1670,13 @@ impl ShareScenario {
     }
 }
 
-/// The recipient's own engine, on nothing but the shared record store and the
-/// sealed item on its inbox, adopts the share — at the permission the owner
-/// committed on the record, never the one the pointer advertises.
+/// `scopeId` is authored by the sharer and bound to nothing outside its own
+/// record, and every vault anchors its own root at the same id. A share that
+/// names that anchor would have the recipient adopt a foreign record as its own
+/// vault, so it is refused before the gate keys a durable floor on it. The
+/// fixture's sharer grants at its own root, which is exactly that id.
 #[test]
-fn the_recipient_accepts_a_shared_scope_at_the_owner_committed_permission() {
+fn a_share_naming_this_vaults_own_root_scope_is_refused_and_poisons_no_floor() {
     let fx = ShareScenario::new();
     let (mut recipient, _events, sealed) = fx.recipient_engine();
     block_on(recipient.command(Command::ImportContact {
@@ -1663,23 +1684,23 @@ fn the_recipient_accepts_a_shared_scope_at_the_owner_committed_permission() {
     }))
     .expect("the sharer's code imports");
 
-    let outcome = block_on(recipient.command(Command::AcceptShare {
-        sealed_share_pointer: sealed,
-    }))
-    .expect("the share is accepted end to end");
-    let CommandOutcome::ShareAccepted(accepted) = outcome else {
-        panic!("accepting a share answers with the adopted share");
-    };
-    assert_eq!(accepted.scope_id, SCOPE);
     assert_eq!(
-        accepted.permission,
-        CorePermission::Read,
-        "the committed ledger is authority, not the pointer's claim"
+        block_on(recipient.command(Command::AcceptShare {
+            sealed_share_pointer: sealed,
+        })),
+        Err(EngineError::TrustViolation {
+            message: "the record names this vault's own root scope".to_owned(),
+        }),
     );
-    assert!(accepted.newly_added);
-    assert!(
-        inbox(&fx.recipient_device).is_empty(),
-        "the item is acked only once the share is durable"
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        1,
+        "a refused accept acks nothing"
+    );
+    assert_eq!(
+        block_on(fx.recipient_device.floor_store.epoch_floor(&SCOPE)),
+        Ok(None),
+        "and the refusal lands before anything moves this vault's own floor"
     );
 }
 
@@ -2120,6 +2141,70 @@ fn a_redelivered_claim_converts_once() {
         fx.granted_to(),
         granted_after_first,
         "and files one grant for the claimant, not a second"
+    );
+}
+
+/// Revocation is the immediate-cut control, and `revoke` resolves its recipient
+/// in the contact book alone. A grant an invite link produced is therefore only
+/// real if the conversion recorded the claimant it granted.
+#[test]
+fn a_converted_claim_records_the_claimant_so_its_grant_can_be_cut() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    // A claimant this owner has never imported: the invite path is the only
+    // thing that puts them in the book.
+    let claimant_device = fx.device_for(&BYSTANDER_SECRET);
+    let claimant_pk = EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec();
+    let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 31);
+    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    fx.convert().expect("the conversion lands");
+    assert!(
+        fx.granted_to().contains(&claimant_pk),
+        "the conversion granted the claimant"
+    );
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimant_pk.clone(),
+        })),
+        Ok(CommandOutcome::Done),
+        "a converted grantee resolves as a recipient"
+    );
+    assert!(
+        !fx.granted_to().contains(&claimant_pk),
+        "and the cut leaves no committed row behind"
+    );
+}
+
+/// The book a conversion writes is durable, so the session that converted is
+/// not the only one that can name the recipient it granted.
+#[test]
+fn a_converted_claimant_stays_in_the_book_for_the_next_session() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimant_device = fx.device_for(&BYSTANDER_SECRET);
+    let claimant_pk = EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec();
+    let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 32);
+    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    fx.convert().expect("the conversion lands");
+
+    let (next, _next_events, _next_tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    assert!(
+        block_on(next.sharing(next.root()))
+            .expect("a sharing read")
+            .contacts
+            .into_iter()
+            .any(|contact| contact.identity_public_key == claimant_pk),
+        "the next session resolves the claimant a conversion recorded"
     );
 }
 

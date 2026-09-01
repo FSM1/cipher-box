@@ -46,7 +46,8 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
-use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts};
+use crate::grants::inbox::ShareInbox;
+use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
 use crate::grants::{
     AcceptError, AcceptOutcome, ClaimOutcome, CommittedScope, Contact, ContactStore,
     ContactStoreError, ConvertedClaim, CreateGrantError, EphemeralInvitee, GrantRecipient,
@@ -123,8 +124,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
-    focus_files, focus_folders, focus_folders_due, focus_window_expired, on_access_refresh_due,
-    resolve_mode, run_tick_loop,
+    focus_by_scope, focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode,
+    run_tick_loop, scope_root_of,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -1837,6 +1838,28 @@ fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), Engi
     Ok(())
 }
 
+/// Refuse a journal target the write plane cannot author under.
+///
+/// An accepted shared scope is grafted into the render tree with no parent link
+/// (`grants::received_status`), so a browse reaches it but the drain cannot:
+/// an op there names a chain that walks to no root this session publishes under.
+/// Refusing at journal time is the only order that works, on the same grounds as
+/// [`refuse_scope_exit`].
+///
+/// A node the render does not hold at all keeps its existing verdict — the
+/// rebase decides what a stale target means, and that is not this check's call.
+fn refuse_outside_vault(rendered: &Snapshot, node: NodeId) -> Result<(), EngineError> {
+    if rendered.contains(node)
+        && node != rendered.root
+        && !rendered.ancestors(node).contains(&rendered.root)
+    {
+        return Err(EngineError::ScopeExitRefused {
+            message: "that item is not in this session's scope".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// The owner rotation arm over one engine's seam family.
 type OwnerNet<'a, T> = OwnerRotationNet<
     'a,
@@ -2094,7 +2117,7 @@ fn subtree_child_scopes(
 /// The published grant blobs of a gated scope root, as the accept flow's
 /// self-location reads them. The structure signature is the gate's to verify;
 /// self-location keys on the tag alone.
-fn published_grant_blobs(section: &GrantSection) -> Vec<PublishedGrantBlob> {
+pub(crate) fn published_grant_blobs(section: &GrantSection) -> Vec<PublishedGrantBlob> {
     section
         .grant_blobs
         .iter()
@@ -2388,14 +2411,14 @@ struct SyncStatus {
 /// floor past it revokes that epoch, so the seed is evicted rather than left
 /// resident for the rest of the session. Least privilege is a retention rule,
 /// not only an install rule.
-struct CachedSeed {
+pub(crate) struct CachedSeed {
     seed: Zeroizing<[u8; 32]>,
     floor: u64,
 }
 
 /// One of the engine's in-memory per-scope seed cells: scope id → the recovered
 /// seed (zeroized on removal/drop).
-type ScopeSeeds = BTreeMap<[u8; 16], CachedSeed>;
+pub(crate) type ScopeSeeds = BTreeMap<[u8; 16], CachedSeed>;
 
 /// Which of a scope's two independent durable floors bounds a cached seed
 /// (`gate::floor`: the read-epoch floor is the revocation boundary, the
@@ -2456,7 +2479,7 @@ async fn refresh_seed_floor<F: FloorStore>(
 ///
 /// `None` skips the deposit — the floor could not be read, so nothing can be
 /// stamped and the eviction pass has already cleared the cell.
-fn deposit_seed(
+pub(crate) fn deposit_seed(
     cell: &RefCell<ScopeSeeds>,
     scope_id: [u8; 16],
     seed: Zeroizing<[u8; 32]>,
@@ -4041,13 +4064,25 @@ where {
                         focus.borrow_mut().open_folder = None;
                         focus_touched.set(None);
                     }
-                    // The focus window's folders below the root — the read leg for a
-                    // subtree this device did not author. It runs before the drain,
-                    // so the queue rebases onto the deepest state this pass
-                    // reconciled, not just the root's.
-                    let open = focus_folders(&base.borrow(), &focus.borrow());
+                    // The focus window's folders below each scope root — the read
+                    // leg for a subtree this device did not author. It runs before
+                    // the drain, so the queue rebases onto the deepest state this
+                    // pass reconciled, not just the root's.
+                    //
+                    // Grouped by scope: a leg holds one scope's read material, so a
+                    // record sealed under another would fail its AAD-bound unseal
+                    // and be reported as abuse by an honest writer. A scope whose
+                    // seed this device has not recovered serves nothing, and its
+                    // files stay queued for the pass that can.
                     let mut folder_verdict = RefreshVerdict::Reconciled;
-                    if let Some(read_seed) = &read_seed {
+                    let mut queued_files: Vec<NodeId> = Vec::new();
+                    let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
+                    for (scope_root, targets) in by_scope {
+                        let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
+                        else {
+                            queued_files.extend(targets.files);
+                            continue;
+                        };
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
@@ -4056,27 +4091,13 @@ where {
                             gateway: &gateway,
                             base: &base,
                             events: &events,
-                            scope_id: root_id,
-                            scope_read_seed: read_seed,
+                            scope_id: scope_root.0,
+                            scope_read_seed: &scope_read_seed,
                             mode,
                         };
-                        // This leg holds one scope's read material, so a file
-                        // sealed under another would fail its AAD-bound unseal
-                        // and be reported as abuse by an honest writer. Files
-                        // outside it stay queued for the leg that can serve them.
-                        let due_files = {
-                            let base = base.borrow();
-                            let queued = focus_files(&base, &focus.borrow());
-                            let (mine, theirs): (Vec<NodeId>, Vec<NodeId>) =
-                                queued.into_iter().partition(|file| {
-                                    base.ancestors(*file).last() == Some(&NodeId(root_id))
-                                });
-                            focus.borrow_mut().open_files = theirs;
-                            mine
-                        };
                         for (nodes, report) in [
-                            (&open, refresh.run(&open).await),
-                            (&due_files, refresh.run_files(&due_files).await),
+                            (&targets.folders, refresh.run(&targets.folders).await),
+                            (&targets.files, refresh.run_files(&targets.files).await),
                         ] {
                             if nodes.is_empty() {
                                 continue;
@@ -4088,6 +4109,7 @@ where {
                             folder_verdict = folder_verdict.worst(report.verdict);
                         }
                     }
+                    focus.borrow_mut().open_files = queued_files;
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
                     // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -4166,6 +4188,20 @@ where {
                     // Last, and after the settle above: the grantee's own read
                     // leg is the slowest in the pass, and a host refresh waits
                     // on nothing it reports.
+                    //
+                    // The mailbox pull leads it, so a share this pass accepts is
+                    // classified by the refresh below rather than a pass later.
+                    ShareInbox {
+                        mailbox: api.as_ref(),
+                        transport: &transport,
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        enc_secret: &enc_subkey,
+                        vault_root_scope: root_id,
+                    }
+                    .pull(&staging, &entropy, ENVELOPE_V, &events)
+                    .await;
                     ReceivedShareStatus {
                         transport: &transport,
                         gateway: &gateway,
@@ -4173,7 +4209,18 @@ where {
                         floors: &floors,
                         enc_secret: &enc_subkey,
                     }
-                    .refresh(&staging, &entropy, &received_verdicts, now, &profile)
+                    .refresh(
+                        &staging,
+                        &entropy,
+                        &received_verdicts,
+                        &ScopeRender {
+                            base: &base,
+                            read_seeds: &scope_read_seeds,
+                            events: &events,
+                        },
+                        now,
+                        &profile,
+                    )
                     .await;
                     let mut status = sync_status.borrow_mut();
                     status.reconcile_in_flight = false;
@@ -4275,6 +4322,7 @@ where {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
                 let op = Op::relink(
@@ -4294,6 +4342,7 @@ where {
                 replacing,
             } => {
                 let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
                 let replacing = replacing.map(|replaced| Replaced {
@@ -5556,6 +5605,7 @@ where {
                 commitment,
                 ledger,
                 claimant,
+                claimant_code,
                 outcome,
                 record,
             } = match converted {
@@ -5587,6 +5637,15 @@ where {
                 // The set cannot take another grant, or would not publish.
                 Err(e) => return Err(EngineError::from_invite(e)),
             };
+
+            // Ahead of the publish: `revoke`/`downgrade` resolve their recipient
+            // in the contact book alone, so a grant this owner cannot later cut
+            // must never reach the record plane. A book with no room refuses the
+            // conversion and the item stays un-acked.
+            if let Err(e) = self.contact_store(session).record(&claimant_code).await {
+                failure.get_or_insert(EngineError::from_contact_store(e));
+                continue;
+            }
 
             if outcome != ClaimOutcome::Unchanged {
                 match self
@@ -5810,6 +5869,7 @@ where {
             .await
             .map_err(EngineError::from_received_share_store)?;
         let blobs = published_grant_blobs(&candidate.grant_section);
+        let vault_root_scope = self.snapshot.borrow().root.0;
         accept_share(
             &self.seams.floor_store,
             api.as_ref(),
@@ -5819,6 +5879,7 @@ where {
             session.enc_subkey(),
             &candidate,
             &blobs,
+            &vault_root_scope,
             &mut received,
         )
         .await
@@ -5968,10 +6029,20 @@ where {
             now,
             &self.profile,
         );
+        // One leg holds one scope's read material, so a folder in a shared scope
+        // this vault accepted refreshes on the tick's own leg for that scope,
+        // never here under the vault's seed.
+        let (scope_id, due) = {
+            let base = self.snapshot.borrow();
+            let mine = due
+                .into_iter()
+                .filter(|node| scope_root_of(&base, *node) == base.root)
+                .collect::<Vec<_>>();
+            (base.root.0, mine)
+        };
         if due.is_empty() {
             return false;
         }
-        let scope_id = self.snapshot.borrow().root.0;
         let Some(scope_read_seed) = self.scope_read_seed(&scope_id).await else {
             return false;
         };
@@ -6014,9 +6085,14 @@ where {
         // no file for would journal an `updateContent` the drain can only halt
         // on, after a whole upload's worth of staging, entropy and budget.
         let base_version_cid = match &target {
-            WriteTarget::NewFile { .. } => None,
+            WriteTarget::NewFile { parent, .. } => {
+                refuse_outside_vault(&self.render().await?, *parent)?;
+                None
+            }
             WriteTarget::Version { node } => {
-                match self.render().await?.node(*node).map(|meta| meta.kind) {
+                let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, *node)?;
+                match rendered.node(*node).map(|meta| meta.kind) {
                     Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
                     Some(_) => self.write_anchor(*node).await?,
                     None => return Err(EngineError::UnknownNode),
@@ -7344,7 +7420,9 @@ where {
     /// the rendered view, defaulting to 1 for a node not yet in gate-passing
     /// state (a pending create).
     async fn base_sequence_for(&self, node: NodeId) -> Result<u64, EngineError> {
-        Ok(self.render().await?.record_sequence(node).unwrap_or(1))
+        let rendered = self.render().await?;
+        refuse_outside_vault(&rendered, node)?;
+        Ok(rendered.record_sequence(node).unwrap_or(1))
     }
 
     /// Mint a fresh random 16-byte node id from the injected entropy seam
@@ -7576,6 +7654,77 @@ mod tests {
             refuse_scope_exit(&rendered, orphan),
             Err(EngineError::ScopeExitRefused { .. })
         ));
+    }
+
+    /// An accepted shared scope is grafted in parentless, so a browse reaches it
+    /// but the write plane cannot author under it. A mutation there must be
+    /// refused where the caller can still be told, not journaled into a queue
+    /// whose drain can never walk its chain to a root.
+    #[test]
+    fn a_journal_target_outside_this_vaults_tree_is_refused() {
+        let root = NodeId([1; 16]);
+        let inside = NodeId([2; 16]);
+        let shared_root = NodeId([3; 16]);
+        let shared_child = NodeId([4; 16]);
+        let mut rendered = Snapshot::new(root);
+        rendered.upsert_node(NodeMeta::new(inside, "mine", NodeKind::Folder));
+        rendered.link_next(root, inside);
+        rendered.upsert_node(NodeMeta::new(shared_root, "theirs", NodeKind::Folder));
+        rendered.upsert_node(NodeMeta::new(shared_child, "theirs/sub", NodeKind::Folder));
+        rendered.link_next(shared_root, shared_child);
+
+        assert!(refuse_outside_vault(&rendered, root).is_ok());
+        assert!(refuse_outside_vault(&rendered, inside).is_ok());
+        assert!(
+            refuse_outside_vault(&rendered, NodeId([9; 16])).is_ok(),
+            "a node the render never held keeps the verdict the rebase gives it"
+        );
+        for node in [shared_root, shared_child] {
+            assert!(matches!(
+                refuse_outside_vault(&rendered, node),
+                Err(EngineError::ScopeExitRefused { .. })
+            ));
+        }
+    }
+
+    /// The relocation arms read their source off the render, so a destination
+    /// check alone still admits a move *out* of a grafted shared scope. Its op
+    /// names a chain that walks to no root this session publishes, so the drain
+    /// halts on it instead of the caller hearing a refusal.
+    #[test]
+    fn a_relocation_whose_source_is_outside_this_vault_is_refused() {
+        let (mut engine, _events) = started();
+        let root = engine.snapshot.borrow().root;
+        let shared_root = NodeId([0xf1; 16]);
+        let shared_child = NodeId([0xf2; 16]);
+        {
+            let mut base = engine.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(shared_root, "theirs", NodeKind::Folder));
+            base.upsert_node(NodeMeta::new(shared_child, "doc", NodeKind::File));
+            base.link_next(shared_root, shared_child);
+        }
+
+        for command in [
+            Command::Relink {
+                node: shared_child,
+                new_parent: root,
+            },
+            Command::Move {
+                node: shared_child,
+                new_parent: root,
+                new_name: "doc".to_owned(),
+                replacing: None,
+            },
+        ] {
+            let label = command.name();
+            assert!(
+                matches!(
+                    block_on(engine.command(command)),
+                    Err(EngineError::ScopeExitRefused { .. })
+                ),
+                "{label} out of a grafted scope must refuse where the caller hears it"
+            );
+        }
     }
 
     /// A transport that lands a settings save into `slot` before the resolve it

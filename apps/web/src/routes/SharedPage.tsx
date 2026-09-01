@@ -1,11 +1,15 @@
 import { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { toHex } from '@cipherbox/client';
 import { AppShell } from '../components/layout/AppShell';
 import { useReceivedShares } from '../hooks/useReceivedShares';
+import { folderPath } from '../lib/nodeId';
 import { shareStanding, type ReceivedShareStanding } from '../sharing/receivedShares';
 
 interface Row {
   scope: string;
+  /** The vault-browser route for the scope root: a share opens in the one browser. */
+  path: string;
   sharer: string;
   displayName: string;
   permission: string;
@@ -26,6 +30,7 @@ export function SharedPage() {
     () =>
       shares?.map((share) => ({
         scope: toHex(share.scope),
+        path: folderPath(share.scope),
         sharer: toHex(share.sharerIdentityPublicKey),
         displayName: share.displayName,
         permission: share.permission,
@@ -60,39 +65,42 @@ export function SharedPage() {
             {'// nothing has been shared with you yet'}
           </p>
         ) : (
-          <>
-            <ul className="sharing-list" data-testid="shared-list">
-              {rows.map((row) => (
-                <li
-                  key={row.scope}
-                  className="sharing-row sharing-row--shared"
-                  data-testid="shared-row"
-                  data-scope={row.scope}
+          <ul className="sharing-list" data-testid="shared-list">
+            {rows.map((row) => (
+              <li
+                key={`${row.sharer}:${row.scope}`}
+                className="sharing-row sharing-row--shared"
+                data-testid="shared-row"
+                data-scope={row.scope}
+              >
+                <span className="shared-name" data-testid="shared-name">
+                  {row.displayName}
+                </span>
+                <span className="sharing-key" data-testid="shared-sharer">
+                  {row.sharer}
+                </span>
+                <span className="details-badge" data-testid="shared-permission">
+                  {row.permission}
+                </span>
+                <Link
+                  className="terminal-btn shared-open"
+                  to={row.path}
+                  data-testid="shared-open"
+                  aria-label={`open ${row.displayName}`}
                 >
-                  <span className="shared-name" data-testid="shared-name">
-                    {row.displayName}
-                  </span>
-                  <span className="sharing-key" data-testid="shared-sharer">
-                    {row.sharer}
-                  </span>
-                  <span className="details-badge" data-testid="shared-permission">
-                    {row.permission}
-                  </span>
-                  <span
-                    className="shared-standing"
-                    data-testid="shared-standing"
-                    data-resolution={row.resolution}
-                    data-tone={row.standing.tone}
-                  >
-                    {row.standing.label}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <p className="sharing-note" data-testid="shared-no-browse">
-              {'// opening a shared folder is not built yet — this list is its standing'}
-            </p>
-          </>
+                  open
+                </Link>
+                <span
+                  className="shared-standing"
+                  data-testid="shared-standing"
+                  data-resolution={row.resolution}
+                  data-tone={row.standing.tone}
+                >
+                  {row.standing.label}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
 
         <button

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ReceivedShareDescriptor, ReceivedShareResolution } from '@cipherbox/client';
 import { SharedPage } from './SharedPage';
 import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from '../test/authFakes';
@@ -106,7 +106,53 @@ describe('the shared route', () => {
 
     expect(screen.getByTestId('shared-empty')).toBeTruthy();
     expect(screen.queryByTestId('shared-unread')).toBeNull();
-    expect(screen.queryByTestId('shared-no-browse')).toBeNull();
+    expect(screen.queryAllByTestId('shared-open')).toHaveLength(0);
+  });
+
+  it('opens a received share in the vault browser, at its own scope root', async () => {
+    await renderShared(() => Promise.resolve([share(1, 'granted', 'photos')]));
+
+    const open = screen.getByTestId('shared-open');
+    expect(open.getAttribute('href')).toBe(`/files/${'01'.repeat(16)}`);
+    expect(open.getAttribute('aria-label')).toBe('open photos');
+  });
+
+  it('keeps two sharers that claim one scope id apart', async () => {
+    // A sharer authors its own scope id, so the engine keys a bookmark on the
+    // pair. React only warns on a duplicate key, so the warning is the
+    // assertion: a row keyed on the scope alone collides here.
+    const other = new Uint8Array(33).fill(0xb2);
+    const errors: unknown[][] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      errors.push(args);
+    });
+    try {
+      await renderShared(() =>
+        Promise.resolve([
+          share(1, 'granted', 'theirs'),
+          { ...share(1, 'granted', 'also-theirs'), sharerIdentityPublicKey: other },
+        ])
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(screen.getAllByTestId('shared-row')).toHaveLength(2);
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'theirs',
+      'also-theirs',
+    ]);
+    expect(errors.filter((args) => String(args[0]).includes('same key'))).toEqual([]);
+  });
+
+  it('still offers the browse on a revoked share, over the listing that stands', async () => {
+    // The removal is discovered, not delivered: what a member last saw is still
+    // theirs to read.
+    await renderShared(() => Promise.resolve([share(1, 'revocation-signal')]));
+
+    expect(screen.getByTestId('shared-open').getAttribute('href')).toBe(
+      `/files/${'01'.repeat(16)}`
+    );
   });
 
   it("renders the engine's own words when the read is refused, and lists nothing", async () => {

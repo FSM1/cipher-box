@@ -50,4 +50,18 @@ export class SharedPage {
   async readAgain(): Promise<void> {
     await this.page.getByTestId('shared-reload').click();
   }
+
+  /** The row for the scope root `scope`, as lowercase hex. */
+  row(scope: string): Locator {
+    return this.page.locator(`[data-testid="shared-row"][data-scope="${scope}"]`);
+  }
+
+  /**
+   * Opens a received share. The scope root is the handle a browse opens under,
+   * so this lands on `/files/<scope>` in the one vault browser — never a second
+   * one.
+   */
+  async openShare(scope: string): Promise<void> {
+    await this.row(scope).getByTestId('shared-open').click();
+  }
 }

@@ -623,6 +623,10 @@ pub struct ConvertedClaim {
     /// is the only address the share pointer for this grant can be sent to: the
     /// item's sender is the link's ephemeral identity, not the claimant's.
     pub claimant: Contact,
+    /// The contact-code bytes [`claimant`](Self::claimant) imported from. The
+    /// owner records them in the contact book before the grant publishes, so a
+    /// later revoke or downgrade resolves the recipient it just granted.
+    pub claimant_code: Vec<u8>,
     /// What this conversion changed.
     pub outcome: ClaimOutcome,
     /// What the owner must persist to keep this claim single-use, if anything.
@@ -793,6 +797,7 @@ pub fn convert_invite_claim(
         commitment,
         ledger,
         claimant: contact,
+        claimant_code: claim.contact_code,
         outcome,
         record,
     })

@@ -115,6 +115,44 @@ pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
         .collect()
 }
 
+/// The scope root a focused node belongs to: its topmost ancestor, or itself
+/// when no link names it. A shared scope this vault accepted is grafted in
+/// parentless, so it anchors its own subtree and one window may span several
+/// scopes.
+pub fn scope_root_of(snapshot: &Snapshot, node: NodeId) -> NodeId {
+    snapshot.ancestors(node).last().copied().unwrap_or(node)
+}
+
+/// One scope's share of the focus window.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ScopeFocus {
+    /// Folder records below the scope root, nearest first.
+    pub folders: Vec<NodeId>,
+    /// File records in view, in queue order.
+    pub files: Vec<NodeId>,
+}
+
+/// The focus window grouped by the scope root that serves each target — each
+/// scope's read material is its own, so a target may only be resolved on the leg
+/// that holds it.
+///
+/// A scope's own root never appears: it resolves on its own leg (the vault
+/// pointer, or the received-share render), never through the child gate.
+pub fn focus_by_scope(snapshot: &Snapshot, focus: &FocusWindow) -> BTreeMap<NodeId, ScopeFocus> {
+    let mut grouped: BTreeMap<NodeId, ScopeFocus> = BTreeMap::new();
+    for node in focus_folders(snapshot, focus) {
+        let root = scope_root_of(snapshot, node);
+        if node != root {
+            grouped.entry(root).or_default().folders.push(node);
+        }
+    }
+    for node in focus_files(snapshot, focus) {
+        let root = scope_root_of(snapshot, node);
+        grouped.entry(root).or_default().files.push(node);
+    }
+    grouped
+}
+
 /// The focus window's file targets, in queue order — the leg that repaints a
 /// file another device republished, which no folder record mirrors.
 pub fn focus_files(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
@@ -617,6 +655,61 @@ mod tests {
             scheduler.now(),
             UnixMillis(3 * crate::sync::duration_millis(SyncTimingProfile::CI.poll_cadence)),
             "each tick slept exactly the cadence"
+        );
+    }
+
+    /// A leg holds one scope's read material, so the window must be split by the
+    /// scope that can serve each target — and neither scope's own root may ride a
+    /// child-gate leg.
+    #[test]
+    fn the_window_splits_by_the_scope_root_that_can_serve_each_target() {
+        let mut snap = Snapshot::new(id(0));
+        snap.upsert_node(NodeMeta::new(id(1), "mine", NodeKind::Folder));
+        snap.link(id(0), id(1), 1);
+        // An accepted share, grafted in beside the vault root with no parent.
+        snap.upsert_node(NodeMeta::new(id(7), "theirs", NodeKind::Folder));
+        snap.upsert_node(NodeMeta::new(id(8), "theirs/sub", NodeKind::Folder));
+        snap.link(id(7), id(8), 1);
+        snap.upsert_node(NodeMeta::new(id(9), "theirs/file", NodeKind::File));
+        snap.link(id(8), id(9), 1);
+
+        let grouped = focus_by_scope(
+            &snap,
+            &FocusWindow {
+                open_folder: Some(id(8)),
+                open_shared_scopes: vec![id(7)],
+                open_files: vec![id(9)],
+            },
+        );
+
+        assert_eq!(
+            grouped.get(&id(7)),
+            Some(&ScopeFocus {
+                folders: vec![id(8)],
+                files: vec![id(9)],
+            }),
+            "the shared scope serves its own subtree, and never its own root",
+        );
+        assert_eq!(
+            grouped.get(&id(0)),
+            None,
+            "the vault leg has nothing in view"
+        );
+
+        let grouped = focus_by_scope(
+            &snap,
+            &FocusWindow {
+                open_folder: Some(id(1)),
+                open_shared_scopes: Vec::new(),
+                open_files: Vec::new(),
+            },
+        );
+        assert_eq!(
+            grouped.get(&id(0)),
+            Some(&ScopeFocus {
+                folders: vec![id(1)],
+                files: Vec::new(),
+            }),
         );
     }
 }
