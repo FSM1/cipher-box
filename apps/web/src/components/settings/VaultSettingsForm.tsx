@@ -56,7 +56,9 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
 
   // Each read the route lands refills the form, so a confirmed save shows what
   // the vault now carries rather than what was typed at it. The credential is
-  // blanked rather than prefilled: no read can carry one.
+  // blanked rather than prefilled: no read can carry one. Every acknowledgement
+  // clears with the refill: each one is taken on what the form held when it was
+  // ticked, and the refill replaces values the form never shows.
   useEffect(() => {
     const { pinMode, byoEndpoint, byoKind, keepLatestVersions, binRetentionDays } =
       prefillFromSummary(summary);
@@ -68,6 +70,7 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
       binRetentionDays,
       byoAccessToken: '',
     });
+    setAcknowledged(false);
     setClearCredential(false);
     setLoadAcknowledged(false);
   }, [summary]);
