@@ -62,6 +62,7 @@ use crate::facade::{NodeId, seed_names};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{Adopted, GateError, RejectionReason, floor};
 use crate::grants::child_index::canonicalize;
+use crate::grants::create::ScopePointerVoucher;
 use crate::grants::{
     GrantResumeResolver, InteriorRecord, InteriorResealer, PromotedScopeRoot, ScopeRootPromoter,
     UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row, recipient_self_location,
@@ -87,7 +88,8 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::sync::pointer::{
-    PointerFetch, PointerRecord, open_repoint, scope_pointer_name, scope_pointer_signer,
+    PointerFetch, PointerRecord, SessionRole, open_repoint, scope_pointer_name,
+    scope_pointer_signer, seal_repoint,
 };
 
 /// The owner key material the rotation edges run under. The owner is the
@@ -611,7 +613,9 @@ pub(crate) struct DescendantScopeRoot {
     pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     /// `Err` when this pass opened no write plane, classified so the drain can
     /// tell a scope that will never take a write here from one that is merely
-    /// dark this pass. Such a scope still reads and renders.
+    /// dark this pass ([`Self::write`] is read by
+    /// [`crate::sync::drain::DrainScope`]). Such a scope still reads and
+    /// renders.
     pub(crate) write: Result<ScopeWritePlane, WritePlaneDark>,
 }
 
@@ -629,12 +633,6 @@ pub(crate) enum WritePlaneDark {
     Unavailable,
 }
 
-/// The write epoch a grant cut mints a promoted scope root at
-/// (`crate::grants::create`). A write body carrying an empty `writeHistoryLink`
-/// is exactly this epoch (`cipherbox_core::seal::write_body`), so it is the one
-/// write epoch a device that did not mint the root recovers from the record.
-const MINT_WRITE_EPOCH: u64 = 1;
-
 /// How many descendant scope roots one walk admits.
 const MAX_DESCENDANT_SCOPE_ROOTS: usize = 256;
 
@@ -643,6 +641,239 @@ const MAX_DESCENDANT_SCOPE_ROOTS: usize = 256;
 /// GET whether or not it gates, so counting only the entries that gate would let
 /// a committed writer set this device's per-tick record traffic.
 const MAX_SCOPE_DESCENT_ATTEMPTS: usize = 512;
+
+/// The pointer-plane leg of a grant mint: seal the owner-signed re-point that
+/// vouches for the scope the cut is about to create, and publish it at that
+/// scope's pointer name.
+///
+/// Held apart from [`OwnerRotationNet`] because it needs a capability the
+/// rotation deliberately does not carry — `ownerPointerSeed` derives the
+/// pointer record's **signing** key, and narrowing the rotation to the pointer
+/// plane's read edges is what makes "the rotation cannot sign the plane it
+/// reads" a fact of the type ([`OwnerPointerRead`]).
+pub(crate) struct ScopePointerMint<'a, T, H: Http, C: CredentialStore, F, Sch, E, K> {
+    pub(crate) transport: &'a T,
+    pub(crate) api: &'a ApiClient<H, C>,
+    pub(crate) floors: &'a F,
+    pub(crate) scheduler: &'a Sch,
+    pub(crate) profile: &'a SyncTimingProfile,
+    /// Injected entropy — the re-point's seal nonce (determinism law).
+    pub(crate) entropy: &'a RefCell<E>,
+    /// The pointer plane's read and signing edges for this owner.
+    pub(crate) keys: &'a K,
+    /// Signs the re-point payload, which every consult verifies against the
+    /// contact-anchored owner identity.
+    pub(crate) identity_signer: &'a EcdsaSigner,
+    /// That same identity, for reading the pointer this mint may be replacing.
+    pub(crate) identity: &'a EcdsaVerifier,
+    /// Where the published pointer is enrolled for sub-EOL renewal. A scope
+    /// pointer carries a 90-day client-signed EOL and only the owner can renew
+    /// it, so one this mint published and did not enrol would lapse.
+    pub(crate) held: &'a RefCell<HeldRecords>,
+    pub(crate) payload_version: u64,
+}
+
+impl<T, H, C, F, Sch, E, K> ScopePointerVoucher for ScopePointerMint<'_, T, H, C, F, Sch, E, K>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+    K: OwnerPointerRead + OwnerPointerSign,
+{
+    async fn vouch_scope(&self, repoint: &RepointObject) -> Result<(), RotationPublishError> {
+        let read_key = self.keys.pointer_read_key(&repoint.scope_id);
+        let block = seal_repoint(
+            SessionRole::Owner,
+            &mut *self.entropy.borrow_mut(),
+            &read_key,
+            self.payload_version,
+            self.identity_signer,
+            repoint,
+        )
+        .map_err(|_| RotationPublishError::Rejected)?;
+        // Rule 8, through the predicate the consume side reads it with: every
+        // consult refuses a re-point below the epoch already in force, so a
+        // mint must not sign one. Both halves of "in force" are checked, because
+        // this device's own floor speaks only for this device: the durable floor
+        // it holds, and the epoch the standing pointer vouches for, which a
+        // device that never held the scope learns no other way. The read half of
+        // `repoint_regression` cannot fire here — it guards the session root
+        // alone, and a promoted scope is never that.
+        if floor::write_epoch_regression(self.floors, &repoint.scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?
+            .is_some()
+        {
+            return Err(RotationPublishError::Rejected);
+        }
+        let name = self.keys.pointer_name(&repoint.scope_id);
+        let signer = self.keys.pointer_signer(&repoint.scope_id);
+        if let Some((standing, _)) = fanout_get_verify(self.transport, &name).await
+            && let Ok(prior) = open_repoint(
+                &read_key,
+                self.payload_version,
+                &repoint.scope_id,
+                self.identity,
+                &standing.value,
+            )
+            && prior.write_epoch >= repoint.write_epoch
+            // A standing re-point identical to this one is this mint's own
+            // landed vouch: the publish leads the promotion, so an attempt that
+            // vouched and then failed to promote leaves exactly this record. The
+            // retry must re-publish it and re-enrol it for renewal, not be
+            // refused by what its own first attempt signed.
+            && &prior != repoint
+        {
+            return Err(RotationPublishError::Rejected);
+        }
+        // The same name-to-signer bind every held pointer clears: a key arm
+        // whose read and signing edges disagree would publish at a routing key
+        // no renewal here can re-sign (`enrol_scope_pointer`).
+        if IpnsName::from_public_key(&signer.verifying_key()) != name {
+            return Err(RotationPublishError::Rejected);
+        }
+        let record_bytes = publish_pointer_inline(
+            PointerPipeline {
+                transport: self.transport,
+                api: self.api,
+                floors: self.floors,
+                scheduler: self.scheduler,
+                profile: self.profile,
+            },
+            &name,
+            &signer,
+            &block,
+        )
+        .await
+        .map_err(|failure| match failure {
+            PointerPublishFailure::Rejected => RotationPublishError::Rejected,
+            PointerPublishFailure::LostRace => RotationPublishError::LostRace,
+            // A full registry stops this cut like any other unlanded publish:
+            // the mint refuses, so nothing retries behind the member's back.
+            PointerPublishFailure::NotLanded | PointerPublishFailure::RegistryFull => {
+                RotationPublishError::NotPublished
+            }
+        })?;
+        hold_scope_pointer(
+            self.held,
+            repoint.scope_id,
+            &name,
+            signer,
+            block,
+            record_bytes,
+        );
+        Ok(())
+    }
+}
+
+/// The publish pipeline one pointer-plane record rides.
+struct PointerPipeline<'a, T, H: Http, C: CredentialStore, F, Sch> {
+    transport: &'a T,
+    api: &'a ApiClient<H, C>,
+    floors: &'a F,
+    scheduler: &'a Sch,
+    profile: &'a SyncTimingProfile,
+}
+
+/// Publish one pointer-plane record at `name` and raise that name's sequence
+/// floor, or report what the publish pipeline said verbatim.
+///
+/// The observed sequence is the CAS bar: a pointer name carries at most one
+/// live record, so a publish that does not beat what is already there is a lost
+/// race rather than a silent overwrite. Both producers of this plane — the
+/// wave's flip and the grant mint's vouch — go through here, so the bar and the
+/// floor raise cannot drift apart.
+async fn publish_pointer_inline<T, H, C, F, Sch>(
+    pipeline: PointerPipeline<'_, T, H, C, F, Sch>,
+    name: &IpnsName,
+    signer: &Ed25519Signer,
+    block: &[u8],
+) -> Result<Vec<u8>, PointerPublishFailure>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let PointerPipeline {
+        transport,
+        api,
+        floors,
+        scheduler,
+        profile,
+    } = pipeline;
+    let observed = fanout_get_verify(transport, name)
+        .await
+        .map_or(0, |(record, _)| record.sequence);
+    let receipt = publish_inline(
+        transport,
+        api,
+        floors,
+        scheduler,
+        profile,
+        &InlineRecordRequest {
+            name,
+            signer,
+            value: block,
+            min_current_sequence: Some(observed),
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        PublishError::Register(_) => PointerPublishFailure::RegistryFull,
+        PublishError::EmptyHeadCid
+        | PublishError::EmptyInlineValue
+        | PublishError::RecordTooLarge { .. } => PointerPublishFailure::Rejected,
+        _ => PointerPublishFailure::NotLanded,
+    })?;
+    match receipt.outcome {
+        PublishOutcome::Published { sequence } => {
+            floor::advance_sequence_on_unseal(floors, name.as_str().as_bytes(), sequence)
+                .await
+                .map_err(|_| PointerPublishFailure::NotLanded)?;
+            Ok(receipt.record_bytes)
+        }
+        PublishOutcome::LostRace { .. } => Err(PointerPublishFailure::LostRace),
+        PublishOutcome::Unconfirmed { .. } => Err(PointerPublishFailure::NotLanded),
+    }
+}
+
+/// What [`publish_pointer_inline`] reports, on rule 6's retryable-versus-trust
+/// axis. Each caller folds it into the verdict its own arm speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointerPublishFailure {
+    NotLanded,
+    LostRace,
+    Rejected,
+    RegistryFull,
+}
+
+/// Hold a published scope pointer for sub-EOL renewal. Its EOL is
+/// client-signed and only the owner derives the name, so a pointer nothing
+/// renews lapses and a read-only survivor never finds the moved root again.
+fn hold_scope_pointer(
+    held: &RefCell<HeldRecords>,
+    scope_id: [u8; 16],
+    name: &IpnsName,
+    signer: Ed25519Signer,
+    block: Vec<u8>,
+    record_bytes: Vec<u8>,
+) {
+    held.borrow_mut().insert(
+        HeldKey::scope_pointer(scope_id),
+        HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes,
+            signer,
+            value: HeldValue::Inline(block),
+            content_cids: Vec::new(),
+        },
+    );
+}
 
 /// The seams and owner keys one walk reads under.
 pub(crate) struct ScopeWalk<'a, T, S, H, F> {
@@ -655,7 +886,7 @@ pub(crate) struct ScopeWalk<'a, T, S, H, F> {
     pub(crate) identity: &'a EcdsaVerifier,
     /// The pointer plane's read edges, for the consult that decides whether a
     /// descendant may take the mint anchor
-    /// ([`Self::recover_minted_write_plane`]).
+    /// ([`Self::recover_write_plane_from_pointer`]).
     pub(crate) scope_keys: &'a dyn OwnerPointerRead,
     /// See [`PointerConsult::payload_version`].
     pub(crate) payload_version: u64,
@@ -727,9 +958,9 @@ where
     /// narrow signer from it. A seed that cannot name our own root leaves the
     /// root keyless, never a trust verdict.
     ///
-    /// The vault root takes no mint anchor: its floor is cold-seeded from the
-    /// owner-vouched vault pointer at boot, a stronger authority than the
-    /// record.
+    /// The vault root reads no scope pointer: its floor is cold-seeded from the
+    /// owner-vouched vault pointer at boot, which is the plane that speaks for
+    /// it.
     async fn write_plane(
         &self,
         gated: &GatedScopeRoot,
@@ -758,7 +989,8 @@ where
             // this pass read, so the scope waits rather than being charged.
             RootAnchor::VaultRoot => Err(WritePlaneDark::Unavailable),
             RootAnchor::Descendant => {
-                self.recover_minted_write_plane(gated, name, scope_id).await
+                self.recover_write_plane_from_pointer(gated, name, scope_id)
+                    .await
             }
         }
         .map_or_else(
@@ -767,60 +999,42 @@ where
         )
     }
 
-    /// Recover a proved descendant scope root's write plane at the mint anchor,
-    /// on a device that did not mint it, and seed the scope's write-epoch floor
-    /// from what opened.
+    /// Bootstrap a proved descendant scope root's write plane from its own scope
+    /// pointer, on a device that did not mint it.
     ///
-    /// Only the minting device seeds that floor (floor law item 5,
-    /// [`floor::seed_scope_root_write_epoch`]). The record carries the same
-    /// anchor: the owner-write-blob and the write body both open under an AAD
-    /// that binds [`MINT_WRITE_EPOCH`], so what this recovers rests on an
-    /// AAD-confirmed unseal and never on a claimed field.
+    /// Only the minting device seeds a promoted scope's write-epoch floor (floor
+    /// law item 5), so a second device holds none and [`write_plane_of`] reports
+    /// the scope unavailable for ever. The scope pointer closes that: a grant cut
+    /// vouches for the scope on that plane before it publishes the root
+    /// ([`crate::grants::create::ScopePointerVoucher`]), and every write rotation
+    /// re-points it, so one owner-signed re-point always states the epoch in
+    /// force. [`PointerConsult`] raises the floor on sight of it (floor law item
+    /// 3), and the opens below run at the floor it leaves.
     ///
-    /// A write rotation re-points the scope pointer, so a scope that answers on
-    /// that plane has moved past the mint and its owner-vouched epoch is the
-    /// authority instead. Consulting is what keeps a retired write-scope seed
-    /// from going resident when a committed writer of the parent reverts its
-    /// index entry to the pre-rotation root.
+    /// The epoch comes from that plane and from nowhere else. Reading it off the
+    /// record instead takes an epoch from an absence — a consult finds nothing
+    /// both for a scope never re-pointed and for a pointer the network withholds
+    /// — which lets a suppressed pointer hold this device on a write-scope seed a
+    /// rotation has retired.
     ///
-    /// The plane it hands back is this session's alone: the anchor raises no
-    /// durable floor, because a consult finds nothing both for a scope that was
-    /// never re-pointed and for a pointer the network withholds, and the floor
-    /// law admits no permanent advance an untrusted plane can steer. Every pass
-    /// re-proves the anchor, so a pointer that resolves once takes the scope
-    /// back onto its owner-vouched epoch.
-    async fn recover_minted_write_plane(
+    /// Runs only while no floor stands: a record the standing floor does not open
+    /// is the copy this pass read, not a scope this device cannot write.
+    async fn recover_write_plane_from_pointer(
         &self,
         gated: &GatedScopeRoot,
         name: &IpnsName,
         scope_id: [u8; 16],
     ) -> Result<(ScopeWritePlane, Vec<ChildScopeRef>), WritePlaneDark> {
-        // Local first, so the consult below costs a fan-out GET only for a
-        // record that would otherwise take the anchor.
+        // Ahead of both the floor read and the consult, which costs a fan-out
+        // GET: a section carrying no owner-write-blob is keyless whatever the
+        // plane vouches and whatever floor stands, so the verdict the valve
+        // charges must not depend on either. A scope held that way must also not
+        // re-read the pointer every tick for ever.
         let owb = gated
             .section
             .owner_write_blob
             .as_ref()
             .ok_or(WritePlaneDark::Keyless)?;
-        let seed =
-            open_write_scope_seed_at(self.enc_secret, &gated.envelope, owb, MINT_WRITE_EPOCH)
-                .ok_or(WritePlaneDark::Keyless)?;
-        // Held to [`seed_names`] for the same reason the gated seed is: a drain
-        // pass mints every new node's `ipnsName` from this value.
-        if !seed_names(&seed, &scope_id, Some(name)) {
-            return Err(WritePlaneDark::Keyless);
-        }
-        let body = open_write_body(
-            &gated.envelope,
-            &gated.section,
-            &scope_id,
-            &seed,
-            MINT_WRITE_EPOCH,
-        )
-        .map_err(|_| WritePlaneDark::Keyless)?;
-        if !body.write_history_link.is_empty() {
-            return Err(WritePlaneDark::Keyless);
-        }
         if floor::write_epoch_floor(self.floors, &scope_id)
             .await
             .map_err(|_| WritePlaneDark::Unavailable)?
@@ -834,18 +1048,30 @@ where
             payload_version: self.payload_version,
         };
         match consult.run(self.transport, self.floors, &scope_id).await {
-            Ok(None) => {}
-            // A vouched name, an unauthenticated re-point and an unreachable
-            // pointer all leave the anchor unproved, and none of them says this
-            // record will never take a write — the consult that raises the
-            // floor runs again next pass.
-            Ok(Some(_)) | Err(_) => return Err(WritePlaneDark::Unavailable),
+            Ok(Some(_)) => {}
+            // An absent pointer, an unauthenticated re-point and an unreachable
+            // one all leave the epoch unvouched, and none of them says this
+            // record will never take a write.
+            Ok(None) | Err(_) => return Err(WritePlaneDark::Unavailable),
         }
+        let epoch = floor::write_epoch_floor(self.floors, &scope_id)
+            .await
+            .map_err(|_| WritePlaneDark::Unavailable)?
+            .ok_or(WritePlaneDark::Unavailable)?;
+        // The record this pass read may still trail the epoch the pointer
+        // vouches for, which the next pass clears; only a section carrying no
+        // owner-write-blob names a scope no pass here will write.
+        let seed = open_write_scope_seed_at(self.enc_secret, &gated.envelope, owb, epoch)
+            .ok_or(WritePlaneDark::Unavailable)?;
+        // Held to [`seed_names`] for the reason [`Self::write_plane`] holds the
+        // gated seed: a drain pass mints every new node's name from this value.
+        if !seed_names(&seed, &scope_id, Some(name)) {
+            return Err(WritePlaneDark::Keyless);
+        }
+        let body = open_write_body(&gated.envelope, &gated.section, &scope_id, &seed, epoch)
+            .map_err(|_| WritePlaneDark::Unavailable)?;
         Ok((
-            ScopeWritePlane {
-                seed,
-                epoch: MINT_WRITE_EPOCH,
-            },
+            ScopeWritePlane { seed, epoch },
             body.direct_child_scope_index,
         ))
     }
@@ -3595,40 +3821,25 @@ where
         signer: &Ed25519Signer,
         block: &[u8],
     ) -> Result<Vec<u8>, WritePublishError> {
-        let observed = fanout_get_verify(self.transport, name)
-            .await
-            .map_or(0, |(record, _)| record.sequence);
-        let receipt = publish_inline(
-            self.transport,
-            self.api,
-            self.floors,
-            self.scheduler,
-            self.profile,
-            &InlineRecordRequest {
-                name,
-                signer,
-                value: block,
-                min_current_sequence: Some(observed),
+        publish_pointer_inline(
+            PointerPipeline {
+                transport: self.transport,
+                api: self.api,
+                floors: self.floors,
+                scheduler: self.scheduler,
+                profile: self.profile,
             },
+            name,
+            signer,
+            block,
         )
         .await
-        .map_err(|error| match error {
-            PublishError::Register(_) => WritePublishError::RegistryFull,
-            PublishError::EmptyHeadCid
-            | PublishError::EmptyInlineValue
-            | PublishError::RecordTooLarge { .. } => WritePublishError::Rejected,
-            _ => WritePublishError::NotLanded,
-        })?;
-        match receipt.outcome {
-            PublishOutcome::Published { sequence } => {
-                floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
-                    .await
-                    .map_err(|_| WritePublishError::NotLanded)?;
-                Ok(receipt.record_bytes)
-            }
-            PublishOutcome::LostRace { .. } => Err(WritePublishError::LostRace),
-            PublishOutcome::Unconfirmed { .. } => Err(WritePublishError::NotLanded),
-        }
+        .map_err(|failure| match failure {
+            PointerPublishFailure::NotLanded => WritePublishError::NotLanded,
+            PointerPublishFailure::LostRace => WritePublishError::LostRace,
+            PointerPublishFailure::Rejected => WritePublishError::Rejected,
+            PointerPublishFailure::RegistryFull => WritePublishError::RegistryFull,
+        })
     }
 }
 
@@ -3866,21 +4077,13 @@ where
                 let name = scope_pointer_name(self.owner_pointer_seed, &self.scope_id);
                 let signer = scope_pointer_signer(self.owner_pointer_seed, &self.scope_id);
                 let record_bytes = self.publish_pointer_record(&name, &signer, block).await?;
-                // The scope pointer is the only landed re-point channel and its
-                // EOL is client-signed, so an unenrolled pointer lapses and a
-                // read-only survivor never finds the moved root again.
-                // The pointer plane keys it: a scope root's node id is its scope
-                // id, so the node plane already holds the root's own record
-                // under these same bytes.
-                self.held.borrow_mut().insert(
-                    HeldKey::scope_pointer(self.scope_id),
-                    HeldRecord {
-                        routing_key: name.as_str().to_owned(),
-                        record_bytes,
-                        signer,
-                        value: HeldValue::Inline(block.to_vec()),
-                        content_cids: Vec::new(),
-                    },
+                hold_scope_pointer(
+                    self.held,
+                    self.scope_id,
+                    &name,
+                    signer,
+                    block.to_vec(),
+                    record_bytes,
                 );
                 Ok(())
             }
@@ -4108,6 +4311,7 @@ mod tests {
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 
     use crate::content::{ContentKey, ContentProfile, GatewaySource, assemble, frame_and_seal};
+    use crate::grants::create::MINT_EPOCH;
     use crate::rotation::sweep::sim;
     use crate::rotation::{
         CascadeError, CascadeOutcome, CommittedSet, EnumerationError, PrevEpochSeed, ResealSeeds,
@@ -4218,35 +4422,10 @@ mod tests {
         })
     }
 
-    /// An interior scope root whose write body carries a history link — the
-    /// shape of a write plane that has rotated at least once.
-    fn interior_with_write_history(
-        scope_id: [u8; 16],
-        parent_override_seed: &[u8; 32],
-        write_history_link: Vec<u8>,
-    ) -> OwnerRootFixture {
-        let parent_node_seed = *kdf::node_seed(parent_override_seed, &scope_id).as_bytes();
-        scope_root_with_write_history(
-            scope_id,
-            Vec::new(),
-            Some(parent_node_seed),
-            write_history_link,
-        )
-    }
-
     fn scope_root(
         scope_id: [u8; 16],
         child_scope_index: Vec<ChildScopeRef>,
         parent_node_seed: Option<[u8; 32]>,
-    ) -> OwnerRootFixture {
-        scope_root_with_write_history(scope_id, child_scope_index, parent_node_seed, Vec::new())
-    }
-
-    fn scope_root_with_write_history(
-        scope_id: [u8; 16],
-        child_scope_index: Vec<ChildScopeRef>,
-        parent_node_seed: Option<[u8; 32]>,
-        write_history_link: Vec<u8>,
     ) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
             owner_identity: &owner_identity(),
@@ -4257,7 +4436,7 @@ mod tests {
             child_scope_index,
             parent_node_seed,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
-            write_history_link,
+            write_history_link: Vec::new(),
             grants: Vec::new(),
         })
     }
@@ -4726,7 +4905,7 @@ mod tests {
         let root = vault_root(SCOPE, vec![child_ref]);
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage(CHILD_SCOPE, &child, Some(MINT_WRITE_EPOCH + 1));
+        harness.stage(CHILD_SCOPE, &child, Some(MINT_EPOCH + 1));
 
         let proved = harness
             .walk(&InMemorySnapshotCache::default(), &root)
@@ -4743,6 +4922,133 @@ mod tests {
             proved[0].write.as_ref().err(),
             Some(&WritePlaneDark::Unavailable),
             "a record below the durable floor opens under no write seed here"
+        );
+    }
+
+    /// A mint must not sign a re-point every consult would refuse. This
+    /// device's own floor speaks only for itself, so the epoch the standing
+    /// pointer vouches for is checked too — the case a device that never held
+    /// the scope has no floor for.
+    #[test]
+    fn a_mint_refuses_to_vouch_below_the_epoch_the_standing_pointer_carries() {
+        let harness = Harness::plain();
+        vouch(
+            &harness,
+            MINT_EPOCH + 1,
+            &vault_root([0xb0; 16], Vec::new()).name,
+        );
+
+        let signer = owner_identity();
+        let refused = block_on(harness.pointer_mint(&signer).vouch_scope(&RepointObject {
+            scope_id: CHILD_SCOPE,
+            current_root: vault_root([0xc0; 16], Vec::new()).name,
+            write_epoch: MINT_EPOCH,
+            min_read_epoch: MINT_EPOCH,
+            prev_root: None,
+        }));
+
+        assert_eq!(refused, Err(RotationPublishError::Rejected));
+    }
+
+    /// The publish leads the promotion, so an attempt that vouched and then
+    /// failed to promote leaves a standing re-point identical to the one its
+    /// retry signs. The retry must land it again, or the refusal the rollback
+    /// bar makes would strand that folder: nothing lowers the epoch a standing
+    /// pointer carries, so the cut could never be made from any device.
+    #[test]
+    fn a_mint_re_vouches_the_re_point_its_own_failed_attempt_landed() {
+        let harness = Harness::plain();
+        let root_name = vault_root([0xc0; 16], Vec::new()).name;
+        vouch(&harness, MINT_EPOCH, &root_name);
+
+        let signer = owner_identity();
+        let again = block_on(harness.pointer_mint(&signer).vouch_scope(&RepointObject {
+            scope_id: CHILD_SCOPE,
+            current_root: root_name,
+            write_epoch: MINT_EPOCH,
+            min_read_epoch: MINT_EPOCH,
+            prev_root: None,
+        }));
+
+        assert_eq!(again, Ok(()), "the retry re-publishes its own landed vouch");
+    }
+
+    /// A section carrying no owner-write-blob settles the question whatever
+    /// floor stands: the walk consults a pointer for every promoted scope, and
+    /// the first sighting raises that floor, so a keyless verdict gated behind
+    /// the floor read would be reachable at most once and the op below it would
+    /// then stall uncharged for ever.
+    #[test]
+    fn a_scope_root_carrying_no_owner_write_blob_is_keyless_while_a_floor_stands() {
+        let child = interior_without_owner_write_blob(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED);
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &child)]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(MINT_EPOCH));
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            proved[0].write.as_ref().err(),
+            Some(&WritePlaneDark::Keyless),
+            "the section settles it, so the drain charges the op rather than waiting"
+        );
+    }
+
+    /// The pointer the grant cut published is the whole authority: it states the
+    /// epoch, the consult raises the floor on sight of it, and the record then
+    /// opens under the floor the plane left.
+    #[test]
+    fn a_scope_root_the_pointer_plane_vouches_for_opens_its_write_plane() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, None);
+        vouch(&harness, MINT_EPOCH, &child.name);
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        let write = proved[0]
+            .write
+            .as_ref()
+            .expect("the vouched epoch opens the promoted root's write plane");
+        assert_eq!(write.epoch, MINT_EPOCH);
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &CHILD_SCOPE)).expect("floor read"),
+            Some(MINT_EPOCH),
+            "and the consult raises the durable floor to what the owner vouched",
+        );
+    }
+
+    /// A consult finds nothing both for a scope that was never re-pointed and
+    /// for a pointer the network withholds, so an epoch read from that silence
+    /// would be one the network chose. Without a vouched epoch the write plane
+    /// stays shut, whatever the record carries.
+    #[test]
+    fn a_suppressed_scope_pointer_leaves_the_write_plane_shut() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, None);
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            proved[0].write.as_ref().err(),
+            Some(&WritePlaneDark::Unavailable),
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &CHILD_SCOPE)).expect("floor read"),
+            None,
+            "and nothing durable moves on an absence",
         );
     }
 
@@ -4764,59 +5070,25 @@ mod tests {
         assert_eq!(
             proved[0].write.as_ref().err(),
             Some(&WritePlaneDark::Keyless),
+            "and no pointer is read for it: the section settles the question"
         );
     }
 
-    /// Only the device that cut the grant seeds a promoted scope's write-epoch
-    /// floor, and no pointer plane speaks for that scope until its first write
-    /// rotation. A device that merely proves the root recovers the same anchor
-    /// from the record, so its own writes publish.
+    /// A write rotation re-points the pointer before the parent index catches
+    /// up, so the record a pass reads can trail the epoch the owner vouches
+    /// for. That is the propagation window, not a scope this device cannot
+    /// write, so the op below it waits rather than being charged.
     #[test]
-    fn a_scope_root_with_no_durable_floor_recovers_its_write_plane_at_the_mint() {
+    fn a_record_below_the_vouched_write_epoch_waits_rather_than_being_charged() {
         let (child, child_ref, _) = one_level();
         let root = vault_root(SCOPE, vec![child_ref]);
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         harness.stage(CHILD_SCOPE, &child, None);
-
-        let proved = harness
-            .walk(&InMemorySnapshotCache::default(), &root)
-            .expect("the vault root gates");
-
-        let write = proved[0]
-            .write
-            .as_ref()
-            .expect("the mint anchor opens the promoted root's write plane");
-        assert_eq!(write.epoch, MINT_WRITE_EPOCH);
-        assert_eq!(
-            block_on(floor::write_epoch_floor(&harness.floors, &CHILD_SCOPE)).expect("floor read"),
-            None,
-            "and the anchor raises no durable floor: a consult finds nothing both              for a scope never re-pointed and for a pointer the network withholds"
-        );
-    }
-
-    /// A write rotation re-points the scope pointer, so a scope that answers on
-    /// that plane has moved past the mint. Its owner-vouched epoch is then the
-    /// authority, and the record's own anchor is refused — which is what stops
-    /// a reverted parent index from making a retired write-scope seed resident.
-    #[test]
-    fn a_scope_that_answers_on_the_pointer_plane_takes_no_mint_anchor() {
-        let (child, child_ref, _) = one_level();
-        let root = vault_root(SCOPE, vec![child_ref]);
-        let harness = Harness::plain();
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage(CHILD_SCOPE, &child, None);
-        stage_scope_pointer(
+        vouch(
             &harness,
-            CHILD_SCOPE,
-            &owner_identity(),
-            &RepointObject {
-                scope_id: CHILD_SCOPE,
-                current_root: vault_root([0xb0; 16], Vec::new()).name,
-                write_epoch: MINT_WRITE_EPOCH + 1,
-                min_read_epoch: MINT_WRITE_EPOCH,
-                prev_root: None,
-            },
+            MINT_EPOCH + 1,
+            &vault_root([0xb0; 16], Vec::new()).name,
         );
 
         let proved = harness
@@ -4826,33 +5098,61 @@ mod tests {
         assert_eq!(
             proved[0].write.as_ref().err(),
             Some(&WritePlaneDark::Unavailable),
-            "the record this pass read is below the epoch the owner vouches for"
         );
         assert_eq!(
             block_on(floor::write_epoch_floor(&harness.floors, &CHILD_SCOPE)).expect("floor read"),
-            Some(MINT_WRITE_EPOCH + 1),
-            "and the consult raises the owner-vouched floor, which the anchor never does",
+            Some(MINT_EPOCH + 1),
+            "and the floor stands at the owner-vouched epoch",
         );
     }
 
-    /// The mint anchor rests on the record's own write-plane history, so a
-    /// write body carrying a link is not at the mint however it opened.
-    #[test]
-    fn a_carried_write_history_link_refuses_the_mint_anchor() {
-        let child =
-            interior_with_write_history(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, vec![0xAB; 40]);
-        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &child)]);
-        let harness = Harness::plain();
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage(CHILD_SCOPE, &child, None);
+    impl Harness<InMemoryRecordStore> {
+        fn pointer_mint<'a>(
+            &'a self,
+            identity_signer: &'a EcdsaSigner,
+        ) -> ScopePointerMint<
+            'a,
+            InMemoryRecordStore,
+            ScriptedHttp,
+            InMemoryCredentialStore,
+            InMemoryFloorStore,
+            VirtualScheduler,
+            SeededEntropy,
+            OwnerSeeds,
+        > {
+            ScopePointerMint {
+                transport: &self.transport,
+                api: &self.api,
+                floors: &self.floors,
+                scheduler: &self.world.scheduler,
+                profile: &self.profile,
+                entropy: &self.entropy,
+                keys: &OwnerSeeds,
+                identity_signer,
+                identity: &self.identity,
+                held: &self.held,
+                payload_version: PAYLOAD_VERSION,
+            }
+        }
+    }
 
-        let proved = harness
-            .walk(&InMemorySnapshotCache::default(), &root)
-            .expect("the vault root gates");
-
-        assert_eq!(
-            proved[0].write.as_ref().err(),
-            Some(&WritePlaneDark::Keyless),
+    /// Stage the scope pointer a grant cut publishes for `CHILD_SCOPE`.
+    fn vouch<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        write_epoch: u64,
+        current_root: &IpnsName,
+    ) {
+        stage_scope_pointer(
+            harness,
+            CHILD_SCOPE,
+            &owner_identity(),
+            &RepointObject {
+                scope_id: CHILD_SCOPE,
+                current_root: current_root.clone(),
+                write_epoch,
+                min_read_epoch: MINT_EPOCH,
+                prev_root: None,
+            },
         );
     }
 

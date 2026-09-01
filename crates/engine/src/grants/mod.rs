@@ -43,9 +43,9 @@ pub use contact_store::{
 };
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GrantResumeResolver,
-    GranteeScopePlan, InteriorRecord, InteriorResealer, OwnerGrantKeys, ParentScopePlan,
-    PromotedScopeRoot, ScopeRootPromoter, converge_grant_subtree, create_grant, mint_grantee_scope,
-    post_share_pointer,
+    GranteeScopePlan, InteriorRecord, InteriorResealer, MintNet, OwnerGrantKeys, ParentScopePlan,
+    PromotedScopeRoot, ScopePointerVoucher, ScopeRootPromoter, converge_grant_subtree,
+    create_grant, mint_grantee_scope, post_share_pointer,
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedLink, CommittedScope, ConvertedClaim,

@@ -33,8 +33,8 @@ use cipherbox_engine::api::{
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
     GrantRecipient, GrantResumeResolver, GranteeScopePlan, InteriorRecord, InteriorResealer,
-    OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, ScopeRootPromoter, SharePointer,
-    create_grant, import_contact, post_share_pointer,
+    OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, ScopePointerVoucher, ScopeRootPromoter,
+    SharePointer, create_grant, import_contact, post_share_pointer,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
@@ -1393,6 +1393,17 @@ impl GrantResumeResolver for LocalNet {
         _node: &NodeRef,
     ) -> Result<Option<ReadBody>, SweepResolveFailure> {
         Ok(None)
+    }
+}
+
+/// Inert: this suite's subject is the mailbox DTO the grant emits, not the
+/// pointer plane the mint vouches on.
+impl ScopePointerVoucher for LocalNet {
+    async fn vouch_scope(
+        &self,
+        _repoint: &cipherbox_core::payload::RepointObject,
+    ) -> Result<(), RotationPublishError> {
+        Ok(())
     }
 }
 

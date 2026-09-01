@@ -49,6 +49,8 @@ use zeroize::Zeroizing;
 
 use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::grants::SharePointer;
+use cipherbox_core::payload::RepointObject;
+
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::contact::Contact;
 use crate::grants::{GrantRow, mint_grant_row};
@@ -324,6 +326,10 @@ pub enum CreateGrantError {
     /// Publishing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference.
     ParentPublish(RotationPublishError),
+    /// Vouching for the scope on the owner's pointer plane failed
+    /// ([`ScopePointerVoucher`]). Pre-publish: no scope root is promoted, so
+    /// the cut refuses with no scope in existence that no plane speaks for.
+    VouchScope(RotationPublishError),
     /// Posting the sealed share pointer to the recipient mailbox failed
     /// ([`post_share_pointer`]). Both scope roots are published, the parent
     /// index is updated and any write-scope cut has landed; only the share
@@ -355,6 +361,7 @@ impl CreateGrantError {
             Self::DescendantPublish { .. } => "descendant-publish-failed",
             Self::ParentMint(_) => "parent-mint-failed",
             Self::ParentPublish(_) => "parent-publish-failed",
+            Self::VouchScope(_) => "vouch-scope-failed",
             Self::Mailbox(_) => "mailbox-post-failed",
         }
     }
@@ -367,6 +374,30 @@ impl fmt::Display for CreateGrantError {
 }
 
 impl std::error::Error for CreateGrantError {}
+
+/// Every network leg a grant mint reads and publishes through. One value
+/// serves them all: the resolver and the publisher have never differed.
+pub trait MintNet:
+    SweepResolver
+    + CascadeResealResolver
+    + GrantResumeResolver
+    + ScopeRootPublisher
+    + SweepPublisher
+    + ScopeRootPromoter
+    + InteriorResealer
+{
+}
+
+impl<N> MintNet for N where
+    N: SweepResolver
+        + CascadeResealResolver
+        + GrantResumeResolver
+        + ScopeRootPublisher
+        + SweepPublisher
+        + ScopeRootPromoter
+        + InteriorResealer
+{
+}
 
 /// Publish a node that is becoming a scope root for the **first time**.
 ///
@@ -505,6 +536,22 @@ pub trait InteriorResealer {
     ) -> Result<(), RotationPublishError>;
 }
 
+/// Vouch for a scope on the owner's pointer plane, before its root exists.
+///
+/// A promoted scope root is the one scope root no plane speaks for on its own:
+/// the vault root has the vault pointer and a rotated scope has the re-point
+/// its own flip published, while a scope a read grant has just cut has neither.
+/// The mint states its epoch here so that every later reader has proof rather
+/// than an inference (`crate::net::rotation`
+/// `recover_write_plane_from_pointer`).
+pub trait ScopePointerVoucher {
+    /// Publish `repoint`, owner-signed, at its scope's pointer name.
+    async fn vouch_scope(&self, repoint: &RepointObject) -> Result<(), RotationPublishError>;
+}
+
+/// The read and write epoch a grant cut mints a promoted scope root at.
+pub(crate) const MINT_EPOCH: u64 = 1;
+
 /// Mint a grant for one recipient over `grantee`'s folder at `permission`.
 ///
 /// The recipient's row over [`mint_grantee_scope`]. Fail-closed **through the
@@ -515,10 +562,10 @@ pub trait InteriorResealer {
 /// owes [`GranteeScopePlan::write_cut`] by construction. It additionally owes
 /// the name wave over the minted scope, which the caller runs once this returns,
 /// and then [`post_share_pointer`] (blueprint/engine.md "Grant creation").
-pub async fn create_grant<E, R, P>(
+pub async fn create_grant<E, N, V>(
     entropy: &mut E,
-    resolver: &R,
-    publisher: &P,
+    net: &N,
+    voucher: &V,
     grantee: &GranteeScopePlan<'_>,
     recipient: &GrantRecipient<'_>,
     owner: &OwnerGrantKeys<'_>,
@@ -526,8 +573,8 @@ pub async fn create_grant<E, R, P>(
 ) -> Result<CreateGrantOutcome, CreateGrantError>
 where
     E: Entropy,
-    R: SweepResolver + CascadeResealResolver + GrantResumeResolver,
-    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter + InteriorResealer,
+    N: MintNet,
+    V: ScopePointerVoucher,
 {
     let recipient_enc_pub = recipient.enc_pub();
     // Refused ahead of the publishing sweep, so a self-grant costs no publish.
@@ -548,8 +595,8 @@ where
         permission,
     )
     .ok_or(CreateGrantError::UnusableRecipientKey)?;
-    let converged = converge_grant_subtree(resolver, publisher, grantee, parent).await?;
-    mint_grantee_scope(entropy, resolver, publisher, converged, &row, owner).await
+    let converged = converge_grant_subtree(net, net, grantee, parent).await?;
+    mint_grantee_scope(entropy, net, voucher, converged, &row, owner).await
 }
 
 /// Post the sealed share pointer that tells `recipient` where the scope they
@@ -745,19 +792,20 @@ where
 /// ([`GrantResumeResolver`]).
 ///
 /// Fail-closed **through the grantee publish**.
-pub async fn mint_grantee_scope<E, R, P>(
+pub async fn mint_grantee_scope<E, N, V>(
     entropy: &mut E,
-    resolver: &R,
-    publisher: &P,
+    net: &N,
+    voucher: &V,
     converged: ConvergedSubtree<'_>,
     row: &GrantRow,
     owner: &OwnerGrantKeys<'_>,
 ) -> Result<CreateGrantOutcome, CreateGrantError>
 where
     E: Entropy,
-    R: SweepResolver + CascadeResealResolver + GrantResumeResolver,
-    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter + InteriorResealer,
+    N: MintNet,
+    V: ScopePointerVoucher,
 {
+    let (resolver, publisher) = (net, net);
     let ConvergedSubtree {
         grantee,
         parent,
@@ -857,10 +905,10 @@ where
                 };
                 let seeds = ResealSeeds {
                     override_seed: &override_seed,
-                    read_epoch: 1,
+                    read_epoch: MINT_EPOCH,
                     prev: None,
                     write_scope_seed: grantee.sealed_write_scope_seed(),
-                    write_epoch: 1,
+                    write_epoch: MINT_EPOCH,
                     write_history: WriteHistory::Genesis,
                     pointer_read_key: grantee.pointer_read_key,
                 };
@@ -881,12 +929,33 @@ where
             let grantee_record = ResealedScopeRoot {
                 scope_id: grantee.scope_id,
                 ipns_name: name_bytes.to_vec(),
-                read_epoch: 1,
-                write_epoch: 1,
+                read_epoch: MINT_EPOCH,
+                write_epoch: MINT_EPOCH,
                 section: grantee_section,
             };
 
-            // 4) Publish the grantee scope root FIRST: it exists before the
+            // 4) Vouch for the scope on the pointer plane before the root
+            // exists.
+            //
+            // It leads the publishes because a signed record cannot be
+            // unpublished (AGENTS.md rule 8), which is what
+            // [`CreateGrantError::VouchScope`] rests on. A re-point naming a
+            // root not yet on the network costs a reader one waited pass, and a
+            // retry re-publishes at the same scope id, so nothing is orphaned
+            // either way. A resume enters through `SubtreeRoot::Promoted`
+            // instead, where the vouch that led that promotion already stands.
+            voucher
+                .vouch_scope(&RepointObject {
+                    scope_id: grantee.scope_id,
+                    current_root: ipns_name.clone(),
+                    write_epoch: MINT_EPOCH,
+                    min_read_epoch: MINT_EPOCH,
+                    prev_root: None,
+                })
+                .await
+                .map_err(CreateGrantError::VouchScope)?;
+
+            // 5) Publish the grantee scope root FIRST: it exists before the
             // parent references it (register-first / never-orphan), and its
             // index carries the reparented descendants before they are removed
             // from the parent (dest-first). A folder becoming a scope root is a
@@ -905,7 +974,7 @@ where
         }
     };
 
-    // 4b) Re-seal the folder's interior nodes into the scope that now owns them.
+    // 5b) Re-seal the folder's interior nodes into the scope that now owns them.
     // Their records still seal under the read key of the scope the folder left,
     // which no reader of the fresh scope derives and no epoch-1 history link
     // walks back to (blueprint/engine.md "subtree swept in").
@@ -927,7 +996,7 @@ where
     )
     .await?;
 
-    // 4c) Re-key the reparented direct children so each ascent link re-seals under
+    // 5c) Re-key the reparented direct children so each ascent link re-seals under
     // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
     // blueprint/engine.md "subtree swept in"). Metadata-only (existing seed,
     // current epoch, `prev = None`), threaded top-down as the eager cascade does
@@ -996,7 +1065,7 @@ where
             })?;
     }
 
-    // 5) Parent index update — a metadata-only re-seal at the same epoch.
+    // 6) Parent index update — a metadata-only re-seal at the same epoch.
     let mut parent_index = parent.current_child_index.to_vec();
     for descendant in grantee.subtree_child_index {
         parent_index = remove_child(&parent_index, &descendant.scope_id);
@@ -1162,6 +1231,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Records what the mint vouched for, and can be told to refuse — the
+    /// pointer plane's half of the mint, without a network.
+    #[derive(Default)]
+    struct RecordingVoucher {
+        vouched: RefCell<Vec<RepointObject>>,
+        refuse: bool,
+    }
+
+    impl RecordingVoucher {
+        fn refusing() -> Self {
+            Self {
+                refuse: true,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl ScopePointerVoucher for RecordingVoucher {
+        async fn vouch_scope(&self, repoint: &RepointObject) -> Result<(), RotationPublishError> {
+            if self.refuse {
+                return Err(RotationPublishError::NotPublished);
+            }
+            self.vouched.borrow_mut().push(repoint.clone());
+            Ok(())
+        }
+    }
+
     use crate::grants::contact::import_contact;
     use crate::grants::ledger::self_locate;
     use crate::grants::recipient_blinded_tag;
@@ -1889,11 +1986,12 @@ mod tests {
             current_child_index: &[],
             carried_history_links: &[],
         };
+        let voucher = RecordingVoucher::default();
         let outcome = block_on(async {
             let outcome = create_grant(
                 &mut entropy,
                 &net,
-                &net,
+                &voucher,
                 &grantee,
                 &recipient,
                 &owner,
@@ -1929,6 +2027,16 @@ mod tests {
         InMemoryMailboxHub,
     );
 
+    fn assert_nothing_delivered(hub: &InMemoryMailboxHub) {
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
+        assert!(
+            block_on(poll_verified(&recip_box, &recipient_enc(), V))
+                .unwrap()
+                .is_empty(),
+            "and nothing is delivered",
+        );
+    }
+
     fn run(
         entropy_seed: u64,
         subtree: &[ChildScopeRef],
@@ -1941,6 +2049,7 @@ mod tests {
             net,
             parent_grants,
             &recipient_enc(),
+            &RecordingVoucher::default(),
         )
     }
 
@@ -1950,8 +2059,17 @@ mod tests {
         net: FakeNet,
         parent_grants: &[GrantRow],
         recipient_enc: &X25519Secret,
+        voucher: &RecordingVoucher,
     ) -> GrantRun {
-        run_full(entropy, subtree, net, parent_grants, recipient_enc, None)
+        run_full(
+            entropy,
+            subtree,
+            net,
+            parent_grants,
+            recipient_enc,
+            voucher,
+            None,
+        )
     }
 
     fn run_full<E: Entropy>(
@@ -1960,6 +2078,7 @@ mod tests {
         net: FakeNet,
         parent_grants: &[GrantRow],
         recipient_enc: &X25519Secret,
+        voucher: &RecordingVoucher,
         write_cut: Option<&[u8; SECRET_LEN]>,
     ) -> GrantRun {
         let hub = InMemoryMailboxHub::default();
@@ -2046,7 +2165,7 @@ mod tests {
                 let outcome = create_grant(
                     &mut entropy,
                     &net,
-                    &net,
+                    voucher,
                     &grantee,
                     &recipient,
                     &owner,
@@ -2082,6 +2201,7 @@ mod tests {
             FakeNet::new(Ok(())),
             &[],
             &recipient_enc(),
+            &RecordingVoucher::default(),
         );
 
         // Name the draw: without it the assertion holds for a refusal from any
@@ -2112,6 +2232,7 @@ mod tests {
             FakeNet::new(Ok(())),
             &[],
             &recipient_enc(),
+            &RecordingVoucher::default(),
         );
 
         assert!(matches!(
@@ -2119,13 +2240,61 @@ mod tests {
             CreateGrantError::Entropy(_),
         ));
         assert!(published.is_empty(), "no scope root is minted");
-        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
-        assert!(
-            block_on(poll_verified(&recip_box, &recipient_enc(), V))
-                .unwrap()
-                .is_empty(),
-            "and nothing is delivered",
+        assert_nothing_delivered(&hub);
+    }
+
+    /// The pointer plane vouches for the scope before the scope exists, so a
+    /// pointer publish that does not land refuses the whole cut. Publishing the
+    /// roots anyway would leave a scope in existence that no plane speaks for,
+    /// and a signed record cannot be unpublished.
+    #[test]
+    fn a_refused_pointer_publish_mints_no_scope_root() {
+        let voucher = RecordingVoucher::refusing();
+        let (outcome, published, hub) = run_for(
+            SeededEntropy::new(7),
+            &[],
+            FakeNet::new(Ok(())),
+            &[],
+            &recipient_enc(),
+            &voucher,
         );
+
+        assert_eq!(
+            outcome.expect_err("the cut refuses").check(),
+            "vouch-scope-failed",
+        );
+        assert!(published.is_empty(), "no scope root is promoted");
+        assert_nothing_delivered(&hub);
+    }
+
+    /// The epoch the mint vouches for is the epoch it seals the root at, or a
+    /// reader is handed a clock that opens nothing.
+    #[test]
+    fn the_mint_vouches_for_the_epoch_it_seals_the_root_at() {
+        let voucher = RecordingVoucher::default();
+        let (outcome, published, _hub) = run_for(
+            SeededEntropy::new(7),
+            &[],
+            FakeNet::new(Ok(())),
+            &[],
+            &recipient_enc(),
+            &voucher,
+        );
+        outcome.expect("grant creation succeeds over a converged subtree");
+
+        let vouched = voucher.vouched.borrow();
+        let [repoint] = vouched.as_slice() else {
+            panic!("one scope, one re-point");
+        };
+        assert_eq!(repoint.scope_id, published[0].scope_id);
+        assert_eq!(repoint.write_epoch, published[0].write_epoch);
+        assert_eq!(repoint.min_read_epoch, published[0].read_epoch);
+        assert_eq!(
+            repoint.current_root.as_str().as_bytes(),
+            published[0].ipns_name.as_slice(),
+            "and it names the root the mint is about to publish",
+        );
+        assert_eq!(repoint.prev_root, None, "a mint supersedes no earlier root");
     }
 
     #[test]
@@ -2359,6 +2528,7 @@ mod tests {
             net.clone(),
             &[],
             &recipient_enc(),
+            &RecordingVoucher::default(),
             write_cut,
         )
     }
@@ -2419,8 +2589,14 @@ mod tests {
         stall_grant(&net);
 
         let other_recipient = X25519Secret::from_scalar([0x4b; 32]);
-        let (refused, _published, _hub) =
-            run_for(SeededEntropy::new(8), &[], net, &[], &other_recipient);
+        let (refused, _published, _hub) = run_for(
+            SeededEntropy::new(8),
+            &[],
+            net,
+            &[],
+            &other_recipient,
+            &RecordingVoucher::default(),
+        );
         assert_eq!(
             refused
                 .expect_err("a second recipient does not resume the first one's grant")
@@ -2874,8 +3050,14 @@ mod tests {
     #[test]
     fn a_self_grant_is_refused_before_any_network_effect() {
         let net = FakeNet::new(Ok(()));
-        let (outcome, published, hub) =
-            run_for(SeededEntropy::new(7), &[], net.clone(), &[], &owner_enc());
+        let (outcome, published, hub) = run_for(
+            SeededEntropy::new(7),
+            &[],
+            net.clone(),
+            &[],
+            &owner_enc(),
+            &RecordingVoucher::default(),
+        );
 
         let err = outcome.expect_err("a self-grant is refused");
         assert_eq!(err, CreateGrantError::RecipientIsTheOwner);

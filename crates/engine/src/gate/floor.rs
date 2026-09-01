@@ -25,11 +25,11 @@
 //! 4. **Regression is fail-closed** — every advance is monotonic-max via the
 //!    store (raising below the stored floor is a no-op that keeps the max), so
 //!    a floor can never move backward.
-//! 5. **A scope root anchors its own write-epoch floor**
-//!    ([`seed_scope_root_write_epoch`]) — no pointer plane speaks for a scope
-//!    until its first write rotation flips one, so the device that mints the
-//!    root anchors it, and a device that only proves the root recovers the same
-//!    anchor from the record's own write plane.
+//! 5. **A minting device anchors its own write-epoch floor**
+//!    ([`seed_scope_root_write_epoch`]) — the device that mints a promoted
+//!    scope root knows its epoch by construction. A device that only proves the
+//!    root takes that epoch from the scope pointer under item 3, never from the
+//!    record (`crate::net::rotation` `recover_write_plane_from_pointer`).
 //!
 //! A grant blob's epoch field is an advisory routing hint and has **no**
 //! advancement path here — deliberately. Nothing reads it as authority.

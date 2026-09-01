@@ -85,7 +85,7 @@ use crate::net::{
     GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
     OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
     PublishOutcome, RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    ScopePointerEnrolment, ScopeWalk, VaultProvisionNet, WritePlaneDark,
+    ScopePointerEnrolment, ScopePointerMint, ScopeWalk, VaultProvisionNet, WritePlaneDark,
     enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
     refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
@@ -6412,6 +6412,19 @@ where {
         };
 
         let scope_root_name = grantee.ipns_name();
+        let voucher = ScopePointerMint {
+            transport: &self.seams.record_transport,
+            api,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            keys: &scope_keys,
+            identity_signer: session.identity(),
+            identity: &owner_identity,
+            held: &self.held_records,
+            payload_version: POINTER_PAYLOAD_VERSION,
+        };
         let pending = match &share {
             ScopeShare::Contact(contact) => {
                 let recipient = GrantRecipient {
@@ -6421,7 +6434,7 @@ where {
                 create_grant(
                     &mut SharedEntropy(&self.entropy),
                     &net,
-                    &net,
+                    &voucher,
                     &grantee,
                     &recipient,
                     &owner,
@@ -6435,7 +6448,7 @@ where {
                 mint_invite_link(
                     &mut SharedEntropy(&self.entropy),
                     &net,
-                    &net,
+                    &voucher,
                     &StagingInviteStore::new(
                         &self.seams.staging_store,
                         session.enc_subkey(),
