@@ -181,6 +181,21 @@
       "emittable": true
     },
     {
+      "name": "nul",
+      "verdict": "reserved-device",
+      "emittable": true
+    },
+    {
+      "name": "Aux",
+      "verdict": "reserved-device",
+      "emittable": true
+    },
+    {
+      "name": "prn",
+      "verdict": "reserved-device",
+      "emittable": true
+    },
+    {
       "name": "nul.txt",
       "verdict": "reserved-device",
       "emittable": true

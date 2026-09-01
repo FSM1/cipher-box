@@ -8,10 +8,10 @@
 //! from listings, and stays reachable by an explicit lookup or unlink so junk
 //! another client committed is still removable through the mount.
 
-use cipherbox_engine::name::validate_name as validate_law;
 use cipherbox_engine::sync::case_fold;
+use cipherbox_engine::validate_name as validate_law;
 
-pub use cipherbox_engine::name::{NameError, is_emittable};
+pub use cipherbox_engine::{NameError, is_emittable};
 
 /// The longest name the projection admits, in bytes. `statfs` advertises this
 /// same constant, so what is advertised is what is enforced. Aliased from the

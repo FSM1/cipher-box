@@ -542,15 +542,15 @@ impl Drop for TakenNames {
 }
 
 /// One child as a read plane shows it.
-pub struct RenderedChild<'a> {
+pub(crate) struct RenderedChild<'a> {
     /// The child's stored metadata — never rewritten by the render.
-    pub meta: &'a NodeMeta,
+    pub(crate) meta: &'a NodeMeta,
     suffixed: Option<Zeroizing<String>>,
 }
 
 impl RenderedChild<'_> {
     /// The name this child is shown and resolved under.
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         self.suffixed
             .as_ref()
             .map_or_else(|| self.meta.name(), |name| name.as_str())
@@ -574,34 +574,103 @@ impl RenderedChild<'_> {
 /// grantee who plants a twin the power to rename its victim's listing entry.
 /// The strict comparator still decides which suffix is free, so the name a
 /// collision resolves to is unique to the whole folder.
-pub fn rendered_children(snapshot: &Snapshot, parent: NodeId) -> Vec<RenderedChild<'_>> {
+pub(crate) fn rendered_children(snapshot: &Snapshot, parent: NodeId) -> Vec<RenderedChild<'_>> {
     let children = snapshot.children(parent);
+    // The ordinary folder holds no two children under one name, and this runs
+    // on the kernel's readdir and lookup path: borrowed names, no fold, no copy.
+    let mut names: HashSet<&str> = HashSet::with_capacity(children.len());
+    if children.iter().all(|child| names.insert(child.name())) {
+        return children
+            .into_iter()
+            .map(|meta| RenderedChild {
+                meta,
+                suffixed: None,
+            })
+            .collect();
+    }
+    disambiguate(children)
+}
+
+/// The suffixing pass, over a folder that really holds a duplicate.
+fn disambiguate(children: Vec<&NodeMeta>) -> Vec<RenderedChild<'_>> {
     let mut folded: TakenNames = children
         .iter()
         .map(|child| collation_key(child.name()).to_string())
         .collect();
-    let mut stored = TakenNames::default();
+    let mut floors = SuffixFloors::default();
     children
         .into_iter()
         .map(|meta| {
-            let suffixed = (!stored.claim(meta.name()))
-                .then(|| free_suffix(meta.name(), &mut folded))
-                .flatten();
+            let suffixed = floors
+                .floor_for(meta.name())
+                .and_then(|from| lowest_free_suffix(meta.name(), from, &mut folded))
+                .map(|(candidate, n)| {
+                    floors.advance(meta.name(), n);
+                    candidate
+                });
             RenderedChild { meta, suffixed }
         })
         .collect()
 }
 
-/// The lowest `name (n)` no sibling's folded name holds. `None` iff a
-/// pathological folder exhausts the probe, which leaves the twin under its
-/// stored name rather than hiding it.
-fn free_suffix(name: &str, folded: &mut TakenNames) -> Option<Zeroizing<String>> {
-    (1..=MAX_SUFFIX_PROBE).find_map(|n| {
+/// The lowest `name (n)`, at or above `from`, that `taken` does not already
+/// hold under the strict comparator — claimed, and reported with the index it
+/// took. `None` iff the probe is exhausted, which a pathological folder can do;
+/// the caller decides what an unresolvable collision means.
+///
+/// One probe rule for both collision paths: the rebase decides the name a
+/// losing op publishes under, and the read plane decides the name a duplicate
+/// already in the vault shows under.
+pub(crate) fn lowest_free_suffix(
+    name: &str,
+    from: u32,
+    taken: &mut TakenNames,
+) -> Option<(Zeroizing<String>, u32)> {
+    (from..=MAX_SUFFIX_PROBE).find_map(|n| {
         let candidate = suffix_name(name, n);
-        folded
+        taken
             .claim(&collation_key(&candidate))
-            .then_some(candidate)
+            .then_some((candidate, n))
     })
+}
+
+/// Where each stored name's next twin starts probing. A folder a peer filled
+/// with one name repeated costs O(children) probes this way; probing from 1
+/// every time would cost the square of it, on the kernel's own path.
+///
+/// A verbatim copy of every duplicated name, so it wipes what it held rather
+/// than freeing it intact.
+#[derive(Default)]
+struct SuffixFloors(BTreeMap<String, u32>);
+
+impl SuffixFloors {
+    /// Registers `name`. `None` for the first child to store it — that child
+    /// keeps the name — and otherwise the suffix index to probe from.
+    fn floor_for(&mut self, name: &str) -> Option<u32> {
+        match self.0.get(name) {
+            Some(floor) => Some(*floor),
+            None => {
+                self.0.insert(name.to_owned(), 1);
+                None
+            }
+        }
+    }
+
+    /// Records the index a twin took, so the next twin starts past it. Every
+    /// index below it is claimed, so none of them can come free again.
+    fn advance(&mut self, name: &str, taken: u32) {
+        if let Some(floor) = self.0.get_mut(name) {
+            *floor = taken.saturating_add(1);
+        }
+    }
+}
+
+impl Drop for SuffixFloors {
+    fn drop(&mut self) {
+        for (mut name, _) in core::mem::take(&mut self.0) {
+            name.zeroize();
+        }
+    }
 }
 
 /// Split a trailing extension: `("report", "txt")` for `report.txt`. `None`
@@ -990,15 +1059,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn an_exact_duplicate_renders_the_later_id_under_a_suffix() {
-        let mut snap = Snapshot::new(id(0));
-        child(&mut snap, id(0), 1, "q3.pdf");
-        child(&mut snap, id(0), 2, "q3.pdf");
-
-        assert_eq!(rendered_names(&snap, id(0)), ["q3.pdf", "q3 (1).pdf"]);
-    }
-
     /// The two spellings render differently, so a host that spells either one
     /// exactly reaches its own child. Suffixing one would let a grantee who
     /// plants a twin rename its victim's entry.
@@ -1023,6 +1083,29 @@ mod tests {
         assert_eq!(
             rendered_names(&snap, id(0)),
             ["a.txt", "A (1).TXT", "a (2).txt"]
+        );
+    }
+
+    /// A peer sizes a folder, so a listing of one name repeated must cost the
+    /// read plane a walk, not its square: each twin probes on from where the
+    /// last one landed.
+    #[test]
+    fn a_folder_of_one_repeated_name_renders_in_order() {
+        let mut snap = Snapshot::new(id(0));
+        for index in 1..=50 {
+            child(&mut snap, id(0), index, "a.txt");
+        }
+
+        let rendered = rendered_names(&snap, id(0));
+        assert_eq!(rendered[0], "a.txt");
+        assert_eq!(rendered[49], "a (49).txt");
+        assert_eq!(
+            rendered
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            50,
+            "every twin renders under a name of its own"
         );
     }
 

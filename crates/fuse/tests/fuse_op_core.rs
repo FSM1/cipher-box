@@ -1529,12 +1529,7 @@ fn a_peer_committed_duplicate_name_is_listable_and_removable() {
         "q3.pdf",
         NodeKind::File,
     );
-    let mut core = OperationCore::new(
-        started.engine,
-        RecordingAdapter::push_capable(),
-        CacheBudget::CI,
-        spill_area(),
-    );
+    let mut core = mount_over(started.engine);
 
     assert_eq!(
         names(&mut core, ROOT_INO),
@@ -1557,12 +1552,7 @@ fn a_duplicate_at_the_length_bound_renders_a_name_the_mount_still_carries() {
     let mut started = started_engine_over_queue(&[]);
     plant_child(&mut started.engine, started.root, 1, &name, NodeKind::File);
     plant_child(&mut started.engine, started.root, 2, &name, NodeKind::File);
-    let mut core = OperationCore::new(
-        started.engine,
-        RecordingAdapter::push_capable(),
-        CacheBudget::CI,
-        spill_area(),
-    );
+    let mut core = mount_over(started.engine);
 
     let listed = names(&mut core, ROOT_INO);
     assert_eq!(listed.len(), 2, "both children reach the listing");
@@ -1577,8 +1567,8 @@ fn a_duplicate_at_the_length_bound_renders_a_name_the_mount_still_carries() {
 #[test]
 fn a_name_no_kernel_could_carry_never_reaches_a_listing() {
     // A peer on any client can commit whatever text string it likes, and this
-    // crate is what keeps one out of a listing. The over-long case is at
-    // `name::emittability_is_the_narrow_tier_of_admission`.
+    // crate is what keeps one out of a listing. The over-long case is a row of
+    // the frozen name-law vectors.
     let hostile = ["a/b", "a\\b", "..", ".", "", "a\0b", "a\nb"];
     let mut started = started_engine_over_queue(&[]);
     for (index, name) in hostile.iter().enumerate() {
@@ -1597,12 +1587,7 @@ fn a_name_no_kernel_could_carry_never_reaches_a_listing() {
         "keeper.txt",
         NodeKind::File,
     );
-    let mut core = OperationCore::new(
-        started.engine,
-        RecordingAdapter::push_capable(),
-        CacheBudget::CI,
-        spill_area(),
-    );
+    let mut core = mount_over(started.engine);
 
     assert_eq!(names(&mut core, ROOT_INO), vec!["keeper.txt".to_owned()]);
     for name in hostile {

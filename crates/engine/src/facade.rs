@@ -2040,18 +2040,14 @@ impl EngineView {
     /// whose rendered name folds equal under the strict comparator (FUSE
     /// lookup).
     ///
-    /// The exact match wins whatever the id order. A write grantee mints its own
-    /// node ids, so without the preference it could plant a folding twin beside
-    /// an owner's file — `\u{fb01}le.txt` beside `file.txt` — pick an id that sorts
-    /// first, and shadow the owner's file at every lookup. The two names render
-    /// differently, so the deceptive-character filter never sees the pair.
+    /// The exact match wins whatever the id order, so a grantee that plants a
+    /// folding twin cannot shadow an owner's file
+    /// ([`rendered_children`](crate::sync::model::rendered_children)).
     pub fn lookup(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
         let children = rendered_children(&self.rendered, parent);
-        let key = collation_key(name);
-        children
-            .iter()
-            .find(|child| child.name() == name)
+        find_rendered(&children, name)
             .or_else(|| {
+                let key = collation_key(name);
                 children
                     .iter()
                     .find(|child| collation_key(child.name()) == key)
@@ -2064,10 +2060,8 @@ impl EngineView {
     /// [`lookup`](Self::lookup)'s: this decides what a name refers to, never
     /// whether two names are one.
     pub fn lookup_exact(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
-        rendered_children(&self.rendered, parent)
-            .iter()
-            .find(|child| child.name() == name)
-            .map(rendered_attrs)
+        let children = rendered_children(&self.rendered, parent);
+        find_rendered(&children, name).map(rendered_attrs)
     }
 
     /// The node's attributes, if present in the rendered view (FUSE getattr).
@@ -2156,8 +2150,8 @@ fn refuse_unlawful_name(name: &str) -> Result<(), EngineError> {
 }
 
 /// A name a command carries over from the vault, held to
-/// [`MAX_NODE_NAME_BYTES`] alone. A peer authors names this device would refuse,
-/// and the whole law here would strand such a node in the bin forever.
+/// [`MAX_NODE_NAME_BYTES`] alone — the whole law here would strand a node a peer
+/// named ([`crate::name`]).
 fn refuse_over_bound_name(name: &str) -> Result<(), EngineError> {
     if name.len() > MAX_NODE_NAME_BYTES {
         return Err(EngineError::MalformedInput {
@@ -2560,6 +2554,32 @@ fn node_attrs(meta: &NodeMeta, name: &str) -> NodeAttrs {
 /// A child under the name its folder renders it with, not its stored one.
 fn rendered_attrs(child: &RenderedChild<'_>) -> NodeAttrs {
     node_attrs(child.meta, child.name())
+}
+
+/// The child rendered under exactly `name`. Rendered names are unique to a
+/// folder, so there is at most one.
+fn find_rendered<'a, 'b>(
+    children: &'a [RenderedChild<'b>],
+    name: &str,
+) -> Option<&'a RenderedChild<'b>> {
+    children.iter().find(|child| child.name() == name)
+}
+
+/// The name `node`'s own parent renders it under — what a breadcrumb and a
+/// folder title must show, so a duplicate is not re-ambiguated one surface after
+/// the listing told the two apart.
+fn rendered_name(rendered: &Snapshot, node: NodeId) -> String {
+    let Some(parent) = rendered.parent_of(node) else {
+        return rendered
+            .node(node)
+            .map(|meta| meta.name().to_owned())
+            .unwrap_or_default();
+    };
+    rendered_children(rendered, parent)
+        .iter()
+        .find(|child| child.meta.id == node)
+        .map(|child| child.name().to_owned())
+        .unwrap_or_default()
 }
 
 /// Stamp every folder a focus pass attempted against the caller's clock
@@ -7455,16 +7475,10 @@ where {
             .into_iter()
             .map(|id| Breadcrumb {
                 id,
-                name: rendered
-                    .node(id)
-                    .map(|meta| meta.name().to_owned())
-                    .unwrap_or_default(),
+                name: rendered_name(&rendered, id),
             })
             .collect();
-        let folder_name = rendered
-            .node(folder)
-            .map(|meta| meta.name().to_owned())
-            .unwrap_or_default();
+        let folder_name = rendered_name(&rendered, folder);
         Ok(SnapshotView {
             root: rendered.root,
             folder,
@@ -9954,9 +9968,33 @@ mod tests {
         }
     }
 
-    /// A name that only a peer could have authored is still restorable: the bin
-    /// carries the vault's own names, and the whole law here would strand a node
-    /// this device refuses to spell.
+    /// A listing that told two folders apart must not re-ambiguate them one
+    /// surface later, in the trail the user navigates by.
+    #[test]
+    fn a_duplicate_folder_keeps_its_rendered_name_in_the_breadcrumb() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        let planted = NodeId([0xa1; 16]);
+        let shadowed = NodeId([0xa2; 16]);
+        engine.plant_committed_child(root, planted, "reports", NodeKind::Folder);
+        engine.plant_committed_child(root, shadowed, "reports", NodeKind::Folder);
+        let leaf = NodeId([0xa3; 16]);
+        engine.plant_committed_child(shadowed, leaf, "q3", NodeKind::Folder);
+
+        let view = block_on(engine.snapshot(leaf)).expect("snapshot");
+        assert_eq!(view.folder_name, "q3");
+        let trail: Vec<&str> = view
+            .ancestors
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect();
+        assert_eq!(
+            trail.first().copied(),
+            Some("reports (1)"),
+            "the trail names the folder the listing named"
+        );
+    }
+
     #[test]
     fn a_restore_is_held_to_the_length_bound_alone() {
         assert!(refuse_over_bound_name("CON").is_ok());

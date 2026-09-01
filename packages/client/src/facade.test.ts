@@ -34,20 +34,17 @@ import type {
 const MINTED_FRAGMENT = 'a-minted-fragment';
 
 /**
- * The engine's committed name-law vectors, read from the one file the Rust law
- * and the desktop projection answer against.
+ * The names the engine's committed vector file refuses, read from the one file
+ * the Rust law and the desktop projection answer against.
  */
-function nameLawVectors(): { names: Array<{ name: string }> } {
+function unlawfulNames(): string[] {
   const path = new URL('../../../crates/engine/name-law/vectors.json', import.meta.url);
-  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !Array.isArray((parsed as { names?: unknown }).names)
-  ) {
-    throw new Error('the name-law vectors lost their names rows');
-  }
-  return parsed as { names: Array<{ name: string }> };
+  const { names } = JSON.parse(readFileSync(path, 'utf8')) as {
+    names?: Array<{ name: string; verdict: string }>;
+  };
+  const refused = (names ?? []).filter((row) => row.verdict !== 'accept').map((row) => row.name);
+  if (refused.length === 0) throw new Error('the name-law vectors lost their refused rows');
+  return refused;
 }
 
 /** A transport whose engine answers every command with a minted link. */
@@ -346,22 +343,21 @@ describe('EngineFacade', () => {
   });
 
   /**
-   * The engine owns the one name law, and the frozen vector set is what it
-   * answers against. This layer must hold no copy of it: every name the law
-   * refuses still reaches the engine, so a refusal is the engine's verdict and
-   * not a second rule that could drift from it.
+   * The engine owns the one name law. This layer must hold no copy of it: a
+   * name the law refuses still reaches the engine, so a refusal is the engine's
+   * verdict and never a second rule that could drift from it.
    */
-  it('forwards every name-law vector to the engine, verdict and all', async () => {
-    for (const row of nameLawVectors().names) {
+  it('forwards a name the engine law refuses rather than judging it here', async () => {
+    for (const name of unlawfulNames()) {
       const transport = new FakeTransport();
       const facade = new EngineFacade(transport);
 
-      await facade.create(new Uint8Array(16), row.name, 'file');
-      await facade.rename(new Uint8Array(16), row.name);
+      await facade.create(new Uint8Array(16), name, 'file');
+      await facade.rename(new Uint8Array(16), name);
 
       expect(transport.commands).toEqual([
-        { kind: 'create', parent: new Uint8Array(16), name: row.name, nodeKind: 'file' },
-        { kind: 'rename', node: new Uint8Array(16), newName: row.name },
+        { kind: 'create', parent: new Uint8Array(16), name, nodeKind: 'file' },
+        { kind: 'rename', node: new Uint8Array(16), newName: name },
       ]);
     }
   });

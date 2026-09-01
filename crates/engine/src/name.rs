@@ -156,19 +156,6 @@ mod tests {
     use crate::testkit::name_law::{name_law_vectors, verdict};
 
     #[test]
-    fn ordinary_names_are_admitted() {
-        for name in [
-            "notes.txt",
-            "Photos",
-            "a",
-            "naïve — ünïcode.md",
-            "..leading",
-        ] {
-            assert_eq!(validate_name(name), Ok(()), "{name} should be admitted");
-        }
-    }
-
-    #[test]
     fn the_advertised_length_limit_is_the_enforced_one() {
         let longest = "a".repeat(MAX_NODE_NAME_BYTES);
         assert_eq!(validate_name(&longest), Ok(()));
@@ -186,84 +173,8 @@ mod tests {
         assert_eq!(validate_name(&name), Err(NameError::TooLong));
     }
 
-    #[test]
-    fn structurally_impossible_names_are_refused() {
-        assert_eq!(validate_name(""), Err(NameError::Empty));
-        assert_eq!(validate_name("."), Err(NameError::DotEntry));
-        assert_eq!(validate_name(".."), Err(NameError::DotEntry));
-        assert_eq!(validate_name("a/b"), Err(NameError::Separator));
-        assert_eq!(validate_name("a\\b"), Err(NameError::Separator));
-        assert_eq!(validate_name("a\0b"), Err(NameError::Control));
-        assert_eq!(validate_name("a\nb"), Err(NameError::Control));
-    }
-
-    #[test]
-    fn names_that_render_differently_than_they_compare_are_refused() {
-        for name in [
-            "invoice\u{202E}cod.exe", // right-to-left override: renders "invoiceexe.doc"
-            "report\u{200B}.txt",     // zero-width space: a twin of "report.txt"
-            "a\u{2066}b",
-            "\u{FEFF}notes",
-        ] {
-            assert_eq!(
-                validate_name(name),
-                Err(NameError::DeceptiveCharacter),
-                "{name:?} must not enter the vault"
-            );
-        }
-        assert_eq!(validate_name("naïve — ünïcode.md"), Ok(()));
-    }
-
-    #[test]
-    fn windows_hostile_names_are_refused_on_every_platform() {
-        for name in ["a<b", "a>b", "a:b", "a\"b", "a|b", "a?b", "a*b"] {
-            assert_eq!(
-                validate_name(name),
-                Err(NameError::ReservedCharacter),
-                "{name} must be refused everywhere, not only on Windows"
-            );
-        }
-        assert_eq!(validate_name("report."), Err(NameError::TrailingDotOrSpace));
-        assert_eq!(validate_name("report "), Err(NameError::TrailingDotOrSpace));
-        for name in ["CON", "nul", "Aux", "prn", "COM1", "lpt9", "con.txt"] {
-            assert_eq!(
-                validate_name(name),
-                Err(NameError::ReservedDevice),
-                "{name} is a reserved device name"
-            );
-        }
-        for name in ["com", "com0", "lpt10", "console"] {
-            assert_eq!(validate_name(name), Ok(()), "{name} is not reserved");
-        }
-    }
-
-    #[test]
-    fn emittability_is_the_narrow_tier_of_admission() {
-        // Names no kernel protocol can carry — the read path drops these.
-        for name in [
-            "",
-            ".",
-            "..",
-            "a/b",
-            "a\\b",
-            "a\0b",
-            &"x".repeat(MAX_NODE_NAME_BYTES + 1),
-        ] {
-            assert!(!is_emittable(name), "{name:?} is not emittable");
-        }
-        assert!(
-            is_emittable(&"x".repeat(MAX_NODE_NAME_BYTES)),
-            "the advertised length is emittable"
-        );
-        // Refused at create, but still listable so they stay removable.
-        for name in ["re:port", "COM1", "report.", "a\u{202E}b"] {
-            assert!(is_emittable(name), "{name:?} must stay reachable");
-            assert!(validate_name(name).is_err(), "{name:?} is not creatable");
-        }
-    }
-
     /// The frozen vector set is what the projection and the TypeScript client
-    /// check against, so the law itself must answer every row.
+    /// check against, so the law itself must answer every row — both tiers.
     #[test]
     fn the_frozen_vectors_are_the_law() {
         let vectors = name_law_vectors();
@@ -283,25 +194,5 @@ mod tests {
                 row.name
             );
         }
-    }
-
-    #[test]
-    fn every_refusal_reports_a_distinct_check_label() {
-        let labels: std::collections::BTreeSet<&str> = [
-            NameError::Empty,
-            NameError::TooLong,
-            NameError::DotEntry,
-            NameError::Separator,
-            NameError::Control,
-            NameError::DeceptiveCharacter,
-            NameError::ReservedCharacter,
-            NameError::TrailingDotOrSpace,
-            NameError::ReservedDevice,
-            NameError::PlatformJunk,
-        ]
-        .into_iter()
-        .map(NameError::check)
-        .collect();
-        assert_eq!(labels.len(), 10, "a host tells the refusals apart");
     }
 }

@@ -31,9 +31,7 @@ use cipherbox_core::codec::RedactedText;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::seams::OpId;
-use crate::sync::model::{
-    MAX_SUFFIX_PROBE, NodeMeta, Snapshot, TakenNames, collation_key, suffix_name,
-};
+use crate::sync::model::{NodeMeta, Snapshot, TakenNames, collation_key, lowest_free_suffix};
 #[cfg(test)]
 use crate::sync::op::NewNode;
 #[cfg(test)]
@@ -874,7 +872,7 @@ fn resolve_name(
 ) -> Option<(String, bool)> {
     // Fold the sibling collation keys once instead of rescanning the children on
     // every probe — identical to `name_taken`, which folds the same set.
-    let taken: TakenNames = snap
+    let mut taken: TakenNames = snap
         .children(parent)
         .into_iter()
         .filter(|child| !exclude.contains(&child.id))
@@ -883,13 +881,7 @@ fn resolve_name(
     if !taken.holds(&collation_key(name)) {
         return Some((name.to_owned(), false));
     }
-    for n in 2..=MAX_SUFFIX_PROBE {
-        let candidate = suffix_name(name, n);
-        if !taken.holds(&collation_key(&candidate)) {
-            return Some((candidate.to_string(), true));
-        }
-    }
-    None
+    lowest_free_suffix(name, 2, &mut taken).map(|(candidate, _)| (candidate.to_string(), true))
 }
 
 /// A dual-link observed repair: the losing parents to unlink from one child.
@@ -1004,6 +996,7 @@ pub fn reconcile_head(
 mod tests {
     use super::*;
     use crate::facade::{NodeId, NodeKind};
+    use crate::sync::model::{MAX_SUFFIX_PROBE, suffix_name};
     use crate::sync::record::{RecordSeal, encode_op_record};
     use cipherbox_core::suite::x25519::X25519Secret;
     use zeroize::Zeroizing;
