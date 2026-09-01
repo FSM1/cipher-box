@@ -16,13 +16,14 @@
 //! makes unavoidable: a queued write holds its plaintext until the pump reaches
 //! it, so the mount caps the kernel's write width rather than the queue.
 
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,7 +39,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
-use crate::adapters::{ADVISORY_CAPACITY_BYTES, Listed, cursor_of, stale};
+use crate::adapters::{ADVISORY_CAPACITY_BYTES, Listed, NOTIFY_QUEUE_DEPTH, cursor_of, stale};
 use crate::errno::errno_of;
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
@@ -153,10 +154,133 @@ fn mount_options(profile_options: Vec<MountOption>) -> io::Result<Vec<MountOptio
     Ok(options)
 }
 
+/// The queue the invalidator fills and the notify thread drains.
+///
+/// A notification must never go out on the pump's own stack. Linux serves
+/// `inval_entry` inline, under the parent directory's inode lock. The request
+/// that raised the notification still holds that lock, and the pump is the one
+/// task that owes that request its reply, so the notification would wait on the
+/// request (blueprint/desktop.md "Reads, writes, and the never-block law").
+#[derive(Default)]
+struct NotifyPlane {
+    queue: Mutex<Queued>,
+    /// Wakes the notify thread when work arrives or when the mount closes.
+    ready: Condvar,
+    /// Invalidations this mount could not push. Counted rather than swallowed:
+    /// push is what corrects the kernel's caches, so a drop is a node stale
+    /// until its lifetime expires.
+    dropped: AtomicU64,
+}
+
+/// The queue's own state, under one lock so a close cannot race a push.
+#[derive(Default)]
+struct Queued {
+    pending: VecDeque<Invalidation>,
+    closed: bool,
+}
+
+impl Queued {
+    /// Fold `invalidation` into what is already queued for the same inode,
+    /// reporting whether the queue now covers it.
+    ///
+    /// A data invalidation drops the inode's attributes as well as its pages,
+    /// so it covers an attribute one either side of it. Folding the pair the
+    /// core raises per commit into one entry is also what keeps the ceiling out
+    /// of reach: an eviction there would drop the older half of that pair and
+    /// hand the kernel the new size over pages it still holds, which is the one
+    /// order the core forbids.
+    fn fold(&mut self, invalidation: &Invalidation) -> bool {
+        if let Invalidation::Data { ino } = invalidation {
+            self.pending
+                .retain(|held| held != &Invalidation::Attributes { ino: *ino });
+        }
+        self.pending.iter().any(|held| covers(held, invalidation))
+    }
+}
+
+impl NotifyPlane {
+    fn push(&self, invalidation: Invalidation) {
+        let Ok(mut queue) = self.queue.lock() else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        if queue.closed {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if queue.fold(&invalidation) {
+            return;
+        }
+        if queue.pending.len() >= NOTIFY_QUEUE_DEPTH {
+            queue.pending.pop_front();
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        queue.pending.push_back(invalidation);
+        drop(queue);
+        self.ready.notify_one();
+    }
+
+    /// The next invalidation, or `None` once the mount closes the plane and the
+    /// queue runs dry.
+    fn next(&self) -> Option<Invalidation> {
+        let mut queue = self.queue.lock().ok()?;
+        loop {
+            if let Some(invalidation) = queue.pending.pop_front() {
+                return Some(invalidation);
+            }
+            if queue.closed {
+                return None;
+            }
+            queue = self.ready.wait(queue).ok()?;
+        }
+    }
+
+    /// Stop the notify thread. Idempotent, and safe from any thread.
+    fn close(&self) {
+        if let Ok(mut queue) = self.queue.lock() {
+            queue.closed = true;
+        }
+        self.ready.notify_all();
+    }
+}
+
+/// Whether `held` already tells the kernel everything `next` would.
+///
+/// A data invalidation drops the inode's attributes as well as its pages
+/// ([`FuseInvalidator::invalidate`]), so it covers an attribute one for the same
+/// inode.
+fn covers(held: &Invalidation, next: &Invalidation) -> bool {
+    match (held, next) {
+        (Invalidation::Data { ino }, Invalidation::Attributes { ino: want }) => ino == want,
+        _ => held == next,
+    }
+}
+
+/// Drain `plane` into `notifier` from a thread of its own ([`NotifyPlane`]).
+fn spawn_notify(plane: Arc<NotifyPlane>, notifier: Notifier) {
+    thread::spawn(move || {
+        while let Some(invalidation) = plane.next() {
+            // An inode the kernel never cached answers `ENOENT`, which the
+            // notifier already absorbs; what is left is a channel on its way
+            // down, and the trait's contract is that the adapter absorbs that
+            // too.
+            let _ = match invalidation {
+                // Offset zero, length zero: the attributes and every cached page.
+                Invalidation::Data { ino } => notifier.inval_inode(ino, 0, 0),
+                // A negative offset is the kernel's "attributes only".
+                Invalidation::Attributes { ino } => notifier.inval_inode(ino, -1, 0),
+                Invalidation::Entry { parent, name } => {
+                    notifier.inval_entry(parent, OsStr::new(&name))
+                }
+            };
+        }
+    });
+}
+
 /// Pushes the operation core's invalidations at the backend.
 #[derive(Clone)]
 pub struct FuseInvalidator {
-    notifier: Notifier,
+    plane: Arc<NotifyPlane>,
     capabilities: HostCapabilities,
 }
 
@@ -166,18 +290,9 @@ impl HostAdapter for FuseInvalidator {
     }
 
     fn invalidate(&self, invalidation: Invalidation) {
-        // An inode the kernel never cached answers `ENOENT`, which the notifier
-        // already absorbs; what is left is a channel on its way down, and the
-        // trait's contract is that the adapter absorbs that too.
-        let _ = match invalidation {
-            // Offset zero, length zero: the attributes and every cached page.
-            Invalidation::Data { ino } => self.notifier.inval_inode(ino, 0, 0),
-            // A negative offset is the kernel's "attributes only".
-            Invalidation::Attributes { ino } => self.notifier.inval_inode(ino, -1, 0),
-            Invalidation::Entry { parent, name } => {
-                self.notifier.inval_entry(parent, OsStr::new(&name))
-            }
-        };
+        // Queued in order, so the data-before-attributes rule the core relies on
+        // survives the handoff to the notify thread.
+        self.plane.push(invalidation);
     }
 }
 
@@ -404,12 +519,19 @@ impl FuseMount {
         let covered = device_of(mountpoint)?;
         let (sender, ops) = mpsc::unbounded();
         let session = Session::new(FuseSession { ops: sender }, mountpoint, &options)?;
+        let notifier = session.notifier();
+        // The notify thread outlives every value here except the mount, which is
+        // what closes its plane, so it is started only once the mount is certain
+        // to exist.
+        let session = session.spawn()?;
+        let plane = Arc::new(NotifyPlane::default());
+        spawn_notify(plane.clone(), notifier);
         let invalidator = FuseInvalidator {
-            notifier: session.notifier(),
+            plane,
             capabilities: profile.capabilities,
         };
         Ok(Self {
-            _session: session.spawn()?,
+            _session: session,
             invalidator,
             ops,
             owner: Ownership {
@@ -470,6 +592,18 @@ impl FuseMount {
         while let Ok(op) = self.ops.try_recv() {
             drop(KernelOp(Some(op)));
         }
+    }
+}
+
+impl Drop for FuseMount {
+    /// The notify thread parks on the plane, so a mount that went away without
+    /// closing it would leave that thread there for the life of the process.
+    ///
+    /// Closed rather than joined: the thread may be inside a notify write, and a
+    /// teardown that waited on the kernel to take it would hold the unmount open
+    /// on the one path that has to finish.
+    fn drop(&mut self) {
+        self.invalidator.plane.close();
     }
 }
 
@@ -1489,5 +1623,113 @@ mod tests {
         assert!(blocks > 0, "bavail is what a client checks before writing");
         assert!(free_nodes > 0, "a zero ffree refuses file creation");
         assert_eq!(files, 7 + free_nodes, "the nodes in use stay truthful");
+    }
+
+    fn queued(invalidator: &FuseInvalidator) -> Vec<Invalidation> {
+        let mut taken = Vec::new();
+        while let Some(invalidation) = invalidator.plane.queue.lock().unwrap().pending.pop_front() {
+            taken.push(invalidation);
+        }
+        taken
+    }
+
+    fn invalidator_over(plane: Arc<NotifyPlane>) -> FuseInvalidator {
+        FuseInvalidator {
+            plane,
+            capabilities: HostCapabilities {
+                push_invalidation: true,
+                attribute_cache: true,
+                case_insensitive_lookup: false,
+            },
+        }
+    }
+
+    /// The mount's own reply is what releases the parent lock a push
+    /// invalidation needs, so the push must leave the request that raised it.
+    /// Nothing drains this plane, and every push still returns.
+    #[test]
+    fn a_queued_invalidation_keeps_the_order_the_core_pushed() {
+        let invalidator = invalidator_over(Arc::new(NotifyPlane::default()));
+
+        invalidator.invalidate(Invalidation::Entry {
+            parent: 1,
+            name: "made.txt".to_owned(),
+        });
+        invalidator.invalidate(Invalidation::Data { ino: 2 });
+        invalidator.invalidate(Invalidation::Data { ino: 3 });
+
+        assert_eq!(
+            queued(&invalidator),
+            vec![
+                Invalidation::Entry {
+                    parent: 1,
+                    name: "made.txt".to_owned(),
+                },
+                Invalidation::Data { ino: 2 },
+                Invalidation::Data { ino: 3 },
+            ],
+            "the queue keeps the order the core pushed"
+        );
+    }
+
+    /// A data invalidation drops the inode's attributes with its pages, so the
+    /// pair the core raises per commit reaches the kernel as one. Two entries
+    /// could be split by an eviction, which would hand the kernel the new size
+    /// over pages it still holds.
+    #[test]
+    fn the_commit_pair_folds_into_one_data_invalidation() {
+        let invalidator = invalidator_over(Arc::new(NotifyPlane::default()));
+
+        invalidator.invalidate(Invalidation::Attributes { ino: 2 });
+        invalidator.invalidate(Invalidation::Data { ino: 2 });
+        invalidator.invalidate(Invalidation::Attributes { ino: 2 });
+
+        assert_eq!(
+            queued(&invalidator),
+            vec![Invalidation::Data { ino: 2 }],
+            "an attribute invalidation either side of the data one folds into it"
+        );
+    }
+
+    /// A queue at its ceiling drops its oldest and counts it. A mount cannot
+    /// make the kernel wait, and a silent drop looks exactly like a mount with
+    /// nothing to say.
+    #[test]
+    fn a_full_notify_queue_drops_its_oldest_and_counts_it() {
+        let plane = Arc::new(NotifyPlane::default());
+        let invalidator = invalidator_over(plane.clone());
+
+        for ino in 0..(NOTIFY_QUEUE_DEPTH as u64 + 2) {
+            invalidator.invalidate(Invalidation::Data { ino });
+        }
+
+        assert_eq!(
+            plane.dropped.load(Ordering::Relaxed),
+            2,
+            "every drop is counted rather than swallowed"
+        );
+        let held = queued(&invalidator);
+        assert_eq!(held.len(), NOTIFY_QUEUE_DEPTH);
+        assert_eq!(
+            held.first(),
+            Some(&Invalidation::Data { ino: 2 }),
+            "the oldest went, not the newest"
+        );
+    }
+
+    /// The notify thread parks on the plane, so a closed plane must end it and
+    /// a push after the close must not queue work nothing will ever drain.
+    #[test]
+    fn closing_the_plane_ends_the_notify_thread_and_counts_what_follows() {
+        let plane = Arc::new(NotifyPlane::default());
+        let invalidator = invalidator_over(plane.clone());
+        invalidator.invalidate(Invalidation::Data { ino: 3 });
+
+        plane.close();
+
+        assert_eq!(plane.next(), Some(Invalidation::Data { ino: 3 }));
+        assert_eq!(plane.next(), None, "a drained closed plane ends the thread");
+        invalidator.invalidate(Invalidation::Data { ino: 4 });
+        assert_eq!(plane.dropped.load(Ordering::Relaxed), 1);
     }
 }

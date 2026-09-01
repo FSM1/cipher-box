@@ -12,26 +12,20 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   projects it as a filesystem, answers a manual refresh, and gives the mount
   back on `quit`
 - `write-round-trip` — a folder and a file at the mount root reach the engine
-  and render at the vault root, and a file written inside the folder reaches
-  the engine, lists inside the folder, and leaves the root count alone; a
-  platform-junk name is refused and stays out of every listing
+  and render at the vault root, and the file reads back the bytes that were
+  written; a file written inside the folder reaches the engine, lists inside
+  the folder, and leaves the root count alone; a platform-junk name is refused
+  and stays out of every listing
 - `conflict-outcomes` — a call that conflicts with the vault reaches the caller
   as an error and leaves the vault as it was
+- `cross-client-convergence` — two mounts of one vault each serve what the
+  other writes, in both directions, over the network alone
+- `offline-replay` — a write taken while the API is down reads back at once on
+  the instance that took it, and reaches a second instance once the API returns
 
-The macOS leg runs all three. The Linux leg runs `mount-lifecycle` alone: a
-mutating call on its mount never returns, so nothing that writes can run there
-yet. Windows is out of the matrix — its shell links the WinFsp adapter and the
-mount never lands, so the projection stays `opening`.
-
-## What it does not cover yet
-
-The content a write puts in the vault is not readable back through any mount.
-The write reaches the engine, the vault renders the child, nothing
-dead-letters, and the bytes never arrive: the writer's own read answers a
-refusal and a second instance reads an empty file. So cross-client convergence
-over content, and offline replay of a queued write, are not here. Each is a
-host-side defect with its own issue, and the harness they need — the instance,
-the control client, the poll, the stack and the orchestrator — is what is here.
+The macOS and Linux legs both run every scenario. Windows is out of the matrix
+— its shell links the WinFsp adapter and the mount never lands, so the
+projection stays `opening`.
 
 ## How the suite logs in
 

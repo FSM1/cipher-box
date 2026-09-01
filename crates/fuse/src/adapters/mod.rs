@@ -22,6 +22,11 @@ pub mod windows;
 /// refused where it belongs, by the engine's `ENOSPC`/`EDQUOT` equivalents.
 pub(crate) const ADVISORY_CAPACITY_BYTES: u64 = 1 << 40;
 
+/// How many invalidations may queue for the thread that pushes them at the
+/// kernel. A queue that overflows drops its oldest: a mount cannot make the
+/// kernel wait, and the cache lifetimes are the backstop.
+pub(crate) const NOTIFY_QUEUE_DEPTH: usize = 4096;
+
 /// `.` and `..`, which a listing synthesizes ahead of the children the core
 /// hands back. Both name the directory itself — every host resolves `..` by
 /// opening the parent, never through the entry a listing reports.
