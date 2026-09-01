@@ -48,7 +48,8 @@ Glossary only. Design detail lives in `blueprint/`; the as-built v1 spec corpus,
 - **Bin rung** — one of the frozen sizes a bin index body pads up to before the seal, so the published record's length discloses which rung the body reached and nothing finer. Without it the ciphertext length would count the owner's soft deletes, and the share of them that came from a shared scope. Each rung has a **cap**, the largest unpadded body it admits, which is what makes the rung a body takes rise with the body rather than jump at a padding gap.
 - **Bin entry** — one soft-deleted node in the bin index: `nodeId`, `ipnsName`, `kind`, `originParent`, `originName`, `deletedAt`, `scopeId`, and an optional bin-held key. The `ipnsName` is the only remaining route to a record no folder names; `originParent` and `originName` are what a restore puts back.
 - **Soft delete** — a delete that unlinks the node and writes a bin entry instead of retiring the record. The owner's bin retention setting chooses it; retention 0 keeps the hard delete.
-- **Bin-held key** — the key a soft delete from a shared scope re-keys the doomed subtree under, from the `bin-held-key` edge. It sits outside every scope's derivation, which is the access cut key regression cannot give.
+- **Bin-held key** — the key a soft delete re-keys the doomed subtree under, from the `bin-held-key` edge. It sits outside every scope's derivation, which is the access cut key regression cannot give. Scope-seed shaped: every node of the subtree keys at `readKey(nodeSeed(held, nodeId))`, so the one key the entry carries opens the whole subtree.
+- **Owner capture** — the owner's engine binding an unlink it observes on the poll tick but did not author, and re-keying the node at that adoption. Without it a grantee who unlinks a node in the owner's scope leaves the owner nothing to restore, and keeps the node's read key.
 
 ## Sync and refresh
 

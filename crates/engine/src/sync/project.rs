@@ -18,13 +18,25 @@ use crate::sync::model::{NodeMeta, Snapshot};
 /// whether anything changed. A body that is not a folder leaves the snapshot
 /// untouched.
 pub(crate) fn project_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adopted) -> bool {
+    merge_root(snapshot, root, adopted).changed
+}
+
+/// [`project_root`], reporting the children the root stopped naming.
+pub(crate) fn merge_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adopted) -> FolderMerge {
     match &adopted.read_body {
         ReadBody::Folder {
             modified_at,
             children,
             ..
-        } => project_folder(snapshot, root, children, adopted.sequence, *modified_at),
-        ReadBody::File { .. } => false,
+        } => merge_folder(
+            snapshot,
+            root,
+            children,
+            &[],
+            adopted.sequence,
+            *modified_at,
+        ),
+        ReadBody::File { .. } => FolderMerge::unchanged(),
     }
 }
 
@@ -72,6 +84,85 @@ pub(crate) fn project_folder_partial(
     sequence: u64,
     modified_at: u64,
 ) -> bool {
+    merge_folder(snapshot, folder, children, withheld, sequence, modified_at).changed
+}
+
+/// What one folder merge did. A reader that acts on a departure — the owner's
+/// capture of a grantee's unlink into the bin (ADR 0010 item 5) — needs the
+/// departed nodes themselves, which the merge drops with their subtree.
+pub(crate) struct FolderMerge {
+    /// Whether the base moved.
+    pub(crate) changed: bool,
+    /// Children the folder stopped naming, as the snapshot held them before
+    /// the unlink. Read through [`FolderMerge::observed_unlinks`].
+    departed: Vec<NodeMeta>,
+}
+
+impl FolderMerge {
+    pub(crate) fn unchanged() -> Self {
+        Self {
+            changed: false,
+            departed: Vec::new(),
+        }
+    }
+
+    /// The departures this merge saw, as the owner's capture path takes them.
+    ///
+    /// `deleted_at` is stamped once here and carried, so a capture that has to
+    /// wait for a later pass re-keys under the key its own entry names.
+    ///
+    /// A node the snapshot held without an `ipnsName` is dropped: the bin entry
+    /// would name no route back to the record.
+    pub(crate) fn observed_unlinks(
+        &self,
+        scope_id: [u8; 16],
+        parent: NodeId,
+        deleted_at: u64,
+    ) -> Vec<UnlinkedChild> {
+        self.departed
+            .iter()
+            .filter_map(|node| {
+                Some(UnlinkedChild {
+                    scope_id,
+                    parent,
+                    node: node.id,
+                    name: node.name().to_owned(),
+                    kind: unmap_kind(node.kind),
+                    ipns_name: node.ipns_name.clone()?,
+                    deleted_at,
+                })
+            })
+            .collect()
+    }
+}
+
+/// One child a folder stopped naming — everything a bin entry names it by. The
+/// merge that saw it has already dropped the node from the snapshot, so the
+/// entry cannot be built from the snapshot afterwards.
+#[derive(Clone)]
+pub(crate) struct UnlinkedChild {
+    /// The scope the node was sealed under, so a pass holding another scope's
+    /// material never re-keys it.
+    pub(crate) scope_id: [u8; 16],
+    pub(crate) parent: NodeId,
+    pub(crate) node: NodeId,
+    pub(crate) name: String,
+    pub(crate) kind: CoreNodeKind,
+    pub(crate) ipns_name: Vec<u8>,
+    /// The time the capture was observed, minted once so a retry re-keys under
+    /// the key the entry it will write names.
+    pub(crate) deleted_at: u64,
+}
+
+/// [`project_folder_partial`], reporting the children the folder stopped naming.
+pub(crate) fn merge_folder(
+    snapshot: &mut Snapshot,
+    folder: NodeId,
+    children: &[ChildRef],
+    withheld: &[[u8; 16]],
+    sequence: u64,
+    modified_at: u64,
+) -> FolderMerge {
     let mut changed = false;
     if let Some(node) = snapshot.node_mut(folder) {
         changed |= node.record_sequence != sequence || node.mtime != Some(modified_at);
@@ -79,16 +170,18 @@ pub(crate) fn project_folder_partial(
         node.mtime = Some(modified_at);
     }
 
-    let departed: Vec<NodeId> = snapshot
+    let departed: Vec<NodeMeta> = snapshot
         .children(folder)
         .into_iter()
-        .map(|node| node.id)
-        .filter(|id| !children.iter().any(|child| child.id == id.0) && !withheld.contains(&id.0))
+        .filter(|node| {
+            !children.iter().any(|child| child.id == node.id.0) && !withheld.contains(&node.id.0)
+        })
+        .cloned()
         .collect();
     changed |= !departed.is_empty();
-    for id in departed {
-        snapshot.unlink(folder, id);
-        snapshot.remove_unreachable(id);
+    for node in &departed {
+        snapshot.unlink(folder, node.id);
+        snapshot.remove_unreachable(node.id);
     }
 
     for child in children {
@@ -106,7 +199,7 @@ pub(crate) fn project_folder_partial(
         snapshot.upsert_node(meta);
         changed |= snapshot.link(folder, id, child.link_counter);
     }
-    changed
+    FolderMerge { changed, departed }
 }
 
 /// Fold a verified file read-body's plaintext `(size, mtime)`, version count and
@@ -143,6 +236,13 @@ fn map_kind(kind: CoreNodeKind) -> NodeKind {
     match kind {
         CoreNodeKind::Folder => NodeKind::Folder,
         CoreNodeKind::File => NodeKind::File,
+    }
+}
+
+fn unmap_kind(kind: NodeKind) -> CoreNodeKind {
+    match kind {
+        NodeKind::Folder => CoreNodeKind::Folder,
+        NodeKind::File => CoreNodeKind::File,
     }
 }
 

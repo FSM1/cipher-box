@@ -494,19 +494,21 @@ format versions; the version is bound into the AAD
 `[cipherbox/v2/aad, v, 0x0f]`, so rewriting the clear copy fails the tag.
 
 The body is `{entries[], pad, revision}`. Each entry carries `nodeId`,
-`ipnsName`, `kind`, `originParent`, `originName`, `deletedAt`, `scopeId`, and an
-optional `heldKey`. `ipnsName` is the only remaining route to a record no folder
-names, and `heldKey` is present only when the delete re-keyed the doomed subtree
-out of a shared scope's derivation. `revision` is what the floor law orders two
-records by when the outer IPNS sequence cannot tell them apart. Duplicate
+`ipnsName`, `kind`, `originParent`, `originName`, `deletedAt`, `scopeId`, and
+`heldKey`, which the codec takes as optional. `ipnsName` is the only remaining
+route to a record no folder names, and `heldKey` is the scope-seed-shaped key
+the delete re-keyed the doomed subtree under: every node of that subtree keys at
+`readKey(nodeSeed(held, nodeId))`, so the one key opens the whole subtree. Every
+soft delete re-keys, so every entry this build writes carries one. `revision` is
+what the floor law orders two records by when the outer IPNS sequence cannot
+tell them apart. Duplicate
 `nodeId` is fail-closed at decode: two entries for one node would let restore and
 purge pick a winner by position.
 
 **The body pads to a fixed rung before the seal.** The record is published, so
 its ciphertext length is server-visible, and an unpadded body would disclose the
-soft-delete count to within one entry and — because a `heldKey` is present only
-after a shared-scope re-key — the share of those deletes that came from a shared
-scope. That is a sharing-activity count, not a size. The rungs are 4 KiB,
+soft-delete count to within one entry. That is a deletion-activity count, not a
+size. The rungs are 4 KiB,
 16 KiB, 64 KiB, 256 KiB, 1 MiB, and the block ceiling less the seal, so the
 ladder steps by 4x until the last rung, which the block ceiling cuts short. It
 starts at 4 KiB, which holds roughly two dozen entries at the ~170 bytes a
@@ -543,9 +545,11 @@ tampering.
 Three channels the padding does not close, stated so the freeze does not imply
 otherwise. The bin record's IPNS **sequence** is signed cleartext, so one resolve
 bounds the number of bin publishes the owner ever made — a cumulative count along
-the same axis as the one the pad hides. A bin publish that **coincides** with a
-scope-side republish marks that delete as a shared-scope delete, which is the bit
-`heldKey` presence used to leak through the length. And the record's **existence**
+the same axis as the one the pad hides. A bin publish also **coincides** with the
+re-key's own republishes. Those name the exact set of records the delete binned,
+not merely its size, and the republisher inventory holds that set for the EOL
+term. Blunting it needs decoy re-keys or a wave spread over ticks, which is
+engine work. And the record's **existence**
 says the bin is non-empty, so the client publishes an empty bin index at vault
 genesis whatever the retention setting. Mitigating the first two is engine work:
 a fresh nonce per seal makes a no-op republish byte-indistinguishable from a real

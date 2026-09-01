@@ -26,7 +26,7 @@ use crate::gate::{Adopted, GateError, GateRejection, RejectionReason};
 use crate::seams::{RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
 use crate::sync::model::Snapshot;
-use crate::sync::project::project_root;
+use crate::sync::project::{FolderMerge, merge_root};
 use crate::sync::tick::ResolveMode;
 
 /// Runs the adoption gate over a fetched record. The concrete implementation
@@ -437,23 +437,23 @@ where
 }
 
 /// Fold a completed resolve's verdict into the shared base cell. A gate-passing
-/// `Adopted` re-projects ([`project_root`], merging over the current base) and
-/// returns whether the merge changed anything (the caller emits
-/// `SnapshotUpdated`); so does an own `Current` root, from
-/// [`Resolved::current_at_floor`]. `NoUpdate`/`TrustViolation` leave
-/// last-known-good intact and return false. Non-await by construction — the
-/// short borrows never span an `.await` (facade single-threaded executor rule).
+/// `Adopted` re-projects ([`merge_root`], merging over the current base) and
+/// reports what the merge changed (the caller emits `SnapshotUpdated`); so does
+/// an own `Current` root, from [`Resolved::current_at_floor`].
+/// `NoUpdate`/`TrustViolation` leave last-known-good intact and report nothing.
+/// Non-await by construction — the short borrows never span an `.await`
+/// (facade single-threaded executor rule).
 pub(crate) fn refresh_base_from_resolved(
     base: &RefCell<Snapshot>,
     root: NodeId,
     resolved: &Resolved,
-) -> bool {
+) -> FolderMerge {
     let adopted = match (&resolved.outcome, &resolved.current_at_floor) {
         (ResolveOutcome::Adopted(adopted), _) => adopted,
         (ResolveOutcome::Current { .. }, Some(at_floor)) => at_floor,
-        _ => return false,
+        _ => return FolderMerge::unchanged(),
     };
-    project_root(&mut base.borrow_mut(), root, adopted)
+    merge_root(&mut base.borrow_mut(), root, adopted)
 }
 
 #[cfg(test)]
@@ -1202,11 +1202,14 @@ mod tests {
             let cell = RefCell::new(Snapshot::new(root));
             let child_id = [7u8; 16];
 
-            assert!(refresh_base_from_resolved(
-                &cell,
-                root,
-                &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
-            ));
+            assert!(
+                refresh_base_from_resolved(
+                    &cell,
+                    root,
+                    &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
+                )
+                .changed
+            );
 
             let base = cell.borrow();
             let rendered = apply_overlay(&base, &[]);
@@ -1221,11 +1224,14 @@ mod tests {
             let child_id = [7u8; 16];
             let cell = RefCell::new(Snapshot::new(root));
 
-            assert!(refresh_base_from_resolved(
-                &cell,
-                root,
-                &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
-            ));
+            assert!(
+                refresh_base_from_resolved(
+                    &cell,
+                    root,
+                    &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
+                )
+                .changed
+            );
             // A verified head-version read folds the child's plaintext facts in.
             assert!(project_child_version(
                 &mut cell.borrow_mut(),
@@ -1241,7 +1247,8 @@ mod tests {
                     &cell,
                     root,
                     &Resolved::just(ResolveOutcome::Adopted(adopted_with_one_child(child_id))),
-                ),
+                )
+                .changed,
                 "re-projecting the same body repaints nothing"
             );
 
@@ -1265,17 +1272,20 @@ mod tests {
             let cell = RefCell::new(Snapshot::new(root));
             let child_id = [0x3C; 16];
 
-            assert!(refresh_base_from_resolved(
-                &cell,
-                root,
-                &Resolved {
-                    last_known_good: None,
-                    outcome: ResolveOutcome::Current {
-                        record_bytes: vec![9, 9, 9],
+            assert!(
+                refresh_base_from_resolved(
+                    &cell,
+                    root,
+                    &Resolved {
+                        last_known_good: None,
+                        outcome: ResolveOutcome::Current {
+                            record_bytes: vec![9, 9, 9],
+                        },
+                        current_at_floor: Some(adopted_with_one_child(child_id)),
                     },
-                    current_at_floor: Some(adopted_with_one_child(child_id)),
-                },
-            ));
+                )
+                .changed
+            );
 
             assert!(
                 cell.borrow().contains(NodeId(child_id)),
@@ -1300,7 +1310,8 @@ mod tests {
             ] {
                 let cell = RefCell::new(before.clone());
                 assert!(
-                    !refresh_base_from_resolved(&cell, root, &Resolved::just(outcome.clone())),
+                    !refresh_base_from_resolved(&cell, root, &Resolved::just(outcome.clone()))
+                        .changed,
                     "{outcome:?} must not repaint the base"
                 );
                 assert_eq!(

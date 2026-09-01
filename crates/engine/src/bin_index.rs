@@ -12,7 +12,8 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{BinIndex, open_bin_index, seal_bin_index};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
+use zeroize::Zeroizing;
 
 use crate::api::ApiClient;
 use crate::content::Gateway;
@@ -99,19 +100,22 @@ pub enum BinIndexPublishError {
     Revision,
 }
 
-/// The bin index's own key material, derived once from the login secret.
+/// The bin's own key material, derived once from the login secret.
 ///
-/// The publish and load paths take this rather than the login secret, so the
-/// spawned task that writes a bin entry holds only what the bin index needs
-/// (AGENTS.md security rule 1).
+/// The publish, load and re-key paths take this rather than the login secret, so
+/// the spawned task that bins a node holds only what the bin needs (AGENTS.md
+/// security rule 1). The held-key edge factors into a per-account half and a
+/// per-delete half, so the whole edge is reachable from the account half alone.
 pub struct BinIndexKeys {
     signer: Ed25519Signer,
     seal_key: SecretBytes,
+    held_root: SecretBytes,
     name: IpnsName,
 }
 
 impl BinIndexKeys {
-    /// Derive the `bin-index-ipns-keypair` and `bin-index-seal-key` edges.
+    /// Derive the `bin-index-ipns-keypair`, `bin-index-seal-key` and
+    /// `bin-held-key` edges.
     #[must_use]
     pub fn derive(login_secret: &[u8]) -> Self {
         let signer = kdf::bin_index_ipns_keypair(login_secret);
@@ -119,6 +123,7 @@ impl BinIndexKeys {
         Self {
             signer,
             seal_key: kdf::bin_index_seal_key(login_secret),
+            held_root: kdf::bin_held_root(login_secret),
             name,
         }
     }
@@ -127,6 +132,16 @@ impl BinIndexKeys {
     #[must_use]
     pub fn name(&self) -> &IpnsName {
         &self.name
+    }
+
+    /// The seed the doomed subtree rooted at `node_id` re-seals under, which is
+    /// the whole of the access cut: no scope seed of any epoch is an input, so
+    /// key regression cannot reach it (ADR 0010 item 3).
+    #[must_use]
+    pub fn held_key(&self, node_id: &[u8; 16], deleted_at: u64) -> Zeroizing<[u8; SECRET_LEN]> {
+        Zeroizing::new(
+            *kdf::bin_held_key(self.held_root.as_bytes(), node_id, deleted_at).as_bytes(),
+        )
     }
 }
 

@@ -31,7 +31,7 @@ use cipherbox_core::content::{
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinEntry, ChildRef, NodeKind, PreservedFields, ReadBody, Version, open_content_key,
+    BinEntry, BinIndex, ChildRef, NodeKind, PreservedFields, ReadBody, Version, open_content_key,
     open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
@@ -48,7 +48,10 @@ use crate::content::{
     read_block, validate_byo_config, version_cids,
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::{BlockProgress, Event, NodeId, OpPhase, emit_trust_violation};
+use crate::facade::{
+    BlockProgress, Event, MAX_NODE_NAME_BYTES, NodeId, OpPhase, emit_trust_violation,
+};
+use crate::gate::GateStage;
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
@@ -87,7 +90,7 @@ use crate::sync::doomed::{
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::project::{project_child_version, project_folder};
+use crate::sync::project::{UnlinkedChild, project_child_version, project_folder};
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
 use crate::sync::staging::{
@@ -456,8 +459,29 @@ pub struct SettingsHold {
     pub refusal: SettingsRefusal,
 }
 
+/// The captures one pass adopts into the bin. A peer chooses both the trigger
+/// and the count, so the pass takes a bounded share and the rest waits.
+const MAX_BIN_ADOPTIONS: usize = 32;
+
+/// What one session holds unadopted. The set is memory a peer's republishes
+/// fill, so it is bounded like every other per-session set.
+const MAX_HELD_CAPTURES: usize = 4096;
+
+/// Add what a read leg observed to the session's unadopted set, up to
+/// [`MAX_HELD_CAPTURES`].
+pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<UnlinkedChild>) {
+    let mut set = set.borrow_mut();
+    let room = MAX_HELD_CAPTURES.saturating_sub(set.len());
+    set.extend(observed.into_iter().take(room));
+}
+
 /// The owner-scope material one drain pass publishes under. Every field is
 /// borrowed from the live session; the drain zeroizes none of it.
+///
+/// Copied to swap one field: a re-key into the bin publishes the doomed subtree
+/// under the bin's held key, while the name plane and the scope id the AAD binds
+/// stay the source scope's ([`Drain::rekey_into_bin`]).
+#[derive(Clone, Copy)]
 pub(crate) struct DrainScope<'a> {
     /// The vault root node — also the root scope id (the cold-start anchor).
     pub(crate) root: NodeId,
@@ -524,9 +548,14 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) cancels: &'a RefCell<UploadCancels>,
     /// The facade's outbound event stream, for upload progress.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
-    /// The bin index's own signer and seal key. The pass holds these two edges
-    /// rather than the login secret they derive from.
+    /// The bin's own key material. The pass holds these derived edges rather
+    /// than the login secret they come from.
     pub(crate) bin_keys: &'a BinIndexKeys,
+    /// Unlinks the poll leg observed and this device did not author, shared
+    /// with the tick loop that fills it. A capture leaves the set only once its
+    /// bin entry has landed: the merge that saw it has already dropped the node
+    /// from the base, so a set this pass emptied on failure would lose it.
+    pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
     /// The bin index record this session published, shared with the facade's
     /// renewal slot.
     pub(crate) bin_index_record: &'a RefCell<Option<HeldRecord>>,
@@ -742,6 +771,7 @@ where
     /// pass orphaned.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let report = self.drain_queue(scope).await;
+        self.adopt_observed_unlinks(scope).await;
         self.orphan_heads.retire_pending(self.api).await;
         // One enumeration serves every consumer below. A desktop vault stages
         // on the order of ten thousand keys, and each of these was listing the
@@ -1524,12 +1554,12 @@ where
     /// Delete: drop the parent's ref, and either bin the node or stop paying
     /// for what the unlink detached (blueprint/engine.md "Delete branch").
     ///
-    /// `to_bin` selects the soft branch, which writes one bin entry and
-    /// reclaims nothing: the record stays published and the content stays
-    /// pinned, so a revoked grantee who holds the node's read key keeps reading
-    /// it for as long as the entry stands. That is the cost the re-key buys
-    /// back, and the re-key is not landed. The rest of this block describes the
-    /// hard branch.
+    /// `to_bin` selects the soft branch, which writes one bin entry, re-keys the
+    /// doomed subtree into the bin, and reclaims nothing: the record stays
+    /// published and the content stays pinned. The re-key is what stops a
+    /// current or revoked grantee of the source scope from reading a node the
+    /// owner believes is binned. The rest of this block describes the hard
+    /// branch.
     ///
     /// Everything reclaimable happens **after** the unlink publishes, which is
     /// the opposite of [`Self::publish_prune`]'s journal-first ordering and for
@@ -1572,11 +1602,23 @@ where
             return Ok(());
         };
 
-        // The soft branch earns its bin entry before the unlink; the hard
-        // branch earns its doomed manifest. Both then unlink and republish the
-        // parent, which is where the op completes.
+        // The soft branch earns its bin entry and its re-key before the unlink;
+        // the hard branch earns its doomed manifest. Both then unlink and
+        // republish the parent, which is where the op completes.
         let doomed = if to_bin && names_this_scope(scope, &child) {
-            self.record_bin_entry(scope, parent, &child, applied.op.authored_at.0)
+            let unlinked = UnlinkedChild {
+                scope_id: scope.root.0,
+                parent,
+                node: target,
+                name: child.name.clone(),
+                kind: child.kind,
+                ipns_name: child.ipns_name.clone(),
+                deleted_at: applied.op.authored_at.0,
+            };
+            let deleted_at = self
+                .record_bin_entry(&unlinked, applied.op.authored_at.0)
+                .await?;
+            self.rekey_into_bin(scope, pass.epoch, target, deleted_at)
                 .await?;
             None
         } else {
@@ -1821,19 +1863,160 @@ where
         Ok(doomed)
     }
 
-    /// Add one soft-deleted node to the owner's bin index.
+    /// Add one soft-deleted node to the owner's bin index, reporting the
+    /// `deletedAt` the index now carries for it.
+    ///
+    /// A retry over an entry that already landed reports that entry's own value,
+    /// never `deleted_at`, because the held key is derived from it: a second
+    /// value would re-key the subtree under a key the standing entry does not
+    /// name. That is why the entry stands ahead of the re-key on this path: the
+    /// queued op is what drives the retry, and the retry has to reach the same
+    /// key.
     ///
     /// The index is rewritten whole, so only a load that established the
     /// current index may be written over (blueprint/engine.md "Bin index
     /// record"); every other outcome holds the op for a later tick.
-    async fn record_bin_entry(
-        &self,
-        scope: &DrainScope<'_>,
-        parent: NodeId,
-        child: &ChildRef,
-        deleted_at: u64,
-    ) -> Result<(), Halt> {
-        let mut index = load_bin_index(
+    async fn record_bin_entry(&self, child: &UnlinkedChild, deleted_at: u64) -> Result<u64, Halt> {
+        let mut index = self.writable_bin_index().await?;
+        // A duplicate node id is a hard reject at encode, so a retry whose
+        // entry already landed publishes nothing.
+        if let Some(entry) = index
+            .entries
+            .iter()
+            .find(|entry| entry.node_id == child.node.0)
+        {
+            return Ok(entry.deleted_at);
+        }
+        index.entries.push(BinEntry::new(
+            child.node.0,
+            child.ipns_name.clone(),
+            child.kind,
+            child.parent.0,
+            child.name.clone(),
+            deleted_at,
+            child.scope_id,
+            Some(*self.bin_keys.held_key(&child.node.0, deleted_at)),
+        ));
+        self.publish_bin(&index).await?;
+        Ok(deleted_at)
+    }
+
+    /// Bind the unlinks the poll leg observed into the owner's bin, and re-key
+    /// each node out of the source scope's derivation (ADR 0010 item 5).
+    /// Without the re-key, the grantee who unlinked the node keeps its read key.
+    ///
+    /// The re-key runs **before** the entry, which is the opposite of the
+    /// authored delete's order and for the opposite reason: the unlink has
+    /// already published, so nothing waits on the entry, and an entry ahead of
+    /// the re-key would claim a cut that may never run. A capture whose re-key
+    /// or whose index publish does not land stays in the set and is retried,
+    /// under the `deletedAt` it was stamped with, so the retry reaches the same
+    /// key.
+    ///
+    /// The set is empty for a vault at retention `0`: the owner turned the bin
+    /// off, and an adoption carries no owner command that could overrule that.
+    ///
+    /// One index load and one index publish serve the whole pass, and at most
+    /// [`MAX_BIN_ADOPTIONS`] captures ride it, so a peer that unlinks a large
+    /// folder cannot spend the tick.
+    async fn adopt_observed_unlinks(&self, scope: &DrainScope<'_>) {
+        let taken = self.take_captures(scope);
+        if taken.is_empty() {
+            return;
+        }
+        let Ok((_, epoch)) = self.load_scope_root(scope).await else {
+            self.return_captures(taken);
+            return;
+        };
+        let Ok(mut index) = self.writable_bin_index().await else {
+            self.return_captures(taken);
+            return;
+        };
+        let mut added = Vec::new();
+        let mut unfinished = Vec::new();
+        for unlinked in taken {
+            let standing = index
+                .entries
+                .iter()
+                .any(|entry| entry.node_id == unlinked.node.0);
+            if self
+                .rekey_into_bin(scope, epoch, unlinked.node, unlinked.deleted_at)
+                .await
+                .is_err()
+            {
+                if !standing {
+                    unfinished.push(unlinked);
+                }
+                continue;
+            }
+            if standing {
+                continue;
+            }
+            index.entries.push(BinEntry::new(
+                unlinked.node.0,
+                unlinked.ipns_name.clone(),
+                unlinked.kind,
+                unlinked.parent.0,
+                unlinked.name.clone(),
+                unlinked.deleted_at,
+                unlinked.scope_id,
+                Some(
+                    *self
+                        .bin_keys
+                        .held_key(&unlinked.node.0, unlinked.deleted_at),
+                ),
+            ));
+            added.push(unlinked);
+        }
+        if !added.is_empty() && self.publish_bin(&index).await.is_err() {
+            // Re-keyed with no entry to name them: the next pass re-keys to the
+            // same key and writes the entries it could not write here.
+            unfinished.extend(added);
+        }
+        self.return_captures(unfinished);
+    }
+
+    /// The captures this pass may adopt, removed from the shared set.
+    ///
+    /// A node the base still links did not leave the tree — a move or a
+    /// dual-link loser departs one parent and stays named by another — and
+    /// binning it would seal a live node under a key no reader derives. A child
+    /// that does not publish under a name this scope's write seed derives is a
+    /// scope root, which the authored delete refuses for the same reason. A name
+    /// longer than this build ever authors is a peer's, and no entry carries it.
+    fn take_captures(&self, scope: &DrainScope<'_>) -> Vec<UnlinkedChild> {
+        let base = self.base.borrow();
+        let mut set = self.observed_unlinks.borrow_mut();
+        let mut taken = Vec::new();
+        set.retain(|unlinked| {
+            if unlinked.scope_id != scope.root.0
+                || base.contains(unlinked.node)
+                || unlinked.name.len() > MAX_NODE_NAME_BYTES
+                || derive_write_name(scope.write_scope_seed, &unlinked.node.0)
+                    .as_str()
+                    .as_bytes()
+                    != unlinked.ipns_name
+            {
+                return false;
+            }
+            if taken.len() == MAX_BIN_ADOPTIONS {
+                return true;
+            }
+            taken.push(unlinked.clone());
+            false
+        });
+        taken
+    }
+
+    /// Put back the captures this pass did not settle, up to the frozen bound
+    /// on what one session holds unadopted.
+    fn return_captures(&self, unfinished: Vec<UnlinkedChild>) {
+        hold_captures(self.observed_unlinks, unfinished);
+    }
+
+    /// The current bin index, ready to be written over.
+    async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
+        load_bin_index(
             self.transport,
             self.gateway,
             self.http,
@@ -1855,22 +2038,11 @@ where
                 );
             }
             halt
-        })?;
-        // A duplicate node id is a hard reject at encode, so a retry whose
-        // entry already landed publishes nothing.
-        if index.entries.iter().any(|entry| entry.node_id == child.id) {
-            return Ok(());
-        }
-        index.entries.push(BinEntry::new(
-            child.id,
-            child.ipns_name.clone(),
-            child.kind,
-            parent.0,
-            child.name.clone(),
-            deleted_at,
-            scope.root.0,
-            None,
-        ));
+        })
+    }
+
+    /// Publish the bin index and hold the confirmed record for renewal.
+    async fn publish_bin(&self, index: &BinIndex) -> Result<(), Halt> {
         let held = publish_bin_index(
             self.transport,
             self.api,
@@ -1881,12 +2053,119 @@ where
             &mut SharedEntropy(self.entropy),
             self.orphan_heads,
             self.bin_keys,
-            &index,
+            index,
         )
         .await
         .map_err(|error| halt_for_bin_publish(&error))?;
         *self.bin_index_record.borrow_mut() = Some(held);
         Ok(())
+    }
+
+    /// Re-seal the doomed subtree under the bin's held key, which is the access
+    /// cut a soft delete owes (ADR 0010 item 3). Names, signers and the scope id
+    /// the AAD binds do not move, so the bin entry's `ipnsName` stays the route
+    /// back to the node.
+    ///
+    /// The whole subtree is re-keyed in this pass, not left to the lazy wave: a
+    /// binned node takes no ordinary write, so nothing would ever carry it.
+    ///
+    /// A descendant that is a scope root is a boundary, not a member. Its
+    /// subtree is sealed under its own scope's seed, which no grantee of the
+    /// source scope holds, and cutting that scope's grantees is a rotation.
+    ///
+    /// Every failure returns before the parent's unlink publishes, so a subtree
+    /// this pass could not re-key stays linked and nothing is lost.
+    async fn rekey_into_bin(
+        &self,
+        scope: &DrainScope<'_>,
+        epoch: u64,
+        root: NodeId,
+        deleted_at: u64,
+    ) -> Result<(), Halt> {
+        let held = self.bin_keys.held_key(&root.0, deleted_at);
+        let binned = DrainScope {
+            read_scope_seed: &held,
+            ..*scope
+        };
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![root];
+        while let Some(node) = pending.pop() {
+            // Child refs are wire data, so a diamond or a cycle among them is
+            // reachable; a node already walked terminates the walk.
+            if !seen.insert(node.0) {
+                continue;
+            }
+            let (loaded, already_binned) = self.load_doomed(scope, &binned, epoch, node).await?;
+            let LoadedNode {
+                name,
+                envelope_unknown,
+                epoch_tag_unknown,
+                body,
+                ..
+            } = loaded;
+            let content_cids = match &body {
+                ReadBody::Folder { children, .. } => {
+                    pending.extend(
+                        children
+                            .iter()
+                            .filter(|child| names_this_scope(scope, child))
+                            .map(|child| NodeId(child.id)),
+                    );
+                    Vec::new()
+                }
+                // Every retained version stays registered under this name, so
+                // the re-key never drops a pin the binned node still needs.
+                ReadBody::File { versions, .. } => versions
+                    .iter()
+                    .map(|version| {
+                        checked_content_cid(&version.content_cid).map(encode_content_cid_str)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            if already_binned {
+                continue;
+            }
+            let published = self
+                .publish_node(
+                    &binned,
+                    epoch,
+                    node,
+                    &name,
+                    false,
+                    &body,
+                    content_cids,
+                    envelope_unknown,
+                    epoch_tag_unknown,
+                    None,
+                )
+                .await
+                .map_err(Halt::from)?;
+            self.hold(node.0, published.held);
+        }
+        Ok(())
+    }
+
+    /// Load a doomed node under whichever key seals it now, reporting whether
+    /// that was the held key. A pass that stopped part-way through a re-key
+    /// leaves a subtree holding both, and the retry has to read both.
+    async fn load_doomed(
+        &self,
+        scope: &DrainScope<'_>,
+        binned: &DrainScope<'_>,
+        epoch: u64,
+        node: NodeId,
+    ) -> Result<(LoadedNode, bool), Halt> {
+        match self
+            .load_child_node(scope, epoch, node, ResolveMode::CacheFirst)
+            .await
+        {
+            Ok(loaded) => Ok((loaded, false)),
+            Err(halt) => self
+                .load_child_node(binned, epoch, node, ResolveMode::CacheFirst)
+                .await
+                .map(|loaded| (loaded, true))
+                .map_err(|_| halt),
+        }
     }
 
     /// The owner-authored doomed manifest this delete just earned: the target's
@@ -3490,10 +3769,12 @@ where
     /// drain, where the queue comes back and the marks that record what already
     /// published do not.
     ///
-    /// The name derives from the node id this op minted, so a record that
-    /// resolves there **and passes the child gate** is one this op published:
-    /// the gate binds the record to this node id under this scope root, which
-    /// nothing jammed at the name satisfies.
+    /// The name derives from the node id this op minted — 128 random bits from
+    /// the injected entropy seam, public only once the record it names has
+    /// published — so a record standing there is one this op published. A record
+    /// that will not open is one too: a soft delete re-keys the node it bins out
+    /// of this scope's derivation, and re-authoring over it would resurrect a
+    /// binned node under the key the bin just cut.
     ///
     /// What that alone cannot say is whether this device has *forgotten*
     /// publishing it, and two durable reads answer that before the network is
@@ -3505,10 +3786,10 @@ where
     /// floor before that parent publishes, so a crash in the window re-authors
     /// as it always has. A restore rewinds both.
     ///
-    /// A seam failure holds the op for a later pass rather than answering. Only
-    /// an unresolvable name and a gate rejection read as "not published", and a
-    /// create the drain cannot reach is one whose own publish would not land
-    /// either.
+    /// A seam failure holds the op for a later pass rather than answering. An
+    /// unresolvable name and a rejection before the unseal read as "not
+    /// published", and a create the drain cannot reach is one whose own publish
+    /// would not land either.
     async fn create_replays_a_publish(
         &self,
         scope: &DrainScope<'_>,
@@ -3551,7 +3832,15 @@ where
         )
         .await
         .map_err(seam)?;
-        Ok(matches!(resolved.outcome, ResolveOutcome::Adopted(_)))
+        Ok(match resolved.outcome {
+            ResolveOutcome::Adopted(_) => true,
+            // A rejection at the unseal is a record that verified, cleared both
+            // floors, and will not open under this scope's read key — a node a
+            // soft delete re-keyed into the bin. An earlier stage says nothing
+            // about what stands at the name.
+            ResolveOutcome::TrustViolation(rejection) => rejection.stage == GateStage::Unseal,
+            ResolveOutcome::Current { .. } | ResolveOutcome::NoUpdate => false,
+        })
     }
 
     /// The name a create derived, where nothing published references it yet: a
