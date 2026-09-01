@@ -32,9 +32,9 @@ pub use aad::{
     StructTagSpec, build_aad,
 };
 pub use bin_index::{
-    BIN_INDEX_RUNGS, BIN_INDEX_SIZE_CHECK, BIN_INDEX_V, BinEntry, BinIndex,
-    MAX_BIN_INDEX_BODY_BYTES, MAX_BIN_INDEX_BYTES, bin_index_aad, decode_bin_index,
-    encode_bin_index, fit_rung, open_bin_index, seal_bin_index,
+    BIN_INDEX_RUNGS, BIN_INDEX_V, BinEntry, BinIndex, MAX_BIN_INDEX_BODY_BYTES,
+    MAX_BIN_INDEX_BYTES, bin_index_aad, decode_bin_index, encode_bin_index, fit_rung,
+    is_bin_index_over_rung, open_bin_index, seal_bin_index,
 };
 pub use body::{
     ChildRef, NodeKind, PreservedFields, ReadBody, Version, decode_read_body, encode_read_body,

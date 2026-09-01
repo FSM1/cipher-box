@@ -963,8 +963,7 @@ where
             self.clear_bin_index_hold();
             return (report, Some(Vec::new()));
         }
-        // The hold names one op, so it goes as soon as that op does; the load
-        // itself is the only probe the bin plane has, so nothing else gates it.
+        // The hold names one op, so it goes as soon as that op does.
         if self
             .bin_index_hold
             .borrow()
@@ -1062,6 +1061,12 @@ where
         attempts: &mut Attempts,
         report: &mut DrainReport,
     ) {
+        // The bin plane has no probe of its own — the load is the only one — so
+        // its hold goes here, on the first halt that is not it. Every other
+        // hold's own pre-pass gate is what lets go of it.
+        if !matches!(halt, Halt::HeldByBinIndex(_)) {
+            self.clear_bin_index_hold();
+        }
         match halt {
             Halt::Unclassified => {}
             // The facade undid the op against the blocks it could see when the
@@ -1152,11 +1157,10 @@ where
                 self.dead_letter(scope, op_id, op, reason, report).await;
             }
             // One pass raises one halt, and each hold's own gate is what lets
-            // go of it — so taking one drops the other rather than leaving two
+            // go of it — so taking one drops the others rather than leaving two
             // cells claiming the same head for different reasons.
             Halt::Blocked { needed_bytes } => {
                 self.clear_settings_hold();
-                self.clear_bin_index_hold();
                 *self.blocked.borrow_mut() = Some(BlockedOp {
                     op_id,
                     node: op.target,
@@ -1165,7 +1169,6 @@ where
             }
             Halt::HeldBySettings(refusal) => {
                 self.clear_block();
-                self.clear_bin_index_hold();
                 *self.settings_hold.borrow_mut() = Some(SettingsHold {
                     op_id,
                     node: op.target,
@@ -1771,28 +1774,25 @@ where
     ) -> Result<(), Halt> {
         let target = applied.op.target;
         let mut unlink_from = Vec::new();
-        for parent in self.published_parents(target)? {
+        let mut named = None;
+        for parent in self.published_parents(scope, target)? {
             self.ensure_folder(scope, pass, parent).await?;
-            if pass
+            let Some(child) = pass
                 .folder(parent)?
                 .children
                 .iter()
-                .any(|child| child.id == target.0)
-            {
-                unlink_from.push(parent);
-            }
+                .find(|child| child.id == target.0)
+                .cloned()
+            else {
+                continue;
+            };
+            named.get_or_insert(child);
+            unlink_from.push(parent);
         }
         // Removing an absent ref is the op already satisfied, never a publish.
-        let Some((&origin, _)) = unlink_from.split_first() else {
+        let (Some(&origin), Some(child)) = (unlink_from.first(), named) else {
             return Ok(());
         };
-        let child = pass
-            .folder(origin)?
-            .children
-            .iter()
-            .find(|child| child.id == target.0)
-            .cloned()
-            .ok_or(Halt::Unclassified)?;
 
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
@@ -1800,8 +1800,9 @@ where
         let doomed = if to_bin && names_this_scope(scope, &child) {
             let unlinked = UnlinkedChild {
                 scope_id: scope.root.0,
-                // The winning link's parent: the folder a reader resolves the
-                // node under, and so the one a restore returns it to.
+                // The highest-ranked link still standing: the folder a reader
+                // resolves the node under, and so the one a restore returns it
+                // to.
                 parent: origin,
                 node: target,
                 name: child.name.clone(),
@@ -1831,7 +1832,7 @@ where
         // Only the last unlink completes the op. A pass that stops part-way
         // leaves the node binned and still linked, which is the residue the
         // entry-before-unlink order already settles on the retry.
-        let last = unlink_from.len() - 1;
+        let count = unlink_from.len();
         for (at, parent) in unlink_from.into_iter().enumerate() {
             pass.folder_mut(parent)?
                 .children
@@ -1841,7 +1842,7 @@ where
                 pass,
                 parent,
                 applied.op.authored_at.0,
-                (at == last).then_some(applied.op_id),
+                (at + 1 == count).then_some(applied.op_id),
             )
             .await
             .map_err(Halt::from)?;
@@ -2108,7 +2109,7 @@ where
         if index.entries.len() == before {
             return Ok(());
         }
-        self.publish_bin(&index).await
+        self.publish_bin(index).await
     }
 
     /// Write what the unlink just earned to the doomed-name journal, reporting
@@ -2320,7 +2321,7 @@ where
     /// current index may be written over (blueprint/engine.md "Bin index
     /// record"); every other outcome holds the op for a later tick.
     async fn record_bin_entry(&self, child: &UnlinkedChild, deleted_at: u64) -> Result<u64, Halt> {
-        let mut index = self.writable_bin_index().await?;
+        let mut index = self.carried_bin_index().await?;
         // A duplicate node id is a hard reject at encode, so a retry whose
         // entry already landed publishes nothing.
         if let Some(entry) = index
@@ -2340,7 +2341,7 @@ where
             child.scope_id,
             Some(*self.bin_keys.held_key(&child.node.0, deleted_at)),
         ));
-        self.publish_bin(&index).await?;
+        self.publish_bin(index).await?;
         Ok(deleted_at)
     }
 
@@ -2411,7 +2412,7 @@ where
             ));
             added.push(unlinked);
         }
-        if !added.is_empty() && self.publish_bin(&index).await.is_err() {
+        if !added.is_empty() && self.publish_bin(index).await.is_err() {
             // Re-keyed with no entry to name them: the next pass re-keys to the
             // same key and writes the entries it could not write here.
             unfinished.extend(added);
@@ -2492,7 +2493,19 @@ where
         if let Some(index) = cached_bin_index(self.snapshot_cache, self.bin_keys).await {
             return Some(index);
         }
-        match self.read_bin_index().await {
+        match load_bin_index(
+            self.transport,
+            self.gateway,
+            self.http,
+            self.floors,
+            self.snapshot_cache,
+            self.scheduler,
+            self.profile,
+            self.bin_keys,
+        )
+        .await
+        .enrol(self.bin_index_record)
+        {
             BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => Some(index),
             BinIndexLoad::Empty(_) => None,
         }
@@ -2536,14 +2549,14 @@ where
         hold_captures(self.observed_unlinks, unfinished);
     }
 
-    /// Load the bin index, enrolling the record the plane served in the
-    /// session's renewal set.
+    /// The current bin index, ready to be written over.
     ///
-    /// A session that only reads keeps the record's EOL alive this way, and a
-    /// record already past its EOL is renewed rather than left refused for good
-    /// — the rewrite guard admits no publish that would re-sign it.
-    async fn read_bin_index(&self) -> BinIndexLoad {
-        let read = load_bin_index(
+    /// A fresh load every time: the index is rewritten whole, so a rewrite built
+    /// on a copy read before an intervening publish drops that publish's
+    /// entries. [`Self::carried_bin_index`] is the one caller that may build on
+    /// what the pass already established.
+    async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
+        let index = load_bin_index(
             self.transport,
             self.gateway,
             self.http,
@@ -2553,20 +2566,10 @@ where
             self.profile,
             self.bin_keys,
         )
-        .await;
-        if let Some(renewable) = read.renewable {
-            *self.bin_index_record.borrow_mut() = Some(renewable);
-        }
-        read.load
-    }
-
-    /// The current bin index, ready to be written over — the one this pass has
-    /// already established, or a fresh load.
-    async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
-        if let Some(index) = self.established_bin_index.borrow().clone() {
-            return Ok(index);
-        }
-        let index = self.read_bin_index().await.writable().map_err(|reason| {
+        .await
+        .enrol(self.bin_index_record)
+        .writable()
+        .map_err(|reason| {
             let halt = halt_for_bin_load(reason);
             if halt == Halt::Attempt {
                 emit_trust_violation(
@@ -2581,15 +2584,29 @@ where
         Ok(index)
     }
 
-    /// Record the index this pass may build its next rewrite on, and let go of
-    /// the hold a refused load took.
+    /// The bin index a further entry may be appended to: the one this pass
+    /// established, or a fresh load.
+    ///
+    /// Only the entry the soft delete writes builds on the carried copy, which
+    /// is what makes a bulk soft delete cost one resolve rather than one per
+    /// node (blueprint/engine.md "Bin index record"). The entry an op *removes*
+    /// runs after a re-key and several publishes, so it resolves again.
+    async fn carried_bin_index(&self) -> Result<BinIndex, Halt> {
+        if let Some(index) = self.established_bin_index.borrow().clone() {
+            return Ok(index);
+        }
+        self.writable_bin_index().await
+    }
+
+    /// Record the index a further entry may be appended to, and let go of the
+    /// hold a refused load took.
     fn establish_bin_index(&self, index: BinIndex) {
         *self.established_bin_index.borrow_mut() = Some(index);
         self.clear_bin_index_hold();
     }
 
     /// Publish the bin index and hold the confirmed record for renewal.
-    async fn publish_bin(&self, index: &BinIndex) -> Result<(), Halt> {
+    async fn publish_bin(&self, index: BinIndex) -> Result<(), Halt> {
         // A publish that does not confirm leaves the standing index unknown, so
         // the next rewrite resolves rather than building on this attempt.
         *self.established_bin_index.borrow_mut() = None;
@@ -2603,14 +2620,14 @@ where
             &mut SharedEntropy(self.entropy),
             self.orphan_heads,
             self.bin_keys,
-            index,
+            &index,
         )
         .await
         .map_err(|error| halt_for_bin_publish(&error))?;
         *self.bin_index_record.borrow_mut() = Some(held);
         // The confirm re-resolved this session's own bytes at its own sequence,
         // so the published entries are the standing index.
-        self.establish_bin_index(index.clone());
+        self.establish_bin_index(index);
         Ok(())
     }
 
@@ -4011,24 +4028,28 @@ where
         self.base.borrow().parent_of(node).ok_or(Halt::Unclassified)
     }
 
-    /// Every parent the base links `node` under, winning link first — the order
-    /// [`Snapshot::winning_link`] resolves, so the head of the list is what
-    /// [`Self::published_parent`] would have returned on its own.
+    /// Every parent inside `scope` that the base links `node` under, winner
+    /// first ([`Snapshot::links_ranked`]).
     ///
     /// A delete acts on the whole list, because it re-keys the node out of the
     /// scope: a link left standing names a record its own folder's readers can
     /// no longer open (blueprint/engine.md "Delete branch").
-    fn published_parents(&self, node: NodeId) -> Result<Vec<NodeId>, Halt> {
-        let mut links = self.base.borrow().links_to(node);
-        if links.is_empty() {
+    ///
+    /// A link from outside the scope is dropped rather than halted on. This
+    /// scope's write plane cannot author that folder at all, so waiting on it
+    /// would hold the queue head for as long as the link stands.
+    fn published_parents(&self, scope: &DrainScope<'_>, node: NodeId) -> Result<Vec<NodeId>, Halt> {
+        let parents: Vec<NodeId> = self
+            .base
+            .borrow()
+            .links_ranked_under(node, scope.root)
+            .into_iter()
+            .map(|link| link.parent)
+            .collect();
+        if parents.is_empty() {
             return Err(Halt::Unclassified);
         }
-        links.sort_by(|a, b| {
-            b.link_counter
-                .cmp(&a.link_counter)
-                .then(a.parent.cmp(&b.parent))
-        });
-        Ok(links.into_iter().map(|link| link.parent).collect())
+        Ok(parents)
     }
 
     // -----------------------------------------------------------------------
@@ -4969,7 +4990,6 @@ mod tests {
         for reason in [
             DefaultsReason::UnprovenFirstRun,
             DefaultsReason::Suppressed,
-            DefaultsReason::Expired,
             DefaultsReason::TimedOut,
             DefaultsReason::FloorUnreadable,
         ] {

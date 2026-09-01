@@ -9,10 +9,11 @@
 //! published over.
 
 use cipherbox_core::codec::decode;
+use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinEntry, BinIndex, MAX_BIN_INDEX_BODY_BYTES, NodeKind, seal_bin_index,
+    BinEntry, BinIndex, MAX_BIN_INDEX_BODY_BYTES, NodeKind, encode_bin_index, seal_bin_index,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::secret::SECRET_LEN;
@@ -82,6 +83,11 @@ fn api(device: &FakeDevice) -> ApiClient<ScriptedHttp, InMemoryCredentialStore> 
 }
 
 /// Publish `index` from `device`, asserting the publish confirmed.
+///
+/// `seed` decides the nonce, so one seed names one body: this file seals every
+/// fixture under one key, and two bodies that shared a seed would share a nonce.
+/// The seeds are `1` for `binned(&[1])`, `2` for `binned(&[1, 2])`, and so on;
+/// a test that publishes one body under two seeds on purpose takes its own.
 fn publish(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, index: &BinIndex, seed: u64) {
     publish_with(world, device, blocks, index, &mut SeededEntropy::new(seed))
         .expect("the bin index record publishes");
@@ -181,10 +187,20 @@ fn published_nonce(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> [u8
     sealed[..NONCE_LEN].try_into().expect("nonce prefix")
 }
 
+/// The nonce a fixture body is sealed under: derived from the body itself, so
+/// two distinct bodies can never share one under this file's single seal key.
+/// Two bodies sealed under one key must never share a nonce, in fixtures as in
+/// production.
+fn fixture_nonce(index: &BinIndex) -> [u8; NONCE_LEN] {
+    let body = encode_bin_index(index).expect("encode");
+    let cid = compute_cid(CONTENT_CID_CODEC, &body);
+    cid[cid.len() - NONCE_LEN..]
+        .try_into()
+        .expect("digest tail")
+}
+
 /// Put a hand-sealed body on the block plane and publish a record anchoring it
-/// at the account's bin name and `sequence`, bypassing the publish path. Each
-/// fixture body gets its own nonce: two bodies sealed under one key must never
-/// share one, in fixtures as in production.
+/// at the account's bin name and `sequence`, bypassing the publish path.
 fn seed_bin(
     device: &FakeDevice,
     blocks: &Blocks,
@@ -193,9 +209,7 @@ fn seed_bin(
     key: &[u8; 32],
     eol: &str,
 ) {
-    let mut nonce = [8u8; NONCE_LEN];
-    nonce[0] = u8::try_from(sequence).expect("fixture sequences are small");
-    let block = seal_bin_index(key, &nonce, index).expect("seal");
+    let block = seal_bin_index(key, &fixture_nonce(index), index).expect("seal");
     let cid = blocks.put(block);
     let record = IpnsRecord::create_v2(
         &kdf::bin_index_ipns_keypair(&SECRET),
@@ -232,7 +246,7 @@ fn a_bin_written_on_one_device_resolves_on_a_second_device_of_the_account() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let alice = world.device(b"alice-laptop");
-    publish(&world, &alice, &blocks, &binned(&[1, 2]), 1);
+    publish(&world, &alice, &blocks, &binned(&[1, 2]), 2);
 
     let bob = world.device(b"alice-phone");
     let BinIndexLoad::Resolved(index) = load(&world, &bob, &blocks, &keys()) else {
@@ -694,6 +708,30 @@ fn a_resolved_bin_record_is_offered_for_renewal_by_the_load_alone() {
             .expect("resolved records are renewable")
             .routing_key,
         name().as_str(),
+    );
+}
+
+/// A device that holds no sequence floor for the name has nothing of its own
+/// against which to judge the age of what the plane served — the bar the
+/// lapsed-EOL refusal used to carry. It resolves, and it re-signs nothing. The
+/// resolve leaves the floor, so the next load enrols.
+#[test]
+fn a_device_that_has_never_adopted_the_bin_record_re_signs_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let author = world.device(b"alice-laptop");
+    publish(&world, &author, &blocks, &binned(&[1]), 1);
+
+    let fresh = world.device(b"alice-phone");
+    let first = read(&world, &fresh, &blocks, &keys());
+    assert!(matches!(first.load, BinIndexLoad::Resolved(_)));
+    assert!(
+        first.renewable.is_none(),
+        "a first sight is not this device's to re-sign",
+    );
+    assert!(
+        read(&world, &fresh, &blocks, &keys()).renewable.is_some(),
+        "and the floor the first resolve left admits the next one",
     );
 }
 

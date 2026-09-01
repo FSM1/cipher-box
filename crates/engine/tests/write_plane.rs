@@ -4467,7 +4467,7 @@ fn a_withheld_bin_index_reports_a_named_hold_that_clears_when_it_resolves() {
     tick(&world, &engine, &mut tasks);
 
     let second = child_id(&engine, ROOT, "b.txt");
-    let bin_name = BinIndexKeys::derive(&SECRET).name().clone();
+    let bin_name = bin_name();
     world.record_store.fail_get_for(bin_name.as_str());
     block_on(engine.command(Command::Delete { node: second })).unwrap();
     tick(&world, &engine, &mut tasks);
@@ -4527,7 +4527,7 @@ fn bin_gets_for_a_pass_deleting(count: usize) -> usize {
         .iter()
         .map(|name| child_id(&engine, ROOT, name))
         .collect();
-    let bin_name = BinIndexKeys::derive(&SECRET).name().clone();
+    let bin_name = bin_name();
     let before = world.record_store.get_count(bin_name.as_str());
     for node in doomed {
         block_on(engine.command(Command::Delete { node })).unwrap();
@@ -4548,14 +4548,66 @@ fn bin_gets_for_a_pass_deleting(count: usize) -> usize {
 /// hundred times over.
 #[test]
 fn a_bulk_soft_delete_resolves_the_bin_index_once_for_the_whole_pass() {
-    let endpoints = FakeWorld::new().device(b"alice").record_store.endpoints();
-    let fanout = endpoints.len();
+    let fanout = FakeWorld::new().record_store.endpoints().len();
     let one = bin_gets_for_a_pass_deleting(1);
     let four = bin_gets_for_a_pass_deleting(4);
     assert_eq!(
         four - one,
         3 * fanout,
         "three more deletes cost three more confirms and no further load",
+    );
+}
+
+/// A rewrite that removes an entry never builds on the copy the pass carried
+/// for its soft deletes. It runs after a re-key and several folder publishes,
+/// and the index is rewritten whole, so a copy read before those would drop
+/// every entry another device added since.
+#[test]
+fn a_restore_resolves_the_bin_index_rather_than_the_copy_the_pass_carried() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    for name in ["a.txt", "b.txt"] {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.into(),
+            },
+            &(0..40u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let restored = child_id(&engine, ROOT, "a.txt");
+    let doomed = child_id(&engine, ROOT, "b.txt");
+    block_on(engine.command(Command::Delete { node: restored })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // One fanout GET per resolve, and one per publish confirm.
+    let fanout = world.record_store.endpoints().len();
+    let before = world.record_store.get_count(bin_name().as_str());
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    block_on(engine.command(Command::Restore {
+        node: restored,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+    let spent = world.record_store.get_count(bin_name().as_str()) - before;
+
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks),
+        vec![doomed.0],
+        "the pass binned one node and unbinned the other"
+    );
+    assert_eq!(
+        spent,
+        bin_gets_for_a_pass_deleting(1) + 3 * fanout,
+        "the delete carries one resolve; the restore resolves for its entry \
+         read and again for its rewrite, then confirms",
     );
 }
 

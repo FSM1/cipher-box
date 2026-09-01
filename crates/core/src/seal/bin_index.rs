@@ -419,9 +419,24 @@ fn pad_len(bare: usize, rung: usize) -> Option<usize> {
         .map(|(_, n)| n)
 }
 
-/// The collection label the total-size refusal reports, so a caller can tell a
-/// bin that no rung admits from any other refusal [`encode_bin_index`] makes.
-pub const BIN_INDEX_SIZE_CHECK: &str = "binIndex";
+/// The collection label the total-size refusal reports. Private to core;
+/// consumers that must tell it from the per-collection bounds it shares
+/// `too-many-structures` with go through [`is_bin_index_over_rung`].
+const BIN_INDEX_SIZE_CHECK: &str = "binIndex";
+
+/// True when `e` is the body's no-rung-admits-it refusal, rather than one of the
+/// per-collection bounds that raise the same check name. What lets a caller
+/// charge a full bin apart from an encoder fault.
+#[must_use]
+pub fn is_bin_index_over_rung(e: &CodecError) -> bool {
+    matches!(
+        e,
+        CodecError::Malformed(Malformed::TooManyStructures {
+            collection: BIN_INDEX_SIZE_CHECK,
+            ..
+        })
+    )
+}
 
 // ---------------------------------------------------------------------------
 // The sealed record.

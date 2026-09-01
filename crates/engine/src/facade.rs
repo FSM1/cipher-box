@@ -4319,14 +4319,13 @@ where {
     /// Idempotent on ADR 0007's derived terms: the name comes from the login
     /// secret alone, and only a load that finds neither a record nor a durable
     /// mark mints one — so a repeated first run publishes nothing. A publish
-    /// that does not land leaves the first soft delete to mint the record, which
-    /// is where `main` stood.
+    /// that does not land leaves the first soft delete to mint the record.
     async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
         let Some(session) = self.session.as_ref() else {
             return;
         };
         let keys = BinIndexKeys::derive(session.login_secret());
-        let read = load_bin_index(
+        let load = load_bin_index(
             &self.seams.record_transport,
             &self.gateway,
             &self.seams.http,
@@ -4336,14 +4335,9 @@ where {
             &self.profile,
             &keys,
         )
-        .await;
-        if !matches!(
-            read.load,
-            BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun)
-        ) {
-            if let Some(renewable) = read.renewable {
-                *self.bin_index_record.borrow_mut() = Some(renewable);
-            }
+        .await
+        .enrol(&self.bin_index_record);
+        if !matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun)) {
             return;
         }
         if let Ok(held) = publish_bin_index(
@@ -8789,11 +8783,8 @@ where {
             &self.profile,
             &keys,
         )
-        .await;
-        if let Some(renewable) = load.renewable {
-            *self.bin_index_record.borrow_mut() = Some(renewable);
-        }
-        let load = load.load;
+        .await
+        .enrol(&self.bin_index_record);
         let reason = match load {
             BinIndexLoad::Resolved(_) => return Ok(load),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,

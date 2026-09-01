@@ -10,11 +10,13 @@
 //! settings resolve's lapsed-EOL refusal (blueprint/engine.md "Bin index
 //! record").
 
-use cipherbox_core::error::{CodecError, Malformed};
+use core::cell::RefCell;
+
+use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BIN_INDEX_SIZE_CHECK, BinIndex, NodeKind, open_bin_index, seal_bin_index,
+    BinIndex, NodeKind, is_bin_index_over_rung, open_bin_index, seal_bin_index,
 };
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
@@ -154,14 +156,10 @@ pub enum BinIndexPublishError {
 /// Tell a bin the top rung no longer admits from every other encode refusal,
 /// so the host reads a full bin rather than a codec defect.
 fn publish_refusal(error: CodecError) -> BinIndexPublishError {
-    match &error {
-        CodecError::Malformed(Malformed::TooManyStructures { collection, .. })
-            if *collection == BIN_INDEX_SIZE_CHECK =>
-        {
-            BinIndexPublishError::Full
-        }
-        _ => BinIndexPublishError::Codec(error),
+    if is_bin_index_over_rung(&error) {
+        return BinIndexPublishError::Full;
     }
+    BinIndexPublishError::Codec(error)
 }
 
 /// The bin's own key material, derived once from the login secret.
@@ -367,12 +365,31 @@ pub struct BinIndexRead {
     pub load: BinIndexLoad,
     /// The record standing at the name, for the session's renewal set.
     ///
-    /// Only a record that cleared the whole floor law is offered: a sub-EOL
-    /// renewal re-signs at `floor + 1`, so renewing a replay or a fork would
-    /// make it win record selection. A read alone enrols the record, which is
-    /// what keeps the EOL alive on a session that publishes nothing, and so what
-    /// keeps a live account away from the lapse this plane does not refuse.
+    /// A read alone enrols the record, which is what keeps the EOL alive on a
+    /// session that publishes nothing, and so what keeps a live account away
+    /// from the lapse this plane does not refuse.
+    ///
+    /// Two bars, because the renewal re-signs at `floor + 1` and so promotes
+    /// whatever it is given. The record must have cleared the whole floor law,
+    /// or a replay or a fork would be re-signed into winning record selection.
+    /// And this device must already hold a sequence floor for the name, or it
+    /// has nothing of its own against which to judge the age of what the plane
+    /// served — the bar the lapsed-EOL refusal used to carry
+    /// (blueprint/engine.md "Bin index record").
     pub renewable: Option<HeldRecord>,
+}
+
+impl BinIndexRead {
+    /// Put the renewable record in the session's slot and hand back the load.
+    ///
+    /// Every caller enrols: a load that reads and does not enrol is what lets
+    /// the record's EOL lapse under a session that publishes nothing.
+    pub fn enrol(self, slot: &RefCell<Option<HeldRecord>>) -> BinIndexLoad {
+        if let Some(renewable) = self.renewable {
+            *slot.borrow_mut() = Some(renewable);
+        }
+        self.load
+    }
 }
 
 /// Resolve the bin index record, bounded by
@@ -406,7 +423,6 @@ where
     // Held outside the budget so a load that runs out of it mid-resolve still
     // has the cached ciphertext the resolve read on its way in.
     let mut cached = None;
-    let mut renewable = None;
     let load = resolve_bin_index(
         transport,
         gateway,
@@ -414,11 +430,10 @@ where
         floors,
         snapshots,
         &mut cached,
-        &mut renewable,
         keys,
     );
     let reason = match within(scheduler, profile.settings_load_budget, load).await {
-        Some(Ok(index)) => {
+        Some(Ok((index, renewable))) => {
             return BinIndexRead {
                 load: BinIndexLoad::Resolved(index),
                 renewable,
@@ -433,9 +448,14 @@ where
         Some(index) => BinIndexLoad::Stale { index, reason },
         None => BinIndexLoad::Empty(reason),
     };
-    BinIndexRead { load, renewable }
+    BinIndexRead {
+        load,
+        renewable: None,
+    }
 }
 
+/// The resolved index and the record to enrol for renewal
+/// ([`BinIndexRead::renewable`]), or the reason the ladder degrades.
 #[allow(clippy::too_many_arguments)]
 async fn resolve_bin_index<T, H, F, Sn>(
     transport: &T,
@@ -444,9 +464,8 @@ async fn resolve_bin_index<T, H, F, Sn>(
     floors: &F,
     snapshots: &Sn,
     cached: &mut Option<Vec<u8>>,
-    renewable: &mut Option<HeldRecord>,
     keys: &BinIndexKeys,
-) -> Result<BinIndex, DefaultsReason>
+) -> Result<(BinIndex, Option<HeldRecord>), DefaultsReason>
 where
     T: RecordTransport,
     H: Http,
@@ -506,20 +525,21 @@ where
             revision: index.revision,
         });
     }
-    // Offered for renewal once the whole floor law has passed
-    // ([`BinIndexRead::renewable`]).
-    *renewable = head_cid_from_value(&verified.value).map(|head_cid| HeldRecord {
-        routing_key: name.as_str().to_owned(),
-        record_bytes,
-        signer: keys.signer.clone(),
-        value: HeldValue::Head(head_cid),
-        content_cids: Vec::new(),
-    });
+    // Both bars are behind this point ([`BinIndexRead::renewable`]).
+    let renewable = durable
+        .and_then(|_| head_cid_from_value(&verified.value))
+        .map(|head_cid| HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes,
+            signer: keys.signer.clone(),
+            value: HeldValue::Head(head_cid),
+            content_cids: Vec::new(),
+        });
     // Ciphertext at rest: the sealed block, never the opened index.
     let _ = snapshots.put(&cache_key, &block).await;
     let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
     let _ = floor::advance_sequence_on_unseal(floors, &adopted_key, index.revision).await;
-    Ok(index)
+    Ok((index, renewable))
 }
 
 #[cfg(test)]
@@ -551,7 +571,6 @@ mod tests {
                 floor: 4,
                 revision: 2,
             },
-            DefaultsReason::Expired,
             DefaultsReason::TimedOut,
             DefaultsReason::Unreadable,
             DefaultsReason::FloorUnreadable,

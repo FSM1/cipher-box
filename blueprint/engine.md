@@ -397,18 +397,21 @@ per-name sequence floor. Only what differs is stated here.
 - **An empty bin is the bottom rung, not an error.** A vault that has never
   soft-deleted anything has no entries to load, so the ladder bottoms out at an
   empty index. The record still exists from vault genesis, because its very
-  existence would otherwise say the bin is non-empty. The genesis publish runs
-  on ADR 0007's derived-idempotent first-run terms: the name comes from the
-  login secret alone, and only a load that finds neither a record nor a durable
-  mark mints one.
-- **The publish cadence is an accepted residual for v2.0.0.** The frozen rungs
-  hide the entry count, and a record present from genesis hides the fact of the
-  first delete. Neither hides _when_ a revision lands, and the IPNS sequence is
-  public and monotone, so an observer of the record plane reads a lower bound on
-  the account's lifetime bin publishes and the times of the recent ones. A decoy
-  publish cadence is what closes that, and the fresh-nonce rule above is what
-  makes one work — a no-op republish is byte-indistinguishable from a real
-  edit — but no decoy is scheduled in v2.0.0.
+  existence would otherwise say the bin is non-empty. What the genesis publish
+  removes is the first-appearance signal — a name the API sees registered for
+  the first time. The genesis publish runs on ADR 0007's derived-idempotent
+  first-run terms: the name comes from the login secret alone, and only a load
+  that finds neither a record nor a durable mark mints one.
+- **Three disclosures stay open, and all three are accepted for v2.0.0.** The
+  rungs coarsen the entry count to one of six bands rather than hiding it: the
+  published block length is public, so an observer reads the band and every
+  crossing between bands. The IPNS sequence is public and monotone, so an
+  observer reads a lower bound on the account's lifetime bin publishes. And
+  nothing hides _when_ a revision lands, so the first bump off the genesis
+  record times the first soft delete and each later bump times another. A decoy
+  publish cadence is what closes the last of these, and the fresh-nonce rule
+  above is what makes one work — a no-op republish is byte-indistinguishable
+  from a real edit — but no decoy is scheduled in v2.0.0.
 - **The queue head never waits on the bin plane in silence.** Every state the
   load can leave the head in has an exit and a reported cause. A refusal of
   bytes the plane served is charged against the attempt budget. Every other
@@ -422,17 +425,24 @@ per-name sequence floor. Only what differs is stated here.
   renewal passes over a record already past its EOL. A refusal would therefore
   hold the queue head for good on a vault that soft-deleted nothing for ninety
   days. The load establishes the index instead, and the rewrite it feeds stamps
-  the fresh EOL. Two things bound what that admits. The load enrols every record
-  it reads in the session's renewal set, so a live account never reaches the
-  lapse. And the residual is narrow: only a device holding none of the three
-  durable marks has nothing else to judge age by, and the settings record's own
-  reason for refusing — the record it would adopt carries a bearer credential —
-  has no counterpart in a bin index.
-- **One load serves a pass, one publish serves an operation.** The index a pass
-  establishes — resolved, or left standing by its own confirmed publish — is
-  carried across the operations of that pass, so a bulk soft delete costs one
-  resolve rather than one per node. The publish stays per operation, which is
-  what keeps each entry ahead of its own unlink.
+  the fresh EOL. The residual is that nothing on this plane now bounds a
+  record's age: what bounds a replay is the per-name sequence floor, which
+  admits any record at or above it however old. The settings record's own reason
+  for refusing — the record it would adopt carries a bearer credential — has no
+  counterpart in a bin index, which is why the trade reads differently here. Two
+  things hold the residual down. The load enrols the record in the session's
+  renewal set, so a live account never reaches the lapse at all. And it enrols
+  only a record that cleared the whole floor law _and_ that this device already
+  holds a sequence floor for, because the renewal re-signs at `floor + 1` and so
+  promotes whatever it is given.
+- **One load serves a pass of soft deletes; every other rewrite resolves.** The
+  index a pass establishes — resolved, or left standing by its own confirmed
+  publish — is carried across the entries that pass _adds_, so a bulk soft
+  delete costs one resolve rather than one per node. A rewrite that removes an
+  entry runs after a re-key and several folder publishes, so it resolves again:
+  the index is rewritten whole, and a copy read before those would drop every
+  entry another device added since. The publish stays per operation either way,
+  which is what keeps each entry ahead of its own unlink.
 
 ## Delete branch
 
@@ -460,13 +470,17 @@ delete does.
   name this scope's write seed does not derive. Its subtree is sealed under a
   grantee's own seed, and cutting that grantee is a rotation, not a bin entry.
 - **A node the base links more than once unlinks from every one of them.** The
-  delete removes the child ref from every folder the base links the node under
-  and republishes each, under one bin entry whose `originParent` names the
-  winning link's parent. The soft branch re-keys the node out of the scope, so a
-  link left standing would name a record its own folder's readers can no longer
-  open; the hard branch's own reclamation already assumes no link survives. A
-  folder the pass cannot load holds the op rather than publishing a partial
-  unlink.
+  delete removes the child ref from every folder in this scope that the base
+  links the node under and republishes each, under one bin entry whose
+  `originParent` names the highest-ranked of those links — the folder a reader
+  resolves the node under, and so the folder a restore returns it to. The soft
+  branch re-keys the node out of the scope, so a link left standing would name a
+  record its own folder's readers can no longer open; the hard branch's own
+  reclamation already assumes no link survives. A folder the pass cannot load
+  holds the op rather than publishing a partial unlink. A link from _outside_
+  the scope is left standing instead: this scope's write plane cannot author
+  that folder at all, so waiting on it would hold the queue head for as long as
+  the link stands.
 
 ### Re-key into the bin
 
