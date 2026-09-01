@@ -48,7 +48,8 @@ use crate::content::{
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
 use crate::grants::grafted::{
-    BookmarkedScopeRoots, GraftedSharers, evict_grafted_read_seeds, floor_view,
+    BookmarkedScopeRoots, GraftedPlane, GraftedSharers, NamedNodes, contested_nodes,
+    evict_grafted_read_seeds, floor_view,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
@@ -3345,6 +3346,9 @@ pub struct Engine<T: SeamTypes> {
     /// leg applies below a grafted root
     /// ([`GraftedPlane`](crate::grants::grafted::GraftedPlane)).
     bookmarked_scope_roots: Rc<RefCell<BookmarkedScopeRoots>>,
+    /// Rebuilt by the same pass: what each renderable grafted scope's body
+    /// named, which decides the ids no plane may render.
+    grafted_named_nodes: Rc<RefCell<NamedNodes>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -3509,6 +3513,7 @@ impl<T: SeamTypes> Engine<T> {
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
+                grafted_named_nodes: Rc::new(RefCell::new(NamedNodes::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3838,6 +3843,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut roots) = self.bookmarked_scope_roots.try_borrow_mut() {
             roots.clear();
+        }
+        if let Ok(mut named) = self.grafted_named_nodes.try_borrow_mut() {
+            named.clear();
         }
     }
 
@@ -4397,6 +4405,7 @@ where {
         let received_verdicts = self.received_verdicts.clone();
         let grafted_sharers = self.grafted_sharers.clone();
         let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
+        let grafted_named_nodes = self.grafted_named_nodes.clone();
         let consult_keys = self.sweep_keys.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -4617,6 +4626,7 @@ where {
                     let mut attempted_files: Vec<NodeId> = Vec::new();
                     let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
+                    let contested = contested_nodes(&grafted_named_nodes.borrow());
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
@@ -4638,7 +4648,11 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
-                            plane_roots: (scope_root.0 != root_id).then_some(&scope_roots),
+                            plane: (scope_root.0 != root_id).then_some(GraftedPlane {
+                                scope_id: scope_root.0,
+                                scope_roots: &scope_roots,
+                                contested: &contested,
+                            }),
                             mode,
                             observed_at: now.0,
                         };
@@ -4784,6 +4798,7 @@ where {
                             read_seeds: &scope_read_seeds,
                             grafted_sharers: &grafted_sharers,
                             scope_roots: &bookmarked_scope_roots,
+                            named_nodes: &grafted_named_nodes,
                             events: &events,
                         },
                         now,
@@ -6808,7 +6823,7 @@ where {
             events: &self.events,
             scope_id,
             scope_read_seed: &scope_read_seed,
-            plane_roots: None,
+            plane: None,
             mode: ResolveMode::CacheFirst,
             observed_at: now.0,
         }
