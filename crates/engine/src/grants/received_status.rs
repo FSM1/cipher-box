@@ -197,7 +197,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             if class == ResolutionClass::Granted && renderable.contains(&share.scope_id) {
                 if let Some(candidate) = &candidate {
-                    self.graft(candidate, share, contact, epoch_floor, render)
+                    self.graft(candidate, share, contact, epoch_floor, render, &renderable)
                         .await;
                 }
             }
@@ -274,6 +274,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         contact: &Contact,
         epoch_floor: u64,
         render: &ScopeRender<'_>,
+        renderable: &BTreeSet<[u8; 16]>,
     ) {
         // A scope root is the node its own scope is named for, and the bookmark
         // opens under that id. The reader-scope bind is stage 6's, so state it
@@ -358,14 +359,23 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let root = NodeId(share.scope_id);
         let mut base = render.base.borrow_mut();
-        // A sharer names their own children. An id this vault's own tree already
-        // holds is not one of them, so it is dropped rather than relinked out of
-        // the vault and under the shared root.
+        // A sharer names their own children only. An id that already belongs to
+        // another tree is dropped rather than relinked under this shared root:
+        // `project_folder` never unlinks the old parent, so a link accepted here
+        // would leave the node under both, and the higher `link_counter` wins.
+        // Two trees are foreign to this sharer — this vault's own, and every
+        // other accepted scope.
         let children: Vec<ChildRef> = children
             .into_iter()
             .filter(|child| {
                 let id = NodeId(child.id);
-                id != base.root && !base.is_descendant_of(id, base.root)
+                if id == base.root || base.is_descendant_of(id, base.root) {
+                    return false;
+                }
+                !renderable.iter().any(|other| {
+                    *other != share.scope_id
+                        && (id == NodeId(*other) || base.is_descendant_of(id, NodeId(*other)))
+                })
             })
             .collect();
         // The scope root has no parent here to name it, so the pointer's label
@@ -956,6 +966,34 @@ mod tests {
             .expect("the bookmarks persist");
         }
 
+        /// Bookmark the shared scope, plus a second accepted scope at `other`
+        /// from the same sharer. `other` names a root no record is seeded at, so
+        /// it resolves to nothing and only its renderable id matters here.
+        fn bookmark_with_extra_scope(&self, other: [u8; 16]) {
+            let mut list = ReceivedSharesList::new();
+            for (scope, name) in [
+                (SCOPE, scope_root_name()),
+                (
+                    other,
+                    derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &other),
+                ),
+            ] {
+                list.reconcile(ReceivedShare {
+                    scope_root_name: name.as_str().as_bytes().to_vec(),
+                    scope_id: scope,
+                    sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                    display_name: "shared-folder".to_owned(),
+                    permission: Permission::Read,
+                    pointer_read_key: SecretBytes::new([0x9a; 32]),
+                });
+            }
+            block_on(
+                StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy)
+                    .persist(&list),
+            )
+            .expect("the bookmarks persist");
+        }
+
         /// One received-share pass, with the head block its resolve fetches
         /// served.
         fn pass(&self, at_millis: u64) -> ResolutionClass {
@@ -1125,6 +1163,87 @@ mod tests {
             base.node(NodeId(mine)).expect("still held").name(),
             "mine",
             "and the sharer could not rename it either"
+        );
+    }
+
+    /// `project_folder` never unlinks a child's old parent, so a child id this
+    /// sharer does not own would leave the node under two parents, and the
+    /// higher `link_counter` would hand it to the sharer. Another accepted
+    /// scope's root is such an id: it is parentless, so the vault-root filter
+    /// alone lets it through.
+    #[test]
+    fn another_accepted_scopes_root_is_not_grafted_as_a_child() {
+        let other = [0x77; 16];
+        let fx = RenderedScope::new(vec![
+            shared_child(0xa1, "photos"),
+            ChildRef {
+                id: other,
+                name: "stolen-scope".to_owned(),
+                ipns_name: vec![0x77],
+                kind: CoreNodeKind::Folder,
+                link_counter: 9,
+                unknown: PreservedFields::new(),
+            },
+        ]);
+        fx.base
+            .borrow_mut()
+            .upsert_node(NodeMeta::new(NodeId(other), "theirs", NodeKind::Folder));
+        fx.bookmark_with_extra_scope(other);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+        let base = fx.base.borrow();
+        assert_eq!(
+            base.parent_of(NodeId(other)),
+            None,
+            "the other scope root stays parentless"
+        );
+        assert_eq!(
+            base.node(NodeId(other)).expect("still held").name(),
+            "theirs",
+            "and this sharer could not rename it"
+        );
+    }
+
+    /// The same rule one level down: a node already linked below another
+    /// accepted scope belongs to that sharer's tree, not to this one.
+    #[test]
+    fn a_node_inside_another_accepted_scope_is_not_grafted_as_a_child() {
+        let other = [0x77; 16];
+        let theirs = [0x78; 16];
+        let fx = RenderedScope::new(vec![
+            shared_child(0xa1, "photos"),
+            ChildRef {
+                id: theirs,
+                name: "stolen-node".to_owned(),
+                ipns_name: vec![0x78],
+                kind: CoreNodeKind::Folder,
+                link_counter: 9,
+                unknown: PreservedFields::new(),
+            },
+        ]);
+        {
+            let mut base = fx.base.borrow_mut();
+            base.upsert_node(NodeMeta::new(NodeId(other), "theirs", NodeKind::Folder));
+            base.upsert_node(NodeMeta::new(NodeId(theirs), "their-doc", NodeKind::Folder));
+            base.link_next(NodeId(other), NodeId(theirs));
+        }
+        fx.bookmark_with_extra_scope(other);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+        let base = fx.base.borrow();
+        assert_eq!(
+            base.parent_of(NodeId(theirs)),
+            Some(NodeId(other)),
+            "the node stays under the sharer that owns it"
+        );
+        assert_eq!(
+            base.node(NodeId(theirs)).expect("still held").name(),
+            "their-doc",
+            "and this sharer could not rename it"
         );
     }
 
