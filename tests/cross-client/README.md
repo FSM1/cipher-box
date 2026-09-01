@@ -26,14 +26,25 @@ timing profile.
   made
 - the revocation the grantee discovers on its own next pass, and the rotation the
   owner's mount reads across
+- a node the owner's tab publishes **inside** the scope root the grant promoted,
+  read at the owner's own mount on one nocache pass, and at the grantee too
 - a write made at the mount while the API is away, and the tab that converges on
   it once the API is back
 - the leader tab dying mid-flow: a follower is promoted, its work still reaches
   the record plane, and the mount reads it
 
-Rotation under mount is not here yet: a node published inside a scope root does
-not reach the owner's own mount. That is engine-side, and the scenario lands
-once it does.
+## The leg that is not here yet
+
+The rotation-under-mount acceptance line is the remaining scenario: the mount
+moves a node out of a granted scope, or deletes one from it, and the engine
+rotates the scope as one transaction with the mutation.
+
+It was blocked on the write plane of a promoted scope root. A device that did
+not cut the grant proved the scope for reading and opened no write plane, so the
+mount's change reached no other host. `ScopeWalk::recover_write_plane_from_pointer`
+now recovers that plane from the owner-vouched scope pointer, and a proved root
+that still opens no write plane reports `WritePlaneDark` rather than a silent
+`fresh`. The scenario lands next, on that footing.
 
 A related limit shapes the offline scenario: a tab that cold-starts onto a vault
 a mount already published does not converge on it. The scenario therefore holds
