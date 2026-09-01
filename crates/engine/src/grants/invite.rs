@@ -35,6 +35,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as FRAGMENT_B64;
+use cipherbox_core::codec::RedactedBytes;
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::seal::{
@@ -348,7 +349,7 @@ const MAX_FRAGMENT_TEXT_LEN: usize = MAX_INVITE_FRAGMENT_BYTES.div_ceil(3) * 4;
 /// only ever moves it between a URL and a command: it composes no link and
 /// parses none, and so never holds the invite secret or the owner bundle as
 /// something it could log or store (#25 D6).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InviteFragment {
     /// The invite secret — the whole capability.
     pub invite_secret: SecretBytes,
@@ -356,6 +357,19 @@ pub struct InviteFragment {
     pub owner_contact_code: Vec<u8>,
     /// The scope root's opaque `ipnsName`, which a claim names.
     pub scope_root_name: Vec<u8>,
+}
+
+impl fmt::Debug for InviteFragment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InviteFragment")
+            .field("invite_secret", &self.invite_secret)
+            .field(
+                "owner_contact_code",
+                &RedactedBytes::of(&self.owner_contact_code),
+            )
+            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
+            .finish()
+    }
 }
 
 fn malformed_fragment<E>(_: E) -> InviteError {
@@ -463,7 +477,7 @@ pub struct ConvertedClaimRecord {
 /// authentication is the seal's inner sender signature, which the claimant makes
 /// with the link's ephemeral identity key ([`post_invite_claim`]); the contact
 /// code inside is self-authenticating and imported fail-closed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InviteClaim {
     /// Fresh per claim ([`Self::mint`]), inside the signed payload — so a
     /// redelivery carries the same id, and no other party learns it.
@@ -472,6 +486,16 @@ pub struct InviteClaim {
     pub scope_root_name: Vec<u8>,
     /// The claimant's contact code — `{identityPk, encSubkey, bindingSig}`.
     pub contact_code: Vec<u8>,
+}
+
+impl fmt::Debug for InviteClaim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InviteClaim")
+            .field("claim_id", &RedactedBytes::of(&self.claim_id))
+            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
+            .field("contact_code", &RedactedBytes::of(&self.contact_code))
+            .finish()
+    }
 }
 
 impl InviteClaim {
@@ -2519,6 +2543,60 @@ mod tests {
             "the fragment needs no percent-encoding",
         );
         assert_eq!(InviteFragment::decode(&text).expect("decodes"), fragment);
+    }
+
+    /// A contact code carries a party's identity key, which
+    /// [`SharingContact`](crate::SharingContact) withholds as a stable
+    /// cross-service identifier.
+    #[test]
+    fn a_fragment_debug_withholds_the_owner_contact_code() {
+        let fragment = InviteFragment {
+            invite_secret: SecretBytes::new([0x4e; SECRET_LEN]),
+            owner_contact_code: b"owner-bundle".to_vec(),
+            scope_root_name: b"k51scoperoot".to_vec(),
+        };
+        let rendered = format!("{fragment:?}");
+
+        assert!(
+            !rendered.contains("owner-bundle"),
+            "the owner contact code never renders: {rendered}"
+        );
+        assert!(
+            !rendered.contains("k51scoperoot"),
+            "nor the scope root name: {rendered}"
+        );
+        assert!(
+            !rendered.contains("4e4e"),
+            "nor the invite secret: {rendered}"
+        );
+        assert!(rendered.contains("InviteFragment"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
+    }
+
+    /// The claim id is inside the signed payload, so no other party learns it,
+    /// and the contact code carries the claimant's identity key.
+    #[test]
+    fn a_claim_debug_withholds_its_id_and_the_contact_code() {
+        let mut entropy = SeededEntropy::new(3);
+        let claim = InviteClaim::mint(&mut entropy, b"k51scoperoot".to_vec(), b"bundle".to_vec())
+            .expect("mints");
+        let rendered = format!("{claim:?}");
+
+        let id = format!("{:?}", claim.claim_id);
+        assert!(
+            !rendered.contains(&id),
+            "the claim id never renders: {rendered}"
+        );
+        assert!(
+            !rendered.contains("bundle"),
+            "nor the contact code: {rendered}"
+        );
+        assert!(
+            !rendered.contains("k51scoperoot"),
+            "nor the scope root name: {rendered}"
+        );
+        assert!(rendered.contains("InviteClaim"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 
     /// Every way a fragment can fail to be one is the same fail-closed refusal:

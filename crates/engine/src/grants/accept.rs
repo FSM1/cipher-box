@@ -15,7 +15,7 @@
 
 use core::fmt;
 
-use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
+use cipherbox_core::codec::{Map, RedactedBytes, RedactedText, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -40,7 +40,7 @@ use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
 /// courtesy display fields. Opaque application bytes inside the HPKE seal; this
 /// is app framing, not crypto. `sharer_identity_pk` is bound to the verified
 /// contact before anything is trusted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SharePointer {
     /// The scope root's opaque `ipnsName` to resolve.
     pub scope_root_name: Vec<u8>,
@@ -51,6 +51,20 @@ pub struct SharePointer {
     pub display_name: String,
     /// The advertised permission (courtesy; the committed ledger is authority).
     pub permission: Permission,
+}
+
+impl fmt::Debug for SharePointer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharePointer")
+            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
+            .field(
+                "sharer_identity_pk",
+                &RedactedBytes::of(&self.sharer_identity_pk),
+            )
+            .field("display_name", &RedactedText::of(&self.display_name))
+            .field("permission", &self.permission)
+            .finish()
+    }
 }
 
 impl SharePointer {
@@ -149,9 +163,9 @@ impl ReceivedShare {
 impl fmt::Debug for ReceivedShare {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReceivedShare")
-            .field("scope_root_name", &self.scope_root_name)
+            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
             .field("scope_id", &self.scope_id)
-            .field("display_name", &self.display_name)
+            .field("display_name", &RedactedText::of(&self.display_name))
             .field("permission", &self.permission)
             .field("pointer_read_key", &"<redacted>")
             .finish()
@@ -662,7 +676,7 @@ impl From<SeamError> for ReceivedShareStoreError {
 }
 
 /// One owner-side sent-share record — the denormalized index the owner keeps.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SentShare {
     /// The scope root shared.
     pub scope_root_name: Vec<u8>,
@@ -670,6 +684,19 @@ pub struct SentShare {
     pub recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     /// The permission granted.
     pub permission: Permission,
+}
+
+impl fmt::Debug for SentShare {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SentShare")
+            .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
+            .field(
+                "recipient_identity_pk",
+                &RedactedBytes::of(&self.recipient_identity_pk),
+            )
+            .field("permission", &self.permission)
+            .finish()
+    }
 }
 
 /// The owner's denormalized sent-index — a self-healing bookmark keyed by
@@ -998,6 +1025,36 @@ mod tests {
             display_name: "Shared Folder".to_string(),
             permission: Permission::Read,
         }
+    }
+
+    /// A scope root's `ipnsName` is user content, and a peer's identity key is a
+    /// stable cross-service identifier for a third party — the ground
+    /// [`SharingContact`](crate::SharingContact) already withholds one on.
+    #[test]
+    fn share_pointer_debug_withholds_the_scope_root_name_and_the_label() {
+        let p = pointer();
+        let rendered = format!("{p:?}");
+
+        let unredacted = format!("{:?}", p.scope_root_name);
+        assert!(
+            !rendered.contains(&unredacted),
+            "the scope root name never renders: {rendered}"
+        );
+        assert!(
+            !rendered.contains("k51scoperoot"),
+            "nor any text rendering of it: {rendered}"
+        );
+        assert!(
+            !rendered.contains(&p.display_name),
+            "the label never renders: {rendered}"
+        );
+        let key = format!("{:?}", p.sharer_identity_pk);
+        assert!(
+            !rendered.contains(&key),
+            "nor the peer's identity key: {rendered}"
+        );
+        assert!(rendered.contains("SharePointer"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 
     #[test]

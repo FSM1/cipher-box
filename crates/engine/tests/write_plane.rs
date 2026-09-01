@@ -11,14 +11,17 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use cipherbox_core::codec::Value;
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
+use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
 use cipherbox_core::seal::{
     ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
-    Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section, open_read_body,
-    seal_settings_record, set_grant_section, sign_grant_set,
+    Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section,
+    encode_read_body, open_read_body, seal_settings_record, set_grant_section, sign_grant_set,
 };
+use cipherbox_core::suite::aead::{NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
@@ -65,10 +68,10 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
     DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError,
-    Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_OPEN_STREAMS, NodeId,
-    NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordSeal,
-    ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget,
-    reseal_scope_root, stage_op,
+    Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
+    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal,
+    PrevEpochSeed, RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
+    WriteHistory, WriteTarget, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -1916,20 +1919,23 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
-    // A child ref carries its name verbatim, so a name past the 2 MiB IPFS
-    // block ceiling is a parent folder record this engine can author and its
-    // own ingress can never hold.
-    let name = "n".repeat(2 * 1024 * 1024 + 4096);
+    concurrent_root_extend(
+        &world.record_store,
+        &blocks,
+        vec![child_at_the_block_ceiling()],
+    );
+    tick(&world, &engine, &mut tasks);
+
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
             parent: ROOT,
-            name: name.clone(),
+            name: "one-child-too-many.bin".into(),
         },
         &(0..200u8).collect::<Vec<u8>>(),
     )
     .expect("the write commits");
-    let doomed = child_id(&engine, ROOT, &name);
+    let doomed = child_id(&engine, ROOT, "one-child-too-many.bin");
 
     let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert!(
@@ -1955,6 +1961,187 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
         "the version the oversized record would have named stays pinned — unpinning \
          it is loss no retry undoes — while the child name the parent never came to \
          reference is owed back like any abandoned create's"
+    );
+}
+
+/// A peer-authored child carrying preserved bulk that leaves the root one child
+/// short of the block ceiling.
+///
+/// This is the route the facade bounds cannot close: the rendered view drops a
+/// child's carried fields, so `refuse_full_parent` cannot charge them, while the
+/// drain re-emits them into the record it authors.
+fn child_at_the_block_ceiling() -> ChildRef {
+    let padded = |pad: usize| {
+        let mut child = file_ref([0xB1; 16], "peer-authored.bin");
+        child.unknown = [("pad".to_owned(), Value::Bytes(vec![0u8; pad]))]
+            .into_iter()
+            .collect();
+        child
+    };
+    let sealed = |child: &ChildRef| {
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: vec![child.clone()],
+            unknown: PreservedFields::new(),
+        };
+        encode_read_body(&body).expect("the body encodes").len() + NONCE_LEN + TAG_LEN
+    };
+
+    // Sized against the encoder, because a CBOR length head grows with what it
+    // measures. The headroom left is smaller than one child ref, so the next
+    // child this device authors puts the record over.
+    let target = MAX_READ_SEALED_BYTES - 64;
+    let mut pad = target - sealed(&padded(0));
+    for _ in 0..8 {
+        let short = target as isize - sealed(&padded(pad)) as isize;
+        if short == 0 {
+            break;
+        }
+        pad = pad.saturating_add_signed(short);
+    }
+    let child = padded(pad);
+    let at = sealed(&child);
+    assert!(
+        at <= MAX_READ_SEALED_BYTES && MAX_READ_SEALED_BYTES - at < CHILD_REF_FLOOR,
+        "the seed must open and leave less than one child ref: {at}"
+    );
+    child
+}
+
+/// Smaller than any child ref the engine authors, so the seed above is provably
+/// one child short of the ceiling rather than approximately so.
+const CHILD_REF_FLOOR: usize = 96;
+
+/// The child ceiling is what keeps a folder this device authors inside the IPFS
+/// block ceiling, and a peer decides how many children a folder already holds.
+/// So the refusal is driven against a *published* over-full listing: the ceiling
+/// has to bite on a record this device adopted from the network, and it has to
+/// bite at the boundary rather than as a dead letter, because a queued op no
+/// re-author can shrink spends a staging reservation and reports a failure where
+/// the remedy is to split the folder.
+#[test]
+fn a_peer_overfilled_folder_refuses_a_further_child_and_stages_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let planted: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN)
+        .map(|i| {
+            let mut id = [0u8; 16];
+            id[..8].copy_from_slice(&(i as u64 + 1).to_be_bytes());
+            // One folder among them, so the last assertion has a parent with room.
+            if i == 0 {
+                child_ref(id, "planted-folder", CoreNodeKind::Folder)
+            } else {
+                file_ref(id, &format!("planted-{i}.bin"))
+            }
+        })
+        .collect();
+    concurrent_root_extend(&world.record_store, &blocks, planted);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        block_on(engine.view()).unwrap().children(ROOT).len(),
+        MAX_FOLDER_CHILDREN,
+        "the peer's listing is in gate-passing state"
+    );
+
+    assert_eq!(
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: "one-too-many.bin".into(),
+            kind: NodeKind::File,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        }),
+        "the boundary refuses, so the caller learns the folder is full"
+    );
+    assert_eq!(
+        block_on(engine.begin_write(
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "one-too-many.bin".into(),
+            },
+            8,
+        ))
+        .err(),
+        Some(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        }),
+        "a write handle creates a child too, and it reserves staging bytes first"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "a refusal at the boundary queues nothing for the drain to end"
+    );
+
+    // The ceiling bounds the folder, never the vault.
+    block_on(engine.command(Command::Create {
+        parent: child_id(&engine, ROOT, "planted-folder"),
+        name: "under-a-sibling.bin".into(),
+        kind: NodeKind::File,
+    }))
+    .expect("a folder with room still takes a child");
+}
+
+/// A `NewFile` handle takes no place in its folder until it commits, so two
+/// handles opened together both see the same free one. The commit re-check is
+/// what stops the second from overfilling the folder.
+#[test]
+fn the_second_handle_over_the_last_free_place_is_refused_at_its_commit() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let planted: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN - 1)
+        .map(|i| {
+            let mut id = [0u8; 16];
+            id[..8].copy_from_slice(&(i as u64 + 1).to_be_bytes());
+            file_ref(id, &format!("planted-{i}.bin"))
+        })
+        .collect();
+    concurrent_root_extend(&world.record_store, &blocks, planted);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        block_on(engine.view()).unwrap().children(ROOT).len(),
+        MAX_FOLDER_CHILDREN - 1,
+        "exactly one place is free"
+    );
+
+    let first = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "first.bin".into(),
+        },
+        8,
+    ))
+    .expect("the free place admits the first handle");
+    let second = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "second.bin".into(),
+        },
+        8,
+    ))
+    .expect("the second handle sees the same free place");
+
+    for handle in [first, second] {
+        block_on(engine.push_chunk(handle, &[0x7a; 8])).expect("the bytes stage");
+    }
+    block_on(engine.commit_write(first)).expect("the first commit takes the place");
+    assert_eq!(
+        block_on(engine.commit_write(second)),
+        Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        }),
+        "the re-check refuses the second rather than overfilling the folder"
     );
 }
 
@@ -7685,9 +7872,14 @@ fn stage(device: &FakeDevice, op: &Op, upload: Option<&[u8]>) {
 /// top of whatever the root currently carries. The root carries a grant section,
 /// so it re-authors through the owner-root fixture rather than the child path.
 fn concurrent_root_add(records: &InMemoryRecordStore, blocks: &Blocks, extra: ChildRef) {
+    concurrent_root_extend(records, blocks, vec![extra]);
+}
+
+/// The same, for a listing one call has to plant whole.
+fn concurrent_root_extend(records: &InMemoryRecordStore, blocks: &Blocks, extra: Vec<ChildRef>) {
     let (sequence, _) = published(records, ROOT);
     let mut children = published_children(records, blocks, ROOT);
-    children.push(extra);
+    children.extend(extra);
     let fixture = owner_root_fixture(OwnerRootSpec {
         owner_identity: &owner_identity(),
         owner_enc: &kdf::enc_subkey(&SECRET).public(),
