@@ -1361,6 +1361,31 @@ mod tests {
         assert!(fx.read_seeds.borrow().is_empty());
     }
 
+    /// The other side of that guard. A foreign body can link any id under its
+    /// own folders, so a scope root another sharer's subtree already lists must
+    /// still graft: a refusal on that alone gives one contact a channel to deny
+    /// another contact's share.
+    #[test]
+    fn a_scope_root_another_shared_subtree_holds_still_grafts() {
+        let other = [0x77; 16];
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        {
+            let mut base = fx.base.borrow_mut();
+            base.upsert_node(NodeMeta::new(NodeId(other), "theirs", NodeKind::Folder));
+            base.upsert_node(NodeMeta::new(NodeId(SCOPE), "claimed", NodeKind::Folder));
+            base.link_next(NodeId(other), NodeId(SCOPE));
+        }
+        fx.bookmark_with_extra_scope(other);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+        assert!(
+            fx.grafted_sharers.borrow().contains_key(&SCOPE),
+            "and the floor namespace answers for it"
+        );
+    }
+
     /// The dangerous shape is the transition, not the fresh state. A scope that
     /// already grafted, and that a second bookmark then contests, must lose its
     /// floor namespace with the authority it lost — the leg below it refuses

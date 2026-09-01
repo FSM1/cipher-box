@@ -91,12 +91,13 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
         let Ok(items) = poll_verified(self.mailbox, self.enc_secret, v).await else {
             return;
         };
-        // Ahead of both durable loads, which cost a seal-open each: an inbox
-        // carrying nothing for this arm spends neither.
-        if !items
+        // Decoded once, ahead of both durable loads, which cost a seal-open
+        // each: an inbox carrying nothing for this arm spends neither.
+        let decoded: Vec<(&VerifiedMailboxItem, SharePointer)> = items
             .iter()
-            .any(|item| SharePointer::decode(&item.payload).is_ok())
-        {
+            .filter_map(|item| Some((item, SharePointer::decode(&item.payload).ok()?)))
+            .collect();
+        if decoded.is_empty() {
             return;
         }
         let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
@@ -109,17 +110,14 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             .iter()
             .map(|contact| (contact.identity_pk().to_sec1(), contact))
             .collect();
-        // The budget is spent only on items this arm can retire, in sender
-        // order rather than mailbox order.
+        // Both budgets are charged after the sender filter: an item this arm
+        // can never ack stays on the inbox, so it must not spend a slot.
         let mut spent: BTreeMap<[u8; IDENTITY_PUBLIC_LEN], usize> = BTreeMap::new();
         let mut pointers: Vec<(&VerifiedMailboxItem, SharePointer, &Contact)> = Vec::new();
-        for item in &items {
+        for (item, pointer) in decoded {
             if pointers.len() == MAX_ACCEPTS_PER_PASS {
                 break;
             }
-            let Ok(pointer) = SharePointer::decode(&item.payload) else {
-                continue;
-            };
             let sender = item.sender_identity.to_sec1();
             let Some(contact) = by_identity.get(&sender) else {
                 continue;
