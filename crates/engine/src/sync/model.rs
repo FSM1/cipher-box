@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use caseless::Caseless;
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
+use cipherbox_core::hex::lower as hex_lower;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -472,7 +473,11 @@ pub fn case_fold<I: Iterator<Item = char>>(chars: I) -> impl Iterator<Item = cha
 /// own, and the reallocation frees an intermediate holding the name, which
 /// zeroizing the returned value cannot reach.
 pub fn suffix_name(name: &str, n: u32) -> Zeroizing<String> {
-    let suffix = format!(" ({n})");
+    insert_before_extension(name, &format!(" ({n})"))
+}
+
+/// `suffix` inserted ahead of the extension, inside [`MAX_NODE_NAME_BYTES`].
+fn insert_before_extension(name: &str, suffix: &str) -> Zeroizing<String> {
     // The extension is kept only while a byte of stem can survive beside it.
     let (stem, ext) = match split_extension(name)
         .filter(|(_, ext)| suffix.len() + ext.len() + 1 < MAX_NODE_NAME_BYTES)
@@ -485,7 +490,7 @@ pub fn suffix_name(name: &str, n: u32) -> Zeroizing<String> {
     let stem = truncate_on_char_boundary(stem, room);
     let mut out = Zeroizing::new(String::with_capacity(stem.len() + suffix.len() + ext_bytes));
     out.push_str(stem);
-    out.push_str(&suffix);
+    out.push_str(suffix);
     if let Some(ext) = ext {
         out.push('.');
         out.push_str(ext);
@@ -516,8 +521,13 @@ pub(crate) const MAX_SUFFIX_PROBE: u32 = 10_000;
 pub(crate) struct TakenNames(HashSet<String>);
 
 impl TakenNames {
-    /// Claims `key`, reporting whether it was still free.
+    /// Claims `key`, reporting whether it was still free. The copy is made only
+    /// on a real insert: `HashSet::insert` drops the argument when the key is
+    /// already held, which would free a verbatim name this set cannot reach.
     pub(crate) fn claim(&mut self, key: &str) -> bool {
+        if self.holds(key) {
+            return false;
+        }
         self.0.insert(key.to_owned())
     }
 
@@ -563,17 +573,18 @@ impl RenderedChild<'_> {
 ///
 /// A folder's children are bound on `id` and `ipnsName` and never on `name`
 /// (`crates/core/src/seal/body.rs`), so a peer can commit a child under the
-/// exact name an owner's child holds and take every lookup of it. Rendering the
-/// later id under its own name keeps both reachable, with a tiebreak identical
-/// on every device. The stored name is untouched: a member who renames the
-/// loser persists the fix through the normal op path.
+/// exact name an owner's child holds. Rendering the later id under its own name
+/// keeps both children reachable and tells them apart, with a tiebreak
+/// identical on every device. It does not decide *whose* the plain name is: a
+/// grantee mints its own ids, so it can sort first and keep it. The stored name
+/// is untouched, and a member who renames the loser persists the fix through
+/// the normal op path.
 ///
-/// Two spellings that only *fold* equal keep both names. They render
-/// differently, so a host that spells a name exactly still reaches its own
-/// child ([`crate::EngineView::lookup`]); suffixing one of them would hand a
-/// grantee who plants a twin the power to rename its victim's listing entry.
-/// The strict comparator still decides which suffix is free, so the name a
-/// collision resolves to is unique to the whole folder.
+/// Two spellings that only *fold* equal keep both names, because they are
+/// different names to a host that spells one exactly
+/// ([`crate::EngineView::lookup`]). Spellings a person cannot tell apart —
+/// composed against decomposed, a homoglyph — are that case, so the pass does
+/// not separate them. The strict comparator still decides which suffix is free.
 pub(crate) fn rendered_children(snapshot: &Snapshot, parent: NodeId) -> Vec<RenderedChild<'_>> {
     let children = snapshot.children(parent);
     // The ordinary folder holds no two children under one name, and this runs
@@ -601,16 +612,33 @@ fn disambiguate(children: Vec<&NodeMeta>) -> Vec<RenderedChild<'_>> {
     children
         .into_iter()
         .map(|meta| {
-            let suffixed = floors
-                .floor_for(meta.name())
-                .and_then(|from| lowest_free_suffix(meta.name(), from, &mut folded))
-                .map(|(candidate, n)| {
-                    floors.advance(meta.name(), n);
-                    candidate
-                });
+            let suffixed = floors.floor_for(meta.name()).map(|from| {
+                match lowest_free_suffix(meta.name(), from, &mut folded) {
+                    Some((candidate, n)) => {
+                        floors.advance(meta.name(), n);
+                        candidate
+                    }
+                    None => node_id_name(meta, &mut folded),
+                }
+            });
             RenderedChild { meta, suffixed }
         })
         .collect()
+}
+
+/// The last-resort rendered name for a twin the numeric probe cannot serve: the
+/// child's own node id, which a folder binds unique
+/// (`crates/core/src/seal/body.rs`). Leaving such a twin under its stored name
+/// instead would put two children back under one name, and the first by id — a
+/// grantee's, since it mints them — would take every lookup of it.
+fn node_id_name(meta: &NodeMeta, folded: &mut TakenNames) -> Zeroizing<String> {
+    let tagged = insert_before_extension(meta.name(), &format!(" [{}]", hex_lower(&meta.id.0)));
+    // A sibling that stored this very spelling still gives way; the id is
+    // unique, so numbering off it terminates.
+    if folded.claim(&collation_key(&tagged)) {
+        return tagged;
+    }
+    lowest_free_suffix(&tagged, 1, folded).map_or(tagged, |(candidate, _)| candidate)
 }
 
 /// The lowest `name (n)`, at or above `from`, that `taken` does not already
@@ -1106,6 +1134,44 @@ mod tests {
                 .len(),
             50,
             "every twin renders under a name of its own"
+        );
+    }
+
+    /// A peer sizes the listing, so it can hold more twins than the probe
+    /// serves. Falling back to the stored name would put two children under one
+    /// name again, and the first by id — the grantee's — would take every
+    /// lookup of it.
+    #[test]
+    fn a_twin_past_the_probe_renders_under_its_node_id() {
+        let mut snap = Snapshot::new(id(0));
+        // Every numbered candidate the probe would reach is a sibling's own
+        // name. These ids all lead with a zero byte, so they sort first.
+        for n in 1..=MAX_SUFFIX_PROBE {
+            let sibling = NodeId(u128::from(n).to_be_bytes());
+            snap.upsert_node(NodeMeta::new(
+                sibling,
+                suffix_name("a.txt", n).to_string(),
+                NodeKind::File,
+            ));
+            snap.link(id(0), sibling, 1);
+        }
+        child(&mut snap, id(0), 1, "a.txt");
+        child(&mut snap, id(0), 2, "a.txt");
+
+        let rendered = rendered_names(&snap, id(0));
+        let twin = rendered.last().expect("the twin");
+        assert!(
+            twin.contains(&hex_lower(&id(2).0)),
+            "{twin:?} must carry the node id"
+        );
+        assert!(crate::name::is_emittable(twin));
+        assert_eq!(
+            rendered
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            rendered.len(),
+            "no two children render under one name"
         );
     }
 

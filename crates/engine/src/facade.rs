@@ -66,7 +66,7 @@ use crate::grants::{
     recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::{poll_verified, post_sealed};
-use crate::name::{NameError, validate_name};
+use crate::name::{NameError, is_emittable, validate_name};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
@@ -2149,13 +2149,19 @@ fn refuse_unlawful_name(name: &str) -> Result<(), EngineError> {
     })
 }
 
-/// A name a command carries over from the vault, held to
-/// [`MAX_NODE_NAME_BYTES`] alone — the whole law here would strand a node a peer
-/// named ([`crate::name`]).
-fn refuse_over_bound_name(name: &str) -> Result<(), EngineError> {
+/// A name a command carries over from the vault, held to the narrow tier only
+/// ([`crate::name`]): the wider law would strand a node a peer named, and a name
+/// no kernel can carry strands it just as surely — restored into a live folder,
+/// it is invisible and unremovable through every projection.
+fn refuse_unemittable_name(name: &str) -> Result<(), EngineError> {
     if name.len() > MAX_NODE_NAME_BYTES {
         return Err(EngineError::MalformedInput {
             check: NameError::TooLong.check(),
+        });
+    }
+    if !is_emittable(name) {
+        return Err(EngineError::MalformedInput {
+            check: "node-name-unemittable",
         });
     }
     Ok(())
@@ -2556,8 +2562,7 @@ fn rendered_attrs(child: &RenderedChild<'_>) -> NodeAttrs {
     node_attrs(child.meta, child.name())
 }
 
-/// The child rendered under exactly `name`. Rendered names are unique to a
-/// folder, so there is at most one.
+/// The first child rendered under exactly `name`.
 fn find_rendered<'a, 'b>(
     children: &'a [RenderedChild<'b>],
     name: &str,
@@ -4944,7 +4949,7 @@ where {
             }
             Command::Restore { node, into } => {
                 let entry = self.binned_node(node).await?;
-                refuse_over_bound_name(&entry.origin_name)?;
+                refuse_unemittable_name(&entry.origin_name)?;
                 let into = into.unwrap_or(NodeId(entry.origin_parent));
                 let rendered = self.render().await?;
                 if !rendered.contains(into) {
@@ -9972,7 +9977,7 @@ mod tests {
     /// surface later, in the trail the user navigates by.
     #[test]
     fn a_duplicate_folder_keeps_its_rendered_name_in_the_breadcrumb() {
-        let (mut engine, _events) = started();
+        let (engine, _events) = started();
         let root = engine.root();
         let planted = NodeId([0xa1; 16]);
         let shadowed = NodeId([0xa2; 16]);
@@ -9997,14 +10002,26 @@ mod tests {
 
     #[test]
     fn a_restore_is_held_to_the_length_bound_alone() {
-        assert!(refuse_over_bound_name("CON").is_ok());
+        // A peer named it, so the wider law must not strand it.
+        assert!(refuse_unemittable_name("CON").is_ok());
         assert!(refuse_unlawful_name("CON").is_err());
         assert_eq!(
-            refuse_over_bound_name(&"n".repeat(MAX_NODE_NAME_BYTES + 1)),
+            refuse_unemittable_name(&"n".repeat(MAX_NODE_NAME_BYTES + 1)),
             Err(EngineError::MalformedInput {
                 check: "node-name-too-long",
             })
         );
+        // The narrow tier still holds: restored into a live folder, a name no
+        // kernel can carry is invisible and unremovable through the mount.
+        for name in ["", "a/b", "a\0b", "..", "a\nb"] {
+            assert_eq!(
+                refuse_unemittable_name(name),
+                Err(EngineError::MalformedInput {
+                    check: "node-name-unemittable",
+                }),
+                "{name:?} must not be restored into a listing"
+            );
+        }
     }
 
     /// The ceiling is derived from the seal budget, so the derivation has to
