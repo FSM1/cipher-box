@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { errorMessage } from '../lib/errorMessage';
 import { streamTicket } from '../lib/streamTicket';
 import { useEngine, useMediaService } from '../providers/EngineProvider';
+import { displayName } from '../vault/displayName';
 
 /** Never a renderable type: a blob URL is same-origin with the app. */
 const OPAQUE = 'application/octet-stream';
@@ -122,7 +123,7 @@ export function useFileDownload(): FileDownload {
         const outcome = await save(file);
         // A browser that blocks the second download blocks every one after it.
         if (outcome === 'refused') break;
-        if (outcome === 'failed') failed.push(file.name);
+        if (outcome === 'failed') failed.push(displayName(file.name));
       }
       if (failed.length === 0) return;
       // Each save clears the banner the one before it set, so the batch reports

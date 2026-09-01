@@ -7,6 +7,7 @@
 import { toHex } from '@cipherbox/client';
 import type { BinRowDescriptor, NodeKind } from '@cipherbox/client';
 import { formatEpochMillis } from '../utils/format';
+import { displayName } from './displayName';
 import { kindIcon } from './listing';
 
 const MILLIS_PER_DAY = 86_400_000n;
@@ -44,7 +45,7 @@ function toRow(entry: BinRowDescriptor, retentionDays: number | null): BinRow {
   return {
     id: entry.node,
     key: toHex(entry.node),
-    name: entry.originName,
+    name: displayName(entry.originName),
     kind: entry.kind,
     icon: kindIcon(entry.kind),
     deleted: formatEpochMillis(entry.deletedAt, OUT_OF_RANGE),

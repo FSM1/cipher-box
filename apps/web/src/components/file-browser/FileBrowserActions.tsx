@@ -25,7 +25,7 @@ import { TextEditorDialog } from './TextEditorDialog';
 
 const saveRequest = (row: ListingRow): SaveRequest => ({
   node: row.id,
-  name: row.name,
+  name: row.storedName,
   size: row.bytes,
 });
 
@@ -104,7 +104,7 @@ export function FileBrowserActions({
   const menuItems = (row: ListingRow): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [];
     if (row.kind === 'file') {
-      const kind = previewKind(row.name);
+      const kind = previewKind(row.storedName);
       if (kind !== 'none') {
         items.push({ label: 'preview', onSelect: () => setDialog({ kind: 'preview', row }) });
       }
@@ -199,7 +199,7 @@ export function FileBrowserActions({
         <NamePromptDialog
           title={`rename ${dialog.row.name}`}
           fieldLabel="new name"
-          initialName={dialog.row.name}
+          initialName={dialog.row.storedName}
           confirmLabel="rename"
           busyLabel="renaming..."
           testId="rename"

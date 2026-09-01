@@ -15,6 +15,12 @@ describe('the bin rows', () => {
     expect(row.key).toBe('07'.repeat(16));
   });
 
+  it('neutralises the name a purge dialog reads back', () => {
+    const [row] = binRows([entry({ originName: 'report\u202Efdp.exe' })], 30);
+
+    expect(row.name).toBe('reportfdp.exe');
+  });
+
   it('marks a folder apart from a file', () => {
     expect(binRows([entry({ kind: 'folder' })], 30)[0].icon).toBe('[DIR]');
   });

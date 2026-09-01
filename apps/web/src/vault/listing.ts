@@ -7,6 +7,7 @@
 import { toHex } from '@cipherbox/client';
 import type { NodeKind, PendingClass, SnapshotChildDescriptor } from '@cipherbox/client';
 import { formatBytes, formatEpochMillis } from '../utils/format';
+import { displayName } from './displayName';
 
 /** Stands in for a projection the child ref does not carry yet (#27 D7). */
 const UNRESOLVED = '...';
@@ -24,6 +25,12 @@ export interface ListingRow {
   /** Hex node id: React key, route target, and `data-node-id`. */
   key: string;
   name: string;
+  /**
+   * The engine's word for the name. Only a caller that parses it, or writes it
+   * back, reads this one — a rename prefilled with the shown name would publish
+   * the neutralisation as the member's own edit.
+   */
+  storedName: string;
   kind: NodeKind;
   /** Terminal-style kind marker. */
   icon: string;
@@ -54,7 +61,8 @@ function toRow(child: SnapshotChildDescriptor): ListingRow {
   return {
     id: child.id,
     key: toHex(child.id),
-    name: child.name,
+    name: displayName(child.name),
+    storedName: child.name,
     kind: child.kind,
     icon: kindIcon(child.kind),
     size: isFolder ? NOT_APPLICABLE : projectedSize(child.size),

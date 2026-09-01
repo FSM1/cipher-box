@@ -32,7 +32,7 @@ export function NodeRows({ row }: { row: ListingRow }) {
     <>
       <DetailSection label="node" />
       <DetailRow label="name">
-        <CopyableValue value={row.name} label="name" />
+        <CopyableValue value={row.name} copyValue={row.storedName} label="name" />
       </DetailRow>
       <DetailRow label="type">
         <span className="details-badge">{row.icon}</span>
@@ -59,7 +59,16 @@ export function StateRows({ row }: { row: ListingRow }) {
 }
 
 /** An identifying field, with a copy button that only confirms a real write. */
-export function CopyableValue({ value, label }: { value: string; label: string }) {
+export function CopyableValue({
+  value,
+  copyValue = value,
+  label,
+}: {
+  value: string;
+  /** What the copy hands over, where the shown text is neutralised. */
+  copyValue?: string;
+  label: string;
+}) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -71,7 +80,7 @@ export function CopyableValue({ value, label }: { value: string; label: string }
   );
 
   const copy = async () => {
-    if (!(await copyToClipboard(value))) return;
+    if (!(await copyToClipboard(copyValue))) return;
     setCopied(true);
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(false), ACKNOWLEDGED_MS);

@@ -208,6 +208,49 @@ describe('the vault browser write path', () => {
     await waitFor(() => expect(engine.facade.delete).toHaveBeenCalledWith(DOCS));
   });
 
+  it('names a row the confirmation destroys in the order the vault stores it', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'report\u202Efdp.exe')] }));
+
+    openRowMenu('reportfdp.exe');
+    chooseMenuItem('delete');
+
+    expect(screen.getByTestId('delete-dialog').textContent).toContain('"reportfdp.exe"');
+  });
+
+  it('prefills a rename with the name the engine holds, not the shown one', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'report\u202Efdp.exe')] }));
+
+    openRowMenu('reportfdp.exe');
+    chooseMenuItem('rename');
+
+    expect((screen.getByLabelText('new name') as HTMLInputElement).value).toBe(
+      'report\u202Efdp.exe'
+    );
+    expect((screen.getByTestId('rename-confirm') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('saves a file under the name the engine holds, not the shown one', async () => {
+    const engine = fakeEngine();
+    const saves = trackSaves();
+    try {
+      renderBrowser(engine);
+      await landSnapshot(engine, folderView({ children: [file(NOTE, 'report\u202Efdp.exe')] }));
+
+      openRowMenu('reportfdp.exe');
+      chooseMenuItem('download');
+
+      await waitFor(() =>
+        expect(saves.clicked.map((save) => save.download)).toEqual(['report\u202Efdp.exe'])
+      );
+    } finally {
+      saves.restore();
+    }
+  });
+
   it('dispatches relink to the folder the picker walked into', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
