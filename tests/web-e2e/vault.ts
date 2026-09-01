@@ -11,6 +11,36 @@ import { VaultPage } from './page-objects/vault.page';
 /** Multi-byte and multi-line, so no transfer that mangles either passes. */
 export const PAYLOAD = 'ciphertext round trip\n\tédition — 中文\r\nlast line without a newline';
 
+export interface ListedChild {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: string;
+}
+
+export interface Listing {
+  readonly children: readonly ListedChild[];
+}
+
+/**
+ * One listed child's node id, by name. A name the listing does not carry is a
+ * test defect, so it fails here rather than at whatever read used the id.
+ */
+export function nodeOf(listing: Listing, name: string): string {
+  const found = listing.children.filter((child) => child.name === name);
+  if (found.length === 0) {
+    throw new Error(`the listing carries no ${name}; it carries ${namesOf(listing).join(', ')}`);
+  }
+  if (found.length > 1) {
+    throw new Error(`the listing carries ${found.length} children named ${name}`);
+  }
+  return found[0].id;
+}
+
+/** Sorted, so a whole-listing assertion does not ride the order a read returns. */
+export function namesOf(listing: Listing): string[] {
+  return listing.children.map((child) => child.name).sort();
+}
+
 const PROBE = 'probe';
 
 export async function coldStart(

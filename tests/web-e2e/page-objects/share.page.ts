@@ -112,6 +112,11 @@ export class SharePage {
     return this.page.getByTestId('share-grant-permission');
   }
 
+  /** Cuts one recipient's grant. */
+  get revoke(): Locator {
+    return this.page.getByTestId('share-revoke');
+  }
+
   /**
    * Mints a link and returns the URL the dialog shows. The link is shown once,
    * so the caller keeps it.

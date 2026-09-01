@@ -1,5 +1,11 @@
-# The desktop mounted e2e suite (blueprint/testing.md): the real Tauri binary
-# on a real mount, driven through the filesystem and the vault it projects.
+# The desktop mounted e2e suite and the cross-client suite
+# (blueprint/testing.md): the real Tauri binary on a real mount, driven through
+# the filesystem and the vault it projects, and — for cross-client — the built
+# web artifact headless beside that mount against one stack.
+#
+# Two suites, one runner class (blueprint/deploy.md "Runners"): cross-client
+# rides the mounted matrix rather than provisioning a fourth. Each suite is its
+# own leg of the matrix, so each reports its own gate.
 #
 # The binary is built with the `e2e-hook` feature, which adds the dev-key
 # headless entry and a loopback control endpoint. A shipping build compiles
@@ -15,6 +21,9 @@
 # The Windows shell links the WinFsp adapter and its mount does not land, so its
 # projection never leaves `opening`; it joins this matrix when it does. Every
 # step that leg needs is here already.
+#
+# The cross-client suite runs one leg, macOS. The Playwright cache step below
+# names the condition a second cross-client host has to clear.
 name: Desktop E2E Tests
 
 on:
@@ -30,9 +39,9 @@ permissions: {}
 
 jobs:
   desktop-e2e:
-    name: Desktop E2E (${{ matrix.platform }})
+    name: ${{ matrix.label }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
     permissions:
       contents: read
     strategy:
@@ -41,8 +50,21 @@ jobs:
         include:
           - platform: macos
             os: macos-latest
+            suite: mounted
+            label: Desktop E2E
+            timeoutMinutes: 45
           - platform: linux
             os: ubuntu-latest
+            suite: mounted
+            label: Desktop E2E
+            timeoutMinutes: 45
+          # The cross-client leg builds the wasm engine and the web bundle on
+          # top of everything the mounted leg does, so it takes the longer cap.
+          - platform: macos
+            os: macos-latest
+            suite: cross-client
+            label: Cross-Client E2E
+            timeoutMinutes: 60
 
     env:
       # The desktop binary reads these at compile time (`option_env!` in
@@ -123,6 +145,16 @@ jobs:
           key: desktop-e2e-${{ matrix.platform }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: desktop-e2e-${{ matrix.platform }}-cargo-
 
+      # The wasm target rides its own key. Both macOS legs share the key above,
+      # and on a hit neither leg saves, so a tree only the cross-client leg
+      # builds would never reach that cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.suite == 'cross-client'
+        with:
+          path: target/wasm32-unknown-unknown
+          key: cross-client-e2e-${{ matrix.platform }}-wasm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cross-client-e2e-${{ matrix.platform }}-wasm-
+
       # `tauri-build` embeds the frontend, so the bundle must exist before cargo
       # runs. The headless entry never loads it, but the build still reads it.
       - name: Build the desktop frontend
@@ -182,9 +214,52 @@ jobs:
       - name: Build the API
         run: pnpm --filter @cipherbox/api build
 
+      - uses: ./.github/actions/wasm-bindgen-cli
+        if: matrix.suite == 'cross-client'
+
+      # The web host under test is the shipping bundle plus the introspection
+      # hook, served from a built directory — the artifact that ships is the
+      # artifact tested (blueprint/testing.md "E2E").
+      - name: Build the web bundle the cross-client suite serves
+        if: matrix.suite == 'cross-client'
+        run: |
+          pnpm --filter @cipherbox/web run build:wasm
+          pnpm --filter @cipherbox/web run build:bundle
+        env:
+          VITE_E2E_HOOK: 'true'
+          # The front door needs it to build. It stays off the job-wide block:
+          # a `VITE_` value there is a compile-time input to the desktop binary.
+          VITE_GOOGLE_CLIENT_ID: cross-client-google-client-id
+
+      - name: Resolve the Playwright version
+        if: matrix.suite == 'cross-client'
+        id: playwright
+        working-directory: tests/cross-client
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # The path is the macOS browser cache, which is what holds this suite to
+      # one leg: a second cross-client host needs the path chosen by runner.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.suite == 'cross-client'
+        id: playwright-cache
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      # The real Chrome headless, not `chrome-headless-shell`: the shell
+      # segfaults on a page that registers a Service Worker, and the bundle
+      # registers one.
+      - name: Install Playwright Chromium
+        if: matrix.suite == 'cross-client' && steps.playwright-cache.outputs.cache-hit != 'true'
+        # A stalled browser download otherwise runs to the job cap, and reports
+        # as a suite failure rather than as the install failure it is.
+        timeout-minutes: 10
+        run: pnpm --filter @cipherbox/cross-client-e2e exec playwright install chromium
+
       # The orchestrator owns the API process, because a scenario needs a real
       # outage.
       - name: Run the mounted suite
+        if: matrix.suite == 'mounted'
         shell: bash
         run: |
           set -euo pipefail
@@ -209,6 +284,21 @@ jobs:
           CIPHERBOX_API_URL: http://localhost:3000
           NODE_ENV: test
 
+      # One stack serves both hosts, so the suite starts nothing of the API's or
+      # the record store's; it owns only the API process and the preview server.
+      - name: Run the cross-client suite
+        if: matrix.suite == 'cross-client'
+        run: pnpm --filter @cipherbox/cross-client-e2e run test:e2e
+        env:
+          CIPHERBOX_DESKTOP_BINARY: ${{ github.workspace }}/target/debug/cipherbox-desktop
+          CIPHERBOX_API_ENTRY: ${{ github.workspace }}/apps/api/dist/main.js
+          CIPHERBOX_E2E_WORKDIR: ${{ runner.temp }}/cross-client-e2e
+          CIPHERBOX_API_URL: http://localhost:3000
+          # The suite owns the API child, which inherits this: the bundle is
+          # served on the port `CIPHERBOX_WEB_PORT` defaults to.
+          CORS_ALLOWED_ORIGINS: http://localhost:4175
+          NODE_ENV: test
+
       - name: Collect the logs a failure leaves
         if: failure()
         shell: bash
@@ -219,6 +309,7 @@ jobs:
           # -xdev: a scenario that failed can leave a mount under the workdir,
           # and descending into one hangs the collection rather than reading it.
           find "${RUNNER_TEMP}/desktop-e2e" -xdev -name '*.log' -exec cp {} failure-logs/ \; 2>/dev/null || true
+          find "${RUNNER_TEMP}/cross-client-e2e" -xdev -name '*.log' -exec cp {} failure-logs/ \; 2>/dev/null || true
           cp "${RUNNER_TEMP}/kubo.log" failure-logs/ 2>/dev/null || true
           cp "${RUNNER_TEMP}/xvfb.log" failure-logs/ 2>/dev/null || true
           cp /tmp/mock-ipns-routing.log failure-logs/ 2>/dev/null || true
@@ -228,6 +319,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-e2e-logs-${{ matrix.platform }}
+          name: desktop-e2e-logs-${{ matrix.suite }}-${{ matrix.platform }}
           path: failure-logs/
           retention-days: 7

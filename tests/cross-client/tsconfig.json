@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // The web page objects this suite drives type themselves against the
+    // `apps/web` source, which reads `import.meta.env`.
+    "types": ["node", "vite/client"],
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "paths": {
+      "@web/*": ["../../apps/web/src/*"]
+    }
+  },
+  "references": [{ "path": "../../packages/client/tsconfig.build.json" }],
+  "include": ["**/*.ts"]
+}
