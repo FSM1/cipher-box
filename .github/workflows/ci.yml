@@ -128,12 +128,42 @@ jobs:
           CADDY_IMAGE: cipherbox-caddy:lint
         run: pnpm lint:accelerator-front
 
-      # The updater refuses any release its configured key did not sign, so a
-      # pubkey that drifts from the CI signing secret ships an app that can
-      # never update again. This is checked here rather than in Desktop Build
-      # because a key rotation touches no path filter — and because the
-      # signing key has no business in a job that runs the desktop crate's
-      # build scripts.
+  # The updater refuses any release that its configured key did not sign. A
+  # pubkey that drifts from the CI signing secret thus ships an app that can
+  # never update again. This check gets its own job because a key rotation
+  # touches no path filter, and because the signing key must stay out of any
+  # job that runs the desktop crate build scripts. Dependabot runs receive no
+  # repository secrets, so the job skips there; a skipped job satisfies a
+  # required check. The separate job costs a new required status check that
+  # branch protection must add.
+  updater-key:
+    name: Updater Key
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # No git operation follows the checkout, and this job holds the signing
+      # secret, so the job token stays out of the workspace .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
       - name: Assert the updater pubkey matches the signing key
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -144,8 +174,6 @@ jobs:
             echo "::error::TAURI_SIGNING_PRIVATE_KEY is unavailable to this run, so the updater key is unverifiable"
             exit 1
           fi
-          sudo apt-get update
-          sudo apt-get install -y minisign
           WORK=$(mktemp -d)
           # Tauri wraps both the public key and the signature file in base64;
           # minisign wants the unwrapped bytes.
