@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { RequireAuth } from './auth/RequireAuth';
 import { SessionEndWatcher } from './auth/SessionEndWatcher';
+import { BinPage } from './routes/BinPage';
 import { FilesPage } from './routes/FilesPage';
 import { InvitePage } from './routes/InvitePage';
 import { LoginPage } from './routes/LoginPage';
@@ -27,6 +28,14 @@ export function App() {
           element={
             <RequireAuth>
               <SharedPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/bin"
+          element={
+            <RequireAuth>
+              <BinPage />
             </RequireAuth>
           }
         />

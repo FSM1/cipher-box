@@ -67,8 +67,8 @@ export class FilesPage {
   async move(name: string, destination: string): Promise<void> {
     await this.act(name, 'move to...');
     const dialog = this.page.getByTestId('move-dialog');
-    await dialog.getByTestId('move-dialog-folder').filter({ hasText: destination }).click();
-    await expect(dialog.getByTestId('move-dialog-destination')).toHaveText(destination);
+    await dialog.getByTestId('folder-picker-entry').filter({ hasText: destination }).click();
+    await expect(dialog.getByTestId('folder-picker-destination')).toHaveText(destination);
     await this.page.getByTestId('move-confirm').click();
     await expect(dialog).toHaveCount(0);
   }

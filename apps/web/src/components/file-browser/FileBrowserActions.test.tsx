@@ -220,7 +220,7 @@ describe('the vault browser write path', () => {
     // The destination is the folder it opened on until the picker moves.
     expect(screen.getByTestId('move-confirm').getAttribute('disabled')).not.toBeNull();
 
-    fireEvent.click(screen.getByTestId('move-dialog-folder'));
+    fireEvent.click(screen.getByTestId('folder-picker-entry'));
     await settlePickerRead(
       engine,
       folderView({
@@ -243,7 +243,7 @@ describe('the vault browser write path', () => {
     chooseMenuItem('move to...');
     await settlePickerRead(engine, listing());
 
-    expect(screen.queryAllByTestId('move-dialog-folder')).toHaveLength(0);
+    expect(screen.queryAllByTestId('folder-picker-entry')).toHaveLength(0);
   });
 
   it('never names the folder it is walking out of as the destination', async () => {
@@ -305,7 +305,7 @@ describe('the vault browser write path', () => {
       engine,
       folderView({ folder: DOCS, folderName: 'documents', ancestors: [{ id: ROOT, name: '' }] })
     );
-    fireEvent.click(screen.getByTestId('move-dialog-up'));
+    fireEvent.click(screen.getByTestId('folder-picker-up'));
     await act(async () => {
       await Promise.resolve();
     });
@@ -326,8 +326,8 @@ describe('the vault browser write path', () => {
 
     // Leaving before the child's listing lands has no ancestry to read, and
     // reading none as "the vault root" would strand the walk at the top.
-    fireEvent.click(screen.getByTestId('move-dialog-folder'));
-    fireEvent.click(screen.getByTestId('move-dialog-up'));
+    fireEvent.click(screen.getByTestId('folder-picker-entry'));
+    fireEvent.click(screen.getByTestId('folder-picker-up'));
     await act(async () => {
       for (let hop = 0; hop < 5; hop += 1) await Promise.resolve();
     });
@@ -427,7 +427,7 @@ describe('the vault browser selection', () => {
     fireEvent.click(screen.getByTestId('selection-move'));
     await settlePickerRead(engine, listing());
 
-    fireEvent.click(screen.getByTestId('move-dialog-folder'));
+    fireEvent.click(screen.getByTestId('folder-picker-entry'));
     await settlePickerRead(
       engine,
       folderView({ folder: DOCS, folderName: 'documents', ancestors: [{ id: ROOT, name: '' }] })

@@ -8,8 +8,6 @@ interface NavItemProps {
   icon: NavIcon;
   label: string;
   active: boolean;
-  /** A destination this build does not serve yet; renders inert. */
-  comingSoon?: boolean;
 }
 
 const ICONS: Record<NavIcon, ReactNode> = {
@@ -61,7 +59,7 @@ const ICONS: Record<NavIcon, ReactNode> = {
 };
 
 /** One sidebar destination. */
-export function NavItem({ to, icon, label, active, comingSoon = false }: NavItemProps) {
+export function NavItem({ to, icon, label, active }: NavItemProps) {
   const testId = `nav-item-${label.toLowerCase()}`;
   const body = (
     <>
@@ -73,20 +71,6 @@ export function NavItem({ to, icon, label, active, comingSoon = false }: NavItem
       <span className="nav-item-label">{label}</span>
     </>
   );
-
-  if (comingSoon) {
-    return (
-      <span
-        className="nav-item nav-item--disabled"
-        aria-disabled="true"
-        title="coming soon"
-        data-testid={testId}
-      >
-        {body}
-        <span className="nav-item-badge">soon</span>
-      </span>
-    );
-  }
 
   return (
     <Link

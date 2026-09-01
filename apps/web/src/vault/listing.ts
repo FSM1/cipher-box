@@ -6,13 +6,18 @@
 
 import { toHex } from '@cipherbox/client';
 import type { NodeKind, PendingClass, SnapshotChildDescriptor } from '@cipherbox/client';
-import { formatBytes, formatDate, MAX_DATE_MILLIS } from '../utils/format';
+import { formatBytes, formatEpochMillis } from '../utils/format';
 
 /** Stands in for a projection the child ref does not carry yet (#27 D7). */
 const UNRESOLVED = '...';
 
 /** A column with nothing to show for this kind of node. */
 const NOT_APPLICABLE = '-';
+
+/** The terminal-style kind marker every listing writes. */
+export function kindIcon(kind: NodeKind): string {
+  return kind === 'folder' ? '[DIR]' : '[FILE]';
+}
 
 export interface ListingRow {
   id: Uint8Array;
@@ -51,7 +56,7 @@ function toRow(child: SnapshotChildDescriptor): ListingRow {
     key: toHex(child.id),
     name: child.name,
     kind: child.kind,
-    icon: isFolder ? '[DIR]' : '[FILE]',
+    icon: kindIcon(child.kind),
     size: isFolder ? NOT_APPLICABLE : projectedSize(child.size),
     bytes: isFolder ? null : child.size,
     contentVersion: child.contentVersion,
@@ -66,10 +71,8 @@ function projectedSize(value: bigint | null): string {
   return value === null ? UNRESOLVED : formatBytes(Number(value));
 }
 
-/** Out of range it would throw and take the whole listing with it. */
 function projectedDate(value: bigint | null): string {
-  if (value === null) return UNRESOLVED;
-  return value > MAX_DATE_MILLIS ? NOT_APPLICABLE : formatDate(Number(value));
+  return value === null ? UNRESOLVED : formatEpochMillis(value, NOT_APPLICABLE);
 }
 
 function byKindThenName(a: ListingRow, b: ListingRow): number {

@@ -196,13 +196,6 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.nav-item--disabled,
-.nav-item--disabled:hover {
-  color: var(--color-text-dim);
-  background-color: transparent;
-  cursor: default;
-}
-
 .nav-item-icon {
   display: flex;
   align-items: center;
@@ -216,16 +209,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.nav-item-badge {
-  margin-left: auto;
-  flex-shrink: 0;
-  padding: 0 3px;
-  font-size: var(--font-size-xxs);
-  color: var(--color-text-dim);
-  border: var(--border-thickness) solid var(--color-border-dim);
-  text-transform: lowercase;
 }
 
 /* ==========================================================================
