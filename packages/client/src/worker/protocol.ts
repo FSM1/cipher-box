@@ -222,12 +222,24 @@ export interface ReceivedShareDescriptor {
 }
 
 /** One soft-deleted node, as data (mirrors the facade `BinRow`). */
+/**
+ * Where a bin row's origin folder stands in the vault (mirrors the facade
+ * `BinOrigin`). `'gone'` is the state a default restore refuses on, so a host
+ * names it rather than showing a folder that is not there.
+ */
+export type BinOriginDescriptor =
+  | { kind: 'root' }
+  | { kind: 'folder'; name: string }
+  | { kind: 'gone' };
+
 export interface BinRowDescriptor {
   node: Uint8Array;
   kind: NodeKind;
   /** The folder the node was unlinked from, where a restore puts it back. */
   originParent: Uint8Array;
   originName: string;
+  /** That folder as a member reads it, rather than as a node id. */
+  originFolder: BinOriginDescriptor;
   /** Deletion time in Unix millis; a host renders expiry from it. */
   deletedAt: bigint;
   scope: Uint8Array;

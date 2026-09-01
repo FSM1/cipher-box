@@ -1141,6 +1141,19 @@ impl BinView {
     }
 }
 
+/// Where a bin row's origin folder stands in the vault (mirrors the facade
+/// `BinOrigin`).
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOriginKind {
+    /// The vault root, which carries no name of its own.
+    Root,
+    /// A folder the vault still holds.
+    Folder,
+    /// No folder of that id stands in the vault, so a default restore refuses.
+    Gone,
+}
+
 /// One soft-deleted node, as the `/bin` route renders it. Key-free by
 /// construction: the entry's bin-held key and its `ipnsName` have no getter.
 #[wasm_bindgen]
@@ -1174,6 +1187,27 @@ impl BinRow {
     #[wasm_bindgen(getter, js_name = originName)]
     pub fn origin_name(&self) -> String {
         self.inner.origin_name.clone()
+    }
+
+    /// Where the origin folder stands in the vault this session renders.
+    #[wasm_bindgen(getter, js_name = originFolderKind)]
+    pub fn origin_folder_kind(&self) -> BinOriginKind {
+        match self.inner.origin_folder {
+            facade::BinOrigin::Root => BinOriginKind::Root,
+            facade::BinOrigin::Folder(_) => BinOriginKind::Folder,
+            facade::BinOrigin::Gone => BinOriginKind::Gone,
+        }
+    }
+
+    /// The origin folder's own name, empty for every kind but
+    /// [`BinOriginKind::Folder`] — the root carries none and a gone folder
+    /// leaves none to read.
+    #[wasm_bindgen(getter, js_name = originFolderName)]
+    pub fn origin_folder_name(&self) -> String {
+        match &self.inner.origin_folder {
+            facade::BinOrigin::Folder(name) => name.clone(),
+            _ => String::new(),
+        }
     }
 
     /// The deletion time in milliseconds, a `u64` crossing as a `bigint`. A

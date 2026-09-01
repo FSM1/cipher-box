@@ -12,8 +12,8 @@ use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_wasm::{
-    BinView, ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase,
-    PendingClass, Permission, PinMode, SnapshotView, Staleness, VaultSettings,
+    BinOriginKind, BinView, ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event, NodeId,
+    NodeKind, OpPhase, PendingClass, Permission, PinMode, SnapshotView, Staleness, VaultSettings,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -227,6 +227,7 @@ fn bin_view_getters_cross_with_boundary_shapes() {
             kind: facade::NodeKind::Folder,
             origin_parent: facade::NodeId([1u8; 16]),
             origin_name: "holiday".into(),
+            origin_folder: facade::BinOrigin::Folder("trips".into()),
             deleted_at: u64::MAX,
             scope: facade::NodeId([2u8; 16]),
         }],
@@ -255,6 +256,15 @@ fn bin_view_getters_cross_with_boundary_shapes() {
     assert_eq!(
         get(&row, "originName").as_string().as_deref(),
         Some("holiday")
+    );
+    assert_eq!(
+        get(&row, "originFolderName").as_string().as_deref(),
+        Some("trips"),
+        "the origin folder crosses under its own name"
+    );
+    assert_eq!(
+        get(&row, "originFolderKind"),
+        JsValue::from(BinOriginKind::Folder)
     );
 
     let deleted_at = get(&row, "deletedAt");

@@ -644,6 +644,7 @@ describe('broadcast transport ↔ leader relay', () => {
           kind: 'file',
           originParent: new Uint8Array(16).fill(1),
           originName: 'notes.txt',
+          originFolder: { kind: 'root' },
           deletedAt: 1_800_000_000_000n,
           scope: new Uint8Array(16).fill(2),
         },

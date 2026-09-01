@@ -4,7 +4,7 @@ import type { SettingsOrigin } from '@cipherbox/client';
 import { RestoreIntoDialog } from '../components/bin/RestoreIntoDialog';
 import { AppShell } from '../components/layout/AppShell';
 import { ConfirmDangerDialog } from '../components/ui/ConfirmDangerDialog';
-import { useVaultStorage } from '../hooks/useVaultStorage';
+import { useVaultStorage } from '../providers/VaultStorageProvider';
 import { useBin, type BinVerdict } from '../hooks/useBin';
 import { binRows, type BinRow } from '../vault/binRows';
 
@@ -227,6 +227,9 @@ function BinBody({
           <span className="bin-name" data-testid="bin-name">
             {row.name}
           </span>
+          <span className="details-badge" data-testid="bin-origin">
+            {`from ${row.origin}`}
+          </span>
           <span className="details-badge" data-testid="bin-deleted">
             {`deleted ${row.deleted}`}
           </span>
@@ -239,7 +242,7 @@ function BinBody({
             onClick={() => onRestore(row)}
             disabled={busy}
             data-testid="bin-restore"
-            aria-label={`restore ${row.name}`}
+            aria-label={`restore ${row.name} from ${row.origin}`}
           >
             restore
           </button>
@@ -250,7 +253,7 @@ function BinBody({
               onClick={() => onRestoreElsewhere(row)}
               disabled={busy}
               data-testid="bin-restore-elsewhere"
-              aria-label={`restore ${row.name} into another folder`}
+              aria-label={`restore ${row.name} from ${row.origin} into another folder`}
             >
               pick a folder
             </button>
@@ -261,7 +264,7 @@ function BinBody({
             onClick={() => onPurge(row)}
             disabled={busy}
             data-testid="bin-purge"
-            aria-label={`purge ${row.name}`}
+            aria-label={`purge ${row.name} from ${row.origin}`}
           >
             purge
           </button>
