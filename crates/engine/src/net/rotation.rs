@@ -345,7 +345,8 @@ impl RotationAncestry {
     }
 }
 
-/// Which root binding a gated read must prove.
+/// Which root binding a gated read must prove, and which write-plane fallback
+/// the walk allows it ([`ScopeWalk::write_plane`]).
 ///
 /// A descendant's record is bound to its parent by an ascent link the gate
 /// verifies ([`gated_child_root`]) — a `directChildScopeIndex` entry, or one
@@ -608,11 +609,31 @@ pub(crate) struct DescendantScopeRoot {
     /// The root's own gate-passing body, for the projection leg.
     pub(crate) adopted: Adopted,
     pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
-    /// `None` when this device holds the root keyless — no owner-write-blob, or
-    /// no durable write-epoch floor for the scope yet. Such a scope still reads
-    /// and renders; only its write plane waits.
-    pub(crate) write: Option<ScopeWritePlane>,
+    /// `Err` when this pass opened no write plane, classified so the drain can
+    /// tell a scope that will never take a write here from one that is merely
+    /// dark this pass. Such a scope still reads and renders.
+    pub(crate) write: Result<ScopeWritePlane, WritePlaneDark>,
 }
+
+/// Why a proved scope root opened no write plane on this pass.
+///
+/// The two answer different questions for the drain's valve: a record that
+/// carries no write plane for this device will not take an op on any later pass
+/// either, while a seam or pointer-plane failure clears on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WritePlaneDark {
+    /// The record itself carries no write plane this device opens — no
+    /// owner-write-blob, or one no epoch this device can reach unseals.
+    Keyless,
+    /// A seam read or a pointer-plane consult this pass could not make.
+    Unavailable,
+}
+
+/// The write epoch a grant cut mints a promoted scope root at
+/// (`crate::grants::create`). A write body carrying an empty `writeHistoryLink`
+/// is exactly this epoch (`cipherbox_core::seal::write_body`), so it is the one
+/// write epoch a device that did not mint the root recovers from the record.
+const MINT_WRITE_EPOCH: u64 = 1;
 
 /// How many descendant scope roots one walk admits.
 const MAX_DESCENDANT_SCOPE_ROOTS: usize = 256;
@@ -632,6 +653,12 @@ pub(crate) struct ScopeWalk<'a, T, S, H, F> {
     pub(crate) floors: &'a F,
     pub(crate) enc_secret: &'a X25519Secret,
     pub(crate) identity: &'a EcdsaVerifier,
+    /// The pointer plane's read edges, for the consult that decides whether a
+    /// descendant may take the mint anchor
+    /// ([`Self::recover_minted_write_plane`]).
+    pub(crate) scope_keys: &'a dyn OwnerPointerRead,
+    /// See [`PointerConsult::payload_version`].
+    pub(crate) payload_version: u64,
 }
 
 impl<T, S, H, F> ScopeWalk<'_, T, S, H, F>
@@ -670,7 +697,9 @@ where
             .snapshot_cache
             .put(name.as_str().as_bytes(), &record_bytes)
             .await;
-        let (write, grandchildren) = self.write_plane(&gated, &name, child.scope_id).await;
+        let (write, grandchildren) = self
+            .write_plane(&gated, &name, child.scope_id, RootAnchor::Descendant)
+            .await;
         Some((
             DescendantScopeRoot {
                 scope_id: child.scope_id,
@@ -697,33 +726,128 @@ where
     /// straight off this value and mints every new node's `ipnsName` and its
     /// narrow signer from it. A seed that cannot name our own root leaves the
     /// root keyless, never a trust verdict.
+    ///
+    /// The vault root takes no mint anchor: its floor is cold-seeded from the
+    /// owner-vouched vault pointer at boot, a stronger authority than the
+    /// record.
     async fn write_plane(
         &self,
         gated: &GatedScopeRoot,
         name: &IpnsName,
         scope_id: [u8; 16],
-    ) -> (Option<ScopeWritePlane>, Vec<ChildScopeRef>) {
-        let Some(seed) = gated.write_scope_seed.clone() else {
-            return (None, Vec::new());
-        };
-        if !seed_names(&seed, &scope_id, Some(name)) {
-            return (None, Vec::new());
+        anchor: RootAnchor,
+    ) -> (Result<ScopeWritePlane, WritePlaneDark>, Vec<ChildScopeRef>) {
+        if let Some(seed) = gated.write_scope_seed.clone()
+            && seed_names(&seed, &scope_id, Some(name))
+            && let Ok((write_body, epoch)) = write_plane_of(
+                self.floors,
+                &gated.envelope,
+                &gated.section,
+                &seed,
+                scope_id,
+            )
+            .await
+        {
+            return (
+                Ok(ScopeWritePlane { seed, epoch }),
+                write_body.direct_child_scope_index,
+            );
         }
-        let Ok((write_body, epoch)) = write_plane_of(
-            self.floors,
+        match anchor {
+            // A record the durable floor does not open may simply be the copy
+            // this pass read, so the scope waits rather than being charged.
+            RootAnchor::VaultRoot => Err(WritePlaneDark::Unavailable),
+            RootAnchor::Descendant => {
+                self.recover_minted_write_plane(gated, name, scope_id).await
+            }
+        }
+        .map_or_else(
+            |dark| (Err(dark), Vec::new()),
+            |(plane, index)| (Ok(plane), index),
+        )
+    }
+
+    /// Recover a proved descendant scope root's write plane at the mint anchor,
+    /// on a device that did not mint it, and seed the scope's write-epoch floor
+    /// from what opened.
+    ///
+    /// Only the minting device seeds that floor (floor law item 5,
+    /// [`floor::seed_scope_root_write_epoch`]). The record carries the same
+    /// anchor: the owner-write-blob and the write body both open under an AAD
+    /// that binds [`MINT_WRITE_EPOCH`], so what this recovers rests on an
+    /// AAD-confirmed unseal and never on a claimed field.
+    ///
+    /// A write rotation re-points the scope pointer, so a scope that answers on
+    /// that plane has moved past the mint and its owner-vouched epoch is the
+    /// authority instead. Consulting is what keeps a retired write-scope seed
+    /// from going resident when a committed writer of the parent reverts its
+    /// index entry to the pre-rotation root.
+    ///
+    /// The plane it hands back is this session's alone: the anchor raises no
+    /// durable floor, because a consult finds nothing both for a scope that was
+    /// never re-pointed and for a pointer the network withholds, and the floor
+    /// law admits no permanent advance an untrusted plane can steer. Every pass
+    /// re-proves the anchor, so a pointer that resolves once takes the scope
+    /// back onto its owner-vouched epoch.
+    async fn recover_minted_write_plane(
+        &self,
+        gated: &GatedScopeRoot,
+        name: &IpnsName,
+        scope_id: [u8; 16],
+    ) -> Result<(ScopeWritePlane, Vec<ChildScopeRef>), WritePlaneDark> {
+        // Local first, so the consult below costs a fan-out GET only for a
+        // record that would otherwise take the anchor.
+        let owb = gated
+            .section
+            .owner_write_blob
+            .as_ref()
+            .ok_or(WritePlaneDark::Keyless)?;
+        let seed =
+            open_write_scope_seed_at(self.enc_secret, &gated.envelope, owb, MINT_WRITE_EPOCH)
+                .ok_or(WritePlaneDark::Keyless)?;
+        // Held to [`seed_names`] for the same reason the gated seed is: a drain
+        // pass mints every new node's `ipnsName` from this value.
+        if !seed_names(&seed, &scope_id, Some(name)) {
+            return Err(WritePlaneDark::Keyless);
+        }
+        let body = open_write_body(
             &gated.envelope,
             &gated.section,
+            &scope_id,
             &seed,
-            scope_id,
+            MINT_WRITE_EPOCH,
         )
-        .await
-        else {
-            return (None, Vec::new());
+        .map_err(|_| WritePlaneDark::Keyless)?;
+        if !body.write_history_link.is_empty() {
+            return Err(WritePlaneDark::Keyless);
+        }
+        if floor::write_epoch_floor(self.floors, &scope_id)
+            .await
+            .map_err(|_| WritePlaneDark::Unavailable)?
+            .is_some()
+        {
+            return Err(WritePlaneDark::Unavailable);
+        }
+        let consult = PointerConsult {
+            scope_keys: self.scope_keys,
+            owner_identity: self.identity,
+            payload_version: self.payload_version,
         };
-        (
-            Some(ScopeWritePlane { seed, epoch }),
-            write_body.direct_child_scope_index,
-        )
+        match consult.run(self.transport, self.floors, &scope_id).await {
+            Ok(None) => {}
+            // A vouched name, an unauthenticated re-point and an unreachable
+            // pointer all leave the anchor unproved, and none of them says this
+            // record will never take a write — the consult that raises the
+            // floor runs again next pass.
+            Ok(Some(_)) | Err(_) => return Err(WritePlaneDark::Unavailable),
+        }
+        Ok((
+            ScopeWritePlane {
+                seed,
+                epoch: MINT_WRITE_EPOCH,
+            },
+            body.direct_child_scope_index,
+        ))
     }
 
     /// Every scope root this owner holds below the vault root, breadth-first
@@ -760,7 +884,9 @@ where
         let gated = gated_scope_root(&adopter, root_name, root_record_bytes)
             .await
             .ok()?;
-        let (_, index) = self.write_plane(&gated, root_name, root_scope_id).await;
+        let (_, index) = self
+            .write_plane(&gated, root_name, root_scope_id, RootAnchor::VaultRoot)
+            .await;
         let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
         let mut descendants: Vec<DescendantScopeRoot> = Vec::new();
         let mut visited = BTreeSet::from([root_scope_id]);
@@ -1261,7 +1387,7 @@ where
             // signing under the write seed of the scope it is leaving.
             write_scope_seed: Some(source.write_scope_seed.clone()),
         };
-        floor::seed_write_epoch_on_mint(self.floors, &record.scope_id, record.write_epoch)
+        floor::seed_scope_root_write_epoch(self.floors, &record.scope_id, record.write_epoch)
             .await
             .map_err(|_| RotationPublishError::NotPublished)?;
         self.root_publish()
@@ -4072,10 +4198,55 @@ mod tests {
         scope_root(scope_id, child_scope_index, Some(parent_node_seed))
     }
 
+    /// An interior scope root the owner holds keyless — the shape of a record
+    /// authored before the tag, or a read-only one.
+    fn interior_without_owner_write_blob(
+        scope_id: [u8; 16],
+        parent_override_seed: &[u8; 32],
+    ) -> OwnerRootFixture {
+        owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id,
+            root_id: scope_id,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: Some(*kdf::node_seed(parent_override_seed, &scope_id).as_bytes()),
+            owner_write_blob_epoch: None,
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        })
+    }
+
+    /// An interior scope root whose write body carries a history link — the
+    /// shape of a write plane that has rotated at least once.
+    fn interior_with_write_history(
+        scope_id: [u8; 16],
+        parent_override_seed: &[u8; 32],
+        write_history_link: Vec<u8>,
+    ) -> OwnerRootFixture {
+        let parent_node_seed = *kdf::node_seed(parent_override_seed, &scope_id).as_bytes();
+        scope_root_with_write_history(
+            scope_id,
+            Vec::new(),
+            Some(parent_node_seed),
+            write_history_link,
+        )
+    }
+
     fn scope_root(
         scope_id: [u8; 16],
         child_scope_index: Vec<ChildScopeRef>,
         parent_node_seed: Option<[u8; 32]>,
+    ) -> OwnerRootFixture {
+        scope_root_with_write_history(scope_id, child_scope_index, parent_node_seed, Vec::new())
+    }
+
+    fn scope_root_with_write_history(
+        scope_id: [u8; 16],
+        child_scope_index: Vec<ChildScopeRef>,
+        parent_node_seed: Option<[u8; 32]>,
+        write_history_link: Vec<u8>,
     ) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
             owner_identity: &owner_identity(),
@@ -4086,7 +4257,7 @@ mod tests {
             child_scope_index,
             parent_node_seed,
             owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
-            write_history_link: Vec::new(),
+            write_history_link,
             grants: Vec::new(),
         })
     }
@@ -4415,6 +4586,8 @@ mod tests {
                     floors: &self.floors,
                     enc_secret: &self.enc_secret,
                     identity: &self.identity,
+                    scope_keys: &OwnerSeeds,
+                    payload_version: PAYLOAD_VERSION,
                 }
                 .descendant_scope_roots(
                     SCOPE,
@@ -4543,15 +4716,17 @@ mod tests {
         );
     }
 
-    /// A root this device holds keyless is still admitted: the scope renders on
-    /// the read leg, and only its write plane waits.
+    /// A root whose write plane this pass could not open is still admitted: the
+    /// scope renders on the read leg, and only its write plane waits. A record
+    /// below the scope's durable floor is the copy this pass happened to read,
+    /// so it is dark rather than keyless and the drain waits on it.
     #[test]
-    fn a_keyless_scope_root_is_still_admitted() {
+    fn a_scope_root_below_its_durable_write_floor_is_admitted_and_waits() {
         let (child, child_ref, _) = one_level();
         let root = vault_root(SCOPE, vec![child_ref]);
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage(CHILD_SCOPE, &child, None);
+        harness.stage(CHILD_SCOPE, &child, Some(MINT_WRITE_EPOCH + 1));
 
         let proved = harness
             .walk(&InMemorySnapshotCache::default(), &root)
@@ -4564,9 +4739,143 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![CHILD_SCOPE],
         );
+        assert_eq!(
+            proved[0].write.as_ref().err(),
+            Some(&WritePlaneDark::Unavailable),
+            "a record below the durable floor opens under no write seed here"
+        );
+    }
+
+    /// A record that carries no owner-write-blob names the one darkness a later
+    /// pass cannot clear on its own, so the drain charges an op below it rather
+    /// than stalling for ever.
+    #[test]
+    fn a_scope_root_carrying_no_owner_write_blob_is_keyless() {
+        let child = interior_without_owner_write_blob(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED);
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &child)]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, None);
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            proved[0].write.as_ref().err(),
+            Some(&WritePlaneDark::Keyless),
+        );
+    }
+
+    /// Only the device that cut the grant seeds a promoted scope's write-epoch
+    /// floor, and no pointer plane speaks for that scope until its first write
+    /// rotation. A device that merely proves the root recovers the same anchor
+    /// from the record, so its own writes publish.
+    #[test]
+    fn a_scope_root_with_no_durable_floor_recovers_its_write_plane_at_the_mint() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, None);
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        let write = proved[0]
+            .write
+            .as_ref()
+            .expect("the mint anchor opens the promoted root's write plane");
+        assert_eq!(write.epoch, MINT_WRITE_EPOCH);
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &CHILD_SCOPE)).expect("floor read"),
+            None,
+            "and the anchor raises no durable floor: a consult finds nothing both              for a scope never re-pointed and for a pointer the network withholds"
+        );
+    }
+
+    /// A write rotation re-points the scope pointer, so a scope that answers on
+    /// that plane has moved past the mint. Its owner-vouched epoch is then the
+    /// authority, and the record's own anchor is refused — which is what stops
+    /// a reverted parent index from making a retired write-scope seed resident.
+    #[test]
+    fn a_scope_that_answers_on_the_pointer_plane_takes_no_mint_anchor() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, None);
+        stage_scope_pointer(
+            &harness,
+            CHILD_SCOPE,
+            &owner_identity(),
+            &RepointObject {
+                scope_id: CHILD_SCOPE,
+                current_root: vault_root([0xb0; 16], Vec::new()).name,
+                write_epoch: MINT_WRITE_EPOCH + 1,
+                min_read_epoch: MINT_WRITE_EPOCH,
+                prev_root: None,
+            },
+        );
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            proved[0].write.as_ref().err(),
+            Some(&WritePlaneDark::Unavailable),
+            "the record this pass read is below the epoch the owner vouches for"
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &CHILD_SCOPE)).expect("floor read"),
+            Some(MINT_WRITE_EPOCH + 1),
+            "and the consult raises the owner-vouched floor, which the anchor never does",
+        );
+    }
+
+    /// The mint anchor rests on the record's own write-plane history, so a
+    /// write body carrying a link is not at the mint however it opened.
+    #[test]
+    fn a_carried_write_history_link_refuses_the_mint_anchor() {
+        let child =
+            interior_with_write_history(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, vec![0xAB; 40]);
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &child)]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, None);
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            proved[0].write.as_ref().err(),
+            Some(&WritePlaneDark::Keyless),
+        );
+    }
+
+    /// The vault root's own floor is the boot cold-seed's, taken from the
+    /// owner-vouched vault pointer. The mint anchor is a weaker authority and
+    /// never stands in for it.
+    #[test]
+    fn the_vault_root_takes_no_mint_anchor() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, None);
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+
         assert!(
-            proved[0].write.is_none(),
-            "no durable write-epoch floor means the owner-write-blob never opens"
+            harness
+                .walked(&InMemorySnapshotCache::default(), &root)
+                .is_empty(),
+            "the vault root's index is a write-plane read it cannot make"
+        );
+        assert_eq!(
+            block_on(floor::write_epoch_floor(&harness.floors, &SCOPE)).expect("floor read"),
+            None,
         );
     }
 
@@ -9846,7 +10155,7 @@ mod tests {
             min_read_epoch: SWEPT_EPOCH,
             prev_root: None,
         };
-        stage_scope_pointer(&harness, &owner_identity(), &repoint);
+        stage_scope_pointer(&harness, SCOPE, &owner_identity(), &repoint);
 
         assert_eq!(
             block_on(harness.net(&[]).consult_pointer(&SCOPE)),
@@ -9865,7 +10174,7 @@ mod tests {
             prev_root: None,
         };
         let impostor = EcdsaSigner::from_scalar(&[0x4d; 32]).expect("valid scalar");
-        stage_scope_pointer(&harness, &impostor, &repoint);
+        stage_scope_pointer(&harness, SCOPE, &impostor, &repoint);
 
         assert_eq!(
             block_on(harness.net(&[]).consult_pointer(&SCOPE)),
@@ -10169,6 +10478,7 @@ mod tests {
         .expect("raise the write floor");
         stage_scope_pointer(
             &harness,
+            SCOPE,
             &owner_identity(),
             &RepointObject {
                 scope_id: SCOPE,
@@ -10204,6 +10514,7 @@ mod tests {
         let current_root = vault_root([0xb0; 16], Vec::new()).name;
         stage_scope_pointer(
             &harness,
+            SCOPE,
             &owner_identity(),
             &RepointObject {
                 scope_id: SCOPE,
@@ -10224,11 +10535,12 @@ mod tests {
     /// pointer read key the net re-derives and signed by `owner`.
     fn stage_scope_pointer<T: RecordTransport + Clone>(
         harness: &Harness<T>,
+        scope_id: [u8; 16],
         owner: &EcdsaSigner,
         repoint: &RepointObject,
     ) {
-        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE);
-        let read_key = OwnerSeeds.pointer_read_key(&SCOPE);
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &scope_id);
+        let read_key = OwnerSeeds.pointer_read_key(&scope_id);
         let mut entropy = SeededEntropy::new(5);
         let block = seal_repoint(
             SessionRole::Owner,
@@ -10239,7 +10551,7 @@ mod tests {
             repoint,
         )
         .expect("owner seals the re-point");
-        let signer = scope_pointer_signer(&OWNER_POINTER_SEED, &SCOPE);
+        let signer = scope_pointer_signer(&OWNER_POINTER_SEED, &scope_id);
         let record = IpnsRecord::create_v2(&signer, &block, 1, TTL_NANOS, EOL).marshal();
         for endpoint in harness.store.endpoints() {
             harness
