@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import type { EngineFacade } from '@cipherbox/client';
+import { EngineRequestError, type EngineFacade } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
 
@@ -12,6 +12,8 @@ export interface CommandRunner<TCommand extends string> {
   busy: TCommand | null;
   /** The last dispatch's failure, cleared by the next dispatch. */
   error: string | null;
+  /** That failure's stable engine code, absent for a transport fault. */
+  code: string | undefined;
   /** Resolves `true` once the engine accepted the command. */
   run(command: TCommand, dispatch: (facade: EngineFacade) => Promise<unknown>): Promise<boolean>;
   /** Retires the last refusal without dispatching, when its surface goes away. */
@@ -22,6 +24,7 @@ export function useCommandRunner<TCommand extends string>(): CommandRunner<TComm
   const client = useEngine();
   const [busy, setBusy] = useState<TCommand | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState<string | undefined>(undefined);
 
   const run = useCallback(
     async (
@@ -30,15 +33,18 @@ export function useCommandRunner<TCommand extends string>(): CommandRunner<TComm
     ): Promise<boolean> => {
       if (client === null) {
         setError('the engine is not ready yet');
+        setCode(undefined);
         return false;
       }
       setBusy(command);
       setError(null);
+      setCode(undefined);
       try {
         await dispatch(client.facade);
         return true;
       } catch (refusal: unknown) {
         setError(errorMessage(refusal));
+        setCode(refusal instanceof EngineRequestError ? refusal.code : undefined);
         return false;
       } finally {
         setBusy(null);
@@ -47,5 +53,10 @@ export function useCommandRunner<TCommand extends string>(): CommandRunner<TComm
     [client]
   );
 
-  return { busy, error, run, clearError: useCallback(() => setError(null), []) };
+  const clearError = useCallback(() => {
+    setError(null);
+    setCode(undefined);
+  }, []);
+
+  return { busy, error, code, run, clearError };
 }

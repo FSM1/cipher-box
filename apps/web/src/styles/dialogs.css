@@ -122,13 +122,13 @@
    Move Picker
    ========================================================================== */
 
-.move-dialog-destination {
+.folder-picker-destination {
   font-weight: var(--font-weight-semibold);
   text-transform: none;
   color: var(--color-text-primary);
 }
 
-.move-dialog-list {
+.folder-picker-list {
   display: flex;
   flex-direction: column;
   max-height: 240px;
@@ -137,7 +137,7 @@
   border: var(--border-thickness) solid var(--color-border-dim);
 }
 
-.move-dialog-entry {
+.folder-picker-entry {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -154,16 +154,16 @@
   transition: background-color 0.15s ease;
 }
 
-.move-dialog-entry:last-child {
+.folder-picker-entry:last-child {
   border-bottom: none;
 }
 
-.move-dialog-entry:hover,
-.move-dialog-entry:focus-visible {
+.folder-picker-entry:hover,
+.folder-picker-entry:focus-visible {
   background-color: var(--color-green-darker);
 }
 
-.move-dialog-empty {
+.folder-picker-empty {
   margin: 0;
   padding: var(--spacing-sm);
   font-family: var(--font-family-mono);

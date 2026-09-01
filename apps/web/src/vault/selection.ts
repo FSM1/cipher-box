@@ -9,7 +9,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { toHex } from '@cipherbox/client';
 import type { ListingRow } from './listing';
 
-const EMPTY: ReadonlySet<string> = new Set();
+/** No node keys: an empty selection, and a picker that excludes nothing. */
+export const NO_KEYS: ReadonlySet<string> = new Set();
 
 export interface Selection {
   /** The selected rows, in listing order. */
@@ -29,14 +30,14 @@ export interface Selection {
  * @param folder the folder that listing belongs to; a change to it starts over
  */
 export function useSelection(rows: ListingRow[], folder: Uint8Array | null): Selection {
-  const [keys, setKeys] = useState<ReadonlySet<string>>(EMPTY);
+  const [keys, setKeys] = useState<ReadonlySet<string>>(NO_KEYS);
   const folderKey = folder === null ? '' : toHex(folder);
 
-  useEffect(() => setKeys(EMPTY), [folderKey]);
+  useEffect(() => setKeys(NO_KEYS), [folderKey]);
 
   const selected = useMemo(() => rows.filter((row) => keys.has(row.key)), [keys, rows]);
   const allSelected = rows.length > 0 && selected.length === rows.length;
-  const clear = () => setKeys(EMPTY);
+  const clear = () => setKeys(NO_KEYS);
 
   return {
     rows: selected,

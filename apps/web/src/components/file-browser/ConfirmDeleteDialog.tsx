@@ -1,6 +1,6 @@
 import type { ListingRow } from '../../vault/listing';
 import { describeRows } from '../../vault/selection';
-import { Modal } from '../ui/Modal';
+import { ConfirmDangerDialog } from '../ui/ConfirmDangerDialog';
 
 interface ConfirmDeleteDialogProps {
   /** The rows the delete will retire, named as one or counted as many. */
@@ -20,31 +20,23 @@ export function ConfirmDeleteDialog({
   error,
 }: ConfirmDeleteDialogProps) {
   const what = describeRows(rows);
-  const recursive = rows.some((row) => row.kind === 'folder');
-  const message =
-    rows.length === 1
-      ? `delete "${what}"${recursive ? ' and everything inside it' : ''}?`
-      : `delete ${what}${recursive ? ' and everything inside' : ''}?`;
+  const inside = rows.some((row) => row.kind === 'folder')
+    ? rows.length === 1
+      ? ' and everything inside it'
+      : ' and everything inside'
+    : '';
 
   return (
-    <Modal onClose={onClose} title={`delete ${what}`} error={error} busy={busy}>
-      <div className="dialog-content" data-testid="delete-dialog">
-        <p className="dialog-message">{message}</p>
-        <div className="dialog-actions">
-          <button type="button" className="dialog-button" onClick={onClose} disabled={busy}>
-            cancel
-          </button>
-          <button
-            type="button"
-            className="dialog-button dialog-button--danger"
-            onClick={onConfirm}
-            disabled={busy}
-            data-testid="delete-confirm"
-          >
-            {busy ? 'deleting...' : 'delete'}
-          </button>
-        </div>
-      </div>
-    </Modal>
+    <ConfirmDangerDialog
+      title={`delete ${what}`}
+      message={rows.length === 1 ? `delete "${what}"${inside}?` : `delete ${what}${inside}?`}
+      verb="delete"
+      busyVerb="deleting..."
+      testId="delete"
+      onClose={onClose}
+      onConfirm={onConfirm}
+      busy={busy}
+      error={error}
+    />
   );
 }

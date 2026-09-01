@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import type { ListingRow } from '../../vault/listing';
 import { describeRows } from '../../vault/selection';
+import { FolderPickerBody } from '../ui/FolderPickerBody';
 import { Modal } from '../ui/Modal';
 
 interface MoveDialogProps {
@@ -26,44 +27,7 @@ export function MoveDialog({ rows, parent, onClose, onConfirm, busy, error }: Mo
   return (
     <Modal onClose={onClose} title={`move ${describeRows(rows)}`} error={error} busy={busy}>
       <div className="dialog-content" data-testid="move-dialog">
-        <p className="dialog-label">
-          {'destination: '}
-          <span className="move-dialog-destination" data-testid="move-dialog-destination">
-            {picker.destinationName === null ? '...' : picker.destinationName || '/'}
-          </span>
-        </p>
-        <div className="move-dialog-list" role="group" aria-label="destination folder">
-          {picker.canLeave && (
-            <button
-              type="button"
-              className="move-dialog-entry"
-              onClick={picker.leave}
-              data-testid="move-dialog-up"
-            >
-              [..]
-            </button>
-          )}
-          {picker.isLoading && <p className="move-dialog-empty">{'// loading...'}</p>}
-          {picker.error !== null && (
-            <p className="move-dialog-empty" role="alert">
-              {picker.error}
-            </p>
-          )}
-          {!picker.isLoading && picker.folders.length === 0 && picker.error === null && (
-            <p className="move-dialog-empty">{'// no subfolders'}</p>
-          )}
-          {picker.folders.map((folder) => (
-            <button
-              key={folder.key}
-              type="button"
-              className="move-dialog-entry"
-              onClick={() => picker.enter(folder.id)}
-              data-testid="move-dialog-folder"
-            >
-              <span aria-hidden="true">[DIR]</span> {folder.name}
-            </button>
-          ))}
-        </div>
+        <FolderPickerBody picker={picker} />
         <div className="dialog-actions">
           <button type="button" className="dialog-button" onClick={onClose} disabled={busy}>
             cancel

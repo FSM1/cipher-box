@@ -5,6 +5,15 @@ export { formatBytes } from '@cipherbox/client';
 /** Past this, `Intl` throws on the `Date` rather than formatting it. */
 export const MAX_DATE_MILLIS = 8_640_000_000_000_000n;
 
+/**
+ * Locale-aware date for a Unix-millisecond timestamp within `MAX_DATE_MILLIS`;
+ * outside it `Intl` throws and takes the whole render down.
+ */
+export function formatEpochMillis(millis: bigint, outOfRange: string): string {
+  if (millis < 0n || millis > MAX_DATE_MILLIS) return outOfRange;
+  return formatDate(Number(millis));
+}
+
 /** Locale-aware date for a Unix-millisecond timestamp. */
 export function formatDate(timestampMillis: number): string {
   return new Intl.DateTimeFormat(undefined, {

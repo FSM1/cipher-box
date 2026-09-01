@@ -1,13 +1,28 @@
-/* The /shared route, over the sharing list chrome `dialogs.css` already sets. */
+/* The /shared and /bin routes, over the sharing list chrome `dialogs.css` sets. */
 
-/* The verdict takes its own line, so a long one never squeezes the row. */
-.sharing-row--shared {
+/* A verdict or a row of actions takes its own line, rather than squeeze one. */
+.sharing-row--shared,
+.bin-row {
   flex-wrap: wrap;
 }
 
-.shared-name {
+.shared-name,
+.bin-name {
   color: var(--color-text-primary);
   overflow-wrap: anywhere;
+}
+
+.bin-warning {
+  margin: var(--spacing-sm) 0;
+  color: var(--color-warning);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.bin-icon {
+  color: var(--color-text-dim);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
 }
 
 .shared-standing {

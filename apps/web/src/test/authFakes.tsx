@@ -6,9 +6,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type {
   AuthMethodDescriptor,
+  BinDescriptor,
+  BinRowDescriptor,
+  CommandOutcomeDescriptor,
   EngineClient,
   ReceivedShareDescriptor,
   SiweIntent,
+  SnapshotDescriptor,
   VaultSettingsDescriptor,
   VaultStorageDescriptor,
 } from '@cipherbox/client';
@@ -56,6 +60,10 @@ export interface EngineCalls {
   vaultSettings: VaultSettingsDescriptor[];
   /** The method id each unlink named. */
   unlinked: string[];
+  /** Each restore, as the page dispatched it. */
+  restores: { node: Uint8Array; into: Uint8Array | null }[];
+  /** Each purge, by the node it named. */
+  purges: Uint8Array[];
 }
 
 /** A hosted vault whose ledger has drained, as the storage pane first reads it. */
@@ -74,6 +82,22 @@ export const FAKE_VAULT_STORAGE: VaultStorageDescriptor = {
   reclaimStalls: [],
 };
 
+/** A bin index the vault published and this device read, holding nothing. */
+export const FAKE_EMPTY_BIN: BinDescriptor = { entries: [], origin: 'resolved' };
+
+/** One soft-deleted node, as the bin index names it. 2026-01-01T00:00:00Z. */
+export function binEntry(overrides: Partial<BinRowDescriptor> = {}): BinRowDescriptor {
+  return {
+    node: new Uint8Array(16).fill(7),
+    kind: 'file',
+    originParent: new Uint8Array(16).fill(2),
+    originName: 'notes.txt',
+    deletedAt: 1_767_225_600_000n,
+    scope: new Uint8Array(16).fill(3),
+    ...overrides,
+  };
+}
+
 /**
  * The engine as a host reads it: a `start` the engine resolved *is* the session,
  * and tearing the client down ends it — so a test drives sign-in through the
@@ -89,6 +113,12 @@ export function fakeEngineClient(
     vaultStorage: () => Promise<VaultStorageDescriptor>;
     authMethods: () => Promise<AuthMethodDescriptor[]>;
     receivedShares: () => Promise<ReceivedShareDescriptor[]>;
+    /** The bin the `/bin` route reads back. */
+    bin: () => Promise<BinDescriptor>;
+    /** The listing the destination picker walks; it never lands by default. */
+    snapshot: () => Promise<SnapshotDescriptor>;
+    restore: () => Promise<CommandOutcomeDescriptor>;
+    purge: () => Promise<CommandOutcomeDescriptor>;
   }> = {}
 ) {
   const calls: EngineCalls = {
@@ -101,6 +131,8 @@ export function fakeEngineClient(
     originSessionEnds: 0,
     vaultSettings: [],
     unlinked: [],
+    restores: [],
+    purges: [],
   };
   const sessionListeners = new Set<() => void>();
   const sessionEndListeners = new Set<() => void>();
@@ -147,6 +179,15 @@ export function fakeEngineClient(
       vaultStorage: () => overrides.vaultStorage?.() ?? Promise.resolve(FAKE_VAULT_STORAGE),
       authMethods: () => overrides.authMethods?.() ?? Promise.resolve([]),
       receivedShares: () => overrides.receivedShares?.() ?? Promise.resolve([]),
+      bin: () => overrides.bin?.() ?? Promise.resolve(FAKE_EMPTY_BIN),
+      restore(node: Uint8Array, into: Uint8Array | null) {
+        calls.restores.push({ node, into });
+        return overrides.restore?.() ?? Promise.resolve({ kind: 'done' as const });
+      },
+      purge(node: Uint8Array) {
+        calls.purges.push(node);
+        return overrides.purge?.() ?? Promise.resolve({ kind: 'done' as const });
+      },
       async logout() {
         calls.logouts += 1;
         // The engine is zeroized either way: `EngineFacade.logout` tears the
@@ -163,7 +204,7 @@ export function fakeEngineClient(
         return overrides.saveVaultSettings?.() ?? Promise.resolve();
       },
       subscribe: () => () => undefined,
-      snapshot: () => new Promise(() => undefined),
+      snapshot: () => overrides.snapshot?.() ?? new Promise(() => undefined),
       setFocus: () => Promise.resolve(),
     },
     reportFocus: () => undefined,
