@@ -124,8 +124,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
-    focus_by_scope, focus_files, focus_folders, focus_folders_due, focus_window_expired,
-    on_access_refresh_due, resolve_mode, run_tick_loop, scope_root_of,
+    focus_by_scope, focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode,
+    run_tick_loop, scope_root_of,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -1854,7 +1854,7 @@ fn refuse_outside_vault(rendered: &Snapshot, node: NodeId) -> Result<(), EngineE
         && !rendered.ancestors(node).contains(&rendered.root)
     {
         return Err(EngineError::ScopeExitRefused {
-            message: "that folder is not in this session's scope".to_owned(),
+            message: "that item is not in this session's scope".to_owned(),
         });
     }
     Ok(())
@@ -4322,6 +4322,7 @@ where {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
                 let op = Op::relink(
@@ -4341,6 +4342,7 @@ where {
                 replacing,
             } => {
                 let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 refuse_scope_exit(&rendered, new_parent)?;
                 let replacing = replacing.map(|replaced| Replaced {
@@ -7682,6 +7684,46 @@ mod tests {
                 refuse_outside_vault(&rendered, node),
                 Err(EngineError::ScopeExitRefused { .. })
             ));
+        }
+    }
+
+    /// The relocation arms read their source off the render, so a destination
+    /// check alone still admits a move *out* of a grafted shared scope. Its op
+    /// names a chain that walks to no root this session publishes, so the drain
+    /// halts on it instead of the caller hearing a refusal.
+    #[test]
+    fn a_relocation_whose_source_is_outside_this_vault_is_refused() {
+        let (mut engine, _events) = started();
+        let root = engine.snapshot.borrow().root;
+        let shared_root = NodeId([0xf1; 16]);
+        let shared_child = NodeId([0xf2; 16]);
+        {
+            let mut base = engine.snapshot.borrow_mut();
+            base.upsert_node(NodeMeta::new(shared_root, "theirs", NodeKind::Folder));
+            base.upsert_node(NodeMeta::new(shared_child, "doc", NodeKind::File));
+            base.link_next(shared_root, shared_child);
+        }
+
+        for command in [
+            Command::Relink {
+                node: shared_child,
+                new_parent: root,
+            },
+            Command::Move {
+                node: shared_child,
+                new_parent: root,
+                new_name: "doc".to_owned(),
+                replacing: None,
+            },
+        ] {
+            let label = command.name();
+            assert!(
+                matches!(
+                    block_on(engine.command(command)),
+                    Err(EngineError::ScopeExitRefused { .. })
+                ),
+                "{label} out of a grafted scope must refuse where the caller hears it"
+            );
         }
     }
 

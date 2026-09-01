@@ -160,13 +160,23 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
 /// pass: a gate rejection, and the binds that hold a pointer to the contact that
 /// sent it. Every other arm is an unreachable or unwritable pass the next one
 /// retries, and the item stays un-acked either way.
+///
+/// The match is exhaustive on purpose: a new refusal arm must state its class
+/// here, because the silent default hides an attack signal (AGENTS.md rule 6).
 fn report(events: &mpsc::UnboundedSender<Event>, name: &str, error: &AcceptError) {
     let attributable = match error {
-        AcceptError::SharerMismatch | AcceptError::NameMismatch | AcceptError::UncommittedTag => {
-            true
-        }
+        AcceptError::SenderNotContact
+        | AcceptError::SharerMismatch
+        | AcceptError::NameMismatch
+        | AcceptError::OwnVaultScope
+        | AcceptError::UncommittedTag => true,
         AcceptError::Gate(e) => e.rejection().is_some(),
-        _ => false,
+        AcceptError::MalformedPointer(_)
+        | AcceptError::UnusableSharerKey
+        | AcceptError::NoBlobAtTag
+        | AcceptError::GrantBlobOpen(_)
+        | AcceptError::Persist(_)
+        | AcceptError::Ack(_) => false,
     };
     if attributable {
         emit_trust_violation(events, name, error);
@@ -270,6 +280,7 @@ mod tests {
         floors: InMemoryFloorStore,
         staging: InMemoryStagingStore,
         entropy: RefCell<SeededEntropy>,
+        vault_root_scope: [u8; 16],
     }
 
     impl Inbox {
@@ -306,7 +317,15 @@ mod tests {
                 floors: InMemoryFloorStore::default(),
                 staging: InMemoryStagingStore::default(),
                 entropy: RefCell::new(SeededEntropy::new(5)),
+                vault_root_scope: VAULT_ROOT_SCOPE,
             }
+        }
+
+        /// This vault anchored at `scope`, so a share that names `scope` names
+        /// the anchor itself.
+        fn anchored_at(mut self, scope: [u8; 16]) -> Self {
+            self.vault_root_scope = scope;
+            self
         }
 
         /// Import `peer` into this vault's contact book, as an out-of-band code
@@ -334,13 +353,16 @@ mod tests {
             .expect("the sealed item posts");
         }
 
-        /// The pointer the sharer's grant would have delivered.
+        /// The pointer the sharer's grant would have delivered. It advertises
+        /// `Write` while [`published`] commits `Read`, so an accept that trusted
+        /// the pointer over the owner-signed commitment would be visible in the
+        /// bookmark.
         fn pointer(&self) -> Vec<u8> {
             SharePointer {
                 scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
                 sharer_identity_pk: sharer().verifying_key().to_sec1(),
                 display_name: "shared-folder".to_owned(),
-                permission: Permission::Read,
+                permission: Permission::Write,
             }
             .encode()
         }
@@ -361,7 +383,7 @@ mod tests {
                     http: &self.http,
                     floors: &self.floors,
                     enc_secret: &my_enc(),
-                    vault_root_scope: VAULT_ROOT_SCOPE,
+                    vault_root_scope: self.vault_root_scope,
                 }
                 .pull(&self.staging, &self.entropy, V, &sender),
             );
@@ -379,6 +401,15 @@ mod tests {
                 .expect("the list loads")
                 .iter()
                 .map(|share| share.scope_id)
+                .collect()
+        }
+
+        /// The permissions this vault durably bookmarked, in bookmark order.
+        fn permissions(&self) -> Vec<Permission> {
+            block_on(StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy).load())
+                .expect("the list loads")
+                .iter()
+                .map(|share| share.permission)
                 .collect()
         }
 
@@ -401,8 +432,33 @@ mod tests {
         let events = fx.pull();
 
         assert_eq!(fx.bookmarked(), vec![SCOPE]);
+        assert_eq!(
+            fx.permissions(),
+            vec![Permission::Read],
+            "the owner-signed commitment is authority, not the pointer's claim"
+        );
         assert_eq!(fx.inbox_len(), 0, "and acks only what it made durable");
         assert!(events.is_empty(), "an honest share is no abuse report");
+    }
+
+    /// `scopeId` is authored by the sharer, so a contact can mint a scope root
+    /// at the id every vault anchors its own root on. Adopting it would key this
+    /// vault's durable floors on a foreign epoch and replace the seed its own
+    /// writes seal under, so the pull refuses it and names the sender.
+    #[test]
+    fn a_pointer_naming_this_vaults_own_root_scope_is_reported_and_left_unacked() {
+        let fx = Inbox::new().anchored_at(SCOPE);
+        fx.import(&sharer(), &sharer_enc());
+        fx.post(&sharer(), &fx.pointer(), "share-1");
+
+        let events = fx.pull();
+
+        assert!(fx.bookmarked().is_empty(), "the anchor was never adopted");
+        assert_eq!(fx.inbox_len(), 1, "and nothing was acked away");
+        assert!(
+            matches!(events.as_slice(), [Event::AttributableAbuse { .. }]),
+            "naming the anchor is abuse, never staleness: {events:?}"
+        );
     }
 
     /// The contact book is the accept's only trust anchor. An item with no

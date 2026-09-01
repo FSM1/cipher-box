@@ -68,7 +68,7 @@ export function SharedPage() {
           <ul className="sharing-list" data-testid="shared-list">
             {rows.map((row) => (
               <li
-                key={row.scope}
+                key={`${row.sharer}:${row.scope}`}
                 className="sharing-row sharing-row--shared"
                 data-testid="shared-row"
                 data-scope={row.scope}
