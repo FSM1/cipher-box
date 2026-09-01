@@ -16,6 +16,7 @@ use cipherbox_engine::api::IdentityChallengeSigner;
 use cipherbox_engine::seams::{
     CredentialStore, Http, HttpMethod, HttpRequest, HttpResponse, SeamError, SeamResult,
 };
+use zeroize::Zeroizing;
 
 /// The desktop-shaped `Http` seam: a real reqwest client. Featureless reqwest
 /// (no TLS backend) is enough — the CI stack is reached over plain http.
@@ -114,10 +115,13 @@ impl CredentialStore for MemoryCredentialStore {
 /// A fresh random secp256k1 identity scalar (crypto lives in core; this loops
 /// over the OS RNG until it draws a valid one). Held by the caller where a test
 /// needs the identity key itself and not only a login.
-pub fn random_identity_scalar() -> [u8; 32] {
+///
+/// The caller is the terminal owner of these bytes, so the draw lands in a
+/// `Zeroizing` buffer that clears when that binding ends.
+pub fn random_identity_scalar() -> Zeroizing<[u8; 32]> {
     loop {
-        let mut scalar = [0u8; 32];
-        getrandom::getrandom(&mut scalar).expect("os rng");
+        let mut scalar = Zeroizing::new([0u8; 32]);
+        getrandom::getrandom(scalar.as_mut()).expect("os rng");
         if IdentityChallengeSigner::from_scalar(&scalar).is_some() {
             return scalar;
         }

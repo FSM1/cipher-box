@@ -24,6 +24,9 @@ getrandom = "0.2"
 # Lowercase hex, the API's wire form for public keys — the same crate core and
 # the engine already use.
 hex = "0.4"
+# The identity scalar this suite draws is terminal here: `Zeroizing` clears it
+# when the test that holds it ends.
+zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
