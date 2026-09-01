@@ -3,8 +3,8 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { VaultStatus } from './control';
 import type { Instance } from './instance';
 import { poll } from './poll';
@@ -104,6 +104,87 @@ export async function rendersItems(
       intervalMs: context.deadlines.intervalMs,
     }
   );
+}
+
+/**
+ * Waits until `name` at the mount root reads back `expected` on the instance
+ * that wrote it.
+ */
+export function readsBack(
+  context: ScenarioContext,
+  instance: Instance,
+  name: string,
+  expected: string,
+  what: string
+): Promise<void> {
+  return serves(context, instance, name, expected, what, {
+    refresh: false,
+    timeoutMs: context.deadlines.readMs,
+  });
+}
+
+/**
+ * Waits until `instance` serves what another client published, past every cache
+ * it holds.
+ *
+ * The nocache manual refresh is the deterministic barrier between two clients
+ * of one vault: without it this waits on a record lifetime rather than on the
+ * publish it means to prove.
+ */
+export function converges(
+  context: ScenarioContext,
+  instance: Instance,
+  name: string,
+  expected: string,
+  what: string
+): Promise<void> {
+  return serves(context, instance, name, expected, what, {
+    refresh: true,
+    timeoutMs: context.deadlines.convergeMs,
+  });
+}
+
+/**
+ * The one read wait. The listing, the refusal and the vault all ride the poll's
+ * last value, so a timeout names whether the name converged, whether the mount
+ * refused the read or served the wrong bytes, and what the vault reported while
+ * it did.
+ */
+async function serves(
+  context: ScenarioContext,
+  instance: Instance,
+  name: string,
+  expected: string,
+  what: string,
+  how: { refresh: boolean; timeoutMs: number }
+): Promise<void> {
+  await poll(
+    async () => {
+      if (how.refresh) await instance.refresh();
+      return {
+        listed: await readdir(instance.mountRoot).catch((error: NodeJS.ErrnoException) => [
+          error.code,
+        ]),
+        read: await readOrErrno(join(instance.mountRoot, name)),
+        vault: await instance.status(),
+      };
+    },
+    (seen) => seen.read === expected,
+    {
+      what: `${instance.name}: ${what}`,
+      timeoutMs: how.timeoutMs,
+      intervalMs: context.deadlines.readIntervalMs,
+    }
+  );
+}
+
+/** The file's text, or the errno the mount refused the read with. */
+async function readOrErrno(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code ?? String(error);
+  }
 }
 
 /**

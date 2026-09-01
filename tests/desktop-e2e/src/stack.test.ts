@@ -13,6 +13,9 @@ const BUDGET: Deadlines = {
   controlFileMs: 1_500,
   mountMs: 1_500,
   refreshMs: 1_500,
+  readIntervalMs: 100,
+  readMs: 1_500,
+  convergeMs: 3_000,
   shutdownMs: 5_000,
   scenarioMs: 10_000,
 };

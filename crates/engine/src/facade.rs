@@ -8496,15 +8496,36 @@ where {
         if stale {
             self.focus_hinted.set(Some((node, now)));
             if is_file {
-                let mut focus = self.focus.borrow_mut();
-                focus.open_files.retain(|held| *held != node);
-                focus.open_files.push(node);
-                if focus.open_files.len() > MAX_FOCUS_FILES {
-                    focus.open_files.remove(0);
-                }
+                self.note_focus_file(node);
             }
         }
         stale
+    }
+
+    /// Put `node` on the on-access file queue, newest last and bounded by
+    /// [`MAX_FOCUS_FILES`]. The focus window and the refresh hint do not move.
+    ///
+    /// Damped by the same staleness threshold every other on-access refresh
+    /// runs against. A file that has published no version projects no size
+    /// however often a pass resolves it, so an undamped caller keyed on the
+    /// absent size would spend a resolve on that node every tick, forever.
+    pub fn note_focus_file(&self, node: NodeId) {
+        let now = self.seams.scheduler.now();
+        let resolved = self.focus_refreshed.borrow().get(&node).copied();
+        if resolved.is_some_and(|last| !on_access_refresh_due(now, last, &self.profile)) {
+            return;
+        }
+        let mut focus = self.focus.borrow_mut();
+        focus.open_files.retain(|held| *held != node);
+        focus.open_files.push(node);
+        if focus.open_files.len() > MAX_FOCUS_FILES {
+            focus.open_files.remove(0);
+        }
+    }
+
+    /// The files the tick's file leg will resolve next, oldest first.
+    pub fn queued_focus_files(&self) -> Vec<NodeId> {
+        self.focus.borrow().open_files.clone()
     }
 
     /// The folder the focus window currently holds open.

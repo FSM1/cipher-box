@@ -10,6 +10,7 @@ import { strict as assert } from 'node:assert';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  readsBack,
   refuses,
   rendersItems,
   withInstances,
@@ -21,6 +22,7 @@ import {
 const JUNK = '.DS_Store';
 
 const ROOT_FILE = 'at-the-root.txt';
+const ROOT_TEXT = 'at the root';
 const FOLDER = 'folder';
 const NESTED_FILE = 'nested.txt';
 
@@ -31,8 +33,9 @@ export const writeRoundTrip: Scenario = {
       await mkdir(join(a.mountRoot, FOLDER));
       await rendersItems(context, a, 1, 'a folder made at the mount root to render a child');
 
-      await writeFile(join(a.mountRoot, ROOT_FILE), 'at the root');
+      await writeFile(join(a.mountRoot, ROOT_FILE), ROOT_TEXT);
       await rendersItems(context, a, 2, 'a file made at the mount root to render a child');
+      await readsBack(context, a, ROOT_FILE, ROOT_TEXT, 'the mount to read back what was written');
 
       await writeFile(join(a.mountRoot, FOLDER, NESTED_FILE), 'inside a folder');
       // The root still holds two children: the nested file is the folder's.

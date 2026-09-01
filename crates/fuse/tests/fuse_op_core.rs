@@ -3144,4 +3144,69 @@ mod published {
             "a mount that cannot push is still the one told what moved"
         );
     }
+
+    /// A host that decides a read from the attributes a lookup carries never
+    /// opens a file the reply reports as empty. A child ref mirrors no size, so
+    /// the lookup has to put an unprojected file on the engine's on-access file
+    /// leg — and only that file, because queueing every named one would put a
+    /// whole listing on the record plane.
+    #[test]
+    fn a_lookup_queues_only_the_file_whose_length_is_still_to_arrive() {
+        let mut mount = mount_published(&clip_bytes(), CacheBudget::CI);
+        block_on(mount.core.lookup(ROOT_INO, CLIP)).expect("the published file is named");
+        assert!(
+            mount.core.engine_mut().queued_focus_files().is_empty(),
+            "a file whose length is already projected asks for no resolve"
+        );
+
+        let unread = seed_child(mount.core.engine_mut(), ROOT, "unread.bin", NodeKind::File);
+        let named = block_on(mount.core.lookup(ROOT_INO, "unread.bin")).expect("the file is named");
+
+        assert_eq!(named.size, None, "a child ref carries no size to project");
+        assert_eq!(
+            mount.core.engine_mut().queued_focus_files(),
+            vec![unread],
+            "the lookup queued the child's own record, which is the only thing \
+             that projects a length"
+        );
+        assert_eq!(
+            mount.core.engine_mut().focus_folder(),
+            Some(ROOT),
+            "the window stays on the folder the lookup searched"
+        );
+    }
+
+    /// The kernel is acked at journal time (blueprint/desktop.md "release"), so
+    /// a member who writes a file and opens it must get their bytes. The mount
+    /// never takes the whole-file write path: it journals a `Create` and then an
+    /// `updateContent` against the node that create made.
+    #[test]
+    fn a_file_made_through_the_mount_reads_back_before_and_after_its_publish() {
+        let mut mount = mount_published(&clip_bytes(), CacheBudget::CI);
+        let bytes = b"at the root";
+        let (made, writer) = block_on(mount.core.create(
+            ROOT_INO,
+            "at-the-root.txt",
+            Access::ReadWrite,
+        ))
+        .expect("the create lands");
+        assert_eq!(
+            block_on(mount.core.write(writer, 0, bytes)).expect("the write lands"),
+            bytes.len() as u32
+        );
+        block_on(mount.core.release(writer)).expect("the release commits");
+
+        for what in ["the queue holds the version", "the drain published it"] {
+            let reader =
+                block_on(mount.core.open(made.ino, Access::Read)).expect("the file opens for read");
+            assert_eq!(
+                block_on(mount.core.read(reader, 0, 4096)).expect("the read serves"),
+                bytes,
+                "the mount reads back what it wrote while {what}"
+            );
+            block_on(mount.core.release(reader)).expect("the reader closes");
+            // Publishes what the release journaled, for the second pass.
+            advance_and_pump(&mut mount);
+        }
+    }
 }

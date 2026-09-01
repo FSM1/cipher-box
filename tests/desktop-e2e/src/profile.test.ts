@@ -7,6 +7,9 @@ const NAMES = [
   'controlFileMs',
   'mountMs',
   'refreshMs',
+  'readIntervalMs',
+  'readMs',
+  'convergeMs',
   'shutdownMs',
   'scenarioMs',
 ] as const satisfies readonly (keyof Deadlines)[];
@@ -42,6 +45,13 @@ describe('deadlines', () => {
   it('reads a signal more often than the engine ticks, so no read misses a state', () => {
     for (const profile of [CI_PROFILE, PRODUCTION_PROFILE]) {
       expect(deadlines(profile).intervalMs).toBeLessThan(profile.pollCadenceMs);
+    }
+  });
+
+  it('reads a file less often than it reads a control signal', () => {
+    for (const profile of [CI_PROFILE, PRODUCTION_PROFILE]) {
+      const budget = deadlines(profile);
+      expect(budget.readIntervalMs).toBeGreaterThan(budget.intervalMs);
     }
   });
 
