@@ -4,7 +4,6 @@ import { FolderPickerBody } from '../ui/FolderPickerBody';
 import { Modal } from '../ui/Modal';
 
 interface RestoreIntoDialogProps {
-  /** The bin entry the restore puts back. */
   name: string;
   onClose: () => void;
   onConfirm: (into: Uint8Array) => void;

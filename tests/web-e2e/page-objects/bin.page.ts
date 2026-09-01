@@ -3,9 +3,6 @@ import { expect, type Locator, type Page } from '@playwright/test';
 /**
  * The `/bin` route: what this vault soft-deleted, and the restore or purge each
  * row offers.
- *
- * A `bin-row` carries the node id on `data-node`. `bin-unestablished` and `bin-empty` are distinct states: the first means no
- * bin index was read, the second means one was read and holds nothing.
  */
 export class BinPage {
   constructor(readonly page: Page) {}
