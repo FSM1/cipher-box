@@ -2089,6 +2089,62 @@ fn a_peer_overfilled_folder_refuses_a_further_child_and_stages_nothing() {
     .expect("a folder with room still takes a child");
 }
 
+/// A `NewFile` handle takes no place in its folder until it commits, so two
+/// handles opened together both see the same free one. The commit re-check is
+/// what stops the second from overfilling the folder.
+#[test]
+fn the_second_handle_over_the_last_free_place_is_refused_at_its_commit() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let planted: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN - 1)
+        .map(|i| {
+            let mut id = [0u8; 16];
+            id[..8].copy_from_slice(&(i as u64 + 1).to_be_bytes());
+            file_ref(id, &format!("planted-{i}.bin"))
+        })
+        .collect();
+    concurrent_root_extend(&world.record_store, &blocks, planted);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        block_on(engine.view()).unwrap().children(ROOT).len(),
+        MAX_FOLDER_CHILDREN - 1,
+        "exactly one place is free"
+    );
+
+    let first = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "first.bin".into(),
+        },
+        8,
+    ))
+    .expect("the free place admits the first handle");
+    let second = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "second.bin".into(),
+        },
+        8,
+    ))
+    .expect("the second handle sees the same free place");
+
+    for handle in [first, second] {
+        block_on(engine.push_chunk(handle, &[0x7a; 8])).expect("the bytes stage");
+    }
+    block_on(engine.commit_write(first)).expect("the first commit takes the place");
+    assert_eq!(
+        block_on(engine.commit_write(second)),
+        Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        }),
+        "the re-check refuses the second rather than overfilling the folder"
+    );
+}
+
 /// Cache a scope root whose carried grant section is committed to a different
 /// `ipnsName` — the account's own root bytes, re-sectioned and re-signed, so
 /// only the commitment's name is wrong. The drain reads its anchor from the

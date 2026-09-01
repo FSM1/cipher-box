@@ -768,7 +768,7 @@ pub fn open_owner_history_link(
 /// One committed grant: a recipient's blinded tag, their permission, and the
 /// writer pseudonym public key any envelope holder verifies committed-write
 /// authorship against.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct GrantSetEntry {
     /// The recipient's blinded tag.
     pub tag: [u8; SECRET_LEN],
@@ -778,6 +778,20 @@ pub struct GrantSetEntry {
     pub pseudonym_pk: [u8; 32],
     /// Preserved unknown fields (never any of the known keys).
     pub unknown: PreservedFields,
+}
+
+/// Both `tag` and `pseudonym_pk` derive from the owner–recipient pairwise
+/// ECDH, so each names one grantee. A rendered set links every grantee of a
+/// scope, which is what blinding the tag exists to deny.
+impl fmt::Debug for GrantSetEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantSetEntry")
+            .field("tag", &RedactedBytes::of(&self.tag))
+            .field("permission", &self.permission)
+            .field("pseudonym_pk", &RedactedBytes::of(&self.pseudonym_pk))
+            .field("unknown", &self.unknown)
+            .finish()
+    }
 }
 
 const GRANT_SET_ENTRY_KNOWN: &[&str] = &["permission", "pseudonymPk", "tag"];
@@ -1525,6 +1539,30 @@ mod tests {
                 .collect(),
             unknown: PreservedFields::new(),
         }
+    }
+
+    /// The commitment names every grantee of a scope. A rendered set links them
+    /// to each other and to the scope, which is what blinding a tag denies.
+    #[test]
+    fn grant_set_commitment_debug_withholds_the_per_grantee_identifiers() {
+        let c = commitment_of(2);
+        let rendered = format!("{c:?}");
+
+        for entry in &c.entries {
+            assert!(
+                !rendered.contains(&format!("{:?}", entry.tag)),
+                "a grantee's tag never renders: {rendered}"
+            );
+            assert!(
+                !rendered.contains(&format!("{:?}", entry.pseudonym_pk)),
+                "nor its writer pseudonym: {rendered}"
+            );
+        }
+        assert!(
+            rendered.contains("Read"),
+            "the permission still renders: {rendered}"
+        );
+        assert!(rendered.contains("GrantSetEntry"), "the shape survives");
     }
 
     #[test]

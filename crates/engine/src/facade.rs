@@ -2088,6 +2088,44 @@ fn refuse_full_parent(
     })
 }
 
+/// A rename leaves the child count alone and moves the listing's bytes, so the
+/// count arm of [`refuse_full_parent`] never fires for one. Refused here, where
+/// the caller learns it, rather than at the drain's oversized re-seal.
+///
+/// Only a name that grows is held to the budget, so a peer-overfilled folder
+/// still lets a shorter name out of it.
+fn refuse_over_budget_rename(
+    rendered: &Snapshot,
+    node: NodeId,
+    new_name: &str,
+) -> Result<(), EngineError> {
+    let Some(parent) = rendered.parent_of(node) else {
+        return Ok(());
+    };
+    let (before, after) =
+        rendered
+            .children(parent)
+            .iter()
+            .fold((0usize, 0usize), |(before, after), child| {
+                let ipns = child.ipns_name.as_deref();
+                let renamed = if child.id == node {
+                    new_name
+                } else {
+                    child.name()
+                };
+                (
+                    before.saturating_add(child_ref_bytes(child.name(), ipns)),
+                    after.saturating_add(child_ref_bytes(renamed, ipns)),
+                )
+            });
+    if after > before && after > MAX_READ_SEALED_BYTES {
+        return Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        });
+    }
+    Ok(())
+}
+
 /// What one child costs the folder body it sits in. The two attacker-sized
 /// fields are charged as they stand; the rest is [`CHILD_REF_FIXED_BYTES`].
 ///
@@ -4609,7 +4647,10 @@ where {
             }
             Command::Rename { node, new_name } => {
                 refuse_over_bound_name(&new_name)?;
-                let seq = self.base_sequence_for(node).await?;
+                let rendered = self.render().await?;
+                refuse_outside_vault(&rendered, node)?;
+                refuse_over_budget_rename(&rendered, node, &new_name)?;
+                let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::rename(node, new_name, seq, authored_at))
                     .await
             }
@@ -9469,6 +9510,59 @@ mod tests {
             Err(EngineError::MalformedInput {
                 check: "folder-child-ceiling",
             })
+        );
+    }
+
+    /// A rename adds no child, so only the byte charge can refuse one. The
+    /// drain would otherwise halt on the oversized re-seal and dead-letter the
+    /// op after its retry budget, long after the caller could act.
+    #[test]
+    fn a_rename_that_grows_a_listing_past_the_seal_budget_is_refused() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let target = NodeId(1u128.to_be_bytes());
+        let ballast = NodeId(2u128.to_be_bytes());
+        // A peer sizes its own child, so the listing sits exactly at the budget
+        // and one more byte of name is over it.
+        let ballast_name = "n".repeat(MAX_READ_SEALED_BYTES - 2 * CHILD_REF_FIXED_BYTES - 1);
+        rendered.upsert_node(NodeMeta::new(target, "n", NodeKind::File));
+        rendered.link(root, target, 1);
+        rendered.upsert_node(NodeMeta::new(ballast, ballast_name, NodeKind::File));
+        rendered.link(root, ballast, 1);
+
+        assert_eq!(
+            refuse_over_budget_rename(&rendered, target, "n"),
+            Ok(()),
+            "a listing that seals stays renamable"
+        );
+        assert_eq!(
+            refuse_over_budget_rename(&rendered, target, "nn"),
+            Err(EngineError::MalformedInput {
+                check: "folder-child-ceiling",
+            }),
+            "the one byte that pushes it over is refused at the boundary"
+        );
+    }
+
+    /// A peer overfills a folder this vault must still let a member out of, so
+    /// the budget holds a growing name only.
+    #[test]
+    fn a_rename_that_shrinks_a_listing_is_never_refused() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let name = "n".repeat(MAX_NODE_NAME_BYTES);
+        let children = MAX_READ_SEALED_BYTES / (CHILD_REF_FIXED_BYTES + name.len()) + 1;
+        for i in 0..children {
+            let child = NodeId((i as u128 + 1).to_be_bytes());
+            rendered.upsert_node(NodeMeta::new(child, name.clone(), NodeKind::File));
+            rendered.link(root, child, 1);
+        }
+        let target = NodeId(1u128.to_be_bytes());
+
+        assert_eq!(
+            refuse_over_budget_rename(&rendered, target, "n"),
+            Ok(()),
+            "a shorter name is the way out of an overfilled folder"
         );
     }
 

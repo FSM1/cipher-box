@@ -363,7 +363,10 @@ impl fmt::Debug for InviteFragment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InviteFragment")
             .field("invite_secret", &self.invite_secret)
-            .field("owner_contact_code", &self.owner_contact_code)
+            .field(
+                "owner_contact_code",
+                &RedactedBytes::of(&self.owner_contact_code),
+            )
             .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
             .finish()
     }
@@ -488,9 +491,9 @@ pub struct InviteClaim {
 impl fmt::Debug for InviteClaim {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InviteClaim")
-            .field("claim_id", &self.claim_id)
+            .field("claim_id", &RedactedBytes::of(&self.claim_id))
             .field("scope_root_name", &RedactedBytes::of(&self.scope_root_name))
-            .field("contact_code", &self.contact_code)
+            .field("contact_code", &RedactedBytes::of(&self.contact_code))
             .finish()
     }
 }
@@ -2540,6 +2543,60 @@ mod tests {
             "the fragment needs no percent-encoding",
         );
         assert_eq!(InviteFragment::decode(&text).expect("decodes"), fragment);
+    }
+
+    /// A contact code carries a party's identity key, which
+    /// [`SharingContact`](crate::SharingContact) withholds as a stable
+    /// cross-service identifier.
+    #[test]
+    fn a_fragment_debug_withholds_the_owner_contact_code() {
+        let fragment = InviteFragment {
+            invite_secret: SecretBytes::new([0x4e; SECRET_LEN]),
+            owner_contact_code: b"owner-bundle".to_vec(),
+            scope_root_name: b"k51scoperoot".to_vec(),
+        };
+        let rendered = format!("{fragment:?}");
+
+        assert!(
+            !rendered.contains("owner-bundle"),
+            "the owner contact code never renders: {rendered}"
+        );
+        assert!(
+            !rendered.contains("k51scoperoot"),
+            "nor the scope root name: {rendered}"
+        );
+        assert!(
+            !rendered.contains("4e4e"),
+            "nor the invite secret: {rendered}"
+        );
+        assert!(rendered.contains("InviteFragment"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
+    }
+
+    /// The claim id is inside the signed payload, so no other party learns it,
+    /// and the contact code carries the claimant's identity key.
+    #[test]
+    fn a_claim_debug_withholds_its_id_and_the_contact_code() {
+        let mut entropy = SeededEntropy::new(3);
+        let claim = InviteClaim::mint(&mut entropy, b"k51scoperoot".to_vec(), b"bundle".to_vec())
+            .expect("mints");
+        let rendered = format!("{claim:?}");
+
+        let id = format!("{:?}", claim.claim_id);
+        assert!(
+            !rendered.contains(&id),
+            "the claim id never renders: {rendered}"
+        );
+        assert!(
+            !rendered.contains("bundle"),
+            "nor the contact code: {rendered}"
+        );
+        assert!(
+            !rendered.contains("k51scoperoot"),
+            "nor the scope root name: {rendered}"
+        );
+        assert!(rendered.contains("InviteClaim"), "the shape survives");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 
     /// Every way a fragment can fail to be one is the same fail-closed refusal:
