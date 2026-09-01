@@ -8,8 +8,8 @@
  * addresses a node by id.
  */
 
-/** Longest name a listing or a dialog shows, in code points. */
-const MAX_NAME_POINTS = 96;
+/** Code points kept off a name. A clamped name shows one more: the ellipsis. */
+const LONGEST_KEPT_POINTS = 96;
 
 const ELLIPSIS = '\u2026';
 
@@ -26,8 +26,8 @@ export function displayName(name: string): string {
   const stripped = name.replace(NEUTRALISED, '');
   // A UTF-16 length never reads under the code-point count, so a name the
   // clamp cannot reach settles here rather than through a split.
-  if (stripped.length <= MAX_NAME_POINTS) return stripped;
+  if (stripped.length <= LONGEST_KEPT_POINTS) return stripped;
   const points = Array.from(stripped);
-  if (points.length <= MAX_NAME_POINTS) return stripped;
-  return points.slice(0, MAX_NAME_POINTS).join('') + ELLIPSIS;
+  if (points.length <= LONGEST_KEPT_POINTS) return stripped;
+  return points.slice(0, LONGEST_KEPT_POINTS).join('') + ELLIPSIS;
 }
