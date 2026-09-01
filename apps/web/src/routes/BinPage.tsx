@@ -219,57 +219,66 @@ function BinBody({
 
   return (
     <ul className="sharing-list" data-testid="bin-list">
-      {rows.map((row) => (
-        <li key={row.key} className="sharing-row bin-row" data-testid="bin-row" data-node={row.key}>
-          <span className="bin-icon" aria-hidden="true">
-            {row.icon}
-          </span>
-          <span className="bin-name" data-testid="bin-name">
-            {row.name}
-          </span>
-          <span className="details-badge" data-testid="bin-origin">
-            {`from ${row.origin}`}
-          </span>
-          <span className="details-badge" data-testid="bin-deleted">
-            {`deleted ${row.deleted}`}
-          </span>
-          <span className="details-badge" data-testid="bin-expires">
-            {row.expires === null ? 'no expiry' : `expires ${row.expires}`}
-          </span>
-          <button
-            type="button"
-            className="terminal-btn"
-            onClick={() => onRestore(row)}
-            disabled={busy}
-            data-testid="bin-restore"
-            aria-label={`restore ${row.name} from ${row.origin}`}
+      {rows.map((row) => {
+        /** Names one row of two that share a name, for a reader who cannot see. */
+        const what = `${row.name} from ${row.origin}`;
+        return (
+          <li
+            key={row.key}
+            className="sharing-row bin-row"
+            data-testid="bin-row"
+            data-node={row.key}
           >
-            restore
-          </button>
-          {elsewhere === row.key && (
+            <span className="bin-icon" aria-hidden="true">
+              {row.icon}
+            </span>
+            <span className="bin-name" data-testid="bin-name">
+              {row.name}
+            </span>
+            <span className="details-badge" data-testid="bin-origin">
+              {`from ${row.origin}`}
+            </span>
+            <span className="details-badge" data-testid="bin-deleted">
+              {`deleted ${row.deleted}`}
+            </span>
+            <span className="details-badge" data-testid="bin-expires">
+              {row.expires === null ? 'no expiry' : `expires ${row.expires}`}
+            </span>
             <button
               type="button"
               className="terminal-btn"
-              onClick={() => onRestoreElsewhere(row)}
+              onClick={() => onRestore(row)}
               disabled={busy}
-              data-testid="bin-restore-elsewhere"
-              aria-label={`restore ${row.name} from ${row.origin} into another folder`}
+              data-testid="bin-restore"
+              aria-label={`restore ${what}`}
             >
-              pick a folder
+              restore
             </button>
-          )}
-          <button
-            type="button"
-            className="terminal-btn"
-            onClick={() => onPurge(row)}
-            disabled={busy}
-            data-testid="bin-purge"
-            aria-label={`purge ${row.name} from ${row.origin}`}
-          >
-            purge
-          </button>
-        </li>
-      ))}
+            {elsewhere === row.key && (
+              <button
+                type="button"
+                className="terminal-btn"
+                onClick={() => onRestoreElsewhere(row)}
+                disabled={busy}
+                data-testid="bin-restore-elsewhere"
+                aria-label={`restore ${what} into another folder`}
+              >
+                pick a folder
+              </button>
+            )}
+            <button
+              type="button"
+              className="terminal-btn"
+              onClick={() => onPurge(row)}
+              disabled={busy}
+              data-testid="bin-purge"
+              aria-label={`purge ${what}`}
+            >
+              purge
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }

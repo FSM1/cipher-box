@@ -81,6 +81,10 @@ export function fakeEngine() {
         return refuseRefresh === null ? Promise.resolve() : Promise.reject(refuseRefresh);
       },
     },
+    // No session: this fake drives the browse plane, and a surface that reads
+    // the account off it must see a tab that holds none.
+    subscribeSession: () => () => undefined,
+    signedInAccount: () => null,
     reportFocus(node: Uint8Array | null) {
       reported.push(node);
     },

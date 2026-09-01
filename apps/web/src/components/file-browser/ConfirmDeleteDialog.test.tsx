@@ -55,7 +55,6 @@ async function prompt(vaultStorage: () => Promise<VaultStorageDescriptor>): Prom
 
 describe('the delete confirmation', () => {
   it('says the delete cannot be undone where the vault deletes outright', async () => {
-    // Retention 0 makes the delete a hard delete, with no bin entry behind it.
     expect(await prompt(() => Promise.resolve(storageWith(0)))).toContain('cannot be undone');
   });
 

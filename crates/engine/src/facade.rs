@@ -7620,8 +7620,8 @@ where {
                 });
             }
         };
-        // The same rendered view a default restore is checked against, so a row
-        // reads as gone exactly where that restore would refuse.
+        // The same rendered view a default restore resolves its destination
+        // against, so the two never disagree on what the vault still holds.
         let rendered = self.render().await?;
         Ok(BinView {
             entries: index

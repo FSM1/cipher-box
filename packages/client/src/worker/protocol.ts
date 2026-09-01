@@ -221,7 +221,6 @@ export interface ReceivedShareDescriptor {
   resolution: ReceivedShareResolution | null;
 }
 
-/** One soft-deleted node, as data (mirrors the facade `BinRow`). */
 /**
  * Where a bin row's origin folder stands in the vault (mirrors the facade
  * `BinOrigin`). `'gone'` is the state a default restore refuses on, so a host
@@ -232,6 +231,7 @@ export type BinOriginDescriptor =
   | { kind: 'folder'; name: string }
   | { kind: 'gone' };
 
+/** One soft-deleted node, as data (mirrors the facade `BinRow`). */
 export interface BinRowDescriptor {
   node: Uint8Array;
   kind: NodeKind;

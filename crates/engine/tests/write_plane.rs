@@ -4347,22 +4347,19 @@ fn the_bin_read_names_the_origin_folder_of_two_entries_that_share_a_name() {
     }
 
     let view = block_on(engine.bin()).expect("the bin reads");
-    let mut origins: Vec<BinOrigin> = view
+    let mut origins: Vec<String> = view
         .entries
         .iter()
         .inspect(|row| assert_eq!(row.origin_name, "notes.txt"))
-        .map(|row| row.origin_folder.clone())
+        .map(|row| match &row.origin_folder {
+            BinOrigin::Folder(name) => name.clone(),
+            other => panic!("a folder the vault holds must read as itself, not {other:?}"),
+        })
         .collect();
-    origins.sort_by_key(|origin| match origin {
-        BinOrigin::Folder(name) => name.clone(),
-        _ => String::new(),
-    });
+    origins.sort();
     assert_eq!(
         origins,
-        vec![
-            BinOrigin::Folder("left".to_owned()),
-            BinOrigin::Folder("right".to_owned())
-        ],
+        vec!["left".to_owned(), "right".to_owned()],
         "one name in two folders reads as two rows a member can tell apart"
     );
     assert!(

@@ -15,13 +15,8 @@ const MILLIS_PER_DAY = 86_400_000n;
 /** A date `Intl` cannot format. */
 const OUT_OF_RANGE = '-';
 
-/** The vault root, as the breadcrumbs also name it. */
 const ROOT_FOLDER = 'root';
-
-/** The origin folder the vault no longer holds, which a restore refuses on. */
 const GONE_FOLDER = 'a folder that is gone';
-
-/** A folder whose whole name neutralises away, so no word of it is readable. */
 const UNNAMED_FOLDER = 'a folder with no readable name';
 
 export interface BinRow {

@@ -1,6 +1,6 @@
 import { useVaultStorage } from '../../providers/VaultStorageProvider';
 import type { ListingRow } from '../../vault/listing';
-import { describeRows } from '../../vault/selection';
+import { describeRows, plural } from '../../vault/selection';
 import { ConfirmDangerDialog } from '../ui/ConfirmDangerDialog';
 
 interface ConfirmDeleteDialogProps {
@@ -51,8 +51,7 @@ export function ConfirmDeleteDialog({
  * the dialog must not wait on the read, and must not promise a bin either.
  */
 function deleteOutcome(retentionDays: number | null): string | null {
-  if (retentionDays === null || !Number.isInteger(retentionDays) || retentionDays < 0) return null;
+  if (retentionDays === null) return null;
   if (retentionDays === 0) return 'this vault deletes outright, so this cannot be undone.';
-  const days = retentionDays === 1 ? '1 day' : `${retentionDays} days`;
-  return `this vault keeps it in the bin for ${days}.`;
+  return `this vault keeps it in the bin for ${plural(retentionDays, 'day')}.`;
 }

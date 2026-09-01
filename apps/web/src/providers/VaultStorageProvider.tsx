@@ -24,14 +24,10 @@ export interface VaultStorageRead {
   reload(): Promise<boolean>;
 }
 
-const VaultStorageContext = createContext<VaultStorageRead | null>(null);
-
-/** Nothing read and nothing claimed — what a surface with no provider above gets. */
-const UNREAD: VaultStorageRead = {
-  storage: null,
-  error: null,
-  reload: () => Promise.resolve(false),
-};
+// `undefined` distinguishes "no provider above me" from "mounted, nothing read
+// yet" — a surface that claims the least must reach the second state, not the
+// first.
+const VaultStorageContext = createContext<VaultStorageRead | undefined>(undefined);
 
 export function VaultStorageProvider({ children }: { children: ReactNode }) {
   const { error, run } = useCommandRunner<'vaultStorage'>();
@@ -43,9 +39,11 @@ export function VaultStorageProvider({ children }: { children: ReactNode }) {
     [run]
   );
 
-  // A read taken before this tab holds a session refuses, so the session it
-  // goes on to hold takes the read again.
+  // A session change drops what the session before it read, then reads again: a
+  // read taken before login refuses, and one vault's retention must never
+  // answer for the next vault's delete.
   useEffect(() => {
+    setStorage(null);
     void reload();
   }, [reload, account]);
 
@@ -55,5 +53,9 @@ export function VaultStorageProvider({ children }: { children: ReactNode }) {
 
 /** The vault's storage as this tab last read it. */
 export function useVaultStorage(): VaultStorageRead {
-  return useContext(VaultStorageContext) ?? UNREAD;
+  const value = useContext(VaultStorageContext);
+  if (value === undefined) {
+    throw new Error('vault storage hooks must be used within <VaultStorageProvider>');
+  }
+  return value;
 }
