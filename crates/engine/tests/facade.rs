@@ -335,30 +335,9 @@ fn a_prune_that_cannot_reach_the_scope_forgets_nothing() {
     );
 }
 
-/// A link's fragment and the owner's own record both bind the name the mint
-/// published at, and the write-scope cut moves it — so a write link is refused
-/// ahead of every other check rather than minted unclaimable.
-#[test]
-fn minting_a_write_invite_link_is_refused() {
-    let world = FakeWorld::new();
-    let device = world.device(b"alice-pk");
-    let (mut engine, _events) = new_engine(&device);
-    block_on(engine.start(secret())).unwrap();
-
-    assert_eq!(
-        block_on(engine.command(Command::CreateInviteLink {
-            node: NodeId([1; 16]),
-            permission: Permission::Write,
-            expires_at: None,
-        })),
-        Err(EngineError::UnsupportedTarget {
-            check: "write-links-need-a-write-scope-cut"
-        }),
-    );
-}
-
-/// A folder passes the target check, so an offline engine stops at the scope
-/// material it has not resolved — availability, never the catch-all.
+/// A folder passes the target check at either permission, so an offline engine
+/// stops at the scope material it has not resolved — availability, never a
+/// refusal of the permission alone.
 #[test]
 fn minting_an_invite_link_on_an_unresolved_vault_reports_availability() {
     let world = FakeWorld::new();
@@ -366,14 +345,19 @@ fn minting_an_invite_link_on_an_unresolved_vault_reports_availability() {
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
 
-    assert!(matches!(
-        block_on(engine.command(Command::CreateInviteLink {
-            node: NodeId([1; 16]),
-            permission: Permission::Read,
-            expires_at: None,
-        })),
-        Err(EngineError::ContentUnavailable { .. }),
-    ));
+    for permission in [Permission::Read, Permission::Write] {
+        assert!(
+            matches!(
+                block_on(engine.command(Command::CreateInviteLink {
+                    node: NodeId([1; 16]),
+                    permission,
+                    expires_at: None,
+                })),
+                Err(EngineError::ContentUnavailable { .. }),
+            ),
+            "a {permission:?} link is not refused on its permission"
+        );
+    }
 }
 
 /// A contact code the peer signed itself: the bundle a real import receives

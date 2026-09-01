@@ -7,7 +7,11 @@
 //! [`Mailbox`] seam so the sender authentication a claim depends on is the
 //! transport's own, not a test double's.
 
-use cipherbox_core::seal::{GrantSetCommitment, Permission, PreservedFields, sign_grant_set};
+use std::sync::OnceLock;
+
+use cipherbox_core::seal::{
+    ChildScopeRef, GrantSetCommitment, Permission, PreservedFields, sign_grant_set,
+};
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -45,6 +49,12 @@ fn owner_identity() -> EcdsaSigner {
     EcdsaSigner::from_scalar(&[0x33; 32]).expect("valid scalar")
 }
 
+/// The gated reference a resolve of `SCOPE` at its current name hands back.
+fn scope_ref() -> &'static ChildScopeRef {
+    static REF: OnceLock<ChildScopeRef> = OnceLock::new();
+    REF.get_or_init(|| ChildScopeRef::new(SCOPE, scope_name()))
+}
+
 fn scope_name() -> Vec<u8> {
     derive_write_name(&WRITE_SCOPE_SEED, &SCOPE)
         .as_str()
@@ -78,12 +88,13 @@ struct Link {
 
 impl Link {
     fn scope(&self) -> CommittedScope<'_> {
-        CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &self.commitment,
-            commitment_sig: &self.commitment_sig,
-            ledger: &self.ledger,
-        }
+        CommittedScope::bind(
+            scope_ref(),
+            &self.commitment,
+            &self.commitment_sig,
+            &self.ledger,
+        )
+        .expect("the gated reference names the scope root the set carries")
     }
 }
 
@@ -496,12 +507,8 @@ fn published<'a>(
     sig: &'a cipherbox_core::suite::ecdsa::EcdsaSignature,
     ledger: &'a [cipherbox_core::seal::GrantLedgerEntry],
 ) -> CommittedScope<'a> {
-    CommittedScope {
-        scope_id: &SCOPE,
-        commitment,
-        commitment_sig: sig,
-        ledger,
-    }
+    CommittedScope::bind(scope_ref(), commitment, sig, ledger)
+        .expect("the gated reference names the scope root the set carries")
 }
 
 /// Convert one claim and refuse it, returning the refusal's stable name.

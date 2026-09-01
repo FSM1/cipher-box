@@ -55,7 +55,7 @@ use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, Engine, EngineError,
     EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission, ResealSeeds,
     ScopeRootIdentity, SharePointer, SharingInviteLinks, StoragePolicy, SyncTimingProfile,
-    WriteHistory, post_sealed, reseal_scope_root,
+    WriteHistory, poll_verified, post_sealed, reseal_scope_root,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -579,6 +579,19 @@ fn recorded_links(device: &FakeDevice) -> Vec<RecordedInvite> {
         .links
 }
 
+/// The one share pointer waiting on `device`'s inbox, opened under the
+/// recipient's own encryption subkey.
+fn delivered_share_pointer(device: &FakeDevice) -> SharePointer {
+    let mut items = block_on(poll_verified(
+        &device.mailbox,
+        &kdf::enc_subkey(&RECIPIENT_SECRET),
+        ENVELOPE_V,
+    ))
+    .expect("the inbox answers");
+    assert_eq!(items.len(), 1, "one share pointer per grant");
+    SharePointer::decode(&items.remove(0).payload).expect("the pointer decodes")
+}
+
 /// Import the recipient into the owner's contact book, which is the only thing
 /// that makes their encryption subkey usable as a grant target.
 fn import_recipient(engine: &mut Engine<FakeSeamTypes>) {
@@ -701,9 +714,13 @@ impl GrantScenario {
     /// Mint a link at the folder and hand back only what a host holds: the URL
     /// fragment.
     fn mint_link(&mut self) -> Zeroizing<String> {
+        self.mint_link_at(Permission::Read)
+    }
+
+    fn mint_link_at(&mut self, permission: Permission) -> Zeroizing<String> {
         let outcome = block_on(self.engine.command(Command::CreateInviteLink {
             node: self.folder,
-            permission: Permission::Read,
+            permission,
             expires_at: None,
         }))
         .expect("the link mints");
@@ -908,6 +925,31 @@ fn a_write_grant_cuts_the_granted_subtree_into_its_own_write_scope() {
         1,
         "the share pointer reached the recipient"
     );
+}
+
+/// The pointer is the only thing that tells a grantee where to look, and a write
+/// grant's name wave moves the scope root after the mint. So the post runs past
+/// the wave: a pointer naming the pre-wave root would send the grantee to a name
+/// their own seed does not derive.
+#[test]
+fn a_write_grants_share_pointer_names_the_root_its_wave_moved_to() {
+    let mut fx = GrantScenario::new();
+    let inherited_name = write_name(fx.folder);
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let moved_name = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved_name, inherited_name);
+    let pointer = delivered_share_pointer(&fx.recipient_device);
+    assert_eq!(
+        pointer.scope_root_name,
+        moved_name.as_str().as_bytes(),
+        "the grantee is sent to the root the wave moved to"
+    );
+    assert_eq!(pointer.permission, CorePermission::Write);
 }
 
 /// The record the mint publishes before the wave lingers for ever — the wave
@@ -2319,6 +2361,79 @@ fn a_claim_from_the_fragment_alone_becomes_a_personal_grant_on_the_scope() {
         inbox(&fx.recipient_device).len(),
         1,
         "and the claimant is told which scope root to resolve"
+    );
+}
+
+/// The write link end to end. Its scope's cut moves the root the fragment and
+/// the recorded tag both bind, so the fragment seals at the moved name and the
+/// record is located by the tag the moved set carries.
+#[test]
+fn a_write_invite_link_claims_and_converts_across_its_own_cut() {
+    let mut fx = GrantScenario::new();
+    let inherited_name = write_name(fx.folder);
+    let fragment = fx.mint_link_at(Permission::Write);
+
+    let moved_name = fx.granted_scope_repoint().current_root;
+    assert_ne!(
+        moved_name, inherited_name,
+        "the write link's own cut moved the scope root"
+    );
+    assert_eq!(
+        InviteFragment::decode(&fragment)
+            .expect("the mint's own fragment")
+            .scope_root_name,
+        moved_name.as_str().as_bytes(),
+        "the bearer is sent to the root the wave moved to"
+    );
+
+    let bearer_pk = recipient_identity().verifying_key().to_sec1().to_vec();
+    let (mut bearer, _bearer_events) = fx.bearer();
+    assert_eq!(
+        block_on(bearer.command(Command::ClaimInviteLink { fragment })),
+        Ok(CommandOutcome::Done),
+    );
+    assert_eq!(
+        block_on(
+            fx.engine
+                .command(Command::ConvertInviteClaims { node: fx.folder })
+        ),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(
+        fx.granted_to().contains(&bearer_pk),
+        "the claim converted into a personal grant on the moved scope"
+    );
+}
+
+/// The owner half of the same rule: the record holds the tag the mint made, and
+/// the cut re-minted the row under another one. A revoke names the tag the set
+/// carries now, and forgets the record it was derived from.
+#[test]
+fn a_write_invite_link_is_revoked_after_its_cut() {
+    let mut fx = GrantScenario::new();
+    fx.mint_link_at(Permission::Write);
+    assert_eq!(recorded_links(&fx.owner_device).len(), 1);
+
+    assert_eq!(
+        block_on(
+            fx.engine
+                .command(Command::RevokeInviteLink { node: fx.folder })
+        ),
+        Ok(CommandOutcome::Done),
+    );
+
+    assert!(
+        recorded_links(&fx.owner_device).is_empty(),
+        "the cut landed, so the record it was derived from is spent"
+    );
+    let after = fx.granted_scope_repoint().current_root;
+    assert!(
+        published_grant_section_at(&fx.world, &fx.blocks, &after)
+            .expect("the moved root answers")
+            .commitment
+            .entries
+            .is_empty(),
+        "and the link's row is no longer committed, so a claim on it is refused"
     );
 }
 

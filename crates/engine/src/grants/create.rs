@@ -4,8 +4,9 @@
 //! Mints the owner-only sharing path in the sequence the blueprint fixes:
 //! converge the subtree, mint the grantee scope at read epoch 1, publish
 //! grantee-first, re-key the reparented descendants under the fresh derivation,
-//! then post the sealed share pointer. Convergence is the load-bearing
-//! correctness rule — a grant over a subtree that cannot be proven
+//! update the parent index, and — for a write grant, after the name wave — post
+//! the sealed share pointer ([`post_share_pointer`]). Convergence is the
+//! load-bearing correctness rule — a grant over a subtree that cannot be proven
 //! epoch-converged is refused **fail-closed**, so a new grantee can never regress
 //! through an ancestor scope's history (CONTEXT.md "Epoch-converged").
 //!
@@ -14,7 +15,10 @@
 //! [`GranteeScopePlan::write_cut`] carries the fresh seed the mint seals under;
 //! the wave itself is
 //! [`rotate_scope_write`](crate::rotation::rotate_scope_write), driven by the
-//! caller over the minted root.
+//! caller over the minted root. The pointer post is split out of
+//! [`create_grant`] so the caller runs it past that wave: a pointer naming the
+//! scope root the wave moves off would send the grantee to a name their own
+//! seed does not derive.
 //!
 //! # Simulation boundary
 //!
@@ -277,10 +281,12 @@ pub enum CreateGrantError {
     /// Publishing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference.
     ParentPublish(RotationPublishError),
-    /// Posting the sealed share pointer to the recipient mailbox failed.
-    /// Post-publish: both scope roots are published and the parent index is
-    /// updated; only the share pointer is missing. A retry posts a fresh item —
-    /// delivery is at-least-once, and the accept flow is the dedup point.
+    /// Posting the sealed share pointer to the recipient mailbox failed
+    /// ([`post_share_pointer`]). Both scope roots are published, the parent
+    /// index is updated and any write-scope cut has landed; only the share
+    /// pointer is missing, so the grantee never learns of a scope that exists. A
+    /// retry posts a fresh item — delivery is at-least-once, and the accept flow
+    /// is the dedup point.
     Mailbox(SeamError),
 }
 
@@ -337,21 +343,18 @@ pub trait ScopeRootPromoter {
 
 /// Mint a grant for one recipient over `grantee`'s folder at `permission`.
 ///
-/// The recipient's row over [`mint_grantee_scope`], then the mailbox share
-/// pointer that tells them where to look. Fail-closed **through the grantee
-/// publish**; past that point the sequence is not atomic — see
+/// The recipient's row over [`mint_grantee_scope`]. Fail-closed **through the
+/// grantee publish**; past that point the sequence is not atomic — see
 /// [`CreateGrantError`] for what each post-publish variant leaves committed.
 ///
 /// The permission comes from [`GranteeScopePlan::permission`], so a write grant
 /// owes [`GranteeScopePlan::write_cut`] by construction. It additionally owes
-/// the name wave over the minted scope, which the caller runs once this returns
-/// (blueprint/engine.md "Grant creation").
-#[allow(clippy::too_many_arguments)]
-pub async fn create_grant<E, R, P, M>(
+/// the name wave over the minted scope, which the caller runs once this returns,
+/// and then [`post_share_pointer`] (blueprint/engine.md "Grant creation").
+pub async fn create_grant<E, R, P>(
     entropy: &mut E,
     resolver: &R,
     publisher: &P,
-    mailbox: &M,
     grantee: &GranteeScopePlan<'_>,
     recipient: &GrantRecipient<'_>,
     owner: &OwnerGrantKeys<'_>,
@@ -361,7 +364,6 @@ where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
     P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
-    M: Mailbox,
 {
     let recipient_enc_pub = recipient.enc_pub();
     // Refused ahead of the publishing sweep, so a self-grant costs no publish.
@@ -382,16 +384,36 @@ where
     )
     .ok_or(CreateGrantError::UnusableRecipientKey)?;
     let converged = converge_grant_subtree(resolver, publisher, grantee, parent).await?;
-    let outcome = mint_grantee_scope(entropy, resolver, publisher, &converged, &row, owner).await?;
+    mint_grantee_scope(entropy, resolver, publisher, &converged, &row, owner).await
+}
 
-    // Post the sealed share pointer to the recipient's mailbox with a fresh
-    // HPKE ephemeral scalar (never a clock or a constant).
+/// Post the sealed share pointer that tells `recipient` where the scope they
+/// were granted answers.
+///
+/// `scope_root_name` is the name the scope root answers at **now**: a write
+/// grant's name wave runs between the mint and this post, and a pointer naming
+/// the pre-wave root would send the grantee to a name their own seed does not
+/// derive (blueprint/engine.md "Grant creation").
+pub async fn post_share_pointer<E, M>(
+    entropy: &mut E,
+    mailbox: &M,
+    owner: &OwnerGrantKeys<'_>,
+    grantee: &GranteeScopePlan<'_>,
+    recipient: &GrantRecipient<'_>,
+    scope_root_name: &IpnsName,
+) -> Result<(), CreateGrantError>
+where
+    E: Entropy,
+    M: Mailbox,
+{
+    let recipient_enc_pub = recipient.enc_pub();
     let pointer = SharePointer {
-        scope_root_name: name_bytes.to_vec(),
+        scope_root_name: scope_root_name.as_str().as_bytes().to_vec(),
         sharer_identity_pk: owner.identity_signer.verifying_key().to_sec1(),
         display_name: recipient.display_name.clone(),
-        permission,
+        permission: grantee.permission(),
     };
+    // Fresh HPKE ephemeral scalar, never a clock or a constant.
     let ephemeral = fresh_ephemeral(entropy).map_err(CreateGrantError::Entropy)?;
     // Fresh random, never derived: the API keeps only
     // sha256(senderPublicKey : idempotencyKey), so any key an observer can
@@ -413,9 +435,7 @@ where
         &idempotency_key,
     )
     .await
-    .map_err(CreateGrantError::Mailbox)?;
-
-    Ok(outcome)
+    .map_err(CreateGrantError::Mailbox)
 }
 
 /// A subtree [`converge_grant_subtree`] proved converged, carrying the two plans
@@ -1202,16 +1222,28 @@ mod tests {
             current_child_index: &[],
             carried_history_links: &[],
         };
-        let outcome = block_on(create_grant(
-            &mut entropy,
-            &net,
-            &net,
-            &recorder,
-            &grantee,
-            &recipient,
-            &owner,
-            &parent,
-        ))
+        let outcome = block_on(async {
+            let outcome = create_grant(
+                &mut entropy,
+                &net,
+                &net,
+                &grantee,
+                &recipient,
+                &owner,
+                &parent,
+            )
+            .await?;
+            post_share_pointer(
+                &mut entropy,
+                &recorder,
+                &owner,
+                &grantee,
+                &recipient,
+                &grantee.ipns_name(),
+            )
+            .await
+            .map(|()| outcome)
+        })
         .expect("grant creation succeeds");
 
         let posts = recorder.posts.borrow();
@@ -1334,16 +1366,28 @@ mod tests {
                 current_child_index: &[],
                 carried_history_links: &[],
             };
-            block_on(create_grant(
-                &mut entropy,
-                &net,
-                &net,
-                &mailbox,
-                &grantee,
-                &recipient,
-                &owner,
-                &parent,
-            ))
+            block_on(async {
+                let outcome = create_grant(
+                    &mut entropy,
+                    &net,
+                    &net,
+                    &grantee,
+                    &recipient,
+                    &owner,
+                    &parent,
+                )
+                .await?;
+                post_share_pointer(
+                    &mut entropy,
+                    &mailbox,
+                    &owner,
+                    &grantee,
+                    &recipient,
+                    &grantee.ipns_name(),
+                )
+                .await
+                .map(|()| outcome)
+            })
         };
         let published = net.published.borrow().clone();
         (outcome, published, hub)
