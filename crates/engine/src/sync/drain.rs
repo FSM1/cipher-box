@@ -1242,8 +1242,12 @@ where
                     }
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
-                let Ok(preserved) = self.preserve_dead_letter(op_id, reason).await else {
-                    return;
+                let preserved = match op.content_root_cid() {
+                    Some(_) => match self.preserve_dead_letter(op_id, reason).await {
+                        Ok(preserved) => preserved,
+                        Err(_) => return,
+                    },
+                    None => Preservation::Kept,
                 };
                 let handed_back = if owes_its_name {
                     self.retire_unreferenced_name(scope, op).await
@@ -1829,10 +1833,12 @@ where
                 self.publish_prune(scope, pass, applied, *keep_latest).await
             }
             // A cross-scope relocation re-seals the moved subtree at the
-            // destination epoch — a plan this driver does not author. Publishing
-            // it as a plain ref move would carry the subtree into the
-            // destination still sealed at the source epoch.
-            OpKind::Relink { .. } | OpKind::Move { .. } => Err(Halt::Unclassified),
+            // destination scope's epoch (blueprint/engine.md "Sync core: Ops") —
+            // a plan this driver does not author, and one a plain ref move would
+            // publish still sealed at the source epoch, open to the source's
+            // grantees. Charged, so it dead-letters where the host sees it
+            // instead of holding the FIFO head with nothing reported.
+            OpKind::Relink { .. } | OpKind::Move { .. } => Err(Halt::UploadAttempt),
         }
     }
 
@@ -4538,6 +4544,9 @@ where
     /// Copy one queued op's record into the preserved set before the
     /// abandonment removes it, so the version it stages stays both referenced
     /// and openable ([`preserve_dead_letter`]).
+    /// Callers pass only an op that has a staged version. The preserved set
+    /// evicts oldest-first, so a slot spent on a record with no content would
+    /// release a version whose per-version key nothing re-derives.
     async fn preserve_dead_letter(
         &self,
         op_id: OpId,

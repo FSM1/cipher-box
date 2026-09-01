@@ -126,7 +126,7 @@ use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
     VaultPointerProbe, provision_vault,
 };
-use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
+use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
 use crate::sync::record::{RecordClass, record_content_root_cid};
 use cipherbox_core::hex::lower as hex_lower;
 
@@ -2191,9 +2191,7 @@ impl EngineView {
     }
 }
 
-/// Prove at journal time that a relocation stays inside this session's one
-/// scope, so the op reaching [`stage_op`] is the [`ScopeCrossing::Intra`] its
-/// callers record.
+/// Classify a relocation's scope crossing at journal time, from **both** ends.
 ///
 /// A destination the render does not hold is [`EngineError::UnknownNode`] — the
 /// same verdict [`Engine::snapshot`] gives it, so a host reads one answer for a
@@ -2203,10 +2201,26 @@ impl EngineView {
 /// works, because an op the caller was already told succeeded can never be
 /// retro-failed (blueprint/desktop.md "Conflicts, dead letters, and rotation").
 ///
-/// Only the destination is checked: the source parent comes from
-/// [`Engine::relocation_anchors`], which reads it off the render or falls back
-/// to the root.
-fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), EngineError> {
+/// The source end is read too, because a destination-only check cannot tell a
+/// pure relink from a move that leaves a granted scope. A crossing changes what
+/// the relocation owes: the moved subtree re-seals at the destination scope's
+/// epoch, and an exit from a granted scope cuts the source
+/// (blueprint/engine.md "Sync core: Ops"). No driver authors that plan, and a
+/// plain relink is not a substitute — it would carry the subtree into the
+/// destination still sealed at the source epoch, where the source's grantees can
+/// still open it. So a crossing is refused here, in the same order and for the
+/// same reason a destination outside the scope is.
+///
+/// An interior scope root exists only because a grant cut one (CONTEXT.md
+/// "Scope"), so `scope_roots` names the boundaries this session has proved. A
+/// boundary it does not know reads as no boundary, which is the classification
+/// every relocation had before the source end was read at all.
+fn classify_crossing(
+    rendered: &Snapshot,
+    from_parent: NodeId,
+    new_parent: NodeId,
+    scope_roots: &[NodeId],
+) -> Result<ScopeCrossing, EngineError> {
     if !rendered.contains(new_parent) {
         return Err(EngineError::UnknownNode);
     }
@@ -2215,7 +2229,21 @@ fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), Engi
             message: "its destination folder is not in this session's scope".to_owned(),
         });
     }
-    Ok(())
+    if scope_of(rendered, from_parent, scope_roots) != scope_of(rendered, new_parent, scope_roots) {
+        return Err(EngineError::ScopeExitRefused {
+            message: "it crosses a shared folder's boundary, which needs a re-seal this session \
+                      cannot author"
+                .to_owned(),
+        });
+    }
+    Ok(ScopeCrossing::Intra)
+}
+
+/// The scope `node` belongs to, named by its root. The render root is the
+/// fallback the shared walk leaves to its callers: it anchors the vault's
+/// initial scope, which every node reaching no listed root belongs to.
+fn scope_of(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> NodeId {
+    enclosing_scope_root(rendered, node, scope_roots).unwrap_or(rendered.root)
 }
 
 /// Refuse a journal target the write plane cannot author under.
@@ -2224,7 +2252,7 @@ fn refuse_scope_exit(rendered: &Snapshot, new_parent: NodeId) -> Result<(), Engi
 /// (`grants::received_status`), so a browse reaches it but the drain cannot:
 /// an op there names a chain that walks to no root this session publishes under.
 /// Refusing at journal time is the only order that works, on the same grounds as
-/// [`refuse_scope_exit`].
+/// [`classify_crossing`].
 ///
 /// A node the render does not hold at all keeps its existing verdict — the
 /// rebase decides what a stale target means, and that is not this check's call.
@@ -3576,6 +3604,11 @@ pub struct Engine<T: SeamTypes> {
     /// Rebuilt by the same pass: what each renderable grafted scope's body
     /// named, which decides the ids no plane may render.
     grafted_named_nodes: Rc<RefCell<NamedNodes>>,
+    /// The folders this session's own grants promoted into scope roots. The
+    /// mint is the one moment a session proves it promoted a folder, so it is
+    /// the only writer; read by
+    /// [`relocation_scope_roots`](Self::relocation_scope_roots).
+    minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -3754,6 +3787,7 @@ impl<T: SeamTypes> Engine<T> {
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
                 grafted_named_nodes: Rc::new(RefCell::new(NamedNodes::new())),
+                minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -4123,6 +4157,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut named) = self.grafted_named_nodes.try_borrow_mut() {
             named.clear();
+        }
+        if let Ok(mut roots) = self.minted_scope_roots.try_borrow_mut() {
+            roots.clear();
         }
     }
 
@@ -5422,7 +5459,12 @@ where {
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                refuse_scope_exit(&rendered, new_parent)?;
+                let crossing = classify_crossing(
+                    &rendered,
+                    from_parent,
+                    new_parent,
+                    &self.relocation_scope_roots(),
+                )?;
                 refuse_full_parent(&rendered, new_parent, Some(node), None)?;
                 let op = Op::relink(
                     node,
@@ -5430,7 +5472,7 @@ where {
                     new_parent,
                     base_sequence,
                     authored_at,
-                    ScopeCrossing::Intra,
+                    crossing,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -5444,7 +5486,12 @@ where {
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                refuse_scope_exit(&rendered, new_parent)?;
+                let crossing = classify_crossing(
+                    &rendered,
+                    from_parent,
+                    new_parent,
+                    &self.relocation_scope_roots(),
+                )?;
                 refuse_full_parent(&rendered, new_parent, Some(node), replacing)?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
@@ -5461,7 +5508,7 @@ where {
                     replacing,
                     base_sequence,
                     authored_at,
-                    ScopeCrossing::Intra,
+                    crossing,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -6465,6 +6512,8 @@ where {
                 .map_err(EngineError::from_invite_mint)?,
             ),
         };
+
+        self.minted_scope_roots.borrow_mut().insert(node);
 
         if let ScopeShare::Contact(contact) = &share {
             // The grant this mint published is one no claim conversion recorded,
@@ -8782,6 +8831,18 @@ where {
             .collect())
     }
 
+    /// Every scope boundary this session has proved: the roots its own grants
+    /// minted, plus the roots a gated descent proved
+    /// ([`install_descendant_scopes`]). Wider than the set the drain drives,
+    /// which lists only the scopes it holds a seed pair for.
+    fn relocation_scope_roots(&self) -> Vec<NodeId> {
+        self.minted_scope_roots
+            .borrow()
+            .union(&self.descendant_scope_roots.borrow())
+            .copied()
+            .collect()
+    }
+
     /// What a relocation op anchors on: the parent the move was formed against
     /// (the scope root for an unlinked node) and the target's base sequence.
     fn relocation_anchors(&self, rendered: &Snapshot, node: NodeId) -> (NodeId, u64) {
@@ -9466,16 +9527,80 @@ mod tests {
         rendered.link_next(root, inside);
         rendered.upsert_node(NodeMeta::new(orphan, "adrift", NodeKind::Folder));
 
-        assert!(refuse_scope_exit(&rendered, root).is_ok());
-        assert!(refuse_scope_exit(&rendered, inside).is_ok());
+        let none: [NodeId; 0] = [];
+        assert_eq!(
+            classify_crossing(&rendered, root, root, &none),
+            Ok(ScopeCrossing::Intra)
+        );
+        assert_eq!(
+            classify_crossing(&rendered, root, inside, &none),
+            Ok(ScopeCrossing::Intra)
+        );
         assert!(matches!(
-            refuse_scope_exit(&rendered, NodeId([9; 16])),
+            classify_crossing(&rendered, root, NodeId([9; 16]), &none),
             Err(EngineError::UnknownNode)
         ));
         assert!(matches!(
-            refuse_scope_exit(&rendered, orphan),
+            classify_crossing(&rendered, root, orphan, &none),
             Err(EngineError::ScopeExitRefused { .. })
         ));
+    }
+
+    /// The source end is read too, so a boundary the destination check cannot
+    /// see still refuses. A crossing owes a re-seal no driver authors, and the
+    /// refusal precedes the journal entry rather than following it.
+    #[test]
+    fn a_relocation_that_crosses_a_scope_boundary_is_refused_from_either_side() {
+        let root = NodeId([1; 16]);
+        let granted = NodeId([2; 16]);
+        let inside_granted = NodeId([3; 16]);
+        let plain = NodeId([4; 16]);
+        let mut rendered = Snapshot::new(root);
+        for (parent, node, name) in [
+            (root, granted, "shared"),
+            (granted, inside_granted, "deep"),
+            (root, plain, "mine"),
+        ] {
+            rendered.upsert_node(NodeMeta::new(node, name, NodeKind::Folder));
+            rendered.link_next(parent, node);
+        }
+        let roots = [granted];
+
+        for (from_parent, new_parent, why) in [
+            (
+                inside_granted,
+                root,
+                "full depth: a source below the granted root exits it",
+            ),
+            (granted, root, "a scope root sits inside its own scope"),
+            (
+                plain,
+                granted,
+                "and a move into the granted scope crosses the same boundary",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    classify_crossing(&rendered, from_parent, new_parent, &roots),
+                    Err(EngineError::ScopeExitRefused { .. })
+                ),
+                "{why}"
+            );
+        }
+        for (from_parent, new_parent, why) in [
+            (plain, root, "both ends resolve to the vault root"),
+            (
+                inside_granted,
+                granted,
+                "both ends resolve to the granted scope root",
+            ),
+        ] {
+            assert_eq!(
+                classify_crossing(&rendered, from_parent, new_parent, &roots),
+                Ok(ScopeCrossing::Intra),
+                "{why}"
+            );
+        }
     }
 
     /// An accepted shared scope is grafted in parentless, so a browse reaches it

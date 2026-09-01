@@ -74,8 +74,9 @@ use cipherbox_engine::{
     DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event, EventStream, GatewayConfig,
     LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
     OpKind, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordReader,
-    RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory,
-    WriteTarget, decode_queue, load_bin_index, publish_bin_index, reseal_scope_root, stage_op,
+    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
+    WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index, reseal_scope_root,
+    stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -9805,6 +9806,59 @@ fn content_lost(events: &mut EventStream) -> bool {
             }
         )
     })
+}
+
+/// A relocation that changes scope re-seals the moved subtree at the
+/// destination scope's epoch, which this driver does not author. What it must
+/// not do is hold the queue head with nothing charged and nothing reported: the
+/// host would read `fresh`, no dead letter, and no warning, while the move never
+/// publishes and every op behind it waits forever.
+#[test]
+fn a_cross_scope_relocation_the_drain_cannot_author_dead_letters_rather_than_wedging_the_queue() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 71);
+
+    create(&mut engine, "photos");
+    create(&mut engine, "archive");
+    let photos = child_id(&engine, ROOT, "photos");
+    let archive = child_id(&engine, ROOT, "archive");
+    tick(&world, &engine, &mut tasks);
+
+    stage(
+        &alice,
+        &Op::relink(
+            photos,
+            ROOT,
+            archive,
+            published(&world.record_store, photos).0,
+            UnixMillis(1),
+            ScopeCrossing::Cross,
+        ),
+        None,
+    );
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted],
+        "the halt is charged and classified, so the host is told"
+    );
+    assert!(
+        passes > 1,
+        "a classified halt spends a budget, never one pass"
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "and the head leaves the queue, so nothing behind it is starved"
+    );
 }
 
 /// Tick until the drain dead-letters something, and report how many passes that
