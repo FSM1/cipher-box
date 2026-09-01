@@ -3683,6 +3683,27 @@ fn a_genesis_bin_index_that_did_not_land_is_published_by_a_later_start() {
     );
 }
 
+/// The mark the failed attempt left is a mark like any other: the device cannot
+/// tell an attempt that never reached the plane from one that did, so it never
+/// publishes an empty index over what another device may hold. The account
+/// recovers through the device that holds no mark, above.
+#[test]
+fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    world.record_store.fail_put_for(bin_name().as_str());
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+    world.record_store.heal_put_for(bin_name().as_str());
+
+    let (_engine, _tasks) = start_on_api(&world, &blocks, &alice, 43);
+
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the marked device published nothing on its own retry",
+    );
+}
+
 /// The gate is the device's own durable marks, which decide what a resolve
 /// would: an account that already holds the record spends no publish, and the
 /// start pays no network round trip to find that out.

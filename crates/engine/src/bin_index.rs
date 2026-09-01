@@ -251,12 +251,10 @@ pub(crate) async fn cached_bin_index<Sn: SnapshotCache>(
 /// `FloorUnreadable` rung leaves the publish.
 pub(crate) async fn holds_a_bin_index_mark<F: FloorStore>(floors: &F, keys: &BinIndexKeys) -> bool {
     let name = &keys.name;
-    for key in [
-        name.as_str().as_bytes().to_vec(),
-        revision_mint_key(name),
-        revision_adopted_key(name),
-    ] {
-        if !matches!(floor::sequence_floor(floors, &key).await, Ok(None)) {
+    let minted = revision_mint_key(name);
+    let adopted = revision_adopted_key(name);
+    for key in [name.as_str().as_bytes(), &minted, &adopted] {
+        if !matches!(floor::sequence_floor(floors, key).await, Ok(None)) {
             return true;
         }
     }

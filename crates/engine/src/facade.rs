@@ -3421,10 +3421,11 @@ pub struct Engine<T: SeamTypes> {
     /// gate-passing record here, and the cold-start liveness loop keyless
     /// re-PUTs the map's values on the hourly cadence.
     held_records: Rc<RefCell<HeldRecords>>,
-    /// The vault settings record this session published, in its own slot rather
-    /// than in [`held_records`](Self::held_records): that map is keyed by node
-    /// id and the settings record has none, so a synthetic id would put it in a
-    /// slot a resolved record could claim and evict its renewal.
+    /// The vault settings record this session published or read
+    /// ([`SettingsRead::enrol`]), in its own slot rather than in
+    /// [`held_records`](Self::held_records): that map is keyed by node id and
+    /// the settings record has none, so a synthetic id would put it in a slot a
+    /// resolved record could claim and evict its renewal.
     settings_record: Rc<RefCell<Option<HeldRecord>>>,
     /// The bin index record this session published, in its own slot for the
     /// same reason the settings record has one, and shared with the drain,
@@ -4278,6 +4279,11 @@ impl<T: SeamTypes> Engine<T> {
         *self.tick_loop_spawner.borrow_mut() = None;
         *self.placement.borrow_mut() = None;
         *self.settings_summary.borrow_mut() = None;
+        // The settings load enrols ahead of the gate, and both slots hold a
+        // record's own signer, so a start that stops here drops them at their
+        // terminal owner (security rule 7).
+        *self.settings_record.borrow_mut() = None;
+        *self.bin_index_record.borrow_mut() = None;
         self.session_bearer.clear();
         self.accelerator_bearer.clear();
     }
@@ -4333,12 +4339,13 @@ where {
     /// register-first step tells the API both that this account has binned
     /// something and when (blueprint/engine.md "Bin index record").
     ///
-    /// Runs on every session start, because one attempt that does not land
-    /// would otherwise leave the account at that disclosure for good. Idempotent
-    /// on ADR 0007's derived terms: the name comes from the login secret alone,
-    /// and only a load that finds neither a record nor a durable mark mints one.
-    /// A device that holds a mark answers from its own store and spends no
-    /// network at all ([`holds_a_bin_index_mark`]).
+    /// Runs on every session start, so an attempt that does not land is not the
+    /// account's only one. Idempotent on ADR 0007's derived terms: the name
+    /// comes from the login secret alone, and only a load that finds neither a
+    /// record nor a durable mark mints one. A device that holds a mark reaches
+    /// that verdict from its own store and spends no network at all
+    /// ([`holds_a_bin_index_mark`]) — including a device whose own attempt
+    /// failed behind the revision it minted, which the mark keeps fail-closed.
     async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
         let Some(session) = self.session.as_ref() else {
             return;
@@ -12612,6 +12619,76 @@ mod tests {
                 block_on(engine.command(Command::ManualRefresh)),
                 Err(EngineError::NotStarted),
                 "the engine stays unstarted after a cold-start trust failure"
+            );
+        }
+
+        /// The settings load enrols ahead of the cold-start gate, and the record
+        /// it enrols carries the name's own signer. A start that stops at the
+        /// gate must leave none of it resident (security rule 7).
+        #[test]
+        fn a_cold_start_trust_failure_leaves_no_settings_record_resident() {
+            use cipherbox_core::content::{compute_cid, encode_content_cid_str};
+
+            use crate::content::DAG_ROOT_CODEC;
+            use crate::settings::{cached_settings_block, settings_name};
+
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (_head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+
+            // A settings record this start resolves, on a device that already
+            // holds the name's floor: both enrolment bars are cleared.
+            let (_cache_key, block) = cached_settings_block(
+                &CAP_SECRET,
+                &VaultSettings::default(),
+                &mut SeededEntropy::new(5),
+            );
+            let name = settings_name(&CAP_SECRET);
+            let value = format!(
+                "/ipfs/{}",
+                encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block))
+            );
+            let record = IpnsRecord::create_v2(
+                &kdf::settings_ipns_keypair(&CAP_SECRET),
+                value.as_bytes(),
+                1,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal();
+            for endpoint in device.record_store.endpoints() {
+                device
+                    .record_store
+                    .seed_record(&endpoint, name.as_str(), record.clone());
+            }
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_sequence_floor(name.as_str().as_bytes(), 1),
+            )
+            .expect("the floor raises");
+
+            // The settings head block first, then a root head block that does
+            // not hash to its record's CID: the same trust failure as above.
+            device.http.enqueue_response(head_response(&block));
+            device
+                .http
+                .enqueue_response(head_response(b"forged head block"));
+
+            let (mut engine, _events) = engine_on(&device);
+            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())));
+
+            assert!(
+                matches!(out, Err(EngineError::ColdStart { .. })),
+                "the fixture must fail at the cold-start gate: {out:?}",
+            );
+            assert!(
+                engine.settings_record.borrow().is_none(),
+                "a fail-closed start re-signs nothing and holds no signer",
             );
         }
 
