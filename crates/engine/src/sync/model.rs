@@ -14,7 +14,7 @@
 //! residue holds two, resolved by [`crate::sync::rebase::observed_repair`].
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use caseless::Caseless;
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
@@ -22,6 +22,7 @@ use unicode_normalization::UnicodeNormalization;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::facade::{NodeId, NodeKind};
+use crate::name::MAX_NODE_NAME_BYTES;
 
 /// One node's metadata in the working tree.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
@@ -456,31 +457,151 @@ pub fn case_fold<I: Iterator<Item = char>>(chars: I) -> impl Iterator<Item = cha
     chars.default_case_fold()
 }
 
-/// The auto-suffix for an add/add collision loser: ` (n)` inserted before the
+/// The auto-suffix for a collision loser: ` (n)` inserted before the
 /// extension (`report.txt` → `report (2).txt`; `folder` → `folder (2)`;
 /// `.bashrc` → `.bashrc (2)`).
-/// Zeroizing for the same reason as [`collation_key`]: the candidate embeds
-/// the name verbatim, and a saturated folder builds thousands of them.
 ///
-/// Built into a buffer sized for the whole candidate up front. `format!` grows
-/// its own, and the reallocation frees an intermediate holding the name — which
+/// The result always fits [`MAX_NODE_NAME_BYTES`]: the stem is cut on a
+/// character boundary first, so a loser at the bound is re-authored under a
+/// name the projection can still emit rather than one it drops from every
+/// listing.
+///
+/// Zeroizing for the same reason as [`collation_key`]: the candidate embeds
+/// the name verbatim, and a saturated folder builds thousands of them. Built
+/// into a buffer sized for the whole candidate up front — `format!` grows its
+/// own, and the reallocation frees an intermediate holding the name, which
 /// zeroizing the returned value cannot reach.
 pub fn suffix_name(name: &str, n: u32) -> Zeroizing<String> {
     let suffix = format!(" ({n})");
-    let mut out = Zeroizing::new(String::with_capacity(name.len() + suffix.len()));
-    match split_extension(name) {
-        Some((stem, ext)) => {
-            out.push_str(stem);
-            out.push_str(&suffix);
-            out.push('.');
-            out.push_str(ext);
-        }
-        None => {
-            out.push_str(name);
-            out.push_str(&suffix);
-        }
+    // The extension is kept only while a byte of stem can survive beside it.
+    let (stem, ext) = match split_extension(name)
+        .filter(|(_, ext)| suffix.len() + ext.len() + 1 < MAX_NODE_NAME_BYTES)
+    {
+        Some((stem, ext)) => (stem, Some(ext)),
+        None => (name, None),
+    };
+    let ext_bytes = ext.map_or(0, |ext| ext.len() + 1);
+    let room = MAX_NODE_NAME_BYTES.saturating_sub(suffix.len() + ext_bytes);
+    let stem = truncate_on_char_boundary(stem, room);
+    let mut out = Zeroizing::new(String::with_capacity(stem.len() + suffix.len() + ext_bytes));
+    out.push_str(stem);
+    out.push_str(&suffix);
+    if let Some(ext) = ext {
+        out.push('.');
+        out.push_str(ext);
     }
     out
+}
+
+/// The longest prefix of `text` within `max` bytes that is still valid UTF-8.
+fn truncate_on_char_boundary(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// The highest auto-suffix a collision loser probes — a folder jammed with
+/// this many colliding siblings is pathological, not a routine merge.
+pub(crate) const MAX_SUFFIX_PROBE: u32 = 10_000;
+
+/// Sibling name material claimed inside one folder — a verbatim copy of every
+/// name it holds, so the set wipes what it held rather than freeing it intact.
+/// A `HashSet<Zeroizing<String>>` cannot stand in: `Zeroizing` is not `Hash`.
+#[derive(Default)]
+pub(crate) struct TakenNames(HashSet<String>);
+
+impl TakenNames {
+    /// Claims `key`, reporting whether it was still free.
+    pub(crate) fn claim(&mut self, key: &str) -> bool {
+        self.0.insert(key.to_owned())
+    }
+
+    /// Whether the key is already claimed.
+    pub(crate) fn holds(&self, key: &str) -> bool {
+        self.0.contains(key)
+    }
+}
+
+impl FromIterator<String> for TakenNames {
+    fn from_iter<I: IntoIterator<Item = String>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl Drop for TakenNames {
+    fn drop(&mut self) {
+        for mut key in self.0.drain() {
+            key.zeroize();
+        }
+    }
+}
+
+/// One child as a read plane shows it.
+pub struct RenderedChild<'a> {
+    /// The child's stored metadata — never rewritten by the render.
+    pub meta: &'a NodeMeta,
+    suffixed: Option<Zeroizing<String>>,
+}
+
+impl RenderedChild<'_> {
+    /// The name this child is shown and resolved under.
+    pub fn name(&self) -> &str {
+        self.suffixed
+            .as_ref()
+            .map_or_else(|| self.meta.name(), |name| name.as_str())
+    }
+}
+
+/// The children of `parent` as a read plane shows them, ordered by node id: a
+/// child an earlier sibling already stores the same **exact** name as renders
+/// under the lowest free `name (n)` instead.
+///
+/// A folder's children are bound on `id` and `ipnsName` and never on `name`
+/// (`crates/core/src/seal/body.rs`), so a peer can commit a child under the
+/// exact name an owner's child holds and take every lookup of it. Rendering the
+/// later id under its own name keeps both reachable, with a tiebreak identical
+/// on every device. The stored name is untouched: a member who renames the
+/// loser persists the fix through the normal op path.
+///
+/// Two spellings that only *fold* equal keep both names. They render
+/// differently, so a host that spells a name exactly still reaches its own
+/// child ([`crate::EngineView::lookup`]); suffixing one of them would hand a
+/// grantee who plants a twin the power to rename its victim's listing entry.
+/// The strict comparator still decides which suffix is free, so the name a
+/// collision resolves to is unique to the whole folder.
+pub fn rendered_children(snapshot: &Snapshot, parent: NodeId) -> Vec<RenderedChild<'_>> {
+    let children = snapshot.children(parent);
+    let mut folded: TakenNames = children
+        .iter()
+        .map(|child| collation_key(child.name()).to_string())
+        .collect();
+    let mut stored = TakenNames::default();
+    children
+        .into_iter()
+        .map(|meta| {
+            let suffixed = (!stored.claim(meta.name()))
+                .then(|| free_suffix(meta.name(), &mut folded))
+                .flatten();
+            RenderedChild { meta, suffixed }
+        })
+        .collect()
+}
+
+/// The lowest `name (n)` no sibling's folded name holds. `None` iff a
+/// pathological folder exhausts the probe, which leaves the twin under its
+/// stored name rather than hiding it.
+fn free_suffix(name: &str, folded: &mut TakenNames) -> Option<Zeroizing<String>> {
+    (1..=MAX_SUFFIX_PROBE).find_map(|n| {
+        let candidate = suffix_name(name, n);
+        folded
+            .claim(&collation_key(&candidate))
+            .then_some(candidate)
+    })
 }
 
 /// Split a trailing extension: `("report", "txt")` for `report.txt`. `None`
@@ -817,6 +938,115 @@ mod tests {
         assert_eq!(*suffix_name("folder", 2), *"folder (2)");
         assert_eq!(*suffix_name(".bashrc", 2), *".bashrc (2)");
         assert_eq!(*suffix_name("a.b.c", 3), *"a.b (3).c");
+    }
+
+    /// A suffix that pushed the name past the bound would be dropped from every
+    /// listing and every lookup by the projection's narrow tier, which loses the
+    /// member its own file.
+    #[test]
+    fn a_suffixed_name_at_the_bound_stays_within_it() {
+        for name in [
+            "a".repeat(MAX_NODE_NAME_BYTES),
+            format!("{}.txt", "a".repeat(MAX_NODE_NAME_BYTES - 4)),
+            format!("{}.txt", "é".repeat((MAX_NODE_NAME_BYTES - 4) / 2)),
+            format!("a.{}", "e".repeat(MAX_NODE_NAME_BYTES - 2)),
+        ] {
+            assert!(
+                (MAX_NODE_NAME_BYTES - 1..=MAX_NODE_NAME_BYTES).contains(&name.len()),
+                "{} does not set up the bound",
+                name.len()
+            );
+            for n in [1, 2, 99, 10_000] {
+                let suffixed = suffix_name(&name, n);
+                assert!(
+                    suffixed.len() <= MAX_NODE_NAME_BYTES,
+                    "{n}: {} bytes",
+                    suffixed.len()
+                );
+                assert!(suffixed.contains(&format!(" ({n})")), "the suffix survives");
+                assert!(crate::name::is_emittable(&suffixed), "must stay emittable");
+            }
+        }
+    }
+
+    /// The stem is cut on a character boundary, so the result is still UTF-8 —
+    /// a name is a CBOR text string and a mid-character cut cannot be encoded.
+    #[test]
+    fn truncation_cuts_the_stem_on_a_character_boundary() {
+        let name = format!("{}.txt", "é".repeat(125));
+        let suffixed = suffix_name(&name, 1);
+        assert_eq!(*suffixed, format!("{} (1).txt", "é".repeat(123)));
+    }
+
+    fn child(snap: &mut Snapshot, parent: NodeId, index: u8, name: &str) {
+        snap.upsert_node(NodeMeta::new(id(index), name, NodeKind::File));
+        snap.link(parent, id(index), 1);
+    }
+
+    fn rendered_names(snap: &Snapshot, parent: NodeId) -> Vec<String> {
+        rendered_children(snap, parent)
+            .iter()
+            .map(|child| child.name().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn an_exact_duplicate_renders_the_later_id_under_a_suffix() {
+        let mut snap = Snapshot::new(id(0));
+        child(&mut snap, id(0), 1, "q3.pdf");
+        child(&mut snap, id(0), 2, "q3.pdf");
+
+        assert_eq!(rendered_names(&snap, id(0)), ["q3.pdf", "q3 (1).pdf"]);
+    }
+
+    /// The two spellings render differently, so a host that spells either one
+    /// exactly reaches its own child. Suffixing one would let a grantee who
+    /// plants a twin rename its victim's entry.
+    #[test]
+    fn a_folding_twin_keeps_both_stored_names() {
+        let mut snap = Snapshot::new(id(0));
+        child(&mut snap, id(0), 1, "\u{fb01}le.txt");
+        child(&mut snap, id(0), 2, "file.txt");
+
+        assert_eq!(rendered_names(&snap, id(0)), ["\u{fb01}le.txt", "file.txt"]);
+    }
+
+    /// The probe skips a suffix a sibling already holds, however that sibling
+    /// spells it — the strict comparator, not byte equality, decides free.
+    #[test]
+    fn the_probe_steps_over_a_suffix_a_folding_sibling_holds() {
+        let mut snap = Snapshot::new(id(0));
+        child(&mut snap, id(0), 1, "a.txt");
+        child(&mut snap, id(0), 2, "A (1).TXT");
+        child(&mut snap, id(0), 3, "a.txt");
+
+        assert_eq!(
+            rendered_names(&snap, id(0)),
+            ["a.txt", "A (1).TXT", "a (2).txt"]
+        );
+    }
+
+    #[test]
+    fn the_frozen_collision_vectors_are_the_render() {
+        for row in &crate::testkit::name_law::name_law_vectors().collisions {
+            let mut snap = Snapshot::new(id(0));
+            for (index, name) in row.names.iter().enumerate() {
+                let index = u8::try_from(index + 1).expect("a vector row is short");
+                child(&mut snap, id(0), index, name);
+            }
+            assert_eq!(
+                rendered_names(&snap, id(0)),
+                row.rendered,
+                "stored {:?}",
+                row.names
+            );
+            for name in rendered_names(&snap, id(0)) {
+                assert!(
+                    crate::name::is_emittable(&name),
+                    "{name:?} must stay emittable"
+                );
+            }
+        }
     }
 
     #[test]

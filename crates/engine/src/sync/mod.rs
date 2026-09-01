@@ -43,7 +43,10 @@ pub use drain::{
     BlockedOp, DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, SettingsHold,
     owner_scoped_key, owner_tag,
 };
-pub use model::{Link, NodeMeta, Snapshot, case_fold, collation_key, suffix_name};
+pub use model::{
+    Link, NodeMeta, RenderedChild, Snapshot, case_fold, collation_key, rendered_children,
+    suffix_name,
+};
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};
 pub use overlay::apply_overlay;
 pub use pointer::{

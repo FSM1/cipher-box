@@ -66,6 +66,7 @@ use crate::grants::{
     recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::{poll_verified, post_sealed};
+use crate::name::{NameError, validate_name};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
@@ -108,7 +109,7 @@ use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{
     Drain, DrainReport, DrainScope, bin_load_is_a_verdict, hold_captures, published_op_mark,
 };
-use crate::sync::model::{NodeMeta, Snapshot, collation_key};
+use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
@@ -837,12 +838,7 @@ impl fmt::Display for BlankApiBaseUrl {
 
 impl std::error::Error for BlankApiBaseUrl {}
 
-/// The longest node name a command may carry, in bytes.
-///
-/// Bounded here rather than at a host: the projection's own limit runs above the
-/// facade, so a web caller reaches this boundary with no bound in front of it.
-/// Peer-committed names take the two-tier rule in `crates/fuse/src/name.rs`.
-pub const MAX_NODE_NAME_BYTES: usize = 255;
+pub use crate::name::MAX_NODE_NAME_BYTES;
 
 /// The det-CBOR cost of one `ChildRef` beyond its `name` and its `ipnsName`:
 /// the five known keys, the map and byte-string heads, the kind, and a
@@ -2030,22 +2026,19 @@ impl EngineView {
         self.rendered.root
     }
 
-    /// The children under `parent`, deterministically ordered by node id.
+    /// The children under `parent`, deterministically ordered by node id and
+    /// rendered under names unique to the folder ([`rendered_children`]).
     pub fn children(&self, parent: NodeId) -> Vec<NodeAttrs> {
-        self.rendered
-            .children(parent)
-            .into_iter()
-            .map(node_attrs)
+        rendered_children(&self.rendered, parent)
+            .iter()
+            .map(rendered_attrs)
             .collect()
     }
 
     /// The child of `parent` a case-insensitive host resolves `name` to: the
-    /// first stored under exactly `name` when one exists, and otherwise the
-    /// first whose name folds equal under the strict comparator (FUSE lookup).
-    ///
-    /// "First" is by node id in both arms, because a decoded listing may hold
-    /// two children under one exact name — `assert_children_unique` binds `id`
-    /// and `ipnsName`, never `name`.
+    /// one rendered under exactly `name` when it exists, and otherwise the one
+    /// whose rendered name folds equal under the strict comparator (FUSE
+    /// lookup).
     ///
     /// The exact match wins whatever the id order. A write grantee mints its own
     /// node ids, so without the preference it could plant a folding twin beside
@@ -2053,31 +2046,35 @@ impl EngineView {
     /// first, and shadow the owner's file at every lookup. The two names render
     /// differently, so the deceptive-character filter never sees the pair.
     pub fn lookup(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
-        self.lookup_exact(parent, name).or_else(|| {
-            let key = collation_key(name);
-            self.rendered
-                .children(parent)
-                .into_iter()
-                .find(|child| collation_key(child.name()) == key)
-                .map(node_attrs)
-        })
+        let children = rendered_children(&self.rendered, parent);
+        let key = collation_key(name);
+        children
+            .iter()
+            .find(|child| child.name() == name)
+            .or_else(|| {
+                children
+                    .iter()
+                    .find(|child| collation_key(child.name()) == key)
+            })
+            .map(rendered_attrs)
     }
 
-    /// The child of `parent` stored under exactly `name`, if any — what a host
-    /// presenting names case-sensitively resolves through. Collisions stay
+    /// The child of `parent` rendered under exactly `name`, if any — what a host
+    /// presenting names case-sensitively resolves through. Folding twins stay
     /// [`lookup`](Self::lookup)'s: this decides what a name refers to, never
     /// whether two names are one.
     pub fn lookup_exact(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
-        self.rendered
-            .children(parent)
-            .into_iter()
+        rendered_children(&self.rendered, parent)
+            .iter()
             .find(|child| child.name() == name)
-            .map(node_attrs)
+            .map(rendered_attrs)
     }
 
     /// The node's attributes, if present in the rendered view (FUSE getattr).
     pub fn attrs(&self, node: NodeId) -> Option<NodeAttrs> {
-        self.rendered.node(node).map(node_attrs)
+        self.rendered
+            .node(node)
+            .map(|meta| node_attrs(meta, meta.name()))
     }
 
     /// Minimal statfs: the node count reachable from the root. Byte/quota
@@ -2149,11 +2146,22 @@ type OwnerNet<'a, T> = OwnerRotationNet<
     Box<dyn Entropy>,
 >;
 
-/// A node name a command carries, held to [`MAX_NODE_NAME_BYTES`].
+/// A name a command authors, held to the one name law ([`crate::name`]) — the
+/// facade is the only boundary every client crosses, so a web caller meets the
+/// same rules a mount enforces.
+fn refuse_unlawful_name(name: &str) -> Result<(), EngineError> {
+    validate_name(name).map_err(|reason| EngineError::MalformedInput {
+        check: reason.check(),
+    })
+}
+
+/// A name a command carries over from the vault, held to
+/// [`MAX_NODE_NAME_BYTES`] alone. A peer authors names this device would refuse,
+/// and the whole law here would strand such a node in the bin forever.
 fn refuse_over_bound_name(name: &str) -> Result<(), EngineError> {
     if name.len() > MAX_NODE_NAME_BYTES {
         return Err(EngineError::MalformedInput {
-            check: "node-name-too-long",
+            check: NameError::TooLong.check(),
         });
     }
     Ok(())
@@ -2538,15 +2546,20 @@ pub(crate) fn published_grant_blobs(section: &GrantSection) -> Vec<PublishedGran
         .collect()
 }
 
-fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
+fn node_attrs(meta: &NodeMeta, name: &str) -> NodeAttrs {
     NodeAttrs {
         id: meta.id,
-        name: meta.name().to_owned(),
+        name: name.to_owned(),
         kind: meta.kind,
         size: meta.size,
         mtime: meta.mtime,
         content_version: meta.content_version,
     }
+}
+
+/// A child under the name its folder renders it with, not its stored one.
+fn rendered_attrs(child: &RenderedChild<'_>) -> NodeAttrs {
+    node_attrs(child.meta, child.name())
 }
 
 /// Stamp every folder a focus pass attempted against the caller's clock
@@ -4888,7 +4901,7 @@ where {
         let authored_at = self.seams.scheduler.now();
         match command {
             Command::Create { parent, name, kind } => {
-                refuse_over_bound_name(&name)?;
+                refuse_unlawful_name(&name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, parent)?;
                 refuse_full_parent(&rendered, parent, None, None)?;
@@ -4943,7 +4956,7 @@ where {
                 self.stage_and_notify(&op).await
             }
             Command::Rename { node, new_name } => {
-                refuse_over_bound_name(&new_name)?;
+                refuse_unlawful_name(&new_name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, node)?;
                 refuse_over_budget_rename(&rendered, node, &new_name)?;
@@ -4973,7 +4986,7 @@ where {
                 new_name,
                 replacing,
             } => {
-                refuse_over_bound_name(&new_name)?;
+                refuse_unlawful_name(&new_name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, node)?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
@@ -6856,7 +6869,7 @@ where {
         // on, after a whole upload's worth of staging, entropy and budget.
         let base_version_cid = match &target {
             WriteTarget::NewFile { parent, name } => {
-                refuse_over_bound_name(name)?;
+                refuse_unlawful_name(name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, *parent)?;
                 refuse_full_parent(&rendered, *parent, None, None)?;
@@ -7423,19 +7436,18 @@ where {
         }
         let dead = self.dead_letters.borrow();
         let dead_nodes: BTreeSet<NodeId> = dead.values().filter_map(|(node, _)| *node).collect();
-        let children = rendered
-            .children(folder)
-            .into_iter()
+        let children = rendered_children(&rendered, folder)
+            .iter()
             .map(|child| SnapshotChild {
-                id: child.id,
+                id: child.meta.id,
                 name: child.name().to_owned(),
-                kind: child.kind,
-                size: child.size,
-                mtime: child.mtime,
-                pending: pending.get(&child.id).copied().unwrap_or_default(),
-                dead_letter: dead_nodes.contains(&child.id),
-                content_version: child.content_version,
-                content_cid: child.head_content_cid.clone(),
+                kind: child.meta.kind,
+                size: child.meta.size,
+                mtime: child.meta.mtime,
+                pending: pending.get(&child.meta.id).copied().unwrap_or_default(),
+                dead_letter: dead_nodes.contains(&child.meta.id),
+                content_version: child.meta.content_version,
+                content_cid: child.meta.head_content_cid.clone(),
             })
             .collect();
         let ancestors = rendered
@@ -8062,6 +8074,16 @@ where {
         self.snapshot.borrow().root
     }
 
+    /// Plant a child into the base snapshot the way a peer's committed record
+    /// does: the command boundary's name law never sees it, so a host suite can
+    /// drive names and duplicates this device would refuse to author.
+    #[cfg(any(test, feature = "test-kit"))]
+    pub fn plant_committed_child(&self, parent: NodeId, child: NodeId, name: &str, kind: NodeKind) {
+        let mut base = self.snapshot.borrow_mut();
+        base.upsert_node(NodeMeta::new(child, name, kind));
+        base.link_next(parent, child);
+    }
+
     /// Render the base snapshot with the pending-op overlay applied.
     async fn render(&self) -> Result<Snapshot, EngineError> {
         // Take the base borrow only after the await, and drop it at the end of
@@ -8628,6 +8650,40 @@ mod tests {
             view.lookup(root, "\u{fb01}le.txt").expect("resolves").id,
             twin,
             "each name still resolves to itself"
+        );
+    }
+
+    /// `assert_children_unique` binds a folder's children on `id` and on
+    /// `ipnsName`, never on `name`, so a grantee that mints a low-sorting id can
+    /// commit a child under an owner's exact name. Both must stay reachable, and
+    /// under names a host can tell apart.
+    #[test]
+    fn an_exact_duplicate_renders_under_a_suffix_and_both_children_open() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let planted = NodeId([1; 16]);
+        let owned = NodeId([2; 16]);
+        rendered.upsert_node(NodeMeta::new(planted, "q3.pdf", NodeKind::File));
+        rendered.link(root, planted, 1);
+        rendered.upsert_node(NodeMeta::new(owned, "q3.pdf", NodeKind::File));
+        rendered.link(root, owned, 2);
+        let view = EngineView { rendered };
+
+        let names: Vec<String> = view.children(root).into_iter().map(|c| c.name).collect();
+        assert_eq!(
+            names,
+            ["q3.pdf", "q3 (1).pdf"],
+            "the listing tells them apart"
+        );
+        assert_eq!(view.lookup(root, "q3.pdf").expect("resolves").id, planted);
+        assert_eq!(
+            view.lookup(root, "q3 (1).pdf").expect("resolves").id,
+            owned,
+            "the shadowed child opens under its rendered name"
+        );
+        assert_eq!(
+            view.lookup_exact(root, "q3 (1).pdf").expect("resolves").id,
+            owned
         );
     }
 
@@ -9852,6 +9908,64 @@ mod tests {
             root,
             &"n".repeat(MAX_NODE_NAME_BYTES),
             NodeKind::File,
+        );
+    }
+
+    /// The whole law, not only the length cap: the facade is the one boundary
+    /// every client crosses, so a web caller cannot author a name a mount could
+    /// never carry.
+    #[test]
+    fn a_name_the_law_refuses_is_refused_at_create_and_at_rename() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "keeper.txt", NodeKind::File);
+        let node = block_on(engine.view())
+            .expect("view")
+            .lookup(root, "keeper.txt")
+            .expect("the seeded child")
+            .id;
+
+        for (name, check) in [
+            ("CON", "node-name-reserved-device"),
+            ("a\u{7}b", "node-name-control"),
+            ("a/b", "node-name-separator"),
+            ("re:port", "node-name-reserved-character"),
+            ("report.", "node-name-trailing-dot-or-space"),
+            ("", "node-name-empty"),
+        ] {
+            let refusal = Err(EngineError::MalformedInput { check });
+            assert_eq!(
+                block_on(engine.command(Command::Create {
+                    parent: root,
+                    name: name.to_owned(),
+                    kind: NodeKind::File,
+                })),
+                refusal,
+                "create {name:?}"
+            );
+            assert_eq!(
+                block_on(engine.command(Command::Rename {
+                    node,
+                    new_name: name.to_owned(),
+                })),
+                refusal,
+                "rename to {name:?}"
+            );
+        }
+    }
+
+    /// A name that only a peer could have authored is still restorable: the bin
+    /// carries the vault's own names, and the whole law here would strand a node
+    /// this device refuses to spell.
+    #[test]
+    fn a_restore_is_held_to_the_length_bound_alone() {
+        assert!(refuse_over_bound_name("CON").is_ok());
+        assert!(refuse_unlawful_name("CON").is_err());
+        assert_eq!(
+            refuse_over_bound_name(&"n".repeat(MAX_NODE_NAME_BYTES + 1)),
+            Err(EngineError::MalformedInput {
+                check: "node-name-too-long",
+            })
         );
     }
 

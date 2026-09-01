@@ -157,9 +157,23 @@ fn started_engine_over_queue(entries: &[&[u8]]) -> Started {
     }
 }
 
-/// Seed a child by issuing a facade command directly, which is how a name the
-/// projection would never create — one another client committed — gets into
-/// the rendered view.
+/// Plant a child the way a peer's committed record does, straight into the
+/// base snapshot: the facade holds a command to the name law, so a name no
+/// client of this device could author reaches the mount only from a peer.
+fn plant_child(
+    engine: &mut Engine<FakeSeamTypes>,
+    parent: NodeId,
+    index: u8,
+    name: &str,
+    kind: NodeKind,
+) -> NodeId {
+    let child = NodeId([index; 16]);
+    engine.plant_committed_child(parent, child, name, kind);
+    child
+}
+
+/// Seed a child by issuing a facade command directly — the ordinary authoring
+/// path, which the name law admits.
 fn seed_child(
     engine: &mut Engine<FakeSeamTypes>,
     parent: NodeId,
@@ -1495,18 +1509,100 @@ fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
 
 // --- names arriving from other clients ---
 
+/// A peer commits under the exact name an owner's child holds, and picks the
+/// lower-sorting id. Both must reach the user, under names the kernel can tell
+/// apart, and either must still be removable.
+#[test]
+fn a_peer_committed_duplicate_name_is_listable_and_removable() {
+    let mut started = started_engine_over_queue(&[]);
+    plant_child(
+        &mut started.engine,
+        started.root,
+        1,
+        "q3.pdf",
+        NodeKind::File,
+    );
+    plant_child(
+        &mut started.engine,
+        started.root,
+        2,
+        "q3.pdf",
+        NodeKind::File,
+    );
+    let mut core = OperationCore::new(
+        started.engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill_area(),
+    );
+
+    assert_eq!(
+        names(&mut core, ROOT_INO),
+        vec!["q3.pdf".to_owned(), "q3 (1).pdf".to_owned()]
+    );
+    let twin = block_on(core.lookup(ROOT_INO, "q3 (1).pdf")).expect("the twin resolves");
+    let winner = block_on(core.lookup(ROOT_INO, "q3.pdf")).expect("the winner resolves");
+    assert_ne!(twin.ino, winner.ino, "one name each, not one file twice");
+    block_on(core.unlink(ROOT_INO, "q3 (1).pdf")).expect("and is removable");
+    assert_eq!(names(&mut core, ROOT_INO), vec!["q3.pdf".to_owned()]);
+}
+
+/// The auto-suffix on a name already at the bound used to author 259 bytes,
+/// which the narrow tier drops from every listing and every lookup — the
+/// member's own file, invisible and unremovable through the mount.
+#[test]
+fn a_duplicate_at_the_length_bound_renders_a_name_the_mount_still_carries() {
+    let name = format!("{}.pdf", "n".repeat(MAX_NAME_BYTES - 4));
+    assert_eq!(name.len(), MAX_NAME_BYTES);
+    let mut started = started_engine_over_queue(&[]);
+    plant_child(&mut started.engine, started.root, 1, &name, NodeKind::File);
+    plant_child(&mut started.engine, started.root, 2, &name, NodeKind::File);
+    let mut core = OperationCore::new(
+        started.engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill_area(),
+    );
+
+    let listed = names(&mut core, ROOT_INO);
+    assert_eq!(listed.len(), 2, "both children reach the listing");
+    let suffixed = listed.last().expect("the loser").clone();
+    assert!(suffixed.len() <= MAX_NAME_BYTES, "{} bytes", suffixed.len());
+    assert_eq!(cipherbox_fuse::validate_name(&suffixed), Ok(()));
+    block_on(core.lookup(ROOT_INO, &suffixed)).expect("the loser resolves");
+    block_on(core.unlink(ROOT_INO, &suffixed)).expect("and is removable");
+    assert_eq!(names(&mut core, ROOT_INO), vec![name]);
+}
+
 #[test]
 fn a_name_no_kernel_could_carry_never_reaches_a_listing() {
     // A peer on any client can commit whatever text string it likes, and this
     // crate is what keeps one out of a listing. The over-long case is at
     // `name::emittability_is_the_narrow_tier_of_admission`.
     let hostile = ["a/b", "a\\b", "..", ".", "", "a\0b", "a\nb"];
-    let seed: Vec<(&str, NodeKind)> = hostile
-        .iter()
-        .map(|name| (*name, NodeKind::File))
-        .chain([("keeper.txt", NodeKind::File)])
-        .collect();
-    let mut core = mount_seeded(RecordingAdapter::push_capable(), &seed);
+    let mut started = started_engine_over_queue(&[]);
+    for (index, name) in hostile.iter().enumerate() {
+        let index = u8::try_from(index + 1).expect("a short list");
+        plant_child(
+            &mut started.engine,
+            started.root,
+            index,
+            name,
+            NodeKind::File,
+        );
+    }
+    seed_child(
+        &mut started.engine,
+        started.root,
+        "keeper.txt",
+        NodeKind::File,
+    );
+    let mut core = OperationCore::new(
+        started.engine,
+        RecordingAdapter::push_capable(),
+        CacheBudget::CI,
+        spill_area(),
+    );
 
     assert_eq!(names(&mut core, ROOT_INO), vec!["keeper.txt".to_owned()]);
     for name in hostile {

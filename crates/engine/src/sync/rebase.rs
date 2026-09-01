@@ -24,7 +24,6 @@
 //! with their staged bytes preserved — nothing is silently dropped (#33 D6).
 
 use core::num::NonZeroU64;
-use std::collections::HashSet;
 
 use core::fmt;
 
@@ -32,18 +31,15 @@ use cipherbox_core::codec::RedactedText;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::seams::OpId;
-use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
+use crate::sync::model::{
+    MAX_SUFFIX_PROBE, NodeMeta, Snapshot, TakenNames, collation_key, suffix_name,
+};
 #[cfg(test)]
 use crate::sync::op::NewNode;
 #[cfg(test)]
 use crate::sync::op::ScopeCrossing;
 use crate::sync::op::{Op, OpKind, Replaced};
 use crate::sync::record::{RecordClass, RecordReader};
-
-/// The highest auto-suffix a loser probes before dead-lettering — a folder
-/// jammed with this many colliding siblings is pathological, not a routine
-/// merge.
-const MAX_SUFFIX_PROBE: u32 = 10_000;
 
 /// How one op resolved against the working base.
 #[derive(Clone, PartialEq, Eq)]
@@ -884,36 +880,16 @@ fn resolve_name(
         .filter(|child| !exclude.contains(&child.id))
         .map(|child| collation_key(child.name()).to_string())
         .collect();
-    if !taken.0.contains(&*collation_key(name)) {
+    if !taken.holds(&collation_key(name)) {
         return Some((name.to_owned(), false));
     }
     for n in 2..=MAX_SUFFIX_PROBE {
         let candidate = suffix_name(name, n);
-        if !taken.0.contains(&*collation_key(&candidate)) {
+        if !taken.holds(&collation_key(&candidate)) {
             return Some((candidate.to_string(), true));
         }
     }
     None
-}
-
-/// The folded sibling collation keys of one folder — a verbatim copy of every
-/// sibling name, so the set wipes what it held rather than freeing it intact.
-/// A `HashSet<Zeroizing<String>>` cannot stand in: `Zeroizing` is not `Hash`.
-#[derive(Default)]
-struct TakenNames(HashSet<String>);
-
-impl FromIterator<String> for TakenNames {
-    fn from_iter<I: IntoIterator<Item = String>>(iter: I) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-impl Drop for TakenNames {
-    fn drop(&mut self) {
-        for mut key in self.0.drain() {
-            key.zeroize();
-        }
-    }
 }
 
 /// A dual-link observed repair: the losing parents to unlink from one child.
@@ -1511,6 +1487,39 @@ mod tests {
         assert_eq!(base.node(id(2)).unwrap().name(), "a (2).txt");
         // Both are visible.
         assert_eq!(base.children(id(0)).len(), 2);
+    }
+
+    /// The loser is re-authored under a name this device chose. One past the
+    /// bound is dropped by the projection's narrow tier, which loses the member
+    /// its own file — invisible and unremovable through the mount.
+    #[test]
+    fn an_add_add_loser_at_the_length_bound_stays_emittable() {
+        let name = format!("{}.txt", "a".repeat(crate::name::MAX_NODE_NAME_BYTES - 4));
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), &name, NodeKind::File);
+
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::create(id(2), id(0), &name, NewNode::File { content: None }, 1, AT),
+            SCOPE_ROOTS,
+        );
+
+        let OpResolution::Applied {
+            effective_name: Some(effective),
+            suffixed: true,
+            ..
+        } = res
+        else {
+            panic!("the loser auto-suffixes: {res:?}");
+        };
+        assert!(
+            crate::name::is_emittable(&effective),
+            "{} bytes is past the bound",
+            effective.len()
+        );
+        assert_eq!(base.children(id(0)).len(), 2, "both are visible");
     }
 
     #[test]
