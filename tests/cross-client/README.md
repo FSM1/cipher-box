@@ -28,6 +28,9 @@ timing profile.
   owner's mount reads across
 - a node the owner's tab publishes **inside** the scope root the grant promoted,
   read at the owner's own mount on one nocache pass, and at the grantee too
+- a node the owner's **mount** creates and then deletes inside that same
+  promoted root, on the device that minted no grant, read both ways at the
+  owner's tab and at the grantee
 - a write made at the mount while the API is away, and the tab that converges on
   it once the API is back
 - the leader tab dying mid-flow: a follower is promoted, its work still reaches
@@ -36,21 +39,28 @@ timing profile.
 ## The leg that is not here yet
 
 The rotation-under-mount acceptance line is the remaining scenario: the mount
-moves a node out of a granted scope, or deletes one from it, and the engine
-rotates the scope as one transaction with the mutation.
+moves a node out of a granted scope, and the engine rotates the scope as one
+transaction with the mutation.
 
-It was blocked on the write plane of a promoted scope root. A device that did
-not cut the grant proved the scope for reading and opened no write plane, so the
-mount's change reached no other host. `ScopeWalk::recover_write_plane_from_pointer`
-now recovers that plane from the owner-vouched scope pointer, and a proved root
-that still opens no write plane reports `WritePlaneDark` rather than a silent
-`fresh`. The scenario lands next, on that footing.
+A move that takes a node **out of** a granted scope never publishes. The mount
+applies it to its own render and reports `staleness: fresh`, `deadLetters: 0`
+and no warning, while the owner's tab keeps the node inside the granted folder
+and lists nothing at the root.
 
-A related limit shapes the offline scenario: a tab that cold-starts onto a vault
-a mount already published does not converge on it. The scenario therefore holds
-its second host up across the outage.
+The promoted scope's write plane is not the cause:
+`mount-write-in-promoted-scope` publishes a create and a delete inside the
+granted folder on that same mount. The engine owes a scope-exit rotation for a
+move that leaves a granted scope, and it does not classify the crossing that
+owes it. That blocks the leg, and there is no scenario for it yet.
 
-One further cross-client scenario lives in the web suite rather than here:
+## A limit the offline scenario works around
+
+A tab that cold-starts onto a vault a mount already published does not converge
+on it. The offline scenario therefore holds its second host up across the
+outage.
+
+## The slice that lives elsewhere
+
 `tests/web-e2e/tests/cross-client.spec.ts` holds the timing-profile slice the
 merge-blocking `Web E2E Smoke` gate runs, which needs no mount.
 
@@ -65,9 +75,12 @@ up, and both the desktop binary and the web bundle must be built.
    `CORS_ALLOWED_ORIGINS=http://localhost:4175`. Do **not** start the API: this
    suite owns that process, because a scenario takes it away.
 
-2. Build the web bundle carrying the introspection hook:
+2. Build the web bundle carrying the introspection hook. Clear `NODE_ENV`
+   first: `vite` reads it, and `test` builds a bundle that still points at the
+   dev Service Worker, which never installs from a built directory.
 
    ```sh
+   unset NODE_ENV
    export VITE_ENVIRONMENT=ci VITE_API_URL=http://localhost:3000 \
      VITE_ROUTING_ENDPOINTS=http://localhost:3001 \
      VITE_READ_ACCELERATOR_URL=http://127.0.0.1:8080

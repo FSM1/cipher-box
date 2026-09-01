@@ -5,10 +5,9 @@
  * poll cadence, and nothing sleeps (blueprint/testing.md "The DX hook").
  */
 
-import { strict as assert } from 'node:assert';
 import { expect } from '@playwright/test';
 import { FOLDER, grantOneFolder, standing } from '../share';
-import { projects } from '../scenario';
+import { mountHeld, projects } from '../scenario';
 import type { Scenario, ScenarioContext } from '../scenario';
 
 export const shareGrantCut: Scenario = {
@@ -16,10 +15,7 @@ export const shareGrantCut: Scenario = {
   async run(context: ScenarioContext) {
     const { mount, owner, grantee, scope } = await grantOneFolder(context);
 
-    const granted = await mount.status();
-    assert.equal(granted.deadLetters, 0, 'the scope cut dead-letters nothing at the mount');
-    assert.deepEqual(granted.warnings, [], 'the scope cut raises no warning at the mount');
-    assert.equal(granted.mount.state, 'mounted', 'the scope cut keeps the mount');
+    mountHeld(await mount.status(), 'the scope cut');
 
     // The grantee holds the scope, so it browses the shared subtree the accept
     // grafted beside its own root.
@@ -42,9 +38,6 @@ export const shareGrantCut: Scenario = {
     // rotation in one pass, and still holds the folder it granted.
     await mount.refresh();
     await projects(context, mount.mountRoot, FOLDER);
-    const cut = await mount.status();
-    assert.equal(cut.deadLetters, 0, 'the revocation rotation dead-letters nothing at the mount');
-    assert.deepEqual(cut.warnings, [], 'the revocation rotation raises no warning at the mount');
-    assert.equal(cut.mount.state, 'mounted', 'the revocation rotation keeps the mount');
+    mountHeld(await mount.status(), 'the revocation rotation');
   },
 };

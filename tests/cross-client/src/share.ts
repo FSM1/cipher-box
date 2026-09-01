@@ -7,7 +7,7 @@
 import { expect } from '@playwright/test';
 import type { Instance } from '../../desktop-e2e/src/instance';
 import { poll } from '../../desktop-e2e/src/poll';
-import { projects, type ScenarioContext } from './scenario';
+import { passUntil, projects, rowsListed, type ScenarioContext } from './scenario';
 import { nodeOf } from '../../web-e2e/vault';
 import type { WebHost } from './web';
 
@@ -66,42 +66,55 @@ export async function grantOneFolder(context: ScenarioContext): Promise<Granted>
   return { mount, owner, grantee, scope };
 }
 
-/**
- * Waits for a pass at `host` to list `name` inside the shared scope `scope`.
- *
- * Each read is a fresh pass, on the same grounds as [`standing`].
- */
-export async function listsInScope(
+/** Waits for a pass at `host` to list `name` inside the shared scope `scope`. */
+export function listsInScope(
   context: ScenarioContext,
   host: WebHost,
   scope: string,
   name: string
 ): Promise<void> {
-  await poll(
-    async () => {
-      // The pass runs with the shared scope focused, because the focus window
-      // is what the sync tick walks.
-      await host.shared.open();
-      await host.shared.readAgain();
-      await host.shared.openShare(scope);
-      await host.refresh();
-      return host.files.row(name).count();
-    },
-    (count) => count === 1,
-    {
-      what: `a pass at ${host.name} to list ${name} in the shared scope`,
-      timeoutMs: context.deadlines.refreshMs,
-      intervalMs: context.deadlines.intervalMs,
-    }
+  return passUntil(context, `${host.name} to list ${name} in the shared scope`, 1, () =>
+    scopeRows(host, scope, name, null)
   );
+}
+
+/**
+ * Waits for a pass at `host` to stop listing `name` inside the shared scope,
+ * while it still lists `survivor`.
+ */
+export function dropsFromScope(
+  context: ScenarioContext,
+  host: WebHost,
+  scope: string,
+  name: string,
+  survivor: string
+): Promise<void> {
+  return passUntil(context, `${host.name} to drop ${name} from the shared scope`, 0, () =>
+    scopeRows(host, scope, name, survivor)
+  );
+}
+
+/** Reads how many rows one fresh pass lists for `name` inside the shared scope. */
+async function scopeRows(
+  host: WebHost,
+  scope: string,
+  name: string,
+  survivor: string | null
+): Promise<number> {
+  // The pass runs with the shared scope focused, because the focus window is
+  // what the sync tick walks.
+  await host.shared.open();
+  await host.shared.readAgain();
+  await host.shared.openShare(scope);
+  await host.refresh();
+  return rowsListed(host, name, survivor);
 }
 
 /**
  * The standing the grantee's own passes reach for one scope.
  *
  * The recipient's mailbox leg rides the nocache pass, so a refresh both accepts
- * a delivered share and classifies it. A standing is *discovered*, never
- * delivered, so each read is a fresh pass rather than a retry of one.
+ * a delivered share and classifies it.
  */
 export async function standing(
   context: ScenarioContext,
