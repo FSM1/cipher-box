@@ -220,10 +220,7 @@ export interface ReceivedShareDescriptor {
   resolution: ReceivedShareResolution | null;
 }
 
-/**
- * One soft-deleted node, as data. Key-free: the entry's bin-held key and its
- * `ipnsName` cross nowhere.
- */
+/** One soft-deleted node, as data (mirrors the facade `BinRow`). */
 export interface BinRowDescriptor {
   node: Uint8Array;
   kind: NodeKind;

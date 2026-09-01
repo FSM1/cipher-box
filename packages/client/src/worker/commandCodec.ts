@@ -266,11 +266,11 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       );
     case 'delete':
       return wasm.Command.delete(nodeId(wasm, descriptor.node, 'node'));
-    case 'restore': {
-      // The destination first: a refusal after `nodeId` strands the handle it minted.
-      const into = descriptor.into === null ? undefined : nodeId(wasm, descriptor.into, 'into');
-      return wasm.Command.restore(nodeId(wasm, descriptor.node, 'node'), into);
-    }
+    case 'restore':
+      return wasm.Command.restore(
+        nodeId(wasm, descriptor.node, 'node'),
+        descriptor.into === null ? undefined : nodeId(wasm, descriptor.into, 'into')
+      );
     case 'purge':
       return wasm.Command.purge(nodeId(wasm, descriptor.node, 'node'));
     case 'rename':

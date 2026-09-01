@@ -8353,9 +8353,9 @@ where {
         BinnedNode::of(&index, &node.0).ok_or(EngineError::NotBinned)
     }
 
-    /// The owner's bin index load, with a refusal of bytes the plane actually
-    /// served already turned into the fail-closed trust violation — never the
-    /// availability a caller retries on (AGENTS.md rule 6).
+    /// The owner's bin index load. A refusal of bytes the plane actually served
+    /// is a trust verdict at whichever rung it lands on, never the availability
+    /// a caller retries on (AGENTS.md rule 6), so both rungs are charged here.
     ///
     /// A cached index answers as readily as a resolved one: the drain re-reads
     /// the entry before it publishes anything, and a purge is conditional on the
@@ -8377,9 +8377,11 @@ where {
             &keys,
         )
         .await;
-        if let BinIndexLoad::Empty(reason) = load
-            && bin_load_is_a_verdict(reason)
-        {
+        let reason = match load {
+            BinIndexLoad::Resolved(_) => return Ok(load),
+            BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,
+        };
+        if bin_load_is_a_verdict(reason) {
             let message = format!("bin index refused: {reason:?}");
             emit_trust_violation(&self.events, keys.name().as_str(), message.clone());
             return Err(EngineError::TrustViolation { message });

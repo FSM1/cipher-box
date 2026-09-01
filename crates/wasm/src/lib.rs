@@ -1121,9 +1121,7 @@ impl BinView {
             .collect()
     }
 
-    /// Which rung the load reached. `Defaults` means this device established no
-    /// index, so an empty `entries` is the fallback and not a read: a host must
-    /// render that apart from a bin it read.
+    /// Which rung the bin index load reached.
     #[wasm_bindgen(getter)]
     pub fn origin(&self) -> SettingsOrigin {
         self.inner.origin.into()

@@ -4084,6 +4084,19 @@ fn binned_held_key(
         .expect("the entry carries the key the subtree re-keyed under")
 }
 
+/// The deletion time the entry for `node` was stamped with.
+fn binned_deleted_at(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, node: NodeId) -> u64 {
+    let BinIndexLoad::Resolved(index) = load_bin(world, device, blocks) else {
+        panic!("the bin index resolved from the network");
+    };
+    index
+        .entries
+        .iter()
+        .find(|entry| entry.node_id == node.0)
+        .expect("the node is binned")
+        .deleted_at
+}
+
 /// The default restore: the entry names the folder the node came from, and the
 /// node goes back under the name it had there. The re-key runs in reverse, so
 /// the destination scope reads it again and the bin-held key stops opening it
@@ -4272,25 +4285,73 @@ fn the_bin_read_names_every_soft_deleted_node_with_its_origin_and_deletion_time(
     assert_eq!(row.kind, NodeKind::File);
     assert_eq!(row.origin_parent, ROOT, "a restore defaults to this folder");
     assert_eq!(row.origin_name, "notes.txt");
-    assert!(row.deleted_at > 0, "expiry is measured from this");
+    assert_eq!(
+        row.deleted_at,
+        binned_deleted_at(&world, &alice, &blocks, doomed),
+        "the row carries the injected deletion time expiry is measured from"
+    );
     assert!(
         !format!("{row:?}").contains("notes.txt"),
         "a row's Debug must not put a user's file name in a log"
     );
+}
 
-    block_on(engine.command(Command::Restore {
-        node: doomed,
-        into: None,
-    }))
-    .expect("the restore stages");
+/// A replayed bin index is a verdict on bytes the plane served, so the read
+/// refuses it. Rendering the cached copy as staleness would let a replay show a
+/// bin that is missing whatever the owner deleted since (AGENTS.md rule 6).
+#[test]
+fn the_bin_read_refuses_a_replayed_index_rather_than_reading_it_as_stale() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    for name in ["first.txt", "second.txt"] {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.into(),
+            },
+            &(0..200u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
     tick(&world, &engine, &mut tasks);
 
+    let bin_keys = BinIndexKeys::derive(&SECRET);
+    let bin_name = bin_keys.name();
+    let first = child_id(&engine, ROOT, "first.txt");
+    block_on(engine.command(Command::Delete { node: first })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let replayed = world
+        .record_store
+        .record_at(&endpoint, bin_name.as_str())
+        .expect("the first delete published a bin index");
+
+    // A second delete moves the index past the record captured above.
+    let second = child_id(&engine, ROOT, "second.txt");
+    block_on(engine.command(Command::Delete { node: second })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        block_on(engine.bin()).expect("the bin reads").entries.len(),
+        2
+    );
+
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, bin_name.as_str(), replayed.clone());
+    }
+
     assert!(
-        block_on(engine.bin())
-            .expect("the bin reads")
-            .entries
-            .is_empty(),
-        "a restored node leaves the read"
+        matches!(
+            block_on(engine.bin()),
+            Err(EngineError::TrustViolation { .. })
+        ),
+        "a replayed index is a verdict, never an empty or a stale bin"
     );
 }
 

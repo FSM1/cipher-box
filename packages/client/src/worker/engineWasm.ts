@@ -161,10 +161,7 @@ export interface WasmReceivedShareRow {
   readonly resolution?: string;
 }
 
-/**
- * wasm-bindgen `BinRow` — one soft-deleted node. Key-free by construction: the
- * entry's bin-held key and its `ipnsName` have no getter.
- */
+/** wasm-bindgen `BinRow` — one soft-deleted node, key-free by construction. */
 export interface WasmBinRow {
   readonly node: Uint8Array;
   readonly kind: number;

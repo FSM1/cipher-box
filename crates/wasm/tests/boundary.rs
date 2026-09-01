@@ -12,7 +12,7 @@ use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::settings::MAX_BIN_RETENTION_DAYS;
 use cipherbox_wasm::{
-    ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase,
+    BinView, ByoIpfsConfig, ByoKind, Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase,
     PendingClass, Permission, PinMode, SnapshotView, Staleness, VaultSettings,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
@@ -213,6 +213,70 @@ fn upload_progress_crosses_with_its_op_id_and_block_counters() {
             .js_typeof(),
         JsValue::from_str("bigint")
     );
+}
+
+/// The bin read surface crosses with boundary-correct JS shapes: node ids as
+/// `Uint8Array`, the deletion time as `bigint`, and the rows as a JS array. The
+/// entry's bin-held key and its `ipnsName` have no getter, so a row carries
+/// nothing a host could route or unseal with.
+#[wasm_bindgen_test]
+fn bin_view_getters_cross_with_boundary_shapes() {
+    let view: JsValue = BinView::from_facade(facade::BinView {
+        entries: vec![facade::BinRow {
+            node: facade::NodeId([4u8; 16]),
+            kind: facade::NodeKind::Folder,
+            origin_parent: facade::NodeId([1u8; 16]),
+            origin_name: "holiday".into(),
+            deleted_at: u64::MAX,
+            scope: facade::NodeId([2u8; 16]),
+        }],
+        origin: cipherbox_engine::SettingsOrigin::Stale,
+    })
+    .into();
+
+    let get = |target: &JsValue, key: &str| {
+        Reflect::get(target, &JsValue::from_str(key)).expect("getter is readable")
+    };
+
+    let entries = get(&view, "entries");
+    assert!(entries.is_instance_of::<Array>());
+    let entries = entries.unchecked_into::<Array>();
+    assert_eq!(entries.length(), 1);
+
+    let row = entries.get(0);
+    for (key, byte) in [("node", 4u8), ("originParent", 1), ("scope", 2)] {
+        let value = get(&row, key);
+        assert!(value.is_instance_of::<Uint8Array>(), "{key} must be bytes");
+        assert_eq!(
+            value.unchecked_into::<Uint8Array>().to_vec(),
+            vec![byte; 16]
+        );
+    }
+    assert_eq!(
+        get(&row, "originName").as_string().as_deref(),
+        Some("holiday")
+    );
+
+    let deleted_at = get(&row, "deletedAt");
+    assert_eq!(
+        deleted_at.js_typeof(),
+        JsValue::from_str("bigint"),
+        "deletedAt must cross as a JS bigint, never a number"
+    );
+    let decimal = String::from(
+        deleted_at
+            .unchecked_into::<BigInt>()
+            .to_string(10)
+            .expect("bigint renders in base 10"),
+    );
+    assert_eq!(decimal, u64::MAX.to_string());
+
+    for absent in ["heldKey", "ipnsName"] {
+        assert!(
+            get(&row, absent).is_undefined(),
+            "{absent} must have no getter on the boundary"
+        );
+    }
 }
 
 /// The snapshot read surface crosses with boundary-correct JS shapes: node ids

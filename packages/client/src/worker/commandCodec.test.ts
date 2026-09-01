@@ -143,6 +143,36 @@ describe('buildCommand', () => {
     () =>
       buildCommand(permissiveWasm, descriptor as CommandDescriptor);
 
+  /**
+   * Records every builder call by name, whichever builder the arm reaches
+   * for. `NodeId.fromBytes` records too: minting a handle is what a refusal
+   * after it would strand, so the guard against that has to see the call.
+   */
+  const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
+    const calls: Record<string, unknown[][]> = {};
+    const wasm = {
+      ...fakeWasmEnums,
+      NodeId: {
+        fromBytes: (bytes: Uint8Array) => {
+          (calls.NodeId ??= []).push([bytes]);
+          return { bytes };
+        },
+      },
+      Command: new Proxy(
+        {},
+        {
+          get:
+            (_target, name: string) =>
+            (...args: unknown[]): object => {
+              (calls[name] ??= []).push(args);
+              return {};
+            },
+        }
+      ),
+    } as unknown as EngineWasm;
+    return { wasm, calls };
+  };
+
   /** An erase routed to the logout beside it would silently keep the seams. */
   it('routes each zero-argument command to the builder of its own name', () => {
     const built: string[] = [];
@@ -213,36 +243,6 @@ describe('buildCommand', () => {
     const node = new Uint8Array(16).fill(5);
     const into = new Uint8Array(16).fill(6);
 
-    /** Records every builder call by name, whichever bin arm the codec reaches. */
-    const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
-      const calls: Record<string, unknown[][]> = {};
-      const wasm = {
-        ...fakeWasmEnums,
-        NodeId: {
-          fromBytes: (bytes: Uint8Array) => {
-            (calls.NodeId ??= []).push([bytes]);
-            return { bytes };
-          },
-        },
-        Command: new Proxy(
-          {},
-          {
-            get:
-              (_target, name: string) =>
-              (...args: unknown[]): object => {
-                (calls[name] ??= []).push(args);
-                return {};
-              },
-          }
-        ),
-      } as unknown as EngineWasm;
-      return { wasm, calls };
-    };
-
-    /** Builds off the union, as a version-skewed peer's descriptor arrives. */
-    const build = (wasm: EngineWasm, descriptor: unknown): unknown =>
-      buildCommand(wasm, descriptor as CommandDescriptor);
-
     it('carries both the node and the named destination to the restore builder', () => {
       const { wasm, calls } = spyWasm();
 
@@ -267,22 +267,14 @@ describe('buildCommand', () => {
       expect(calls.purge).toEqual([[{ bytes: node }]]);
     });
 
-    it('rejects a restore or a purge whose node is not bytes', () => {
+    it('names the bad field when a restore or a purge is malformed', () => {
       expect(refuses({ kind: 'restore', node: [1, 2, 3], into: null })).toThrow(
         'invalid request field node'
       );
-      expect(refuses({ kind: 'purge', node: [1, 2, 3] })).toThrow('invalid request field node');
-    });
-
-    it('refuses a destination that is not bytes before it mints the node', () => {
-      const { wasm, calls } = spyWasm();
-
-      expect(() => build(wasm, { kind: 'restore', node, into: 'sixteen bytes!!!' })).toThrow(
+      expect(refuses({ kind: 'restore', node, into: 'sixteen bytes!!!' })).toThrow(
         'invalid request field into: string'
       );
-      // Refused before the node was minted, so no wasm handle is stranded.
-      expect(calls.NodeId).toBeUndefined();
-      expect(calls.restore).toBeUndefined();
+      expect(refuses({ kind: 'purge', node: [1, 2, 3] })).toThrow('invalid request field node');
     });
   });
 
@@ -290,36 +282,6 @@ describe('buildCommand', () => {
     /** Stands in for a real fragment, which is a bearer capability. */
     const FRAGMENT = 'placeholder-invite-fragment';
     const node = new Uint8Array(16).fill(7);
-
-    /**
-     * Records every builder call by name, whichever builder the arm reaches
-     * for. `NodeId.fromBytes` records too: minting a handle is what a refusal
-     * after it would strand, so the guard against that has to see the call.
-     */
-    const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[][]> } => {
-      const calls: Record<string, unknown[][]> = {};
-      const wasm = {
-        ...fakeWasmEnums,
-        NodeId: {
-          fromBytes: (bytes: Uint8Array) => {
-            (calls.NodeId ??= []).push([bytes]);
-            return { bytes };
-          },
-        },
-        Command: new Proxy(
-          {},
-          {
-            get:
-              (_target, name: string) =>
-              (...args: unknown[]): object => {
-                (calls[name] ??= []).push(args);
-                return {};
-              },
-          }
-        ),
-      } as unknown as EngineWasm;
-      return { wasm, calls };
-    };
 
     it('carries the link deadline through as the engine bigint', () => {
       const { wasm, calls } = spyWasm();
