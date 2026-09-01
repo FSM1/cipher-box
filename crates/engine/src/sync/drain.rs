@@ -56,7 +56,7 @@ use crate::facade::{
     emit_trust_violation,
 };
 use crate::gate::GateStage;
-use crate::gate::floor;
+use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
     AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
@@ -343,6 +343,13 @@ enum Halt {
     /// record plane, a load this pass could not do. Charged nothing and retried
     /// on the next tick, so an outage never abandons an op.
     Unclassified,
+    /// A node this pass must re-author is still behind the scope's epoch, so
+    /// only the lazy wave clears it (CONTEXT.md "Epoch lag"). A queued write
+    /// left stale by a cut the gate legitimately adopted is neither a trust
+    /// violation nor a refusal its own bytes earn: charged nothing, and
+    /// re-driven at the pass that finds the node lifted. Charging it would
+    /// dead-letter a good write whenever a wave outran the attempt budget.
+    EpochLagged,
     /// The op's record reached the record plane and did not confirm. Charged
     /// against the attempt budget, because a retry re-signs at the same
     /// sequence and a jammed name would otherwise retry forever. The PUT was
@@ -389,6 +396,18 @@ enum Halt {
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass.
     Cancelled,
+}
+
+/// The halt a gate rejection earns on a node this pass wanted to re-author:
+/// epoch lag alone is the wave's to clear, so it takes [`Halt::EpochLagged`]
+/// and every other reason keeps the caller's own verdict.
+fn halt_for_rejection(reason: &RejectionReason, otherwise: Halt) -> Halt {
+    match reason {
+        RejectionReason::EpochBelowFloor { .. } => Halt::EpochLagged,
+        RejectionReason::Trust(_)
+        | RejectionReason::SequenceNotNewer { .. }
+        | RejectionReason::ScopeRootNotResealable { .. } => otherwise,
+    }
 }
 
 /// A failed publish, and whether its record nonetheless confirmed at its name.
@@ -1068,7 +1087,7 @@ where
             self.clear_bin_index_hold();
         }
         match halt {
-            Halt::Unclassified => {}
+            Halt::Unclassified | Halt::EpochLagged => {}
             // The facade undid the op against the blocks it could see when the
             // cancel landed. One more can confirm inside that window — the
             // upload the drain was already awaiting — and it would be charged
@@ -1441,17 +1460,31 @@ where
                 .ok_or(Halt::Unclassified)?,
             ResolveOutcome::Current { record_bytes } => record_bytes,
             ResolveOutcome::NoUpdate => resolved.last_known_good.ok_or(Halt::Unclassified)?,
-            ResolveOutcome::TrustViolation(_) => return Err(Halt::Unclassified),
+            ResolveOutcome::TrustViolation(rejection) => {
+                return Err(halt_for_rejection(&rejection.reason, Halt::Unclassified));
+            }
         };
         let (adopted, envelope) = adopter
             .open_carried_at_floor(&name, &record_bytes)
             .await
-            .map_err(|_| Halt::UploadAttempt)?;
+            .map_err(|error| match error {
+                GateError::Rejected(rejection) => {
+                    halt_for_rejection(&rejection.reason, Halt::UploadAttempt)
+                }
+                GateError::Seam(_) => Halt::UploadAttempt,
+            })?;
         // The same two rollback guards the root load makes: this build authors
         // exactly `ENVELOPE_V`, and re-sealing a node at another epoch than the
         // scope's would cross the AAD epoch binding.
-        if envelope.v != ENVELOPE_V || adopted.epoch != epoch {
+        if envelope.v != ENVELOPE_V {
             return Err(Halt::Unclassified);
+        }
+        if adopted.epoch != epoch {
+            return Err(if adopted.epoch < epoch {
+                Halt::EpochLagged
+            } else {
+                Halt::Unclassified
+            });
         }
         Ok(LoadedNode {
             name,
@@ -4863,6 +4896,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::HeldByBinIndex(_)
         | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
+        Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
         }
@@ -5433,5 +5467,49 @@ mod tests {
         let no_room = upload_failure(Halt::ScopeRootNotResealable).expect("a reported verdict");
         let oversized = upload_failure(Halt::HeadOversized).expect("a reported verdict");
         assert_ne!(no_room, oversized);
+    }
+
+    /// A cut raises a scope's read-epoch floor at once and the lazy wave lifts
+    /// the interior behind it, so a node the wave has not reached rejects on
+    /// the epoch stage until it does. That is the wave's state, not a verdict
+    /// on the queued write: charging it spends the budget on a condition no
+    /// retry of these bytes clears, and dead-letters a write nobody got wrong.
+    #[test]
+    fn an_epoch_lagged_target_is_held_for_the_wave_rather_than_charged() {
+        let lagged = RejectionReason::EpochBelowFloor { floor: 4, epoch: 3 };
+        for caller in [Halt::Unclassified, Halt::UploadAttempt] {
+            assert_eq!(
+                halt_for_rejection(&lagged, caller),
+                Halt::EpochLagged,
+                "a node behind the wave takes the wave's own hold",
+            );
+        }
+        assert!(
+            upload_failure(Halt::EpochLagged).is_some(),
+            "the member is told the write is waiting, never left with silence",
+        );
+    }
+
+    /// Every other rejection is attributable, so the caller's own verdict
+    /// stands — an epoch carve-out that also swallowed a rollback or a forged
+    /// section would turn a fail-closed refusal into an unbounded retry.
+    #[test]
+    fn only_epoch_lag_is_carved_out_of_the_callers_own_verdict() {
+        for reason in [
+            RejectionReason::Trust(cipherbox_core::error::TrustViolation::DuplicateId.into()),
+            RejectionReason::SequenceNotNewer {
+                floor: 9,
+                sequence: 8,
+            },
+            RejectionReason::ScopeRootNotResealable { size: 2, limit: 1 },
+        ] {
+            for caller in [Halt::Unclassified, Halt::UploadAttempt] {
+                assert_eq!(
+                    halt_for_rejection(&reason, caller),
+                    caller,
+                    "an attributable rejection keeps the verdict its own leg gave it",
+                );
+            }
+        }
     }
 }
