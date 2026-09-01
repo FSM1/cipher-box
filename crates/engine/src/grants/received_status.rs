@@ -41,6 +41,7 @@ use super::accept::ReceivedShareStore;
 use super::accept::{BookmarkKey, ReceivedShare};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
+use super::grafted::GraftedSharers;
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
 use super::revocation::{ResolutionClass, ResolutionFacts, classify};
@@ -75,6 +76,9 @@ pub(crate) struct ScopeRender<'a> {
     pub base: &'a RefCell<Snapshot>,
     /// Scope id -> the recovered read scope seed.
     pub read_seeds: &'a RefCell<ScopeSeeds>,
+    /// Which identity granted each scope root the tree holds by graft — the
+    /// floor namespace every leg below such a root must read in.
+    pub grafted_sharers: &'a RefCell<GraftedSharers>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -131,6 +135,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // to decode: a vault that has accepted nothing pays none of it.
         if received.iter().next().is_none() {
             verdicts.borrow_mut().clear();
+            render.grafted_sharers.borrow_mut().clear();
             return;
         }
         let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
@@ -154,6 +159,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .granted_scope_roots()
             .into_iter()
             .map(|granted| granted.scope_id)
+            .collect();
+        // Every bookmarked scope id, ambiguous ones included: a third sharer may
+        // not name as its own child an id that two others contest.
+        let scope_roots: BTreeSet<[u8; 16]> = received.iter().map(|share| share.scope_id).collect();
+        // Rebuilt each pass, like the verdicts. It covers every renderable
+        // scope and not only the ones this pass grafts: a revoked share keeps
+        // the listing it last rendered, and the leg below it must keep reading
+        // the floor that revoked it.
+        *render.grafted_sharers.borrow_mut() = received
+            .iter()
+            .filter(|share| renderable.contains(&share.scope_id))
+            .map(|share| (share.scope_id, share.sharer_identity_pk))
             .collect();
 
         let mut refreshed = BTreeMap::new();
@@ -197,7 +214,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             if class == ResolutionClass::Granted && renderable.contains(&share.scope_id) {
                 if let Some(candidate) = &candidate {
-                    self.graft(candidate, share, contact, epoch_floor, render, &renderable)
+                    self.graft(candidate, share, contact, epoch_floor, render, &scope_roots)
                         .await;
                 }
             }
@@ -274,7 +291,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         contact: &Contact,
         epoch_floor: u64,
         render: &ScopeRender<'_>,
-        renderable: &BTreeSet<[u8; 16]>,
+        scope_roots: &BTreeSet<[u8; 16]>,
     ) {
         // A scope root is the node its own scope is named for, and the bookmark
         // opens under that id. The reader-scope bind is stage 6's, so state it
@@ -282,10 +299,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         if candidate.envelope.id != share.scope_id || candidate.envelope.scope != share.scope_id {
             return;
         }
-        // A bookmark at this vault's own anchor is one the accept flow refuses
-        // ([`AcceptError::OwnVaultScope`]); one persisted before that refusal
-        // existed must not reach the tree it would overwrite.
-        if render.base.borrow().root == NodeId(share.scope_id) {
+        // The scope root is a node id like any other, and a sharer authors it.
+        // One this vault's own tree holds would be renamed here and pruned to the
+        // children this body names. A root another *sharer's* subtree holds is
+        // grafted anyway: a foreign body can link any id under its own folders,
+        // and refusing on that alone would let one contact deny another contact's
+        // share for good.
+        if in_own_tree(&render.base.borrow(), NodeId(share.scope_id)) {
             return;
         }
         let Some(tag) = recipient_blinded_tag(
@@ -359,23 +379,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let root = NodeId(share.scope_id);
         let mut base = render.base.borrow_mut();
-        // A sharer names their own children only. An id that already belongs to
-        // another tree is dropped rather than relinked under this shared root:
-        // `project_folder` never unlinks the old parent, so a link accepted here
-        // would leave the node under both, and the higher `link_counter` wins.
-        // Two trees are foreign to this sharer — this vault's own, and every
-        // other accepted scope.
         let children: Vec<ChildRef> = children
             .into_iter()
             .filter(|child| {
-                let id = NodeId(child.id);
-                if id == base.root || base.is_descendant_of(id, base.root) {
-                    return false;
-                }
-                !renderable.iter().any(|other| {
-                    *other != share.scope_id
-                        && (id == NodeId(*other) || base.is_descendant_of(id, NodeId(*other)))
-                })
+                !claimed_elsewhere(&base, NodeId(child.id), share.scope_id, scope_roots)
             })
             .collect();
         // The scope root has no parent here to name it, so the pointer's label
@@ -397,6 +404,34 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             let _ = render.events.unbounded_send(Event::SnapshotUpdated);
         }
     }
+}
+
+/// Whether `id` is already spoken for by a plane other than the grafted scope
+/// `under`: this vault's own tree, or any other bookmarked scope root and the
+/// subtree below it.
+///
+/// A sharer names their own nodes only. [`project_folder`] never unlinks the old
+/// parent, so a link accepted for an id another tree already holds would leave
+/// the node under both, and the higher `link_counter` would win it
+/// ([`Snapshot::winning_link`]). The rule covers the grafted root as well as its
+/// children: the root is a node id like any other, and a body that names one
+/// another tree holds would rename that node and prune it to its own children.
+///
+/// Ambiguous ids count. A scope id two bookmarks claim renders for neither, so a
+/// third sharer must not reach it either.
+fn claimed_elsewhere(
+    base: &Snapshot,
+    id: NodeId,
+    under: [u8; 16],
+    scope_roots: &BTreeSet<[u8; 16]>,
+) -> bool {
+    let foreign_root = |node: NodeId| node.0 != under && scope_roots.contains(&node.0);
+    in_own_tree(base, id) || foreign_root(id) || base.ancestors(id).into_iter().any(foreign_root)
+}
+
+/// Whether `id` is a node this vault's own tree holds.
+fn in_own_tree(base: &Snapshot, id: NodeId) -> bool {
+    id == base.root || base.is_descendant_of(id, base.root)
 }
 
 /// What a resolved scope root supports, as a pure function of the record and the
@@ -474,7 +509,6 @@ mod tests {
     /// This vault's own root, which the shared scope is grafted in beside.
     const VAULT_ROOT: [u8; 16] = [0u8; 16];
     const SHARER_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0x02; IDENTITY_PUBLIC_LEN];
-
     fn sharer_signer() -> EcdsaSigner {
         EcdsaSigner::from_scalar(&[0x31; 32]).expect("valid scalar")
     }
@@ -864,6 +898,7 @@ mod tests {
         entropy: RefCell<SeededEntropy>,
         base: RefCell<Snapshot>,
         read_seeds: RefCell<ScopeSeeds>,
+        grafted_sharers: RefCell<GraftedSharers>,
         verdicts: RefCell<ReceivedVerdicts>,
     }
 
@@ -929,6 +964,7 @@ mod tests {
                 entropy: RefCell::new(SeededEntropy::new(9)),
                 base: RefCell::new(Snapshot::new(NodeId(vault_root))),
                 read_seeds: RefCell::new(ScopeSeeds::new()),
+                grafted_sharers: RefCell::new(GraftedSharers::new()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
             };
             block_on(
@@ -939,7 +975,7 @@ mod tests {
             fx
         }
 
-        /// Bookmark the shared scope, as an accept would have.
+        /// Bookmark every served scope, as an accept would have.
         fn bookmark(&self) {
             self.bookmark_sharers(&[sharer_signer().verifying_key().to_sec1()]);
         }
@@ -1018,6 +1054,7 @@ mod tests {
                     &ScopeRender {
                         base: &self.base,
                         read_seeds: &self.read_seeds,
+                        grafted_sharers: &self.grafted_sharers,
                         events: &events,
                     },
                     UnixMillis(at_millis),
@@ -1267,6 +1304,108 @@ mod tests {
         assert!(
             fx.read_seeds.borrow().is_empty(),
             "and no sharer's seed is cached under it"
+        );
+        assert!(
+            fx.grafted_sharers.borrow().is_empty(),
+            "and no floor namespace answers for it either"
+        );
+    }
+
+    /// The leg below a grafted root reads that root's epoch floors under the
+    /// identity that granted it, so the pass that grafts must record who did.
+    #[test]
+    fn a_grafted_scope_records_the_identity_that_granted_it() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert_eq!(
+            fx.grafted_sharers.borrow().get(&SCOPE).copied(),
+            Some(sharer_signer().verifying_key().to_sec1())
+        );
+    }
+
+    /// A scope root is a node id like any other, and the sharer authors it. A
+    /// body whose root names a node this vault already holds would rename that
+    /// node and prune it to the children the body lists.
+    #[test]
+    fn a_scope_root_at_a_node_this_vault_owns_grafts_nothing() {
+        let kept = [0x11; 16];
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        {
+            let mut base = fx.base.borrow_mut();
+            base.upsert_node(NodeMeta::new(NodeId(SCOPE), "mine", NodeKind::Folder));
+            base.link_next(NodeId(VAULT_ROOT), NodeId(SCOPE));
+            base.upsert_node(NodeMeta::new(NodeId(kept), "keep", NodeKind::Folder));
+            base.link_next(NodeId(SCOPE), NodeId(kept));
+        }
+        fx.bookmark();
+
+        fx.pass(0);
+
+        assert_eq!(
+            fx.listing(),
+            vec!["keep".to_owned()],
+            "this vault's own subtree stands"
+        );
+        assert_eq!(
+            fx.base
+                .borrow()
+                .node(NodeId(SCOPE))
+                .expect("still held")
+                .name(),
+            "mine",
+            "and the sharer could not rename it"
+        );
+        assert!(fx.read_seeds.borrow().is_empty());
+    }
+
+    /// The other side of that guard. A foreign body can link any id under its
+    /// own folders, so a scope root another sharer's subtree already lists must
+    /// still graft: a refusal on that alone gives one contact a channel to deny
+    /// another contact's share.
+    #[test]
+    fn a_scope_root_another_shared_subtree_holds_still_grafts() {
+        let other = [0x77; 16];
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        {
+            let mut base = fx.base.borrow_mut();
+            base.upsert_node(NodeMeta::new(NodeId(other), "theirs", NodeKind::Folder));
+            base.upsert_node(NodeMeta::new(NodeId(SCOPE), "claimed", NodeKind::Folder));
+            base.link_next(NodeId(other), NodeId(SCOPE));
+        }
+        fx.bookmark_with_extra_scope(other);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+        assert!(
+            fx.grafted_sharers.borrow().contains_key(&SCOPE),
+            "and the floor namespace answers for it"
+        );
+    }
+
+    /// The dangerous shape is the transition, not the fresh state. A scope that
+    /// already grafted, and that a second bookmark then contests, must lose its
+    /// floor namespace with the authority it lost — the leg below it refuses
+    /// rather than falling back to this vault's own plane.
+    #[test]
+    fn a_scope_contested_after_it_grafted_leaves_the_floor_map() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        assert!(fx.grafted_sharers.borrow().contains_key(&SCOPE));
+
+        fx.bookmark_sharers(&[
+            sharer_signer().verifying_key().to_sec1(),
+            SHARER_IDENTITY_PK,
+        ]);
+        fx.pass(60_000);
+
+        assert!(
+            fx.grafted_sharers.borrow().is_empty(),
+            "no identity answers for a contested id"
         );
     }
 

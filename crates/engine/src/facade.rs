@@ -46,6 +46,7 @@ use crate::content::{
 };
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
+use crate::grants::grafted::{GraftedSharers, evict_grafted_read_seeds, floor_view};
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
 use crate::grants::{
@@ -2468,7 +2469,7 @@ pub(crate) type ScopeSeeds = BTreeMap<[u8; 16], CachedSeed>;
 /// (`gate::floor`: the read-epoch floor is the revocation boundary, the
 /// write-epoch floor an owner-only clock).
 #[derive(Clone, Copy)]
-enum SeedFloor {
+pub(crate) enum SeedFloor {
     Read,
     Write,
 }
@@ -2492,7 +2493,7 @@ impl SeedFloor {
 /// `None` on a floor-store failure, which also evicts: a seed whose currency
 /// cannot be established is not held, and nothing may be stamped against a floor
 /// that was never read.
-async fn refresh_seed_floor<F: FloorStore>(
+pub(crate) async fn refresh_seed_floor<F: FloorStore>(
     floors: &F,
     cell: &RefCell<ScopeSeeds>,
     scope_id: &[u8; 16],
@@ -2894,6 +2895,11 @@ pub struct Engine<T: SeamTypes> {
     /// override seed), keyed by scope id. In-memory only — never persisted,
     /// never crossing the facade (security rules 1/3); the child read pipeline
     /// derives per-node read keys from them (`node-seed` → `read-key`).
+    ///
+    /// Every key is the vault root scope id or a grafted scope id. The eviction
+    /// pass reads that as an invariant: it drops a seed under any other key,
+    /// because no floor namespace answers for one
+    /// ([`evict_grafted_read_seeds`](crate::grants::grafted::evict_grafted_read_seeds)).
     scope_read_seeds: Rc<RefCell<ScopeSeeds>>,
     /// Per-scope write seeds recovered by gate-passing adopts (the
     /// owner-write-blob seed), keyed by scope id. In-memory only, exactly like
@@ -2934,6 +2940,9 @@ pub struct Engine<T: SeamTypes> {
     /// scope. In-memory: a verdict is what a live resolve found, so a restart
     /// re-earns it rather than rendering one nothing observed this session.
     received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
+    /// Rebuilt by the received-share pass, like
+    /// [`received_verdicts`](Self::received_verdicts).
+    grafted_sharers: Rc<RefCell<GraftedSharers>>,
     /// When a host operation last put the focus window's folder in view
     /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
     /// loop, which is what closes a window the operation stream stopped
@@ -3081,6 +3090,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
+                grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3395,6 +3405,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut verdicts) = self.received_verdicts.try_borrow_mut() {
             verdicts.clear();
+        }
+        if let Ok(mut sharers) = self.grafted_sharers.try_borrow_mut() {
+            sharers.clear();
         }
     }
 
@@ -3913,6 +3926,7 @@ where {
         let focus_refreshed = self.focus_refreshed.clone();
         let pointer_consulted = self.pointer_consulted.clone();
         let received_verdicts = self.received_verdicts.clone();
+        let grafted_sharers = self.grafted_sharers.clone();
         let consult_keys = self.sweep_keys.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
@@ -4028,6 +4042,8 @@ where {
                         &scope_write_seeds,
                     )
                     .await;
+                    let grafted = grafted_sharers.borrow().clone();
+                    evict_grafted_read_seeds(&floors, &grafted, &root_id, &scope_read_seeds).await;
                     let adopter = RootAdopter::new(
                         &gateway,
                         &http,
@@ -4127,11 +4143,17 @@ where {
                             queued_files.extend(targets.files);
                             continue;
                         };
+                        let Some(scope_floors) =
+                            floor_view(&floors, &grafted, &root_id, &scope_root.0)
+                        else {
+                            queued_files.extend(targets.files);
+                            continue;
+                        };
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
                             http: &http,
-                            floors: &floors,
+                            floors: &scope_floors,
                             gateway: &gateway,
                             base: &base,
                             events: &events,
@@ -4260,6 +4282,7 @@ where {
                         &ScopeRender {
                             base: &base,
                             read_seeds: &scope_read_seeds,
+                            grafted_sharers: &grafted_sharers,
                             events: &events,
                         },
                         now,
@@ -6160,13 +6183,14 @@ where {
     /// floor has risen past the one it was recovered under. Every on-demand
     /// read goes through here; the resolve tick evicts once per pass.
     async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
-        refresh_seed_floor(
-            &self.seams.floor_store,
-            &self.scope_read_seeds,
-            scope_id,
-            SeedFloor::Read,
-        )
-        .await;
+        let own_root = self.snapshot.borrow().root.0;
+        let sharers = self.grafted_sharers.borrow().clone();
+        let Some(floors) = floor_view(&self.seams.floor_store, &sharers, &own_root, scope_id)
+        else {
+            self.scope_read_seeds.borrow_mut().remove(scope_id);
+            return None;
+        };
+        refresh_seed_floor(&floors, &self.scope_read_seeds, scope_id, SeedFloor::Read).await;
         cached_seed(&self.scope_read_seeds, scope_id)
     }
 

@@ -6,7 +6,7 @@
 //! cannot live above the facade — the tick polls, and every pointer it finds
 //! runs the same [`accept_share`] flow a host-driven accept runs, gate and all.
 //!
-//! Two rules this leg adds to that flow:
+//! Three rules this leg adds to that flow:
 //!
 //! - **Only this arm's items.** A payload that does not decode as a
 //!   [`SharePointer`] belongs to another consumer of the same inbox and is left
@@ -16,6 +16,9 @@
 //! - **One item never denies the rest.** A refusal is reported and the pass
 //!   moves on, so one hostile or unreachable scope root cannot stall delivery of
 //!   the honest pointers behind it.
+//! - **No sender holds the pass.** Each sender may spend at most
+//!   [`MAX_ACCEPTS_PER_SENDER`] of the pass's slots, so one contact's
+//!   never-retired pointers cannot starve every other contact's share.
 
 use core::cell::RefCell;
 use std::collections::BTreeMap;
@@ -41,6 +44,11 @@ use super::received_share_store::StagingReceivedShareStore;
 /// and a durable persist; the rest stay on the inbox for the next pass, which
 /// until-acked retention guarantees they survive.
 const MAX_ACCEPTS_PER_PASS: usize = 8;
+
+/// How many of one pass's slots a single sender may hold. Only a durable
+/// persist acks an item, so a sender whose pointers no pass can retire would
+/// otherwise hold every slot for good.
+const MAX_ACCEPTS_PER_SENDER: usize = 2;
 
 /// The seams one mailbox pull reads, plus this device's own encryption subkey —
 /// the seal's recipient half and the self-locating tag's other half. Borrowed:
@@ -83,12 +91,13 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
         let Ok(items) = poll_verified(self.mailbox, self.enc_secret, v).await else {
             return;
         };
-        // Ahead of both durable loads, which cost a seal-open each: an inbox
-        // carrying nothing for this arm spends neither.
-        if !items
+        // Decoded once, ahead of both durable loads, which cost a seal-open
+        // each: an inbox carrying nothing for this arm spends neither.
+        let decoded: Vec<(&VerifiedMailboxItem, SharePointer)> = items
             .iter()
-            .any(|item| SharePointer::decode(&item.payload).is_ok())
-        {
+            .filter_map(|item| Some((item, SharePointer::decode(&item.payload).ok()?)))
+            .collect();
+        if decoded.is_empty() {
             return;
         }
         let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
@@ -101,18 +110,25 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             .iter()
             .map(|contact| (contact.identity_pk().to_sec1(), contact))
             .collect();
-        // The budget is spent only on items this arm can retire. An item it
-        // leaves un-acked stays on the inbox, so budgeting before the sender
-        // filter would let a stranger's pointers hold every slot for good.
-        let pointers: Vec<(&VerifiedMailboxItem, SharePointer, &Contact)> = items
-            .iter()
-            .filter_map(|item| {
-                let pointer = SharePointer::decode(&item.payload).ok()?;
-                let contact = by_identity.get(&item.sender_identity.to_sec1())?;
-                Some((item, pointer, *contact))
-            })
-            .take(MAX_ACCEPTS_PER_PASS)
-            .collect();
+        // Both budgets are charged after the sender filter: an item this arm
+        // can never ack stays on the inbox, so it must not spend a slot.
+        let mut spent: BTreeMap<[u8; IDENTITY_PUBLIC_LEN], usize> = BTreeMap::new();
+        let mut pointers: Vec<(&VerifiedMailboxItem, SharePointer, &Contact)> = Vec::new();
+        for (item, pointer) in decoded {
+            if pointers.len() == MAX_ACCEPTS_PER_PASS {
+                break;
+            }
+            let sender = item.sender_identity.to_sec1();
+            let Some(contact) = by_identity.get(&sender) else {
+                continue;
+            };
+            let share = spent.entry(sender).or_default();
+            if *share >= MAX_ACCEPTS_PER_SENDER {
+                continue;
+            }
+            *share += 1;
+            pointers.push((item, pointer, *contact));
+        }
         if pointers.is_empty() {
             return;
         }
@@ -225,6 +241,10 @@ mod tests {
 
     fn sharer_enc() -> X25519Secret {
         X25519Secret::from_scalar([0x33; 32])
+    }
+
+    fn stranger_enc() -> X25519Secret {
+        X25519Secret::from_scalar([0x34; 32])
     }
 
     fn me() -> EcdsaSigner {
@@ -369,11 +389,20 @@ mod tests {
 
         /// One pull pass, with the head block its resolve fetches served.
         fn pull(&self) -> Vec<Event> {
-            self.http.enqueue_response(HttpResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: self.fixture.head_block.clone(),
-            });
+            self.pull_serving(1)
+        }
+
+        /// The same pass, with `heads` head-block fetches served — one per item
+        /// the pass reaches. An unscripted fetch is a seam error, so the count
+        /// is itself the assertion on how far the budget let the pass go.
+        fn pull_serving(&self, heads: usize) -> Vec<Event> {
+            for _ in 0..heads {
+                self.http.enqueue_response(HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: self.fixture.head_block.clone(),
+                });
+            }
             let (sender, mut events) = mpsc::unbounded();
             block_on(
                 ShareInbox {
@@ -528,6 +557,39 @@ mod tests {
             fx.inbox_len(),
             MAX_ACCEPTS_PER_PASS,
             "and only the un-anchored items are left"
+        );
+    }
+
+    /// The contact filter cannot stop an imported contact, and no refusal acks
+    /// its item, so a hostile contact can keep un-retirable pointers on the
+    /// inbox for good. A per-sender share is what keeps them from holding every
+    /// slot of every pass.
+    #[test]
+    fn one_contact_cannot_hold_every_slot_of_the_pass() {
+        let fx = Inbox::new();
+        fx.import(&sharer(), &sharer_enc());
+        fx.import(&stranger(), &stranger_enc());
+        // The pointer binds to its sender, so the sender filter passes it, but
+        // the record's commitment is the other sharer's: the gate refuses it and
+        // the item is never acked.
+        let mut hostile = SharePointer::decode(&fx.pointer()).expect("our own pointer");
+        hostile.sharer_identity_pk = stranger().verifying_key().to_sec1();
+        for i in 0..MAX_ACCEPTS_PER_PASS {
+            fx.post(&stranger(), &hostile.encode(), &format!("hostile-{i}"));
+        }
+        fx.post(&sharer(), &fx.pointer(), "share-1");
+
+        fx.pull_serving(MAX_ACCEPTS_PER_SENDER + 1);
+
+        assert_eq!(
+            fx.bookmarked(),
+            vec![SCOPE],
+            "the contact behind the flood is still served"
+        );
+        assert_eq!(
+            fx.inbox_len(),
+            MAX_ACCEPTS_PER_PASS,
+            "and every un-retirable item is still on the inbox"
         );
     }
 
