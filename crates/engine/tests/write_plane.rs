@@ -4161,6 +4161,157 @@ fn a_restore_with_no_destination_returns_the_node_to_the_folder_its_entry_names(
     );
 }
 
+/// A vault holding `photos/deep.bin`, with `deep.bin` also linked under the
+/// root by a second writer — the dual link `Snapshot` models and the delete
+/// branch has to decide (blueprint/engine.md "Delete branch").
+fn seed_dual_linked_file(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, NodeId) {
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(world, engine, tasks);
+    let photos = child_id(engine, ROOT, "photos");
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(world, engine, tasks);
+    let deep = child_id(engine, photos, "deep.bin");
+    concurrent_root_add(&world.record_store, blocks, file_ref(deep.0, "deep.bin"));
+    tick(world, engine, tasks);
+    assert!(
+        block_on(engine.view()).unwrap().attrs(deep).is_some(),
+        "the second link is in gate-passing state"
+    );
+    (photos, deep)
+}
+
+/// The soft delete re-keys the node out of the scope, so a link it leaves
+/// standing names a record that folder's own readers can no longer open. Every
+/// link goes, under one entry.
+#[test]
+fn a_soft_delete_unlinks_a_dual_linked_node_from_every_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let (photos, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+
+    block_on(engine.command(Command::Delete { node: deep })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["photos".to_owned()],
+        "the root stops naming the node it linked second"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        Vec::<String>::new(),
+        "and so does the folder the node was created in"
+    );
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the soft delete published a bin index record");
+    };
+    assert_eq!(index.entries.len(), 1, "two links, one entry");
+    assert_eq!(index.entries[0].node_id, deep.0);
+    assert!(
+        [ROOT.0, photos.0].contains(&index.entries[0].origin_parent),
+        "the entry names one of the folders that linked it"
+    );
+}
+
+/// The entry names one folder, so a restore returns the node to that folder and
+/// to no other: the second link was a delete's to remove, never a restore's to
+/// put back.
+#[test]
+fn a_restore_returns_a_dual_linked_node_to_its_origin_parent_alone() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let (photos, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+
+    block_on(engine.command(Command::Delete { node: deep })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the soft delete published a bin index record");
+    };
+    let origin = NodeId(index.entries[0].origin_parent);
+
+    block_on(engine.command(Command::Restore {
+        node: deep,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    let other = if origin == ROOT { photos } else { ROOT };
+    assert!(
+        published_names(&world.record_store, &blocks, origin).contains(&"deep.bin".to_owned()),
+        "the folder the entry named holds the node again"
+    );
+    assert!(
+        !published_names(&world.record_store, &blocks, other).contains(&"deep.bin".to_owned()),
+        "and the folder the entry did not name still does not"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "a restored node leaves the bin"
+    );
+}
+
+/// The purge's own unlink proof passes because the delete left no link to find.
+/// A delete that had unlinked one parent only would leave the purge refusing
+/// for good, and the retention deadline queues it with no owner command.
+#[test]
+fn a_purge_after_a_dual_link_soft_delete_finds_no_link_to_refuse_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let (_, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+    let name = write_name(deep);
+    let content: Vec<String> = registration_entries(&alice, &name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+
+    block_on(engine.command(Command::Delete { node: deep })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::Purge { node: deep })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&name.as_str().to_owned()),
+        "the purged node leaves the inventory the republisher walks"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "and the entry goes with it"
+    );
+}
+
 /// A restore may name any folder in the vault, and the node lands there rather
 /// than at the entry's `originParent`.
 #[test]

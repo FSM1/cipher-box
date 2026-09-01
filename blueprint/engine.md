@@ -425,6 +425,14 @@ delete does.
 - **A child that is a scope root stays hard.** Such a child publishes under a
   name this scope's write seed does not derive. Its subtree is sealed under a
   grantee's own seed, and cutting that grantee is a rotation, not a bin entry.
+- **A node the base links more than once unlinks from every one of them.** The
+  delete removes the child ref from every folder the base links the node under
+  and republishes each, under one bin entry whose `originParent` names the
+  winning link's parent. The soft branch re-keys the node out of the scope, so a
+  link left standing would name a record its own folder's readers can no longer
+  open; the hard branch's own reclamation already assumes no link survives. A
+  folder the pass cannot load holds the op rather than publishing a partial
+  unlink.
 
 ### Re-key into the bin
 

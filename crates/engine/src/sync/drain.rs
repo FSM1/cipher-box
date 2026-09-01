@@ -1708,26 +1708,39 @@ where
         to_bin: bool,
     ) -> Result<(), Halt> {
         let target = applied.op.target;
-        let parent = self.published_parent(target)?;
-        self.ensure_folder(scope, pass, parent).await?;
+        let mut unlink_from = Vec::new();
+        for parent in self.published_parents(target)? {
+            self.ensure_folder(scope, pass, parent).await?;
+            if pass
+                .folder(parent)?
+                .children
+                .iter()
+                .any(|child| child.id == target.0)
+            {
+                unlink_from.push(parent);
+            }
+        }
         // Removing an absent ref is the op already satisfied, never a publish.
-        let Some(child) = pass
-            .folder(parent)?
+        let Some((&origin, _)) = unlink_from.split_first() else {
+            return Ok(());
+        };
+        let child = pass
+            .folder(origin)?
             .children
             .iter()
             .find(|child| child.id == target.0)
             .cloned()
-        else {
-            return Ok(());
-        };
+            .ok_or(Halt::Unclassified)?;
 
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
-        // republish the parent, which is where the op completes.
+        // republish every parent, which is where the op completes.
         let doomed = if to_bin && names_this_scope(scope, &child) {
             let unlinked = UnlinkedChild {
                 scope_id: scope.root.0,
-                parent,
+                // The winning link's parent: the folder a reader resolves the
+                // node under, and so the one a restore returns it to.
+                parent: origin,
                 node: target,
                 name: child.name.clone(),
                 kind: child.kind,
@@ -1745,7 +1758,7 @@ where
                 self.enumerate_doomed(
                     scope,
                     pass.epoch,
-                    parent,
+                    origin,
                     target,
                     child.kind,
                     Boundary::None,
@@ -1753,18 +1766,24 @@ where
                 .await?,
             )
         };
-        pass.folder_mut(parent)?
-            .children
-            .retain(|entry| entry.id != target.0);
-        self.publish_folder(
-            scope,
-            pass,
-            parent,
-            applied.op.authored_at.0,
-            Some(applied.op_id),
-        )
-        .await
-        .map_err(Halt::from)?;
+        // Only the last unlink completes the op. A pass that stops part-way
+        // leaves the node binned and still linked, which is the residue the
+        // entry-before-unlink order already settles on the retry.
+        let last = unlink_from.len() - 1;
+        for (at, parent) in unlink_from.into_iter().enumerate() {
+            pass.folder_mut(parent)?
+                .children
+                .retain(|entry| entry.id != target.0);
+            self.publish_folder(
+                scope,
+                pass,
+                parent,
+                applied.op.authored_at.0,
+                (at == last).then_some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        }
         let Some(doomed) = doomed else {
             return Ok(());
         };
@@ -3905,6 +3924,26 @@ where
     /// it goes — so an op rebases onto exactly what the ops before it published.
     fn published_parent(&self, node: NodeId) -> Result<NodeId, Halt> {
         self.base.borrow().parent_of(node).ok_or(Halt::Unclassified)
+    }
+
+    /// Every parent the base links `node` under, winning link first — the order
+    /// [`Snapshot::winning_link`] resolves, so the head of the list is what
+    /// [`Self::published_parent`] would have returned on its own.
+    ///
+    /// A delete acts on the whole list, because it re-keys the node out of the
+    /// scope: a link left standing names a record its own folder's readers can
+    /// no longer open (blueprint/engine.md "Delete branch").
+    fn published_parents(&self, node: NodeId) -> Result<Vec<NodeId>, Halt> {
+        let mut links = self.base.borrow().links_to(node);
+        if links.is_empty() {
+            return Err(Halt::Unclassified);
+        }
+        links.sort_by(|a, b| {
+            b.link_counter
+                .cmp(&a.link_counter)
+                .then(a.parent.cmp(&b.parent))
+        });
+        Ok(links.into_iter().map(|link| link.parent).collect())
     }
 
     // -----------------------------------------------------------------------
