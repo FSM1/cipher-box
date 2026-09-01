@@ -10,6 +10,12 @@
 
 import type { ByoKind, PinMode, VaultSettingsDescriptor } from '@cipherbox/client';
 
+/**
+ * The window a vault keeps before its owner chooses one, mirroring the engine
+ * default. Only a form that has loaded no summary ever uses it.
+ */
+const DEFAULT_BIN_RETENTION_DAYS = 30;
+
 export interface VaultSettingsFields {
   pinMode: PinMode;
   byoEndpoint: string;
@@ -17,6 +23,12 @@ export interface VaultSettingsFields {
   byoAccessToken: string;
   /** Newest-n retention; blank keeps every version within quota. */
   keepLatestVersions: string;
+  /**
+   * Days a soft-deleted node stays in the bin. No control renders it yet, so
+   * the form carries the loaded value untouched: a save replaces the whole
+   * record, and a field this form drops is a choice the member loses.
+   */
+  binRetentionDays: number;
 }
 
 export const DEFAULT_VAULT_SETTINGS_FORM: VaultSettingsFields = {
@@ -25,6 +37,7 @@ export const DEFAULT_VAULT_SETTINGS_FORM: VaultSettingsFields = {
   byoKind: 'kubo',
   byoAccessToken: '',
   keepLatestVersions: '',
+  binRetentionDays: DEFAULT_BIN_RETENTION_DAYS,
 };
 
 export type VaultSettingsDraft =
@@ -54,6 +67,7 @@ export function buildVaultSettings(form: VaultSettingsFields): VaultSettingsDraf
           ? null
           : { endpoint, kind: form.byoKind, accessToken: bearer(form.byoAccessToken) },
       keepLatestVersions: keep === '' ? null : Number(keep),
+      binRetentionDays: form.binRetentionDays,
     },
   };
 }

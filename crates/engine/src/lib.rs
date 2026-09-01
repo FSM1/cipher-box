@@ -49,7 +49,7 @@ pub use api::{
     TestLoginOutcome, UPLOAD_TOO_LARGE, UploadResult,
 };
 pub use bin_index::{
-    BinIndexLoad, BinIndexPublishError, bin_index_name, load_bin_index, publish_bin_index,
+    BinIndexKeys, BinIndexLoad, BinIndexPublishError, load_bin_index, publish_bin_index,
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
@@ -105,10 +105,10 @@ pub use seams::{
     OwedRetire, OwnerScopedFloorStore, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes,
 };
 pub use settings::{
-    DefaultsReason, Placement, PlacementDecision, PlacementRefusal, PlacementSource,
-    SessionPlacement, SettingsLoad, SettingsOrigin, SettingsPublishError, SettingsRefusal,
-    VaultSettings, VaultSettingsSummary, decide_placement, load_settings, placement_of,
-    publish_settings, settings_name,
+    DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, MAX_BIN_RETENTION_DAYS, Placement,
+    PlacementDecision, PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad,
+    SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings, VaultSettingsSummary,
+    decide_placement, load_settings, placement_of, publish_settings, settings_name,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{

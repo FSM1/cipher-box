@@ -420,7 +420,9 @@ pub fn rebase_one(
         OpKind::Create { parent, name, node } => {
             rebase_create(working, op, *parent, name, node.kind())
         }
-        OpKind::Delete { target_sequence } => rebase_delete(working, op, *target_sequence),
+        OpKind::Delete {
+            target_sequence, ..
+        } => rebase_delete(working, op, *target_sequence),
         OpKind::Rename { new_name } => rebase_rename(working, op, new_name),
         OpKind::Relink {
             from_parent,
@@ -1003,7 +1005,12 @@ mod tests {
 
         // The delete snapshotted the target at sequence 3.
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::delete(id(1), 1, AT, 3, false),
+            SCOPE_ROOTS,
+        );
         assert_eq!(res, OpResolution::dropped(DropReason::TargetAdvanced));
         assert!(base.contains(id(1)), "edit wins — the node survives");
     }
@@ -1015,7 +1022,12 @@ mod tests {
         base.node_mut(id(1)).unwrap().record_sequence = 3;
 
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::delete(id(1), 1, AT, 3, false),
+            SCOPE_ROOTS,
+        );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(!base.contains(id(1)));
     }
@@ -1030,7 +1042,12 @@ mod tests {
         with_node(&mut base, id(2), id(3), "deep.bin", NodeKind::File);
 
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 1), SCOPE_ROOTS);
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::delete(id(1), 1, AT, 1, false),
+            SCOPE_ROOTS,
+        );
 
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(!base.contains(id(2)), "no parentless descendant survives");
@@ -1047,7 +1064,12 @@ mod tests {
         with_node(&mut base, id(1), id(2), "trip.txt", NodeKind::File);
 
         let local = base.clone();
-        rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 1), SCOPE_ROOTS);
+        rebase_one(
+            &mut base,
+            &local,
+            &Op::delete(id(1), 1, AT, 1, false),
+            SCOPE_ROOTS,
+        );
 
         assert_eq!(
             rebase_one(
@@ -1070,7 +1092,12 @@ mod tests {
             "a create under a detached descendant"
         );
         assert_eq!(
-            rebase_one(&mut base, &local, &Op::delete(id(2), 1, AT, 1), SCOPE_ROOTS),
+            rebase_one(
+                &mut base,
+                &local,
+                &Op::delete(id(2), 1, AT, 1, false),
+                SCOPE_ROOTS
+            ),
             OpResolution::dropped(DropReason::AlreadySatisfied),
             "a delete of one — the unlink above it already satisfied it"
         );
@@ -2116,7 +2143,7 @@ mod tests {
             sequence: 1,
         });
         let ops = vec![
-            (OpId(1), Op::delete(id(1), 1, AT, 1)),
+            (OpId(1), Op::delete(id(1), 1, AT, 1, false)),
             (
                 OpId(2),
                 Op::move_node(

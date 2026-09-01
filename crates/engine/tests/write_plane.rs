@@ -66,12 +66,13 @@ use cipherbox_engine::testkit::{
     poll_tasks_once, poll_tasks_until_parked, retire_targets as body_targets,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, ApiClient, BlockProgress, Command, CommandOutcome, CommittedSet, ContentProfile,
-    DeadLetter, DeadLetterReason, DefaultsReason, Engine, EngineError, Entropy, EntropyError,
-    Event, EventStream, GatewayConfig, LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN,
-    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal,
-    PrevEpochSeed, RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
-    WriteHistory, WriteTarget, reseal_scope_root, stage_op,
+    ApiBaseUrl, ApiClient, BinIndexKeys, BinIndexLoad, BlockProgress, Command, CommandOutcome,
+    CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter, DeadLetterReason,
+    DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event, EventStream, GatewayConfig,
+    LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
+    OpKind, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordReader,
+    RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory,
+    WriteTarget, decode_queue, load_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -3386,6 +3387,193 @@ fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
     assert_eq!(names, ["photos"], "device B resolves the delete");
 }
 
+/// Seed a zero bin retention, so this session's deletes take the hard path —
+/// unlink, retire, reclaim — that the narratives below assert
+/// (CONTEXT.md "Soft delete").
+fn seed_hard_delete(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) {
+    seed_vault_settings(
+        world,
+        device,
+        blocks,
+        &VaultSettings {
+            bin_retention_days: 0,
+            ..VaultSettings::default()
+        },
+    );
+}
+
+/// Whether the delete queued on `device` is soft, read off the durable op
+/// journal under the owner's own `enc-subkey` — the way a replay reads it.
+fn journaled_delete_to_bin(device: &FakeDevice) -> bool {
+    let enc_secret = kdf::enc_subkey(&SECRET);
+    let raw = block_on(device.staging_store.queued_ops()).expect("the journal reads");
+    decode_queue(&RecordReader::new(&enc_secret), &raw)
+        .mine
+        .iter()
+        .find_map(|(_, op)| match &op.kind {
+            OpKind::Delete { to_bin, .. } => Some(*to_bin),
+            _ => None,
+        })
+        .expect("the journal holds a delete")
+}
+
+/// The retention the session loaded decides the branch, and the verdict is
+/// journaled on the op: a settings save between staging and publish must not
+/// change what an already-queued delete does. A zero retention is the owner
+/// asking for the delete to destroy the node, so it must journal the hard one.
+#[test]
+fn the_loaded_bin_retention_decides_the_journaled_delete_branch() {
+    for (days, to_bin) in [(0u32, false), (DEFAULT_BIN_RETENTION_DAYS, true)] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        seed_vault_settings(
+            &world,
+            &alice,
+            &blocks,
+            &VaultSettings {
+                bin_retention_days: days,
+                ..VaultSettings::default()
+            },
+        );
+
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        create(&mut engine, "doomed");
+        tick(&world, &engine, &mut tasks);
+        let doomed = child_id(&engine, ROOT, "doomed");
+        block_on(engine.command(Command::Delete { node: doomed })).expect("the delete stages");
+
+        assert_eq!(
+            journaled_delete_to_bin(&alice),
+            to_bin,
+            "a retention of {days} journals to_bin {to_bin}",
+        );
+    }
+}
+
+/// The owner's bin index, read back off the network the way a second device
+/// reads it: no engine state, only the seams and the login secret.
+fn load_bin(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) -> BinIndexLoad {
+    serve_http(device, blocks, 8);
+    let gateway = GatewayConfig {
+        accelerator: Some("https://gw.test".into()),
+        public_fallbacks: Vec::new(),
+    }
+    .into_gateway(SessionBearer::default());
+    block_on(load_bin_index(
+        &device.record_store,
+        &gateway,
+        &device.http,
+        &device.floors(&SECRET),
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &BinIndexKeys::derive(&SECRET),
+    ))
+}
+
+/// The soft delete is an unlink and nothing more: the parent stops naming the
+/// node, one bin entry records where it came from, and the reclamation the hard
+/// path performs — retiring the name, unpinning the content — does not happen,
+/// or a restore would have nothing left to restore.
+#[test]
+fn a_soft_delete_bins_the_node_and_reclaims_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    seed_vault_settings(
+        &world,
+        &alice,
+        &blocks,
+        &VaultSettings {
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+            ..VaultSettings::default()
+        },
+    );
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+    let content: Vec<String> = registration_entries(&alice, &name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+    let (sequence, _) = published(&world.record_store, doomed);
+    let mark = retire_targets(&alice).len();
+
+    let authored_at = cipherbox_engine::seams::Scheduler::now(&world.scheduler).0;
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        Vec::<String>::new(),
+        "the parent stops naming the node"
+    );
+    assert!(
+        block_on(engine.view()).unwrap().attrs(doomed).is_none(),
+        "the binned node left the rendered view"
+    );
+
+    // Nothing is reclaimed: the same two observations the hard path makes, in
+    // the negative.
+    let retired = retired_since(&alice, mark);
+    assert!(
+        !retired.contains(&name.as_str().to_owned()),
+        "the binned node keeps its place in the inventory the republisher walks"
+    );
+    for cid in &content {
+        assert!(
+            !retired.contains(cid),
+            "the binned version keeps its pins: {cid}"
+        );
+    }
+    assert_eq!(
+        published(&world.record_store, doomed).0,
+        sequence,
+        "the binned node's own record still resolves, untouched"
+    );
+
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the soft delete published a bin index record");
+    };
+    assert_eq!(index.entries.len(), 1, "one delete, one entry");
+    let entry = &index.entries[0];
+    assert_eq!(entry.node_id, doomed.0);
+    assert_eq!(entry.kind, CoreNodeKind::File);
+    assert_eq!(entry.scope_id, SCOPE);
+    // Where a restore puts the node back.
+    assert_eq!(entry.origin_parent, ROOT.0);
+    assert_eq!(entry.origin_name(), "notes.txt");
+    assert_eq!(entry.ipns_name(), name.as_str().as_bytes());
+    assert!(
+        entry.held_key().is_none(),
+        "a scope needing the re-key takes the hard path, so this entry holds no key"
+    );
+    // The op's own authoring time, not a clock read at publish: the tick above
+    // moved the injected clock between the two.
+    assert_eq!(entry.deleted_at, authored_at);
+    assert!(
+        cipherbox_engine::seams::Scheduler::now(&world.scheduler).0 > authored_at,
+        "the clock moved after authoring, so the equality above is a real one"
+    );
+}
+
 /// A delete is also the reclamation: the deleted record leaves the republisher
 /// inventory and its pinned bytes leave the account, or a vault pays quota for
 /// content nothing can reach and a revoked grantee holding the old seed keeps
@@ -3397,6 +3585,7 @@ fn a_delete_retires_the_nodes_name_and_reclaims_the_content_it_held() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let plaintext: Vec<u8> = (0..200u8).collect();
     write_file(
@@ -3445,6 +3634,7 @@ fn a_folder_delete_quarantines_a_descendant_for_a_converged_tick() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -3671,6 +3861,7 @@ fn a_descendant_no_pass_can_establish_drops_out_of_the_quarantine() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -3750,6 +3941,7 @@ fn a_delete_never_reclaims_a_descendant_a_surviving_parent_still_names() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -3891,6 +4083,7 @@ fn a_delete_whose_confirm_never_landed_settles_from_the_journal_after_a_restart(
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 42);
     block_on(engine.start(secret())).unwrap();
@@ -3969,6 +4162,7 @@ fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     serve_http(&alice, &blocks, 400);
     let (mut engine, _events) = engine_on(&alice, 42);
     block_on(engine.start(secret())).unwrap();
@@ -4035,6 +4229,7 @@ fn a_delete_refuses_to_unlink_above_a_folder_it_cannot_enumerate() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     block_on(engine.command(Command::Create {
         parent: ROOT,
@@ -7984,6 +8179,27 @@ fn member_node(kind: ByoKind) -> ByoIpfsConfig {
 /// it decides placement from the member's own choice rather than the first-run
 /// defaults.
 fn seed_settings(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, mode: PinMode) {
+    seed_vault_settings(
+        world,
+        device,
+        blocks,
+        &VaultSettings {
+            pin_mode: mode,
+            byo: Some(member_node(ByoKind::Kubo)),
+            retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+        },
+    );
+}
+
+/// [`seed_settings`] over a whole settings shape, for the fields a cold start
+/// carries into the session beyond the placement decision.
+fn seed_vault_settings(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    settings: &VaultSettings,
+) {
     serve_http(device, blocks, 8);
     let api = ApiClient::new(
         device.http.clone(),
@@ -8000,11 +8216,7 @@ fn seed_settings(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, mode: 
         &mut SeededEntropy::new(9),
         &OrphanHeads::default(),
         &SECRET,
-        &VaultSettings {
-            pin_mode: mode,
-            byo: Some(member_node(ByoKind::Kubo)),
-            retention: RetentionPolicy::KeepAll,
-        },
+        settings,
     ))
     .expect("the settings record publishes");
 }
@@ -8829,6 +9041,10 @@ fn seed_settings_naming_no_provider(world: &FakeWorld, blocks: &Blocks) {
     use cipherbox_core::codec::{Map, Value, encode};
 
     let mut m = Map::new();
+    m.insert(
+        "binRetentionDays",
+        Value::Unsigned(u64::from(DEFAULT_BIN_RETENTION_DAYS)),
+    );
     m.insert("byo", Value::Null);
     m.insert("keepLatest", Value::Null);
     m.insert("pinMode", Value::Text("external".to_owned()));
@@ -9500,6 +9716,7 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
             pin_mode: PinMode::External,
             byo: Some(member_node(ByoKind::Kubo)),
             retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         },
     ))
     .expect_err("the save does not reach the network");

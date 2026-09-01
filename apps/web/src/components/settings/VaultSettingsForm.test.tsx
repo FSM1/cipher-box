@@ -21,6 +21,7 @@ function summary(
     byoKind: null,
     byoCredentialStored: false,
     keepLatestVersions: null,
+    binRetentionDays: 30,
     origin: 'resolved',
     ...overrides,
   };
@@ -39,12 +40,19 @@ function renderForm(taking = engineTaking(), stored: VaultSettingsSummaryDescrip
     taking.engine.client,
     fakeCoreKitSession({ loggedIn: true }).session
   );
-  render(
+  const { rerender } = render(
     <Providers>
       <VaultSettingsForm summary={stored} />
     </Providers>
   );
-  return taking;
+  /** Lands a later read on the mounted form, as the route does after a re-read. */
+  const reread = (next: VaultSettingsSummaryDescriptor) =>
+    rerender(
+      <Providers>
+        <VaultSettingsForm summary={next} />
+      </Providers>
+    );
+  return { ...taking, reread };
 }
 
 const type = (label: RegExp | string, value: string) =>
@@ -148,6 +156,25 @@ describe('the vault settings form', () => {
 
     expect(ack().checked).toBe(false);
     expect(saveButton().disabled).toBe(true);
+  });
+
+  it('takes the replace acknowledgement again once a later read refills the form', async () => {
+    const taking = renderForm(engineTaking(), summary({ binRetentionDays: 30 }));
+
+    acknowledge();
+    expect(saveButton().disabled).toBe(false);
+
+    // The bin window has no control on this form, so this read moves a value
+    // the member cannot see. The acknowledgement names what the form holds.
+    taking.reread(summary({ binRetentionDays: 7 }));
+
+    expect(ack().checked).toBe(false);
+    expect(saveButton().disabled).toBe(true);
+
+    await save();
+
+    expect(taking.saves).toHaveLength(1);
+    expect(taking.saves[0].binRetentionDays).toBe(7);
   });
 
   it('never sends a retention the descriptor cannot carry', async () => {

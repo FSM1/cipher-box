@@ -242,6 +242,11 @@ export interface VaultSettingsDescriptor {
   byo: ByoIpfsConfigDescriptor | null;
   /** Newest-n retention; `null` keeps every version within quota. */
   keepLatestVersions: number | null;
+  /**
+   * Days a soft-deleted node stays in the bin; `0` keeps the hard delete.
+   * Absent takes the engine's documented default.
+   */
+  binRetentionDays?: number | null;
 }
 
 /** Whose choice a settings summary reports (mirrors the facade `SettingsOrigin`). */
@@ -260,6 +265,8 @@ export interface VaultSettingsSummaryDescriptor {
   byoCredentialStored: boolean;
   /** `null` keeps every version within quota. */
   keepLatestVersions: number | null;
+  /** Days a soft-deleted node stays in the bin; `0` keeps the hard delete. */
+  binRetentionDays: number;
   origin: SettingsOrigin;
 }
 

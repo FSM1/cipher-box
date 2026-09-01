@@ -405,7 +405,7 @@ mod tests {
         let view = apply_overlay(
             &base,
             &[
-                Op::delete(id(4), 1, AT, 1),
+                Op::delete(id(4), 1, AT, 1, false),
                 Op::move_node(
                     id(2),
                     id(0),
@@ -438,7 +438,7 @@ mod tests {
         let mut base = base();
         base.upsert_node(NodeMeta::new(id(1), "f", NodeKind::File));
         base.link(id(0), id(1), 1);
-        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1)]);
+        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1, false)]);
         assert!(!view.contains(id(1)));
         assert!(base.contains(id(1)));
     }
@@ -456,7 +456,7 @@ mod tests {
         base.link(id(1), id(2), 1);
         base.link(id(2), id(3), 1);
 
-        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1)]);
+        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1, false)]);
 
         assert!(!view.contains(id(1)));
         assert!(!view.contains(id(2)), "no descendant is left parentless");
@@ -477,7 +477,7 @@ mod tests {
         base.link(id(1), id(3), 1);
         base.link(id(2), id(3), 2);
 
-        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1)]);
+        let view = apply_overlay(&base, &[Op::delete(id(1), 1, AT, 1, false)]);
 
         assert!(!view.contains(id(1)));
         assert_eq!(view.parent_of(id(3)), Some(id(2)));

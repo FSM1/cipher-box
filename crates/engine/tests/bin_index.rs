@@ -23,8 +23,8 @@ use cipherbox_engine::testkit::account::{Blocks, serve_http};
 use cipherbox_engine::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    BinIndexLoad, BinIndexPublishError, DefaultsReason, Gateway, GatewayConfig, OrphanHeads,
-    SessionBearer, SyncTimingProfile, bin_index_name, load_bin_index, publish_bin_index,
+    BinIndexKeys, BinIndexLoad, BinIndexPublishError, DefaultsReason, Gateway, GatewayConfig,
+    OrphanHeads, SessionBearer, SyncTimingProfile, load_bin_index, publish_bin_index,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -39,6 +39,14 @@ fn gateway() -> Gateway {
         public_fallbacks: vec!["http://gateway.test".to_owned()],
     }
     .into_gateway(SessionBearer::default())
+}
+
+fn keys() -> BinIndexKeys {
+    BinIndexKeys::derive(&SECRET)
+}
+
+fn name() -> IpnsName {
+    keys().name().clone()
 }
 
 fn entry(seed: u8) -> BinEntry {
@@ -93,13 +101,18 @@ fn publish_with(
         &SyncTimingProfile::CI,
         entropy,
         &OrphanHeads::default(),
-        &SECRET,
+        &keys(),
         index,
     ))
     .map(|_| ())
 }
 
-fn load(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, secret: &[u8]) -> BinIndexLoad {
+fn load(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+    keys: &BinIndexKeys,
+) -> BinIndexLoad {
     serve_http(device, blocks, 4);
     block_on(load_bin_index(
         &device.record_store,
@@ -109,7 +122,7 @@ fn load(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, secret: &[u8]) 
         &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
-        secret,
+        keys,
     ))
 }
 
@@ -162,11 +175,9 @@ fn seed_bin(device: &FakeDevice, blocks: &Blocks, index: &BinIndex, sequence: u6
     )
     .marshal();
     for endpoint in device.record_store.endpoints() {
-        device.record_store.seed_record(
-            &endpoint,
-            bin_index_name(&SECRET).as_str(),
-            record.clone(),
-        );
+        device
+            .record_store
+            .seed_record(&endpoint, name().as_str(), record.clone());
     }
 }
 
@@ -193,7 +204,7 @@ fn a_bin_written_on_one_device_resolves_on_a_second_device_of_the_account() {
     publish(&world, &alice, &blocks, &binned(&[1, 2]), 1);
 
     let bob = world.device(b"alice-phone");
-    let BinIndexLoad::Resolved(index) = load(&world, &bob, &blocks, &SECRET) else {
+    let BinIndexLoad::Resolved(index) = load(&world, &bob, &blocks, &keys()) else {
         panic!("the second device resolves the published record");
     };
     assert_eq!(index.entries, binned(&[1, 2]).entries);
@@ -203,13 +214,13 @@ fn a_bin_written_on_one_device_resolves_on_a_second_device_of_the_account() {
 #[test]
 fn the_bin_name_is_derived_from_the_login_secret_alone() {
     assert_eq!(
-        bin_index_name(&SECRET),
-        IpnsName::from_public_key(&kdf::bin_index_ipns_keypair(&SECRET).verifying_key()),
+        BinIndexKeys::derive(&SECRET).name(),
+        &IpnsName::from_public_key(&kdf::bin_index_ipns_keypair(&SECRET).verifying_key()),
         "the published name is the bin-index-ipns-keypair edge",
     );
     assert_ne!(
-        bin_index_name(&SECRET),
-        bin_index_name(&OTHER_SECRET),
+        BinIndexKeys::derive(&SECRET).name(),
+        BinIndexKeys::derive(&OTHER_SECRET).name(),
         "another account publishes at another name",
     );
 }
@@ -224,7 +235,7 @@ fn a_second_account_cannot_open_the_first_accounts_bin() {
     seed_bin(&device, &blocks, &binned(&[1]), 1, &seal_key(&OTHER_SECRET));
 
     assert_eq!(
-        load(&world, &device, &blocks, &SECRET),
+        load(&world, &device, &blocks, &keys()),
         BinIndexLoad::Empty(DefaultsReason::Unreadable),
         "a body under a foreign key is refused, and named as unreadable",
     );
@@ -242,7 +253,7 @@ fn consecutive_publishes_never_reuse_the_seal_nonce() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"me");
-    let name = bin_index_name(&SECRET);
+    let name = name();
     // One entropy source across every call: a hoisted or cached nonce shows up
     // as two identical prefixes.
     let mut entropy = SeededEntropy::new(4);
@@ -264,7 +275,7 @@ fn consecutive_publishes_never_reuse_the_seal_nonce() {
 /// here, which is the concurrent-publish case this record is CAS-guarded for.
 #[test]
 fn the_seal_nonce_comes_from_the_entropy_seam_and_not_from_the_record() {
-    let name = bin_index_name(&SECRET);
+    let name = name();
     let sealed_under = |seed| {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
@@ -316,10 +327,7 @@ fn a_publish_without_entropy_never_reaches_the_network() {
     assert!(
         device
             .record_store
-            .record_at(
-                &device.record_store.endpoints()[0],
-                bin_index_name(&SECRET).as_str()
-            )
+            .record_at(&device.record_store.endpoints()[0], name().as_str())
             .is_none(),
         "a refused publish never reaches the network",
     );
@@ -340,7 +348,7 @@ fn a_replayed_sequence_is_refused_and_the_cached_copy_answers() {
     publish(&world, &device, &blocks, &binned(&[1, 2]), 2);
 
     seed_bin(&device, &blocks, &binned(&[9]), 1, &seal_key(&SECRET));
-    let load = load(&world, &device, &blocks, &SECRET);
+    let load = load(&world, &device, &blocks, &keys());
     let BinIndexLoad::Stale { index, reason } = load.clone() else {
         panic!("the load falls back to this device's last-known-good copy: {load:?}");
     };
@@ -376,7 +384,7 @@ fn a_same_sequence_fork_below_the_adopted_revision_is_refused() {
     let mut fork = binned(&[9]);
     fork.revision = 1;
     seed_bin(&device, &blocks, &fork, 2, &seal_key(&SECRET));
-    let BinIndexLoad::Stale { reason, .. } = load(&world, &device, &blocks, &SECRET) else {
+    let BinIndexLoad::Stale { reason, .. } = load(&world, &device, &blocks, &keys()) else {
         panic!("the load falls back to this device's last-known-good copy");
     };
     assert_eq!(
@@ -403,7 +411,7 @@ fn a_newer_sequence_is_adopted_whatever_this_devices_revision_counter_holds() {
     let mut newer = binned(&[9]);
     newer.revision = 1;
     seed_bin(&device, &blocks, &newer, 3, &seal_key(&SECRET));
-    let BinIndexLoad::Resolved(index) = load(&world, &device, &blocks, &SECRET) else {
+    let BinIndexLoad::Resolved(index) = load(&world, &device, &blocks, &keys()) else {
         panic!("a record above the sequence floor is adopted");
     };
     assert_eq!(index.entries, newer.entries);
@@ -454,12 +462,12 @@ fn an_unconfirmed_publish_advances_neither_the_sequence_floor_nor_the_readers_ba
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(3),
         &OrphanHeads::default(),
-        &SECRET,
+        &keys(),
         &binned(&[1]),
     ));
     assert_eq!(outcome.unwrap_err(), BinIndexPublishError::Unconfirmed);
 
-    let name = bin_index_name(&SECRET);
+    let name = name();
     let read = |key: Vec<u8>| block_on(device.floor_store.sequence_floor(&key)).expect("read");
     assert_eq!(read(name.as_str().as_bytes().to_vec()), None);
     assert_eq!(
@@ -483,7 +491,7 @@ fn an_unconfirmed_publish_advances_neither_the_sequence_floor_nor_the_readers_ba
 fn a_cold_start_with_no_published_record_loads_an_empty_bin() {
     let world = FakeWorld::new();
     let device = world.device(b"cold");
-    let load = load(&world, &device, &Blocks::default(), &SECRET);
+    let load = load(&world, &device, &Blocks::default(), &keys());
 
     assert_eq!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun));
     assert_eq!(load.writable(), Ok(BinIndex::new(0)));
@@ -496,7 +504,7 @@ fn a_cold_start_with_no_published_record_loads_an_empty_bin() {
 fn a_withheld_record_refuses_the_rewrite_rather_than_minting_a_first_bin() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let name = bin_index_name(&SECRET);
+    let name = name();
     let marks = [
         name.as_str().as_bytes().to_vec(),
         mark(b"bin-index-revision/", &name),
@@ -505,7 +513,7 @@ fn a_withheld_record_refuses_the_rewrite_rather_than_minting_a_first_bin() {
     for mark in &marks {
         let device = world.device(b"cold");
         block_on(device.floor_store.raise_sequence_floor(mark, 3)).expect("the mark raises");
-        let load = load(&world, &device, &blocks, &SECRET);
+        let load = load(&world, &device, &blocks, &keys());
         assert_eq!(
             load,
             BinIndexLoad::Empty(DefaultsReason::Suppressed),
@@ -533,12 +541,12 @@ fn the_liveness_pass_re_puts_the_held_bin_record() {
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(2),
         &OrphanHeads::default(),
-        &SECRET,
+        &keys(),
         &binned(&[1]),
     ))
     .expect("publish");
 
-    let name = bin_index_name(&SECRET);
+    let name = name();
     assert_eq!(held.routing_key, name.as_str());
     let endpoints = device.record_store.endpoints();
     let published = device
@@ -580,10 +588,7 @@ fn a_body_naming_one_node_twice_is_never_published() {
     assert!(
         device
             .record_store
-            .record_at(
-                &device.record_store.endpoints()[0],
-                bin_index_name(&SECRET).as_str()
-            )
+            .record_at(&device.record_store.endpoints()[0], name().as_str())
             .is_none(),
         "a refused body never reaches the network",
     );

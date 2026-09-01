@@ -33,11 +33,11 @@ use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, Command, CommandOutcome, ContentProfile, DefaultsReason, Engine, EngineError,
-    EventStream, Gateway, GatewayConfig, LoginSecret, NodeId, OrphanHeads, PlacementRefusal,
-    ProviderError, RetentionPolicy, SessionBearer, SettingsLoad, SettingsPublishError,
-    StoragePolicy, SyncTimingProfile, VaultSettings, WriteTarget, load_settings, publish_settings,
-    settings_name,
+    ApiBaseUrl, Command, CommandOutcome, ContentProfile, DEFAULT_BIN_RETENTION_DAYS,
+    DefaultsReason, Engine, EngineError, EventStream, Gateway, GatewayConfig, LoginSecret,
+    MAX_BIN_RETENTION_DAYS, NodeId, OrphanHeads, PlacementRefusal, ProviderError, RetentionPolicy,
+    SessionBearer, SettingsLoad, SettingsPublishError, StoragePolicy, SyncTimingProfile,
+    VaultSettings, WriteTarget, load_settings, publish_settings, settings_name,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -63,6 +63,7 @@ fn configured() -> VaultSettings {
             access_token: Some(Zeroizing::new("s3cret".to_owned())),
         }),
         retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
+        bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
     }
 }
 
@@ -429,8 +430,9 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
             pin_mode: PinMode::Hosted,
             byo: None,
             retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         },
-        "the documented defaults: hosted pinning, no member provider, keep all",
+        "the documented defaults: hosted pinning, no member provider, keep all, and the default bin window",
     );
 }
 
@@ -679,6 +681,7 @@ fn external_only() -> VaultSettings {
             access_token: None,
         }),
         retention: RetentionPolicy::KeepAll,
+        bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
     }
 }
 
@@ -1185,6 +1188,16 @@ fn hand_encoded_body(endpoint: &str) -> Vec<u8> {
 
 /// [`hand_encoded_body`] at a chosen body revision.
 fn hand_encoded_body_at(endpoint: &str, revision: u64) -> Vec<u8> {
+    body_map(
+        endpoint,
+        revision,
+        Some(u64::from(DEFAULT_BIN_RETENTION_DAYS)),
+    )
+}
+
+/// A hand-built settings body. `bin_retention_days` of `None` omits the key
+/// altogether, which is the body a build that predates the field would write.
+fn body_map(endpoint: &str, revision: u64, bin_retention_days: Option<u64>) -> Vec<u8> {
     use cipherbox_core::codec::{Map, Value, encode};
 
     let mut byo = Map::new();
@@ -1192,6 +1205,9 @@ fn hand_encoded_body_at(endpoint: &str, revision: u64) -> Vec<u8> {
     byo.insert("endpoint", Value::Text(endpoint.to_owned()));
     byo.insert("kind", Value::Text("kubo".to_owned()));
     let mut m = Map::new();
+    if let Some(days) = bin_retention_days {
+        m.insert("binRetentionDays", Value::Unsigned(days));
+    }
     m.insert("byo", Value::Map(byo));
     m.insert("keepLatest", Value::Null);
     m.insert("pinMode", Value::Text("hosted".to_owned()));
@@ -1209,6 +1225,7 @@ fn hand_encoded_settings(endpoint: &str) -> VaultSettings {
             access_token: None,
         }),
         retention: RetentionPolicy::KeepAll,
+        bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
     }
 }
 
@@ -1224,6 +1241,144 @@ fn published_revision(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> 
         .expect("the body carries a revision")
         .as_unsigned()
         .expect("unsigned")
+}
+
+// ---------------------------------------------------------------------------
+// Bin retention: the window a soft-deleted node waits out, bounded on both
+// sides of the codec (AGENTS.md rule 8)
+// ---------------------------------------------------------------------------
+
+/// The retention is the member's choice like every other field, so it has to
+/// survive the seal and come back as written rather than as the default.
+#[test]
+fn a_chosen_bin_retention_survives_the_round_trip_to_a_second_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice-laptop");
+    let settings = VaultSettings {
+        bin_retention_days: 7,
+        ..configured()
+    };
+    publish(&world, &alice, &blocks, &SECRET, &settings);
+
+    let bob = world.device(b"alice-phone");
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Resolved(settings),
+        "the second device reads back the retention the first device chose",
+    );
+}
+
+/// The bar is inclusive on both sides, so the longest retention the reader
+/// admits is one the writer can publish.
+#[test]
+fn the_longest_admitted_bin_retention_publishes_and_resolves() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice-laptop");
+    let settings = VaultSettings {
+        bin_retention_days: MAX_BIN_RETENTION_DAYS,
+        ..configured()
+    };
+    publish(&world, &alice, &blocks, &SECRET, &settings);
+
+    let bob = world.device(b"alice-phone");
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Resolved(settings),
+    );
+}
+
+/// The encode-side half of the symmetry: a release build must refuse rather
+/// than publish a retention its own reader always rejects, which would strand
+/// the account behind an unreadable settings record.
+#[test]
+fn a_bin_retention_above_the_bar_is_never_published() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    let settings = VaultSettings {
+        bin_retention_days: MAX_BIN_RETENTION_DAYS + 1,
+        ..VaultSettings::default()
+    };
+
+    serve_http(&device, &blocks, 4);
+    let outcome = block_on(publish_settings(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(3),
+        &OrphanHeads::default(),
+        &SECRET,
+        &settings,
+    ));
+
+    assert_eq!(
+        outcome.unwrap_err(),
+        SettingsPublishError::BinRetention,
+        "the guard returns Err in every build, never a stripped assertion",
+    );
+    assert!(
+        device
+            .record_store
+            .record_at(
+                &device.record_store.endpoints()[0],
+                settings_name(&SECRET).as_str()
+            )
+            .is_none(),
+        "nothing reached the record plane",
+    );
+}
+
+/// The decode-side half: a body hand-sealed past the encode guard is refused,
+/// whether it names a retention above the bar or names none at all. A body
+/// carrying no retention says nothing about how long the member wanted a
+/// deleted node kept, so reading a default into it would decide that for them.
+#[test]
+fn a_wire_bin_retention_the_reader_refuses_never_reaches_the_caller() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+
+    // The control: the same hand-made shape at an admitted retention resolves,
+    // so each refusal below is the retention and nothing upstream of it.
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        1,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(hand_encoded_settings("https://kubo.example")),
+    );
+
+    let over_the_bar = Some(u64::from(MAX_BIN_RETENTION_DAYS) + 1);
+    for (sequence, days) in [(2, over_the_bar), (3, None)] {
+        seed_settings(
+            &device,
+            &blocks,
+            &body_map("https://kubo.example", 1, days),
+            sequence,
+        );
+        let degraded = load(&world, &device, &blocks, &SECRET);
+        let SettingsLoad::Stale { settings, reason } = degraded else {
+            panic!("{days:?}: the refused body degrades to last-known-good, got {degraded:?}");
+        };
+        assert_eq!(reason, DefaultsReason::Unreadable, "{days:?}");
+        assert_eq!(
+            settings.bin_retention_days, DEFAULT_BIN_RETENTION_DAYS,
+            "{days:?}: the cached copy's retention stands, not the refused one",
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1793,6 +1948,7 @@ fn a_settings_save_naming_no_byte_destination_is_refused_as_a_placement() {
             pin_mode: PinMode::External,
             byo: None,
             retention: RetentionPolicy::KeepAll,
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         },
     }));
 

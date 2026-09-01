@@ -391,6 +391,33 @@ because the reader is always the signer. Only what differs is stated here.
   empty index. The record still exists from vault genesis, because its very
   existence would otherwise say the bin is non-empty.
 
+## Delete branch
+
+There is one `Delete` command. The facade branches it on the owner's
+`binRetentionDays` setting and journals the verdict on the op, so a settings
+save between the queue and the drain cannot change what an already-queued
+delete does.
+
+- **Retention `0` keeps the hard delete**, with the doomed manifest, the
+  quarantine, and the reclamation above. Retention above `0` makes the delete
+  soft: the drain unlinks the child, republishes the parent, and adds one bin
+  entry. Nothing is enumerated, journaled, retired, or unpinned, so the node's
+  own record still resolves and its content stays pinned.
+- **The bin entry lands before the unlink.** A pass that stops between the two
+  leaves a node that is both binned and still linked, and the retry settles it.
+  The reverse order leaves a node that no folder names and no bin entry finds.
+  The retry is idempotent because a duplicate node id is a hard reject at
+  encode, so an entry that already landed publishes nothing.
+- **A load that carries no member choice takes the soft branch.** A cached
+  copy is still the member's choice and still decides the branch; it is the
+  documented defaults that fall to the bin. The two errors are not equal: a
+  soft delete reclaims nothing and stays reversible, while a hard delete the
+  owner did not ask for destroys the node.
+- **A child that is a scope root stays hard.** Such a child publishes under a
+  name this scope's write seed does not derive. Its subtree is sealed under a
+  grantee's own seed, and cutting that grantee needs a re-key the bin does not
+  carry.
+
 ## Sync core
 
 One model, two trigger sources (FSM1/cipher-box-next#33 D2): web drives it from navigation and the

@@ -170,6 +170,7 @@ export interface WasmVaultSettingsSummary {
   readonly byoKind?: number;
   readonly byoCredentialStored: boolean;
   readonly keepLatestVersions?: number;
+  readonly binRetentionDays: number;
   readonly origin: number;
 }
 
@@ -281,7 +282,8 @@ export interface EngineWasm {
   VaultSettings: new (
     pinMode: number,
     byo?: WasmByoIpfsConfig,
-    keepLatestVersions?: number
+    keepLatestVersions?: number,
+    binRetentionDays?: number
   ) => WasmVaultSettings;
   NodeKind: { readonly File: number; readonly Folder: number };
   PendingClass: {

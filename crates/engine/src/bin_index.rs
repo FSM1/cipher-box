@@ -11,6 +11,7 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{BinIndex, open_bin_index, seal_bin_index};
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 
 use crate::api::ApiClient;
@@ -98,11 +99,35 @@ pub enum BinIndexPublishError {
     Revision,
 }
 
-/// The IPNS name the bin index record is published under
-/// (`bin-index-ipns-keypair`).
-#[must_use]
-pub fn bin_index_name(login_secret: &[u8]) -> IpnsName {
-    IpnsName::from_public_key(&kdf::bin_index_ipns_keypair(login_secret).verifying_key())
+/// The bin index's own key material, derived once from the login secret.
+///
+/// The publish and load paths take this rather than the login secret, so the
+/// spawned task that writes a bin entry holds only what the bin index needs
+/// (AGENTS.md security rule 1).
+pub struct BinIndexKeys {
+    signer: Ed25519Signer,
+    seal_key: SecretBytes,
+    name: IpnsName,
+}
+
+impl BinIndexKeys {
+    /// Derive the `bin-index-ipns-keypair` and `bin-index-seal-key` edges.
+    #[must_use]
+    pub fn derive(login_secret: &[u8]) -> Self {
+        let signer = kdf::bin_index_ipns_keypair(login_secret);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        Self {
+            signer,
+            seal_key: kdf::bin_index_seal_key(login_secret),
+            name,
+        }
+    }
+
+    /// The IPNS name the bin index record is published under.
+    #[must_use]
+    pub fn name(&self) -> &IpnsName {
+        &self.name
+    }
 }
 
 /// The reader's body-revision bar, kept apart from the writer's counter at
@@ -138,8 +163,8 @@ async fn next_revision<F: FloorStore>(
     })
 }
 
-/// Seal `index` and publish it at [`bin_index_name`] through the shared publish
-/// port, so the record inherits register-first, seq-CAS, and confirm.
+/// Seal `index` and publish it at [`BinIndexKeys::name`] through the shared
+/// publish port, so the record inherits register-first, seq-CAS, and confirm.
 ///
 /// **The nonce is drawn fresh from the entropy seam on every publish.**
 /// `bin-index-seal-key` takes no epoch input, so it never rotates: one key seals
@@ -166,7 +191,7 @@ pub async fn publish_bin_index<T, H, C, F, Sn, Sch>(
     profile: &SyncTimingProfile,
     entropy: &mut dyn Entropy,
     orphans: &OrphanHeads,
-    login_secret: &[u8],
+    keys: &BinIndexKeys,
     index: &BinIndex,
 ) -> Result<HeldRecord, BinIndexPublishError>
 where
@@ -177,11 +202,10 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
 {
-    let signer = kdf::bin_index_ipns_keypair(login_secret);
-    let name = IpnsName::from_public_key(&signer.verifying_key());
-    let revision = next_revision(floors, &name).await?;
+    let name = &keys.name;
+    let revision = next_revision(floors, name).await?;
     let nonce = fresh_nonce(entropy).map_err(BinIndexPublishError::Entropy)?;
-    let seal_key = kdf::bin_index_seal_key(login_secret);
+    let seal_key = &keys.seal_key;
     let minted = BinIndex {
         revision,
         entries: index.entries.clone(),
@@ -199,8 +223,8 @@ where
         scheduler,
         profile,
         &RecordPublishRequest {
-            name: &name,
-            signer: &signer,
+            name,
+            signer: &keys.signer,
             head: &head,
             content_cids: Vec::new(),
             min_current_sequence: None,
@@ -223,17 +247,17 @@ where
     let PublishOutcome::Published { sequence } = receipt.outcome else {
         return Err(BinIndexPublishError::Unconfirmed);
     };
-    let _ = snapshots.put(&bin_index_cache_key(&name), &block).await;
+    let _ = snapshots.put(&bin_index_cache_key(name), &block).await;
     floor::advance_sequence_on_unseal(floors, name.as_str().as_bytes(), sequence)
         .await
         .map_err(BinIndexPublishError::Floor)?;
-    floor::advance_sequence_on_unseal(floors, &revision_adopted_key(&name), revision)
+    floor::advance_sequence_on_unseal(floors, &revision_adopted_key(name), revision)
         .await
         .map_err(BinIndexPublishError::Floor)?;
     Ok(HeldRecord {
         routing_key: name.as_str().to_owned(),
         record_bytes: receipt.record_bytes,
-        signer,
+        signer: keys.signer.clone(),
         value: HeldValue::Head(head.cid().to_owned()),
         // The bin index record anchors its sealed body and nothing else.
         content_cids: Vec::new(),
@@ -258,7 +282,7 @@ pub async fn load_bin_index<T, H, F, Sn, Sch>(
     snapshots: &Sn,
     scheduler: &Sch,
     profile: &SyncTimingProfile,
-    login_secret: &[u8],
+    keys: &BinIndexKeys,
 ) -> BinIndexLoad
 where
     T: RecordTransport,
@@ -267,8 +291,8 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler,
 {
-    let name = bin_index_name(login_secret);
-    let seal_key = kdf::bin_index_seal_key(login_secret);
+    let name = &keys.name;
+    let seal_key = &keys.seal_key;
     // Held outside the budget so a load that runs out of it mid-resolve still
     // has the cached ciphertext the resolve read on its way in.
     let mut cached = None;
@@ -279,8 +303,8 @@ where
         floors,
         snapshots,
         &mut cached,
-        &seal_key,
-        &name,
+        seal_key,
+        name,
         scheduler.now(),
     );
     let reason = match within(scheduler, profile.settings_load_budget, load).await {
@@ -432,7 +456,7 @@ mod tests {
     /// the per-name sequence floor uses, or one would raise another's bar.
     #[test]
     fn every_durable_mark_takes_its_own_key() {
-        let name = bin_index_name(&[3u8; 32]);
+        let name = BinIndexKeys::derive(&[3u8; 32]).name().clone();
         let keys = [
             name.as_str().as_bytes().to_vec(),
             revision_adopted_key(&name),
@@ -452,8 +476,8 @@ mod tests {
     fn the_bin_publishes_at_a_name_the_settings_record_never_takes() {
         let secret = [3u8; 32];
         assert_ne!(
-            bin_index_name(&secret),
-            crate::settings::settings_name(&secret),
+            BinIndexKeys::derive(&secret).name(),
+            &crate::settings::settings_name(&secret),
         );
     }
 }

@@ -162,6 +162,11 @@ pub enum OpKind {
     Delete {
         /// The target's record sequence at the time the delete was formed.
         target_sequence: u64,
+        /// Whether this delete is soft: unlink the node and write a bin entry
+        /// instead of retiring the record (CONTEXT.md "Soft delete"). Journaled
+        /// on the op rather than read at publish, so a settings save between
+        /// the two does not change what an already-queued delete does.
+        to_bin: bool,
     },
     /// Rename a node in place.
     Rename {
@@ -247,9 +252,13 @@ impl fmt::Debug for OpKind {
                 .field("name", &RedactedText::of(name))
                 .field("node", node)
                 .finish(),
-            Self::Delete { target_sequence } => f
+            Self::Delete {
+                target_sequence,
+                to_bin,
+            } => f
                 .debug_struct("Delete")
                 .field("target_sequence", target_sequence)
+                .field("to_bin", to_bin)
                 .finish(),
             Self::Rename { new_name } => f
                 .debug_struct("Rename")
@@ -323,12 +332,16 @@ impl Op {
         base_sequence: u64,
         authored_at: UnixMillis,
         target_sequence: u64,
+        to_bin: bool,
     ) -> Self {
         Self {
             target,
             base_sequence,
             authored_at,
-            kind: OpKind::Delete { target_sequence },
+            kind: OpKind::Delete {
+                target_sequence,
+                to_bin,
+            },
         }
     }
 
@@ -605,7 +618,7 @@ mod tests {
                 3,
                 at(1_000),
             ),
-            Op::delete(id(2), 4, at(1_001), 7),
+            Op::delete(id(2), 4, at(1_001), 7, false),
             Op::rename(id(3), "b.txt", 5, at(1_002)),
             Op::relink(
                 id(4),
@@ -700,7 +713,7 @@ mod tests {
             Op::create(id(1), id(0), "a", NewNode::File { content: None }, 1, at(1))
                 .pending_class(),
             Op::create(id(1), id(0), "d", NewNode::Folder, 1, at(1)).pending_class(),
-            Op::delete(id(2), 1, at(1), 1).pending_class(),
+            Op::delete(id(2), 1, at(1), 1, false).pending_class(),
             Op::rename(id(3), "b", 1, at(1)).pending_class(),
             Op::relink(id(4), id(0), id(9), 1, at(1), ScopeCrossing::Intra).pending_class(),
             Op::move_node(
