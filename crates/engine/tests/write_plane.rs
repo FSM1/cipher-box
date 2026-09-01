@@ -1931,23 +1931,32 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
-    concurrent_root_extend(
+    // An ordinary folder, not the scope root: a scope root reserves part of its
+    // record for the grant section a re-key rebuilds, and the adoption gate
+    // refuses a foreign root over that reservation before its listing is ever
+    // read.
+    create(&mut engine, "bulky");
+    let bulky = child_id(&engine, ROOT, "bulky");
+    tick(&world, &engine, &mut tasks);
+
+    concurrent_add(
         &world.record_store,
         &blocks,
-        vec![child_at_the_block_ceiling()],
+        bulky,
+        child_at_the_block_ceiling(),
     );
     tick(&world, &engine, &mut tasks);
 
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
-            parent: ROOT,
+            parent: bulky,
             name: "one-child-too-many.bin".into(),
         },
         &(0..200u8).collect::<Vec<u8>>(),
     )
     .expect("the write commits");
-    let doomed = child_id(&engine, ROOT, "one-child-too-many.bin");
+    let doomed = child_id(&engine, bulky, "one-child-too-many.bin");
 
     let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert!(
@@ -1976,8 +1985,8 @@ fn an_authored_head_over_the_block_ceiling_dead_letters_with_its_version_intact(
     );
 }
 
-/// A peer-authored child carrying preserved bulk that leaves the root one child
-/// short of the block ceiling.
+/// A peer-authored child carrying preserved bulk that leaves its folder one
+/// child short of the block ceiling.
 ///
 /// This is the route the facade bounds cannot close: the rendered view drops a
 /// child's carried fields, so `refuse_full_parent` cannot charge them, while the
