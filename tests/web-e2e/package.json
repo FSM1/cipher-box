@@ -9,10 +9,12 @@
   },
   "devDependencies": {
     "@cipherbox/client": "workspace:*",
+    "@cipherbox/login": "workspace:*",
     "@cipherbox/web": "workspace:*",
     "@playwright/test": "^1.56.0",
     "@types/node": "^22.19.7",
     "typescript": "^5.9.3",
+    "viem": "^2.44.4",
     "vite": "^8.1.5"
   }
 }
