@@ -15,9 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildRef, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
-    refuse_stale_cut_epoch, verify_grant_set_bound,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
@@ -28,6 +27,7 @@ use crate::facade::{Event, NodeId, NodeKind, ScopeSeeds, deposit_seed};
 use crate::gate::floor;
 use crate::gate::{
     Candidate, ReaderContext, RejectionReason, SeedBlob, adopt, read_cut_epoch_floor,
+    verify_commitment_in_force,
 };
 use crate::name::validate_name;
 use crate::net::rotation::scope_name;
@@ -70,11 +70,9 @@ pub(crate) struct ReceivedVerdict {
 
 /// The durable bars a verdict on one bookmarked shared scope is measured
 /// against, both read under the sharer-scoped view of the floor store.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct SharedScopeFloors {
-    /// The scope's read-epoch floor — the epoch-lag rung.
     pub epoch: u64,
-    /// The newest cut epoch this device adopted at the scope.
     pub cut_epoch: u64,
 }
 
@@ -330,20 +328,20 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             // One resolve serves both legs: the verdict this row renders, and
             // the subtree a browse of it opens.
-            let (candidate, floors) = self.resolved(share).await;
-            let class = match &candidate {
-                Some(candidate) => classify(&facts_from(
+            let resolved = self.resolved(share).await;
+            let class = match &resolved {
+                Some((candidate, floors)) => classify(&facts_from(
                     candidate,
                     share,
                     self.enc_secret,
                     &contact.identity_pk(),
                     &contact.enc_subkey(),
-                    floors,
+                    *floors,
                 )),
-                None => classify(&ResolutionFacts::unresolved(floors.epoch)),
+                None => ResolutionClass::Unresolvable,
             };
             if class == ResolutionClass::Granted && renderable.contains(&share.scope_id) {
-                if let Some(candidate) = &candidate {
+                if let Some((candidate, floors)) = &resolved {
                     if let Some(open) = self
                         .open(candidate, share, contact, floors.epoch, render)
                         .await
@@ -378,47 +376,35 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// every verdict on it is measured against. `None` is absence — an
     /// unparsable bookmark, an unresolvable name, an unassemblable record, or a
     /// floor this pass could not read — never a removal.
-    async fn resolved(&self, share: &ReceivedShare) -> (Option<Candidate>, SharedScopeFloors) {
-        // A floor this pass could not read is availability, not a verdict: with
-        // no floor neither bar can fire, so a superseded or stale record would
-        // read as granted. Absent (`Ok(None)`) is a genuine zero.
-        let sharer_floors = self.sharer_floors(share);
-        let (Ok(epoch_floor), Ok(cut_epoch)) = (
-            floor::read_epoch_floor(&sharer_floors, &share.scope_id).await,
-            read_cut_epoch_floor(&sharer_floors, &share.scope_id).await,
-        ) else {
-            return (None, SharedScopeFloors::default());
-        };
-        let floors = SharedScopeFloors {
-            epoch: epoch_floor.unwrap_or(0),
-            cut_epoch,
-        };
-        let unresolved = (None, floors);
-
-        let Ok(name) = scope_name(&share.scope_root_name) else {
-            return unresolved;
-        };
-        let Some((verified, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
-            return unresolved;
-        };
+    async fn resolved(&self, share: &ReceivedShare) -> Option<(Candidate, SharedScopeFloors)> {
+        let name = scope_name(&share.scope_root_name).ok()?;
+        let (verified, record_bytes) = fanout_get_verify(self.transport, &name).await?;
         // Fan-out has no memory — it answers with the best of what endpoints
         // served. A suppressing relay could otherwise re-serve the record that
         // still committed this device and pin the verdict at `Granted`. Read the
         // durable bar only; a body this pass never unsealed may not raise it
         // (the floor law's provenance rule).
-        let Ok(sequence_floor) = floor::sequence_floor(self.floors, &share.scope_root_name).await
-        else {
-            return unresolved;
-        };
+        let sequence_floor = floor::sequence_floor(self.floors, &share.scope_root_name)
+            .await
+            .ok()?;
         if sequence_floor.is_some_and(|floor| verified.sequence < floor) {
-            return unresolved;
+            return None;
         }
-        let Ok(candidate) =
-            assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await
-        else {
-            return unresolved;
-        };
-        (Some(candidate), floors)
+        let candidate = assemble_candidate(self.gateway, self.http, &name, &record_bytes, None)
+            .await
+            .ok()?;
+        // A floor this pass could not read is availability, not a verdict: with
+        // no floor neither bar can fire, so a superseded or stale record would
+        // read as granted. Absent (`Ok(None)`) is a genuine zero.
+        let sharer_floors = self.sharer_floors(share);
+        let epoch = floor::read_epoch_floor(&sharer_floors, &share.scope_id)
+            .await
+            .ok()?
+            .unwrap_or(0);
+        let cut_epoch = read_cut_epoch_floor(&sharer_floors, &share.scope_id)
+            .await
+            .ok()?;
+        Some((candidate, SharedScopeFloors { epoch, cut_epoch }))
     }
 
     /// Open the accepted scope's own folder body, and cache the read scope seed
@@ -531,9 +517,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 /// What a resolved scope root supports, as a pure function of the record and the
 /// verified contact anchors.
 ///
-/// A commitment that does not verify under `sharer_identity`, that is bound to
-/// another name, or that a cut has superseded, is not a fresh owner-signed
-/// record — an untrusted party republishing at that name proves nothing about
+/// A commitment [`verify_commitment_in_force`] refuses is not a fresh
+/// owner-signed record — a party republishing at that name proves nothing about
 /// your grant, so it classifies as unresolvable rather than as a removal.
 pub(crate) fn facts_from(
     candidate: &Candidate,
@@ -551,18 +536,13 @@ pub(crate) fn facts_from(
         return ResolutionFacts::unresolved(floors.epoch);
     }
     let section = &candidate.grant_section;
-    let owner_signed = EcdsaSignature::from_compact(&section.commitment_sig).is_some_and(|sig| {
-        verify_grant_set_bound(sharer_identity, &section.commitment, &sig, scope_root_name).is_ok()
-    });
-    if !owner_signed {
-        return ResolutionFacts::unresolved(floors.epoch);
-    }
-    // The same bar the gate holds a commitment to (blueprint/engine.md
-    // "Adoption gate and floors", stage 2). A write-only cut republishes at the
-    // scope's unchanged read epoch, so the epoch-lag rung below cannot stand in
-    // for it: without this, a party the owner cut restores the pre-cut set here
-    // and `open` refuses the very record this verdict calls granted.
-    if refuse_stale_cut_epoch(&section.commitment, floors.cut_epoch).is_err() {
+    // The gate's stage 2 entire, so a browse of this row opens exactly the
+    // records the row calls granted. A write-only cut republishes at the scope's
+    // unchanged read epoch, so the epoch-lag rung below cannot stand in for the
+    // cut bar.
+    if verify_commitment_in_force(sharer_identity, section, scope_root_name, floors.cut_epoch)
+        .is_err()
+    {
         return ResolutionFacts::unresolved(floors.epoch);
     }
     // The owner-signed commitment is the authority, so a blob at an uncommitted
@@ -596,7 +576,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::content::GatewaySource;
-    use crate::gate::record_cut_epoch_floor;
+    use crate::gate::{CUT_EPOCH_SUFFIX, record_cut_epoch_floor};
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, HttpResponse};
     use crate::seams::{FloorRaise, SeamError, SeamResult};
@@ -714,74 +694,43 @@ mod tests {
         ))
     }
 
-    /// A floor store that answers every read with a seam failure, and a record
-    /// plane that serves the shared scope root — so the only thing standing
-    /// between this resolve and `Granted` is how the failed floor read is
-    /// treated.
-    struct UnreadableFloors;
-
-    impl FloorStore for UnreadableFloors {
-        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn sequence_floor(&self, _name: &[u8]) -> SeamResult<Option<u64>> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn raise_sequence_floor(&self, _name: &[u8], _seq: u64) -> SeamResult<u64> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn commit_floors(&self, _raises: &[FloorRaise]) -> SeamResult<()> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn clear(&self) -> SeamResult<()> {
-            Err(SeamError::new("floor store unavailable"))
-        }
+    /// Which durable bar a [`FailingFloorRead`] store refuses to answer. Every
+    /// other read answers "never raised", and every write fails — a resolve
+    /// raises none.
+    enum Unreadable {
+        /// Every floor, the shape a wholly unavailable host presents.
+        Every,
+        /// The per-name sequence floor — the replay bar.
+        Sequence,
+        /// The per-scope cut-epoch floor — the superseded-set bar.
+        CutEpoch,
     }
 
-    /// A floor store that answers the read-epoch floor and fails the per-name
-    /// sequence floor — the shape that reaches the replay-bar rung.
-    struct UnreadableSequenceFloor;
+    /// A floor store that fails one read, against a record plane that serves the
+    /// shared scope root — so the only thing standing between the resolve and
+    /// `Granted` is how the failed read is treated.
+    struct FailingFloorRead(Unreadable);
 
-    impl FloorStore for UnreadableSequenceFloor {
-        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
-            Ok(None)
-        }
-        async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn sequence_floor(&self, _name: &[u8]) -> SeamResult<Option<u64>> {
-            Err(SeamError::new("sequence floor unavailable"))
-        }
-        async fn raise_sequence_floor(&self, _name: &[u8], _seq: u64) -> SeamResult<u64> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn commit_floors(&self, _raises: &[FloorRaise]) -> SeamResult<()> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-        async fn clear(&self) -> SeamResult<()> {
-            Err(SeamError::new("floor store unavailable"))
-        }
-    }
-
-    /// A floor store that answers every floor except the cut bar, which it
-    /// fails — the shape that reaches the superseded-set rung.
-    struct UnreadableCutEpochFloor;
-
-    impl FloorStore for UnreadableCutEpochFloor {
+    impl FloorStore for FailingFloorRead {
         async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
-            if scope_id.ends_with(b"/cut-epoch") {
-                return Err(SeamError::new("cut-epoch floor unavailable"));
+            match self.0 {
+                Unreadable::Every => Err(SeamError::new("floor store unavailable")),
+                Unreadable::CutEpoch if scope_id.ends_with(CUT_EPOCH_SUFFIX) => {
+                    Err(SeamError::new("cut-epoch floor unavailable"))
+                }
+                _ => Ok(None),
             }
-            Ok(None)
         }
         async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
             Err(SeamError::new("floor store unavailable"))
         }
         async fn sequence_floor(&self, _name: &[u8]) -> SeamResult<Option<u64>> {
-            Ok(None)
+            match self.0 {
+                Unreadable::Every | Unreadable::Sequence => {
+                    Err(SeamError::new("sequence floor unavailable"))
+                }
+                Unreadable::CutEpoch => Ok(None),
+            }
         }
         async fn raise_sequence_floor(&self, _name: &[u8], _seq: u64) -> SeamResult<u64> {
             Err(SeamError::new("floor store unavailable"))
@@ -793,6 +742,26 @@ mod tests {
             Err(SeamError::new("floor store unavailable"))
         }
     }
+
+    /// A floor store holding `cut_epoch` for `sharer`'s [`SCOPE`], with the
+    /// read-epoch and sequence bars at the highest value the served root still
+    /// passes — so a refusal can only be the cut bar's.
+    fn seeded_floors(sharer: [u8; IDENTITY_PUBLIC_LEN], cut_epoch: u64) -> InMemoryFloorStore {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            let scoped = SharerScopedFloorStore::granted_by(&floors, sharer);
+            record_cut_epoch_floor(&scoped, &SCOPE, cut_epoch).await?;
+            scoped.raise_epoch_floor(&SCOPE, OWNER_ROOT_EPOCH).await?;
+            floors
+                .raise_sequence_floor(scope_root_name().as_str().as_bytes(), SERVED_SEQUENCE)
+                .await
+        })
+        .expect("the floor store answers");
+        floors
+    }
+
+    /// The IPNS sequence [`ServedScopeRoot`] serves its record at.
+    const SERVED_SEQUENCE: u64 = 1;
 
     /// The published scope root and a record plane serving it — everything a
     /// resolve needs except the floor store under test.
@@ -816,7 +785,7 @@ mod tests {
                         kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
                     ),
                     format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-                    1,
+                    SERVED_SEQUENCE,
                     2_000_000_000,
                     "2099-01-01T00:00:00Z",
                 )
@@ -839,7 +808,7 @@ mod tests {
                 headers: Vec::new(),
                 body: self.fixture.head_block.clone(),
             });
-            let (candidate, floors) = block_on(
+            let resolved = block_on(
                 ReceivedShareStatus {
                     transport: &self.records,
                     gateway: &self.gateway,
@@ -849,17 +818,17 @@ mod tests {
                 }
                 .resolved(&bookmark()),
             );
-            classify(&match candidate {
-                Some(candidate) => facts_from(
+            match resolved {
+                Some((candidate, floors)) => classify(&facts_from(
                     &candidate,
                     &bookmark(),
                     &my_enc(),
                     &sharer.verifying_key(),
                     &sharer_enc().public(),
                     floors,
-                ),
-                None => ResolutionFacts::unresolved(floors.epoch),
-            })
+                )),
+                None => ResolutionClass::Unresolvable,
+            }
         }
     }
 
@@ -878,7 +847,7 @@ mod tests {
             ResolutionClass::Granted
         );
         assert_eq!(
-            served.resolve(&UnreadableFloors, &sharer),
+            served.resolve(&FailingFloorRead(Unreadable::Every), &sharer),
             ResolutionClass::Unresolvable,
             "an unread floor is availability, never a verdict"
         );
@@ -891,7 +860,7 @@ mod tests {
     fn an_unreadable_sequence_floor_reaches_no_verdict() {
         let sharer = sharer_signer();
         assert_eq!(
-            ServedScopeRoot::new(&sharer).resolve(&UnreadableSequenceFloor, &sharer),
+            ServedScopeRoot::new(&sharer).resolve(&FailingFloorRead(Unreadable::Sequence), &sharer),
             ResolutionClass::Unresolvable,
             "an unread replay bar is availability, never a verdict"
         );
@@ -900,22 +869,37 @@ mod tests {
     /// The cut this device already adopted is read under the granting identity,
     /// at the key the gate reads — so the verdict a `/shared` row renders and
     /// the gate a browse of it passes refuse the same replayed set.
+    ///
+    /// The other two bars are seeded to their highest passing value: a cut party
+    /// that keeps a name's signing key mints a fresh sequence there, and a
+    /// write-only cut leaves the read epoch alone, so the cut bar is the only
+    /// one that can refuse the replay.
     #[test]
     fn a_cut_this_device_adopted_refuses_the_pre_cut_set_it_would_call_granted() {
         let sharer = sharer_signer();
         let served = ServedScopeRoot::new(&sharer);
-        let floors = InMemoryFloorStore::default();
-        block_on(record_cut_epoch_floor(
-            &SharerScopedFloorStore::granted_by(&floors, SHARER_IDENTITY_PK),
-            &SCOPE,
-            1,
-        ))
-        .expect("the floor store answers");
+        let floors = seeded_floors(SHARER_IDENTITY_PK, 1);
 
         assert_eq!(
             served.resolve(&floors, &sharer),
             ResolutionClass::Unresolvable,
             "the served root carries the pre-cut set"
+        );
+    }
+
+    /// A cut is one sharer's act at one scope. The floor it raises is filed
+    /// under the granting identity, so it cannot refuse another sharer's scope
+    /// of the same id.
+    #[test]
+    fn a_cut_under_one_sharer_leaves_another_sharers_scope_of_that_id_granted() {
+        let sharer = sharer_signer();
+        let served = ServedScopeRoot::new(&sharer);
+        let floors = seeded_floors([0x07; IDENTITY_PUBLIC_LEN], 1);
+
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Granted,
+            "the cut belongs to an identity this bookmark was not granted by"
         );
     }
 
@@ -926,7 +910,7 @@ mod tests {
     fn an_unreadable_cut_epoch_floor_reaches_no_verdict() {
         let sharer = sharer_signer();
         assert_eq!(
-            ServedScopeRoot::new(&sharer).resolve(&UnreadableCutEpochFloor, &sharer),
+            ServedScopeRoot::new(&sharer).resolve(&FailingFloorRead(Unreadable::CutEpoch), &sharer),
             ResolutionClass::Unresolvable,
             "an unread cut bar is availability, never a verdict"
         );
@@ -962,10 +946,8 @@ mod tests {
         );
     }
 
-    /// An owner-signed set the owner has since cut is a replay, not a verdict:
-    /// a write-only cut republishes at the scope's unchanged read epoch, so the
-    /// epoch-lag rung cannot see it, and `open` refuses the same record at the
-    /// gate.
+    /// A set the owner has since cut is a replay, not a verdict, and a replay is
+    /// never read as a removal.
     #[test]
     fn a_commitment_a_cut_superseded_is_unresolvable() {
         let sharer = sharer_signer();
@@ -980,10 +962,6 @@ mod tests {
                 epoch: OWNER_ROOT_EPOCH,
                 cut_epoch: 1,
             },
-        );
-        assert!(
-            !facts.owner_signed_record,
-            "a superseded set is not a fresh owner-signed record"
         );
         assert_eq!(classify(&facts), ResolutionClass::Unresolvable);
     }

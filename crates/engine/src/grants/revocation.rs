@@ -10,8 +10,8 @@
 //!   no grant blob at your tag. That is the definitive "you were removed": the
 //!   owner republished the committed set without you.
 //! - **Unresolvable** — the name did not resolve to a fresh owner-signed record
-//!   at all (unknown, stale, or network-suppressed). Merely absent, never proof
-//!   of revocation.
+//!   at all (unknown, superseded by a cut, or network-suppressed). Merely
+//!   absent, never proof of revocation.
 //! - **Epoch lag** — a fresh owner-signed record resolves and your tag is still
 //!   committed, but its epoch is below your durable read-epoch floor: a
 //!   sweep-pending staleness, not a revocation.
@@ -58,8 +58,9 @@ impl ResolutionClass {
 pub struct ResolutionFacts {
     /// The name resolved to a record that passed both record-verify and
     /// commitment-verify against the contact-anchored owner identity — a *fresh
-    /// owner-signed* record. `false` covers no record, a verify failure, or a
-    /// commitment for a different owner.
+    /// owner-signed* record. `false` covers no record, a verify failure, a
+    /// commitment for a different owner, and a set a cut superseded, which an
+    /// owner really did sign but has withdrawn.
     pub owner_signed_record: bool,
     /// A grant blob is present at your self-located tag in that record.
     pub blob_present: bool,

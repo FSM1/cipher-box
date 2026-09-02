@@ -36,7 +36,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::gate::floor;
-use crate::seams::{FloorStore, SeamError};
+use crate::seams::{FloorStore, SeamError, SeamResult};
 
 /// The six ordered stages of the adoption gate. The stage a rejection names is
 /// the first stage that failed; earlier stages all passed.
@@ -304,7 +304,7 @@ pub struct PendingAdoption {
 
 /// Suffix that keeps the cut-epoch floor apart from the other floors under one
 /// scope id, on the convention `gate::floor` sets for the write-epoch floor.
-const CUT_EPOCH_SUFFIX: &[u8] = b"/cut-epoch";
+pub(crate) const CUT_EPOCH_SUFFIX: &[u8] = b"/cut-epoch";
 
 /// The floor key carrying the newest cut epoch this device has adopted at
 /// `scope_id`.
@@ -312,14 +312,40 @@ fn cut_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
     [scope_id.as_slice(), CUT_EPOCH_SUFFIX].concat()
 }
 
-/// `scope_id`'s cut-epoch floor: the newest cut this device adopted there, and
-/// zero where it recorded none. The bar
-/// [`refuse_stale_cut_epoch`](cipherbox_core::seal::refuse_stale_cut_epoch)
-/// holds a commitment to.
+/// Stage 2 of the gate, whole: the grant-set commitment verifies under the
+/// contact-anchored `owner_identity`, binds `ipns_name` — the name is inside the
+/// signed preimage, so a commitment for another scope root is invalid here — and
+/// is not a set `cut_epoch_floor` has already superseded.
+///
+/// A commitment carries no read epoch, so a pre-cut set the owner really did
+/// sign verifies for ever, and any committed write grantee can republish a root
+/// that carries it; the cut epoch this device already adopted is what tells the
+/// replay apart from the set in force (blueprint/engine.md "Adoption gate and
+/// floors"). The classification path a `/shared` row renders holds a record to
+/// this same bar without unsealing it, so the two never disagree.
+pub fn verify_commitment_in_force(
+    owner_identity: &EcdsaVerifier,
+    section: &GrantSection,
+    ipns_name: &[u8],
+    cut_epoch_floor: u64,
+) -> Result<(), CodecError> {
+    let commitment_sig = EcdsaSignature::from_compact(&section.commitment_sig)
+        .ok_or(CodecError::from(TrustViolation::CommitmentInvalid))?;
+    verify_grant_set_bound(
+        owner_identity,
+        &section.commitment,
+        &commitment_sig,
+        ipns_name,
+    )?;
+    refuse_stale_cut_epoch(&section.commitment, cut_epoch_floor)
+}
+
+/// `scope_id`'s cut-epoch floor, zero where this device recorded none — the bar
+/// [`refuse_stale_cut_epoch`] holds a commitment to.
 pub async fn read_cut_epoch_floor<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
-) -> Result<u64, SeamError> {
+) -> SeamResult<u64> {
     Ok(floors
         .epoch_floor(&cut_epoch_floor_key(scope_id))
         .await?
@@ -621,39 +647,18 @@ pub async fn adopt_deferred<F: FloorStore>(
         .and_then(|record| record.verify(&candidate.name))
         .map_err(|e| reject(GateStage::RecordVerify, RejectionReason::Trust(e)))?;
 
-    // Stage 2 — commitment verify against the contact-anchored owner identity,
-    // and its binding to this record's name (the name is inside the signed
-    // commitment preimage; a commitment for a different scope root is invalid
-    // here).
+    // Stage 2.
     let section = &candidate.grant_section;
-    let commitment_sig =
-        EcdsaSignature::from_compact(&section.commitment_sig).ok_or_else(|| {
-            reject(
-                GateStage::CommitmentVerify,
-                RejectionReason::Trust(TrustViolation::CommitmentInvalid.into()),
-            )
-        })?;
-    verify_grant_set_bound(
-        reader.owner_identity,
-        &section.commitment,
-        &commitment_sig,
-        candidate.name.as_str().as_bytes(),
-    )
-    .map_err(|e| {
-        reject(
-            GateStage::CommitmentVerify,
-            RejectionReason::Trust(e.into()),
-        )
-    })?;
-    // A commitment carries no read epoch, so a pre-cut set the owner really did
-    // sign passes the verify above for ever, and any committed write grantee can
-    // republish a root that carries it. The cut epoch this device already
-    // adopted here is what tells the replay apart from the set in force.
     let cut_epoch_floor = read_cut_epoch_floor(floors, &reader.scope_id)
         .await
         .map_err(GateError::Seam)?;
-    refuse_stale_cut_epoch(&section.commitment, cut_epoch_floor)
-        .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
+    verify_commitment_in_force(
+        reader.owner_identity,
+        section,
+        candidate.name.as_str().as_bytes(),
+        cut_epoch_floor,
+    )
+    .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
 
     // Stage 3 — grant-section authentication under `authenticate_structure`'s
     // recompute contract. Any failure rejects the whole record (#39 D3).
