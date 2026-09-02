@@ -1,11 +1,11 @@
-//! The vault projected as a filesystem, on the platforms `crates/fuse` has a
-//! host adapter for.
+//! The vault projected as a filesystem. One projection over all three host
+//! adapters: which one a build links is the only thing that differs.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cipherbox_engine::{Engine, Event};
-use cipherbox_fuse::{CacheBudget, FuseInvalidator, FuseMount, OperationCore, SpillArea};
+use cipherbox_fuse::{CacheBudget, Invalidator, Mount, OperationCore, Publication, SpillArea};
 use tokio::task::JoinHandle;
 
 use super::{FromMount, MountStatus};
@@ -14,7 +14,7 @@ use crate::engine::DesktopSeamTypes;
 pub use cipherbox_fuse::KernelOp;
 
 /// What the mounting thread hands back: the mount it made, or why it made none.
-pub type Landing = Result<FuseMount, String>;
+pub type Landing = Result<Mount, String>;
 
 /// Shown once the kernel session has ended under a live app — an unmount from a
 /// terminal or Finder. The inode map is per mount session, so the vault is
@@ -28,13 +28,20 @@ const NO_HOME: &str = "this device has no home directory to mount the vault unde
 /// Shown when the mounting thread ended without a verdict.
 const NO_VERDICT: &str = "the mount stopped before it said whether it had been made";
 
+/// Shown when the backend never published the mount at the mount point. Until
+/// it does, that path is the directory under the mount, and a write there
+/// reaches no engine — so the session says the vault is not projected rather
+/// than name a mount point that takes writes and loses them.
+const NOT_PUBLISHED: &str = "the mount was made but the backend never published it";
+
 /// How long a session that is ending waits for a mount still being made. The
 /// mount unmounts itself when the handle it lands in is dropped, so the wait
 /// bounds an orderly shutdown rather than gating one.
 const SHUTDOWN_WITHIN: Duration = Duration::from_secs(5);
 
 /// The vault's mount point: `~/CipherBox`, the name v1 taught members to look
-/// for.
+/// for. WinFsp makes that directory itself and removes it at unmount; the unix
+/// backends mount over one the adapter prepares.
 fn mount_point(home_dir: &Path) -> PathBuf {
     home_dir.join("CipherBox")
 }
@@ -58,8 +65,8 @@ pub enum Projection {
     /// The vault is projected through `core`. `mount` empties when the kernel
     /// session ends; the engine goes on running inside the core either way.
     Projected {
-        core: Box<OperationCore<DesktopSeamTypes, FuseInvalidator>>,
-        mount: Option<FuseMount>,
+        core: Box<OperationCore<DesktopSeamTypes, Invalidator>>,
+        mount: Option<Mount>,
         at: PathBuf,
     },
 }
@@ -119,8 +126,16 @@ impl Projection {
             Self::Opening { .. } => MountStatus::Opening,
             Self::Detached { refusal, .. } => MountStatus::refused(refusal),
             Self::Projected { mount: None, .. } => MountStatus::refused(ENDED),
-            Self::Projected { at, .. } => MountStatus::Mounted {
-                path: at.display().to_string(),
+            Self::Projected {
+                mount: Some(mount),
+                at,
+                ..
+            } => match mount.publication() {
+                Publication::Live => MountStatus::Mounted {
+                    path: at.display().to_string(),
+                },
+                Publication::Pending => MountStatus::Opening,
+                Publication::Refused => MountStatus::refused(NOT_PUBLISHED),
             },
         }
     }
@@ -216,8 +231,6 @@ impl Projection {
     pub async fn tear_down(self) {
         match self {
             Self::Opening { landing, .. } => {
-                // Whatever it lands is dropped, and dropping a `FuseMount` is
-                // the unmount.
                 let _ = tokio::time::timeout(SHUTDOWN_WITHIN, landing).await;
             }
             Self::Projected {

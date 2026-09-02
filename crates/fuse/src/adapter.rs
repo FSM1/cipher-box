@@ -49,6 +49,21 @@ impl core::fmt::Debug for Invalidation {
     }
 }
 
+/// Whether a mount technology has published a mount at its mount point yet.
+///
+/// A backend that mounts out of band leaves the mount point serving the
+/// directory it covers for a while, and a write there reaches no engine and is
+/// never journaled. A host reports a mount as made only on [`Live`](Self::Live).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publication {
+    /// The backend has not published the mount yet.
+    Pending,
+    /// The mount serves its mount point.
+    Live,
+    /// The backend was given long enough and never published the mount.
+    Refused,
+}
+
 /// What a mount technology can do for the core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostCapabilities {

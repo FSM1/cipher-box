@@ -12,11 +12,13 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
+  ControlRefusal,
   quit,
   readEndpoint,
   refresh as sendRefresh,
   status as readStatus,
   type ControlEndpoint,
+  type MountStatus,
   type VaultStatus,
 } from './control';
 import { poll } from './poll';
@@ -26,6 +28,12 @@ const run = promisify(execFile);
 const LOG_TAIL_LINES = 40;
 /** The mount point the shell picks under a given home. */
 const DEFAULT_MOUNT_NAME = 'CipherBox';
+/**
+ * How long the unmount tool is given. A scenario that ran out of time waits for
+ * this before it reports, so an unmount that never returns must not become the
+ * scenario's own wait.
+ */
+const UNMOUNT_WITHIN_MS = 30_000;
 
 export interface InstanceOptions {
   /** Names the instance in every message and log file. */
@@ -64,6 +72,19 @@ export class Instance {
   /** The nocache manual refresh — the deterministic barrier between clients. */
   refresh(): Promise<void> {
     return sendRefresh(this.endpoint, this.budget.refreshMs);
+  }
+
+  /**
+   * Takes the mount away without an orderly quit.
+   *
+   * A kernel call on a mount carries no timeout, so a mount that stopped
+   * answering holds its caller — and with it one of the few filesystem threads
+   * Node has. Removing the mount is what returns those calls, so a scenario
+   * that ran out of time does this before it does anything else.
+   */
+  async abandon(): Promise<void> {
+    this.shell.child.kill('SIGKILL');
+    await forceUnmount(this.mountRoot);
   }
 
   /** Ends the instance, and never leaves a mount for the next scenario. */
@@ -146,9 +167,16 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
     );
 
     const opened = await poll(
-      async () => {
+      async (): Promise<MountStatus> => {
         await refuseIfDead(shell, name);
-        const status = await readStatus(endpoint, budget.refreshMs);
+        // The shell publishes its control file before it starts the session, so
+        // a status read can land while there is no session to read. That is the
+        // cold start rather than a failure.
+        const status = await readStatus(endpoint, budget.refreshMs).catch((error: unknown) => {
+          if (error instanceof ControlRefusal) return null;
+          throw error;
+        });
+        if (!status) return { state: 'opening' };
         if (status.mount.state === 'refused') {
           throw new Error(`${name} refused to mount: ${status.mount.reason}`);
         }
@@ -198,8 +226,9 @@ async function forceUnmount(mountRoot: string): Promise<void> {
         : null;
   if (!tool) return;
   try {
-    await run(tool.command, tool.args);
+    await run(tool.command, tool.args, { timeout: UNMOUNT_WITHIN_MS });
   } catch {
-    // The mount was already gone, or the tool is absent on this host.
+    // The mount was already gone, the tool is absent on this host, or it ran
+    // out of its own time.
   }
 }

@@ -43,7 +43,7 @@ use winfsp::host::{FileSystemHost, FileSystemParams, VolumeParams};
 use winfsp::notify::{Notifier, NotifyInfo, NotifyingFileSystemContext};
 use zeroize::Zeroizing;
 
-use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
 use crate::adapters::descriptor::OwnerOnlyDescriptor;
 use crate::adapters::{ADVISORY_CAPACITY_BYTES, DOT_ENTRIES, Listed, cursor_of};
 use crate::error::VfsError;
@@ -1156,6 +1156,12 @@ impl WinFspMount {
     /// The invalidator to mount the operation core behind.
     pub fn invalidator(&self) -> WinFspInvalidator {
         self.invalidator.clone()
+    }
+
+    /// WinFsp mounts before [`mount`] returns, so this mount serves its mount
+    /// point from the moment a host holds it.
+    pub fn publication(&self) -> Publication {
+        Publication::Live
     }
 
     /// Handles this mount closed while they still owed an `updateContent` op

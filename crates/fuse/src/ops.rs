@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 use crate::adapter::{CacheTtls, HostAdapter, Invalidation};
 use crate::cache::{CacheBudget, ChunkCache, grow_wiping};
 use crate::error::VfsError;
-use crate::handle::{Access, HandleId, HandleTable, OpenFile};
+use crate::handle::{Access, FIRST_HANDLE, HandleId, HandleTable, OpenFile};
 use crate::inode::{InodeTable, ROOT_INO};
 use crate::name::{is_emittable, is_platform_junk, validate_name};
 use crate::spill::{SpillArea, SpillFile};
@@ -292,7 +292,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             served: Shadow::new(cache.shadowed_nodes()),
             listed: Shadow::new(cache.shadowed_directories()),
             walks: HashMap::new(),
-            next_walk: 0,
+            next_walk: FIRST_HANDLE,
             refresh_hint: None,
         }
     }

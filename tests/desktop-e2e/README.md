@@ -11,24 +11,27 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - `mount-lifecycle` — a headless shell starts on a dev key, mints the vault,
   projects it as a filesystem, answers a manual refresh, and gives the mount
   back on `quit`
+- `write-round-trip` — a folder and a file at the mount root reach the engine
+  and render at the vault root, and a file written inside the folder reaches
+  the engine, lists inside the folder, and leaves the root count alone; a
+  platform-junk name is refused and stays out of every listing
+- `conflict-outcomes` — a call that conflicts with the vault reaches the caller
+  as an error and leaves the vault as it was
+
+The macOS leg runs all three. The Linux leg runs `mount-lifecycle` alone: a
+mutating call on its mount never returns, so nothing that writes can run there
+yet. Windows is out of the matrix — its shell links the WinFsp adapter and the
+mount never lands, so the projection stays `opening`.
 
 ## What it does not cover yet
 
-The filesystem scenarios — a write round trip, cross-client convergence, the
-conflict outcomes the projection renders, and offline replay — are not here.
-The mount opens and answers, but the operations a scenario needs do not behave
-yet on any host this suite can run:
-
-- On macOS a `mkdir` at the mount root returns success and the vault root still
-  renders no child. A file created directly at the mount root answers `EISDIR`,
-  and a platform-junk name is taken rather than refused.
-- On Linux the shell reaches GTK and then never runs its setup hook, so it
-  arms no control endpoint and mounts nothing.
-- On Windows the shell builds the detached projection, so it makes no mount.
-
-Each one is a host-side defect rather than a harness defect, and each has its
-own issue. The harness here — the instance, the control client, the poll, the
-stack and the orchestrator — is what those scenarios will stand on.
+The content a write puts in the vault is not readable back through any mount.
+The write reaches the engine, the vault renders the child, nothing
+dead-letters, and the bytes never arrive: the writer's own read answers a
+refusal and a second instance reads an empty file. So cross-client convergence
+over content, and offline replay of a queued write, are not here. Each is a
+host-side defect with its own issue, and the harness they need — the instance,
+the control client, the poll, the stack and the orchestrator — is what is here.
 
 ## How the suite logs in
 

@@ -28,11 +28,13 @@ mod ntstatus;
 mod ops;
 mod spill;
 
-pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
+/// The mount this platform's backend makes, what it pushes invalidation
+/// through, and one of its kernel operations. One name for each on every
+/// platform, so a host never forks on the target to reach its own adapter.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use adapters::fuse::{FuseInvalidator, FuseMount, KernelOp};
-/// Mount the vault under this platform's backend. One name for every platform,
-/// so a host never forks on the target to reach its own adapter.
+pub use adapters::fuse::{FuseInvalidator as Invalidator, FuseMount as Mount, KernelOp};
+/// Mount the vault under this platform's backend.
 #[cfg(target_os = "linux")]
 pub use adapters::linux::mount;
 #[cfg(target_os = "macos")]
@@ -41,7 +43,8 @@ pub use adapters::macos::mount;
 pub use adapters::windows::mount;
 #[cfg(windows)]
 pub use adapters::windows::{
-    CAPABILITIES as WINFSP_CAPABILITIES, KernelOp, WinFspInvalidator, WinFspMount,
+    CAPABILITIES as WINFSP_CAPABILITIES, KernelOp, WinFspInvalidator as Invalidator,
+    WinFspMount as Mount,
 };
 pub use cache::CacheBudget;
 #[cfg(unix)]

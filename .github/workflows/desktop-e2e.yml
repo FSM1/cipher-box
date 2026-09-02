@@ -12,11 +12,12 @@
 # Job names are the contract (blueprint/deploy.md freeze step 4). `ci-e2e.yml`
 # and `tag-staging.yml` call this workflow and read the `ref` input.
 #
-# One leg today. The Linux shell reaches GTK and then never runs its setup
-# hook, so it arms no control endpoint and mounts nothing. The Windows shell
-# builds the detached projection and makes no mount at all. Both legs join this
-# matrix when their host starts headless; the steps below already carry the
-# provisioning each one needs.
+# Two legs today. The Windows shell links the WinFsp adapter and its mount does
+# not land, so its projection never leaves `opening`; it joins this matrix when
+# it does. Every step that leg needs is here already.
+#
+# The Linux leg runs the lifecycle alone, because a mutating call on its mount
+# never returns.
 name: Desktop E2E Tests
 
 on:
@@ -43,6 +44,8 @@ jobs:
         include:
           - platform: macos
             os: macos-latest
+          - platform: linux
+            os: ubuntu-latest
 
     env:
       # The desktop binary reads these at compile time (`option_env!` in
@@ -76,6 +79,12 @@ jobs:
 
       - uses: ./.github/actions/setup-fuse-t
         if: runner.os == 'macOS'
+
+      # WinFsp before cargo: `winfsp-sys` reads the headers and the import
+      # library out of the installation, and `winfsp_init` loads its DLL from
+      # the same registry key at mount time.
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
 
       # `fuse3` supplies the `fusermount3` binary the vendored fuser mounts
       # through. The webkit and appindicator packages are the Tauri shell's own
@@ -176,8 +185,8 @@ jobs:
       - name: Build the API
         run: pnpm --filter @cipherbox/api build
 
-      # The orchestrator owns the API process, so the offline-replay scenario
-      # can take the API away and give it back.
+      # The orchestrator owns the API process, because a scenario needs a real
+      # outage.
       - name: Run the mounted suite
         shell: bash
         run: |
@@ -194,10 +203,14 @@ jobs:
             done
             xdpyinfo -display :99 > /dev/null \
               || { echo '--- Xvfb log ---'; cat "$RUNNER_TEMP/xvfb.log"; exit 1; }
+            # A mutating call on the Linux mount never returns, so this leg runs
+            # the lifecycle alone until it does.
+            pnpm --filter @cipherbox/desktop-e2e run test:e2e --scenario mount-lifecycle
+          else
+            pnpm --filter @cipherbox/desktop-e2e run test:e2e
           fi
-          pnpm --filter @cipherbox/desktop-e2e run test:e2e
         env:
-          CIPHERBOX_DESKTOP_BINARY: ${{ github.workspace }}/target/debug/cipherbox-desktop
+          CIPHERBOX_DESKTOP_BINARY: ${{ github.workspace }}/target/debug/cipherbox-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
           CIPHERBOX_API_ENTRY: ${{ github.workspace }}/apps/api/dist/main.js
           CIPHERBOX_E2E_WORKDIR: ${{ runner.temp }}/desktop-e2e
           CIPHERBOX_API_URL: http://localhost:3000
@@ -210,7 +223,9 @@ jobs:
           mkdir -p failure-logs
           # Only the log files: the home roots hold the account directory and
           # the control token, and neither may reach an artifact.
-          find "${RUNNER_TEMP}/desktop-e2e" -name '*.log' -exec cp {} failure-logs/ \; 2>/dev/null || true
+          # -xdev: a scenario that failed can leave a mount under the workdir,
+          # and descending into one hangs the collection rather than reading it.
+          find "${RUNNER_TEMP}/desktop-e2e" -xdev -name '*.log' -exec cp {} failure-logs/ \; 2>/dev/null || true
           cp "${RUNNER_TEMP}/kubo.log" failure-logs/ 2>/dev/null || true
           cp "${RUNNER_TEMP}/xvfb.log" failure-logs/ 2>/dev/null || true
           cp /tmp/mock-ipns-routing.log failure-logs/ 2>/dev/null || true

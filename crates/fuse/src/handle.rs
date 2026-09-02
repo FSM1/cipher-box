@@ -54,17 +54,31 @@ pub struct OpenFile {
     pub stream: Option<StreamHandle>,
 }
 
+/// The lowest handle number a reply may carry. Zero is the FUSE-family null
+/// handle: FUSE-T's SMB backend reads a `fh` of zero as a file that was never
+/// opened, and drops the write that follows the create which handed it out.
+pub(crate) const FIRST_HANDLE: u64 = 1;
+
 /// The session's open handles.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct HandleTable {
     open: HashMap<HandleId, OpenFile>,
     next: u64,
 }
 
+impl Default for HandleTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HandleTable {
     /// An empty table.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            open: HashMap::new(),
+            next: FIRST_HANDLE,
+        }
     }
 
     /// Open a handle on `node`. Ids are monotonic and never reused, so a
