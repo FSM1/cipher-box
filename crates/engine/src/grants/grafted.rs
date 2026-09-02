@@ -24,21 +24,73 @@ pub(crate) type GraftedSharers = BTreeMap<[u8; 16], [u8; IDENTITY_PUBLIC_LEN]>;
 /// that linked it would hold it the moment the contest resolves.
 pub(crate) type BookmarkedScopeRoots = BTreeSet<[u8; 16]>;
 
-/// Every node id each renderable grafted scope's body names, by scope id.
-pub(crate) type NamedNodes = BTreeMap<[u8; 16], BTreeSet<[u8; 16]>>;
+/// Which body a claim-record entry came from: the scope it is sealed under, and
+/// the node whose body it is. A scope root's own body is keyed at its scope id.
+///
+/// Per body rather than per scope, because a scope's bodies arrive on different
+/// legs: the root body on the received-share pass, a folder body only while the
+/// focus window holds it. Keyed per scope, a fresh root body would erase what
+/// the folder legs below it named.
+pub(crate) type BodyKey = ([u8; 16], [u8; 16]);
+
+/// Every node id each renderable grafted body names, by body.
+pub(crate) type NamedNodes = BTreeMap<BodyKey, BTreeSet<[u8; 16]>>;
 
 /// The node ids more than one [`NamedNodes`] entry names.
 pub(crate) type ContestedNodes = BTreeSet<[u8; 16]>;
 
+/// The node ids more than one **scope** names.
+///
+/// The contest is between sharers. Two bodies of one scope may name an id
+/// between them — a move inside that scope does exactly that, and the two legs
+/// that read them run a tick apart — so a scope never contests itself.
 pub(crate) fn contested_nodes(named: &NamedNodes) -> ContestedNodes {
-    let mut once = BTreeSet::new();
+    let mut claimed: BTreeMap<[u8; 16], [u8; 16]> = BTreeMap::new();
     let mut contested = ContestedNodes::new();
-    for id in named.values().flatten() {
-        if !once.insert(*id) {
-            contested.insert(*id);
+    for ((scope_id, _), ids) in named {
+        for id in ids {
+            if *claimed.entry(*id).or_insert(*scope_id) != *scope_id {
+                contested.insert(*id);
+            }
         }
     }
     contested
+}
+
+/// Record what one grafted body names, and answer with the contest the whole
+/// record now carries.
+///
+/// Every leg that reads a grafted body writes its claim here before it applies
+/// the split, so a body cannot take an id a second scope's body names however
+/// deep in that scope's subtree the id sits.
+pub(crate) fn record_body(
+    named: &RefCell<NamedNodes>,
+    scope_id: [u8; 16],
+    node_id: [u8; 16],
+    children: &[ChildRef],
+) -> ContestedNodes {
+    let mut named = named.borrow_mut();
+    named.insert(
+        (scope_id, node_id),
+        children.iter().map(|child| child.id).collect(),
+    );
+    contested_nodes(&named)
+}
+
+/// Drop every entry no live body answers for: a scope outside `renderable`, and
+/// a folder body the render tree no longer holds. A departed body names nothing,
+/// so keeping its entry would hold a contest open for good.
+///
+/// A scope root's own entry is kept while its scope is renderable, so a scope
+/// this pass could not open does not lose its claim to one it did.
+pub(crate) fn retain_live_bodies(
+    named: &mut NamedNodes,
+    renderable: &BTreeSet<[u8; 16]>,
+    base: &Snapshot,
+) {
+    named.retain(|(scope_id, node_id), _| {
+        renderable.contains(scope_id) && (node_id == scope_id || base.contains(NodeId(*node_id)))
+    });
 }
 
 /// The plane one read leg runs on when that plane is a grafted scope.
@@ -253,19 +305,20 @@ mod tests {
         split_contesting(ids, &ContestedNodes::new())
     }
 
+    fn child(id: [u8; 16]) -> ChildRef {
+        ChildRef {
+            id,
+            name: "n".to_owned(),
+            ipns_name: vec![id[0]],
+            kind: CoreNodeKind::Folder,
+            link_counter: 1,
+            unknown: PreservedFields::new(),
+        }
+    }
+
     fn split_contesting(ids: &[[u8; 16]], contested: &ContestedNodes) -> PlaneSplit {
         let roots = BookmarkedScopeRoots::from([SCOPE, OTHER_SCOPE]);
-        let children: Vec<ChildRef> = ids
-            .iter()
-            .map(|id| ChildRef {
-                id: *id,
-                name: "n".to_owned(),
-                ipns_name: vec![id[0]],
-                kind: CoreNodeKind::Folder,
-                link_counter: 1,
-                unknown: PreservedFields::new(),
-            })
-            .collect();
+        let children: Vec<ChildRef> = ids.iter().copied().map(child).collect();
         GraftedPlane {
             scope_id: SCOPE,
             scope_roots: &roots,
@@ -329,15 +382,63 @@ mod tests {
     }
 
     /// The claim record answers over every renderable scope at once, so an id
-    /// one body alone names stays that body's to render.
+    /// one scope alone names stays that scope's to render.
     #[test]
-    fn only_an_id_two_bodies_name_is_contested() {
+    fn only_an_id_two_scopes_name_is_contested() {
         let named = NamedNodes::from([
-            (SCOPE, BTreeSet::from([UNCLAIMED, OWN_CHILD])),
-            (OTHER_SCOPE, BTreeSet::from([UNCLAIMED])),
+            ((SCOPE, SCOPE), BTreeSet::from([UNCLAIMED, OWN_CHILD])),
+            ((OTHER_SCOPE, OTHER_SCOPE), BTreeSet::from([UNCLAIMED])),
         ]);
 
         assert_eq!(contested_nodes(&named), ContestedNodes::from([UNCLAIMED]));
+    }
+
+    /// The contest is between sharers. One scope's root body and a folder body
+    /// below it name an id between them whenever a node moves inside that
+    /// scope, and the two legs that read them run a tick apart.
+    #[test]
+    fn two_bodies_of_one_scope_do_not_contest_each_other() {
+        let named = NamedNodes::from([
+            ((SCOPE, SCOPE), BTreeSet::from([UNCLAIMED])),
+            ((SCOPE, UNDER_OTHER), BTreeSet::from([UNCLAIMED])),
+        ]);
+
+        assert!(contested_nodes(&named).is_empty());
+    }
+
+    /// Every leg records its own body before it reads the contest back, so a
+    /// body cannot take an id a second scope's body names.
+    #[test]
+    fn a_recorded_body_contests_an_id_a_second_scope_already_named() {
+        let named = RefCell::new(NamedNodes::from([(
+            (OTHER_SCOPE, UNDER_OTHER),
+            BTreeSet::from([UNCLAIMED]),
+        )]));
+
+        let contested = record_body(&named, SCOPE, SCOPE, &[child(UNCLAIMED)]);
+
+        assert_eq!(contested, ContestedNodes::from([UNCLAIMED]));
+    }
+
+    /// A departed body names nothing. Its entry goes with it, or the contest it
+    /// raised would stand for good — while a scope root keeps its entry through
+    /// a pass that could not open it.
+    #[test]
+    fn the_record_keeps_only_a_live_bodys_entry() {
+        let mut named = NamedNodes::from([
+            ((SCOPE, SCOPE), BTreeSet::from([UNCLAIMED])),
+            ((SCOPE, UNDER_OTHER), BTreeSet::from([UNCLAIMED])),
+            ((SCOPE, UNCLAIMED), BTreeSet::from([OWN_CHILD])),
+            ((OTHER_SCOPE, OTHER_SCOPE), BTreeSet::from([UNDER_OTHER])),
+        ]);
+
+        retain_live_bodies(&mut named, &BTreeSet::from([SCOPE]), &tree());
+
+        assert_eq!(
+            named.keys().copied().collect::<Vec<_>>(),
+            vec![(SCOPE, SCOPE), (SCOPE, UNDER_OTHER)],
+            "an unrenderable scope and a body the tree dropped both go"
+        );
     }
 
     /// The accept and render legs raise a granted scope's read-epoch floor under

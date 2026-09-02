@@ -632,13 +632,21 @@ fn disambiguate(children: Vec<&NodeMeta>) -> Vec<RenderedChild<'_>> {
 /// instead would put two children back under one name, and the first by id — a
 /// grantee's, since it mints them — would take every lookup of it.
 fn node_id_name(meta: &NodeMeta, folded: &mut TakenNames) -> Zeroizing<String> {
-    let tagged = insert_before_extension(meta.name(), &format!(" [{}]", hex_lower(&meta.id.0)));
+    let tagged = insert_before_extension(meta.name(), &format!(" {}", node_id_label(meta.id)));
     // A sibling that stored this very spelling still gives way; the id is
     // unique, so numbering off it terminates.
     if folded.claim(&collation_key(&tagged)) {
         return tagged;
     }
     lowest_free_suffix(&tagged, 1, folded).map_or(tagged, |(candidate, _)| candidate)
+}
+
+/// The one fallback label for a node no carried name can serve: its own id in
+/// brackets. A folder binds `id` unique (`crates/core/src/seal/body.rs`) and the
+/// name law admits every spelling of it, so it is safe wherever a name must
+/// exist and cannot come from a peer.
+pub(crate) fn node_id_label(id: NodeId) -> String {
+    format!("[{}]", hex_lower(&id.0))
 }
 
 /// The lowest `name (n)`, at or above `from`, that `taken` does not already

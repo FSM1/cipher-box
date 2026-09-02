@@ -19,7 +19,9 @@ use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
 use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError, RejectionReason};
-use crate::grants::grafted::{GraftedPlane, PlaneSplit};
+use crate::grants::grafted::{
+    BookmarkedScopeRoots, GraftedPlane, NamedNodes, PlaneSplit, record_body,
+};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::project::{UnlinkedChild, merge_folder, project_child_version};
@@ -69,6 +71,18 @@ fn rejection_verdict(reason: &RejectionReason) -> Option<RefreshVerdict> {
 /// this vault's own node.
 const NOTHING_WITHHELD: &[[u8; 16]] = &[];
 
+/// What a leg below a grafted root applies the cross-plane rule with: the
+/// bookmarked scope roots, and the claim record ([`NamedNodes`]).
+///
+/// The record rather than a finished contest, because this leg reads the only
+/// bodies that name a node deep in a grafted subtree: it records each one and
+/// reads the contest back over the whole record.
+#[derive(Clone, Copy)]
+pub(crate) struct GraftedLeg<'a> {
+    pub(crate) scope_roots: &'a BookmarkedScopeRoots,
+    pub(crate) named_nodes: &'a RefCell<NamedNodes>,
+}
+
 /// The focus-window folder refresh over one owned scope's read material.
 /// Borrows the content/record seams from the live session; the caller's read
 /// seed is borrowed and never zeroized here.
@@ -88,8 +102,8 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
     /// The plane this leg runs on, or `None` on this vault's own plane
-    /// ([`GraftedPlane`]).
-    pub(crate) plane: Option<GraftedPlane<'a>>,
+    /// ([`GraftedLeg`]).
+    pub(crate) plane: Option<GraftedLeg<'a>>,
     /// How this pass resolves each folder's record: a manual refresh forces
     /// [`ResolveMode::NoCache`], so an unreachable record is reported as
     /// staleness rather than re-projected from cached bytes.
@@ -137,7 +151,7 @@ where
                 report.fold(RefreshVerdict::Rejected);
                 continue;
             };
-            let split = self.split(children);
+            let split = self.split(*folder, children);
             if split.as_ref().is_some_and(|split| split.names_own_tree) {
                 emit_trust_violation(
                     self.events,
@@ -169,8 +183,20 @@ where
 
     /// How this leg's plane splits a foreign body's children
     /// ([`GraftedPlane::split`]), or `None` on this vault's own plane.
-    fn split(&self, children: &[ChildRef]) -> Option<PlaneSplit> {
-        Some(self.plane?.split(&self.base.borrow(), children))
+    ///
+    /// `folder`'s own claim is recorded first, so the contest this split reads
+    /// covers what this very body names.
+    fn split(&self, folder: NodeId, children: &[ChildRef]) -> Option<PlaneSplit> {
+        let leg = self.plane?;
+        let contested = record_body(leg.named_nodes, self.scope_id, folder.0, children);
+        Some(
+            GraftedPlane {
+                scope_id: self.scope_id,
+                scope_roots: leg.scope_roots,
+                contested: &contested,
+            }
+            .split(&self.base.borrow(), children),
+        )
     }
 
     /// Fold each file's published head into the base, reporting whether the base
@@ -293,8 +319,10 @@ mod tests {
         NodeKind as CoreNodeKind, PreservedFields, encode_envelope, seal_read_body,
     };
 
+    use std::collections::BTreeSet;
+
     use crate::content::{DAG_ROOT_CODEC, GatewaySource};
-    use crate::grants::grafted::{BookmarkedScopeRoots, ContestedNodes};
+    use crate::grants::grafted::BookmarkedScopeRoots;
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, HttpResponse};
     use crate::sync::model::NodeMeta;
@@ -426,16 +454,16 @@ mod tests {
         /// One folder-leg pass over `FOLDER`, with the head block its resolve
         /// fetches served.
         fn run(&self, scope_id: [u8; 16], plane_roots: Option<&BookmarkedScopeRoots>) -> bool {
-            self.run_contesting(scope_id, plane_roots, &ContestedNodes::new())
+            self.run_recorded(scope_id, plane_roots, &RefCell::new(NamedNodes::new()))
         }
 
-        /// The same pass, with a claim record that gives `contested` to no
-        /// plane.
-        fn run_contesting(
+        /// The same pass, over a claim record a second scope has already
+        /// written into.
+        fn run_recorded(
             &self,
             scope_id: [u8; 16],
             plane_roots: Option<&BookmarkedScopeRoots>,
-            contested: &ContestedNodes,
+            named_nodes: &RefCell<NamedNodes>,
         ) -> bool {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
@@ -454,10 +482,9 @@ mod tests {
                     events: &events,
                     scope_id,
                     scope_read_seed: &self.read_seed,
-                    plane: plane_roots.map(|scope_roots| GraftedPlane {
-                        scope_id,
+                    plane: plane_roots.map(|scope_roots| GraftedLeg {
                         scope_roots,
-                        contested,
+                        named_nodes,
                     }),
                     mode: ResolveMode::NoCache,
                     observed_at: 0,
@@ -583,15 +610,33 @@ mod tests {
         leg.place(SCOPE_A, "from-a", None);
         leg.place(FOLDER, "a-folder", Some(SCOPE_A));
         leg.place(CONTESTED, "still-mine", Some(FOLDER));
+        let named = RefCell::new(NamedNodes::from([(
+            (SCOPE_B, SCOPE_B),
+            BTreeSet::from([CONTESTED]),
+        )]));
 
-        leg.run_contesting(
-            SCOPE_A,
-            Some(&scope_roots()),
-            &ContestedNodes::from([CONTESTED]),
-        );
+        leg.run_recorded(SCOPE_A, Some(&scope_roots()), &named);
 
         assert!(leg.listing(FOLDER).is_empty());
         assert!(!leg.holds(CONTESTED));
+    }
+
+    /// The folder leg is the only body that names a node this deep, so it must
+    /// write its claim into the record. Without it a hostile root body one
+    /// level up is alone on the id and takes it.
+    #[test]
+    fn a_folder_leg_records_what_its_body_names() {
+        let leg = FolderLeg::new(SCOPE_A, vec![child_ref(HONEST, "a-photo", 1)]);
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        let named = RefCell::new(NamedNodes::new());
+
+        leg.run_recorded(SCOPE_A, Some(&scope_roots()), &named);
+
+        assert_eq!(
+            named.borrow().get(&(SCOPE_A, FOLDER)),
+            Some(&BTreeSet::from([HONEST])),
+        );
     }
 
     /// The rule is the grafted plane's alone. On this vault's own plane every

@@ -48,22 +48,23 @@ use crate::content::{
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
 use crate::grants::grafted::{
-    BookmarkedScopeRoots, GraftedPlane, GraftedSharers, NamedNodes, contested_nodes,
-    evict_grafted_read_seeds, floor_view,
+    BookmarkedScopeRoots, GraftedSharers, NamedNodes, evict_grafted_read_seeds, floor_view,
 };
 use crate::grants::inbox::ShareInbox;
-use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
+use crate::grants::received_status::{
+    ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name,
+};
 use crate::grants::{
     ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
     CreateGrantError, EphemeralInvitee, GrantRecipient, GranteeScopePlan, InviteClaim, InviteError,
     InviteFragment, InviteMintError, InviteMintPlan, InviteStore, InviteStoreError,
-    MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
-    PendingInviteLink, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
-    ResolutionClass, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, convert_invite_claim, create_grant,
-    enforce_committed_ledger, import_contact, insert_child, link_budget_full, locate_invite_link,
-    mint_invite_link, partition_scope_links, post_invite_claim, post_share_pointer,
-    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PendingInviteLink,
+    PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, SharePointer,
+    StagingContactStore, StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK,
+    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
+    link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
+    post_invite_claim, post_share_pointer, recipient_blinded_tag, resolve_recipient,
+    row_is_owner_attested,
 };
 use crate::mailbox::{poll_verified, post_sealed};
 use crate::name::{NameError, is_emittable, validate_name};
@@ -74,12 +75,13 @@ use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
-    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldKey, HeldMaterial,
-    HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
-    PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
-    VaultProvisionNet, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify,
-    keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
+    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, GraftedLeg, HeldKey,
+    HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet,
+    PointerConsult, PointerConsultArm, PointerConsultError, PublishError, PublishOutcome,
+    RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    ScopePointerEnrolment, VaultProvisionNet, enrol_owned_scope_pointers, eol_renew_pass,
+    fanout_get_verify, keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child,
+    run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -2304,7 +2306,7 @@ fn share_display_name(rendered: &Snapshot, node: NodeId) -> Result<String, Engin
         .ok_or(EngineError::UnknownNode)?
         .name()
         .to_owned();
-    if name.len() > MAX_DISPLAY_NAME_BYTES {
+    if name.len() > MAX_NODE_NAME_BYTES {
         return Err(EngineError::MalformedInput {
             check: "grant-display-name-too-long",
         });
@@ -4709,7 +4711,6 @@ where {
                     let mut attempted_files: Vec<NodeId> = Vec::new();
                     let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
-                    let contested = contested_nodes(&grafted_named_nodes.borrow());
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
@@ -4731,10 +4732,9 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
-                            plane: (scope_root.0 != root_id).then_some(GraftedPlane {
-                                scope_id: scope_root.0,
+                            plane: (scope_root.0 != root_id).then_some(GraftedLeg {
                                 scope_roots: &scope_roots,
-                                contested: &contested,
+                                named_nodes: &grafted_named_nodes,
                             }),
                             mode,
                             observed_at: now.0,
@@ -7584,6 +7584,9 @@ where {
     /// reload; the verdict comes from the focus tick's last resolve of that
     /// scope root, so a revocation the owner published is *discovered* here
     /// rather than delivered.
+    ///
+    /// The label is the one the graft renders under ([`grafted_root_name`]), so
+    /// this row and the folder it opens name the same thing.
     pub async fn received_shares(&self) -> Result<Vec<ReceivedShareRow>, EngineError> {
         self.live_session()?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
@@ -7599,7 +7602,8 @@ where {
             .map(|share| ReceivedShareRow {
                 scope: NodeId(share.scope_id),
                 sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
-                display_name: share.display_name.clone(),
+                display_name: grafted_root_name(&share.display_name, NodeId(share.scope_id))
+                    .to_string(),
                 permission: share.permission.into(),
                 resolution: verdicts.get(&share.key()).map(|v| v.class),
             })
@@ -12655,6 +12659,10 @@ mod tests {
         /// Persist one received-share bookmark into this device's durable list,
         /// the state an accept leaves behind.
         fn bookmark_a_received_share(device: &FakeDevice) {
+            bookmark_a_received_share_labelled(device, "shared-folder");
+        }
+
+        fn bookmark_a_received_share_labelled(device: &FakeDevice, display_name: &str) {
             let enc_secret = kdf::enc_subkey(&CAP_SECRET);
             let entropy = RefCell::new(SeededEntropy::new(11));
             let store =
@@ -12664,7 +12672,7 @@ mod tests {
                 scope_root_name: child_name().as_str().as_bytes().to_vec(),
                 scope_id: SHARED_SCOPE,
                 sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
-                display_name: "shared-folder".to_owned(),
+                display_name: display_name.to_owned(),
                 permission: CorePermission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
             });
@@ -12863,6 +12871,26 @@ mod tests {
                 after[0].resolution,
                 Some(ResolutionClass::Unresolvable),
                 "a scope root nothing answers at is unresolvable, never a revocation",
+            );
+        }
+
+        /// The `/shared` row and the graft it opens must name the same thing.
+        /// A sharer-authored label the name law refuses reaches the row too, and
+        /// a row that showed the raw label would tell the user one name while
+        /// the folder carried another.
+        #[test]
+        fn a_shared_row_carries_the_label_the_graft_renders_under() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, _tasks) = started_and_parked(&world, &device);
+            bookmark_a_received_share_labelled(&device, "a\u{202E}gnp.exe");
+
+            let rows = block_on(engine.received_shares()).expect("the list reads");
+
+            assert_eq!(
+                rows[0].display_name,
+                crate::sync::model::node_id_label(NodeId(SHARED_SCOPE)),
+                "the row shows the name the law admits, not the sharer's"
             );
         }
 

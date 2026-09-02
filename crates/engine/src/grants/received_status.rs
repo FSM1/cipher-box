@@ -27,13 +27,14 @@ use crate::entropy::Entropy;
 use crate::facade::{Event, NodeId, NodeKind, ScopeSeeds, deposit_seed};
 use crate::gate::floor;
 use crate::gate::{Candidate, ReaderContext, RejectionReason, SeedBlob, adopt};
+use crate::name::validate_name;
 use crate::net::rotation::scope_name;
 use crate::net::{assemble_candidate, fanout_get_verify};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
     FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore, UnixMillis,
 };
-use crate::sync::model::{NodeMeta, Snapshot};
+use crate::sync::model::{NodeMeta, Snapshot, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::tick::on_access_refresh_due;
 
@@ -43,7 +44,7 @@ use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::grafted::{
     BookmarkedScopeRoots, ContestedNodes, GraftedPlane, GraftedSharers, NamedNodes,
-    contested_nodes, in_own_tree,
+    contested_nodes, in_own_tree, retain_live_bodies,
 };
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
@@ -101,21 +102,23 @@ struct Opened<'a> {
     modified_at: u64,
 }
 
-/// Rebuild the per-node claim over every renderable scope, and answer with the
-/// ids more than one of them names.
+/// Fold this pass's scope-root bodies into the per-node claim, and answer with
+/// the ids more than one scope names.
 ///
 /// A scope this pass did not open keeps the entry its last opened body wrote, so
-/// a fresh body does not take an id from a scope this pass could not reach.
+/// a fresh body does not take an id from a scope this pass could not reach. The
+/// folder bodies the focus leg recorded are separate entries, so a root body
+/// replaces the root's claim and nothing else.
 fn claim_contest(
     opened: &[Opened<'_>],
     renderable: &BTreeSet<[u8; 16]>,
-    named: &RefCell<NamedNodes>,
+    render: &ScopeRender<'_>,
 ) -> ContestedNodes {
-    let mut named = named.borrow_mut();
-    named.retain(|scope_id, _| renderable.contains(scope_id));
+    let mut named = render.named_nodes.borrow_mut();
+    retain_live_bodies(&mut named, renderable, &render.base.borrow());
     for open in opened {
         named.insert(
-            open.share.scope_id,
+            (open.share.scope_id, open.share.scope_id),
             open.children.iter().map(|child| child.id).collect(),
         );
     }
@@ -141,6 +144,20 @@ fn depart_contested(contested: &ContestedNodes, render: &ScopeRender<'_>) -> boo
     departed
 }
 
+/// The name a grafted scope root renders under, and the label the `/shared` row
+/// carries.
+///
+/// The sharer authors the label, so it is held to the node-name law
+/// ([`validate_name`]) before it reaches the render tree. Refusing the share
+/// instead is not open to us — the recipient must still reach the folder — and
+/// the label binds nothing, so the node-id fallback costs no reachability.
+pub(crate) fn grafted_root_name(display_name: &str, root: NodeId) -> Zeroizing<String> {
+    match validate_name(display_name) {
+        Ok(()) => Zeroizing::new(display_name.to_owned()),
+        Err(_) => Zeroizing::new(node_id_label(root)),
+    }
+}
+
 /// Merge one opened scope root into the render tree, under the cross-plane rule
 /// its plane applies ([`GraftedPlane`]).
 fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRender<'_>) {
@@ -156,14 +173,15 @@ fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRe
     .split(&base, &open.children);
     // The scope root has no parent here to name it, so the pointer's label is
     // the only name a browse can show.
+    let label = grafted_root_name(&share.display_name, root);
     let renamed = match base.node_mut(root) {
-        Some(meta) if meta.name() != share.display_name => {
-            meta.rename(share.display_name.clone());
+        Some(meta) if meta.name() != *label => {
+            meta.rename(label.as_str());
             true
         }
         Some(_) => false,
         None => {
-            let mut meta = NodeMeta::new(root, share.display_name.clone(), NodeKind::Folder);
+            let mut meta = NodeMeta::new(root, label.as_str(), NodeKind::Folder);
             meta.ipns_name = Some(share.scope_root_name.clone());
             base.upsert_node(meta);
             true
@@ -326,7 +344,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         }
         *verdicts.borrow_mut() = refreshed;
 
-        let contested = claim_contest(&opened, &renderable, render.named_nodes);
+        let contested = claim_contest(&opened, &renderable, render);
         if depart_contested(&contested, render) {
             let _ = render.events.unbounded_send(Event::SnapshotUpdated);
         }
@@ -564,7 +582,10 @@ mod tests {
         SeededEntropy, block_on, owner_root_fixture,
     };
 
-    use super::super::accept::ReceivedSharesList;
+    use crate::grants::grafted::record_body;
+    use crate::name::{MAX_NODE_NAME_BYTES, is_emittable};
+
+    use super::super::accept::{ReceivedShareStoreError, ReceivedSharesList};
     use super::super::ledger::mint_grant_row;
     use super::super::revocation::{ResolutionClass, classify};
 
@@ -1047,6 +1068,26 @@ mod tests {
             self.bookmark_sharers(&[sharer_signer().verifying_key().to_sec1()]);
         }
 
+        /// The same bookmark, under a label the sharer chose.
+        fn bookmark_labelled(&self, display_name: &str) {
+            self.try_bookmark_labelled(display_name)
+                .expect("the bookmark persists");
+        }
+
+        /// The same, reporting whether the durable store took the label.
+        fn try_bookmark_labelled(&self, display_name: &str) -> Result<(), ReceivedShareStoreError> {
+            let mut list = ReceivedSharesList::new();
+            list.reconcile(ReceivedShare {
+                scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
+                scope_id: SCOPE,
+                sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                display_name: display_name.to_owned(),
+                permission: Permission::Read,
+                pointer_read_key: SecretBytes::new([0x9a; 32]),
+            });
+            self.persist(&list)
+        }
+
         /// Bookmark the shared scope once per identity in `sharers` — the same
         /// `scopeId` claimed by each, which is what a second sharer minting that
         /// id looks like from here.
@@ -1062,11 +1103,14 @@ mod tests {
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                 });
             }
+            self.persist(&list).expect("the bookmarks persist");
+        }
+
+        fn persist(&self, list: &ReceivedSharesList) -> Result<(), ReceivedShareStoreError> {
             block_on(
                 StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy)
-                    .persist(&list),
+                    .persist(list),
             )
-            .expect("the bookmarks persist");
         }
 
         /// Bookmark the shared scope, plus a second accepted scope at `other`
@@ -1090,11 +1134,7 @@ mod tests {
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                 });
             }
-            block_on(
-                StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy)
-                    .persist(&list),
-            )
-            .expect("the bookmarks persist");
+            self.persist(&list).expect("the bookmarks persist");
         }
 
         /// One received-share pass, with the head block its resolve fetches
@@ -1685,6 +1725,159 @@ mod tests {
         fn holds_contested(&self) -> bool {
             self.base.borrow().contains(NodeId(CONTESTED_NODE))
         }
+
+        /// Record what a folder body below `which` sharer's root names, the way
+        /// the focus window's folder leg does ([`record_body`]).
+        fn record_folder_body(&self, which: usize, folder: [u8; 16], children: &[ChildRef]) {
+            record_body(&self.named_nodes, self.scopes[which], folder, children);
+        }
+    }
+
+    /// The folder below the honest sharer's root, whose body names
+    /// [`CONTESTED_NODE`].
+    const DEEP_FOLDER: [u8; 16] = [0xf1; 16];
+
+    /// A hostile root body that reaches for a node deep in an honest sharer's
+    /// subtree gets it under neither plane. The order does not matter: the
+    /// honest folder leg refreshes only while the focus window holds it, so the
+    /// hostile root body reaches the snapshot first in almost every case.
+    #[test]
+    fn a_root_body_that_names_a_deep_node_of_another_scope_renders_it_under_neither() {
+        for honest_first in [true, false] {
+            let fx = TwoSharers::new();
+            fx.publish(0, vec![shared_child(0xa1, "own")], 1);
+            fx.publish(1, vec![shared_child(0xf1, "a-folder")], 1);
+            fx.pass(0);
+
+            fx.publish(
+                0,
+                vec![shared_child(0xa1, "own"), shared_child(0xcc, "deep-steal")],
+                2,
+            );
+            let honest = [shared_child(0xcc, "mine")];
+            if honest_first {
+                fx.record_folder_body(1, DEEP_FOLDER, &honest);
+                fx.pass(60_000);
+            } else {
+                fx.pass(60_000);
+                assert!(fx.holds_contested(), "the hostile body was alone on the id");
+                fx.record_folder_body(1, DEEP_FOLDER, &honest);
+                fx.pass(120_000);
+            }
+
+            assert_eq!(fx.listing(0), vec!["own".to_owned()]);
+            assert!(!fx.holds_contested());
+        }
+    }
+
+    /// The record is keyed per body, so a fresh root body replaces what the root
+    /// named and nothing else. Keyed per scope, the pass that re-opens the
+    /// honest root would erase the folder leg's claim and hand the id over.
+    #[test]
+    fn a_root_body_replace_keeps_a_folder_bodys_ids() {
+        let fx = TwoSharers::new();
+        fx.publish(0, vec![shared_child(0xa1, "own")], 1);
+        fx.publish(1, vec![shared_child(0xf1, "a-folder")], 1);
+        fx.pass(0);
+        fx.record_folder_body(1, DEEP_FOLDER, &[shared_child(0xcc, "mine")]);
+
+        fx.publish(
+            1,
+            vec![shared_child(0xf1, "a-folder"), shared_child(0xa2, "more")],
+            2,
+        );
+        fx.publish(
+            0,
+            vec![shared_child(0xa1, "own"), shared_child(0xcc, "deep-steal")],
+            2,
+        );
+        fx.pass(60_000);
+
+        assert_eq!(fx.listing(0), vec!["own".to_owned()]);
+        assert!(!fx.holds_contested());
+    }
+
+    /// A body the render tree no longer holds names nothing, so its entry goes
+    /// with it. Keeping it would hold the contest open against a scope that is
+    /// now alone on the id.
+    #[test]
+    fn a_folder_the_render_tree_drops_loses_its_claim() {
+        let fx = TwoSharers::new();
+        fx.publish(0, vec![shared_child(0xa1, "own")], 1);
+        fx.publish(1, vec![shared_child(0xf1, "a-folder")], 1);
+        fx.pass(0);
+        fx.record_folder_body(1, DEEP_FOLDER, &[shared_child(0xcc, "mine")]);
+
+        // The honest root stops naming the folder, so the folder departs.
+        fx.publish(1, vec![shared_child(0xa2, "other")], 2);
+        fx.publish(
+            0,
+            vec![shared_child(0xa1, "own"), shared_child(0xcc, "now-free")],
+            2,
+        );
+        fx.pass(60_000);
+        assert!(
+            !fx.base.borrow().contains(NodeId(DEEP_FOLDER)),
+            "the folder left the tree"
+        );
+
+        fx.pass(120_000);
+
+        assert_eq!(
+            fx.listing(0),
+            vec!["own".to_owned(), "now-free".to_owned()],
+            "the departed body contests nothing"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The sharer-authored label, held to the node-name law.
+    // -----------------------------------------------------------------------
+
+    /// The node-id fallback must itself pass the law it stands in for.
+    #[test]
+    fn the_grafted_root_fallback_name_is_lawful() {
+        let fallback = grafted_root_name("a\u{202E}b", NodeId(SCOPE));
+
+        assert_eq!(*fallback, node_id_label(NodeId(SCOPE)));
+        assert_eq!(validate_name(&fallback), Ok(()));
+        assert!(is_emittable(&fallback));
+    }
+
+    /// A sharer authors the label and it lands in this vault's render tree as a
+    /// node name. An unlawful one must not strand the share: the recipient has
+    /// to list the graft and remove it through every projection.
+    #[test]
+    fn a_sharer_label_the_name_law_refuses_grafts_under_the_node_id() {
+        for hostile in ["a\u{202E}gnp.exe", "photos/../etc", "NUL", "trailing "] {
+            let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+            fx.bookmark_labelled(hostile);
+
+            assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+            let base = fx.base.borrow();
+            let root = base.node(NodeId(SCOPE)).expect("the graft is a node");
+            assert_eq!(root.name(), node_id_label(NodeId(SCOPE)), "for {hostile:?}");
+            assert!(is_emittable(root.name()));
+            drop(base);
+            assert_eq!(fx.listing(), vec!["photos".to_owned()], "and it opens");
+        }
+    }
+
+    /// The one bound: a label the render tree could not carry as a node name is
+    /// never stored in the first place.
+    #[test]
+    fn a_label_past_the_node_name_bound_never_reaches_the_store() {
+        let fx = RenderedScope::new(Vec::new());
+
+        assert!(
+            fx.try_bookmark_labelled(&"x".repeat(MAX_NODE_NAME_BYTES))
+                .is_ok()
+        );
+        assert!(
+            fx.try_bookmark_labelled(&"x".repeat(MAX_NODE_NAME_BYTES + 1))
+                .is_err()
+        );
     }
 
     /// A node id both grafted bodies name renders under neither scope. The
