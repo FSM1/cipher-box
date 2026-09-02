@@ -200,7 +200,13 @@ jobs:
           KUBO_ARCHIVE="$RUNNER_TEMP/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.${KUBO_FORMAT}"
           curl -fsSL --retry 3 -o "$KUBO_ARCHIVE" \
             "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.${KUBO_FORMAT}"
-          echo "${KUBO_SHA512}  ${KUBO_ARCHIVE}" | shasum -a 512 -c -
+          # `shasum` is Perl's, and the Windows runner's bash keeps Git's Perl
+          # directory off `PATH`; coreutils' `sha512sum` is the one macOS lacks.
+          if command -v sha512sum > /dev/null; then
+            echo "${KUBO_SHA512}  ${KUBO_ARCHIVE}" | sha512sum -c -
+          else
+            echo "${KUBO_SHA512}  ${KUBO_ARCHIVE}" | shasum -a 512 -c -
+          fi
           if [ "$KUBO_FORMAT" = zip ]; then
             # Git bash ships GNU tar, which reads no zip. Windows ships bsdtar.
             "$(cygpath "$SYSTEMROOT")/System32/tar.exe" -xf "$KUBO_ARCHIVE"
