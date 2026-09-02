@@ -8,10 +8,12 @@
 //! to this device's last-known-good copy where one opens, and only then to the
 //! documented defaults — inside a scheduler-measured budget.
 
+use core::cell::RefCell;
 use core::future::poll_fn;
 use core::num::NonZeroU64;
 use core::task::Poll;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
@@ -28,6 +30,7 @@ use cipherbox_engine::seams::{
     SnapshotCache, UnixMillis,
 };
 use cipherbox_engine::testkit::account::{Blocks, serve_http};
+use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on, poll_tasks_until_parked,
@@ -36,9 +39,10 @@ use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, DEFAULT_BIN_RETENTION_DAYS,
     DefaultsReason, Engine, EngineError, EventStream, Gateway, GatewayConfig, LoginSecret,
     MAX_BIN_RETENTION_DAYS, NodeId, OrphanHeads, PlacementRefusal, ProviderError, RetentionPolicy,
-    SessionBearer, SettingsLoad, SettingsPublishError, StoragePolicy, SyncTimingProfile,
-    VaultSettings, WriteTarget, load_settings, publish_settings, settings_name,
+    SessionBearer, SettingsLoad, SettingsPublishError, SettingsRead, StoragePolicy,
+    SyncTimingProfile, VaultSettings, WriteTarget, load_settings, publish_settings, settings_name,
 };
+use cipherbox_engine::{HeldRecord, HeldValue};
 
 const SECRET: [u8; 32] = [7u8; 32];
 /// A second account signed in on the same device set.
@@ -164,6 +168,10 @@ fn seed_settings_until(
 }
 
 fn load(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, secret: &[u8]) -> SettingsLoad {
+    read(world, device, blocks, secret).load
+}
+
+fn read(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, secret: &[u8]) -> SettingsRead {
     serve_http(device, blocks, 4);
     block_on(load_settings(
         &device.record_store,
@@ -521,7 +529,8 @@ fn an_unresolvable_settings_name_does_not_block_cold_start_past_the_budget() {
         &scheduler,
         &profile,
         &SECRET,
-    ));
+    ))
+    .load;
 
     assert_eq!(load, SettingsLoad::Defaults(DefaultsReason::TimedOut));
     assert_eq!(
@@ -565,6 +574,257 @@ fn a_rolled_back_record_yields_defaults_and_never_lowers_the_floor() {
     );
 }
 
+/// A read-only session keeps the name alive: the load enrols what it resolved,
+/// so an account nobody re-saves never reaches the lapse this plane refuses.
+#[test]
+fn a_resolved_settings_record_is_offered_for_renewal_by_the_load_alone() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &SECRET, &configured());
+
+    let read = read(&world, &device, &blocks, &SECRET);
+    assert!(matches!(read.load, SettingsLoad::Resolved(_)));
+    assert_eq!(
+        read.renewable
+            .expect("resolved records are renewable")
+            .routing_key,
+        settings_name(&SECRET).as_str(),
+    );
+}
+
+/// The recheck's load awaits, and a save that lands across it puts its own
+/// confirmed record in the same slot. The renewal re-signs at `floor + 1`, so
+/// enrolling the older read over that record would win record selection and
+/// roll the account back to the body the save replaced.
+#[test]
+fn an_enrolment_never_replaces_a_record_that_landed_across_its_load() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &SECRET, &configured());
+
+    // The pass reads while the slot still holds nothing of its own.
+    let stale = read(&world, &device, &blocks, &SECRET);
+    let stale_bytes = stale
+        .renewable
+        .as_ref()
+        .expect("the read the pass would enrol is renewable")
+        .record_bytes
+        .clone();
+
+    // The save lands across the load and enrols the record it confirmed.
+    let mut saved_settings = configured();
+    saved_settings.pin_mode = PinMode::Hosted;
+    publish(&world, &device, &blocks, &SECRET, &saved_settings);
+    let saved = read(&world, &device, &blocks, &SECRET)
+        .renewable
+        .expect("the saved record is renewable");
+    let saved_bytes = saved.record_bytes.clone();
+    assert_ne!(stale_bytes, saved_bytes, "the save replaced the record");
+    let slot = RefCell::new(Some(saved));
+
+    stale.enrol(&slot, None);
+
+    assert_eq!(
+        slot.borrow()
+            .as_ref()
+            .expect("the slot still holds a record")
+            .record_bytes,
+        saved_bytes,
+        "the older read did not replace the record the save enrolled",
+    );
+}
+
+/// A transport that lands a settings save in `slot` before the resolve it
+/// wraps can answer — the interleaving a single-threaded executor allows at
+/// any `.await`.
+struct SavesAcrossTheLoad {
+    inner: InMemoryRecordStore,
+    slot: Rc<RefCell<Option<HeldRecord>>>,
+    saved: HeldRecord,
+}
+
+impl RecordTransport for SavesAcrossTheLoad {
+    fn endpoints(&self) -> Vec<EndpointId> {
+        self.inner.endpoints()
+    }
+
+    async fn get_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        max_bytes: usize,
+    ) -> SeamResult<Option<Vec<u8>>> {
+        *self.slot.borrow_mut() = Some(self.saved.clone());
+        self.inner
+            .get_record(endpoint, routing_key, max_bytes)
+            .await
+    }
+
+    async fn put_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        record: &[u8],
+    ) -> SeamResult<()> {
+        self.inner.put_record(endpoint, routing_key, record).await
+    }
+}
+
+/// The bar rests on the capture running ahead of the load. A capture taken
+/// after it reads back the save's own record, matches it, and hands the slot
+/// straight to the older read the enrolment must refuse.
+#[test]
+fn the_settings_enrolment_captures_the_slot_ahead_of_its_load() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &SECRET, &configured());
+
+    // The record a save confirms while the load is in flight. It stands above
+    // the published one, which is what the load reads and would enrol.
+    let saved = held_settings_record("bafysavedhead", 9);
+    let saved_bytes = saved.record_bytes.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let transport = SavesAcrossTheLoad {
+        inner: device.record_store.clone(),
+        slot: Rc::clone(&slot),
+        saved,
+    };
+
+    serve_http(&device, &blocks, 4);
+    let observed = slot.borrow().as_ref().map(|held| held.record_bytes.clone());
+    let read = block_on(load_settings(
+        &transport,
+        &gateway(),
+        &device.http,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &SECRET,
+    ));
+    read.enrol(&slot, observed);
+
+    assert_eq!(
+        slot.borrow()
+            .as_ref()
+            .expect("the slot still holds a record")
+            .record_bytes,
+        saved_bytes,
+        "the load ran against a slot the capture had already read",
+    );
+}
+
+/// A held settings record at `head` and `sequence`, signed by the name's own
+/// keypair so the resolve verifies it.
+fn held_settings_record(head: &str, sequence: u64) -> HeldRecord {
+    HeldRecord {
+        routing_key: settings_name(&SECRET).as_str().to_owned(),
+        record_bytes: IpnsRecord::create_v2(
+            &kdf::settings_ipns_keypair(&SECRET),
+            format!("/ipfs/{head}").as_bytes(),
+            sequence,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal(),
+        signer: kdf::settings_ipns_keypair(&SECRET),
+        value: HeldValue::Head(head.to_owned()),
+        content_cids: Vec::new(),
+    }
+}
+
+/// The renewal re-signs at `floor + 1`, so a record the floor law rejected must
+/// never enter the set: renewing a replay would make it win record selection.
+#[test]
+fn a_replayed_settings_record_is_never_offered_for_renewal() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        3,
+    );
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(settings_name(&SECRET).as_str().as_bytes(), 9),
+    )
+    .expect("raise");
+
+    let read = read(&world, &device, &blocks, &SECRET);
+    assert_eq!(
+        read.load,
+        SettingsLoad::Defaults(DefaultsReason::RolledBack {
+            floor: 9,
+            sequence: 3,
+        }),
+    );
+    assert!(
+        read.renewable.is_none(),
+        "a replay the load refused is not this session's to re-sign",
+    );
+}
+
+/// The lapsed-EOL refusal is this plane's alone, and a renewal would undo it:
+/// the re-PUT carries a fresh validity, so the record the resolve just refused
+/// would come back live.
+#[test]
+fn a_lapsed_settings_record_is_never_offered_for_renewal() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    world.scheduler.advance_to(NOW);
+    seed_settings_until(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        1,
+        LAPSED_EOL,
+    );
+    // The other bar is cleared, so the lapse is what denies the renewal.
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(settings_name(&SECRET).as_str().as_bytes(), 1),
+    )
+    .expect("raise");
+
+    let read = read(&world, &device, &blocks, &SECRET);
+    assert_eq!(read.load, SettingsLoad::Defaults(DefaultsReason::Expired));
+    assert!(
+        read.renewable.is_none(),
+        "a record the lapse refused is not this session's to re-sign",
+    );
+}
+
+/// A device that holds no sequence floor for the name has nothing of its own
+/// against which to judge the age of what the plane served. It resolves, and it
+/// re-signs nothing. The resolve leaves the floor, so the next load enrols.
+#[test]
+fn a_device_that_has_never_adopted_the_settings_record_re_signs_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let author = world.device(b"alice-laptop");
+    publish(&world, &author, &blocks, &SECRET, &configured());
+
+    let fresh = world.device(b"alice-phone");
+    let first = read(&world, &fresh, &blocks, &SECRET);
+    assert!(matches!(first.load, SettingsLoad::Resolved(_)));
+    assert!(
+        first.renewable.is_none(),
+        "a first sight is not this device's to re-sign",
+    );
+    assert!(
+        read(&world, &fresh, &blocks, &SECRET).renewable.is_some(),
+        "and the floor the first resolve left admits the next one",
+    );
+}
+
 #[test]
 fn an_unavailable_head_block_yields_defaults() {
     let world = FakeWorld::new();
@@ -597,7 +857,8 @@ fn an_unavailable_head_block_yields_defaults() {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &SECRET,
-        )),
+        ))
+        .load,
         SettingsLoad::Defaults(DefaultsReason::Suppressed),
         "a verified record whose block will not come back is being withheld",
     );
@@ -660,7 +921,8 @@ fn a_floor_the_host_cannot_read_is_reported_apart_from_an_unusable_record() {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &SECRET,
-        )),
+        ))
+        .load,
         SettingsLoad::Defaults(DefaultsReason::FloorUnreadable),
         "a floor the host cannot read is never treated as no floor",
     );
@@ -749,7 +1011,8 @@ fn a_load_that_runs_out_of_budget_prefers_the_cached_copy() {
             &scheduler,
             &SyncTimingProfile::CI,
             &SECRET,
-        )),
+        ))
+        .load,
         SettingsLoad::Stale {
             settings: external_only(),
             reason: DefaultsReason::TimedOut,
@@ -799,7 +1062,8 @@ fn a_floor_the_host_cannot_read_prefers_the_cached_copy() {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &SECRET,
-        )),
+        ))
+        .load,
         SettingsLoad::Stale {
             settings: external_only(),
             reason: DefaultsReason::FloorUnreadable,
@@ -875,7 +1139,8 @@ fn a_cached_copy_that_does_not_authenticate_is_not_used() {
                 &world.scheduler,
                 &SyncTimingProfile::CI,
                 &SECRET,
-            )),
+            ))
+            .load,
             SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
             "a cached copy is re-opened on every read, never trusted for being cached",
         );
@@ -942,7 +1207,8 @@ fn the_cache_holds_the_sealed_block_never_the_opened_body() {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &SECRET,
-        )),
+        ))
+        .load,
         SettingsLoad::Resolved(configured()),
     );
 
@@ -1009,7 +1275,8 @@ fn a_second_account_on_the_device_never_sees_the_first_accounts_cached_settings(
             &world.scheduler,
             &SyncTimingProfile::CI,
             &OTHER_SECRET,
-        )),
+        ))
+        .load,
         SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
         "another account's copy is both keyed and sealed out of reach",
     );
@@ -1056,7 +1323,8 @@ fn a_snapshot_cache_that_never_answers_does_not_block_cold_start() {
             &scheduler,
             &profile,
             &SECRET,
-        )),
+        ))
+        .load,
         SettingsLoad::Defaults(DefaultsReason::TimedOut),
     );
     assert_eq!(
@@ -1878,6 +2146,32 @@ fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
     )
 }
 
+/// [`boot`] over a gateway that can serve the settings head block, so the
+/// start's own load reaches the published record rather than the cached copy.
+fn boot_resolving(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    blocks: &Blocks,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    serve_http(device, blocks, 40);
+    let (mut engine, events) = Engine::new(
+        device.seam_set(),
+        Box::new(SeededEntropy::new(21)),
+        SyncTimingProfile::CI,
+        ContentProfile::CI,
+        StoragePolicy::CI,
+        ApiBaseUrl::offline(),
+        GatewayConfig {
+            accelerator: None,
+            public_fallbacks: vec!["http://gateway.test".to_owned()],
+        },
+    );
+    block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).expect("cold start");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    (engine, events, tasks)
+}
+
 /// A cold-started engine whose block plane is wired for a whole scenario, with
 /// its spawned loops parked at their first sleep.
 fn boot(
@@ -2004,6 +2298,63 @@ fn a_saved_settings_record_is_kept_alive_by_the_liveness_loop() {
             world.record_store.record_at(endpoint, name.as_str()),
             Some(published.clone()),
             "the hourly pass re-PUT the settings record",
+        );
+    }
+}
+
+/// A session that only reads keeps the record alive, or an account whose
+/// settings nobody re-saves inside the window lapses on its own and the next
+/// placement decision fails closed for want of a copy it can authenticate.
+#[test]
+fn a_session_that_only_loads_the_settings_record_keeps_it_alive() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    // Published before the session, so this start reads a record it did not
+    // write. The publish runs against the floor view the engine binds, which is
+    // where the sequence floor the enrolment needs has to land.
+    serve_http(&device, &blocks, 4);
+    block_on(publish_settings(
+        &device.record_store,
+        &ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        ),
+        &device.floors(&SECRET),
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(1),
+        &OrphanHeads::default(),
+        &SECRET,
+        &configured(),
+    ))
+    .expect("the settings record publishes");
+    let (_engine, _events, mut tasks) = boot_resolving(&world, &device, &blocks);
+
+    let name = settings_name(&SECRET);
+    let endpoints = world.record_store.endpoints();
+    let published = world
+        .record_store
+        .record_at(&endpoints[0], name.as_str())
+        .expect("the settings record stands at the name");
+
+    // Clobber what every endpoint serves; only a re-PUT of the held record can
+    // put the published bytes back.
+    for endpoint in &endpoints {
+        world
+            .record_store
+            .seed_record(endpoint, name.as_str(), b"not the record".to_vec());
+    }
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    poll_tasks_until_parked(&mut tasks);
+
+    for endpoint in &endpoints {
+        assert_eq!(
+            world.record_store.record_at(endpoint, name.as_str()),
+            Some(published.clone()),
+            "the load alone enrolled the record the hourly pass re-PUT",
         );
     }
 }

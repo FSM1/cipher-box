@@ -3512,6 +3512,22 @@ fn bin_name() -> IpnsName {
     BinIndexKeys::derive(&SECRET).name().clone()
 }
 
+/// Start a session against the API and run the tasks it spawned, so the
+/// publishes its start made have all landed.
+fn start_on_api(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+    entropy_seed: u64,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>) {
+    serve_http(device, blocks, 64);
+    let (mut engine, _events) = engine_on_api(device, entropy_seed);
+    block_on(engine.start(secret())).expect("the session starts");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    (engine, tasks)
+}
+
 /// Provision a first-run vault against the API and run the tasks its start
 /// spawned, so the genesis publishes have all landed.
 fn provision_first_run(
@@ -3519,12 +3535,7 @@ fn provision_first_run(
     blocks: &Blocks,
     device: &FakeDevice,
 ) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>) {
-    serve_http(device, blocks, 64);
-    let (mut engine, _events) = engine_on_api(device, 42);
-    block_on(engine.start(secret())).expect("start provisions the first-run vault");
-    let mut tasks = world.scheduler.take_spawned_tasks();
-    poll_tasks_until_parked(&mut tasks);
-    (engine, tasks)
+    start_on_api(world, blocks, device, 42)
 }
 
 /// The record's existence would otherwise say the bin is non-empty, and the
@@ -3627,6 +3638,123 @@ fn a_repeated_first_run_leaves_the_bin_index_the_last_run_published() {
             .record_at(&world.record_store.endpoints()[0], bin_name().as_str()),
         Some(standing),
         "the repeated first run published no second record over it",
+    );
+}
+
+fn standing_bin_record(world: &FakeWorld) -> Option<Vec<u8>> {
+    world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], bin_name().as_str())
+}
+
+/// One genesis attempt that does not land would otherwise leave the account at
+/// the disclosure the record exists to close, for good. Every start attempts it,
+/// so the record arrives before the first soft delete asks the API for it.
+#[test]
+fn a_genesis_bin_index_that_did_not_land_is_published_by_a_later_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    world.record_store.fail_put_for(bin_name().as_str());
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the genesis publish did not land",
+    );
+    world.record_store.heal_put_for(bin_name().as_str());
+
+    // A later start on a device that holds no mark for the name, with nothing
+    // soft-deleted and no vault to mint.
+    let bob = world.device(b"alice-second-install");
+    let (_engine, _tasks) = start_on_api(&world, &blocks, &bob, 43);
+
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "the later start published the record the first run owed",
+    );
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &bob, &blocks) else {
+        panic!("the record resolves off the network");
+    };
+    assert!(
+        index.entries.is_empty(),
+        "and it is the empty index, published ahead of any soft delete",
+    );
+}
+
+/// The mark the failed attempt left is a mark like any other: the device cannot
+/// tell an attempt that never reached the plane from one that did, so it never
+/// publishes an empty index over what another device may hold. The account
+/// recovers through the device that holds no mark, above.
+#[test]
+fn the_device_whose_genesis_publish_minted_a_revision_retries_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    world.record_store.fail_put_for(bin_name().as_str());
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+    world.record_store.heal_put_for(bin_name().as_str());
+
+    let (_engine, _tasks) = start_on_api(&world, &blocks, &alice, 43);
+
+    assert!(
+        standing_bin_record(&world).is_none(),
+        "the marked device published nothing on its own retry",
+    );
+}
+
+/// The gate is the device's own durable marks, which decide what a resolve
+/// would: an account that already holds the record spends no publish, and the
+/// start pays no network round trip to find that out.
+#[test]
+fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+    let standing = standing_bin_record(&world).expect("the genesis publish landed");
+    let resolves = world.record_store.get_count(bin_name().as_str());
+
+    // A second session on the device the genesis publish left marked. The tasks
+    // it spawns stay unpolled, so what follows is the start's own spend.
+    serve_http(&alice, &blocks, 64);
+    let (mut engine, _events) = engine_on_api(&alice, 43);
+    block_on(engine.start(secret())).expect("the second session starts");
+
+    assert_eq!(
+        world.record_store.get_count(bin_name().as_str()),
+        resolves,
+        "the durable mark answered, so the start resolved nothing",
+    );
+    assert_eq!(
+        standing_bin_record(&world),
+        Some(standing.clone()),
+        "and it published nothing over the standing record",
+    );
+
+    // Then the tasks the start spawned: a resolve or a publish the gate
+    // deferred rather than refused would land here.
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    assert!(!tasks.is_empty(), "the start spawned its loops");
+    poll_tasks_until_parked(&mut tasks);
+    assert_eq!(
+        world.record_store.get_count(bin_name().as_str()),
+        resolves,
+        "and the session spawned no resolve of the name either",
+    );
+    assert_eq!(
+        standing_bin_record(&world),
+        Some(standing),
+        "nor any publish over the standing record",
+    );
+
+    // The control: a device with no mark of its own does reach the network, so
+    // the count above is one this fake actually moves.
+    let carol = world.device(b"alice-third-install");
+    let (_engine, _tasks) = start_on_api(&world, &blocks, &carol, 44);
+    assert!(
+        world.record_store.get_count(bin_name().as_str()) > resolves,
+        "an unmarked device resolves the name once",
     );
 }
 

@@ -242,6 +242,25 @@ pub(crate) async fn cached_bin_index<Sn: SnapshotCache>(
     open_bin_index(keys.seal_key.as_bytes(), &block).ok()
 }
 
+/// Whether this device holds any durable mark for the bin index name.
+///
+/// The genesis publish's cheap gate: the mint arm it runs for is the one a load
+/// reaches only with no record *and* no mark, so a marked device already knows
+/// the answer without the fanout resolve and head fetch that would repeat it. A
+/// floor the host cannot read answers `true`, which is where the load's own
+/// `FloorUnreadable` rung leaves the publish.
+pub(crate) async fn holds_a_bin_index_mark<F: FloorStore>(floors: &F, keys: &BinIndexKeys) -> bool {
+    let name = &keys.name;
+    let minted = revision_mint_key(name);
+    let adopted = revision_adopted_key(name);
+    for key in [name.as_str().as_bytes(), &minted, &adopted] {
+        if !matches!(floor::sequence_floor(floors, key).await, Ok(None)) {
+            return true;
+        }
+    }
+    false
+}
+
 /// The next body revision for this account's bin index record.
 async fn next_revision<F: FloorStore>(
     floors: &F,
