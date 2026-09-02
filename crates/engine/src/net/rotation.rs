@@ -1963,12 +1963,19 @@ where
 
 /// How many of a moved record's content versions the wave expands. A committed
 /// writer sizes the list, and each entry costs one gateway fetch inside a pass
-/// the revocation waits on. A version past the bound keeps whatever pin rows the
-/// old name's registrations left, and the node's next publish re-registers it.
+/// the revocation waits on.
+///
+/// Content past this bound and past [`MAX_MOVED_CONTENT_CIDS`] reaches no
+/// registration under the new name, and the retire that follows drops the old
+/// name's rows, so that content loses its last reference edge. Holding the old
+/// name back instead would leave live a name the revoked grantee's retired write
+/// scope seed still signs for, which is the hole the wave exists to close, so
+/// the bound is charged against reclaim rather than against trust. Carrying the
+/// whole set to the new name in continuation batches is not landed.
 const MAX_MOVED_VERSIONS: usize = 64;
 
 /// How many content CIDs one moved record's registration carries. A committed
-/// writer sizes the leaf list too, and the whole set rides one register body.
+/// writer sizes the leaf list too. Same residual as [`MAX_MOVED_VERSIONS`].
 const MAX_MOVED_CONTENT_CIDS: usize = 8192;
 
 /// The write-plane name wave's transport edge (blueprint/engine.md
@@ -2763,7 +2770,8 @@ where
     ///
     /// [`MAX_MOVED_VERSIONS`] and [`MAX_MOVED_CONTENT_CIDS`] bound the walk,
     /// because neither the version count nor the leaf count is bounded by
-    /// anything but the record's own byte ceiling.
+    /// anything but the record's own byte ceiling. Both bounds truncate rather
+    /// than refuse, and each names its own residual.
     async fn moved_content_cids(&self, body: &ReadBody) -> Vec<String> {
         let ReadBody::File { versions, .. } = body else {
             return Vec::new();

@@ -92,37 +92,22 @@ const GRANT_RESERVATION_STEP: usize = 64;
 /// always leave beside itself ([`resealable_root_rest_bytes`]).
 ///
 /// A re-seal rebuilds the section from the committed set, so it mints one grant
-/// blob per committed row even where the record it re-read carried none — growth
-/// that record never showed. Left uncoordinated, a scope root sits under the
-/// block ceiling with no authorable re-seal, and the owner's revocation cascade
-/// refuses on it identically for ever: whoever can grow that record makes the
-/// scope rotation-proof.
+/// blob per committed row even where the record it re-read carried none. Left
+/// uncoordinated, a scope root sits under the block ceiling with no authorable
+/// re-seal and the owner's revocation cascade refuses on it for ever: whoever
+/// can grow that record makes the scope rotation-proof.
 ///
-/// The grant run is sized from the record's **own** committed count rather than
-/// the frozen ceiling, so the reservation is what this scope's next re-seal will
-/// really mint. The count is owner-signed: a writer that edits it breaks the
-/// commitment signature the gate verifies, so it can no longer buy itself room
-/// by claiming a smaller set, nor cost every ordinary root the whole ceiling.
-/// The remaining runs stay at their frozen ceilings — a committed writer authors
-/// both the child index and the carried links, so neither count is owner-vouched.
+/// The count is the record's **own**, and owner-signed, so a writer that edits
+/// it breaks the commitment signature the gate verifies a stage later. It is
+/// charged in whole [`GRANT_RESERVATION_STEP`]s, so a root keeps its budget
+/// across the grants that share its step and only a step crossing can find it
+/// too full. The remaining runs keep their frozen ceilings, because a committed
+/// writer authors both the child index and the carried links.
 ///
-/// Every **write-grantee-authored** per-item size is bounded too: the re-seal
-/// drops each ledger row's and each child ref's preserved unknown map and bounds
-/// a retained history link's `sealed` ([`MAX_RETAINED_HISTORY_LINK_BYTES`]), so
-/// no run a write grantee sizes rides forward. The owner-signed commitment is
-/// the deliberate exception — its entries' preserved fields ride inside the
-/// signature, so dropping them would break it, and only the owner can author
-/// them. A section over the budget is still a **retryable** refusal on the
-/// record the next pass re-resolves, never a trust verdict.
-///
-/// The count is rounded up to [`GRANT_RESERVATION_STEP`] before it is charged,
-/// so the budget is a step function of the grant set rather than a line. A root
-/// authored inside its budget therefore keeps that budget across the grants that
-/// share its step, and only a grant that crosses a step can find a root too full
-/// to carry the section it would then owe.
-///
-/// The clamp keeps [`resealable_root_rest_bytes`]'s complement a total: every
-/// caller feeds a decode-bounded count, and an unclamped one would underflow it.
+/// A section over the budget is a **retryable** refusal on the record the next
+/// pass re-resolves, never a trust verdict. The clamp keeps
+/// [`resealable_root_rest_bytes`]'s complement a total: every caller feeds a
+/// decode-bounded count, and an unclamped one would underflow it.
 pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {
     // One whole step above the count, so the step a root was authored in always
     // holds at least one more grant than it committed.
