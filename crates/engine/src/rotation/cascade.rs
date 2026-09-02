@@ -449,13 +449,13 @@ pub(crate) async fn record_grant_floor<F: FloorStore>(
 /// records as already cut **at this scope**.
 ///
 /// The floor is what separates the two descendants a record cannot tell apart.
-/// A grant-set commitment carries no read epoch, so a pre-cut set the owner
-/// really did sign passes every gate stage, and a committed write grantee can
-/// republish a descendant root carrying it. Only the engine's own durable state
-/// remembers that the owner cut that recipient there, so a descendant whose
-/// commitment attests the recipient keeps its blob unless the floor says
-/// otherwise — the ancestor's cut alone no longer revokes an independent grant
-/// one level down.
+/// A commitment's `cutEpoch` refuses a pre-cut set only at a scope whose cut
+/// this device recorded, so on a device that recorded none a pre-cut set the
+/// owner really did sign passes every gate stage, and a committed write grantee
+/// can republish a descendant root carrying it. This per-recipient floor is the
+/// complement: a descendant whose commitment attests the recipient keeps its
+/// blob unless the floor says otherwise — the ancestor's cut alone no longer
+/// revokes an independent grant one level down.
 ///
 /// A cut stands only while it is newer than the owner's newest grant to the
 /// same recipient at the same scope ([`record_grant_floor`]), so an owner who
@@ -1384,12 +1384,13 @@ mod tests {
 
     #[test]
     fn a_descendant_the_owner_cut_at_that_descendant_gets_no_re_keyed_grant_blob() {
-        // A grant-set commitment carries no read epoch, so a pre-cut one the
-        // owner really did sign still passes every gate stage. A current write
-        // grantee can therefore republish a descendant root carrying it, at
-        // the live read and write epochs. Bound to the record's own set alone,
-        // the cascade would wrap the fresh read override seed straight back to
-        // the party the owner cut there.
+        // The cut here raises the per-recipient floor alone, so no `cutEpoch`
+        // floor refuses the descendant's set and a pre-cut one the owner really
+        // did sign still passes every gate stage. A current write grantee can
+        // therefore republish a descendant root carrying it, at the live read
+        // and write epochs. Bound to the record's own set alone, the cascade
+        // would wrap the fresh read override seed straight back to the party
+        // the owner cut there.
         let net = FakeNet::new().scope(0x0a, 4, &[0x0b]).scope(0x0b, 4, &[]);
         let revokee = net.owner.grantee.public().to_bytes();
         let floors = InMemoryFloorStore::default();

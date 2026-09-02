@@ -21,7 +21,7 @@
 //!   ([`seal_owner_history_link`]), so only the owner opens it and only the
 //!   owner can have written it.
 //! - **Grant-set commitment** — the owner-signed `{cutEpoch, ipnsName,
-//!   ownerPseudonymPk, [(tag, recipientEncPk, permission, pseudonymPk)]}`
+//!   ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`
 //!   ([`GrantSetCommitment`]).
 //!
 //! All crypto is composed from [`crate::suite`]; the whole-record fail-closed

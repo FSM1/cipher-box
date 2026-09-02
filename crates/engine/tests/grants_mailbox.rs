@@ -357,7 +357,7 @@ impl GrantFixture {
 
         let mut commitment = self.commitment.clone();
         commitment.entries = vec![GrantSetEntry::new(
-            &POINTER_READ_KEY,
+            &rotated_pointer_read_key,
             self.tag,
             self.recipient_enc.public().to_bytes(),
             permission,
