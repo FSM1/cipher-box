@@ -11,9 +11,10 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - `mount-lifecycle` — a headless shell starts on a dev key, mints the vault,
   projects it as a filesystem, answers a manual refresh, and gives the mount
   back on `quit`
-- `write-round-trip` — a folder, a file at the mount root, and a file inside
-  the folder all reach the engine and render at the vault root; a platform-junk
-  name is refused and stays out of every listing
+- `write-round-trip` — a folder and a file at the mount root reach the engine
+  and render at the vault root, and a file written inside the folder reaches
+  the engine, lists inside the folder, and leaves the root count alone; a
+  platform-junk name is refused and stays out of every listing
 - `conflict-outcomes` — a call that conflicts with the vault reaches the caller
   as an error and leaves the vault as it was
 

@@ -193,7 +193,6 @@ export class ControlRefusal extends Error {
   }
 }
 
-/** Sends one verb and turns a refusal into a throw. */
 export async function sendOrThrow(
   endpoint: ControlEndpoint,
   verb: ControlVerb,

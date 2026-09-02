@@ -71,7 +71,6 @@ const MAX_WRITE_BYTES: u32 = 1 << 20;
 /// reports it [`Publication::Refused`]. Wide enough for a loaded runner.
 const PUBLISHED_WITHIN: Duration = Duration::from_secs(30);
 
-/// How often the publication watch re-reads the mount point.
 const PUBLISH_POLL: Duration = Duration::from_millis(25);
 
 /// [`Publication`] as the watch stores it.

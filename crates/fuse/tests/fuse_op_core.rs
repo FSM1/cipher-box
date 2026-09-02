@@ -331,10 +331,8 @@ fn statfs_counts_reachable_nodes_and_the_advertised_name_limit_is_enforced() {
 
 // --- the never-block law ---
 
-/// Zero is the FUSE-family null handle. FUSE-T's SMB backend reads a `fh` of
-/// zero as a file that was never opened and drops the write that follows the
-/// create which handed it out, so the first handle of a session — the one a
-/// member's first file at the mount root gets — must not be zero.
+/// The first handles of a session are the ones a member's first file and first
+/// walk at the mount root get. `FIRST_HANDLE` carries why zero is refused.
 #[test]
 fn no_handle_a_host_is_given_is_the_null_handle() {
     let (mut core, _adapter) = mount();

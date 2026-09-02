@@ -37,6 +37,11 @@ export const writeRoundTrip: Scenario = {
       await writeFile(join(a.mountRoot, FOLDER, NESTED_FILE), 'inside a folder');
       // The root still holds two children: the nested file is the folder's.
       await rendersItems(context, a, 2, 'a nested file to leave the root count alone');
+      assert.deepEqual(
+        await readdir(join(a.mountRoot, FOLDER)),
+        [NESTED_FILE],
+        'the folder lists the file the mount wrote inside it'
+      );
 
       await refuses(writeFile(join(a.mountRoot, JUNK), 'junk'), `the platform-junk name ${JUNK}`);
       assert.deepEqual(

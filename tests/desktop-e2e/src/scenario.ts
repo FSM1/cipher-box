@@ -65,15 +65,16 @@ export async function withInstances<T>(
  *
  * A kernel call on a mount has no timeout of its own. Rejecting the race leaves
  * every blocked call holding one of the few filesystem threads Node has, and
- * the teardown that follows needs those threads — so the mounts go first, which
- * is what returns the calls.
+ * the teardown that follows needs those threads — so the mounts go first and
+ * the rejection waits for them, which is what returns the calls.
  */
 function withDeadline<T>(body: Promise<T>, timeoutMs: number, started: Instance[]): Promise<T> {
   let timer: NodeJS.Timeout;
   const expiry = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      void Promise.all(started.map((instance) => instance.abandon()));
-      reject(new Error(`the scenario did not finish within ${timeoutMs}ms`));
+      void Promise.allSettled(started.map((instance) => instance.abandon())).then(() =>
+        reject(new Error(`the scenario did not finish within ${timeoutMs}ms`))
+      );
     }, timeoutMs);
     timer.unref();
   });

@@ -28,6 +28,12 @@ const run = promisify(execFile);
 const LOG_TAIL_LINES = 40;
 /** The mount point the shell picks under a given home. */
 const DEFAULT_MOUNT_NAME = 'CipherBox';
+/**
+ * How long the unmount tool is given. A scenario that ran out of time waits for
+ * this before it reports, so an unmount that never returns must not become the
+ * scenario's own wait.
+ */
+const UNMOUNT_WITHIN_MS = 30_000;
 
 export interface InstanceOptions {
   /** Names the instance in every message and log file. */
@@ -220,8 +226,9 @@ async function forceUnmount(mountRoot: string): Promise<void> {
         : null;
   if (!tool) return;
   try {
-    await run(tool.command, tool.args);
+    await run(tool.command, tool.args, { timeout: UNMOUNT_WITHIN_MS });
   } catch {
-    // The mount was already gone, or the tool is absent on this host.
+    // The mount was already gone, the tool is absent on this host, or it ran
+    // out of its own time.
   }
 }

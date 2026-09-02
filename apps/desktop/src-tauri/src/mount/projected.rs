@@ -231,8 +231,6 @@ impl Projection {
     pub async fn tear_down(self) {
         match self {
             Self::Opening { landing, .. } => {
-                // Whatever it lands is dropped, and dropping a mount is
-                // the unmount.
                 let _ = tokio::time::timeout(SHUTDOWN_WITHIN, landing).await;
             }
             Self::Projected {
