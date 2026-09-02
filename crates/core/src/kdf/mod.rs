@@ -1,7 +1,8 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these twenty-one edges. Every edge
-//! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
+//! Nothing in CipherBox derives a key outside these twenty-four edges. Every
+//! edge is domain-separated by a fixed `cipherbox/v2/<edge>` context string
+//! fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
 //! **fixed-length message input**, never variable context, which would admit
@@ -20,6 +21,7 @@
 
 use zeroize::Zeroize;
 
+use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::ed25519::Ed25519Signer;
 use crate::suite::hash::{derive_key, keyed_hash};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
@@ -51,6 +53,9 @@ const CTX_BIN_INDEX_SEAL_KEY: &str = "cipherbox/v2/bin-index-seal-key";
 const CTX_BIN_HELD_KEY: &str = "cipherbox/v2/bin-held-key";
 const CTX_GENESIS_READ_SCOPE_SEED: &str = "cipherbox/v2/genesis-read-scope-seed";
 const CTX_GENESIS_WRITE_SCOPE_SEED: &str = "cipherbox/v2/genesis-write-scope-seed";
+const CTX_CONTACT_LABEL_SEED: &str = "cipherbox/v2/contact-label-seed";
+const CTX_CONTACT_LABEL: &str = "cipherbox/v2/contact-label";
+const CTX_COMMITTED_RECIPIENT_MASK: &str = "cipherbox/v2/committed-recipient-mask";
 
 /// One catalog edge's frozen, machine-checkable metadata: its stable name, its
 /// `cipherbox/v2/...` context string, and an input-layout descriptor. The KAT
@@ -62,7 +67,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The twenty-one edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The twenty-four edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -169,6 +174,21 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "genesis-write-scope-seed",
         context: CTX_GENESIS_WRITE_SCOPE_SEED,
         input_layout: "derive_key(ctx, loginSecret[var])",
+    },
+    EdgeSpec {
+        name: "contact-label-seed",
+        context: CTX_CONTACT_LABEL_SEED,
+        input_layout: "derive_key(ctx, loginSecret[var])",
+    },
+    EdgeSpec {
+        name: "contact-label",
+        context: CTX_CONTACT_LABEL,
+        input_layout: "keyed_hash(derive_key(ctx, contactLabelSeed[32]), identityPk[33])",
+    },
+    EdgeSpec {
+        name: "committed-recipient-mask",
+        context: CTX_COMMITTED_RECIPIENT_MASK,
+        input_layout: "keyed_hash(derive_key(ctx, pointerReadKey[32]), tag[32])",
     },
 ];
 
@@ -299,6 +319,30 @@ fn genesis_read_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
 
 fn genesis_write_scope_seed_bytes(login_secret: &[u8]) -> SecretBytes {
     derive_key(CTX_GENESIS_WRITE_SCOPE_SEED, login_secret)
+}
+
+fn contact_label_seed_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_CONTACT_LABEL_SEED, login_secret)
+}
+
+fn committed_recipient_mask_bytes(
+    pointer_read_key: &[u8; SECRET_LEN],
+    tag: &[u8; SECRET_LEN],
+) -> SecretBytes {
+    keyed_hash(
+        derive_key(CTX_COMMITTED_RECIPIENT_MASK, pointer_read_key).as_bytes(),
+        tag,
+    )
+}
+
+fn contact_label_bytes(
+    contact_label_seed: &[u8; SECRET_LEN],
+    identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+) -> SecretBytes {
+    keyed_hash(
+        derive_key(CTX_CONTACT_LABEL, contact_label_seed).as_bytes(),
+        identity_pk,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +518,45 @@ pub fn genesis_write_scope_seed(login_secret: &[u8]) -> SecretBytes {
     genesis_write_scope_seed_bytes(login_secret)
 }
 
+/// `contact-label-seed`: the device-only seed [`contact_label`] labels under,
+/// from the login secret. A dedicated edge, so the label derives from no key
+/// that leaves the device.
+pub fn contact_label_seed(login_secret: &[u8]) -> SecretBytes {
+    contact_label_seed_bytes(login_secret)
+}
+
+/// `committed-recipient-mask`: the per-(scope, tag) keystream a grant-set
+/// commitment entry hides its recipient encryption subkey under.
+///
+/// Keyed on the scope's `pointerReadKey`, which the owner derives and every
+/// grant blob carries, so the owner and every grantee of the scope recover the
+/// recipient and no observer does. The blinded tag is the message, so one
+/// recipient masks to unrelated bytes at every scope root — the unlinkability
+/// the tag itself exists for, extended to the recipient the owner must commit.
+pub fn committed_recipient_mask(
+    pointer_read_key: &[u8; SECRET_LEN],
+    tag: &[u8; SECRET_LEN],
+) -> SecretBytes {
+    committed_recipient_mask_bytes(pointer_read_key, tag)
+}
+
+/// `contact-label`: a fixed-width local label for a contact identity key, for
+/// keying durable device-local state that would otherwise name that contact in
+/// the clear.
+///
+/// Deterministic across sessions on one device, and unlinkable off it: the seed
+/// is the account's alone, so no observer who holds the identity key can
+/// recompute the label. Local state only — a label MUST never be published, or
+/// it becomes exactly the cross-scope correlator the blinded tag exists to deny.
+/// The identity key enters as fixed-length `keyed_hash` message, never as
+/// context and never as a concatenation tail.
+pub fn contact_label(
+    contact_label_seed: &[u8; SECRET_LEN],
+    identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+) -> [u8; SECRET_LEN] {
+    *contact_label_bytes(contact_label_seed, identity_pk).as_bytes()
+}
+
 // ---------------------------------------------------------------------------
 // Separation surface: the whole edge table under one set of probe inputs.
 // ---------------------------------------------------------------------------
@@ -497,6 +580,8 @@ pub struct EdgeProbe<'a> {
     pub index: u64,
     /// The scope-root `ipnsName` for `blinded-tag`.
     pub ipns_name: &'a [u8],
+    /// The 33-byte compressed SEC1 identity key for `contact-label`.
+    pub identity_pk: &'a [u8; IDENTITY_PUBLIC_LEN],
 }
 
 impl core::fmt::Debug for EdgeProbe<'_> {
@@ -507,6 +592,7 @@ impl core::fmt::Debug for EdgeProbe<'_> {
             .field("struct_tag", &self.struct_tag)
             .field("index", &self.index)
             .field("ipns_name", &self.ipns_name)
+            .field("identity_pk", &self.identity_pk)
             .finish()
     }
 }
@@ -534,8 +620,8 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the outputs must be pairwise distinct), its property test, and the
-/// frozen vectors the KAT generator writes.
+/// (the outputs must be pairwise distinct), its property test, and the frozen
+/// vectors the KAT generator writes.
 ///
 /// The **catalog-freezing / separation surface**, not the production derivation
 /// path: it returns each edge's raw derived bytes in the clear. Never feed
@@ -634,6 +720,18 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
             name: "genesis-write-scope-seed",
             output: b(genesis_write_scope_seed_bytes(probe.seed)),
         },
+        EdgeProbeOutput {
+            name: "contact-label-seed",
+            output: b(contact_label_seed_bytes(probe.seed)),
+        },
+        EdgeProbeOutput {
+            name: "contact-label",
+            output: b(contact_label_bytes(probe.seed, probe.identity_pk)),
+        },
+        EdgeProbeOutput {
+            name: "committed-recipient-mask",
+            output: b(committed_recipient_mask_bytes(probe.seed, probe.seed)),
+        },
     ]
 }
 
@@ -642,6 +740,8 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    const PROBE_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0x02; IDENTITY_PUBLIC_LEN];
+
     fn probe<'a>(seed: &'a [u8; 32], id: &'a [u8; 16], name: &'a [u8]) -> EdgeProbe<'a> {
         EdgeProbe {
             seed,
@@ -649,6 +749,7 @@ mod tests {
             struct_tag: 1,
             index: 0,
             ipns_name: name,
+            identity_pk: &PROBE_IDENTITY_PK,
         }
     }
 
@@ -739,6 +840,40 @@ mod tests {
         assert_eq!(
             genesis_write_scope_seed(&seed).as_bytes(),
             &by("genesis-write-scope-seed")
+        );
+        assert_eq!(
+            contact_label_seed(&seed).as_bytes(),
+            &by("contact-label-seed")
+        );
+        assert_eq!(
+            contact_label(&seed, &PROBE_IDENTITY_PK),
+            by("contact-label")
+        );
+    }
+
+    /// The label must separate two contacts on one device and one contact
+    /// across two devices, which is the whole of what it buys the floor store.
+    #[test]
+    fn a_contact_label_separates_contacts_and_accounts() {
+        let seed = contact_label_seed(b"login-secret");
+        let other_seed = contact_label_seed(b"another-secret");
+        let a = [0x02u8; IDENTITY_PUBLIC_LEN];
+        let mut b = a;
+        b[IDENTITY_PUBLIC_LEN - 1] ^= 1;
+
+        assert_eq!(
+            contact_label(seed.as_bytes(), &a),
+            contact_label(contact_label_seed(b"login-secret").as_bytes(), &a),
+            "one account labels one contact the same way on every session",
+        );
+        assert_ne!(
+            contact_label(seed.as_bytes(), &a),
+            contact_label(seed.as_bytes(), &b)
+        );
+        assert_ne!(
+            contact_label(seed.as_bytes(), &a),
+            contact_label(other_seed.as_bytes(), &a),
+            "and no other account can recompute it from the identity key alone",
         );
     }
 

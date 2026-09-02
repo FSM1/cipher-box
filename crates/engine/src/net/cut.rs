@@ -226,7 +226,6 @@ where
                     pointer_read_key: &current.pointer_read_key,
                 },
                 &CommittedSet {
-                    owner_identity: self.keys.identity,
                     commitment: &cut.commitment,
                     commitment_sig: &cut.commitment_sig,
                     grant_ledger: &cut.grant_ledger,
@@ -294,7 +293,6 @@ where
                     // the cut party's row from the re-wrapped blobs *is* the
                     // revocation.
                     committed: CommittedSet {
-                        owner_identity: self.keys.identity,
                         commitment: &cut.commitment,
                         commitment_sig: &cut.commitment_sig,
                         grant_ledger: &cut.grant_ledger,

@@ -210,7 +210,14 @@ impl GrantFixture {
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
-            entries: vec![GrantSetEntry::new(tag, Permission::Read, [0xC0; 32])],
+            cut_epoch: 0,
+            entries: vec![GrantSetEntry::new(
+                &POINTER_READ_KEY,
+                tag,
+                recipient_enc.public().to_bytes(),
+                Permission::Read,
+                [0xC0; 32],
+            )],
             unknown: PreservedFields::new(),
         };
         let commitment_sig = sign_grant_set(&owner_identity, &commitment).expect("signs");
@@ -349,7 +356,13 @@ impl GrantFixture {
         };
 
         let mut commitment = self.commitment.clone();
-        commitment.entries = vec![GrantSetEntry::new(self.tag, permission, [0xC0; 32])];
+        commitment.entries = vec![GrantSetEntry::new(
+            &rotated_pointer_read_key,
+            self.tag,
+            self.recipient_enc.public().to_bytes(),
+            permission,
+            [0xC0; 32],
+        )];
         let commitment_sig = sign_grant_set(&self.owner_identity, &commitment).expect("signs");
 
         // Keep the owner blob + write-body; swap the re-sealed grant blob.

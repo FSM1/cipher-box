@@ -136,6 +136,7 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
     let commitment = GrantSetCommitment {
         ipns_name: name.as_str().as_bytes().to_vec(),
         owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: grants
             .iter()
             .map(|row| row.commitment_entry.clone())
@@ -169,7 +170,6 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
             pointer_read_key: &pointer_read_key,
         },
         &CommittedSet {
-            owner_identity: &owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
@@ -509,6 +509,7 @@ fn recipient_row_at_root(permission: CorePermission) -> GrantRow {
     mint_grant_row(
         &owner_identity(),
         &kdf::enc_subkey(&SECRET),
+        &owner_pointer_read_key(),
         recipient_identity().verifying_key().to_sec1(),
         &kdf::enc_subkey(&RECIPIENT_SECRET).public(),
         &SCOPE,
@@ -525,6 +526,7 @@ fn bystander_row_with_corrupt_sig() -> GrantRow {
     let mut row = mint_grant_row(
         &owner_identity(),
         &kdf::enc_subkey(&SECRET),
+        &owner_pointer_read_key(),
         bystander.verifying_key().to_sec1(),
         &kdf::enc_subkey(&BYSTANDER_SECRET).public(),
         &SCOPE,
@@ -548,6 +550,7 @@ fn expiring_invite_link_at_root(secret_byte: u8, expires_at: Option<UnixMillis>)
     mint_invite_grant(
         &owner_identity(),
         &kdf::enc_subkey(&SECRET),
+        &owner_pointer_read_key(),
         &invitee,
         &SCOPE,
         &WRITE_SCOPE_SEED,

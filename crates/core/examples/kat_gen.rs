@@ -177,6 +177,7 @@ struct ProbeJson {
     struct_tag: u8,
     index: u64,
     ipns_name: String,
+    identity_pk: String,
 }
 
 #[derive(Serialize)]
@@ -775,6 +776,11 @@ struct StructureSigRejectVector {
 struct GrantSetAcceptVector {
     name: String,
     owner_identity_pk: String,
+    /// The scope pointer read key each entry's recipient is masked under.
+    pointer_read_key: String,
+    /// The recipient encryption subkeys the masked entries recover to, in entry
+    /// order — what freezes the mask rather than only the bytes over it.
+    recipients: Vec<String>,
     commitment: String,
     signature: String,
 }
@@ -3659,6 +3665,7 @@ fn build_kdf_edges() -> KdfEdgesFile {
     let struct_tag = 0x01u8;
     let index = 0u64;
     let ipns_name = b"cipherbox/v2/scope-root".to_vec();
+    let identity_pk: [u8; 33] = std::array::from_fn(|i| (0x80 + i) as u8);
 
     let probe = EdgeProbe {
         seed: &seed,
@@ -3666,6 +3673,7 @@ fn build_kdf_edges() -> KdfEdgesFile {
         struct_tag,
         index,
         ipns_name: &ipns_name,
+        identity_pk: &identity_pk,
     };
     let outputs = kdf::edge_probe_outputs(&probe);
     assert_eq!(outputs.len(), EDGES.len(), "probe must cover every edge");
@@ -3710,6 +3718,7 @@ fn build_kdf_edges() -> KdfEdgesFile {
             struct_tag,
             index,
             ipns_name: hexstr(&ipns_name),
+            identity_pk: hexstr(&identity_pk),
         },
         edges,
     }
@@ -5370,6 +5379,7 @@ fn section_commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {
     GrantSetCommitment {
         ipns_name: b"grant-section-scope-root".to_vec(),
         owner_pseudonym_pk: [0x88; 32],
+        cut_epoch: 0,
         entries,
         unknown: PreservedFields::new(),
     }
@@ -5388,8 +5398,20 @@ fn section_grant_blob(tag: u8) -> SignedGrantBlob {
 fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
     let full = seal::GrantSection {
         commitment: section_commitment(vec![
-            GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+            GrantSetEntry::new(
+                &[0x66; 32],
+                [0x01; 32],
+                [0x41; 32],
+                Permission::Read,
+                [0x02; 32],
+            ),
+            GrantSetEntry::new(
+                &[0x66; 32],
+                [0x03; 32],
+                [0x43; 32],
+                Permission::Write,
+                [0x04; 32],
+            ),
         ]),
         commitment_sig: [0x11; 64],
         grant_blobs: vec![section_grant_blob(0x01), section_grant_blob(0x03)],
@@ -6546,13 +6568,31 @@ fn build_structure_sig_reject() -> Vec<StructureSigRejectVector> {
 
 // --- Grant-set commitment ---------------------------------------------------
 
+/// The scope pointer read key the grant-set vectors mask their recipients
+/// under. Frozen alongside the bytes, so a second implementation can check the
+/// mask and not merely the framing.
+const GRANT_SET_POINTER_READ_KEY: [u8; 32] = [0x66; 32];
+
 fn grant_set_sample() -> GrantSetCommitment {
     GrantSetCommitment {
         ipns_name: b"scope-root-ipns".to_vec(),
         owner_pseudonym_pk: [0x88; 32],
+        cut_epoch: 7,
         entries: vec![
-            GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
-            GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+            GrantSetEntry::new(
+                &GRANT_SET_POINTER_READ_KEY,
+                [0x01; 32],
+                [0x41; 32],
+                Permission::Read,
+                [0x02; 32],
+            ),
+            GrantSetEntry::new(
+                &GRANT_SET_POINTER_READ_KEY,
+                [0x03; 32],
+                [0x43; 32],
+                Permission::Write,
+                [0x04; 32],
+            ),
         ],
         unknown: PreservedFields::new(),
     }
@@ -6577,14 +6617,26 @@ fn build_grant_set_accept() -> Vec<GrantSetAcceptVector> {
     vec![GrantSetAcceptVector {
         name: "read-and-write".to_string(),
         owner_identity_pk: hexstr(&owner.verifying_key().to_sec1()),
+        pointer_read_key: hexstr(&GRANT_SET_POINTER_READ_KEY),
+        recipients: c
+            .entries
+            .iter()
+            .map(|e| hexstr(&e.recipient_enc_pk(&GRANT_SET_POINTER_READ_KEY)))
+            .collect(),
         commitment: hexstr(&bytes),
         signature: hexstr(&sig.to_compact()),
     }]
 }
 
 /// A grant-set entry map value, for hand-crafting commitment reject vectors.
-fn grant_set_entry_map(tag: Vec<u8>, permission: &str, pseudonym: Vec<u8>) -> Value {
+fn grant_set_entry_map(
+    tag: Vec<u8>,
+    masked_recipient: Vec<u8>,
+    permission: &str,
+    pseudonym: Vec<u8>,
+) -> Value {
     map_of(vec![
+        ("maskedRecipientEncPk", Value::Bytes(masked_recipient)),
         ("permission", Value::Text(permission.to_string())),
         ("pseudonymPk", Value::Bytes(pseudonym)),
         ("tag", Value::Bytes(tag)),
@@ -6598,6 +6650,7 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
     // Codec rejects (signature empty): the commitment never decodes.
     let commitment_of = |entries: Vec<Value>, omit_entries: bool| -> Vec<u8> {
         let mut kv = vec![
+            ("cutEpoch", Value::Unsigned(7)),
             ("ipnsName", Value::Bytes(b"scope-root-ipns".to_vec())),
             ("ownerPseudonymPk", Value::Bytes(vec![0x88; 32])),
         ];
@@ -6610,7 +6663,12 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         (
             "entry-invalid-permission",
             commitment_of(
-                vec![grant_set_entry_map(vec![0x01; 32], "owner", vec![0x02; 32])],
+                vec![grant_set_entry_map(
+                    vec![0x01; 32],
+                    vec![0x41; 32],
+                    "owner",
+                    vec![0x02; 32],
+                )],
                 false,
             ),
             "invalid-permission",
@@ -6618,10 +6676,40 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         (
             "pseudonym-pk-wrong-length",
             commitment_of(
-                vec![grant_set_entry_map(vec![0x01; 32], "read", vec![0x02; 31])],
+                vec![grant_set_entry_map(
+                    vec![0x01; 32],
+                    vec![0x41; 32],
+                    "read",
+                    vec![0x02; 31],
+                )],
                 false,
             ),
             "invalid-field-length",
+        ),
+        (
+            "masked-recipient-enc-pk-wrong-length",
+            commitment_of(
+                vec![grant_set_entry_map(
+                    vec![0x01; 32],
+                    vec![0x41; 31],
+                    "read",
+                    vec![0x02; 32],
+                )],
+                false,
+            ),
+            "invalid-field-length",
+        ),
+        (
+            "entry-missing-masked-recipient-enc-pk",
+            commitment_of(
+                vec![map_of(vec![
+                    ("permission", Value::Text("read".to_string())),
+                    ("pseudonymPk", Value::Bytes(vec![0x02; 32])),
+                    ("tag", Value::Bytes(vec![0x01; 32])),
+                ])],
+                false,
+            ),
+            "missing-field",
         ),
         (
             "missing-entries",
@@ -6629,16 +6717,39 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
             "missing-field",
         ),
         (
-            // One past the ceiling, all tags distinct so the bound is what fires
-            // — every write entry is another key the gate trial-verifies each
-            // structure against.
+            "missing-cut-epoch",
+            encode(&map_of(vec![
+                ("entries", Value::Array(vec![])),
+                ("ipnsName", Value::Bytes(b"scope-root-ipns".to_vec())),
+                ("ownerPseudonymPk", Value::Bytes(vec![0x88; 32])),
+            ]))
+            .unwrap(),
+            "missing-field",
+        ),
+        (
+            "cut-epoch-not-an-unsigned",
+            encode(&map_of(vec![
+                ("cutEpoch", Value::Text("7".to_string())),
+                ("entries", Value::Array(vec![])),
+                ("ipnsName", Value::Bytes(b"scope-root-ipns".to_vec())),
+                ("ownerPseudonymPk", Value::Bytes(vec![0x88; 32])),
+            ]))
+            .unwrap(),
+            "unexpected-type",
+        ),
+        (
+            // One past the ceiling, all tags and recipients distinct so the
+            // bound is what fires — every write entry is another key the gate
+            // trial-verifies each structure against.
             "entries-past-the-bound",
             commitment_of(
                 (0..=seal::MAX_GRANT_BLOBS as u64)
                     .map(|i| {
                         let mut tag = vec![0u8; 32];
                         tag[..8].copy_from_slice(&i.to_be_bytes());
-                        grant_set_entry_map(tag, "write", vec![0x02; 32])
+                        let mut recipient = vec![0xff; 32];
+                        recipient[..8].copy_from_slice(&i.to_be_bytes());
+                        grant_set_entry_map(tag, recipient, "write", vec![0x02; 32])
                     })
                     .collect(),
                 false,
@@ -6672,8 +6783,8 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
     // at decode (no signature exercised), so its signature stays empty.
     let dup_tag_bytes = commitment_of(
         vec![
-            grant_set_entry_map(vec![0x01; 32], "read", vec![0x02; 32]),
-            grant_set_entry_map(vec![0x01; 32], "write", vec![0x09; 32]),
+            grant_set_entry_map(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]),
+            grant_set_entry_map(vec![0x01; 32], vec![0x42; 32], "write", vec![0x09; 32]),
         ],
         false,
     );

@@ -58,8 +58,8 @@ use crate::facade::NodeId;
 use crate::gate::floor::PointerPlane;
 use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{
-    ScopeRootPromoter, UNATTESTED_IDENTITY_PK, bound_recipient, enforce_committed_ledger,
-    mint_grant_row, recipient_self_location, row_is_owner_attested, self_locate_signed,
+    ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
+    recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
@@ -1294,29 +1294,17 @@ where
         let (pairwise, tag) = self
             .self_location(&granted.ipns_name)
             .ok_or(ResolveFailure::Rejected)?;
-        // The owner-signed commitment, never the blob's contents, says what this
-        // device may do here; publishing the root is a write.
-        if section
+        // The owner-signed commitment, never the blob's contents or a ledger row
+        // a co-writer authors, says what this device may do here; publishing the
+        // root is a write. The recipient the entry commits is checked below,
+        // once the blob yields the pointer read key that unmasks it.
+        let own_entry = section
             .commitment
             .entries
             .iter()
             .find(|entry| entry.tag == tag)
-            .map(|entry| entry.permission)
-            != Some(Permission::Write)
-        {
-            return Err(ResolveFailure::Rejected);
-        }
-        // The commitment binds `(tag, permission)` but never `recipientEncPk`,
-        // and a committed co-writer authors the ledger — so a row swapped under
-        // this device's own tag would re-wrap its next seed to a key it does not
-        // hold. The rows this device cannot check are the residual
-        // [`ResealError::TagNotBoundToRecipient`] names.
-        let own_row = write_body
-            .grant_ledger
-            .iter()
-            .find(|entry| entry.tag == tag)
             .ok_or(ResolveFailure::Rejected)?;
-        if own_row.recipient_enc_pk != self.keys.enc_secret.public().to_bytes() {
+        if own_entry.permission != Permission::Write {
             return Err(ResolveFailure::Rejected);
         }
         let grant = self
@@ -1326,6 +1314,11 @@ where
                 &grant_blob_aad(granted.scope_id, envelope.epoch),
             )
             .ok_or(ResolveFailure::Rejected)?;
+        let pointer_read_key = Zeroizing::new(*grant.pointer_read_key());
+        if own_entry.recipient_enc_pk(&pointer_read_key) != self.keys.enc_secret.public().to_bytes()
+        {
+            return Err(ResolveFailure::Rejected);
+        }
         let pseudonym = SessionIdentity::grantee_writer_pseudonym_signer(
             pairwise.as_bytes(),
             &granted.scope_id,
@@ -1339,7 +1332,7 @@ where
             write_epoch,
             read_scope_seed,
             write_scope_seed: write_scope_seed.clone(),
-            pointer_read_key: Zeroizing::new(*grant.pointer_read_key()),
+            pointer_read_key,
             pseudonym,
         };
         self.gated.park(
@@ -1450,7 +1443,6 @@ where
                 pseudonym_signer: &source.pseudonym,
             },
             committed: CommittedSet {
-                owner_identity: self.keys.owner_identity,
                 commitment: &source.section.commitment,
                 commitment_sig: &source.section.commitment_sig,
                 grant_ledger: &source.write_body.grant_ledger,
@@ -1939,7 +1931,6 @@ where
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: self.keys.identity,
                 commitment: &source.commitment,
                 commitment_sig: &source.commitment_sig,
                 grant_ledger: &source.grant_ledger,
@@ -2012,9 +2003,11 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// (`RotateScopeWritePlan::commitment`) — what the root's re-seal binds to,
     /// never the set carried by the record the wave re-reads.
     ///
-    /// A grant-set commitment is epoch-free, so an older owner-signed one still
-    /// verifies: a write grantee inside the forgery window can republish the root
-    /// carrying the **pre-revoke** set, and that record passes every gate stage.
+    /// A grant-set commitment carries no read epoch, so an older owner-signed
+    /// one still verifies: a write grantee inside the forgery window can
+    /// republish the root carrying the **pre-revoke** set, and that record
+    /// passes every gate stage on a device whose cut-epoch floor is still
+    /// below it.
     /// Minting the moved root's section from it would wrap the freshly minted
     /// `writeScopeSeed` to the revokee — a permanent write-revocation bypass.
     pub authorized_commitment: &'a GrantSetCommitment,
@@ -2581,10 +2574,10 @@ where
     /// This owner-re-signs the set it builds, so both carried halves are proven
     /// before a single row is re-minted, and every field a re-minted commitment
     /// entry carries is either derived here or copied from what the owner already
-    /// signed. A ledger row additionally carries forward `expiresAt`, which no
-    /// owner signature covers. A row neither owner
-    /// authority over `recipientEncPk` covers is dropped from the moved set
-    /// rather than re-minted.
+    /// signed. The re-mint walks the commitment, not the ledger: `recipientEncPk`
+    /// is owner-signed there, while a committed write grantee authors the row.
+    /// The row still carries forward `expiresAt` and `recipientIdentityPk`,
+    /// which no commitment field covers.
     fn remint_grants(
         &self,
         node: &RepublishedNode,
@@ -2603,68 +2596,61 @@ where
         enforce_committed_ledger(commitment, ledger).map_err(|_| WritePublishError::Rejected)?;
         let old_name = commitment.ipns_name.as_slice();
         let new_name = node.new_name.as_str().as_bytes();
-        let carried: BTreeMap<[u8; 32], &GrantSetEntry> =
-            commitment.entries.iter().map(|e| (e.tag, e)).collect();
+        let rows: BTreeMap<[u8; 32], &GrantLedgerEntry> =
+            ledger.iter().map(|e| (e.tag, e)).collect();
 
         let owner_identity = self.owner.verifying_key();
+        let pointer_read_key = self.scope_keys.pointer_read_key(&self.scope_id);
 
         let mut reminted = RemintedGrants {
-            entries: Vec::with_capacity(ledger.len()),
-            ledger: Vec::with_capacity(ledger.len()),
+            entries: Vec::with_capacity(commitment.entries.len()),
+            ledger: Vec::with_capacity(commitment.entries.len()),
         };
-        for entry in ledger {
-            // The owner holds both authorities over the row here, and the
-            // stronger one decides (`rotation::adopt_recipients`): re-deriving
-            // the committed tag proves `recipientEncPk`, so a corrupted
-            // `ownerSig` costs the row nothing. Only a key that derives no
-            // committed tag AND carries no owner signature is dropped — there is
-            // no honest key to re-mint it under, and refusing instead would let
-            // the write grantee this wave is cutting veto its own revocation.
-            let attested = row_is_owner_attested(&owner_identity, entry, old_name);
-            let Some(recipient_enc) = bound_recipient(self.owner_enc_secret, entry, old_name)
-            else {
-                if attested {
-                    return Err(WritePublishError::Rejected);
-                }
-                continue;
-            };
-            // `recipientIdentityPk` is the one recipient field the tag does not
-            // prove, and the mint below owner-signs whatever it is handed. Where
-            // the row carried no owner signature, the label is a write-grantee's
-            // to choose, so it is dropped rather than laundered into the owner's.
-            let recipient_identity_pk = if attested {
-                entry.recipient_identity_pk
+        for committed_entry in &commitment.entries {
+            let recipient_enc =
+                X25519Public::from_bytes(committed_entry.recipient_enc_pk(&pointer_read_key))
+                    .ok_or(WritePublishError::Rejected)?;
+            let row = rows
+                .get(&committed_entry.tag)
+                .ok_or(WritePublishError::Rejected)?;
+            // `recipientIdentityPk` is the one recipient field no commitment
+            // entry carries, and the mint below owner-signs whatever it is
+            // handed. Where the row carried no owner signature, the label is a
+            // write-grantee's to choose, so it is dropped rather than laundered
+            // into the owner's.
+            let recipient_identity_pk = if row_is_owner_attested(&owner_identity, row, old_name) {
+                row.recipient_identity_pk
             } else {
                 UNATTESTED_IDENTITY_PK
             };
-            let row = mint_grant_row(
+            let minted = mint_grant_row(
                 self.owner,
                 self.owner_enc_secret,
+                &pointer_read_key,
                 recipient_identity_pk,
                 &recipient_enc,
                 &self.scope_id,
                 new_name,
-                entry.permission,
+                committed_entry.permission,
             )
             .ok_or(WritePublishError::Rejected)?;
 
-            let committed = carried.get(&entry.tag).ok_or(WritePublishError::Rejected)?;
             // The pseudonym binds the scope, not the name, so the mint must
             // reproduce the committed key: it authorizes structure signing, and
             // re-signing a different one would hand that authority elsewhere.
-            let mut commitment_entry = row.commitment_entry;
-            if commitment_entry.pseudonym_pk != committed.pseudonym_pk {
+            let mut commitment_entry = minted.commitment_entry;
+            if commitment_entry.pseudonym_pk != committed_entry.pseudonym_pk {
                 return Err(WritePublishError::Rejected);
             }
-            commitment_entry.unknown = committed.unknown.clone();
-            let mut ledger_entry = row.ledger_entry;
+            commitment_entry.unknown = committed_entry.unknown.clone();
+            let mut ledger_entry = minted.ledger_entry;
             // The deadline is the discovered-expiry trigger's input and the
             // invite claim path's restriction; dropping it at a re-mint erases
             // both. The row's unknown map is not carried, unlike the commitment
             // entry's above: `reseal_scope_root` rebuilds every ledger row
             // without one, so the ledger half adds no unbounded bytes to the
             // re-seal budget.
-            ledger_entry.expires_at = entry.expires_at;
+            ledger_entry.expires_at = row.expires_at;
 
             reminted.entries.push(commitment_entry);
             reminted.ledger.push(ledger_entry);
@@ -2730,7 +2716,6 @@ where
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: &self.owner.verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &remint.ledger,
@@ -3398,8 +3383,7 @@ mod tests {
         decode_envelope, decode_grant_section, encode_envelope, encode_grant_section,
         encode_write_body, grant_section_bytes, open_ascent_link, open_grant_blob,
         open_history_link, open_owner_history_link, open_owner_write_blob, open_read_body, seal,
-        seal_read_body, set_grant_section, sign_grant_set, sign_recipient_binding, sign_structure,
-        verify_grant_set,
+        seal_read_body, set_grant_section, sign_grant_set, sign_structure, verify_grant_set,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -3422,9 +3406,9 @@ mod tests {
         VirtualScheduler,
     };
     use crate::testkit::{
-        FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED,
-        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, SeededEntropy, SilentEntropy,
-        block_on, owner_root_fixture, requested_cid,
+        FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_PSEUDONYM_SEED,
+        OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
+        SeededEntropy, SilentEntropy, block_on, owner_root_fixture, requested_cid,
     };
 
     const SCOPE: [u8; 16] = [0x44; 16];
@@ -3972,7 +3956,6 @@ mod tests {
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {
-                owner_identity: &owner_identity().verifying_key(),
                 commitment: &fixture.grant_section.commitment,
                 commitment_sig: &fixture.grant_section.commitment_sig,
                 grant_ledger: &[],
@@ -4320,7 +4303,6 @@ mod tests {
                     pseudonym_signer: &pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &owner_identity().verifying_key(),
                     commitment: &root.grant_section.commitment,
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
@@ -4399,6 +4381,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };
@@ -4430,7 +4413,6 @@ mod tests {
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
-                owner_identity: &owner_identity().verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],
@@ -4838,7 +4820,6 @@ mod tests {
                     pseudonym_signer: &pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &owner_identity().verifying_key(),
                     commitment: &root.grant_section.commitment,
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
@@ -5104,6 +5085,7 @@ mod tests {
         mint_grant_row(
             &owner_identity(),
             &owner_enc(),
+            &OWNER_ROOT_POINTER_READ_KEY,
             identity.verifying_key().to_sec1(),
             &grantee_enc().public(),
             &GRANTEE_SCOPE,
@@ -5262,7 +5244,8 @@ mod tests {
     /// Republish `root` with `ledger` in its write body, re-sealed under the
     /// scope write seed and re-signed under the pseudonym the commitment names —
     /// what a committed co-writer can put on the wire, since the commitment binds
-    /// `(tag, permission)` and never `recipientEncPk`.
+    /// `(tag, maskedRecipientEncPk, permission, pseudonymPk)` and never
+    /// `recipientIdentityPk` or `expiresAt`.
     fn republish_ledger<T: RecordTransport + Clone>(
         harness: &Harness<T>,
         root: &OwnerRootFixture,
@@ -5537,7 +5520,13 @@ mod tests {
         let mut row = grantee_row(&name, Permission::Write);
         // The blob and the ledger row stay; the owner's commitment drops the tag,
         // exactly as a revoke leaves it before the writer re-plants the blob.
-        row.commitment_entry = GrantSetEntry::new([0xee; 32], Permission::Write, [0u8; 32]);
+        row.commitment_entry = GrantSetEntry::new(
+            &OWNER_ROOT_POINTER_READ_KEY,
+            [0xee; 32],
+            [0x2e; 32],
+            Permission::Write,
+            [0u8; 32],
+        );
         let world = GranteeWorld::staged(
             Harness::plain(),
             granted_scope_root_with(vec![row], Vec::new()),
@@ -5594,14 +5583,52 @@ mod tests {
     }
 
     #[test]
-    fn a_grantee_cut_refuses_a_ledger_row_that_swapped_its_own_recipient_key() {
-        // The commitment binds `(tag, permission)` but not `recipientEncPk`, so a
-        // co-writer could redirect this device's own next seed to a key it does
-        // not hold — while its blob at the current epoch still opens.
+    fn a_grantee_cut_ignores_a_ledger_row_that_swapped_its_own_recipient_key() {
+        // A co-writer authors the ledger, so it can relabel this device's own
+        // row. The cut reads the recipient off the owner-signed commitment, so
+        // the relabel steers nothing and the rotation still lands.
         let world = plain_world(Permission::Write);
         let mut row = grantee_row(&world.root.name, Permission::Write).ledger_entry;
         row.recipient_enc_pk = X25519Secret::from_scalar([0x66; 32]).public().to_bytes();
         republish_ledger(&world.harness, &world.root, GRANTEE_SCOPE, vec![row]);
+
+        world.cut().expect("the relabelled row steers nothing");
+    }
+
+    #[test]
+    fn a_grantee_cut_refuses_a_commitment_naming_another_key_under_its_own_tag() {
+        // Here the owner itself signed a set whose entry under this device's tag
+        // names a key it does not hold. The re-seal would wrap this scope's next
+        // seed to that key, so the device declines to become the re-sealer
+        // rather than publish a root it can never read back.
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
+        let mut row = grantee_row(&name, Permission::Write);
+        row.commitment_entry.set_recipient_enc_pk(
+            &OWNER_ROOT_POINTER_READ_KEY,
+            X25519Secret::from_scalar([0x66; 32]).public().to_bytes(),
+        );
+        let root = granted_scope_root_with(vec![row], Vec::new());
+        let world = GranteeWorld::staged(Harness::plain(), root);
+
+        assert_eq!(
+            world.cut(),
+            Err(RotateError::Resolve(ResolveFailure::Rejected)),
+        );
+    }
+
+    /// The mask key the device unmasks with is the one its own grant blob
+    /// carries, so an entry masked under any other key recovers noise. The
+    /// device must refuse rather than re-seal the scope to bytes nobody holds.
+    #[test]
+    fn a_grantee_cut_refuses_an_entry_masked_under_another_scope_key() {
+        let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
+        let mut row = grantee_row(&name, Permission::Write);
+        let mut wrong_key = OWNER_ROOT_POINTER_READ_KEY;
+        wrong_key[0] ^= 1;
+        row.commitment_entry
+            .set_recipient_enc_pk(&wrong_key, grantee_enc().public().to_bytes());
+        let root = granted_scope_root_with(vec![row], Vec::new());
+        let world = GranteeWorld::staged(Harness::plain(), root);
 
         assert_eq!(
             world.cut(),
@@ -5776,7 +5803,6 @@ mod tests {
                             pseudonym_signer: &pseudonym,
                         },
                         committed: CommittedSet {
-                            owner_identity: &owner_identity().verifying_key(),
                             commitment: &world.root.grant_section.commitment,
                             commitment_sig: &world.root.grant_section.commitment_sig,
                             grant_ledger: &[grantee_row(&name, Permission::Write).ledger_entry],
@@ -5788,7 +5814,7 @@ mod tests {
                         write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                         write_epoch: OWNER_ROOT_EPOCH,
                         write_history_link: &[],
-                        pointer_read_key: &POINTER_READ_KEY,
+                        pointer_read_key: &OWNER_ROOT_POINTER_READ_KEY,
                         carried_history_links: &[],
                     },
                     || Box::pin(async {}),
@@ -5858,6 +5884,7 @@ mod tests {
         GrantSetCommitment {
             ipns_name: Vec::new(),
             owner_pseudonym_pk: [0u8; 32],
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         }
@@ -6302,6 +6329,7 @@ mod tests {
             mint_grant_row(
                 &owner_identity(),
                 &owner_enc(),
+                &WaveSeeds.pointer_read_key(&SCOPE),
                 identity.verifying_key().to_sec1(),
                 &enc.public(),
                 &SCOPE,
@@ -6695,44 +6723,46 @@ mod tests {
     }
 
     #[test]
-    fn a_swapped_recipient_key_costs_its_own_row_and_nothing_else() {
+    fn a_relabelled_ledger_row_cannot_redirect_the_reminted_grant() {
         // A committed write-grantee re-authors the write body with a victim's
         // `recipientEncPk` replaced by a key of its own, under the victim's
-        // owner-committed tag. Neither owner authority covers the result — the
-        // key derives no committed tag and the row's owner signature no longer
-        // verifies — so there is nothing honest to re-mint at the moved name.
-        //
-        // The row is dropped, not refused: the wave IS the write revocation, and
-        // refusing would hand the grantee it cuts a veto over its own cut.
+        // owner-committed tag. The re-mint takes the recipient off the
+        // owner-signed commitment entry, so the relabelling neither strips the
+        // victim's grant nor redirects it to the attacker.
         let harness = Harness::plain();
-        let survivor = granted_rows()[1].ledger_entry.recipient_identity_pk;
+        let attacker = X25519Secret::from_scalar([0x9f; 32]);
         let (_, moved) = wave_over_an_edited_row(&harness, |row| {
-            row.recipient_enc_pk = X25519Secret::from_scalar([0x9f; 32]).public().to_bytes();
+            row.recipient_enc_pk = attacker.public().to_bytes();
         });
 
         let section = published_section(&harness, &moved.new_name);
         assert_eq!(
             section.commitment.entries.len(),
-            1,
-            "the unprovable row is not re-minted into the moved set"
+            2,
+            "the relabelling costs no grant its place in the moved set"
         );
-        let victim_tag = recipient_blinded_tag(
-            &read_grantee(),
-            &owner_enc().public(),
-            moved.new_name.as_str().as_bytes(),
-        )
-        .expect("a contributory sharer key");
+        let new_name = moved.new_name.as_str().as_bytes();
+        let victim_tag = recipient_blinded_tag(&read_grantee(), &owner_enc().public(), new_name)
+            .expect("a contributory sharer key");
         assert!(
-            section.grant_blobs.iter().all(|b| b.tag != victim_tag),
-            "and files no blob for it"
+            section.grant_blobs.iter().any(|b| b.tag == victim_tag),
+            "the victim keeps a blob under the tag its own key derives"
         );
-        assert_eq!(
+        assert!(
+            section
+                .commitment
+                .entries
+                .iter()
+                .all(|e| e.recipient_enc_pk(&WaveSeeds.pointer_read_key(&SCOPE))
+                    != attacker.public().to_bytes()),
+            "and the attacker's key reaches no owner-signed entry"
+        );
+        assert!(
             moved_ledger(&harness, &moved)
                 .iter()
-                .map(|e| e.recipient_identity_pk)
-                .collect::<Vec<_>>(),
-            vec![survivor],
-            "the surviving grantee crosses the wave intact"
+                .any(|e| e.tag == victim_tag
+                    && e.recipient_enc_pk == read_grantee().public().to_bytes()),
+            "the re-minted row names the owner-committed key"
         );
     }
 
@@ -6807,14 +6837,12 @@ mod tests {
     }
 
     #[test]
-    fn the_wave_refuses_an_attested_key_core_will_not_adopt_release_active() {
-        // A cofactor twin and the key with bit 255 set both re-derive the
-        // victim's own tag, so the re-mint's tag comparison cannot separate them
-        // from the honest key — only core's adoption gate does. Reachable only
-        // *under* the owner's own signature, since a planted row detaches its
-        // attestation and is dropped first. Re-minting one would move the name
-        // and file a row whose grant blob the victim can never open. The refusal
-        // is a runtime `Err`, never a debug_assert. Active in release.
+    fn the_wave_refuses_a_committed_key_core_will_not_adopt_release_active() {
+        // A cofactor twin and the key with bit 255 set both blind to the victim's
+        // own tag, so nothing but core's adoption gate separates them from the
+        // honest key. Re-minting one would move the name and file a row whose
+        // grant blob the victim can never open. The refusal is a runtime `Err`,
+        // never a debug_assert. Active in release.
         let victim = read_grantee().public();
         let mut high_bit = victim.to_bytes();
         high_bit[31] |= 0x80;
@@ -6822,23 +6850,15 @@ mod tests {
         let unadoptable = cipherbox_core::suite::x25519::cofactor_twins(&victim)
             .into_iter()
             .chain([high_bit]);
+        let scope_pointer_read_key = WaveSeeds.pointer_read_key(&SCOPE);
         for enc_pk in unadoptable {
             let harness = Harness::plain();
-            let root = granted_root(Vec::new());
+            let mut rows = granted_rows();
+            rows[0]
+                .commitment_entry
+                .set_recipient_enc_pk(&scope_pointer_read_key, enc_pk);
+            let root = granted_root_with(rows, Vec::new());
             harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-            let mut ledger: Vec<GrantLedgerEntry> = granted_rows()
-                .into_iter()
-                .map(|row| row.ledger_entry)
-                .collect();
-            ledger[0].recipient_enc_pk = enc_pk;
-            ledger[0].owner_sig = sign_recipient_binding(
-                &owner_identity(),
-                root.name.as_str().as_bytes(),
-                &ledger[0],
-            )
-            .expect("the owner attests the row")
-            .to_compact();
-            republish_ledger(&harness, &root, SCOPE, ledger);
 
             let owner = owner_identity();
             let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
@@ -7689,7 +7709,6 @@ mod tests {
             ResealError::LedgerDivergesFromCommitment,
             ResealError::SignerNotCommitted,
             ResealError::UnusableRecipientKey,
-            ResealError::TagNotBoundToRecipient,
             ResealError::AscentLinkMismatch,
             ResealError::AscentLinkDropped,
             ResealError::AscentLinkNotOwed,
@@ -7699,6 +7718,7 @@ mod tests {
             ResealError::HistoryLinkNotDescending,
             ResealError::HistoryLinkNotContiguous,
             ResealError::OwnerKeyRequiredForWriteCut,
+            ResealError::TagNotBoundToRecipient,
             ResealError::WriteBodyTooLarge,
             ResealError::SectionNotResealable { size: 2, limit: 1 },
             ResealError::HistoryLinkTooLarge { size: 2, limit: 1 },
@@ -8967,6 +8987,7 @@ mod tests {
         let commitment = GrantSetCommitment {
             ipns_name: node.ipns_name.clone(),
             owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };
@@ -8996,7 +9017,6 @@ mod tests {
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {
-                owner_identity: &owner.verifying_key(),
                 commitment: &commitment,
                 commitment_sig: &commitment_sig,
                 grant_ledger: &[],

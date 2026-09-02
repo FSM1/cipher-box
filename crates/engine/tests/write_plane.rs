@@ -6219,6 +6219,7 @@ fn rotate_read_epoch(records: &InMemoryRecordStore, blocks: &Blocks) {
     let commitment = GrantSetCommitment {
         ipns_name: name.as_str().as_bytes().to_vec(),
         owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: Vec::new(),
         unknown: PreservedFields::new(),
     };
@@ -6250,7 +6251,6 @@ fn rotate_read_epoch(records: &InMemoryRecordStore, blocks: &Blocks) {
             pointer_read_key: &POINTER_READ_KEY,
         },
         &CommittedSet {
-            owner_identity: &owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],

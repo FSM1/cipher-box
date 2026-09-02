@@ -307,7 +307,7 @@ pub struct RotateScopeWritePlan<'a> {
     /// The owner's stable pointer seed — derives the scope's `pointerReadKey` the
     /// re-point object seals under.
     pub owner_pointer_seed: &'a [u8; SECRET_LEN],
-    /// The owner-signed, epoch-free grant-set commitment — the owner-only anchor.
+    /// The owner-signed grant-set commitment — the owner-only anchor.
     pub commitment: &'a GrantSetCommitment,
     /// The current 64-byte compact ECDSA owner signature over `commitment`.
     pub commitment_sig: &'a [u8; ECDSA_SIG_LEN],
@@ -894,6 +894,7 @@ mod tests {
         let c = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: [0x22; 32],
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };

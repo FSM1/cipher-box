@@ -194,6 +194,7 @@ impl Fixture {
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };
@@ -773,6 +774,38 @@ const FLOOR_LAW_RULES: &[&str] = &[
     "grant-blob-epoch-advisory-only",
     "floorstore-regression-fail-closed",
 ];
+
+/// A commitment carries no read epoch, so an owner-signed pre-cut set verifies
+/// for ever and any committed write grantee can republish a root that carries
+/// it. The cut epoch this device already adopted is what tells the replay from
+/// the set in force.
+#[test]
+fn a_commitment_below_the_adopted_cut_epoch_is_a_whole_record_rejection() {
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+
+    // The record the owner published at the cut: the same set, one cut epoch on.
+    let mut cut = fx.candidate(1);
+    cut.grant_section.commitment.cut_epoch = 3;
+    cut.grant_section.commitment_sig =
+        sign_grant_set(&fx.owner_identity, &cut.grant_section.commitment)
+            .expect("the owner re-signs the cut set")
+            .to_compact();
+    block_on(adopt(&floors, &fx.reader(), &cut)).expect("the post-cut record adopts");
+    let cut_epoch_key = [fx.scope_id.as_slice(), b"/cut-epoch"].concat();
+    assert_eq!(
+        block_on(floors.epoch_floor(&cut_epoch_key)).unwrap(),
+        Some(3),
+        "adopting the cut raises the cut-epoch floor"
+    );
+
+    // The pre-cut set, republished at a newer sequence: owner-signed, bound to
+    // this name, and still refused.
+    let err = block_on(adopt(&floors, &fx.reader(), &fx.candidate(2))).unwrap_err();
+    let rejection = err.rejection().expect("a trust rejection");
+    assert_eq!(rejection.stage, GateStage::CommitmentVerify);
+    assert_eq!(rejection.check(), "commitment-invalid");
+}
 
 fn run_floor_scenario(rule: &str) {
     let fx = Fixture::new();
@@ -1684,6 +1717,7 @@ impl ResealedFixture {
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };
@@ -1703,7 +1737,6 @@ impl ResealedFixture {
             pseudonym_signer: &owner_pseudonym,
         };
         let committed = CommittedSet {
-            owner_identity: &owner_identity.verifying_key(),
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &[],

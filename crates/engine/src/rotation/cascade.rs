@@ -76,7 +76,6 @@ use super::reseal::{
 };
 use super::rotate::{ResealedScopeRoot, RotateScopePlan, RotationPublishError, ScopeRootPublisher};
 use crate::entropy::{Entropy, fresh_seed};
-use crate::grants::bound_recipient;
 use crate::grants::child_index::canonicalize;
 use crate::seams::{BoxedTask, FloorRaise, FloorStore, Scheduler, SeamError};
 use cipherbox_core::hex::lower as hex_lower;
@@ -115,7 +114,7 @@ pub struct CascadeTarget {
     pub pointer_read_key: Zeroizing<[u8; SECRET_LEN]>,
     /// The write epoch (unchanged by a read-plane rotation).
     pub write_epoch: u64,
-    /// The owner-signed, epoch-free commitment.
+    /// The owner-signed commitment.
     pub commitment: GrantSetCommitment,
     /// The 64-byte compact ECDSA owner signature over `commitment`.
     pub commitment_sig: [u8; ECDSA_SIG_LEN],
@@ -450,27 +449,25 @@ pub(crate) async fn record_grant_floor<F: FloorStore>(
 /// records as already cut **at this scope**.
 ///
 /// The floor is what separates the two descendants a record cannot tell apart.
-/// A grant-set commitment is epoch-free, so a pre-cut set the owner really did
-/// sign passes every gate stage, and a committed write grantee can republish a
-/// descendant root carrying it. Only the engine's own durable state remembers
-/// that the owner cut that recipient there, so a descendant whose commitment
-/// attests the recipient keeps its blob unless the floor says otherwise — the
-/// ancestor's cut alone no longer revokes an independent grant one level down.
+/// A commitment's `cutEpoch` refuses a pre-cut set only at a scope whose cut
+/// this device recorded, so on a device that recorded none a pre-cut set the
+/// owner really did sign passes every gate stage, and a committed write grantee
+/// can republish a descendant root carrying it. This per-recipient floor is the
+/// complement: a descendant whose commitment attests the recipient keeps its
+/// blob unless the floor says otherwise — the ancestor's cut alone no longer
+/// revokes an independent grant one level down.
 ///
 /// A cut stands only while it is newer than the owner's newest grant to the
 /// same recipient at the same scope ([`record_grant_floor`]), so an owner who
 /// grants again after a cut is served rather than silently withheld for ever.
 ///
-/// The marker read comes first because the per-row work is attacker-sized: a
-/// committed write grantee sets a descendant's row count, and each row would
-/// otherwise cost one owner-recipient DH ([`bound_recipient`]) and up to two
-/// floor reads. A scope the owner never cut pays none of it.
+/// The marker read comes first so a scope the owner never cut pays no per-entry
+/// floor read at all.
 async fn effective_revoked_recipients<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
-    owner_enc_secret: &X25519Secret,
-    ipns_name: &[u8],
     committed: &CommittedSet<'_>,
+    pointer_read_key: &[u8; SECRET_LEN],
 ) -> Result<Vec<[u8; SECRET_LEN]>, SeamError> {
     let mut revoked: BTreeSet<[u8; SECRET_LEN]> =
         committed.revoked_recipients.iter().copied().collect();
@@ -481,11 +478,8 @@ async fn effective_revoked_recipients<F: FloorStore>(
     {
         return Ok(revoked.into_iter().collect());
     }
-    for entry in committed.grant_ledger {
-        let Some(recipient) = bound_recipient(owner_enc_secret, entry, ipns_name) else {
-            continue;
-        };
-        let recipient = recipient.to_bytes();
+    for entry in &committed.commitment.entries {
+        let recipient = entry.recipient_enc_pk(pointer_read_key);
         if revoked.contains(&recipient) {
             continue;
         }
@@ -596,15 +590,10 @@ where
 
     // Fail-closed BEFORE minting: a floor this re-key cannot read would wrap the
     // fresh seed back to a party the owner removed.
-    let revoked = effective_revoked_recipients(
-        floors,
-        &scope_id,
-        owner_enc_secret,
-        plan.identity.ipns_name,
-        &plan.committed,
-    )
-    .await
-    .map_err(|error| CascadeError::RevocationFloor { scope_id, error })?;
+    let revoked =
+        effective_revoked_recipients(floors, &scope_id, &plan.committed, plan.pointer_read_key)
+            .await
+            .map_err(|error| CascadeError::RevocationFloor { scope_id, error })?;
 
     // Mint the fresh random override seed — the fresh-seed cut that revokes cached
     // access. `Zeroizing` wipes it on every return path, including a panic unwind.
@@ -818,7 +807,6 @@ where
                     pseudonym_signer: &target.pseudonym_signer,
                 },
                 committed: CommittedSet {
-                    owner_identity: root_plan.committed.owner_identity,
                     commitment: &target.commitment,
                     commitment_sig: &target.commitment_sig,
                     grant_ledger: &target.grant_ledger,
@@ -891,7 +879,7 @@ mod tests {
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
         sign_recipient_binding,
     };
-    use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::{Cell, RefCell};
@@ -966,7 +954,14 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name,
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
-                entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
+                cut_epoch: 0,
+                entries: vec![GrantSetEntry::new(
+                    &scope_pointer_read_key(byte),
+                    tag,
+                    self.grantee.public().to_bytes(),
+                    Permission::Read,
+                    [0x02; 32],
+                )],
                 unknown: PreservedFields::new(),
             };
             let commitment_sig = sign_grant_set(&self.ecdsa, &commitment)
@@ -974,6 +969,12 @@ mod tests {
                 .to_compact();
             (commitment, commitment_sig, vec![entry])
         }
+    }
+
+    /// The pointer read key of the scope registered under `byte` — what its
+    /// committed entries mask their recipients under.
+    fn scope_pointer_read_key(byte: u8) -> [u8; 32] {
+        [byte.wrapping_add(2); 32]
     }
 
     /// The immutable per-scope material a descendant resolves to, plus the mutable
@@ -1037,7 +1038,7 @@ mod tests {
                     owner_enc_pub: None,
                     override_seed: [byte; 32],
                     write_scope_seed: [byte.wrapping_add(1); 32],
-                    pointer_read_key: [byte.wrapping_add(2); 32],
+                    pointer_read_key: scope_pointer_read_key(byte),
                     commitment,
                     commitment_sig,
                     grant_ledger,
@@ -1217,7 +1218,6 @@ mod tests {
         net: FakeNet,
         holds_owner_enc_secret: bool,
         owner_pub: X25519Public,
-        owner_identity: EcdsaVerifier,
         commitment: GrantSetCommitment,
         commitment_sig: [u8; ECDSA_SIG_LEN],
         grant_ledger: Vec<GrantLedgerEntry>,
@@ -1230,19 +1230,17 @@ mod tests {
     impl RootFx {
         fn new(net: FakeNet) -> Self {
             let owner_pub = net.owner.enc.public();
-            let owner_identity = net.owner.ecdsa.verifying_key();
             let (commitment, commitment_sig, grant_ledger) = net.owner.committed(0x00);
             Self {
                 net,
                 holds_owner_enc_secret: true,
                 owner_pub,
-                owner_identity,
                 commitment,
                 commitment_sig,
                 grant_ledger,
                 current_seed: [0x00; 32],
                 write_scope_seed: [0x01; 32],
-                pointer_read_key: [0x02; 32],
+                pointer_read_key: scope_pointer_read_key(0x00),
                 revoked_recipients: Vec::new(),
             }
         }
@@ -1273,7 +1271,6 @@ mod tests {
                     pseudonym_signer: &self.net.owner.pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &self.owner_identity,
                     commitment: &self.commitment,
                     commitment_sig: &self.commitment_sig,
                     grant_ledger: &self.grant_ledger,
@@ -1387,12 +1384,13 @@ mod tests {
 
     #[test]
     fn a_descendant_the_owner_cut_at_that_descendant_gets_no_re_keyed_grant_blob() {
-        // A grant-set commitment is epoch-free, so a pre-cut one the owner
-        // really did sign still passes every gate stage. A current write
-        // grantee can therefore republish a descendant root carrying it, at
-        // the live read and write epochs. Bound to the record's own set alone,
-        // the cascade would wrap the fresh read override seed straight back to
-        // the party the owner cut there.
+        // The cut here raises the per-recipient floor alone, so no `cutEpoch`
+        // floor refuses the descendant's set and a pre-cut one the owner really
+        // did sign still passes every gate stage. A current write grantee can
+        // therefore republish a descendant root carrying it, at the live read
+        // and write epochs. Bound to the record's own set alone, the cascade
+        // would wrap the fresh read override seed straight back to the party
+        // the owner cut there.
         let net = FakeNet::new().scope(0x0a, 4, &[0x0b]).scope(0x0b, 4, &[]);
         let revokee = net.owner.grantee.public().to_bytes();
         let floors = InMemoryFloorStore::default();

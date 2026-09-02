@@ -380,17 +380,20 @@ pub fn encode_read_body(body: &ReadBody) -> Result<Vec<u8>, CodecError> {
     encode(guard.0)
 }
 
-/// Fail-closed uniqueness over a set of grant blinded tags (#39 D7): a
-/// recipient's tag names at most one grant, so a duplicate is a confused-deputy
-/// over read-vs-write authority. Shared by the grant-ledger (write-body) and the
-/// grant-set commitment (grant section) decoders/encoders.
-pub(crate) fn assert_grant_tags_unique(
-    tags: impl IntoIterator<Item = [u8; SECRET_LEN]>,
+/// Fail-closed uniqueness over a grant identifier (#39 D7): a blinded tag names
+/// at most one grant, and one recipient encryption subkey derives at most one
+/// tag at one scope root, so a duplicate of either is a confused deputy over
+/// read-vs-write authority that a first-match lookup would resolve silently.
+/// Shared by the grant-ledger (write-body) and grant-set commitment (grant
+/// section) decoders and encoders.
+pub(crate) fn assert_grant_ids_unique(
+    ids: impl IntoIterator<Item = [u8; SECRET_LEN]>,
+    duplicate: TrustViolation,
 ) -> Result<(), CodecError> {
     let mut seen = BTreeSet::new();
-    for t in tags {
-        if !seen.insert(t) {
-            return Err(TrustViolation::DuplicateGrantTag.into());
+    for id in ids {
+        if !seen.insert(id) {
+            return Err(duplicate.into());
         }
     }
     Ok(())

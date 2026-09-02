@@ -166,6 +166,7 @@ where
     let minted = mint_invite_grant(
         owner.identity_signer,
         owner.enc_secret,
+        plan.grantee.pointer_read_key,
         &invitee,
         &plan.grantee.scope_id,
         plan.grantee.write_scope_seed,
@@ -409,6 +410,7 @@ mod tests {
             let parent_commitment = GrantSetCommitment {
                 ipns_name: PARENT_NAME.to_vec(),
                 owner_pseudonym_pk: owner_pseudonym().verifying_key().to_bytes(),
+                cut_epoch: 0,
                 entries: Vec::new(),
                 unknown: PreservedFields::default(),
             };

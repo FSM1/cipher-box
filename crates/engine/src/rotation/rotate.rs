@@ -361,7 +361,7 @@ mod tests {
         GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
         sign_grant_set, sign_recipient_binding,
     };
-    use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::RefCell;
@@ -454,7 +454,6 @@ mod tests {
         owner_enc: X25519Secret,
         pseudonym: Ed25519Signer,
         owner_ecdsa: EcdsaSigner,
-        owner_identity: EcdsaVerifier,
         write_scope_seed: [u8; 32],
         pointer_read_key: [u8; 32],
         grantee: X25519Secret,
@@ -466,7 +465,6 @@ mod tests {
             Self {
                 owner_enc: X25519Secret::from_scalar([0x11; 32]),
                 pseudonym: Ed25519Signer::from_seed([0x22; 32]),
-                owner_identity: owner_ecdsa.verifying_key(),
                 owner_ecdsa,
                 write_scope_seed: [0x55; 32],
                 pointer_read_key: [0x66; 32],
@@ -478,7 +476,14 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: b"scope-root".to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
-                entries: vec![GrantSetEntry::new([0xa1; 32], Permission::Read, [0x02; 32])],
+                cut_epoch: 0,
+                entries: vec![GrantSetEntry::new(
+                    &[0x66; 32],
+                    [0xa1; 32],
+                    self.grantee.public().to_bytes(),
+                    Permission::Read,
+                    [0x02; 32],
+                )],
                 unknown: PreservedFields::new(),
             };
             let sig = sign_grant_set(&self.owner_ecdsa, &commitment)
@@ -541,7 +546,6 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
@@ -671,7 +675,6 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
@@ -742,7 +745,6 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,
@@ -808,7 +810,6 @@ mod tests {
                     pseudonym_signer: &fx.pseudonym,
                 },
                 committed: CommittedSet {
-                    owner_identity: &fx.owner_identity,
                     commitment: &commitment,
                     commitment_sig: &sig,
                     grant_ledger: &ledger,

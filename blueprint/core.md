@@ -275,8 +275,9 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
   decoder refuses.
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
-  epoch-free grant-set commitment (ECDSA over det-CBOR `{ipnsName,
-ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
+  grant-set commitment (ECDSA over det-CBOR `{cutEpoch, ipnsName,
+ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`),
+  owner blob, the optional
   owner-write-blob (below), ascent link (public half plaintext,
   derive-and-verified by ancestor readers), per-epoch history links, and a
   detached **structure signature** per seed-bearing structure. On the wire the
@@ -286,7 +287,8 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   with `None`). Every repeated collection in the grant section is bounded
   fail-closed at decode and
   encode — `historyLinks` at 256, `grantBlobs` and the commitment's `entries`
-  both at 1024 (`too-many-structures`) — and two history links may not carry
+  both at 1024 (`too-many-structures`) — the commitment additionally refuses a
+  repeated `tag` (`duplicate-grant-tag`), and two history links may not carry
   equal sealed bytes (`duplicate-history-link`): the gate's stage-3 work is
   `pseudonyms + structures` (engine.md "One section, one signer"), so an
   unbounded collection on **either** side of that sum is a reader-CPU amplifier,
@@ -601,6 +603,20 @@ in the KAT manifest.
 | bin-held-key             | login secret, node id, deletedAt                                | the key one soft delete re-keys a subtree under |
 | genesis-read-scope-seed  | login secret                                                    | the genesis scope's read (override) seed        |
 | genesis-write-scope-seed | login secret                                                    | the genesis writeScopeSeed                      |
+| contact-label-seed       | login secret                                                    | contactLabelSeed (device-only)                  |
+| contact-label            | contactLabelSeed, contact identityPk                            | a local label for a contact identity            |
+| committed-recipient-mask | pointerReadKey, blinded tag                                     | the commitment's recipient mask                 |
+
+`committed-recipient-mask` is what lets the owner sign a grant's recipient into
+the published commitment without naming it: the mask is keyed on the scope's
+`pointerReadKey`, which the owner derives and every grant blob carries, and its
+message is the blinded tag, so one recipient masks to unrelated bytes at every
+scope root.
+
+The contact-label pair is the one edge whose output never reaches the wire: the
+label keys durable device-local state that would otherwise name a contact in the
+clear, and the seed is the account's alone, so no observer who holds the identity
+key can recompute it.
 
 The three bin edges are the owner's alone: no grant carries them, which is what
 makes a soft delete cut a grantee's access that key regression cannot undo

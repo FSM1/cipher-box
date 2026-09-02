@@ -64,7 +64,7 @@
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
-    "count": 21,
+    "count": 24,
     "edges": [
       {
         "name": "node-seed",
@@ -170,6 +170,21 @@
         "name": "genesis-write-scope-seed",
         "context": "cipherbox/v2/genesis-write-scope-seed",
         "inputLayout": "derive_key(ctx, loginSecret[var])"
+      },
+      {
+        "name": "contact-label-seed",
+        "context": "cipherbox/v2/contact-label-seed",
+        "inputLayout": "derive_key(ctx, loginSecret[var])"
+      },
+      {
+        "name": "contact-label",
+        "context": "cipherbox/v2/contact-label",
+        "inputLayout": "keyed_hash(derive_key(ctx, contactLabelSeed[32]), identityPk[33])"
+      },
+      {
+        "name": "committed-recipient-mask",
+        "context": "cipherbox/v2/committed-recipient-mask",
+        "inputLayout": "keyed_hash(derive_key(ctx, pointerReadKey[32]), tag[32])"
       }
     ]
   },
@@ -440,11 +455,12 @@
     },
     "grantSetReject": {
       "file": "vectors/grant/grant_set_reject.json",
-      "count": 6,
+      "count": 10,
       "checks": [
         "duplicate-grant-tag",
         "commitment-invalid",
         "too-many-structures",
+        "unexpected-type",
         "missing-field",
         "invalid-permission",
         "invalid-field-length"

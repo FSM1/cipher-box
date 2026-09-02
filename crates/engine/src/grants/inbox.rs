@@ -218,8 +218,8 @@ mod tests {
         InMemoryStagingStore, ScriptedHttp,
     };
     use crate::testkit::{
-        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on,
-        owner_root_fixture,
+        OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
+        SeededEntropy, block_on, owner_root_fixture,
     };
 
     use super::super::ledger::mint_grant_row;
@@ -266,6 +266,7 @@ mod tests {
             mint_grant_row(
                 &sharer(),
                 &sharer_enc(),
+                &OWNER_ROOT_POINTER_READ_KEY,
                 sharer().verifying_key().to_sec1(),
                 &my_enc().public(),
                 &SCOPE,

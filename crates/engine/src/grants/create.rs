@@ -166,7 +166,7 @@ pub struct OwnerGrantKeys<'a> {
     /// Owner encryption subkey secret — the pairwise ECDH half for the blinded
     /// tag and the recipient's writer pseudonym.
     pub enc_secret: &'a X25519Secret,
-    /// Owner identity signer — signs the epoch-free grant-set commitment; its
+    /// Owner identity signer — signs the grant-set commitment; its
     /// verifying key is the sharer identity in the share pointer.
     pub identity_signer: &'a EcdsaSigner,
     /// Owner writer pseudonym for the new scope — reseals its structures.
@@ -376,6 +376,7 @@ where
     let row = mint_grant_row(
         owner.identity_signer,
         owner.enc_secret,
+        grantee.pointer_read_key,
         recipient.identity_pk().to_sec1(),
         &recipient_enc_pub,
         &grantee.scope_id,
@@ -522,11 +523,11 @@ where
 
     // 2) Build the committed set around the row — one entry, so the scope's
     // whole grant set is the one this mint authorises.
-    let owner_identity = owner.identity_signer.verifying_key();
     let tag = row.tag;
     let commitment = GrantSetCommitment {
         ipns_name: name_bytes.to_vec(),
         owner_pseudonym_pk: owner.pseudonym_signer.verifying_key().to_bytes(),
+        cut_epoch: 0,
         entries: vec![row.commitment_entry.clone()],
         unknown: PreservedFields::new(),
     };
@@ -570,7 +571,6 @@ where
         // shape the convergence pass would later have to repair.
         let grantee_child_index = canonicalize(grantee.subtree_child_index);
         let committed = CommittedSet {
-            owner_identity: &owner_identity,
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
@@ -641,7 +641,6 @@ where
         };
         let canonical_index = canonicalize(&target.direct_child_scope_index);
         let committed = CommittedSet {
-            owner_identity: &owner_identity,
             commitment: &target.commitment,
             commitment_sig: &target.commitment_sig,
             grant_ledger: &target.grant_ledger,
@@ -687,7 +686,6 @@ where
 
     let parent_section = {
         let committed = CommittedSet {
-            owner_identity: &owner_identity,
             commitment: parent.commitment,
             commitment_sig: parent.commitment_sig,
             grant_ledger: parent.grant_ledger,
@@ -759,7 +757,9 @@ mod tests {
     const V: u64 = 1;
     const GRANTEE_SCOPE: [u8; 16] = [0x5c; 16];
     const GRANTEE_WRITE_SCOPE_SEED: [u8; SECRET_LEN] = [0x55; SECRET_LEN];
+    const GRANTEE_POINTER_READ_KEY: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
     const PARENT_SCOPE: [u8; 16] = [0x0e; 16];
+    const PARENT_POINTER_READ_KEY: [u8; SECRET_LEN] = [0x0c; SECRET_LEN];
     const PARENT_NAME: &[u8] = b"parent-scope-root-name";
     const DESCENDANT_SCOPE: [u8; 16] = [0xdd; 16];
     const DESCENDANT_NAME: &[u8] = b"descendant-scope-root-name";
@@ -1043,6 +1043,7 @@ mod tests {
             let commitment = GrantSetCommitment {
                 ipns_name: DESCENDANT_NAME.to_vec(),
                 owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+                cut_epoch: 0,
                 entries: Vec::new(),
                 unknown: PreservedFields::new(),
             };
@@ -1160,13 +1161,12 @@ mod tests {
 
         let parent_node_seed = [0x44; SECRET_LEN];
         let grantee_write_scope_seed = GRANTEE_WRITE_SCOPE_SEED;
-        let grantee_pointer_read_key = [0x66; SECRET_LEN];
         let parent_override_seed = [0x0a; SECRET_LEN];
         let parent_write_scope_seed = [0x0b; SECRET_LEN];
-        let parent_pointer_read_key = [0x0c; SECRET_LEN];
         let parent_commitment = GrantSetCommitment {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: Vec::new(),
             unknown: PreservedFields::new(),
         };
@@ -1182,7 +1182,7 @@ mod tests {
             owner_enc_pub: &owner_enc_pub,
             write_scope_seed: &grantee_write_scope_seed,
             write_cut: None,
-            pointer_read_key: &grantee_pointer_read_key,
+            pointer_read_key: &GRANTEE_POINTER_READ_KEY,
             subtree_child_index: &[],
         };
         let recipient_contact = contact_for(recipient_pub);
@@ -1214,7 +1214,7 @@ mod tests {
                 write_history: WriteHistory::Carried(&[]),
                 write_scope_seed: &parent_write_scope_seed,
                 write_epoch: 2,
-                pointer_read_key: &parent_pointer_read_key,
+                pointer_read_key: &PARENT_POINTER_READ_KEY,
             },
             commitment: &parent_commitment,
             commitment_sig: &parent_commitment_sig,
@@ -1296,14 +1296,13 @@ mod tests {
 
         let parent_node_seed = [0x44; SECRET_LEN];
         let grantee_write_scope_seed = GRANTEE_WRITE_SCOPE_SEED;
-        let grantee_pointer_read_key = [0x66; SECRET_LEN];
 
         let parent_override_seed = [0x0a; SECRET_LEN];
         let parent_write_scope_seed = [0x0b; SECRET_LEN];
-        let parent_pointer_read_key = [0x0c; SECRET_LEN];
         let parent_commitment = GrantSetCommitment {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            cut_epoch: 0,
             entries: parent_grants
                 .iter()
                 .map(|g| g.commitment_entry.clone())
@@ -1326,7 +1325,7 @@ mod tests {
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &grantee_write_scope_seed,
                 write_cut: None,
-                pointer_read_key: &grantee_pointer_read_key,
+                pointer_read_key: &GRANTEE_POINTER_READ_KEY,
                 subtree_child_index: subtree,
             };
             let recipient_contact = contact_for(recipient_pub);
@@ -1358,7 +1357,7 @@ mod tests {
                     write_history: WriteHistory::Carried(&[]),
                     write_scope_seed: &parent_write_scope_seed,
                     write_epoch: 2,
-                    pointer_read_key: &parent_pointer_read_key,
+                    pointer_read_key: &PARENT_POINTER_READ_KEY,
                 },
                 commitment: &parent_commitment,
                 commitment_sig: &parent_commitment_sig,
@@ -1954,12 +1953,12 @@ mod tests {
     }
 
     #[test]
-    fn an_attested_parent_row_the_owner_cannot_re_derive_fails_closed_release_active() {
-        // The owner's two authorities over one row disagree: its signature binds
-        // a `recipientEncPk` its own encryption subkey cannot re-derive the tag
-        // from. Wrapping the parent's override seed and pointer read key under
-        // that disagreement is what the refusal prevents. Runtime `Err`, never a
-        // debug_assert. Active in release.
+    fn a_relabelled_parent_row_cannot_redirect_the_parent_blob() {
+        // A committed write grantee authors the ledger row, so it can relabel
+        // `recipientEncPk` there and re-file it. The re-seal takes the recipient
+        // off the owner-signed commitment entry instead, so the relabel is inert:
+        // the blob still opens for the committed party and never for the
+        // attacker.
         let victim = X25519Secret::from_scalar([0x51; SECRET_LEN]);
         let attacker = X25519Secret::from_scalar([0x52; SECRET_LEN]);
         let mut row = parent_row(&victim.public());
@@ -1968,16 +1967,35 @@ mod tests {
             sign_recipient_binding(&owner_identity(), PARENT_NAME, &row.ledger_entry)
                 .expect("the owner attests the row")
                 .to_compact();
+        let tag = row.tag;
 
         let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[row]);
+        outcome.expect("the parent re-seal ignores the row's recipient field");
 
-        assert_eq!(
-            outcome.expect_err("the parent re-seal refuses the row"),
-            CreateGrantError::ParentMint(ResealError::TagNotBoundToRecipient)
+        let parent = published
+            .iter()
+            .find(|r| r.scope_id == PARENT_SCOPE)
+            .expect("the parent record publishes");
+        let ctx = AadContext {
+            v: V,
+            id: PARENT_SCOPE,
+            scope: PARENT_SCOPE,
+            epoch: parent.read_epoch,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        };
+        let blob = parent
+            .section
+            .grant_blobs
+            .iter()
+            .find(|b| b.tag == tag)
+            .expect("the committed grantee still gets its blob");
+        assert!(
+            open_grant_blob(&victim, &blob.enc, &ctx, &blob.ciphertext).is_ok(),
+            "the blob opens for the party the owner committed"
         );
         assert!(
-            published.iter().all(|r| r.scope_id != PARENT_SCOPE),
-            "no parent record reaches the network"
+            open_grant_blob(&attacker, &blob.enc, &ctx, &blob.ciphertext).is_err(),
+            "and never for the key the row was relabelled to"
         );
     }
 
@@ -1986,6 +2004,7 @@ mod tests {
         mint_grant_row(
             &owner_identity(),
             &owner_enc(),
+            &PARENT_POINTER_READ_KEY,
             recipient_identity().to_sec1(),
             recipient,
             &PARENT_SCOPE,

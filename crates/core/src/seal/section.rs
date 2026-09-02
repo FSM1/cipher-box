@@ -27,14 +27,14 @@ use std::collections::BTreeSet;
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, Value, decode, encode, encoded_len};
-use crate::error::{CodecError, Malformed};
+use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use crate::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
 use crate::suite::hpke::ENC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    PreservedFields, assert_grant_ids_unique, assert_unknown_disjoint, assert_within_bound,
     bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::envelope::{MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES};
@@ -249,7 +249,7 @@ impl SignedSealed {
 /// owner-signed grant-set commitment. Rides `envelope.grantSection`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantSection {
-    /// The owner-signed, epoch-free grant-set commitment.
+    /// The owner-signed grant-set commitment.
     pub commitment: GrantSetCommitment,
     /// The 64-byte compact ECDSA owner signature over the commitment.
     pub commitment_sig: [u8; ECDSA_SIG_LEN],
@@ -413,7 +413,10 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
     }
     // A recipient tag names at most one grant blob; a duplicate is a confused
     // deputy over read-vs-write authority (#39 D7), rejected at decode.
-    assert_grant_tags_unique(grant_blobs.iter().map(|b| b.tag))?;
+    assert_grant_ids_unique(
+        grant_blobs.iter().map(|b| b.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
 
     let owner_blob = SignedOwnerBlob::from_value(req(map, "ownerBlob")?)?;
     let owner_write_blob = match map.get("ownerWriteBlob") {
@@ -469,7 +472,10 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
         section.history_links.len(),
         MAX_HISTORY_LINKS,
     )?;
-    assert_grant_tags_unique(section.grant_blobs.iter().map(|b| b.tag))?;
+    assert_grant_ids_unique(
+        section.grant_blobs.iter().map(|b| b.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
     assert_history_links_unique(&section.history_links)?;
     let commitment_bytes = encode_grant_set_commitment(&section.commitment)?;
 
@@ -529,6 +535,7 @@ mod tests {
         GrantSetCommitment {
             ipns_name: b"scope-root-name".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
             entries,
             unknown: PreservedFields::new(),
         }
@@ -547,8 +554,20 @@ mod tests {
     fn sample() -> GrantSection {
         GrantSection {
             commitment: commitment(vec![
-                GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
-                GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+                GrantSetEntry::new(
+                    &[0x66; 32],
+                    [0x01; 32],
+                    [0x41; 32],
+                    Permission::Read,
+                    [0x02; 32],
+                ),
+                GrantSetEntry::new(
+                    &[0x66; 32],
+                    [0x03; 32],
+                    [0x43; 32],
+                    Permission::Write,
+                    [0x04; 32],
+                ),
             ]),
             commitment_sig: [0x11; ECDSA_SIG_LEN],
             grant_blobs: vec![blob(0x01), blob(0x03)],

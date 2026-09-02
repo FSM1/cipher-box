@@ -29,7 +29,7 @@ use crate::suite::ecdsa::{
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    PreservedFields, assert_grant_ids_unique, assert_unknown_disjoint, assert_within_bound,
     bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::envelope::MAX_BLOCK_BYTES;
@@ -57,11 +57,10 @@ pub struct GrantLedgerEntry {
     /// (`{ipnsName, recipientEncPk, recipientIdentityPk, tag}`, see
     /// [`encode_recipient_binding`]) at the scope root's `ipnsName`.
     ///
-    /// Any committed write-grantee authors this ledger, so `recipientEncPk` is
-    /// the key a re-seal wraps a grant to. This signature is the owner
-    /// authority a re-sealer holding no owner secret verifies it against: per
-    /// row, so an honest re-seal skips exactly the poisoned row rather than
-    /// aborting the whole rotation.
+    /// Any committed write-grantee authors this ledger. A re-seal takes the
+    /// recipient key from the owner-signed commitment rather than from here, so
+    /// this signature is the owner authority over `recipientIdentityPk`, the one
+    /// recipient field no commitment entry carries.
     ///
     /// It is transferable, and deliberately so — every co-writer must be able to
     /// verify it, which rules out a designated-verifier construction. A
@@ -74,7 +73,8 @@ pub struct GrantLedgerEntry {
     /// (blueprint/engine.md "Invites": expiry is a ledger field, lazily pruned).
     ///
     /// **Not a capability boundary.** Neither owner signature covers it: the
-    /// grant-set commitment covers `(tag, permission, pseudonymPk)`, and
+    /// grant-set commitment covers
+    /// `(tag, maskedRecipientEncPk, permission, pseudonymPk)`, and
     /// [`owner_sig`](Self::owner_sig) covers the recipient binding, so a
     /// write-grantee re-authoring this body can alter or drop the deadline
     /// undetectably. It is a deadline cooperating readers honour and the input
@@ -442,7 +442,10 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     for item in raw_ledger {
         grant_ledger.push(GrantLedgerEntry::from_value(item)?);
     }
-    assert_grant_tags_unique(grant_ledger.iter().map(|e| e.tag))?;
+    assert_grant_ids_unique(
+        grant_ledger.iter().map(|e| e.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
     let mut direct_child_scope_index = Vec::with_capacity(raw_children.len());
     for item in raw_children {
         direct_child_scope_index.push(ChildScopeRef::from_value(item)?);
@@ -487,7 +490,10 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
         MAX_DIRECT_CHILD_SCOPES,
     )?;
     assert_within_bound("grantLedger", body.grant_ledger.len(), MAX_GRANT_BLOBS)?;
-    assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
+    assert_grant_ids_unique(
+        body.grant_ledger.iter().map(|e| e.tag),
+        TrustViolation::DuplicateGrantTag,
+    )?;
     assert_unknown_disjoint(&body.unknown, WRITE_BODY_KNOWN)?;
     for entry in &body.grant_ledger {
         assert_unknown_disjoint(&entry.unknown, LEDGER_ENTRY_KNOWN)?;

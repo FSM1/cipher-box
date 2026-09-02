@@ -886,6 +886,8 @@ struct StructureSigRejectVector {
 struct GrantSetAcceptVector {
     name: String,
     owner_identity_pk: String,
+    pointer_read_key: String,
+    recipients: Vec<String>,
     commitment: String,
     signature: String,
 }
@@ -1150,6 +1152,7 @@ struct ProbeJson {
     struct_tag: u8,
     index: u64,
     ipns_name: String,
+    identity_pk: String,
 }
 
 #[derive(Deserialize)]
@@ -2455,6 +2458,9 @@ const ALL_EDGE_NAMES: &[&str] = &[
     "bin-held-key",
     "genesis-read-scope-seed",
     "genesis-write-scope-seed",
+    "contact-label-seed",
+    "contact-label",
+    "committed-recipient-mask",
 ];
 
 #[test]
@@ -2507,12 +2513,16 @@ fn kdf_edge_outputs_are_frozen_and_pairwise_separated() {
         .try_into()
         .expect("probe id is 16 bytes");
     let ipns_name = unhex("probe.ipnsName", &file.probe.ipns_name);
+    let identity_pk: [u8; 33] = unhex("probe.identityPk", &file.probe.identity_pk)
+        .try_into()
+        .expect("probe identity key is 33 bytes");
     let probe = EdgeProbe {
         seed: &seed,
         id: &id,
         struct_tag: file.probe.struct_tag,
         index: file.probe.index,
         ipns_name: &ipns_name,
+        identity_pk: &identity_pk,
     };
     let computed = kdf::edge_probe_outputs(&probe);
     assert_eq!(computed.len(), file.edges.len());
@@ -2607,7 +2617,14 @@ fn identity_signed_preimages() -> Vec<(&'static str, Vec<Vec<u8>>)> {
     let commitment = GrantSetCommitment {
         ipns_name: scope_root.clone(),
         owner_pseudonym_pk: [0x44; 32],
-        entries: vec![GrantSetEntry::new([0x55; 32], Permission::Read, [0x66; 32])],
+        cut_epoch: 0,
+        entries: vec![GrantSetEntry::new(
+            &[0x66; 32],
+            [0x55; 32],
+            [0x95; 32],
+            Permission::Read,
+            [0x66; 32],
+        )],
         unknown: PreservedFields::new(),
     };
 
@@ -5390,6 +5407,26 @@ fn grant_set_accept_vectors_decode_and_verify() {
             "grant-set accept {}: must verify",
             v.name
         );
+        // The mask, not merely the framing: each entry must recover the frozen
+        // recipient under the frozen pointer read key, and must not carry it in
+        // the clear.
+        let prk = unhex32(&v.name, &v.pointer_read_key);
+        assert_eq!(c.entries.len(), v.recipients.len(), "recipient count drift");
+        for (entry, expected) in c.entries.iter().zip(&v.recipients) {
+            let recipient = unhex32(&v.name, expected);
+            assert_eq!(
+                entry.recipient_enc_pk(&prk),
+                recipient,
+                "grant-set accept {}: masked recipient drift",
+                v.name
+            );
+            assert_ne!(
+                *entry.masked_recipient_enc_pk(),
+                recipient,
+                "grant-set accept {}: the recipient must not ride in the clear",
+                v.name
+            );
+        }
     }
 }
 
