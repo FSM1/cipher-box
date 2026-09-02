@@ -2064,11 +2064,14 @@ impl EngineView {
         find_rendered(&children, name).map(rendered_attrs)
     }
 
-    /// The node's attributes, if present in the rendered view (FUSE getattr).
+    /// The node's attributes, if present in the rendered view (FUSE getattr),
+    /// under the name its own folder renders it with — the name
+    /// [`children`](Self::children) and [`lookup`](Self::lookup) gave it, so a
+    /// duplicate is not re-ambiguated one accessor after the listing.
     pub fn attrs(&self, node: NodeId) -> Option<NodeAttrs> {
         self.rendered
             .node(node)
-            .map(|meta| node_attrs(meta, meta.name()))
+            .map(|meta| node_attrs(meta, &rendered_name(&self.rendered, node)))
     }
 
     /// Minimal statfs: the node count reachable from the root. Byte/quota
@@ -9998,6 +10001,31 @@ mod tests {
             Some("reports (1)"),
             "the trail names the folder the listing named"
         );
+    }
+
+    /// Every read accessor names one node the same. A caller that lists a
+    /// duplicate and then asks for its attributes by id must not be handed the
+    /// stored name back, or the two children collapse under one name again on
+    /// the surface after the listing.
+    #[test]
+    fn attrs_names_a_duplicate_the_way_the_listing_does() {
+        let (engine, _events) = started();
+        let root = engine.root();
+        let plain = NodeId([0xb1; 16]);
+        let twin = NodeId([0xb2; 16]);
+        engine.plant_committed_child(root, plain, "q3.pdf", NodeKind::File);
+        engine.plant_committed_child(root, twin, "q3.pdf", NodeKind::File);
+
+        let view = block_on(engine.view()).expect("view");
+        for listed in view.children(root) {
+            assert_eq!(
+                view.attrs(listed.id).expect("attrs").name,
+                listed.name,
+                "{:?} must be named alike by every accessor",
+                listed.id
+            );
+        }
+        assert_eq!(view.attrs(twin).expect("attrs").name, "q3 (1).pdf");
     }
 
     #[test]
