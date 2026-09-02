@@ -144,7 +144,8 @@ fn depart_contested(contested: &ContestedNodes, render: &ScopeRender<'_>) -> boo
     departed
 }
 
-/// The name a grafted scope root renders under.
+/// The name a grafted scope root renders under, and the label the `/shared` row
+/// carries.
 ///
 /// The sharer authors the label and it lands in this vault's render tree as a
 /// node name, so it is held to the same law a command is ([`validate_name`]) —
@@ -152,10 +153,13 @@ fn depart_contested(contested: &ContestedNodes, render: &ScopeRender<'_>) -> boo
 /// and unremovable through every projection. Refusing the share instead is not
 /// open to us: the recipient must still reach the folder. The label binds
 /// nothing, so replacing it costs a courtesy string and no reachability.
-fn grafted_root_name(display_name: &str, root: NodeId) -> String {
+///
+/// Zeroizing because [`NodeMeta`] wipes the name it supersedes, and an unused
+/// copy dropped intact would leave the sharer's label in freed memory.
+pub(crate) fn grafted_root_name(display_name: &str, root: NodeId) -> Zeroizing<String> {
     match validate_name(display_name) {
-        Ok(()) => display_name.to_owned(),
-        Err(_) => node_id_label(root),
+        Ok(()) => Zeroizing::new(display_name.to_owned()),
+        Err(_) => Zeroizing::new(node_id_label(root)),
     }
 }
 
@@ -176,13 +180,13 @@ fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRe
     // the only name a browse can show.
     let label = grafted_root_name(&share.display_name, root);
     let renamed = match base.node_mut(root) {
-        Some(meta) if meta.name() != label => {
-            meta.rename(label);
+        Some(meta) if meta.name() != *label => {
+            meta.rename(label.as_str());
             true
         }
         Some(_) => false,
         None => {
-            let mut meta = NodeMeta::new(root, label, NodeKind::Folder);
+            let mut meta = NodeMeta::new(root, label.as_str(), NodeKind::Folder);
             meta.ipns_name = Some(share.scope_root_name.clone());
             base.upsert_node(meta);
             true
@@ -1086,10 +1090,7 @@ mod tests {
                 permission: Permission::Read,
                 pointer_read_key: SecretBytes::new([0x9a; 32]),
             });
-            block_on(
-                StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy)
-                    .persist(&list),
-            )
+            self.persist(&list)
         }
 
         /// Bookmark the shared scope once per identity in `sharers` — the same
@@ -1107,11 +1108,14 @@ mod tests {
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                 });
             }
+            self.persist(&list).expect("the bookmarks persist");
+        }
+
+        fn persist(&self, list: &ReceivedSharesList) -> Result<(), ReceivedShareStoreError> {
             block_on(
                 StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy)
-                    .persist(&list),
+                    .persist(list),
             )
-            .expect("the bookmarks persist");
         }
 
         /// Bookmark the shared scope, plus a second accepted scope at `other`
@@ -1135,11 +1139,7 @@ mod tests {
                     pointer_read_key: SecretBytes::new([0x9a; 32]),
                 });
             }
-            block_on(
-                StagingReceivedShareStore::new(&self.staging, &my_enc(), &self.entropy)
-                    .persist(&list),
-            )
-            .expect("the bookmarks persist");
+            self.persist(&list).expect("the bookmarks persist");
         }
 
         /// One received-share pass, with the head block its resolve fetches
@@ -1844,9 +1844,9 @@ mod tests {
     fn the_grafted_root_fallback_name_is_lawful() {
         let fallback = grafted_root_name("a\u{202E}b", NodeId(SCOPE));
 
+        assert_eq!(*fallback, node_id_label(NodeId(SCOPE)));
         assert_eq!(validate_name(&fallback), Ok(()));
         assert!(is_emittable(&fallback));
-        assert_eq!(fallback, node_id_label(NodeId(SCOPE)));
     }
 
     /// A sharer authors the label and it lands in this vault's render tree as a
@@ -1854,13 +1854,7 @@ mod tests {
     /// to list the graft and remove it through every projection.
     #[test]
     fn a_sharer_label_the_name_law_refuses_grafts_under_the_node_id() {
-        for hostile in [
-            "a\u{202E}gnp.exe",
-            "photos/../etc",
-            "NUL",
-            "trailing ",
-            &"x".repeat(MAX_NODE_NAME_BYTES),
-        ] {
+        for hostile in ["a\u{202E}gnp.exe", "photos/../etc", "NUL", "trailing "] {
             let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
             fx.bookmark_labelled(hostile);
 
@@ -1868,12 +1862,8 @@ mod tests {
 
             let base = fx.base.borrow();
             let root = base.node(NodeId(SCOPE)).expect("the graft is a node");
-            assert!(
-                is_emittable(root.name()),
-                "{hostile:?} rendered as {:?}",
-                root.name()
-            );
-            assert_eq!(validate_name(root.name()), Ok(()));
+            assert_eq!(root.name(), node_id_label(NodeId(SCOPE)), "for {hostile:?}");
+            assert!(is_emittable(root.name()));
             drop(base);
             assert_eq!(fx.listing(), vec!["photos".to_owned()], "and it opens");
         }

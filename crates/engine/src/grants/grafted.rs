@@ -49,14 +49,8 @@ pub(crate) fn contested_nodes(named: &NamedNodes) -> ContestedNodes {
     let mut contested = ContestedNodes::new();
     for ((scope_id, _), ids) in named {
         for id in ids {
-            match claimed.get(id) {
-                None => {
-                    claimed.insert(*id, *scope_id);
-                }
-                Some(first) if first != scope_id => {
-                    contested.insert(*id);
-                }
-                Some(_) => {}
+            if *claimed.entry(*id).or_insert(*scope_id) != *scope_id {
+                contested.insert(*id);
             }
         }
     }
