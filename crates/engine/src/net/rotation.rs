@@ -2203,7 +2203,8 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         // Availability, not trust: the next pass re-resolves that record
         // ([`ResealError::SectionNotResealable`]).
         ResealError::SectionNotResealable { .. } => WritePublishError::NotLanded,
-        ResealError::LedgerDivergesFromCommitment
+        ResealError::HistoryLinkTooLarge { .. }
+        | ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
         | ResealError::UnusableRecipientKey
         | ResealError::TagNotBoundToRecipient
@@ -2522,8 +2523,8 @@ where
     /// This owner-re-signs the set it builds, so both carried halves are proven
     /// before a single row is re-minted, and every field a re-minted commitment
     /// entry carries is either derived here or copied from what the owner already
-    /// signed. A ledger row additionally carries forward `expiresAt` and the
-    /// preserved unknowns, which no owner signature covers. A row neither owner
+    /// signed. A ledger row additionally carries forward `expiresAt`, which no
+    /// owner signature covers. A row neither owner
     /// authority over `recipientEncPk` covers is dropped from the moved set
     /// rather than re-minted.
     fn remint_grants(
@@ -2601,10 +2602,11 @@ where
             let mut ledger_entry = row.ledger_entry;
             // The deadline is the discovered-expiry trigger's input and the
             // invite claim path's restriction; dropping it at a re-mint erases
-            // both, and dropping the unknown fields discards what another version
-            // wrote.
+            // both. The row's unknown map is not carried, unlike the commitment
+            // entry's above: `reseal_scope_root` rebuilds every ledger row
+            // without one, so the ledger half adds no unbounded bytes to the
+            // re-seal budget.
             ledger_entry.expires_at = entry.expires_at;
-            ledger_entry.unknown = entry.unknown.clone();
 
             reminted.entries.push(commitment_entry);
             reminted.ledger.push(ledger_entry);
@@ -6368,10 +6370,14 @@ mod tests {
     }
 
     #[test]
-    fn the_re_mint_carries_each_grants_preserved_unknown_fields_forward() {
-        // The two halves come from different signed structures — the commitment
-        // entry from the owner-signed set, the ledger row from the write body —
-        // so each is asserted under its own key.
+    fn the_re_mint_carries_the_owner_signed_half_and_drops_the_write_grantees() {
+        // The two halves come from different signed structures, and only one of
+        // them has an owner behind it. The commitment entry rides the
+        // owner-signed set, so dropping it would discard what another version
+        // committed. The ledger row is authored by any committed write grantee
+        // under no owner signature, and its size is what the re-seal budget
+        // cannot bound, so the re-mint drops it — a rotation is not a republish
+        // and owes no byte stability (FSM1/cipher-box-next#27 D10).
         let field = |key: &str, v: u64| -> PreservedFields {
             [(key.to_string(), Value::Unsigned(v))]
                 .into_iter()
@@ -6423,10 +6429,9 @@ mod tests {
             .iter()
             .find(|e| e.tag == tag)
             .expect("the grantee's re-minted ledger row");
-        assert_eq!(
-            row.unknown.get("zl"),
-            Some(&Value::Unsigned(9)),
-            "and the ledger half is carried under no owner signature at all"
+        assert!(
+            row.unknown.is_empty(),
+            "the ledger half answers to no owner signature and must not ride forward"
         );
     }
 
@@ -7558,6 +7563,7 @@ mod tests {
             ResealError::OwnerKeyRequiredForWriteCut,
             ResealError::WriteBodyTooLarge,
             ResealError::SectionNotResealable { size: 2, limit: 1 },
+            ResealError::HistoryLinkTooLarge { size: 2, limit: 1 },
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
@@ -7571,7 +7577,8 @@ mod tests {
                     WritePublishError::NotLanded,
                     "a permanent size verdict would let whoever grew the root block the cascade",
                 ),
-                ResealError::LedgerDivergesFromCommitment
+                ResealError::HistoryLinkTooLarge { .. }
+                | ResealError::LedgerDivergesFromCommitment
                 | ResealError::SignerNotCommitted
                 | ResealError::UnusableRecipientKey
                 | ResealError::TagNotBoundToRecipient

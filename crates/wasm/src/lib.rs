@@ -398,6 +398,9 @@ pub enum DeadLetterReason {
     /// A purge named a node gate-passing state still reaches through a live
     /// parent, so the bin entry alone did not prove it unlinked.
     TargetStillLinked,
+    /// Every attempt authored a shared folder's root record that leaves no room
+    /// for the re-key a revoke needs.
+    ScopeRootNotResealable,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -420,6 +423,9 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             facade::DeadLetterReason::PreservationRefused => DeadLetterReason::PreservationRefused,
             facade::DeadLetterReason::AlreadyPublished => DeadLetterReason::AlreadyPublished,
             facade::DeadLetterReason::TargetStillLinked => DeadLetterReason::TargetStillLinked,
+            facade::DeadLetterReason::ScopeRootNotResealable => {
+                DeadLetterReason::ScopeRootNotResealable
+            }
         }
     }
 }

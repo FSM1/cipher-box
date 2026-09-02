@@ -35,6 +35,7 @@ use zeroize::Zeroizing;
 
 use super::publish::head_cid_from_value;
 use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
+use crate::content::limits::{MAX_RESEALABLE_ROOT_REST_BYTES, scope_root_rest_bytes};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
@@ -208,7 +209,8 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 /// Steps 1-5: turn a fetched record into a content-plane [`Candidate`].
 /// Verifies the record only to read its signed head anchor (the gate re-verifies
 /// from scratch); fetches the head block fail-closed on a CID mismatch; decodes
-/// the envelope and its grant section.
+/// the envelope and its grant section; and holds the root to the re-seal
+/// reservation this engine's own author side enforces.
 ///
 /// Free-standing because the accept flow assembles a candidate for a **sharer's**
 /// scope root, which no reader context of this device's own anchors.
@@ -219,9 +221,10 @@ pub(crate) async fn assemble_candidate<H: Http>(
     record_bytes: &[u8],
     local: Option<&LocalHead>,
 ) -> Result<Candidate, GateError> {
-    // Steps 1-4 are the shared head-envelope assembly; the sequence is
-    // discarded — the gate re-verifies the record from scratch.
-    let (_sequence, envelope) =
+    // Steps 1-4; the sequence is discarded — the gate re-verifies the record
+    // from scratch. Only the block's length outlives the decode, so the buffer
+    // is released rather than held beside the envelope it decoded into.
+    let (_sequence, envelope, block_len) =
         assemble_head_envelope(gateway, http, name, record_bytes, local).await?;
 
     // Step 5 — decode the grant section.
@@ -233,6 +236,16 @@ pub(crate) async fn assemble_candidate<H: Http>(
             .into(),
         )
     })?;
+    let rest = scope_root_rest_bytes(block_len, section_bytes.len());
+    if rest > MAX_RESEALABLE_ROOT_REST_BYTES {
+        return Err(GateError::Rejected(GateRejection {
+            stage: GateStage::RecordVerify,
+            reason: RejectionReason::ScopeRootNotResealable {
+                size: rest,
+                limit: MAX_RESEALABLE_ROOT_REST_BYTES,
+            },
+        }));
+    }
     let grant_section = decode_grant_section(section_bytes).map_err(assembly_reject)?;
 
     Ok(Candidate {
@@ -671,17 +684,18 @@ pub(crate) async fn fetch_head_block<H: Http>(
 }
 
 /// The head-envelope assembly shared by both adopters: [`fetch_head_block`],
-/// then decode the envelope.
+/// then decode the envelope. The block's length rides out beside it, because a
+/// scope root is measured against it; the buffer itself is dropped here.
 pub(crate) async fn assemble_head_envelope<H: Http>(
     gateway: &Gateway,
     http: &H,
     name: &IpnsName,
     record_bytes: &[u8],
     local: Option<&LocalHead>,
-) -> Result<(u64, Envelope), GateError> {
+) -> Result<(u64, Envelope, usize), GateError> {
     let (sequence, block) = fetch_head_block(gateway, http, name, record_bytes, local).await?;
     let envelope = decode_envelope(&block).map_err(assembly_reject)?;
-    Ok((sequence, envelope))
+    Ok((sequence, envelope, block.len()))
 }
 
 /// The structured AAD a seed-bearing structure of `env` is sealed under.
@@ -728,8 +742,10 @@ pub(super) fn map_read_error(e: ReadError) -> GateError {
 mod tests {
     use super::*;
 
-    use cipherbox_core::seal::{Envelope, GrantSection};
+    use cipherbox_core::seal::{Envelope, GrantSection, encode_envelope};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
+
+    use crate::content::root_block_cid;
 
     use crate::content::GatewaySource;
     use crate::seams::HttpResponse;
@@ -737,7 +753,7 @@ mod tests {
     use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
-        OwnerRootSpec, block_on, owner_root_fixture,
+        OwnerRootSpec, block_on, owner_root_fixture, padding,
     };
 
     const TTL_NANOS: u64 = 2_000_000_000;
@@ -811,10 +827,33 @@ mod tests {
         }
 
         fn record(&self, sequence: u64) -> Vec<u8> {
-            let value = format!("/ipfs/{}", self.head_cid_str);
+            self.record_over(&self.head_cid_str, sequence)
+        }
+
+        fn record_over(&self, cid: &str, sequence: u64) -> Vec<u8> {
+            let value = format!("/ipfs/{cid}");
             let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &self.root_id);
             let signer = kdf::ipns_keypair(write_seed.as_bytes());
             IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL).marshal()
+        }
+
+        /// The same scope root re-encoded with `pad` bytes of carried,
+        /// cuttable unknown outside its grant section — what a foreign client
+        /// this engine's own author side would refuse can publish.
+        fn padded(&self, pad: usize) -> (Vec<u8>, String) {
+            let mut envelope = self.envelope.clone();
+            // Appended, never replaced: the grant section itself rides in
+            // `unknown` under its own key.
+            envelope.unknown = envelope
+                .unknown
+                .entries()
+                .iter()
+                .cloned()
+                .chain(padding(pad).entries().iter().cloned())
+                .collect();
+            let block = encode_envelope(&envelope).expect("the padded envelope encodes");
+            let cid = root_block_cid(&block);
+            (block, cid)
         }
 
         fn adopter<'a>(
@@ -866,6 +905,45 @@ mod tests {
         assert_eq!(candidate.grant_section, fx.grant_section);
         // The head block was fetched at its canonical content-CID address.
         assert!(http.requests()[0].url.contains(&fx.head_cid_str));
+    }
+
+    #[test]
+    fn a_scope_root_with_no_room_for_its_own_re_seal_is_refused_at_adoption() {
+        // The produce side holds every root it authors to this budget
+        // (`net/author.rs::encode_scope_root`). Adopting a foreign root over it
+        // would leave the owner's own re-key refusing on that scope for ever —
+        // the encode/decode asymmetry AGENTS.md rule 8 forbids.
+        let fx = Fixture::new();
+        let (block, cid) = fx.padded(MAX_RESEALABLE_ROOT_REST_BYTES);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(block));
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let Err(GateError::Rejected(rejection)) =
+            block_on(adopter.assemble_candidate(&fx.name, &fx.record_over(&cid, 1)))
+        else {
+            panic!("an un-resealable root must be refused as a rejection");
+        };
+        assert_eq!(rejection.check(), "scope-root-not-resealable");
+    }
+
+    #[test]
+    fn a_scope_root_inside_the_re_seal_reservation_still_adopts() {
+        // The anti-vacuity half: the budget must not refuse an ordinary root.
+        let fx = Fixture::new();
+        let (block, cid) = fx.padded(1024);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(block));
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        assert!(
+            block_on(adopter.assemble_candidate(&fx.name, &fx.record_over(&cid, 1))).is_ok(),
+            "a root with room to spare must still assemble"
+        );
     }
 
     #[test]

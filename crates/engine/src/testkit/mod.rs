@@ -28,6 +28,18 @@ pub use content::{
     block_store, doomed_version, frame_version, frame_version_with, gateway, requested_cid, serve,
 };
 pub use entropy::{FailingEntropy, SeededEntropy, SilentAtWidth, SilentEntropy};
+
+/// A preserved-field map of `bytes` padding under one key — the
+/// attacker-sized run a committed write grantee puts on any structure it
+/// authors, for a test that must prove the carry does not ride forward.
+pub fn padding(bytes: usize) -> cipherbox_core::seal::PreservedFields {
+    [(
+        "zpad".to_string(),
+        cipherbox_core::codec::Value::Bytes(vec![0u8; bytes]),
+    )]
+    .into_iter()
+    .collect()
+}
 pub use executor::{block_on, poll_tasks_once, poll_tasks_until_parked};
 pub use owner_root::{
     OWNER_ROOT_EPOCH, OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED,

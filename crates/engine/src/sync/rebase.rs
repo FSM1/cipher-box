@@ -180,6 +180,13 @@ pub enum DeadLetterReason {
     /// delete whose parent publish dead-lettered leaves one standing for a node
     /// the user still sees — so the purge refuses rather than destroying it.
     TargetStillLinked,
+    /// Every attempt authored a scope root that fits the block ceiling but
+    /// leaves no room for its own re-seal, so the owner's next revocation of
+    /// that scope could never be authored. Distinct from [`Self::HeadTooLarge`]
+    /// because the record is not too large, and the remedy is not to hold less:
+    /// a shared folder's root reserves a fixed share of its record for the
+    /// grant section a re-key rebuilds.
+    ScopeRootNotResealable,
 }
 
 /// One applied op, resolved for republish.

@@ -19,6 +19,8 @@ const REASONS: Record<DeadLetterReason, string> = {
     'this device already created this item once; the queued copy is older than what is online, so it was not created again',
   targetStillLinked:
     'this item is still in one of your folders, so it was not permanently deleted from the bin',
+  scopeRootNotResealable:
+    "this shared folder's own record leaves no room for the re-key a revoke needs; the folder has to carry fewer direct subfolders or fewer people before it can be saved",
 };
 
 /**

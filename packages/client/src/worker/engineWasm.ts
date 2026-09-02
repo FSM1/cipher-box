@@ -365,5 +365,6 @@ export interface EngineWasm {
     readonly PreservationRefused: number;
     readonly AlreadyPublished: number;
     readonly TargetStillLinked: number;
+    readonly ScopeRootNotResealable: number;
   };
 }

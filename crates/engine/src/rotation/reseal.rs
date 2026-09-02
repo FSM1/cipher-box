@@ -35,23 +35,23 @@ use zeroize::{Zeroize, Zeroizing};
 use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    HistoryLinkPayload, MAX_GRANT_BLOBS, MAX_HISTORY_LINKS, MAX_WRITE_HISTORY_LINK_BYTES,
-    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, PreservedFields,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK,
-    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed,
-    StructureSigInput, WriteBody, encode_grant_section, encode_write_body,
-    is_write_body_over_bound, open_ascent_link, open_history_link, open_owner_blob, seal,
-    seal_ascent_link_to, seal_grant_blob, seal_history_link, seal_owner_blob,
-    seal_owner_history_link, seal_owner_write_blob, sign_structure,
+    AadContext, AscentLink, ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSection,
+    GrantSetCommitment, HistoryLinkPayload, MAX_GRANT_BLOBS, MAX_HISTORY_LINKS,
+    MAX_WRITE_HISTORY_LINK_BYTES, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
+    PreservedFields, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY,
+    STRUCT_TAG_WRITE_HISTORY_LINK, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob,
+    SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody, encode_grant_section,
+    encode_write_body, is_write_body_over_bound, open_ascent_link, open_history_link,
+    open_owner_blob, seal, seal_ascent_link_to, seal_grant_blob, seal_history_link,
+    seal_owner_blob, seal_owner_history_link, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::content::limits::MAX_RESEALABLE_SECTION_BYTES;
+use crate::content::limits::{MAX_RESEALABLE_SECTION_BYTES, MAX_RETAINED_HISTORY_LINK_BYTES};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
 use crate::grants::{bound_recipient, enforce_committed_ledger, row_is_owner_attested};
@@ -217,6 +217,7 @@ impl ResealSeeds<'_> {
 }
 
 /// The owner-committed grant set plus the write-body content a re-seal carries.
+#[derive(Clone, Copy)]
 pub struct CommittedSet<'a> {
     /// The vault owner's identity public key — the authority every carried
     /// signature in this set answers to: the commitment's, and each ledger row's
@@ -232,9 +233,10 @@ pub struct CommittedSet<'a> {
     /// MUST equal `commitment` as a `(tag → permission)` set (enforced closed).
     pub grant_ledger: &'a [GrantLedgerEntry],
     /// The directly-descendant scope roots (the F-4 cascade index, #38 D6).
-    pub direct_child_scope_index: &'a [cipherbox_core::seal::ChildScopeRef],
-    /// Recipient encryption keys the owner's cut removed. No blob is minted for
-    /// a row a blinded tag proves belongs to one, whatever `commitment` says.
+    pub direct_child_scope_index: &'a [ChildScopeRef],
+    /// Recipient encryption keys **this scope's** re-key must mint no blob for.
+    /// No blob is minted for a row a blinded tag proves belongs to one,
+    /// whatever `commitment` says.
     ///
     /// The encryption key, not the identity key: a tag is
     /// `blind(ownerEncSecret, recipientEncPk, ipnsName)`, so the owner's own
@@ -242,14 +244,10 @@ pub struct CommittedSet<'a> {
     /// `recipientIdentityPk` carries no such proof and any committed writer can
     /// re-author it.
     ///
-    /// A grant-set commitment is epoch-free, so a pre-cut one an owner really
-    /// did sign still verifies at every gate stage. Down a cascade that reads
-    /// each descendant's set off the record it just resolved, that is a
-    /// permanent read-revocation bypass: a current write grantee republishes a
-    /// descendant root carrying the pre-cut set, and the next ancestor rotation
-    /// wraps the fresh read override seed straight back to the revokee.
-    /// An encryption key is vault-wide where a blinded tag is per-scope, so this
-    /// is the axis the owner's cut carries down.
+    /// Per scope, never carried down a cascade: an ancestor's cut says nothing
+    /// about a grant the owner issued independently one level below it. The
+    /// cascade fills this from the scope's own durable revocation floor
+    /// (`rotation/cascade.rs::effective_revoked_recipients`).
     pub revoked_recipients: &'a [[u8; SECRET_LEN]],
 }
 
@@ -328,6 +326,17 @@ pub enum ResealError {
     /// build's own decoder always rejects. Named apart from the generic encode
     /// fold so an operator can tell an over-budget body from an encoder fault.
     WriteBodyTooLarge,
+    /// A freshly minted history link is past
+    /// [`MAX_RETAINED_HISTORY_LINK_BYTES`], the bound this same re-seal drops a
+    /// carried link at. Publishing one would mint a link this build's own
+    /// retention discards on the next pass, taking every older link with it —
+    /// the release-active encode half of that drop (AGENTS.md rule 8).
+    HistoryLinkTooLarge {
+        /// The minted link's sealed length.
+        size: usize,
+        /// The bound it must stay under.
+        limit: usize,
+    },
     /// The freshly minted section is past
     /// [`MAX_RESEALABLE_SECTION_BYTES`](crate::content::limits::MAX_RESEALABLE_SECTION_BYTES),
     /// the budget the scope root's own authoring reserves room for.
@@ -354,6 +363,12 @@ impl core::fmt::Display for ResealError {
             }
             ResealError::UnusableRecipientKey => {
                 f.write_str("grant-ledger recipient encryption key is unusable")
+            }
+            ResealError::HistoryLinkTooLarge { size, limit } => {
+                write!(
+                    f,
+                    "minted history link {size} bytes over the {limit}-byte bound"
+                )
             }
             ResealError::SectionNotResealable { size, limit } => {
                 write!(f, "re-sealed grant section {size} > {limit}")
@@ -418,6 +433,7 @@ impl ResealError {
             ResealError::HistoryLinkNotContiguous => "history-link-not-contiguous",
             ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
             ResealError::WriteBodyTooLarge => "write-body-too-large",
+            ResealError::HistoryLinkTooLarge { .. } => "history-link-too-large",
             ResealError::SectionNotResealable { .. } => "section-not-resealable",
             ResealError::Encode(_) => "structure-encode-failed",
         }
@@ -839,12 +855,21 @@ pub fn reseal_scope_root<E: Entropy>(
         }
         None => 0,
     };
-    let mut history_links: Vec<SignedSealed> = carried_history_links[oldest_kept..]
+    // The window stays a contiguous suffix, so an over-long link takes every
+    // link older than it too. An honest link is a fixed-width seal well under
+    // the bound, so this drops nothing the ratchet needs
+    // ([`MAX_RETAINED_HISTORY_LINK_BYTES`]).
+    let retained = &carried_history_links[oldest_kept..];
+    let bounded_start = retained
+        .iter()
+        .rposition(|link| link.sealed.len() > MAX_RETAINED_HISTORY_LINK_BYTES)
+        .map_or(0, |over| over + 1);
+    let mut history_links: Vec<SignedSealed> = retained[bounded_start..]
         .iter()
         .map(|link| SignedSealed {
             signature: sign_over(STRUCT_TAG_HISTORY_LINK, None, &link.sealed),
             sealed: link.sealed.clone(),
-            unknown: link.unknown.clone(),
+            unknown: PreservedFields::new(),
         })
         .collect();
     if let Some(prev) = &seeds.prev {
@@ -856,6 +881,12 @@ pub fn reseal_scope_root<E: Entropy>(
             read_epoch,
             prev,
         )?;
+        if sealed.len() > MAX_RETAINED_HISTORY_LINK_BYTES {
+            return Err(ResealError::HistoryLinkTooLarge {
+                size: sealed.len(),
+                limit: MAX_RETAINED_HISTORY_LINK_BYTES,
+            });
+        }
         let signature = sign_over(STRUCT_TAG_HISTORY_LINK, None, &sealed);
         history_links.push(SignedSealed {
             sealed,
@@ -884,10 +915,30 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- Write-body: sealed under the write key at the write epoch. ---
     let write_body = {
+        // Every carried unknown map is dropped, so the minted section is a
+        // function of the frozen counts alone and the re-seal budget is a real
+        // bound ([`MAX_RESEALABLE_SECTION_BYTES`]). A rotation is not a
+        // republish and owes no byte stability (FSM1/cipher-box-next#27 D10).
         let wb = WriteBody {
-            grant_ledger: committed.grant_ledger.to_vec(),
+            grant_ledger: committed
+                .grant_ledger
+                .iter()
+                .map(|entry| GrantLedgerEntry {
+                    recipient_identity_pk: entry.recipient_identity_pk,
+                    recipient_enc_pk: entry.recipient_enc_pk,
+                    permission: entry.permission,
+                    tag: entry.tag,
+                    owner_sig: entry.owner_sig,
+                    expires_at: entry.expires_at,
+                    unknown: PreservedFields::new(),
+                })
+                .collect(),
             write_history_link,
-            direct_child_scope_index: committed.direct_child_scope_index.to_vec(),
+            direct_child_scope_index: committed
+                .direct_child_scope_index
+                .iter()
+                .map(|child| ChildScopeRef::new(child.scope_id, child.ipns_name.clone()))
+                .collect(),
             unknown: PreservedFields::new(),
         };
         let mut plaintext = encode_write_body(&wb).map_err(write_body_encode_error)?;
@@ -1002,7 +1053,7 @@ fn ctx_for(v: u64, scope_id: [u8; 16], epoch: u64, struct_tag: u8) -> AadContext
 mod tests {
     use super::*;
     use crate::grants::mint_grant_row;
-    use crate::testkit::SeededEntropy;
+    use crate::testkit::{SeededEntropy, padding};
     use cipherbox_core::seal::{
         ChildScopeRef, GrantSetEntry, MAX_DIRECT_CHILD_SCOPES, MAX_WRITE_BODY_BYTES,
         encode_grant_section, open_ascent_link, open_grant_blob, open_history_link,
@@ -1841,6 +1892,10 @@ mod tests {
         // budget, so a section that fits it always fits beside them. Measured on
         // real bytes at the frozen ceiling of committed rows, since the budget
         // is sized from per-row wire estimates.
+        //
+        // Every row and every child ref carries a padded unknown map here. The
+        // counts are frozen and the per-item sizes are not, so the budget is a
+        // bound only because the re-seal drops the carry.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let (mut commitment, _, _) = fx.committed(b"n");
@@ -1864,7 +1919,13 @@ mod tests {
         let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
             .expect("the owner signs the maximal set")
             .to_compact();
-        let ledger: Vec<GrantLedgerEntry> = rows.into_iter().map(|(_, row)| row).collect();
+        let ledger: Vec<GrantLedgerEntry> = rows
+            .into_iter()
+            .map(|(_, row)| GrantLedgerEntry {
+                unknown: padding(1024),
+                ..row
+            })
+            .collect();
 
         // Every count axis at its ceiling at once, since only the joint maximum
         // can exhaust the budget.
@@ -1878,7 +1939,7 @@ mod tests {
                         .as_str()
                         .as_bytes()
                         .to_vec(),
-                    unknown: PreservedFields::new(),
+                    unknown: padding(1024),
                 }
             })
             .collect();
@@ -1902,6 +1963,141 @@ mod tests {
         assert!(
             size + 64 * 1024 <= MAX_RESEALABLE_SECTION_BYTES,
             "a maximal re-seal is {size} bytes against a {MAX_RESEALABLE_SECTION_BYTES}-byte budget"
+        );
+    }
+
+    #[test]
+    fn a_re_seal_carries_no_preserved_field_a_write_grantee_authored() {
+        // A rotation is not a republish and owes no byte stability
+        // (FSM1/cipher-box-next#27 D10), and no owner signature covers either
+        // map, so carrying one forward hands a committed write grantee a run
+        // no count bound can size.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed(b"n");
+        let ledger: Vec<GrantLedgerEntry> = ledger
+            .into_iter()
+            .map(|row| GrantLedgerEntry {
+                unknown: padding(64),
+                ..row
+            })
+            .collect();
+        let children = vec![ChildScopeRef {
+            scope_id: [0x21; 16],
+            ipns_name: b"child".to_vec(),
+            unknown: padding(64),
+        }];
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(1);
+        let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let mut cs = committed_set(&fx, &commitment, &sig, &ledger);
+        cs.direct_child_scope_index = &children;
+
+        let section = reseal_scope_root(&mut SeededEntropy::new(11), &id, &s, &cs, &[])
+            .expect("a padded set re-seals");
+        let body = opened_write_body(&section, &fx.write_scope_seed, 1);
+        for row in &body.grant_ledger {
+            assert!(
+                row.unknown.is_empty(),
+                "a re-sealed ledger row carries a padded map"
+            );
+        }
+        for child in &body.direct_child_scope_index {
+            assert!(
+                child.unknown.is_empty(),
+                "a re-sealed child scope ref carries a padded map"
+            );
+        }
+    }
+
+    #[test]
+    fn every_history_link_this_engine_mints_fits_the_retained_bound() {
+        // The bound is only safe to enforce because an honest link never
+        // approaches it. Measured on a real minted link, not on the layout the
+        // constant was derived from.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed(b"n");
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let head = chain_seed(4);
+        let fresh = chain_seed(5);
+        let s = seeds(
+            &fresh,
+            5,
+            Some(PrevEpochSeed {
+                seed: &head,
+                epoch: 4,
+            }),
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+        let section = reseal_scope_root(&mut SeededEntropy::new(21), &id, &s, &cs, &[])
+            .expect("the rotation mints one fresh link");
+
+        let minted = &section.history_links[0].sealed;
+        assert!(
+            minted.len() <= MAX_RETAINED_HISTORY_LINK_BYTES,
+            "a {}-byte minted link does not survive a {MAX_RETAINED_HISTORY_LINK_BYTES}-byte bound",
+            minted.len()
+        );
+
+        // The widest honest case: the epoch is the one variable-width field.
+        let widest = mint_history_link(
+            &mut SeededEntropy::new(22),
+            V,
+            SCOPE,
+            &fresh,
+            u64::MAX,
+            &PrevEpochSeed {
+                seed: &head,
+                epoch: u64::MAX - 1,
+            },
+        )
+        .expect("the link mints");
+        assert!(
+            widest.len() * 2 <= MAX_RETAINED_HISTORY_LINK_BYTES,
+            "a {}-byte link leaves too little headroom under {MAX_RETAINED_HISTORY_LINK_BYTES}",
+            widest.len()
+        );
+    }
+
+    #[test]
+    fn a_carried_history_link_past_the_retained_bound_is_dropped_with_everything_older() {
+        // The sweep path keeps its carried links verbatim (`prev` is `None`),
+        // so without this bound one inflated link rides forward for ever and
+        // the section budget is an estimate rather than a bound. Dropped, never
+        // refused, or whoever inflated it blocks the scope's own re-seal.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed(b"n");
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(3);
+        let s = seeds(&seed, 3, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&fx, &commitment, &sig, &ledger);
+
+        let honest = |byte: u8| SignedSealed {
+            sealed: vec![byte; MAX_RETAINED_HISTORY_LINK_BYTES],
+            signature: [0u8; 64],
+            unknown: padding(32),
+        };
+        let inflated = SignedSealed {
+            sealed: vec![0x22; MAX_RETAINED_HISTORY_LINK_BYTES + 1],
+            signature: [0u8; 64],
+            unknown: PreservedFields::new(),
+        };
+        let carried = vec![honest(0x11), inflated, honest(0x33)];
+
+        let section = reseal_scope_root(&mut SeededEntropy::new(12), &id, &s, &cs, &carried)
+            .expect("the sweep still re-seals");
+        assert_eq!(
+            section.history_links.len(),
+            1,
+            "the inflated link and everything older than it must go"
+        );
+        assert!(
+            section.history_links[0].unknown.is_empty(),
+            "and the retained link carries no padded map either"
         );
     }
 

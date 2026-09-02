@@ -30,7 +30,9 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
-use crate::content::limits::{MAX_RESEALABLE_ROOT_REST_BYTES, MAX_RESOLVED_RECORD_BYTES};
+use crate::content::limits::{
+    MAX_RESEALABLE_ROOT_REST_BYTES, MAX_RESOLVED_RECORD_BYTES, scope_root_rest_bytes,
+};
 use crate::content::root_block_cid;
 use crate::gate::authenticate_section_structures;
 
@@ -338,22 +340,38 @@ fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
 }
 
 /// Encode a scope root, holding everything outside its grant section to
-/// [`MAX_RESEALABLE_ROOT_REST_BYTES`] (release-active, security rule 8).
+/// [`MAX_RESEALABLE_ROOT_REST_BYTES`] (release-active, security rule 8). The
+/// adoption gate holds a foreign client's root to the same measure
+/// ([`scope_root_rest_bytes`]).
 ///
-/// This binds only what this engine authors; a foreign client is held instead by
-/// the re-seal's own budget
-/// ([`MAX_RESEALABLE_SECTION_BYTES`](crate::content::limits::MAX_RESEALABLE_SECTION_BYTES)).
-fn encode_scope_root(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
-    let head = encode(envelope)?;
-    let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
-    let rest = head.block.len().saturating_sub(section);
+/// The reservation enters as the encode's own limit, so carried cuttable fields
+/// are **cut** against it rather than refused: a committed write grantee would
+/// otherwise wedge a scope by padding a root with bytes a cut sheds anyway
+/// (blueprint/core.md — an over-length carry is truncated, never refused). Only
+/// what the typed and uncuttable fields alone overflow is refused.
+fn encode_scope_root(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
+    let reserved = grant_section_bytes(&envelope).map_or(0, <[u8]>::len);
+    let limit = MAX_RESEALABLE_ROOT_REST_BYTES
+        .saturating_add(reserved)
+        .min(MAX_RESOLVED_RECORD_BYTES);
+    let (block, cut) =
+        encode_envelope_within(&mut envelope, limit).map_err(envelope_encode_error)?;
+
+    let section = grant_section_bytes(&envelope).map_or(0, <[u8]>::len);
+    let rest = scope_root_rest_bytes(block.len(), section);
     if rest > MAX_RESEALABLE_ROOT_REST_BYTES {
         return Err(AuthorError::ScopeRootNotResealable {
             size: rest,
             limit: MAX_RESEALABLE_ROOT_REST_BYTES,
         });
     }
-    Ok(head)
+    let cid = root_block_cid(&block);
+    Ok(AuthoredHead {
+        envelope,
+        block,
+        cid,
+        cut,
+    })
 }
 
 /// What a newly created node is, carrying exactly the body content its kind can
@@ -982,6 +1000,35 @@ mod tests {
             author_scope_root_envelope(authoring(&folder(), carried), &fixture.name, &owner())
                 .expect("a carried set is cut, never refused");
         assert!(head.block.len() <= MAX_RESOLVED_RECORD_BYTES);
+        assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));
+    }
+
+    #[test]
+    fn a_scope_root_padded_past_the_reservation_is_cut_rather_than_refused() {
+        // A committed write grantee sizes the carried set. Refusing what a cut
+        // sheds would let one wedge a scope: the owner could neither adopt the
+        // padded root nor author the shrunken replacement, so the scope would
+        // never rotate again (blueprint/core.md — an over-length carry is
+        // truncated, never refused).
+        let fixture = owner_root();
+        let carried: PreservedFields = carried_section(&fixture.grant_section)
+            .entries()
+            .iter()
+            .cloned()
+            .chain([(
+                "bloat".to_owned(),
+                Value::Bytes(vec![0xab; MAX_RESEALABLE_ROOT_REST_BYTES]),
+            )])
+            .collect();
+
+        let head =
+            author_scope_root_envelope(authoring(&folder(), carried), &fixture.name, &owner())
+                .expect("the padding is cut, not refused");
+        let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
+        assert!(
+            scope_root_rest_bytes(head.block.len(), section) <= MAX_RESEALABLE_ROOT_REST_BYTES,
+            "the authored root must sit inside its own re-seal reservation"
+        );
         assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));
     }
 

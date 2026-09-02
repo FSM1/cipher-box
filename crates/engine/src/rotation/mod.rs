@@ -46,6 +46,7 @@ pub mod rotate_write;
 pub mod sweep;
 pub mod trigger;
 
+pub(crate) use cascade::record_grant_floor;
 pub use cascade::{
     CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget, RekeyedScope,
     cascade_rotate_scope,

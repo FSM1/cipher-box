@@ -660,6 +660,11 @@ pub enum RotateOnCutError {
     /// already landed, but the revokee still authors at every current write name
     /// until this does.
     Write(WriteRotateError),
+    /// A cut that drives the write plane alone carries recipients to withhold on
+    /// the read plane. Only the read cascade records a withheld recipient in the
+    /// durable revocation floor, so driving this would withhold a blob the
+    /// engine then forgets it withheld. Nothing is cut on either plane.
+    WriteOnlyCutWithdrawsRead,
 }
 
 impl core::fmt::Display for RotateOnCutError {
@@ -668,6 +673,9 @@ impl core::fmt::Display for RotateOnCutError {
             RotateOnCutError::PublishCut(e) => write!(f, "cut-set publish failed: {e}"),
             RotateOnCutError::Read(e) => write!(f, "read-plane cascade failed: {e}"),
             RotateOnCutError::Write(e) => write!(f, "write-plane wave failed: {e}"),
+            RotateOnCutError::WriteOnlyCutWithdrawsRead => {
+                f.write_str("a write-only cut cannot withhold a read grant")
+            }
         }
     }
 }
@@ -680,6 +688,7 @@ impl RotateOnCutError {
         match self {
             RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.check(),
             RotateOnCutError::Write(e) => e.check(),
+            RotateOnCutError::WriteOnlyCutWithdrawsRead => "write-only-cut-withdraws-read",
         }
     }
 
@@ -689,6 +698,8 @@ impl RotateOnCutError {
         match self {
             RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.is_retryable(),
             RotateOnCutError::Write(e) => e.is_retryable(),
+            // A malformed cut: re-driving the same one reaches it again.
+            RotateOnCutError::WriteOnlyCutWithdrawsRead => false,
         }
     }
 }
@@ -713,6 +724,14 @@ pub async fn rotate_on_cut<R: CutRotator>(
     cut: &RevokedCommittedSet,
 ) -> Result<CutRotationReport, RotateOnCutError> {
     if cut.planes.write && !cut.planes.read {
+        // Only the read cascade records a withheld recipient in the durable
+        // revocation floor, so a write-only cut that withheld one would forget
+        // it. Release-active, because the two cuts that reach here build an
+        // empty list by construction and nothing else enforces that
+        // (AGENTS.md rule 8).
+        if !cut.revoked_recipients.is_empty() {
+            return Err(RotateOnCutError::WriteOnlyCutWithdrawsRead);
+        }
         rotator
             .publish_cut_set(scope_root, cut)
             .await
@@ -1525,6 +1544,29 @@ mod tests {
         );
         assert!(report.read.is_some());
         assert!(report.write.is_some());
+    }
+
+    #[test]
+    fn a_write_only_cut_that_withholds_a_read_grant_is_refused_before_anything_publishes() {
+        // Only the read cascade records a withheld recipient in the durable
+        // revocation floor. A write-only cut carrying one would withhold a blob
+        // the engine forgets it withheld, and the next re-key would hand it
+        // back. Both cuts that reach here build an empty list, so this pins the
+        // property rather than a coincidence.
+        let fx = Fixture::new();
+        let mut cut =
+            revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::DowngradeToRead)
+                .expect("downgrade");
+        cut.revoked_recipients.push([0x5e; SECRET_LEN]);
+        let rotator = FakeCutRotator::new();
+
+        let err = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect_err("refused");
+        assert_eq!(err.check(), "write-only-cut-withdraws-read");
+        assert!(!err.is_retryable());
+        assert!(
+            rotator.seen.borrow().is_empty(),
+            "nothing is cut on either plane"
+        );
     }
 
     #[test]
