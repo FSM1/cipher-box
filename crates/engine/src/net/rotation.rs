@@ -62,9 +62,9 @@ use crate::facade::NodeId;
 use crate::gate::floor::PointerPlane;
 use crate::gate::{GateError, RejectionReason, floor};
 use crate::grants::{
-    InteriorRecord, InteriorResealer, ScopeRootPromoter, UNATTESTED_IDENTITY_PK,
-    enforce_committed_ledger, mint_grant_row, recipient_self_location, row_is_owner_attested,
-    self_locate_signed,
+    GrantResumeResolver, InteriorRecord, InteriorResealer, PromotedScopeRoot, ScopeRootPromoter,
+    UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row, recipient_self_location,
+    row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
@@ -640,6 +640,27 @@ where
             Some(seed) => adopter.under_parent_node_seed(seed),
             None => adopter,
         }
+    }
+
+    /// The adopter a child of `source` is gated as a **descendant** scope root
+    /// under: the ascent authority is `nodeSeed(source read seed, node)`, which
+    /// the walk derives rather than accepts, so a `ChildRef` cannot name a root
+    /// the parent scope does not anchor.
+    fn descendant_adopter(
+        &self,
+        source: &SweptScopeSource,
+        node_id: [u8; 16],
+    ) -> RootAdopter<'_, H, F> {
+        let parent_node_seed = kdf::node_seed(&source.read_scope_seed, &node_id);
+        RootAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            self.keys.enc_secret,
+            self.keys.identity,
+            node_id,
+        )
+        .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()))
     }
 
     /// The prologue both read edges share: gate `scope`'s record under the
@@ -1587,16 +1608,7 @@ where
         record_bytes: &[u8],
         head: LocalHead,
     ) -> Result<SweptChild, SweepResolveFailure> {
-        let parent_node_seed = kdf::node_seed(&source.read_scope_seed, &child.node_id);
-        let adopter = RootAdopter::new(
-            self.gateway,
-            self.http,
-            self.floors,
-            self.keys.enc_secret,
-            self.keys.identity,
-            child.node_id,
-        )
-        .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()));
+        let adopter = self.descendant_adopter(source, child.node_id);
         adopter.hold_local_head(head);
         gated_child_root(&adopter, name, record_bytes, child.node_id)
             .await
@@ -1639,44 +1651,19 @@ where
         {
             return Err(SweepResolveFailure::Rejected);
         }
-        floor::check_sequence(
-            self.floors,
-            name.as_str().as_bytes(),
-            sequence,
-            floor::Strictness::AtOrAboveFloor,
-        )
-        .await
-        .map_err(|error| match error {
-            GateError::Seam(_) => SweepResolveFailure::Unavailable,
-            GateError::Rejected(_) => SweepResolveFailure::Rejected,
-        })?;
-        // A record above the scope root's epoch is not lagging, and this scope's
-        // ratchet only walks backward, so there is no seed here that opens it —
-        // an honest race with a fresher root, or an epoch label a committed
-        // writer chose freely (the epoch is only AAD). Either way it is this
-        // pass's read that fails, not the record's trust.
-        if envelope.epoch > source.read_epoch {
-            return Err(SweepResolveFailure::Unreadable);
-        }
-        let seed = seed_at_epoch(
-            envelope.v,
-            source.scope_id,
-            &source.read_scope_seed,
-            source.read_epoch,
-            &source.history_links,
-            envelope.epoch,
-        )
-        .ok_or(SweepResolveFailure::Unreadable)?;
-        let read_key = read_key_for(&seed, &envelope.id);
-        let read_body =
-            open_read_body(&envelope, &read_key).map_err(|_| SweepResolveFailure::Rejected)?;
-        // The floor law's child arm: the per-name sequence floor advances only
-        // after an AAD-confirmed unseal (`net/child.rs`), and nothing else on
-        // this path raises it — so without this a rolled-back record stays
-        // admissible for as long as the node goes unbrowsed.
-        floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
-            .await
-            .map_err(|_| SweepResolveFailure::Unavailable)?;
+        let read_body = self
+            .open_interior_record(
+                &InteriorReadScope {
+                    scope_id: source.scope_id,
+                    read_epoch: source.read_epoch,
+                    read_scope_seed: &source.read_scope_seed,
+                    history_links: &source.history_links,
+                },
+                name,
+                sequence,
+                &envelope,
+            )
+            .await?;
         Ok(SweptChild::Interior(SweptNode {
             current_read_epoch: envelope.epoch,
             sequence,
@@ -1685,6 +1672,65 @@ where
             carried_epoch_tag_unknown: envelope.epoch_tag_unknown,
         }))
     }
+
+    /// The interior read rule itself, over whichever scope's derivation the
+    /// caller proved. Stated once, because both the scope a node belongs to and
+    /// the scope a grant is moving it into authenticate the same record the
+    /// same way.
+    async fn open_interior_record(
+        &self,
+        scope: &InteriorReadScope<'_>,
+        name: &IpnsName,
+        sequence: u64,
+        envelope: &Envelope,
+    ) -> Result<ReadBody, SweepResolveFailure> {
+        floor::check_sequence(
+            self.floors,
+            name.as_str().as_bytes(),
+            sequence,
+            floor::Strictness::AtOrAboveFloor,
+        )
+        .await
+        .map_err(read_verdict)?;
+        // A record above the scope root's epoch is not lagging, and this scope's
+        // ratchet only walks backward, so there is no seed here that opens it —
+        // an honest race with a fresher root, or an epoch label a committed
+        // writer chose freely (the epoch is only AAD). Either way it is this
+        // pass's read that fails, not the record's trust.
+        if envelope.epoch > scope.read_epoch {
+            return Err(SweepResolveFailure::Unreadable);
+        }
+        let seed = seed_at_epoch(
+            envelope.v,
+            scope.scope_id,
+            scope.read_scope_seed,
+            scope.read_epoch,
+            scope.history_links,
+            envelope.epoch,
+        )
+        .ok_or(SweepResolveFailure::Unreadable)?;
+        let read_key = read_key_for(&seed, &envelope.id);
+        let read_body =
+            open_read_body(envelope, &read_key).map_err(|_| SweepResolveFailure::Rejected)?;
+        // The floor law's child arm: the per-name sequence floor advances only
+        // after an AAD-confirmed unseal (`net/child.rs`), and nothing else on
+        // this path raises it — so without this a rolled-back record stays
+        // admissible for as long as the node goes unbrowsed.
+        floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
+            .await
+            .map_err(|_| SweepResolveFailure::Unavailable)?;
+        Ok(read_body)
+    }
+}
+
+/// The derivation one interior record is read under: the scope it must claim,
+/// that scope's current read epoch, the seed its ratchet walks back from, and
+/// the links it walks.
+struct InteriorReadScope<'a> {
+    scope_id: [u8; 16],
+    read_epoch: u64,
+    read_scope_seed: &'a [u8; SECRET_LEN],
+    history_links: &'a [SignedSealed],
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> SweepResolver
@@ -2067,6 +2113,134 @@ where
             node,
         )
         .await
+    }
+}
+
+impl<T, H: Http, C: CredentialStore, F, Sch, E> GrantResumeResolver
+    for OwnerRotationNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport,
+    F: FloorStore,
+{
+    async fn promoted_root(
+        &self,
+        parent: &ChildScopeRef,
+        node: &NodeRef,
+    ) -> Result<Option<PromotedScopeRoot>, ResolveFailure> {
+        let source = self
+            .swept_scope(parent)
+            .map_err(|_| ResolveFailure::Rejected)?;
+        let name = scope_name(&node.ipns_name)?;
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let (sequence, block) =
+            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
+                .await
+                .map_err(|error| match error {
+                    GateError::Seam(_) => ResolveFailure::Unavailable,
+                    GateError::Rejected(_) => ResolveFailure::Rejected,
+                })?;
+        // Ahead of the "not promoted" answer, so a rolled-back record cannot
+        // withdraw a promotion this device has already seen and send the caller
+        // on to mint a second scope over it.
+        floor::check_sequence(
+            self.floors,
+            name.as_str().as_bytes(),
+            sequence,
+            floor::Strictness::AtOrAboveFloor,
+        )
+        .await
+        .map_err(|error| match error {
+            GateError::Seam(_) => ResolveFailure::Unavailable,
+            GateError::Rejected(_) => ResolveFailure::Rejected,
+        })?;
+        let envelope = decode_envelope(&block).map_err(|_| ResolveFailure::Rejected)?;
+        // Still an ordinary child of the parent scope, so no promotion of this
+        // folder's stands to resume. Past this point the record claims to be a
+        // scope root, and a gate that refuses it is a trust verdict rather than
+        // an answer of "not promoted" (rule 6).
+        if !has_grant_section(&envelope) {
+            return Ok(None);
+        }
+        let adopter = self.descendant_adopter(&source, node.node_id);
+        adopter.hold_local_head(LocalHead {
+            cid: root_block_cid(&block),
+            block,
+        });
+        let gated = gated_child_root(&adopter, &name, &record_bytes, node.node_id)
+            .await
+            .map_err(ResolveFailure::from)?;
+        if gated.envelope.v != ENVELOPE_V {
+            return Err(ResolveFailure::Rejected);
+        }
+        // A root held keyless has no readable write body, so the index it
+        // reparented cannot be read — availability, not a trust verdict.
+        let write_scope_seed = gated
+            .write_scope_seed
+            .as_deref()
+            .ok_or(ResolveFailure::Unavailable)?;
+        let (write_body, write_epoch) = write_plane_of(
+            self.floors,
+            &gated.envelope,
+            &gated.section,
+            write_scope_seed,
+            node.node_id,
+        )
+        .await?;
+        Ok(Some(PromotedScopeRoot {
+            record: ResealedScopeRoot {
+                scope_id: node.node_id,
+                ipns_name: node.ipns_name.clone(),
+                read_epoch: gated.envelope.epoch,
+                write_epoch,
+                section: gated.section,
+            },
+            override_seed: gated.read_scope_seed,
+            children: body_children(&gated.read_body),
+            boundaries: write_body.direct_child_scope_index,
+        }))
+    }
+
+    async fn moved_interior_node(
+        &self,
+        root: &ResealedScopeRoot,
+        node: &NodeRef,
+    ) -> Result<Option<ReadBody>, SweepResolveFailure> {
+        let name = scope_name(&node.ipns_name).map_err(SweepResolveFailure::from)?;
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
+            return Err(SweepResolveFailure::Unavailable);
+        };
+        let (sequence, block) =
+            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
+                .await
+                .map_err(read_verdict)?;
+        let envelope = decode_envelope(&block).map_err(|_| SweepResolveFailure::Rejected)?;
+        if envelope.v != ENVELOPE_V || envelope.id != node.node_id || has_grant_section(&envelope) {
+            return Err(SweepResolveFailure::Rejected);
+        }
+        // The move still owes this node: the caller re-seals it out of the scope
+        // it is leaving.
+        if envelope.scope != root.scope_id {
+            return Ok(None);
+        }
+        // The seed the move sealed under is the one this root's own owner blob
+        // yields, never a value the walk carries.
+        let override_seed = new_override_seed(self.keys.enc_secret, root)
+            .map_err(|_| SweepResolveFailure::Rejected)?;
+        self.open_interior_record(
+            &InteriorReadScope {
+                scope_id: root.scope_id,
+                read_epoch: root.read_epoch,
+                read_scope_seed: &override_seed,
+                history_links: &root.section.history_links,
+            },
+            &name,
+            sequence,
+            &envelope,
+        )
+        .await
+        .map(Some)
     }
 }
 

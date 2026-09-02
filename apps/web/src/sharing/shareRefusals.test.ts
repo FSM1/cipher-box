@@ -10,6 +10,10 @@ describe('how a share refusal reads to the member', () => {
     expect(refusalLabel('invite-target-is-the-vault-root')).toContain('folder inside it');
   });
 
+  it('says a refusal the engine raises over a scope it will not resume in words', () => {
+    expect(refusalLabel('resume-not-this-grant')).toContain('no second one');
+  });
+
   it('falls back to the engine’s own name for a refusal it has no phrasing for', () => {
     expect(refusalLabel('some-rule-a-later-build-added')).toBe('some-rule-a-later-build-added');
   });

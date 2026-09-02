@@ -31,8 +31,8 @@ use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher,
 use crate::seams::UnixMillis;
 
 use super::create::{
-    CreateGrantError, GranteeScopePlan, InteriorResealer, OwnerGrantKeys, ParentScopePlan,
-    converge_grant_subtree, mint_grantee_scope,
+    CreateGrantError, GrantResumeResolver, GranteeScopePlan, InteriorResealer, OwnerGrantKeys,
+    ParentScopePlan, converge_grant_subtree, mint_grantee_scope,
 };
 use super::invite::{EphemeralInvitee, InviteError, InviteFragment, mint_invite_grant};
 use super::invite_store::{InviteStore, InviteStoreError};
@@ -158,7 +158,7 @@ pub async fn mint_invite_link<E, R, P, S>(
 ) -> Result<PendingInviteLink, InviteMintError>
 where
     E: Entropy,
-    R: SweepResolver + CascadeResealResolver,
+    R: SweepResolver + CascadeResealResolver + GrantResumeResolver,
     P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter + InteriorResealer,
     S: InviteStore,
 {
@@ -190,6 +190,14 @@ where
     let converged = converge_grant_subtree(resolver, publisher, plan.grantee, plan.parent)
         .await
         .map_err(InviteMintError::Create)?;
+    // An invitee is drawn fresh per call, so its row can never be the one a
+    // promoted root committed. Refused here, ahead of the durable slot the
+    // record below would take.
+    if converged.resumes_a_promotion() {
+        return Err(InviteMintError::Create(
+            CreateGrantError::ResumeNotThisGrant,
+        ));
+    }
 
     // Whole-set replacement, so the load is what keeps the links already
     // recorded.
@@ -200,7 +208,7 @@ where
         .await
         .map_err(InviteMintError::Store)?;
 
-    mint_grantee_scope(entropy, resolver, publisher, &converged, &minted.row, owner)
+    mint_grantee_scope(entropy, resolver, publisher, converged, &minted.row, owner)
         .await
         .map_err(InviteMintError::Create)?;
 
@@ -209,8 +217,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::create::InteriorRecord;
+    use super::super::create::{InteriorRecord, PromotedScopeRoot};
     use super::*;
+    use crate::rotation::published_override_seed;
     use core::cell::RefCell;
     use std::rc::Rc;
 
@@ -288,6 +297,9 @@ mod tests {
         interior: Option<[u8; 16]>,
         /// The interior nodes the mint re-sealed into the invite's scope.
         resealed: Rc<RefCell<Vec<[u8; 16]>>>,
+        /// Answer `promoted_root` from what a previous mint published, as a
+        /// folder an earlier attempt already promoted answers.
+        promotion_stands: bool,
     }
 
     impl FakeNet {
@@ -297,6 +309,7 @@ mod tests {
                 refuse_publish: false,
                 interior: None,
                 resealed: Rc::new(RefCell::new(Vec::new())),
+                promotion_stands: false,
             }
         }
 
@@ -401,6 +414,47 @@ mod tests {
         ) -> Result<(), RotationPublishError> {
             self.resealed.borrow_mut().push(node.node_id);
             Ok(())
+        }
+    }
+
+    impl GrantResumeResolver for FakeNet {
+        async fn promoted_root(
+            &self,
+            _parent: &ChildScopeRef,
+            node: &NodeRef,
+        ) -> Result<Option<PromotedScopeRoot>, ResolveFailure> {
+            if !self.promotion_stands {
+                return Ok(None);
+            }
+            let record = self
+                .published
+                .borrow()
+                .iter()
+                .find(|published| published.scope_id == node.node_id)
+                .cloned()
+                .ok_or(ResolveFailure::Rejected)?;
+            let override_seed = published_override_seed(
+                &kdf::enc_subkey(&OWNER_SECRET),
+                V,
+                node.node_id,
+                1,
+                &record.section,
+            )
+            .ok_or(ResolveFailure::Rejected)?;
+            Ok(Some(PromotedScopeRoot {
+                record,
+                override_seed,
+                children: Vec::new(),
+                boundaries: Vec::new(),
+            }))
+        }
+
+        async fn moved_interior_node(
+            &self,
+            _root: &ResealedScopeRoot,
+            _node: &NodeRef,
+        ) -> Result<Option<ReadBody>, SweepResolveFailure> {
+            Ok(None)
         }
     }
 
@@ -707,6 +761,31 @@ mod tests {
             f.recovered().len(),
             1,
             "the record landed before the publish",
+        );
+    }
+
+    /// An invitee is drawn fresh per call, so a link's row can never be the one
+    /// a promoted root already committed. The mint refuses ahead of the durable
+    /// record, so a retry over an already-promoted folder takes no slot the
+    /// owner then has to revoke.
+    #[test]
+    fn a_link_over_an_already_promoted_folder_records_nothing() {
+        let mut f = Fixture::new();
+        f.mint(None).expect("the first mint lands");
+        f.net.promotion_stands = true;
+
+        let refused = f
+            .mint(None)
+            .expect_err("a promoted folder takes no second mint");
+
+        assert!(matches!(
+            refused,
+            InviteMintError::Create(CreateGrantError::ResumeNotThisGrant)
+        ));
+        assert_eq!(
+            f.recovered().len(),
+            1,
+            "the refusal ran ahead of the second record",
         );
     }
 
