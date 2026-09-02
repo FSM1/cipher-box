@@ -59,7 +59,6 @@ export class BinPage {
       .toBe(0);
   }
 
-  /** Every listed entry, whatever it is named. */
   get rows(): Locator {
     return this.page.getByTestId('bin-row');
   }
