@@ -1,75 +1,23 @@
-//! Name admission for the projection: syntax validation and the platform-junk
-//! filter, decided once for every mount technology
+//! Name admission for the projection: the engine's name law, plus the
+//! platform-junk filter that is the mount's own concern
 //! (blueprint/desktop.md "Names and attributes").
 //!
-//! One rule set on all platforms is the point: a name a Linux mount accepts
-//! must be creatable on Windows too, or a committed folder stops mounting
-//! everywhere. Uniqueness itself is not decided here — that is the engine's
-//! strict comparator.
-//!
-//! Admission is two-tier, because names also arrive *from* the engine and no
-//! layer below validates them — a peer on any client can commit whatever CBOR
-//! text string it likes. [`is_emittable`] is the narrow tier: names no kernel
-//! protocol can carry at all. [`validate_name`] adds the create-only policy on
-//! top. Everything the wider tier refuses stays listable and removable, or a
-//! name another client committed would be stranded in the vault forever.
+//! The law itself lives in the engine ([`cipherbox_engine::name`]) because the
+//! facade is the boundary every client crosses. What stays here is projection
+//! policy: junk a desktop host writes by itself is refused at create and hidden
+//! from listings, and stays reachable by an explicit lookup or unlink so junk
+//! another client committed is still removable through the mount.
 
 use cipherbox_engine::sync::case_fold;
+use cipherbox_engine::validate_name as validate_law;
+
+pub use cipherbox_engine::{NameError, is_emittable};
 
 /// The longest name the projection admits, in bytes. `statfs` advertises this
 /// same constant, so what is advertised is what is enforced. Aliased from the
 /// engine's command boundary rather than restated, so a name this mount admits
 /// at create is one the facade takes.
 pub const MAX_NAME_BYTES: usize = cipherbox_engine::MAX_NODE_NAME_BYTES;
-
-/// Why a name was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameError {
-    /// The name was empty.
-    Empty,
-    /// The name exceeded [`MAX_NAME_BYTES`].
-    TooLong,
-    /// The name was `.` or `..`.
-    DotEntry,
-    /// The name contained a path separator (`/` or `\`).
-    Separator,
-    /// The name contained NUL or another control character.
-    Control,
-    /// The name contained a bidi-override or zero-width character. These
-    /// render as a different name than they compare as, so a hostile grant
-    /// recipient could dress an executable up as a document.
-    DeceptiveCharacter,
-    /// The name contained a character Windows reserves (`< > : " | ? *`).
-    ReservedCharacter,
-    /// The name ended in a dot or a space, which Windows silently strips.
-    TrailingDotOrSpace,
-    /// The name is a Windows reserved device name (`CON`, `NUL`, `COM1`, …),
-    /// with or without an extension.
-    ReservedDevice,
-    /// The name is platform junk (`.DS_Store`, `Thumbs.db`, …).
-    PlatformJunk,
-}
-
-/// Characters Windows refuses in a path component. `/` and `\` are checked
-/// separately so a caller sees [`NameError::Separator`].
-const RESERVED_CHARACTERS: &[char] = &['<', '>', ':', '"', '|', '?', '*'];
-
-/// Windows device names, reserved with or without an extension.
-const RESERVED_DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
-
-/// Whether the character reorders or hides the rest of the name when a file
-/// manager draws it. `char::is_control` is category `Cc` only and misses all
-/// of these; the engine's comparator folds case but not format characters, so
-/// nothing downstream catches them either.
-fn is_deceptive(c: char) -> bool {
-    matches!(
-        c,
-        '\u{200B}'..='\u{200F}' // zero-width space/joiners, LRM/RLM
-            | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
-            | '\u{2066}'..='\u{2069}' // bidi isolates
-            | '\u{FEFF}' // zero-width no-break space
-    )
-}
 
 /// Exact platform-junk names, already folded. One list for every platform: v1
 /// kept a POSIX list and a Windows list that disagreed, so a `.DS_Store`
@@ -130,154 +78,21 @@ pub fn is_platform_junk(name: &str) -> bool {
         })
 }
 
-/// Whether the name can be handed to a kernel at all: within the advertised
-/// length, no separator, no NUL or other control character, not a synthesized
-/// dot entry. A name failing this is not a listing the user could act on — it
-/// is a malformed dirent, and every host protocol would mangle or misroute it.
-pub fn is_emittable(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_NAME_BYTES
-        && name != "."
-        && name != ".."
-        && !name.contains(['/', '\\'])
-        && !name.chars().any(char::is_control)
-}
-
-/// Admit a name for create, mkdir, or a rename destination.
+/// Admit a name for create, mkdir, or a rename destination: the engine's law,
+/// then the junk filter.
 pub fn validate_name(name: &str) -> Result<(), NameError> {
-    if name.is_empty() {
-        return Err(NameError::Empty);
-    }
-    if name.len() > MAX_NAME_BYTES {
-        return Err(NameError::TooLong);
-    }
-    if name == "." || name == ".." {
-        return Err(NameError::DotEntry);
-    }
-    if name.contains('/') || name.contains('\\') {
-        return Err(NameError::Separator);
-    }
-    if name.chars().any(char::is_control) {
-        return Err(NameError::Control);
-    }
-    if name.chars().any(is_deceptive) {
-        return Err(NameError::DeceptiveCharacter);
-    }
-    if name.contains(RESERVED_CHARACTERS) {
-        return Err(NameError::ReservedCharacter);
-    }
-    if name.ends_with('.') || name.ends_with(' ') {
-        return Err(NameError::TrailingDotOrSpace);
-    }
-    if is_reserved_device(name) {
-        return Err(NameError::ReservedDevice);
-    }
+    validate_law(name)?;
     if is_platform_junk(name) {
         return Err(NameError::PlatformJunk);
     }
     Ok(())
 }
 
-fn is_reserved_device(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
-    if RESERVED_DEVICES.contains(&stem.as_str()) {
-        return true;
-    }
-    let Some(digit) = stem
-        .strip_prefix("com")
-        .or_else(|| stem.strip_prefix("lpt"))
-    else {
-        return false;
-    };
-    matches!(digit, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use cipherbox_engine::sync::collation_key;
-
-    #[test]
-    fn ordinary_names_are_admitted() {
-        for name in [
-            "notes.txt",
-            "Photos",
-            "a",
-            "naïve — ünïcode.md",
-            "..leading",
-        ] {
-            assert_eq!(validate_name(name), Ok(()), "{name} should be admitted");
-        }
-    }
-
-    #[test]
-    fn the_advertised_length_limit_is_the_enforced_one() {
-        let longest = "a".repeat(MAX_NAME_BYTES);
-        assert_eq!(validate_name(&longest), Ok(()));
-        assert_eq!(
-            validate_name(&"a".repeat(MAX_NAME_BYTES + 1)),
-            Err(NameError::TooLong)
-        );
-    }
-
-    #[test]
-    fn length_is_counted_in_bytes_not_characters() {
-        // 128 two-byte characters: well under 255 chars, over 255 bytes.
-        let name = "é".repeat(128);
-        assert!(name.chars().count() < MAX_NAME_BYTES);
-        assert_eq!(validate_name(&name), Err(NameError::TooLong));
-    }
-
-    #[test]
-    fn structurally_impossible_names_are_refused() {
-        assert_eq!(validate_name(""), Err(NameError::Empty));
-        assert_eq!(validate_name("."), Err(NameError::DotEntry));
-        assert_eq!(validate_name(".."), Err(NameError::DotEntry));
-        assert_eq!(validate_name("a/b"), Err(NameError::Separator));
-        assert_eq!(validate_name("a\\b"), Err(NameError::Separator));
-        assert_eq!(validate_name("a\0b"), Err(NameError::Control));
-        assert_eq!(validate_name("a\nb"), Err(NameError::Control));
-    }
-
-    #[test]
-    fn names_that_render_differently_than_they_compare_are_refused() {
-        for name in [
-            "invoice\u{202E}cod.exe", // right-to-left override: renders "invoiceexe.doc"
-            "report\u{200B}.txt",     // zero-width space: a twin of "report.txt"
-            "a\u{2066}b",
-            "\u{FEFF}notes",
-        ] {
-            assert_eq!(
-                validate_name(name),
-                Err(NameError::DeceptiveCharacter),
-                "{name:?} must not enter the vault"
-            );
-        }
-        assert_eq!(validate_name("naïve — ünïcode.md"), Ok(()));
-    }
-
-    #[test]
-    fn windows_hostile_names_are_refused_on_every_platform() {
-        for name in ["a<b", "a>b", "a:b", "a\"b", "a|b", "a?b", "a*b"] {
-            assert_eq!(
-                validate_name(name),
-                Err(NameError::ReservedCharacter),
-                "{name} must be refused everywhere, not only on Windows"
-            );
-        }
-        assert_eq!(validate_name("report."), Err(NameError::TrailingDotOrSpace));
-        assert_eq!(validate_name("report "), Err(NameError::TrailingDotOrSpace));
-        for name in ["CON", "nul", "Aux", "prn", "COM1", "lpt9", "con.txt"] {
-            assert_eq!(
-                validate_name(name),
-                Err(NameError::ReservedDevice),
-                "{name} is a reserved device name"
-            );
-        }
-        for name in ["com", "com0", "lpt10", "console"] {
-            assert_eq!(validate_name(name), Ok(()), "{name} is not reserved");
-        }
-    }
+    use cipherbox_engine::testkit::name_law::{name_law_vectors, verdict};
 
     #[test]
     fn junk_is_refused_and_folds_case() {
@@ -322,28 +137,21 @@ mod tests {
         }
     }
 
+    /// Junk is refused at create and still listable, or a `.DS_Store` another
+    /// client committed could never be unlinked through the mount.
     #[test]
-    fn emittability_is_the_narrow_tier_of_admission() {
-        // Names no kernel protocol can carry — the read path drops these.
-        for name in [
-            "",
-            ".",
-            "..",
-            "a/b",
-            "a\\b",
-            "a\0b",
-            &"x".repeat(MAX_NAME_BYTES + 1),
-        ] {
-            assert!(!is_emittable(name), "{name:?} is not emittable");
-        }
-        assert!(
-            is_emittable(&"x".repeat(MAX_NAME_BYTES)),
-            "the advertised length is emittable"
-        );
-        // Refused at create, but still listable so they stay removable.
-        for name in [".DS_Store", "re:port", "COM1", "report.", "a\u{202E}b"] {
+    fn junk_stays_emittable() {
+        for name in [".DS_Store", "Thumbs.db", "._resource"] {
             assert!(is_emittable(name), "{name:?} must stay reachable");
             assert!(validate_name(name).is_err(), "{name:?} is not creatable");
+        }
+    }
+
+    #[test]
+    fn junk_matching_does_not_swallow_real_names() {
+        for name in ["DCIM", "Desktop", "recycle.bin", "trash", "directory"] {
+            assert!(!is_platform_junk(name), "{name} is a legitimate name");
+            assert_eq!(validate_name(name), Ok(()));
         }
     }
 
@@ -365,11 +173,42 @@ mod tests {
         }
     }
 
+    /// The projection answers the frozen vector set exactly as the engine does:
+    /// a mount that admitted a name the facade refuses would fail the create
+    /// after the kernel had already been told the name was good.
     #[test]
-    fn junk_matching_does_not_swallow_real_names() {
-        for name in ["DCIM", "Desktop", "recycle.bin", "trash", "directory"] {
-            assert!(!is_platform_junk(name), "{name} is a legitimate name");
-            assert_eq!(validate_name(name), Ok(()));
+    fn the_frozen_vectors_reach_the_projection_unchanged() {
+        let vectors = name_law_vectors();
+        assert!(vectors.names.len() > 30, "the vector set is loaded");
+        for row in &vectors.names {
+            assert!(
+                !is_platform_junk(&row.name),
+                "{:?} is junk, which is not a law verdict",
+                row.name
+            );
+            assert_eq!(
+                verdict(validate_name(&row.name)),
+                row.verdict,
+                "{:?} must be {}",
+                row.name,
+                row.verdict
+            );
+            assert_eq!(
+                is_emittable(&row.name),
+                row.emittable,
+                "{:?} emittability",
+                row.name
+            );
         }
+    }
+
+    #[test]
+    fn the_advertised_length_is_the_engines_bound() {
+        assert_eq!(MAX_NAME_BYTES, cipherbox_engine::MAX_NODE_NAME_BYTES);
+        assert!(is_emittable(&"x".repeat(MAX_NAME_BYTES)));
+        assert_eq!(
+            validate_name(&"x".repeat(MAX_NAME_BYTES + 1)),
+            Err(NameError::TooLong)
+        );
     }
 }

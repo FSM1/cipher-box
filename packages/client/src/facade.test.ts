@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { EngineFacade } from './facade.js';
@@ -30,6 +32,20 @@ import type {
 
 /** Stands in for the engine's opaque capability; the facade reads none of it. */
 const MINTED_FRAGMENT = 'a-minted-fragment';
+
+/**
+ * The names the engine's committed vector file refuses, read from the one file
+ * the Rust law and the desktop projection answer against.
+ */
+function unlawfulNames(): string[] {
+  const path = new URL('../../../crates/engine/name-law/vectors.json', import.meta.url);
+  const { names } = JSON.parse(readFileSync(path, 'utf8')) as {
+    names?: Array<{ name: string; verdict: string }>;
+  };
+  const refused = (names ?? []).filter((row) => row.verdict !== 'accept').map((row) => row.name);
+  if (refused.length === 0) throw new Error('the name-law vectors lost their refused rows');
+  return refused;
+}
 
 /** A transport whose engine answers every command with a minted link. */
 function mintingTransport(): FakeTransport {
@@ -324,6 +340,26 @@ describe('EngineFacade', () => {
       name: 'docs',
       nodeKind: 'folder',
     });
+  });
+
+  /**
+   * The engine owns the one name law. This layer must hold no copy of it: a
+   * name the law refuses still reaches the engine, so a refusal is the engine's
+   * verdict and never a second rule that could drift from it.
+   */
+  it('forwards a name the engine law refuses rather than judging it here', async () => {
+    for (const name of unlawfulNames()) {
+      const transport = new FakeTransport();
+      const facade = new EngineFacade(transport);
+
+      await facade.create(new Uint8Array(16), name, 'file');
+      await facade.rename(new Uint8Array(16), name);
+
+      expect(transport.commands).toEqual([
+        { kind: 'create', parent: new Uint8Array(16), name, nodeKind: 'file' },
+        { kind: 'rename', node: new Uint8Array(16), newName: name },
+      ]);
+    }
   });
 
   it('sends the placement, provider and retention choice as one command', async () => {

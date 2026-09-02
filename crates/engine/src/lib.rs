@@ -31,6 +31,7 @@ pub mod facade;
 pub mod gate;
 pub mod grants;
 pub mod mailbox;
+pub mod name;
 pub mod net;
 mod owner_keys;
 pub mod profile;
@@ -83,6 +84,7 @@ pub use grants::{
     recipient_blinded_tag, self_locate,
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
+pub use name::{NameError, is_emittable, validate_name};
 pub use net::{
     AdoptOutcome, Adopter, HeldKey, HeldRecord, HeldRecords, HeldValue, OrphanHeads,
     PreflightError, PublishError, PublishOutcome, PublishRequest, RePutResult, ReclaimPass,

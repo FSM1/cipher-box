@@ -20,6 +20,7 @@ mod content;
 mod entropy;
 mod executor;
 pub mod fakes;
+pub mod name_law;
 mod owner_root;
 mod world;
 
