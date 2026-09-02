@@ -186,21 +186,24 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
       const identity = identityOf(subject);
       const devicePublicKey = await identity.publicKeyHex();
       const scalar = crypto.getRandomValues(new Uint8Array(32));
-      let cut;
+      // The cut is held only once every step that can reject has settled: a
+      // caller that never learns the ephemeral key can call no `forget`.
+      let opened;
       try {
-        cut = await facade.deviceRendezvous({ kind: 'open', devicePublicKey, scalar });
+        const cut = await facade.deviceRendezvous({ kind: 'open', devicePublicKey, scalar });
         if (cut.kind !== 'opened') throw new Error('the engine did not open a rendezvous');
+        opened = {
+          devicePublicKey,
+          ephemeralPublicKey: cut.ephemeralPublicKey,
+          signature: await identity.sign(Uint8Array.from(cut.requestPayload)),
+          comparisonValue: cut.comparisonValue,
+        };
       } catch (failure) {
         erase(scalar);
         throw failure;
       }
-      cuts.set(cut.ephemeralPublicKey, { scalar, devicePublicKey });
-      return {
-        devicePublicKey,
-        ephemeralPublicKey: cut.ephemeralPublicKey,
-        signature: await identity.sign(Uint8Array.from(cut.requestPayload)),
-        comparisonValue: cut.comparisonValue,
-      };
+      cuts.set(opened.ephemeralPublicKey, { scalar, devicePublicKey });
+      return opened;
     },
 
     pending: () => facade.pendingApprovals(),
@@ -211,12 +214,13 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
       // A fresh factor per approval; the approver's own is never transferred
       // (ADR 0009 D5).
       const factorKey = decision === 'approve' ? crypto.getRandomValues(new Uint8Array(32)) : null;
-      // Named before the step, because the step transfers these bytes to the
-      // worker and leaves this realm holding a detached buffer.
-      const minted = factorKey === null ? null : await digest(factorKey);
       const sealScalar = crypto.getRandomValues(new Uint8Array(32));
+      let minted: string | null = null;
       let answered;
       try {
+        // Named before the step, because the step transfers these bytes to the
+        // worker and leaves this realm holding a detached buffer.
+        if (factorKey !== null) minted = await digest(factorKey);
         answered = await facade.deviceRendezvous(
           factorKey === null
             ? {
