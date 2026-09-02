@@ -21,6 +21,11 @@ pub use adoption::{
     Adopted, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage, PendingAdoption,
     ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred, record_cut_epoch_floor,
 };
+pub(crate) use adoption::{read_cut_epoch_floor, verify_commitment_in_force};
+// A fake floor store fails one key by its suffix; the constant keeps that in
+// step with the key the gate reads.
+#[cfg(test)]
+pub(crate) use adoption::CUT_EPOCH_SUFFIX;
 // `#[doc(hidden)]` at their definitions: `pub` only for the gate KAT generator
 // and suite, which are external crates. Stage 3 alone is a partial verdict.
 pub use adoption::{
