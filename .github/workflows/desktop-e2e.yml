@@ -175,23 +175,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # One pinned release on both legs, the version every sibling
+          # One pinned release on every leg, the version every sibling
           # workflow runs. Homebrew pins nothing.
           KUBO_VERSION=v0.42.0
           # The archive runs as a daemon on the runner, so the digest is pinned
           # here rather than taken from the same host that serves the archive.
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            KUBO_PLATFORM=darwin-arm64
-            KUBO_SHA512=5f863972f7edee0ac3f003d8b097366927e8d9f651fd5c74e1fda980f766dbf7af4b8a813b13400eb2bcf3a871a494a139c85f022e239b237581ad152259cd22
-          else
-            KUBO_PLATFORM=linux-amd64
-            KUBO_SHA512=054c38a0cf66f7d738e25085ad62cb3a42d03d4bac329b7dd25c1d71cf18e1ce87d55b1d1b705b04c65210dca9109973579e0eb1cd72f6341ecb3311d840d156
-          fi
-          KUBO_ARCHIVE="$RUNNER_TEMP/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.tar.gz"
+          KUBO_FORMAT=tar.gz
+          case "$RUNNER_OS" in
+            macOS)
+              KUBO_PLATFORM=darwin-arm64
+              KUBO_SHA512=5f863972f7edee0ac3f003d8b097366927e8d9f651fd5c74e1fda980f766dbf7af4b8a813b13400eb2bcf3a871a494a139c85f022e239b237581ad152259cd22
+              ;;
+            Windows)
+              KUBO_PLATFORM=windows-amd64
+              KUBO_FORMAT=zip
+              KUBO_SHA512=5501a7745898e71326e1b85d8d231d79a3409147484ce2ca28da94c9272319e6c691e19a1ed74c0f0a7beb601fb203e10a6c242aaab1a5961c260b1b0d14c452
+              ;;
+            *)
+              KUBO_PLATFORM=linux-amd64
+              KUBO_SHA512=054c38a0cf66f7d738e25085ad62cb3a42d03d4bac329b7dd25c1d71cf18e1ce87d55b1d1b705b04c65210dca9109973579e0eb1cd72f6341ecb3311d840d156
+              ;;
+          esac
+          KUBO_ARCHIVE="$RUNNER_TEMP/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.${KUBO_FORMAT}"
           curl -fsSL --retry 3 -o "$KUBO_ARCHIVE" \
-            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.tar.gz"
+            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${KUBO_PLATFORM}.${KUBO_FORMAT}"
           echo "${KUBO_SHA512}  ${KUBO_ARCHIVE}" | shasum -a 512 -c -
-          tar -xzf "$KUBO_ARCHIVE"
+          if [ "$KUBO_FORMAT" = zip ]; then
+            # Git bash ships GNU tar, which reads no zip. Windows ships bsdtar.
+            "$(cygpath "$SYSTEMROOT")/System32/tar.exe" -xf "$KUBO_ARCHIVE"
+          else
+            tar -xzf "$KUBO_ARCHIVE"
+          fi
           # On PATH rather than installed: the release ships no installer for
           # every platform, and this job needs no system-wide binary.
           echo "$PWD/kubo" >> "$GITHUB_PATH"
