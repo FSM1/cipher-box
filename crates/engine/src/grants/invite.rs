@@ -2210,6 +2210,7 @@ mod tests {
         let refused = convert_invite_claim(
             &keys.authority(),
             &committed_scope(&commitment, &sig, &ledger),
+            &POINTER_READ_KEY,
             &[elsewhere],
             &[],
             &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
@@ -2223,6 +2224,7 @@ mod tests {
             convert_invite_claim(
                 &keys.authority(),
                 &committed_scope(&commitment, &sig, &ledger),
+                &POINTER_READ_KEY,
                 &[l.link],
                 &[],
                 &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
@@ -2254,6 +2256,7 @@ mod tests {
         let converted = convert_invite_claim(
             &keys.authority(),
             &committed_scope_at(&moved_ref, &commitment, &sig, &ledger),
+            &POINTER_READ_KEY,
             &[before.link],
             &[],
             &claim_item_for(&link_signer(0x4e), contact_code(&id, &enc), moved),

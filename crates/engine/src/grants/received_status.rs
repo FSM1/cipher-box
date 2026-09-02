@@ -1002,6 +1002,7 @@ mod tests {
                 mint_grant_row(
                     &sharer,
                     &sharer_enc(),
+                    &OWNER_ROOT_POINTER_READ_KEY,
                     sharer.verifying_key().to_sec1(),
                     &my_enc().public(),
                     &SCOPE,
@@ -1638,6 +1639,7 @@ mod tests {
                 mint_grant_row(
                     &self.sharers[which],
                     &self.encs[which],
+                    &OWNER_ROOT_POINTER_READ_KEY,
                     self.sharers[which].verifying_key().to_sec1(),
                     &my_enc().public(),
                     &scope,
