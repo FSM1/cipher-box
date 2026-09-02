@@ -420,7 +420,8 @@ per-name sequence floor. Only what differs is stated here.
   its own dead-letter reason rather than a codec fault, because no retry shrinks
   it.
 - **A lapsed EOL is availability here, and the settings carve-out does not carry
-  over.** Nothing on this plane re-signs the record but the rewrite a refusal
+  over** ([ADR 0013](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0013-a-lapsed-bin-index-record-is-rewritten-not-refused.md)).
+  Nothing on this plane re-signs the record but the rewrite a refusal
   blocks: the API re-PUT carries the record's own validity, and the sub-EOL
   renewal passes over a record already past its EOL. A refusal would therefore
   hold the queue head for good on a vault that soft-deleted nothing for ninety
