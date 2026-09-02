@@ -413,7 +413,15 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let meta = self
             .resolve(&view, parent_node, name)
             .ok_or(VfsError::NotFound)?;
-        Ok(self.entry_attributes(&meta))
+        // A child ref mirrors no size, so only the child's own record projects
+        // one. A host that decides a read from these attributes never opens a
+        // file the reply reports as empty, so the length has to reach it with no
+        // open of its own.
+        let attrs = self.entry_attributes(&meta);
+        if attrs.kind == NodeKind::File && attrs.size.is_none() {
+            self.engine.note_focus_file(meta.id);
+        }
+        Ok(attrs)
     }
 
     /// Find `name` under `parent` as the host presents names — the one rule

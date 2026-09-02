@@ -4614,21 +4614,20 @@ where {
                     // seed this device has not recovered serves nothing, and its
                     // files stay queued for the pass that can.
                     let mut folder_verdict = RefreshVerdict::Reconciled;
-                    let mut queued_files: Vec<NodeId> = Vec::new();
+                    let mut attempted_files: Vec<NodeId> = Vec::new();
                     let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
-                            queued_files.extend(targets.files);
                             continue;
                         };
                         let Some(scope_floors) =
                             floor_view(&floors, &grafted, &root_id, &scope_root.0)
                         else {
-                            queued_files.extend(targets.files);
                             continue;
                         };
+                        attempted_files.extend(targets.files.iter().copied());
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
@@ -4658,7 +4657,13 @@ where {
                             folder_verdict = folder_verdict.worst(report.verdict);
                         }
                     }
-                    focus.borrow_mut().open_files = queued_files;
+                    // Take only what this pass attempted. A lookup queues a file
+                    // while the refreshes above are awaited, and a wholesale
+                    // replacement would drop what arrived after the snapshot.
+                    focus
+                        .borrow_mut()
+                        .open_files
+                        .retain(|node| !attempted_files.contains(node));
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
                     // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -8496,15 +8501,36 @@ where {
         if stale {
             self.focus_hinted.set(Some((node, now)));
             if is_file {
-                let mut focus = self.focus.borrow_mut();
-                focus.open_files.retain(|held| *held != node);
-                focus.open_files.push(node);
-                if focus.open_files.len() > MAX_FOCUS_FILES {
-                    focus.open_files.remove(0);
-                }
+                self.note_focus_file(node);
             }
         }
         stale
+    }
+
+    /// Put `node` on the on-access file queue, newest last and bounded by
+    /// [`MAX_FOCUS_FILES`]. The focus window and the refresh hint do not move.
+    ///
+    /// Damped by the same staleness threshold every other on-access refresh
+    /// runs against. A file that has published no version projects no size
+    /// however often a pass resolves it, so an undamped caller keyed on the
+    /// absent size would spend a resolve on that node every tick, forever.
+    pub fn note_focus_file(&self, node: NodeId) {
+        let now = self.seams.scheduler.now();
+        let resolved = self.focus_refreshed.borrow().get(&node).copied();
+        if resolved.is_some_and(|last| !on_access_refresh_due(now, last, &self.profile)) {
+            return;
+        }
+        let mut focus = self.focus.borrow_mut();
+        focus.open_files.retain(|held| *held != node);
+        focus.open_files.push(node);
+        if focus.open_files.len() > MAX_FOCUS_FILES {
+            focus.open_files.remove(0);
+        }
+    }
+
+    /// The files the tick's file leg will resolve next, oldest first.
+    pub fn queued_focus_files(&self) -> Vec<NodeId> {
+        self.focus.borrow().open_files.clone()
     }
 
     /// The folder the focus window currently holds open.

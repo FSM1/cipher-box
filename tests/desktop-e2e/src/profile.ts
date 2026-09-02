@@ -37,6 +37,20 @@ export interface Deadlines {
   mountMs: number;
   /** A manual refresh resolves. */
   refreshMs: number;
+  /**
+   * Gap between two reads of one file through a mount. Uncapped, unlike
+   * [`intervalMs`](Deadlines.intervalMs): a host caches a refused read, and a
+   * loop tighter than that cache re-reads the cache rather than the mount.
+   */
+  readIntervalMs: number;
+  /** A file this instance wrote itself reads back through its own mount. */
+  readMs: number;
+  /**
+   * A file one client published reaches another client's mount. Wide, because
+   * the name arrives with the parent's listing and the length needs the child's
+   * own record — a second publish to resolve.
+   */
+  convergeMs: number;
   /** The process exits after `quit`. */
   shutdownMs: number;
   /**
@@ -62,6 +76,9 @@ export function deadlines(profile: SyncTimingProfile = CI_PROFILE): Deadlines {
     controlFileMs: 30 * tick,
     mountMs: 60 * tick,
     refreshMs: 30 * tick,
+    readIntervalMs: tick,
+    readMs: 30 * tick,
+    convergeMs: 100 * tick,
     shutdownMs: 20 * tick,
     scenarioMs: 240 * tick,
   };

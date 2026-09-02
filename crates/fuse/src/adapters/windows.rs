@@ -45,7 +45,9 @@ use zeroize::Zeroizing;
 
 use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
 use crate::adapters::descriptor::OwnerOnlyDescriptor;
-use crate::adapters::{ADVISORY_CAPACITY_BYTES, DOT_ENTRIES, Listed, cursor_of};
+use crate::adapters::{
+    ADVISORY_CAPACITY_BYTES, DOT_ENTRIES, Listed, NOTIFY_QUEUE_DEPTH, cursor_of,
+};
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
 use crate::inode::ROOT_INO;
@@ -92,11 +94,6 @@ const SECTOR_BYTES: u16 = 4096;
 /// as the operation core's shadow maps: a path evicted here is a notification
 /// dropped, never a wrong one sent.
 const NOTIFIABLE_PATHS: usize = 4096;
-
-/// How many notifications may queue between two timer ticks. A queue that
-/// overflows drops its oldest: a mount cannot make the kernel wait, and the
-/// cache lifetimes are the backstop.
-const NOTIFY_QUEUE_DEPTH: usize = 4096;
 
 /// The widest name a `DirInfo` buffer has to hold, in UTF-16 units:
 /// [`MAX_NAME_BYTES`] of UTF-8 is at most that many UTF-16 units, plus the NUL
