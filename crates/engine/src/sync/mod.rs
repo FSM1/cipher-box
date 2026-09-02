@@ -47,9 +47,9 @@ pub use model::{Link, NodeMeta, Snapshot, case_fold, collation_key, suffix_name}
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};
 pub use overlay::apply_overlay;
 pub use pointer::{
-    ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, open_repoint,
-    resolve_vault_pointer, scope_pointer_name, scope_pointer_signer, seal_repoint, should_consult,
-    vault_pointer_name,
+    ConsultReason, PointerError, PointerFetch, PointerRecord, SessionRole, VaultPointerAdoption,
+    open_repoint, resolve_vault_pointer, scope_pointer_name, scope_pointer_signer, seal_repoint,
+    should_consult, vault_pointer_name,
 };
 pub use rebase::{
     AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, QueueScan, Repair,

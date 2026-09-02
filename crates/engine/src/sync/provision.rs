@@ -60,7 +60,9 @@ use crate::rotation::reseal::{
 use crate::rotation::rotate_write::{WritePublishError, derive_write_name};
 use crate::seams::{FloorStore, SeamError};
 use crate::session::SessionIdentity;
-use crate::sync::pointer::{PointerError, PointerFetch, SessionRole, open_repoint, seal_repoint};
+use crate::sync::pointer::{
+    PointerError, PointerFetch, PointerRecord, SessionRole, open_repoint, seal_repoint,
+};
 
 /// The read and write epoch a genesis root publishes at. Both planes start at
 /// the first epoch rather than zero: a rotation advances past its predecessor
@@ -467,8 +469,7 @@ where
     //     own read key opens. Nothing here is authorised by a server answer — a
     //     withheld or lying one reaches the indeterminate arm, which refuses. An
     //     outage and a vacant name are that one arm: neither decides a mint.
-    let served = pointer_fetch.fetch(&pointer_name).await.unwrap_or(None);
-    let Some(served) = served else {
+    let Ok(PointerRecord::Found(served)) = pointer_fetch.fetch(&pointer_name).await else {
         return Err(match publish_refusal {
             Some(error) => ProvisionError::Publish {
                 stage: "vault-pointer",
@@ -691,8 +692,11 @@ mod tests {
     /// The pointer plane the mint's success condition reads, over the same
     /// shared state the publisher writes.
     impl PointerFetch for Network {
-        async fn fetch(&self, _name: &IpnsName) -> crate::seams::SeamResult<Option<Vec<u8>>> {
-            Ok(self.pointer_block.borrow().clone())
+        async fn fetch(&self, _name: &IpnsName) -> crate::seams::SeamResult<PointerRecord> {
+            Ok(match self.pointer_block.borrow().clone() {
+                Some(block) => PointerRecord::Found(block),
+                None => PointerRecord::Absent,
+            })
         }
     }
 

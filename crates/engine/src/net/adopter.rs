@@ -120,6 +120,12 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
     /// The same adopter for a **grantee**: the seed comes from this device's own
     /// grant blob, and `owner_identity` stays the contact-anchored owner the
     /// gate's stage 2 verifies the commitment under.
+    ///
+    /// `floors` must arrive filed under the identity that granted
+    /// `root_scope_id`
+    /// ([`SharerScopedFloorStore::granted_by`](crate::seams::SharerScopedFloorStore::granted_by)):
+    /// a grantee's adopt raises the read-epoch floor, and a sharer authors the
+    /// `scopeId` it raises under.
     pub fn for_grantee(
         gateway: &'a Gateway,
         http: &'a H,
