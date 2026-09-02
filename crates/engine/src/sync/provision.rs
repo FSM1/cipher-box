@@ -526,10 +526,10 @@ where
     let root_name = root.name;
 
     // The grant-set commitment: no grantees yet, this name, and the owner's
-    // writer pseudonym. The commitment is owner-signed and carries no epoch,
-    // so it is never revised — a pseudonym that is not the one
-    // `OwnerScopeKeys` derives fails `SignerNotCommitted` on every later
-    // rotation, permanently. Deriving it here through the same trait the
+    // writer pseudonym. A cut re-signs the commitment at a stepped `cutEpoch`,
+    // but the pseudonym it names is never revised — a pseudonym that is not
+    // the one `OwnerScopeKeys` derives fails `SignerNotCommitted` on every
+    // later rotation, permanently. Deriving it here through the same trait the
     // re-seal path uses is what keeps the two sides one value.
     let pseudonym_signer = scope_keys.writer_pseudonym(&scope_id);
     let commitment = GrantSetCommitment {

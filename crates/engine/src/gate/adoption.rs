@@ -312,6 +312,20 @@ fn cut_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
     [scope_id.as_slice(), CUT_EPOCH_SUFFIX].concat()
 }
 
+/// `scope_id`'s cut-epoch floor: the newest cut this device adopted there, and
+/// zero where it recorded none. The bar
+/// [`refuse_stale_cut_epoch`](cipherbox_core::seal::refuse_stale_cut_epoch)
+/// holds a commitment to.
+pub async fn read_cut_epoch_floor<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+) -> Result<u64, SeamError> {
+    Ok(floors
+        .epoch_floor(&cut_epoch_floor_key(scope_id))
+        .await?
+        .unwrap_or(0))
+}
+
 /// Raise `scope_id`'s cut-epoch floor to the epoch a cut this device just
 /// published carries.
 ///
@@ -635,11 +649,9 @@ pub async fn adopt_deferred<F: FloorStore>(
     // sign passes the verify above for ever, and any committed write grantee can
     // republish a root that carries it. The cut epoch this device already
     // adopted here is what tells the replay apart from the set in force.
-    let cut_epoch_floor = floors
-        .epoch_floor(&cut_epoch_floor_key(&reader.scope_id))
+    let cut_epoch_floor = read_cut_epoch_floor(floors, &reader.scope_id)
         .await
-        .map_err(GateError::Seam)?
-        .unwrap_or(0);
+        .map_err(GateError::Seam)?;
     refuse_stale_cut_epoch(&section.commitment, cut_epoch_floor)
         .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
 
