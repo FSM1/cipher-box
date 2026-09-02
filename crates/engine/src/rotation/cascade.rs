@@ -1586,14 +1586,17 @@ mod tests {
 
     #[test]
     fn no_two_epoch_namespace_key_shapes_collide() {
-        // Four producers share the one epoch namespace: the read-epoch floor is
-        // the bare scope id, `gate::floor` adds a `/write-epoch` suffix, and
-        // these two add theirs. Every pair must differ for every scope.
+        // Five producers share the one epoch namespace: the read-epoch floor is
+        // the bare scope id, `gate::floor` adds a `/write-epoch` and a
+        // `/vault-pointer-index` suffix, and these two add theirs. Every pair
+        // must differ for every scope.
         let scope = sid(0x0a);
         let other = sid(0x0b);
         let shapes = [
             scope.to_vec(),
             [scope.as_slice(), b"/write-epoch"].concat(),
+            [scope.as_slice(), b"/vault-pointer-index"].concat(),
+            [other.as_slice(), b"/vault-pointer-index"].concat(),
             revocation_marker_key(&scope),
             revocation_floor_key(&scope, &[0x07; SECRET_LEN]),
             revocation_floor_key(&scope, &[0x08; SECRET_LEN]),
