@@ -12,6 +12,7 @@ import type {
   AuthMethodDescriptor,
   AuthMethodKind,
   BinDescriptor,
+  BinOriginDescriptor,
   BlockedOpDescriptor,
   ByoKind,
   CommandDescriptor,
@@ -34,6 +35,7 @@ import type {
 import type {
   EngineWasm,
   WasmAuthMethod,
+  WasmBinRow,
   WasmBinView,
   WasmBlockedOp,
   WasmCommand,
@@ -622,6 +624,21 @@ function authMethodKindFrom(wasm: EngineWasm, kind: number): AuthMethodKind {
   }
 }
 
+function binOriginFrom(wasm: EngineWasm, row: WasmBinRow): BinOriginDescriptor {
+  switch (row.originFolderKind) {
+    case wasm.BinOriginKind.Root:
+      return { kind: 'root' };
+    case wasm.BinOriginKind.Folder:
+      return { kind: 'folder', name: row.originFolderName };
+    case wasm.BinOriginKind.Gone:
+      return { kind: 'gone' };
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, and
+      // guessing would name a folder the engine did not.
+      throw new Error(`unknown WASM bin origin kind value: ${row.originFolderKind}`);
+  }
+}
+
 /** Reads a wasm-bindgen `BinView`'s key-free getters into a descriptor. */
 export function readBin(wasm: EngineWasm, view: WasmBinView): BinDescriptor {
   return {
@@ -630,6 +647,7 @@ export function readBin(wasm: EngineWasm, view: WasmBinView): BinDescriptor {
       kind: nodeKindFrom(wasm, row.kind),
       originParent: row.originParent,
       originName: row.originName,
+      originFolder: binOriginFrom(wasm, row),
       deletedAt: row.deletedAt,
       scope: row.scope,
     })),

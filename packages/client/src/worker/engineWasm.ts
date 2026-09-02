@@ -167,6 +167,8 @@ export interface WasmBinRow {
   readonly kind: number;
   readonly originParent: Uint8Array;
   readonly originName: string;
+  readonly originFolderKind: number;
+  readonly originFolderName: string;
   readonly deletedAt: bigint;
   readonly scope: Uint8Array;
 }
@@ -322,6 +324,11 @@ export interface EngineWasm {
     readonly Resolved: number;
     readonly Stale: number;
     readonly Defaults: number;
+  };
+  BinOriginKind: {
+    readonly Root: number;
+    readonly Folder: number;
+    readonly Gone: number;
   };
   ReclaimStallReason: {
     readonly NodeUnreadable: number;

@@ -68,7 +68,8 @@ export function describeRows(rows: readonly ListingRow[]): string {
     .join(', ');
 }
 
-function plural(count: number, noun: string): string | null {
+/** A count and its noun, or nothing at all where the count is zero. */
+export function plural(count: number, noun: string): string | null {
   if (count === 0) return null;
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }

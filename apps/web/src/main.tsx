@@ -30,6 +30,7 @@ import { createEngineClient } from './engine/createEngineClient';
 import { installIntrospection } from './engine/introspection';
 import { wagmiConfig } from './lib/wagmi';
 import { EngineProvider } from './providers/EngineProvider';
+import { VaultStorageProvider } from './providers/VaultStorageProvider';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -59,9 +60,11 @@ createRoot(rootElement).render(
               exchange={identityExchange}
               googleClientId={googleClientId(import.meta.env)}
             >
-              <BrowserRouter>
-                <App />
-              </BrowserRouter>
+              <VaultStorageProvider>
+                <BrowserRouter>
+                  <App />
+                </BrowserRouter>
+              </VaultStorageProvider>
             </IdentityProvider>
           </CoreKitProvider>
         </EngineProvider>

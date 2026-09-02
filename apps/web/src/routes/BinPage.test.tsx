@@ -95,6 +95,40 @@ describe('the bin route', () => {
     expect(screen.queryByTestId('bin-unestablished')).toBeNull();
   });
 
+  it('tells two entries of one name apart by the folder each came from', async () => {
+    await renderBin({
+      bin: () =>
+        Promise.resolve(
+          bin([
+            entry({ originFolder: { kind: 'folder', name: 'work' } }),
+            entry({
+              node: new Uint8Array(16).fill(8),
+              originFolder: { kind: 'folder', name: 'holiday' },
+            }),
+          ])
+        ),
+    });
+
+    expect(screen.getAllByTestId('bin-name').map((node) => node.textContent)).toEqual([
+      'notes.txt',
+      'notes.txt',
+    ]);
+    expect(screen.getAllByTestId('bin-origin').map((node) => node.textContent)).toEqual([
+      'from holiday',
+      'from work',
+    ]);
+  });
+
+  it('lists an entry whose origin folder is gone, in words and with the route up', async () => {
+    await renderBin({
+      bin: () => Promise.resolve(bin([entry({ originFolder: { kind: 'gone' } })])),
+    });
+
+    expect(screen.getByTestId('bin-origin').textContent).toBe('from a folder that is gone');
+    expect(screen.getByTestId('bin-page')).toBeTruthy();
+    expect(screen.getByTestId('bin-purge')).toBeTruthy();
+  });
+
   it('takes the retention off the vault settings and never invents one', async () => {
     await renderBin({
       bin: () => Promise.resolve(bin()),

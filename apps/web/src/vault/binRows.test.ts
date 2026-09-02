@@ -72,6 +72,36 @@ describe('the bin rows', () => {
     expect(rows.map((row) => row.name)).toEqual(['c', 'a', 'b']);
   });
 
+  it('names the origin folder, so one name deleted from two folders reads apart', () => {
+    const rows = binRows(
+      [
+        entry({ originFolder: { kind: 'folder', name: 'work' } }),
+        entry({ originFolder: { kind: 'folder', name: 'holiday' } }),
+      ],
+      30
+    );
+
+    expect(rows.map((row) => row.origin)).toEqual(['holiday', 'work']);
+  });
+
+  it('names the root and a gone folder in words, never as a blank', () => {
+    const originOf = (originFolder: Parameters<typeof entry>[0]) =>
+      binRows([entry(originFolder)], 30)[0].origin;
+
+    expect(originOf({ originFolder: { kind: 'root' } })).toBe('root');
+    expect(originOf({ originFolder: { kind: 'gone' } })).toBe('a folder that is gone');
+    // A name that neutralises away entirely would otherwise render as nothing.
+    expect(originOf({ originFolder: { kind: 'folder', name: '\u202E' } })).toBe(
+      'a folder with no readable name'
+    );
+  });
+
+  it('neutralises the origin folder name, which another vault may have authored', () => {
+    const [row] = binRows([entry({ originFolder: { kind: 'folder', name: 'we\u202Elrok' } })], 30);
+
+    expect(row.origin).toBe('welrok');
+  });
+
   it('ties by the name it shows, so a stripped control cannot move a row', () => {
     // A leading tab sorts ahead of every letter but renders as nothing.
     const rows = binRows(

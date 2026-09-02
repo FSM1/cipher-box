@@ -11,6 +11,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { EngineProvider } from '../../providers/EngineProvider';
+import { VaultStorageProvider } from '../../providers/VaultStorageProvider';
+import { FAKE_VAULT_STORAGE } from '../../test/authFakes';
 import { trackSaves } from '../../test/saveSpy';
 import { FileBrowser } from './FileBrowser';
 
@@ -87,9 +89,12 @@ function fakeEngine(
     pushChunk: vi.fn((_handle: bigint, _chunk: ArrayBuffer) => Promise.resolve()),
     commitWrite: vi.fn(() => Promise.resolve(1n)),
     abortWrite: vi.fn(() => Promise.resolve()),
+    vaultStorage: vi.fn(() => Promise.resolve(FAKE_VAULT_STORAGE)),
   };
   const client = {
     facade,
+    subscribeSession: () => () => undefined,
+    signedInAccount: () => null,
     reportFocus: () => undefined,
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
@@ -109,11 +114,13 @@ type Engine = ReturnType<typeof fakeEngine>;
 function renderBrowser(engine: Engine, path = '/files') {
   render(
     <EngineProvider createClient={() => engine.client}>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/files/:nodeId?" element={<FileBrowser />} />
-        </Routes>
-      </MemoryRouter>
+      <VaultStorageProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/files/:nodeId?" element={<FileBrowser />} />
+          </Routes>
+        </MemoryRouter>
+      </VaultStorageProvider>
     </EngineProvider>
   );
 }

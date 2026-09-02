@@ -30,6 +30,7 @@ import {
 } from '@cipherbox/login';
 import { wagmiConfig } from '../lib/wagmi';
 import { EngineProvider } from '../providers/EngineProvider';
+import { VaultStorageProvider } from '../providers/VaultStorageProvider';
 
 /** A 32-byte scalar in the hex shape Core Kit exports. */
 export const SECRET_HEX = '0f'.repeat(32);
@@ -92,6 +93,7 @@ export function binEntry(overrides: Partial<BinRowDescriptor> = {}): BinRowDescr
     kind: 'file',
     originParent: new Uint8Array(16).fill(2),
     originName: 'notes.txt',
+    originFolder: { kind: 'folder', name: 'docs' },
     deletedAt: 1_767_225_600_000n,
     scope: new Uint8Array(16).fill(3),
     ...overrides,
@@ -353,7 +355,7 @@ export function authWrapper(
       <EngineProvider createClient={() => client}>
         <CoreKitProvider createSession={() => session}>
           <IdentityProvider exchange={exchange} googleClientId="google-client-id">
-            {children}
+            <VaultStorageProvider>{children}</VaultStorageProvider>
           </IdentityProvider>
         </CoreKitProvider>
       </EngineProvider>

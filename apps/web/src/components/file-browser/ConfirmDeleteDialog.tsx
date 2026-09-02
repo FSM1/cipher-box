@@ -1,5 +1,6 @@
+import { useVaultStorage } from '../../providers/VaultStorageProvider';
 import type { ListingRow } from '../../vault/listing';
-import { describeRows } from '../../vault/selection';
+import { describeRows, plural } from '../../vault/selection';
 import { ConfirmDangerDialog } from '../ui/ConfirmDangerDialog';
 
 interface ConfirmDeleteDialogProps {
@@ -19,17 +20,20 @@ export function ConfirmDeleteDialog({
   busy,
   error,
 }: ConfirmDeleteDialogProps) {
+  const { storage } = useVaultStorage();
   const what = describeRows(rows);
   const inside = rows.some((row) => row.kind === 'folder')
     ? rows.length === 1
       ? ' and everything inside it'
       : ' and everything inside'
     : '';
+  const asked = rows.length === 1 ? `delete "${what}"${inside}?` : `delete ${what}${inside}?`;
+  const outcome = deleteOutcome(storage?.settings.binRetentionDays ?? null);
 
   return (
     <ConfirmDangerDialog
       title={`delete ${what}`}
-      message={rows.length === 1 ? `delete "${what}"${inside}?` : `delete ${what}${inside}?`}
+      message={outcome === null ? asked : `${asked} ${outcome}`}
       verb="delete"
       busyVerb="deleting..."
       testId="delete"
@@ -39,4 +43,15 @@ export function ConfirmDeleteDialog({
       error={error}
     />
   );
+}
+
+/**
+ * What the vault does with the bytes, in the member's own retention (ADR 0010:
+ * `0` makes every delete a hard delete). An unread retention states nothing:
+ * the dialog must not wait on the read, and must not promise a bin either.
+ */
+function deleteOutcome(retentionDays: number | null): string | null {
+  if (retentionDays === null) return null;
+  if (retentionDays === 0) return 'this vault deletes outright, so this cannot be undone.';
+  return `this vault keeps it in the bin for ${plural(retentionDays, 'day')}.`;
 }

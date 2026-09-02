@@ -587,6 +587,9 @@ pub struct BinRow {
     pub origin_parent: NodeId,
     /// The name the node carried in that folder.
     pub origin_name: String,
+    /// Where [`origin_parent`](Self::origin_parent) stands in the rendered
+    /// vault, so a host can name the place a restore puts the node back.
+    pub origin_folder: BinOrigin,
     /// The injected deletion time, in milliseconds. A host renders expiry from
     /// this and the owner's `bin_retention_days`.
     pub deleted_at: u64,
@@ -601,9 +604,35 @@ impl fmt::Debug for BinRow {
             .field("kind", &self.kind)
             .field("origin_parent", &self.origin_parent)
             .field("origin_name", &RedactedText::of(&self.origin_name))
+            .field("origin_folder", &self.origin_folder)
             .field("deleted_at", &self.deleted_at)
             .field("scope", &self.scope)
             .finish()
+    }
+}
+
+/// Where a bin row's origin folder stands in the rendered vault.
+#[derive(Clone, PartialEq, Eq)]
+pub enum BinOrigin {
+    /// The vault root, which carries no name of its own.
+    Root,
+    /// A folder the vault still holds, under the name it carries there.
+    Folder(String),
+    /// No folder of that id stands in the vault, so a default restore refuses
+    /// with [`EngineError::RestoreTargetGone`].
+    Gone,
+}
+
+impl fmt::Debug for BinOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Root => f.write_str("Root"),
+            Self::Folder(name) => f
+                .debug_tuple("Folder")
+                .field(&RedactedText::of(name))
+                .finish(),
+            Self::Gone => f.write_str("Gone"),
+        }
     }
 }
 
@@ -2130,6 +2159,19 @@ fn refuse_outside_vault(rendered: &Snapshot, node: NodeId) -> Result<(), EngineE
         });
     }
     Ok(())
+}
+
+/// Where a bin row's origin folder stands in `rendered`.
+fn origin_folder(rendered: &Snapshot, parent: NodeId) -> BinOrigin {
+    if parent == rendered.root {
+        return BinOrigin::Root;
+    }
+    match rendered.node(parent) {
+        // The rendered name, not the stored one: a bin row must name the origin
+        // folder the way a host navigating there would read it.
+        Some(_) => BinOrigin::Folder(rendered_name(rendered, parent)),
+        None => BinOrigin::Gone,
+    }
 }
 
 /// The owner rotation arm over one engine's seam family.
@@ -7580,6 +7622,9 @@ where {
                 });
             }
         };
+        // The same rendered view a default restore resolves its destination
+        // against, so the two never disagree on what the vault still holds.
+        let rendered = self.render().await?;
         Ok(BinView {
             entries: index
                 .entries
@@ -7589,6 +7634,7 @@ where {
                     kind: map_kind(entry.kind),
                     origin_parent: NodeId(entry.origin_parent),
                     origin_name: entry.origin_name().to_owned(),
+                    origin_folder: origin_folder(&rendered, NodeId(entry.origin_parent)),
                     deleted_at: entry.deleted_at,
                     scope: NodeId(entry.scope_id),
                 })
@@ -10000,6 +10046,35 @@ mod tests {
             trail.first().copied(),
             Some("reports (1)"),
             "the trail names the folder the listing named"
+        );
+    }
+
+    /// A bin row names the origin folder the way the listing names it. Two
+    /// origin folders that share a stored name would otherwise report one name
+    /// for both rows, which is the telling-apart the bin row exists to give.
+    #[test]
+    fn a_bin_rows_origin_folder_reads_under_its_rendered_name() {
+        let (engine, _events) = started();
+        let root = engine.root();
+        let planted = NodeId([0xb1; 16]);
+        let shadowed = NodeId([0xb2; 16]);
+        engine.plant_committed_child(root, planted, "reports", NodeKind::Folder);
+        engine.plant_committed_child(root, shadowed, "reports", NodeKind::Folder);
+
+        let rendered = block_on(engine.render()).expect("render");
+        assert_eq!(origin_folder(&rendered, root), BinOrigin::Root);
+        assert_eq!(
+            origin_folder(&rendered, planted),
+            BinOrigin::Folder("reports".to_owned())
+        );
+        assert_eq!(
+            origin_folder(&rendered, shadowed),
+            BinOrigin::Folder("reports (1)".to_owned()),
+            "the row names the folder the listing named"
+        );
+        assert_eq!(
+            origin_folder(&rendered, NodeId([0xbf; 16])),
+            BinOrigin::Gone
         );
     }
 

@@ -6,7 +6,7 @@ import { ForgetDeviceDialog } from '../components/settings/ForgetDeviceDialog';
 import { QuotaChrome } from '../components/settings/QuotaChrome';
 import { VaultSettingsForm } from '../components/settings/VaultSettingsForm';
 import { useEngineAccount } from '../engine/useEngineSession';
-import { useVaultStorage } from '../hooks/useVaultStorage';
+import { useVaultStorage } from '../providers/VaultStorageProvider';
 import { useAuthState } from '../stores/auth.store';
 
 /** Which dialog the route has raised, if any. */

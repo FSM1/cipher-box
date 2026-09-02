@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { EngineProvider } from '../../providers/EngineProvider';
+import { VaultStorageProvider } from '../../providers/VaultStorageProvider';
 import { ROOT_ID, fakeEngine, view } from '../../engine/testFakes';
 import { FileBrowser } from './FileBrowser';
 
@@ -10,9 +11,11 @@ function draw(client: ReturnType<typeof fakeEngine>['client']) {
   return render(
     <MemoryRouter initialEntries={['/files']}>
       <EngineProvider createClient={() => client}>
-        <Routes>
-          <Route path="/files/:nodeId?" element={<FileBrowser />} />
-        </Routes>
+        <VaultStorageProvider>
+          <Routes>
+            <Route path="/files/:nodeId?" element={<FileBrowser />} />
+          </Routes>
+        </VaultStorageProvider>
       </EngineProvider>
     </MemoryRouter>
   );

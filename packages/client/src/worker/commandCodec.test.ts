@@ -1098,6 +1098,8 @@ describe('readBin', () => {
         kind: fakeWasmEnums.NodeKind.Folder,
         originParent: new Uint8Array(16).fill(1),
         originName: 'holiday',
+        originFolderKind: fakeWasmEnums.BinOriginKind.Folder,
+        originFolderName: 'trips',
         deletedAt: 1_800_000_000_000n,
         scope: new Uint8Array(16).fill(2),
       },
@@ -1113,6 +1115,7 @@ describe('readBin', () => {
           kind: 'folder',
           originParent: new Uint8Array(16).fill(1),
           originName: 'holiday',
+          originFolder: { kind: 'folder', name: 'trips' },
           deletedAt: 1_800_000_000_000n,
           scope: new Uint8Array(16).fill(2),
         },
@@ -1141,6 +1144,26 @@ describe('readBin', () => {
     expect(() => readBin(fakeWasm, { ...view(), origin: 42 })).toThrow(
       'unknown WASM settings origin value: 42'
     );
+  });
+
+  it('reads the root and a gone origin folder apart, and neither as a name', () => {
+    const base = view();
+    const rowFor = (originFolderKind: number, originFolderName: string) =>
+      readBin(fakeWasm, {
+        ...base,
+        entries: [{ ...base.entries[0]!, originFolderKind, originFolderName }],
+      }).entries[0]!.originFolder;
+
+    expect(rowFor(fakeWasmEnums.BinOriginKind.Root, '')).toEqual({ kind: 'root' });
+    expect(rowFor(fakeWasmEnums.BinOriginKind.Gone, '')).toEqual({ kind: 'gone' });
+  });
+
+  it('fails closed on an origin folder kind it cannot map', () => {
+    // A guessed kind would name a folder the engine did not.
+    const base = view();
+    expect(() =>
+      readBin(fakeWasm, { ...base, entries: [{ ...base.entries[0]!, originFolderKind: 42 }] })
+    ).toThrow('unknown WASM bin origin kind value: 42');
   });
 });
 

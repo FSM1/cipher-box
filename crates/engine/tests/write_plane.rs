@@ -33,7 +33,7 @@ use cipherbox_engine::content::{
     ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
     assemble, decode_root,
 };
-use cipherbox_engine::facade::PendingClass;
+use cipherbox_engine::facade::{BinOrigin, PendingClass};
 use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -4296,6 +4296,11 @@ fn the_bin_read_names_every_soft_deleted_node_with_its_origin_and_deletion_time(
     assert_eq!(row.origin_parent, ROOT, "a restore defaults to this folder");
     assert_eq!(row.origin_name, "notes.txt");
     assert_eq!(
+        row.origin_folder,
+        BinOrigin::Root,
+        "the vault root carries no name, so it is its own state and not an empty one"
+    );
+    assert_eq!(
         row.deleted_at,
         binned_deleted_at(&world, &alice, &blocks, doomed),
         "the row carries the injected deletion time expiry is measured from"
@@ -4303,6 +4308,122 @@ fn the_bin_read_names_every_soft_deleted_node_with_its_origin_and_deletion_time(
     assert!(
         !format!("{row:?}").contains("notes.txt"),
         "a row's Debug must not put a user's file name in a log"
+    );
+}
+
+/// Two nodes of one name, deleted from two folders, are told apart by the row
+/// itself: the origin id a purge routes on is not a thing a member can read, so
+/// the row carries the origin folder's own name.
+#[test]
+fn the_bin_read_names_the_origin_folder_of_two_entries_that_share_a_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    for folder in ["left", "right"] {
+        create(&mut engine, folder);
+    }
+    tick(&world, &engine, &mut tasks);
+    for folder in ["left", "right"] {
+        let parent = child_id(&engine, ROOT, folder);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent,
+                name: "notes.txt".into(),
+            },
+            &(0..200u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    for folder in ["left", "right"] {
+        let doomed = child_id(&engine, child_id(&engine, ROOT, folder), "notes.txt");
+        block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+        tick(&world, &engine, &mut tasks);
+    }
+
+    let view = block_on(engine.bin()).expect("the bin reads");
+    let mut origins: Vec<String> = view
+        .entries
+        .iter()
+        .inspect(|row| assert_eq!(row.origin_name, "notes.txt"))
+        .map(|row| match &row.origin_folder {
+            BinOrigin::Folder(name) => name.clone(),
+            other => panic!("a folder the vault holds must read as itself, not {other:?}"),
+        })
+        .collect();
+    origins.sort();
+    assert_eq!(
+        origins,
+        vec!["left".to_owned(), "right".to_owned()],
+        "one name in two folders reads as two rows a member can tell apart"
+    );
+    assert!(
+        !format!("{:?}", view.entries).contains("left"),
+        "a row's Debug must not put a folder name in a log"
+    );
+}
+
+/// An entry whose origin folder is gone still lists, under the state a default
+/// restore refuses on rather than a folder name the vault no longer holds.
+#[test]
+fn the_bin_read_lists_an_entry_whose_origin_folder_is_gone() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+
+    create(&mut engine, "box");
+    tick(&world, &engine, &mut tasks);
+    let folder = child_id(&engine, ROOT, "box");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: folder,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, folder, "notes.txt");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    block_on(engine.command(Command::Delete { node: folder })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.bin()).expect("the bin reads");
+    let orphan = view
+        .entries
+        .iter()
+        .find(|row| row.node == doomed)
+        .expect("the entry whose origin folder left still lists");
+    assert_eq!(orphan.origin_folder, BinOrigin::Gone);
+    assert!(
+        matches!(
+            block_on(engine.command(Command::Restore {
+                node: doomed,
+                into: None,
+            })),
+            Err(EngineError::RestoreTargetGone),
+        ),
+        "and the row reads gone exactly where the default restore refuses"
+    );
+    let binned_folder = view
+        .entries
+        .iter()
+        .find(|row| row.node == folder)
+        .expect("the folder itself was binned too");
+    assert_eq!(
+        binned_folder.origin_folder,
+        BinOrigin::Root,
+        "a folder deleted from the root keeps a destination a restore can reach"
     );
 }
 
