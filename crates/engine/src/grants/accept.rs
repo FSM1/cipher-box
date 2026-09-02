@@ -28,6 +28,7 @@ use zeroize::Zeroizing;
 use crate::entropy::EntropyError;
 use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
+use crate::name::MAX_NODE_NAME_BYTES;
 use crate::net::GrantedScopeRoot;
 use crate::seams::{FloorStore, Mailbox, SeamError, SharerScopedFloorStore};
 
@@ -313,10 +314,10 @@ pub(crate) const STORED_LIST_V: u64 = 2;
 /// which admits every upload, so an unbounded `displayName` from a verified but
 /// hostile contact would permanently shrink the vault's upload headroom. Bounded
 /// release-active in both directions like every other repeated collection in a
-/// sealed structure.
+/// sealed structure. The label's own bound is [`MAX_NODE_NAME_BYTES`], because
+/// the graft renders it as a node name ([`crate::name`]) and a second bound one
+/// byte wider would store a label the render tree could not carry.
 pub const MAX_RECEIVED_SHARES: usize = 1024;
-/// The bound on a bookmark's courtesy display label.
-pub const MAX_DISPLAY_NAME_BYTES: usize = 256;
 /// The bound on a bookmarked scope root's opaque `ipnsName`.
 pub(crate) const MAX_SCOPE_ROOT_NAME_BYTES: usize = 128;
 
@@ -365,11 +366,7 @@ pub(crate) fn encode_stored_list(
     }
     within("shares", sorted.len(), MAX_RECEIVED_SHARES)?;
     for share in &sorted {
-        within(
-            "displayName",
-            share.display_name.len(),
-            MAX_DISPLAY_NAME_BYTES,
-        )?;
+        within("displayName", share.display_name.len(), MAX_NODE_NAME_BYTES)?;
         within(
             "scopeRootName",
             share.scope_root_name.len(),
@@ -453,7 +450,7 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
             MAX_SCOPE_ROOT_NAME_BYTES,
         )?;
         let display_name = req(share, "displayName")?.as_text()?.to_string();
-        within("displayName", display_name.len(), MAX_DISPLAY_NAME_BYTES)?;
+        within("displayName", display_name.len(), MAX_NODE_NAME_BYTES)?;
         let decoded = ReceivedShare {
             sharer_identity_pk: fixed::<IDENTITY_PUBLIC_LEN>(
                 req(share, "sharerIdentityPk")?,
@@ -1449,7 +1446,7 @@ mod tests {
     fn an_oversized_bookmark_is_refused_in_both_directions() {
         let mut long_label = ReceivedSharesList::new();
         long_label.reconcile(ReceivedShare {
-            display_name: "x".repeat(MAX_DISPLAY_NAME_BYTES + 1),
+            display_name: "x".repeat(MAX_NODE_NAME_BYTES + 1),
             ..share(b"n", 0x8A)
         });
         assert!(matches!(
@@ -1481,7 +1478,7 @@ mod tests {
             .clone();
         entry.insert(
             "displayName",
-            Value::Text("x".repeat(MAX_DISPLAY_NAME_BYTES + 1)),
+            Value::Text("x".repeat(MAX_NODE_NAME_BYTES + 1)),
         );
         map.insert("shares", Value::Array(vec![Value::Map(entry)]));
         assert!(matches!(

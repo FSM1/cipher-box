@@ -48,8 +48,7 @@ use crate::content::{
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor};
 use crate::grants::grafted::{
-    BookmarkedScopeRoots, GraftedPlane, GraftedSharers, NamedNodes, contested_nodes,
-    evict_grafted_read_seeds, floor_view,
+    BookmarkedScopeRoots, GraftedSharers, NamedNodes, evict_grafted_read_seeds, floor_view,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{ReceivedShareStatus, ReceivedVerdicts, ScopeRender};
@@ -57,13 +56,13 @@ use crate::grants::{
     ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
     CreateGrantError, EphemeralInvitee, GrantRecipient, GranteeScopePlan, InviteClaim, InviteError,
     InviteFragment, InviteMintError, InviteMintPlan, InviteStore, InviteStoreError,
-    MAX_DISPLAY_NAME_BYTES, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
-    PendingInviteLink, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
-    ResolutionClass, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, convert_invite_claim, create_grant,
-    enforce_committed_ledger, import_contact, insert_child, link_budget_full, locate_invite_link,
-    mint_invite_link, partition_scope_links, post_invite_claim, post_share_pointer,
-    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PendingInviteLink,
+    PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, SharePointer,
+    StagingContactStore, StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK,
+    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
+    link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
+    post_invite_claim, post_share_pointer, recipient_blinded_tag, resolve_recipient,
+    row_is_owner_attested,
 };
 use crate::mailbox::{poll_verified, post_sealed};
 use crate::name::{NameError, is_emittable, validate_name};
@@ -74,12 +73,13 @@ use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
-    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldKey, HeldMaterial,
-    HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult,
-    PointerConsultArm, PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL,
-    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
-    VaultProvisionNet, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify,
-    keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
+    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, GraftedLeg, HeldKey,
+    HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet,
+    PointerConsult, PointerConsultArm, PointerConsultError, PublishError, PublishOutcome,
+    RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    ScopePointerEnrolment, VaultProvisionNet, enrol_owned_scope_pointers, eol_renew_pass,
+    fanout_get_verify, keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child,
+    run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -2304,7 +2304,7 @@ fn share_display_name(rendered: &Snapshot, node: NodeId) -> Result<String, Engin
         .ok_or(EngineError::UnknownNode)?
         .name()
         .to_owned();
-    if name.len() > MAX_DISPLAY_NAME_BYTES {
+    if name.len() > MAX_NODE_NAME_BYTES {
         return Err(EngineError::MalformedInput {
             check: "grant-display-name-too-long",
         });
@@ -4709,7 +4709,6 @@ where {
                     let mut attempted_files: Vec<NodeId> = Vec::new();
                     let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
-                    let contested = contested_nodes(&grafted_named_nodes.borrow());
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
@@ -4731,10 +4730,9 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
-                            plane: (scope_root.0 != root_id).then_some(GraftedPlane {
-                                scope_id: scope_root.0,
+                            plane: (scope_root.0 != root_id).then_some(GraftedLeg {
                                 scope_roots: &scope_roots,
-                                contested: &contested,
+                                named_nodes: &grafted_named_nodes,
                             }),
                             mode,
                             observed_at: now.0,
