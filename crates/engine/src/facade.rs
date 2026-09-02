@@ -7020,7 +7020,12 @@ where {
     async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
         let own_root = self.snapshot.borrow().root.0;
         let sharers = self.grafted_sharers.borrow().clone();
-        let session = self.session.as_ref()?;
+        // Every arm that serves no seed also drops the one it holds, so no
+        // cached seed outlives the authority that entitles it.
+        let Some(session) = self.session.as_ref() else {
+            self.scope_read_seeds.borrow_mut().remove(scope_id);
+            return None;
+        };
         let Some(floors) = floor_view(
             &self.seams.floor_store,
             &sharers,

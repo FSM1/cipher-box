@@ -288,8 +288,11 @@ impl ContactLabel {
 /// the granting identity means a raise can only restrict the scopes that
 /// identity actually granted.
 ///
-/// Sequence floors pass through unprefixed: an `ipnsName` is an Ed25519 public
-/// key, so no second authority can name one it holds no signing key for.
+/// Sequence floors pass through unprefixed. An `ipnsName` is an Ed25519 public
+/// key, so no second authority can raise one it holds no signing key for, and
+/// one name keeps one ratchet whoever reads it. That is an authority argument,
+/// not a disclosure one: the key is unblinded, so the durable store still names
+/// every scope root this device holds a share for.
 ///
 /// The prefix changes the durable key shape with no migration, exactly as
 /// [`OwnerScopedFloorStore`]'s does: a device holding pre-cutover floors for an
@@ -474,12 +477,15 @@ mod tests {
         );
     }
 
-    /// The at-rest disclosure the label closes: no durable key may carry a
-    /// contact's identity key verbatim.
+    /// The at-rest disclosure the label closes: no durable key may carry any
+    /// run of a contact's identity key. The witness is distinct per byte and
+    /// the window is short, so a key holding a truncated prefix of the identity
+    /// fails this too — a whole-key match would pass such a leak.
     #[test]
     fn no_durable_floor_key_names_the_contact_identity() {
         let store = InMemoryFloorStore::default();
-        let identity_pk = [0x02; IDENTITY_PUBLIC_LEN];
+        let identity_pk: [u8; IDENTITY_PUBLIC_LEN] =
+            core::array::from_fn(|i| (i as u8).wrapping_mul(37).wrapping_add(3));
         let sharer = SharerScopedFloorStore::granted_by(&store, label(identity_pk));
 
         block_on(sharer.raise_epoch_floor(&ROOT_SCOPE, 4)).expect("the floor raises");
@@ -489,10 +495,12 @@ mod tests {
         let keys = store.epoch_keys();
         assert!(!keys.is_empty(), "the raises stored something to inspect");
         for key in keys {
-            assert!(
-                !key.windows(identity_pk.len()).any(|w| w == identity_pk),
-                "a durable floor key carries the contact identity key in the clear"
-            );
+            for run in identity_pk.windows(8) {
+                assert!(
+                    !key.windows(run.len()).any(|w| w == run),
+                    "a durable floor key carries part of the contact identity key"
+                );
+            }
         }
     }
 
