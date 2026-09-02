@@ -11,10 +11,6 @@ export class BinPage {
     return this.page.getByTestId('bin-page');
   }
 
-  get list(): Locator {
-    return this.page.getByTestId('bin-list');
-  }
-
   /** The index landed and holds nothing, as opposed to not having been read. */
   get empty(): Locator {
     return this.page.getByTestId('bin-empty');
@@ -63,14 +59,18 @@ export class BinPage {
       .toBe(0);
   }
 
+  get rows(): Locator {
+    return this.page.getByTestId('bin-row');
+  }
+
   /**
-   * One listed entry, picked by the accessible name its own controls carry. The
-   * row's text would match a substring of a longer sibling's. The name is exact
-   * because the row also holds `restore <name> into another folder`.
+   * One listed entry, picked by its own name cell. The row's whole text would
+   * match a substring of a longer sibling's, and the row's controls name the
+   * origin folder as well as the entry.
    */
   row(name: string): Locator {
-    return this.page.getByTestId('bin-row').filter({
-      has: this.page.getByRole('button', { name: `restore ${name}`, exact: true }),
+    return this.rows.filter({
+      has: this.page.getByTestId('bin-name').and(this.page.getByText(name, { exact: true })),
     });
   }
 

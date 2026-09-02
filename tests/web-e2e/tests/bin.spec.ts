@@ -17,21 +17,24 @@ import { BinPage } from '../page-objects/bin.page';
 import { SettingsPage } from '../page-objects/settings.page';
 import { coldStart, drained } from '../vault';
 
-test('@full a fresh vault holds no bin index, which is not an empty bin', async ({ page }) => {
+test('@full a fresh vault reads an empty bin, not a missing one', async ({ page }) => {
   await coldStart(page);
   const bin = new BinPage(page);
 
   await bin.open();
 
-  await expect(bin.unestablished).toBeVisible();
-  await expect(bin.list).toHaveCount(0);
+  // The record exists from vault genesis, so its own existence says nothing
+  // about what the account deleted (blueprint/engine.md "An empty bin is the
+  // bottom rung"). The page therefore reads an empty bin, never a missing one.
+  await expect(bin.empty).toBeVisible();
+  await expect(bin.unestablished).toHaveCount(0);
   await expect(bin.error).toHaveCount(0);
   // The retention is the vault's own; the page never invents a figure.
   await expect(bin.retention).toBeVisible();
 
   await bin.readAgain();
 
-  await expect(bin.unestablished).toBeVisible();
+  await expect(bin.empty).toBeVisible();
   await expect(bin.error).toHaveCount(0);
 });
 
@@ -99,6 +102,8 @@ test('@full a retention of 0 saved on the form makes the next delete a hard dele
   await bin.open();
 
   await expect(bin.retention).toHaveAttribute('data-days', '0');
-  await expect(bin.row('drafts')).toHaveCount(0);
+  // The page lists no row at all. A name-filtered absence would also hold for a
+  // row locator that can match nothing, and prove nothing.
+  await expect(bin.rows).toHaveCount(0);
   await expect(bin.error).toHaveCount(0);
 });
