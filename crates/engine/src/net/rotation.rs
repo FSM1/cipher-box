@@ -2523,8 +2523,8 @@ where
     /// This owner-re-signs the set it builds, so both carried halves are proven
     /// before a single row is re-minted, and every field a re-minted commitment
     /// entry carries is either derived here or copied from what the owner already
-    /// signed. A ledger row additionally carries forward `expiresAt` and the
-    /// preserved unknowns, which no owner signature covers. A row neither owner
+    /// signed. A ledger row additionally carries forward `expiresAt`, which no
+    /// owner signature covers. A row neither owner
     /// authority over `recipientEncPk` covers is dropped from the moved set
     /// rather than re-minted.
     fn remint_grants(
@@ -2602,10 +2602,11 @@ where
             let mut ledger_entry = row.ledger_entry;
             // The deadline is the discovered-expiry trigger's input and the
             // invite claim path's restriction; dropping it at a re-mint erases
-            // both, and dropping the unknown fields discards what another version
-            // wrote.
+            // both. The row's unknown map is not carried, unlike the commitment
+            // entry's above: `reseal_scope_root` rebuilds every ledger row
+            // without one, so the ledger half adds no unbounded bytes to the
+            // re-seal budget.
             ledger_entry.expires_at = entry.expires_at;
-            ledger_entry.unknown = entry.unknown.clone();
 
             reminted.entries.push(commitment_entry);
             reminted.ledger.push(ledger_entry);
