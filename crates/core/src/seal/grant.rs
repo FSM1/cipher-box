@@ -999,9 +999,10 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
 /// preimage the owner ECDSA-signs and a recipient verifies.
 ///
-/// Fails closed on a duplicate-tag commitment, or on an entry set past
-/// [`MAX_GRANT_BLOBS`], with the same verdict `decode_grant_set_commitment`
-/// raises, so the sign path never attests bytes every recipient rejects.
+/// Fails closed on a duplicate-tag commitment, on an entry set past
+/// [`MAX_GRANT_BLOBS`], or on a preserved-unknown map that carries a schema key,
+/// with the same verdict `decode_grant_set_commitment` raises, so the sign path
+/// never attests bytes every recipient rejects.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
     // Bound first, the order the decoder checks them in, so a value violating
     // both invariants gets the same verdict from either side.
@@ -1010,6 +1011,10 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, Co
         c.entries.iter().map(|e| e.tag),
         TrustViolation::DuplicateGrantTag,
     )?;
+    assert_unknown_disjoint(&c.unknown, GRANT_SET_KNOWN)?;
+    for e in &c.entries {
+        assert_unknown_disjoint(&e.unknown, GRANT_SET_ENTRY_KNOWN)?;
+    }
     let mut m = Map::new();
     m.insert("cutEpoch", Value::Unsigned(c.cut_epoch));
     m.insert(
@@ -1882,6 +1887,39 @@ mod tests {
             "the permission still renders: {rendered}"
         );
         assert!(rendered.contains("GrantSetEntry"), "the shape survives");
+    }
+
+    /// Rule 8: `merge_unknown` would silently drop a preserved field that
+    /// shadows a schema key, so the owner would sign a commitment that does not
+    /// round-trip. The refusal is release-active, matching `encode_write_body`.
+    #[test]
+    fn a_preserved_field_shadowing_a_schema_key_refuses_at_encode_and_sign() {
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+
+        let mut top = commitment_of(1);
+        top.unknown = [("cutEpoch".to_string(), Value::Unsigned(9))]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            encode_grant_set_commitment(&top).unwrap_err().check(),
+            "unknown-field-collision"
+        );
+        assert_eq!(
+            sign_grant_set(&owner, &top).unwrap_err().check(),
+            "unknown-field-collision"
+        );
+
+        let mut entry = commitment_of(1);
+        entry.entries[0].unknown = [(
+            "maskedRecipientEncPk".to_string(),
+            Value::Bytes(vec![0x00; SECRET_LEN]),
+        )]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            encode_grant_set_commitment(&entry).unwrap_err().check(),
+            "unknown-field-collision"
+        );
     }
 
     #[test]

@@ -5244,7 +5244,8 @@ mod tests {
     /// Republish `root` with `ledger` in its write body, re-sealed under the
     /// scope write seed and re-signed under the pseudonym the commitment names —
     /// what a committed co-writer can put on the wire, since the commitment binds
-    /// `(tag, permission)` and never `recipientEncPk`.
+    /// `(tag, maskedRecipientEncPk, permission, pseudonymPk)` and never
+    /// `recipientIdentityPk` or `expiresAt`.
     fn republish_ledger<T: RecordTransport + Clone>(
         harness: &Harness<T>,
         root: &OwnerRootFixture,

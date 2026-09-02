@@ -57,11 +57,10 @@ pub struct GrantLedgerEntry {
     /// (`{ipnsName, recipientEncPk, recipientIdentityPk, tag}`, see
     /// [`encode_recipient_binding`]) at the scope root's `ipnsName`.
     ///
-    /// Any committed write-grantee authors this ledger, so `recipientEncPk` is
-    /// the key a re-seal wraps a grant to. This signature is the owner
-    /// authority a re-sealer holding no owner secret verifies it against: per
-    /// row, so an honest re-seal skips exactly the poisoned row rather than
-    /// aborting the whole rotation.
+    /// Any committed write-grantee authors this ledger. A re-seal takes the
+    /// recipient key from the owner-signed commitment rather than from here, so
+    /// this signature is the owner authority over `recipientIdentityPk`, the one
+    /// recipient field no commitment entry carries.
     ///
     /// It is transferable, and deliberately so — every co-writer must be able to
     /// verify it, which rules out a designated-verifier construction. A
@@ -74,7 +73,8 @@ pub struct GrantLedgerEntry {
     /// (blueprint/engine.md "Invites": expiry is a ledger field, lazily pruned).
     ///
     /// **Not a capability boundary.** Neither owner signature covers it: the
-    /// grant-set commitment covers `(tag, permission, pseudonymPk)`, and
+    /// grant-set commitment covers
+    /// `(tag, maskedRecipientEncPk, permission, pseudonymPk)`, and
     /// [`owner_sig`](Self::owner_sig) covers the recipient binding, so a
     /// write-grantee re-authoring this body can alter or drop the deadline
     /// undetectably. It is a deadline cooperating readers honour and the input
