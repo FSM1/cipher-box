@@ -147,15 +147,10 @@ fn depart_contested(contested: &ContestedNodes, render: &ScopeRender<'_>) -> boo
 /// The name a grafted scope root renders under, and the label the `/shared` row
 /// carries.
 ///
-/// The sharer authors the label and it lands in this vault's render tree as a
-/// node name, so it is held to the same law a command is ([`validate_name`]) —
-/// a bidi override or an over-length label would strand the share, unlistable
-/// and unremovable through every projection. Refusing the share instead is not
-/// open to us: the recipient must still reach the folder. The label binds
-/// nothing, so replacing it costs a courtesy string and no reachability.
-///
-/// Zeroizing because [`NodeMeta`] wipes the name it supersedes, and an unused
-/// copy dropped intact would leave the sharer's label in freed memory.
+/// The sharer authors the label, so it is held to the node-name law
+/// ([`validate_name`]) before it reaches the render tree. Refusing the share
+/// instead is not open to us — the recipient must still reach the folder — and
+/// the label binds nothing, so the node-id fallback costs no reachability.
 pub(crate) fn grafted_root_name(display_name: &str, root: NodeId) -> Zeroizing<String> {
     match validate_name(display_name) {
         Ok(()) => Zeroizing::new(display_name.to_owned()),
