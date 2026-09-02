@@ -4614,21 +4614,20 @@ where {
                     // seed this device has not recovered serves nothing, and its
                     // files stay queued for the pass that can.
                     let mut folder_verdict = RefreshVerdict::Reconciled;
-                    let mut queued_files: Vec<NodeId> = Vec::new();
+                    let mut attempted_files: Vec<NodeId> = Vec::new();
                     let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
-                            queued_files.extend(targets.files);
                             continue;
                         };
                         let Some(scope_floors) =
                             floor_view(&floors, &grafted, &root_id, &scope_root.0)
                         else {
-                            queued_files.extend(targets.files);
                             continue;
                         };
+                        attempted_files.extend(targets.files.iter().copied());
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
@@ -4658,7 +4657,13 @@ where {
                             folder_verdict = folder_verdict.worst(report.verdict);
                         }
                     }
-                    focus.borrow_mut().open_files = queued_files;
+                    // Take only what this pass attempted. A lookup queues a file
+                    // while the refreshes above are awaited, and a wholesale
+                    // replacement would drop what arrived after the snapshot.
+                    focus
+                        .borrow_mut()
+                        .open_files
+                        .retain(|node| !attempted_files.contains(node));
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
                     // the ladder's `last_success` (#33 D4). A gate rejection is a

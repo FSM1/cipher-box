@@ -107,8 +107,8 @@ export async function rendersItems(
 }
 
 /**
- * Waits until `name` at the mount root reads back `expected` on the instance
- * that wrote it.
+ * No refresh: the instance that took the write owes its own reader those bytes
+ * out of what it already holds, with no round trip to prove them.
  */
 export function readsBack(
   context: ScenarioContext,
