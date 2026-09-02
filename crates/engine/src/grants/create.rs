@@ -3,10 +3,11 @@
 //!
 //! Mints the owner-only sharing path in the sequence the blueprint fixes:
 //! converge the subtree, mint the grantee scope at read epoch 1, publish
-//! grantee-first, re-key the reparented descendants under the fresh derivation,
-//! update the parent index, and — for a write grant, after the name wave — post
-//! the sealed share pointer ([`post_share_pointer`]). Convergence is the
-//! load-bearing correctness rule — a grant over a subtree that cannot be proven
+//! grantee-first, re-seal the granted folder's interior nodes into that scope,
+//! re-key the reparented descendants under the fresh derivation, update the
+//! parent index, and — for a write grant, after the name wave — post the sealed
+//! share pointer ([`post_share_pointer`]). Convergence is the load-bearing
+//! correctness rule — a grant over a subtree that cannot be proven
 //! epoch-converged is refused **fail-closed**, so a new grantee can never regress
 //! through an ancestor scope's history (CONTEXT.md "Epoch-converged").
 //!
@@ -36,8 +37,8 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, Permission, PreservedFields, SignedSealed,
-    sign_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, Permission, PreservedFields, ReadBody,
+    SignedSealed, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -52,15 +53,17 @@ use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::grants::contact::Contact;
 use crate::grants::{GrantRow, mint_grant_row};
 use crate::mailbox::post_sealed;
+use crate::rotation::sweep::{body_children, canonicalize_frontier};
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
     ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
-    SweepError, SweepPublisher, SweepResolver, WriteHistory, converge_subtree, derive_write_name,
-    reseal_scope_root,
+    SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, WriteHistory,
+    converge_subtree, derive_write_name, reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::IpnsName;
+use std::collections::BTreeSet;
 
 /// The fresh grantee scope minted at the granted folder. `scope_id` is the
 /// folder's node id (a scope root's node id is its scope id). The mint anchors
@@ -257,6 +260,36 @@ pub enum CreateGrantError {
         /// The fail-closed resolve failure.
         reason: ResolveFailure,
     },
+    /// Reading an interior node of the granted folder for its re-seal failed.
+    /// Post-publish, and the whole grant is: the folder answers as a scope root
+    /// of the new scope, so a node this leg did not move stays sealed under the
+    /// scope the folder left, which readers of neither scope open. Re-running
+    /// the grant is refused at the promotion, so the move is not re-drivable.
+    InteriorResolve {
+        /// The node that could not be read.
+        node_id: [u8; 16],
+        /// The fail-closed read failure.
+        reason: SweepResolveFailure,
+    },
+    /// The walk met a node the convergence pass did not measure as interior: a
+    /// body re-authored since that pass, or a node that now answers as a scope
+    /// root. Either way the re-seal refuses rather than move a record the gate
+    /// never proved into the grantee's scope. Only a committed writer of the
+    /// scope the folder is leaving can author either.
+    InteriorNotConverged {
+        /// The node the walk met.
+        node_id: [u8; 16],
+    },
+    /// Re-sealing an interior node of the granted folder under the fresh
+    /// derivation failed, or its CAS publish lost the race. Post-publish: same
+    /// partial-commit surface as `InteriorResolve`, and a lost race is an error
+    /// rather than a dropped node for the same reason.
+    InteriorPublish {
+        /// The node whose re-sealed record did not land.
+        node_id: [u8; 16],
+        /// The publish failure.
+        error: RotationPublishError,
+    },
     /// Re-sealing a reparented descendant's ascent link under the fresh grantee
     /// derivation failed. Post-publish: same partial-commit surface as
     /// `DescendantResolve`.
@@ -302,6 +335,9 @@ impl CreateGrantError {
             Self::Entropy(_) => "entropy-error",
             Self::Mint(_) => "mint-failed",
             Self::Publish(_) => "publish-failed",
+            Self::InteriorResolve { .. } => "interior-resolve-failed",
+            Self::InteriorNotConverged { .. } => "interior-not-converged",
+            Self::InteriorPublish { .. } => "interior-publish-failed",
             Self::DescendantResolve { .. } => "descendant-resolve-failed",
             Self::DescendantMint { .. } => "descendant-mint-failed",
             Self::DescendantPublish { .. } => "descendant-publish-failed",
@@ -333,11 +369,55 @@ pub trait ScopeRootPromoter {
     /// gated child record inside `parent`. A node whose current record does not
     /// gate — or which already answers as a scope root — is a fail-closed
     /// refusal, never a publish under a fabricated body.
+    ///
+    /// Returns the children of the body it promoted. That body is the new scope
+    /// root's, so its children are the interior the fresh scope now owns: taking
+    /// them from the publish rather than from a read of the caller's own binds
+    /// the re-seal to the record this call made current.
     async fn promote_scope_root(
         &self,
         parent: &ChildScopeRef,
         node: &NodeRef,
         record: &ResealedScopeRoot,
+    ) -> Result<Vec<NodeRef>, RotationPublishError>;
+}
+
+/// One interior node's record, as the read that hands it to a publish found it.
+/// Carries no epoch: an interior record is sealed at the epoch of the scope root
+/// it belongs to, and that scope is the publisher's to name.
+pub struct InteriorRecord<'a> {
+    /// The node id, as the gated parent body named it.
+    pub node_id: [u8; 16],
+    /// That ref's opaque `ipnsName` bytes — the publish destination.
+    pub ipns_name: &'a [u8],
+    /// The sequence of the record this body came from: the CAS basis the re-seal
+    /// must land above.
+    pub sequence: u64,
+    /// The body carried forward verbatim.
+    pub read_body: &'a ReadBody,
+    /// Envelope fields a republish preserves byte-stable.
+    pub carried_unknown: &'a PreservedFields,
+    /// `epochTag` fields a republish preserves byte-stable.
+    pub carried_epoch_tag_unknown: &'a PreservedFields,
+}
+
+/// Re-seal one interior node into the scope a grant just minted over it.
+///
+/// Distinct from [`SweepPublisher::publish_node`], which advances a node inside
+/// the scope it already belongs to: here the node **changes scope**, so the AAD
+/// scope binding and the read key both come from `root`, while the name and the
+/// key that signs at it still come from `source` — the scope the folder left,
+/// whose write seed derives that name until a write grant's name wave moves it.
+pub trait InteriorResealer {
+    /// Re-seal `node`'s carried body under `root`'s derivation at `root`'s read
+    /// epoch and CAS-publish it at the name it answers today. `source` is the
+    /// ref [`SweepResolver::resolve_scope`] proved current for the scope the
+    /// node is leaving.
+    async fn reseal_interior_node(
+        &self,
+        source: &ChildScopeRef,
+        root: &ResealedScopeRoot,
+        node: &InteriorRecord<'_>,
     ) -> Result<(), RotationPublishError>;
 }
 
@@ -363,7 +443,7 @@ pub async fn create_grant<E, R, P>(
 where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
-    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
+    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter + InteriorResealer,
 {
     let recipient_enc_pub = recipient.enc_pub();
     // Refused ahead of the publishing sweep, so a self-grant costs no publish.
@@ -448,6 +528,14 @@ where
 pub struct ConvergedSubtree<'a> {
     grantee: &'a GranteeScopePlan<'a>,
     parent: &'a ParentScopePlan<'a>,
+    /// Every interior node the pass measured against the scope's epoch. The
+    /// re-seal walks only these, so a body re-authored between the pass and the
+    /// mint cannot hand the grantee's scope a node the gate never proved.
+    interior: BTreeSet<[u8; 16]>,
+    /// Every descendant scope root the pass stopped at. The re-seal stops at
+    /// the same set: a scope root is re-keyed as one, and its own interior
+    /// stays in the scope it already belongs to.
+    boundaries: BTreeSet<[u8; 16]>,
 }
 
 /// Prove the granted folder's subtree epoch-converged inside the scope it still
@@ -489,12 +577,25 @@ where
         unconverged.sort_unstable();
         return Err(CreateGrantError::SubtreeNotConverged { unconverged });
     }
-    Ok(ConvergedSubtree { grantee, parent })
+    let interior = swept
+        .converged
+        .iter()
+        .chain(swept.already_converged.iter())
+        .copied()
+        .collect();
+    let boundaries = swept.skipped_scope_roots.iter().copied().collect();
+    Ok(ConvergedSubtree {
+        grantee,
+        parent,
+        interior,
+        boundaries,
+    })
 }
 
 /// Mint the grantee scope `row` is committed at, and hand the granted folder to
-/// it: mint (epoch 1) → publish (grantee first) → re-key the reparented
-/// descendants under the fresh grantee derivation → parent index update.
+/// it: mint (epoch 1) → publish (grantee first) → re-seal the folder's interior
+/// nodes into the new scope → re-key the reparented descendants under the fresh
+/// grantee derivation → parent index update.
 ///
 /// The scope it mints commits exactly `row` and carries no history links, so
 /// whoever holds that row's grant blob reaches this scope's first epoch and
@@ -514,9 +615,14 @@ pub async fn mint_grantee_scope<E, R, P>(
 where
     E: Entropy,
     R: SweepResolver + CascadeResealResolver,
-    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter,
+    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter + InteriorResealer,
 {
-    let ConvergedSubtree { grantee, parent } = converged;
+    let ConvergedSubtree {
+        grantee,
+        parent,
+        interior,
+        boundaries,
+    } = converged;
     // 1) The scope root's ipnsName, derived from the folder's write material.
     let ipns_name = grantee.ipns_name();
     let name_bytes = ipns_name.as_str().as_bytes();
@@ -588,24 +694,39 @@ where
         section: grantee_section,
     };
 
+    let parent_ref =
+        ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec());
+    let folder = NodeRef {
+        node_id: grantee.scope_id,
+        ipns_name: name_bytes.to_vec(),
+    };
+
     // 4) Publish the grantee scope root FIRST: it exists before the parent
     // references it (register-first / never-orphan), and its index carries the
     // reparented descendants before they are removed from the parent
     // (dest-first). A folder becoming a scope root is a promotion, not a
     // republish ([`ScopeRootPromoter`]).
-    publisher
-        .promote_scope_root(
-            &ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec()),
-            &NodeRef {
-                node_id: grantee.scope_id,
-                ipns_name: name_bytes.to_vec(),
-            },
-            &grantee_record,
-        )
+    let promoted_children = publisher
+        .promote_scope_root(&parent_ref, &folder, &grantee_record)
         .await
         .map_err(CreateGrantError::Publish)?;
 
-    // 4b) Re-key the reparented direct children so each ascent link re-seals under
+    // 4b) Re-seal the folder's interior nodes into the scope that now owns them.
+    // Their records still seal under the read key of the scope the folder left,
+    // which no reader of the fresh scope derives and no epoch-1 history link
+    // walks back to (blueprint/engine.md "subtree swept in").
+    reseal_granted_interior(
+        resolver,
+        publisher,
+        &parent_ref,
+        &grantee_record,
+        promoted_children,
+        interior,
+        boundaries,
+    )
+    .await?;
+
+    // 4c) Re-key the reparented direct children so each ascent link re-seals under
     // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
     // blueprint/engine.md "subtree swept in"). Metadata-only (existing seed,
     // current epoch, `prev = None`), threaded top-down as the eager cascade does
@@ -727,6 +848,83 @@ where
     })
 }
 
+/// Re-seal every interior node under the granted folder into `root`, the scope
+/// the mint just published over that folder.
+///
+/// The walk descends from the promoted body's own children, reading each node in
+/// `source` — the scope it is leaving. Both sets come from the convergence pass:
+/// `boundaries` are the descendant scope roots it stopped at, skipped here
+/// because a scope root is re-keyed as one and its own interior stays in the
+/// scope it already belongs to; `interior` is what it measured against the
+/// scope's epoch. A node in neither set is refused rather than moved into a
+/// scope the gate never proved it converged for.
+///
+/// Runs after the promotion, so each re-sealed node points back at a root that
+/// exists. Each level goes through [`canonicalize_frontier`] and each node is
+/// visited once by id.
+async fn reseal_granted_interior<R, P>(
+    resolver: &R,
+    publisher: &P,
+    source: &ChildScopeRef,
+    root: &ResealedScopeRoot,
+    frontier: Vec<NodeRef>,
+    interior: &BTreeSet<[u8; 16]>,
+    boundaries: &BTreeSet<[u8; 16]>,
+) -> Result<(), CreateGrantError>
+where
+    R: SweepResolver,
+    P: InteriorResealer,
+{
+    let mut visited = BTreeSet::from([root.scope_id]);
+    let mut frontier = canonicalize_frontier(frontier);
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for child in &frontier {
+            if !visited.insert(child.node_id) || boundaries.contains(&child.node_id) {
+                continue;
+            }
+            if !interior.contains(&child.node_id) {
+                return Err(CreateGrantError::InteriorNotConverged {
+                    node_id: child.node_id,
+                });
+            }
+            let found = resolver
+                .resolve_child(source, child)
+                .await
+                .map_err(|reason| CreateGrantError::InteriorResolve {
+                    node_id: child.node_id,
+                    reason,
+                })?;
+            let SweptChild::Interior(node) = found else {
+                return Err(CreateGrantError::InteriorNotConverged {
+                    node_id: child.node_id,
+                });
+            };
+            next.extend(body_children(&node.read_body));
+            publisher
+                .reseal_interior_node(
+                    source,
+                    root,
+                    &InteriorRecord {
+                        node_id: child.node_id,
+                        ipns_name: &child.ipns_name,
+                        sequence: node.sequence,
+                        read_body: &node.read_body,
+                        carried_unknown: &node.carried_unknown,
+                        carried_epoch_tag_unknown: &node.carried_epoch_tag_unknown,
+                    },
+                )
+                .await
+                .map_err(|error| CreateGrantError::InteriorPublish {
+                    node_id: child.node_id,
+                    error,
+                })?;
+        }
+        frontier = canonicalize_frontier(next);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,8 +974,38 @@ mod tests {
         format!("interior-{:02x}", node_id[0]).into_bytes()
     }
 
+    /// The child refs a simulated folder body names for `nodes`.
+    fn child_refs(nodes: impl Iterator<Item = [u8; 16]>) -> Vec<ChildRef> {
+        nodes
+            .map(|node_id| ChildRef {
+                id: node_id,
+                name: "n".into(),
+                ipns_name: interior_name(node_id),
+                kind: NodeKind::Folder,
+                link_counter: 1,
+                unknown: PreservedFields::new(),
+            })
+            .collect()
+    }
+
+    /// One interior node as the mint re-sealed it into the granted scope.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ResealedInterior {
+        node_id: [u8; 16],
+        /// The scope the record was re-sealed under.
+        scope_id: [u8; 16],
+        /// The read epoch it was re-sealed at.
+        read_epoch: u64,
+        /// The name it was published at.
+        ipns_name: Vec<u8>,
+    }
+
     /// One interior node of the parent scope: its id and its published epoch.
     type InteriorNodeState = ([u8; 16], u64);
+
+    /// One interior node deeper than the granted folder's own children: its
+    /// parent's id, its own id, and its published epoch.
+    type NestedNodeState = ([u8; 16], [u8; 16], u64);
 
     /// The grantee scope root's ipnsName, derived exactly as the primitive does
     /// (from the folder's write material) so assertions bind the real name.
@@ -845,6 +1073,27 @@ mod tests {
         /// What an interior-node re-seal publish returns.
         node_publish_result: Result<(), RotationPublishError>,
         node_publishes: Rc<RefCell<Vec<[u8; 16]>>>,
+        /// Every interior node the mint re-sealed into the granted scope.
+        resealed: Rc<RefCell<Vec<ResealedInterior>>>,
+        /// What an interior re-seal into the granted scope returns.
+        reseal_result: Result<(), RotationPublishError>,
+        /// Interior nodes deeper than the folder's own children: parent id, node
+        /// id, published epoch.
+        nested: Rc<RefCell<Vec<NestedNodeState>>>,
+        /// A child of the granted folder that answers as a descendant scope
+        /// root — a boundary the interior walk must stop at.
+        boundary: Option<[u8; 16]>,
+        /// A node the promoted body names that the convergence pass never saw:
+        /// a body re-authored between the pass and the mint.
+        promoted_extra: Option<[u8; 16]>,
+        /// Set once the promotion has run, so a read answers the convergence
+        /// pass and the mint's walk differently.
+        promoted: Rc<RefCell<bool>>,
+        /// A node the pass measured as interior that answers as a scope root by
+        /// the time the walk reaches it.
+        turns_scope_root: Option<[u8; 16]>,
+        /// A node the pass read that the walk can no longer read.
+        stalls_after_promotion: Option<[u8; 16]>,
         /// A node the sweep cannot resolve at all.
         unresolvable: Option<[u8; 16]>,
         /// A node the scope's ratchet cannot open.
@@ -863,6 +1112,14 @@ mod tests {
                 outside: Rc::new(RefCell::new(Vec::new())),
                 node_publish_result: Ok(()),
                 node_publishes: Rc::new(RefCell::new(Vec::new())),
+                resealed: Rc::new(RefCell::new(Vec::new())),
+                reseal_result: Ok(()),
+                nested: Rc::new(RefCell::new(Vec::new())),
+                boundary: None,
+                promoted_extra: None,
+                promoted: Rc::new(RefCell::new(false)),
+                turns_scope_root: None,
+                stalls_after_promotion: None,
                 unresolvable: None,
                 unreadable: None,
             }
@@ -893,6 +1150,46 @@ mod tests {
 
         fn node_publish(mut self, result: Result<(), RotationPublishError>) -> Self {
             self.node_publish_result = result;
+            self
+        }
+
+        /// Put one interior node under `parent`, deeper than the folder's own
+        /// children, at `epoch`.
+        fn with_nested(self, parent: [u8; 16], node_id: [u8; 16], epoch: u64) -> Self {
+            self.nested.borrow_mut().push((parent, node_id, epoch));
+            self
+        }
+
+        /// Make `node_id` — a child of the granted folder — answer as a
+        /// descendant scope root.
+        fn with_boundary(mut self, node_id: [u8; 16]) -> Self {
+            self.boundary = Some(node_id);
+            self
+        }
+
+        /// Have the promoted body name `node_id` on top of the folder's own
+        /// children, as a body re-authored after the convergence pass would.
+        fn promoting_also(mut self, node_id: [u8; 16]) -> Self {
+            self.promoted_extra = Some(node_id);
+            self
+        }
+
+        /// Have `node_id` answer as a scope root only after the promotion, as a
+        /// concurrent grant over that node would leave it.
+        fn turning_scope_root(mut self, node_id: [u8; 16]) -> Self {
+            self.turns_scope_root = Some(node_id);
+            self
+        }
+
+        /// Have `node_id` stop resolving after the promotion, as a node whose
+        /// record the mint can no longer read.
+        fn stalling_after_promotion(mut self, node_id: [u8; 16]) -> Self {
+            self.stalls_after_promotion = Some(node_id);
+            self
+        }
+
+        fn reseal(mut self, result: Result<(), RotationPublishError>) -> Self {
+            self.reseal_result = result;
             self
         }
 
@@ -960,24 +1257,25 @@ mod tests {
             if self.unreadable == Some(child.node_id) {
                 return Err(SweepResolveFailure::Unreadable);
             }
+            let promoted = *self.promoted.borrow();
+            if promoted && self.stalls_after_promotion == Some(child.node_id) {
+                return Err(SweepResolveFailure::Unavailable);
+            }
+            if self.boundary == Some(child.node_id)
+                || (promoted && self.turns_scope_root == Some(child.node_id))
+            {
+                return Ok(SweptChild::ScopeRoot(ChildScopeRef::new(
+                    child.node_id,
+                    child.ipns_name.clone(),
+                )));
+            }
             // The granted folder is itself an interior node of the parent scope
             // until the mint publishes its scope root; its body names the nodes
             // the convergence gate must reach.
             let (epoch, children) = if child.node_id == GRANTEE_SCOPE {
                 (
                     PARENT_EPOCH,
-                    self.interior
-                        .borrow()
-                        .iter()
-                        .map(|(node_id, _)| ChildRef {
-                            id: *node_id,
-                            name: "n".into(),
-                            ipns_name: interior_name(*node_id),
-                            kind: NodeKind::Folder,
-                            link_counter: 1,
-                            unknown: PreservedFields::new(),
-                        })
-                        .collect(),
+                    child_refs(self.interior.borrow().iter().map(|(node_id, _)| *node_id)),
                 )
             } else {
                 let epoch = self
@@ -985,10 +1283,24 @@ mod tests {
                     .borrow()
                     .iter()
                     .chain(self.outside.borrow().iter())
+                    .map(|(node_id, epoch)| (*node_id, *epoch))
+                    .chain(
+                        self.nested
+                            .borrow()
+                            .iter()
+                            .map(|(_, node_id, epoch)| (*node_id, *epoch)),
+                    )
                     .find(|(node_id, _)| *node_id == child.node_id)
-                    .map(|(_, epoch)| *epoch)
+                    .map(|(_, epoch)| epoch)
                     .ok_or(SweepResolveFailure::Unavailable)?;
-                (epoch, Vec::new())
+                let children = child_refs(
+                    self.nested
+                        .borrow()
+                        .iter()
+                        .filter(|(parent, _, _)| *parent == child.node_id)
+                        .map(|(_, node_id, _)| *node_id),
+                );
+                (epoch, children)
             };
             Ok(SweptChild::Interior(SweptNode {
                 current_read_epoch: epoch,
@@ -1073,6 +1385,24 @@ mod tests {
         }
     }
 
+    impl InteriorResealer for FakeNet {
+        async fn reseal_interior_node(
+            &self,
+            _source: &ChildScopeRef,
+            root: &ResealedScopeRoot,
+            node: &InteriorRecord<'_>,
+        ) -> Result<(), RotationPublishError> {
+            self.reseal_result.clone()?;
+            self.resealed.borrow_mut().push(ResealedInterior {
+                node_id: node.node_id,
+                scope_id: root.scope_id,
+                read_epoch: root.read_epoch,
+                ipns_name: node.ipns_name.to_vec(),
+            });
+            Ok(())
+        }
+    }
+
     /// The promotion seam over the same recording publisher; the base's real
     /// provenance is pinned against the production net
     /// (`crates/engine/tests/owner_actions.rs`).
@@ -1082,8 +1412,22 @@ mod tests {
             _parent: &ChildScopeRef,
             _node: &NodeRef,
             record: &ResealedScopeRoot,
-        ) -> Result<(), RotationPublishError> {
-            self.publish_scope_root(record).await
+        ) -> Result<Vec<NodeRef>, RotationPublishError> {
+            self.publish_scope_root(record).await?;
+            *self.promoted.borrow_mut() = true;
+            // The promoted body is the granted folder's, so its children are
+            // the nodes inside the folder.
+            Ok(self
+                .interior
+                .borrow()
+                .iter()
+                .map(|(node_id, _)| *node_id)
+                .chain(self.promoted_extra)
+                .map(|node_id| NodeRef {
+                    node_id,
+                    ipns_name: interior_name(node_id),
+                })
+                .collect())
         }
     }
 
@@ -1627,6 +1971,164 @@ mod tests {
             other => panic!("expected SubtreeNotConverged, got {other:?}"),
         }
         assert!(published.is_empty());
+    }
+
+    /// A second interior node inside the granted folder.
+    const SECOND_NODE: [u8; 16] = [0xa2; 16];
+    /// An interior node one level under [`INTERIOR_NODE`].
+    const DEEP_NODE: [u8; 16] = [0xa3; 16];
+
+    #[test]
+    fn every_interior_node_of_the_granted_folder_re_seals_into_the_new_scope() {
+        // Without this the grantee holds a scope root whose whole interior is
+        // still sealed under the scope the folder left, and epoch 1 carries no
+        // history link to walk back through.
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .with_interior(SECOND_NODE, PARENT_EPOCH)
+            .with_nested(INTERIOR_NODE, DEEP_NODE, PARENT_EPOCH);
+        let resealed = Rc::clone(&net.resealed);
+        let (outcome, _published, _hub) = run(7, &[], net, &[]);
+        outcome.expect("grant creation succeeds");
+
+        let mut nodes: Vec<[u8; 16]> = resealed
+            .borrow()
+            .iter()
+            .map(|record| record.node_id)
+            .collect();
+        nodes.sort_unstable();
+        assert_eq!(
+            nodes,
+            vec![INTERIOR_NODE, SECOND_NODE, DEEP_NODE],
+            "the walk descends past the folder's own children",
+        );
+        for record in resealed.borrow().iter() {
+            assert_eq!(
+                record.scope_id, GRANTEE_SCOPE,
+                "re-sealed under the scope the mint published, not the one it left",
+            );
+            assert_eq!(record.read_epoch, 1, "at that scope's first epoch");
+            assert_eq!(
+                record.ipns_name,
+                interior_name(record.node_id),
+                "at the name the folder's body already names it by",
+            );
+        }
+    }
+
+    #[test]
+    fn the_interior_re_seal_stops_at_a_descendant_scope_root() {
+        // A descendant scope root is re-keyed as a scope root, and its own
+        // interior stays in the scope it already belongs to.
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .with_boundary(INTERIOR_NODE);
+        let resealed = Rc::clone(&net.resealed);
+        let (outcome, _published, _hub) = run(7, &[], net, &[]);
+        outcome.expect("grant creation succeeds");
+        assert!(resealed.borrow().is_empty());
+    }
+
+    /// A node the pass measured as interior can answer as a scope root by the
+    /// time the walk reaches it. A scope root is re-keyed as one, so re-sealing
+    /// its record as an interior body would publish over the record that carries
+    /// its own seeds.
+    #[test]
+    fn a_node_that_becomes_a_scope_root_after_the_pass_is_not_moved_into_the_new_scope() {
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .turning_scope_root(INTERIOR_NODE);
+        let resealed = Rc::clone(&net.resealed);
+        let (outcome, _published, _hub) = run(7, &[], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::InteriorNotConverged { node_id }) => {
+                assert_eq!(node_id, INTERIOR_NODE);
+            }
+            other => panic!("expected InteriorNotConverged, got {other:?}"),
+        }
+        assert!(resealed.borrow().is_empty());
+    }
+
+    /// A read the walk cannot make leaves the node sealed under the scope the
+    /// folder left, so the grant reports the partial commit rather than posting
+    /// a pointer to a scope the grantee opens only the root of.
+    #[test]
+    fn an_interior_node_the_mint_cannot_read_fails_the_grant() {
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .stalling_after_promotion(INTERIOR_NODE);
+        let resealed = Rc::clone(&net.resealed);
+        let (outcome, _published, _hub) = run(7, &[], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::InteriorResolve { node_id, reason }) => {
+                assert_eq!(node_id, INTERIOR_NODE);
+                assert_eq!(reason, SweepResolveFailure::Unavailable);
+            }
+            other => panic!("expected InteriorResolve, got {other:?}"),
+        }
+        assert!(resealed.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_node_the_convergence_pass_never_measured_is_not_moved_into_the_new_scope() {
+        // Only a committed writer of the scope the folder is leaving can author
+        // the folder's body. One that names a node from elsewhere in that scope
+        // would have the mint re-seal it into the grantee's scope, where the
+        // owner's own readers no longer open it.
+        const FOREIGN_NODE: [u8; 16] = [0xb7; 16];
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .promoting_also(FOREIGN_NODE);
+        let resealed = Rc::clone(&net.resealed);
+        let (outcome, _published, _hub) = run(7, &[], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::InteriorNotConverged { node_id }) => {
+                assert_eq!(node_id, FOREIGN_NODE);
+            }
+            other => panic!("expected InteriorNotConverged, got {other:?}"),
+        }
+        assert!(
+            !resealed
+                .borrow()
+                .iter()
+                .any(|record| record.node_id == FOREIGN_NODE),
+            "the node the pass never measured was never re-sealed",
+        );
+    }
+
+    #[test]
+    fn an_interior_node_that_does_not_re_seal_fails_the_grant() {
+        // Post-publish: the grantee root is committed, and the grant reports the
+        // node the grantee cannot open rather than posting a pointer to a scope
+        // whose interior is unreadable.
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .reseal(Err(RotationPublishError::LostRace));
+        let (outcome, published, hub) = run(7, &[], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::InteriorPublish { node_id, error }) => {
+                assert_eq!(node_id, INTERIOR_NODE);
+                assert_eq!(error, RotationPublishError::LostRace);
+            }
+            other => panic!("expected InteriorPublish, got {other:?}"),
+        }
+        assert_eq!(
+            published.len(),
+            1,
+            "the grantee root published before the re-seal ran"
+        );
+        assert_eq!(published[0].scope_id, GRANTEE_SCOPE);
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
+        assert!(
+            block_on(poll_verified(&recip_box, &recipient_enc(), V))
+                .unwrap()
+                .is_empty(),
+            "and no share pointer names it",
+        );
     }
 
     #[test]

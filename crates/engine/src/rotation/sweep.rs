@@ -402,7 +402,7 @@ impl SweepError {
 /// Sort by node id and drop repeats, so the frontier — and thus the pass's
 /// publish order — is independent of the order a parent body listed its
 /// children in.
-fn canonicalize_frontier(mut nodes: Vec<NodeRef>) -> Vec<NodeRef> {
+pub(crate) fn canonicalize_frontier(mut nodes: Vec<NodeRef>) -> Vec<NodeRef> {
     nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
     nodes.dedup_by_key(|node| node.node_id);
     nodes
