@@ -8,7 +8,9 @@ import type {
   EventDescriptor,
   SnapshotDescriptor,
   Staleness,
+  VaultStorageDescriptor,
 } from '@cipherbox/client';
+import { FAKE_VAULT_STORAGE } from '../test/authFakes';
 
 /** The anchored root id a first-run vault reports. */
 export const ROOT_ID: Uint8Array = new Uint8Array(16);
@@ -79,6 +81,9 @@ export function fakeEngine() {
       manualRefresh() {
         refreshes += 1;
         return refuseRefresh === null ? Promise.resolve() : Promise.reject(refuseRefresh);
+      },
+      vaultStorage(): Promise<VaultStorageDescriptor> {
+        return Promise.resolve(FAKE_VAULT_STORAGE);
       },
     },
     // No session: this fake drives the browse plane, and a surface that reads

@@ -2167,7 +2167,9 @@ fn origin_folder(rendered: &Snapshot, parent: NodeId) -> BinOrigin {
         return BinOrigin::Root;
     }
     match rendered.node(parent) {
-        Some(meta) => BinOrigin::Folder(meta.name().to_owned()),
+        // The rendered name, not the stored one: a bin row must name the origin
+        // folder the way a host navigating there would read it.
+        Some(_) => BinOrigin::Folder(rendered_name(rendered, parent)),
         None => BinOrigin::Gone,
     }
 }
@@ -10044,6 +10046,35 @@ mod tests {
             trail.first().copied(),
             Some("reports (1)"),
             "the trail names the folder the listing named"
+        );
+    }
+
+    /// A bin row names the origin folder the way the listing names it. Two
+    /// origin folders that share a stored name would otherwise report one name
+    /// for both rows, which is the telling-apart the bin row exists to give.
+    #[test]
+    fn a_bin_rows_origin_folder_reads_under_its_rendered_name() {
+        let (engine, _events) = started();
+        let root = engine.root();
+        let planted = NodeId([0xb1; 16]);
+        let shadowed = NodeId([0xb2; 16]);
+        engine.plant_committed_child(root, planted, "reports", NodeKind::Folder);
+        engine.plant_committed_child(root, shadowed, "reports", NodeKind::Folder);
+
+        let rendered = block_on(engine.render()).expect("render");
+        assert_eq!(origin_folder(&rendered, root), BinOrigin::Root);
+        assert_eq!(
+            origin_folder(&rendered, planted),
+            BinOrigin::Folder("reports".to_owned())
+        );
+        assert_eq!(
+            origin_folder(&rendered, shadowed),
+            BinOrigin::Folder("reports (1)".to_owned()),
+            "the row names the folder the listing named"
+        );
+        assert_eq!(
+            origin_folder(&rendered, NodeId([0xbf; 16])),
+            BinOrigin::Gone
         );
     }
 
