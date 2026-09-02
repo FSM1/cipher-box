@@ -51,7 +51,8 @@ pub use api::{
     RegisteredDevice, RetireResult, SiweNonce, TestLoginOutcome, UPLOAD_TOO_LARGE, UploadResult,
 };
 pub use bin_index::{
-    BinIndexKeys, BinIndexLoad, BinIndexPublishError, load_bin_index, publish_bin_index,
+    BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinIndexRead, load_bin_index,
+    publish_bin_index,
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,

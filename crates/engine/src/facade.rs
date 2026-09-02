@@ -27,8 +27,8 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment, MAX_READ_SEALED_BYTES,
-    ReadBody, Version, open_content_key, seal_content_key, sign_grant_set,
+    BinIndex, ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment,
+    MAX_READ_SEALED_BYTES, ReadBody, Version, open_content_key, seal_content_key, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
@@ -38,7 +38,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
-use crate::bin_index::{BinIndexKeys, BinIndexLoad, BinnedNode, load_bin_index};
+use crate::bin_index::{BinIndexKeys, BinIndexLoad, BinnedNode, load_bin_index, publish_bin_index};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
@@ -101,10 +101,10 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
-    DEFAULT_BIN_RETENTION_DAYS, PlacementRefusal, PlacementSource, SessionPlacement,
-    SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary, decide_placement,
-    load_settings, load_settings_at, placement_of, publish_settings, redecide_placement,
-    settings_name, summarize_settings,
+    DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, PlacementRefusal, PlacementSource,
+    SessionPlacement, SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary,
+    decide_placement, load_settings, load_settings_at, placement_of, publish_settings,
+    redecide_placement, settings_name, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -125,7 +125,7 @@ use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 use crate::sync::record::{RecordClass, record_content_root_cid};
 use cipherbox_core::hex::lower as hex_lower;
 
-pub use crate::sync::drain::{BlockedOp, SettingsHold};
+pub use crate::sync::drain::{BinIndexHold, BlockedOp, SettingsHold};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
@@ -695,6 +695,10 @@ pub struct SessionStatus {
     /// reason as `blocked`, and it names the rule so a host can tell the member
     /// which part of their own provider config to fix.
     pub settings_hold: Option<SettingsHold>,
+    /// The bin-index-refused hold, if the drain has one. Read for the same
+    /// reason as `blocked`, and it names the reason so a withheld record is a
+    /// cause the member can see rather than a silently stalled queue.
+    pub bin_index_hold: Option<BinIndexHold>,
     /// How many durable queue entries this session holds but cannot read
     /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
     /// device is not empty, never whose work it holds — and it exists so an
@@ -728,6 +732,8 @@ pub struct SnapshotView {
     pub blocked: Option<BlockedOp>,
     /// See [`SessionStatus::settings_hold`].
     pub settings_hold: Option<SettingsHold>,
+    /// See [`SessionStatus::bin_index_hold`].
+    pub bin_index_hold: Option<BinIndexHold>,
     /// See [`SessionStatus::retained_records`].
     pub retained_records: usize,
     /// See [`SessionStatus::staleness`].
@@ -745,6 +751,7 @@ impl fmt::Debug for SnapshotView {
             .field("dead_letters", &self.dead_letters)
             .field("blocked", &self.blocked)
             .field("settings_hold", &self.settings_hold)
+            .field("bin_index_hold", &self.bin_index_hold)
             .field("retained_records", &self.retained_records)
             .field("staleness", &self.staleness)
             .finish()
@@ -3506,6 +3513,9 @@ pub struct Engine<T: SeamTypes> {
     /// [`blocked`](Self::blocked): a restart re-derives it from the next drain
     /// attempt's own verdict.
     settings_hold: Rc<RefCell<Option<SettingsHold>>>,
+    /// The drain's bin-index-refused hold, on the same in-memory terms as
+    /// [`blocked`](Self::blocked).
+    bin_index_hold: Rc<RefCell<Option<BinIndexHold>>>,
     /// Pinned bytes a published prune still owes the registry, written by the
     /// drain tick and read by [`pending_reclaim_bytes`](Self::pending_reclaim_bytes).
     /// In-memory: the durable record is the retire ledger, which every pass re-reads.
@@ -3653,6 +3663,7 @@ impl<T: SeamTypes> Engine<T> {
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
                 settings_hold: Rc::new(RefCell::new(None)),
+                bin_index_hold: Rc::new(RefCell::new(None)),
                 pending_reclaim: Rc::new(Cell::new(0)),
                 reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
                 orphan_heads: Rc::new(OrphanHeads::default()),
@@ -3793,6 +3804,7 @@ impl<T: SeamTypes> Engine<T> {
         self.install_cold_start(outcome, root_scope_id);
         if let Some(provisioned) = provisioned {
             self.install_mint(provisioned);
+            self.publish_genesis_bin_index(&api).await;
         }
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
@@ -4297,6 +4309,55 @@ where {
         .await
     }
 
+    /// Publish this account's empty bin index at vault genesis and enrol it in
+    /// the session's renewal set, so the record exists from the start.
+    ///
+    /// Without it the record first appears at the first soft delete, and the
+    /// register-first step tells the API both that this account has binned
+    /// something and when (blueprint/engine.md "Bin index record").
+    ///
+    /// Idempotent on ADR 0007's derived terms: the name comes from the login
+    /// secret alone, and only a load that finds neither a record nor a durable
+    /// mark mints one — so a repeated first run publishes nothing. A publish
+    /// that does not land leaves the first soft delete to mint the record.
+    async fn publish_genesis_bin_index(&self, api: &ApiClient<T::Http, T::CredentialStore>) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let keys = BinIndexKeys::derive(session.login_secret());
+        let load = load_bin_index(
+            &self.seams.record_transport,
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            &keys,
+        )
+        .await
+        .enrol(&self.bin_index_record);
+        if !matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun)) {
+            return;
+        }
+        if let Ok(held) = publish_bin_index(
+            &self.seams.record_transport,
+            api,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            &mut SharedEntropy(&self.entropy),
+            &self.orphan_heads,
+            &keys,
+            &BinIndex::new(0),
+        )
+        .await
+        {
+            *self.bin_index_record.borrow_mut() = Some(held);
+        }
+    }
+
     /// Build the factory for the lazy-wave sweep task every rotation enqueues
     /// once its cut is durable (blueprint/engine.md "Rotation primitives:
     /// sweep").
@@ -4502,6 +4563,7 @@ where {
         let dead_letters = self.dead_letters.clone();
         let blocked = self.blocked.clone();
         let settings_hold = self.settings_hold.clone();
+        let bin_index_hold = self.bin_index_hold.clone();
         let pending_reclaim = self.pending_reclaim.clone();
         let reclaim_stalls = self.reclaim_stalls.clone();
         let content_profile = self.content_profile;
@@ -4873,6 +4935,8 @@ where {
                             bin_retention_days: owner_bin_retention_days(&tick_settings),
                             dead_letters: &dead_letters,
                             bin_index_record: &bin_index_record,
+                            bin_index_hold: &bin_index_hold,
+                            established_bin_index: RefCell::new(None),
                             observed_unlinks: &observed_unlinks,
                         }
                         .run(&DrainScope {
@@ -6903,7 +6967,10 @@ where {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
         let root = self.snapshot.borrow().root;
         match self.provision_first_run_vault(&api, root.0).await {
-            Ok(ProvisionOutcome::Minted(vault)) => self.install_mint(*vault),
+            Ok(ProvisionOutcome::Minted(vault)) => {
+                self.install_mint(*vault);
+                self.publish_genesis_bin_index(&api).await;
+            }
             // The account published from another device between this session's
             // failed mint and this retry — caught by the vacancy probe before
             // minting, or by the pointer walk after. Its root is the one to
@@ -7567,6 +7634,7 @@ where {
             dead_letters: self.retained_dead_letters(),
             blocked: *self.blocked.borrow(),
             settings_hold: *self.settings_hold.borrow(),
+            bin_index_hold: *self.bin_index_hold.borrow(),
             retained_records,
             staleness: self.staleness_now(),
         })
@@ -7651,6 +7719,7 @@ where {
             dead_letters: self.retained_dead_letters(),
             blocked: *self.blocked.borrow(),
             settings_hold: *self.settings_hold.borrow(),
+            bin_index_hold: *self.bin_index_hold.borrow(),
             retained_records: scan.retained,
             staleness: self.staleness_now(),
         })
@@ -8714,7 +8783,8 @@ where {
             &self.profile,
             &keys,
         )
-        .await;
+        .await
+        .enrol(&self.bin_index_record);
         let reason = match load {
             BinIndexLoad::Resolved(_) => return Ok(load),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,
@@ -9007,6 +9077,7 @@ mod tests {
             dead_letters: Vec::new(),
             blocked: None,
             settings_hold: None,
+            bin_index_hold: None,
             retained_records: 0,
             staleness: Staleness::Fresh,
         };

@@ -3,14 +3,21 @@
 //! record").
 //!
 //! The record plane is [`crate::settings`]'s, so the floor law, the degradation
-//! ladder and the mint-versus-adopt revision pair carry over unchanged. The two
+//! ladder and the mint-versus-adopt revision pair carry over unchanged. The
 //! properties that do not are stated where they bite: the nonce rule at
-//! [`publish_bin_index`], and the rewrite guard at [`BinIndexLoad::writable`].
+//! [`publish_bin_index`], the rewrite guard at [`BinIndexLoad::writable`], and
+//! the renewal enrolment at [`BinIndexRead::renewable`], which stands in for the
+//! settings resolve's lapsed-EOL refusal (blueprint/engine.md "Bin index
+//! record").
+
+use core::cell::RefCell;
 
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{BinIndex, NodeKind, open_bin_index, seal_bin_index};
+use cipherbox_core::seal::{
+    BinIndex, NodeKind, is_bin_index_over_rung, open_bin_index, seal_bin_index,
+};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -20,11 +27,10 @@ use crate::content::Gateway;
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
-use crate::net::eol::is_expired;
 use crate::net::fanout_get_verify;
 use crate::net::fetch_head_block;
 use crate::net::liveness::{HeldRecord, HeldValue};
-use crate::net::publish::PublishOutcome;
+use crate::net::publish::{PublishOutcome, head_cid_from_value};
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index, publish_record,
 };
@@ -32,7 +38,6 @@ use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
-    UnixMillis,
 };
 use crate::settings::{DefaultsReason, prefixed_key, within};
 
@@ -124,9 +129,13 @@ impl BinnedNode {
 /// fail-closed: nothing is published.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinIndexPublishError {
-    /// Core refused to encode or seal the body — a duplicate `nodeId`, an
-    /// over-bound field, or a body no rung admits.
+    /// Core refused to encode or seal the body — a duplicate `nodeId` or an
+    /// over-bound field.
     Codec(CodecError),
+    /// The body is past the top rung, so the bin holds all the entries one
+    /// record can carry. Distinct from [`Self::Codec`] because no re-author
+    /// shrinks it: only the expiry sweep frees space.
+    Full,
     /// The host could not supply the per-seal nonce.
     Entropy(EntropyError),
     /// The sealed record failed its pre-publish dry run.
@@ -142,6 +151,15 @@ pub enum BinIndexPublishError {
     /// The durable revision counter did not advance, so this publish would mint
     /// a body revision the reader refuses (AGENTS.md rule 8).
     Revision,
+}
+
+/// Tell a bin the top rung no longer admits from every other encode refusal,
+/// so the host reads a full bin rather than a codec defect.
+fn publish_refusal(error: CodecError) -> BinIndexPublishError {
+    if is_bin_index_over_rung(&error) {
+        return BinIndexPublishError::Full;
+    }
+    BinIndexPublishError::Codec(error)
 }
 
 /// The bin's own key material, derived once from the login secret.
@@ -289,8 +307,7 @@ where
         entries: index.entries.clone(),
         unknown: index.unknown.clone(),
     };
-    let block = seal_bin_index(seal_key.as_bytes(), &nonce, &minted)
-        .map_err(BinIndexPublishError::Codec)?;
+    let block = seal_bin_index(seal_key.as_bytes(), &nonce, &minted).map_err(publish_refusal)?;
     let head = preflight_bin_index(seal_key.as_bytes(), block.clone())
         .map_err(BinIndexPublishError::Preflight)?;
 
@@ -342,6 +359,39 @@ where
     })
 }
 
+/// A bin index load, with the record the plane served at the bin index name.
+pub struct BinIndexRead {
+    /// What the degradation ladder produced.
+    pub load: BinIndexLoad,
+    /// The record standing at the name, for the session's renewal set.
+    ///
+    /// A read alone enrols the record, which is what keeps the EOL alive on a
+    /// session that publishes nothing, and so what keeps a live account away
+    /// from the lapse this plane does not refuse.
+    ///
+    /// Two bars, because the renewal re-signs at `floor + 1` and so promotes
+    /// whatever it is given. The record must have cleared the whole floor law,
+    /// or a replay or a fork would be re-signed into winning record selection.
+    /// And this device must already hold a sequence floor for the name, or it
+    /// has nothing of its own against which to judge the age of what the plane
+    /// served — the bar the lapsed-EOL refusal used to carry
+    /// (blueprint/engine.md "Bin index record").
+    pub renewable: Option<HeldRecord>,
+}
+
+impl BinIndexRead {
+    /// Put the renewable record in the session's slot and hand back the load.
+    ///
+    /// Every caller enrols: a load that reads and does not enrol is what lets
+    /// the record's EOL lapse under a session that publishes nothing.
+    pub fn enrol(self, slot: &RefCell<Option<HeldRecord>>) -> BinIndexLoad {
+        if let Some(renewable) = self.renewable {
+            *slot.borrow_mut() = Some(renewable);
+        }
+        self.load
+    }
+}
+
 /// Resolve the bin index record, bounded by
 /// [`SyncTimingProfile::settings_load_budget`] — the same bound the vault
 /// settings load runs under, because this is the same class of owner record read
@@ -361,7 +411,7 @@ pub async fn load_bin_index<T, H, F, Sn, Sch>(
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     keys: &BinIndexKeys,
-) -> BinIndexLoad
+) -> BinIndexRead
 where
     T: RecordTransport,
     H: Http,
@@ -369,7 +419,6 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler,
 {
-    let name = &keys.name;
     let seal_key = &keys.seal_key;
     // Held outside the budget so a load that runs out of it mid-resolve still
     // has the cached ciphertext the resolve read on its way in.
@@ -381,23 +430,32 @@ where
         floors,
         snapshots,
         &mut cached,
-        seal_key,
-        name,
-        scheduler.now(),
+        keys,
     );
     let reason = match within(scheduler, profile.settings_load_budget, load).await {
-        Some(Ok(index)) => return BinIndexLoad::Resolved(index),
+        Some(Ok((index, renewable))) => {
+            return BinIndexRead {
+                load: BinIndexLoad::Resolved(index),
+                renewable,
+            };
+        }
         Some(Err(reason)) => reason,
         None => DefaultsReason::TimedOut,
     };
     // The cached copy clears the same seal open the fetched one does; being
     // cached buys bytes nothing.
-    match cached.and_then(|block| open_bin_index(seal_key.as_bytes(), &block).ok()) {
+    let load = match cached.and_then(|block| open_bin_index(seal_key.as_bytes(), &block).ok()) {
         Some(index) => BinIndexLoad::Stale { index, reason },
         None => BinIndexLoad::Empty(reason),
+    };
+    BinIndexRead {
+        load,
+        renewable: None,
     }
 }
 
+/// The resolved index and the record to enrol for renewal
+/// ([`BinIndexRead::renewable`]), or the reason the ladder degrades.
 #[allow(clippy::too_many_arguments)]
 async fn resolve_bin_index<T, H, F, Sn>(
     transport: &T,
@@ -406,16 +464,16 @@ async fn resolve_bin_index<T, H, F, Sn>(
     floors: &F,
     snapshots: &Sn,
     cached: &mut Option<Vec<u8>>,
-    seal_key: &SecretBytes,
-    name: &IpnsName,
-    now: UnixMillis,
-) -> Result<BinIndex, DefaultsReason>
+    keys: &BinIndexKeys,
+) -> Result<(BinIndex, Option<HeldRecord>), DefaultsReason>
 where
     T: RecordTransport,
     H: Http,
     F: FloorStore,
     Sn: SnapshotCache,
 {
+    let name = &keys.name;
+    let seal_key = &keys.seal_key;
     let key = name.as_str().as_bytes();
     let cache_key = bin_index_cache_key(name);
     // Read ahead of the resolve so a degraded outcome has last-known-good to
@@ -441,11 +499,6 @@ where
             None => DefaultsReason::UnprovenFirstRun,
         });
     };
-    // The reader is always the signer, so a lapse is refused here rather than
-    // recovered by revival (blueprint/engine.md "Vault settings load").
-    if is_expired(now, &verified.validity) {
-        return Err(DefaultsReason::Expired);
-    }
     let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);
     if sequence < floor {
@@ -472,11 +525,21 @@ where
             revision: index.revision,
         });
     }
+    // Both bars are behind this point ([`BinIndexRead::renewable`]).
+    let renewable = durable
+        .and_then(|_| head_cid_from_value(&verified.value))
+        .map(|head_cid| HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes,
+            signer: keys.signer.clone(),
+            value: HeldValue::Head(head_cid),
+            content_cids: Vec::new(),
+        });
     // Ciphertext at rest: the sealed block, never the opened index.
     let _ = snapshots.put(&cache_key, &block).await;
     let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
     let _ = floor::advance_sequence_on_unseal(floors, &adopted_key, index.revision).await;
-    Ok(index)
+    Ok((index, renewable))
 }
 
 #[cfg(test)]
@@ -508,7 +571,6 @@ mod tests {
                 floor: 4,
                 revision: 2,
             },
-            DefaultsReason::Expired,
             DefaultsReason::TimedOut,
             DefaultsReason::Unreadable,
             DefaultsReason::FloorUnreadable,

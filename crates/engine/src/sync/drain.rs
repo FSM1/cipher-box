@@ -189,14 +189,16 @@ fn names_this_scope(scope: &DrainScope<'_>, child: &ChildRef) -> bool {
 
 /// A bin index load that did not establish the current index.
 ///
-/// A plane this pass could not read is availability and waits uncharged. A
-/// refusal of bytes the plane actually served is charged, so a jammed bin index
-/// cannot hold the queue head for good.
+/// A refusal of bytes the plane actually served is charged, so a jammed bin
+/// index cannot hold the queue head for good. A plane this pass could not read
+/// is availability and waits uncharged — but it waits as a *reported* hold, so
+/// a party who withholds one record does not stall the queue in silence
+/// ([`BinIndexHold`]).
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
     if bin_load_is_a_verdict(reason) {
         Halt::Attempt
     } else {
-        Halt::Unclassified
+        Halt::HeldByBinIndex(reason)
     }
 }
 
@@ -224,6 +226,10 @@ fn halt_for_bin_publish(error: &BinIndexPublishError) -> Halt {
         BinIndexPublishError::Codec(_)
         | BinIndexPublishError::Preflight(_)
         | BinIndexPublishError::Revision => Halt::Attempt,
+        // A bin at its top rung takes no further entry until the expiry sweep
+        // frees one, and no retry of this op shrinks the body. Its own reason,
+        // so the host reads a full bin rather than a spent attempt budget.
+        BinIndexPublishError::Full => Halt::Permanent(DeadLetterReason::BinIndexFull),
         // A lost CAS race is the ordinary outcome of two devices soft-deleting
         // at once, and a confirm the plane could not answer is availability
         // ([`PublishOutcome`](crate::net::publish::PublishOutcome)). Charging
@@ -375,6 +381,11 @@ enum Halt {
         /// resume probe must find room for.
         needed_bytes: u64,
     },
+    /// The bin index plane did not establish the current index, and the reason
+    /// is availability rather than a verdict on bytes it served. Not a failure
+    /// of the op — it holds the head and its staging reservation until the
+    /// record resolves ([`BinIndexHold`]).
+    HeldByBinIndex(DefaultsReason),
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass.
     Cancelled,
@@ -479,6 +490,23 @@ pub struct SettingsHold {
     /// Which rule refused. Render it through [`SettingsRefusal::check`], which
     /// names the rule and never the endpoint or the bearer the settings carry.
     pub refusal: SettingsRefusal,
+}
+
+/// The queue head is held over rather than failed: the bin index plane did not
+/// establish the current index, so the op that needs it keeps its place and its
+/// staging reservation until the record resolves.
+///
+/// Reported, because a party who withholds the record — or one head block of it
+/// — otherwise stops every queued operation for the account with no cause the
+/// member can see (blueprint/engine.md "Bin index record").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BinIndexHold {
+    /// The held op.
+    pub op_id: OpId,
+    /// The node the op targets, so a host can point at it.
+    pub node: NodeId,
+    /// Why the load did not establish the index.
+    pub reason: DefaultsReason,
 }
 
 /// The captures one pass adopts into the bin. A peer chooses both the trigger
@@ -627,9 +655,18 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// bin entry has landed: the merge that saw it has already dropped the node
     /// from the base, so a set this pass emptied on failure would lose it.
     pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
-    /// The bin index record this session published, shared with the facade's
-    /// renewal slot.
+    /// The bin index record this session last published or resolved, shared
+    /// with the facade's renewal slot. A load fills it too, so the sub-EOL
+    /// renewal keeps the record alive on a session that publishes nothing.
     pub(crate) bin_index_record: &'a RefCell<Option<HeldRecord>>,
+    /// The bin-index-refused hold, shared with the facade's read surface. It
+    /// clears only here, on a load that establishes the index.
+    pub(crate) bin_index_hold: &'a RefCell<Option<BinIndexHold>>,
+    /// The bin index this pass has established: the one it resolved, or the one
+    /// its last confirmed publish left standing. Carried so a bulk soft delete
+    /// costs one resolve rather than one per operation; the publish stays per
+    /// operation, which is what keeps the entry ahead of its unlink.
+    pub(crate) established_bin_index: RefCell<Option<BinIndex>>,
 }
 
 /// One folder's current published state, carried across the ops of one pass so
@@ -923,7 +960,16 @@ where
         if queued.is_empty() {
             self.clear_block();
             self.clear_settings_hold();
+            self.clear_bin_index_hold();
             return (report, Some(Vec::new()));
+        }
+        // The hold names one op, so it goes as soon as that op does.
+        if self
+            .bin_index_hold
+            .borrow()
+            .is_some_and(|hold| !still_queued(&queued, hold.op_id))
+        {
+            self.clear_bin_index_hold();
         }
         let purges = queued
             .iter()
@@ -1015,6 +1061,12 @@ where
         attempts: &mut Attempts,
         report: &mut DrainReport,
     ) {
+        // The bin plane has no probe of its own — the load is the only one — so
+        // its hold goes here, on the first halt that is not it. Every other
+        // hold's own pre-pass gate is what lets go of it.
+        if !matches!(halt, Halt::HeldByBinIndex(_)) {
+            self.clear_bin_index_hold();
+        }
         match halt {
             Halt::Unclassified => {}
             // The facade undid the op against the blocks it could see when the
@@ -1105,7 +1157,7 @@ where
                 self.dead_letter(scope, op_id, op, reason, report).await;
             }
             // One pass raises one halt, and each hold's own gate is what lets
-            // go of it — so taking one drops the other rather than leaving two
+            // go of it — so taking one drops the others rather than leaving two
             // cells claiming the same head for different reasons.
             Halt::Blocked { needed_bytes } => {
                 self.clear_settings_hold();
@@ -1121,6 +1173,15 @@ where
                     op_id,
                     node: op.target,
                     refusal,
+                });
+            }
+            Halt::HeldByBinIndex(reason) => {
+                self.clear_block();
+                self.clear_settings_hold();
+                *self.bin_index_hold.borrow_mut() = Some(BinIndexHold {
+                    op_id,
+                    node: op.target,
+                    reason,
                 });
             }
         }
@@ -1159,6 +1220,10 @@ where
 
     fn clear_block(&self) {
         *self.blocked.borrow_mut() = None;
+    }
+
+    fn clear_bin_index_hold(&self) {
+        *self.bin_index_hold.borrow_mut() = None;
     }
 
     /// Whether a settings-held head may be tried again this tick: only once the
@@ -1708,26 +1773,37 @@ where
         to_bin: bool,
     ) -> Result<(), Halt> {
         let target = applied.op.target;
-        let parent = self.published_parent(target)?;
-        self.ensure_folder(scope, pass, parent).await?;
+        let mut unlink_from = Vec::new();
+        let mut named = None;
+        for parent in self.published_parents(scope, target)? {
+            self.ensure_folder(scope, pass, parent).await?;
+            let Some(child) = pass
+                .folder(parent)?
+                .children
+                .iter()
+                .find(|child| child.id == target.0)
+                .cloned()
+            else {
+                continue;
+            };
+            named.get_or_insert(child);
+            unlink_from.push(parent);
+        }
         // Removing an absent ref is the op already satisfied, never a publish.
-        let Some(child) = pass
-            .folder(parent)?
-            .children
-            .iter()
-            .find(|child| child.id == target.0)
-            .cloned()
-        else {
+        let (Some(&origin), Some(child)) = (unlink_from.first(), named) else {
             return Ok(());
         };
 
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
-        // republish the parent, which is where the op completes.
+        // republish every parent, which is where the op completes.
         let doomed = if to_bin && names_this_scope(scope, &child) {
             let unlinked = UnlinkedChild {
                 scope_id: scope.root.0,
-                parent,
+                // The highest-ranked link still standing: the folder a reader
+                // resolves the node under, and so the one a restore returns it
+                // to.
+                parent: origin,
                 node: target,
                 name: child.name.clone(),
                 kind: child.kind,
@@ -1745,7 +1821,7 @@ where
                 self.enumerate_doomed(
                     scope,
                     pass.epoch,
-                    parent,
+                    origin,
                     target,
                     child.kind,
                     Boundary::None,
@@ -1753,18 +1829,24 @@ where
                 .await?,
             )
         };
-        pass.folder_mut(parent)?
-            .children
-            .retain(|entry| entry.id != target.0);
-        self.publish_folder(
-            scope,
-            pass,
-            parent,
-            applied.op.authored_at.0,
-            Some(applied.op_id),
-        )
-        .await
-        .map_err(Halt::from)?;
+        // Only the last unlink completes the op. A pass that stops part-way
+        // leaves the node binned and still linked, which is the residue the
+        // entry-before-unlink order already settles on the retry.
+        let count = unlink_from.len();
+        for (at, parent) in unlink_from.into_iter().enumerate() {
+            pass.folder_mut(parent)?
+                .children
+                .retain(|entry| entry.id != target.0);
+            self.publish_folder(
+                scope,
+                pass,
+                parent,
+                applied.op.authored_at.0,
+                (at + 1 == count).then_some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        }
         let Some(doomed) = doomed else {
             return Ok(());
         };
@@ -2027,7 +2109,7 @@ where
         if index.entries.len() == before {
             return Ok(());
         }
-        self.publish_bin(&index).await
+        self.publish_bin(index).await
     }
 
     /// Write what the unlink just earned to the doomed-name journal, reporting
@@ -2239,7 +2321,7 @@ where
     /// current index may be written over (blueprint/engine.md "Bin index
     /// record"); every other outcome holds the op for a later tick.
     async fn record_bin_entry(&self, child: &UnlinkedChild, deleted_at: u64) -> Result<u64, Halt> {
-        let mut index = self.writable_bin_index().await?;
+        let mut index = self.carried_bin_index().await?;
         // A duplicate node id is a hard reject at encode, so a retry whose
         // entry already landed publishes nothing.
         if let Some(entry) = index
@@ -2259,7 +2341,7 @@ where
             child.scope_id,
             Some(*self.bin_keys.held_key(&child.node.0, deleted_at)),
         ));
-        self.publish_bin(&index).await?;
+        self.publish_bin(index).await?;
         Ok(deleted_at)
     }
 
@@ -2330,7 +2412,7 @@ where
             ));
             added.push(unlinked);
         }
-        if !added.is_empty() && self.publish_bin(&index).await.is_err() {
+        if !added.is_empty() && self.publish_bin(index).await.is_err() {
             // Re-keyed with no entry to name them: the next pass re-keys to the
             // same key and writes the entries it could not write here.
             unfinished.extend(added);
@@ -2405,6 +2487,9 @@ where
     /// entry stamped otherwise. Retention is measured in days, so a copy that is
     /// a pass or two behind costs nothing but a pass or two.
     async fn expiry_bin_index(&self) -> Option<BinIndex> {
+        if let Some(index) = self.established_bin_index.borrow().clone() {
+            return Some(index);
+        }
         if let Some(index) = cached_bin_index(self.snapshot_cache, self.bin_keys).await {
             return Some(index);
         }
@@ -2419,6 +2504,7 @@ where
             self.bin_keys,
         )
         .await
+        .enrol(self.bin_index_record)
         {
             BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => Some(index),
             BinIndexLoad::Empty(_) => None,
@@ -2464,8 +2550,13 @@ where
     }
 
     /// The current bin index, ready to be written over.
+    ///
+    /// A fresh load every time: the index is rewritten whole, so a rewrite built
+    /// on a copy read before an intervening publish drops that publish's
+    /// entries. [`Self::carried_bin_index`] is the one caller that may build on
+    /// what the pass already established.
     async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
-        load_bin_index(
+        let index = load_bin_index(
             self.transport,
             self.gateway,
             self.http,
@@ -2476,6 +2567,7 @@ where
             self.bin_keys,
         )
         .await
+        .enrol(self.bin_index_record)
         .writable()
         .map_err(|reason| {
             let halt = halt_for_bin_load(reason);
@@ -2487,11 +2579,37 @@ where
                 );
             }
             halt
-        })
+        })?;
+        self.establish_bin_index(index.clone());
+        Ok(index)
+    }
+
+    /// The bin index a further entry may be appended to: the one this pass
+    /// established, or a fresh load.
+    ///
+    /// Only the entry the soft delete writes builds on the carried copy, which
+    /// is what makes a bulk soft delete cost one resolve rather than one per
+    /// node (blueprint/engine.md "Bin index record"). The entry an op *removes*
+    /// runs after a re-key and several publishes, so it resolves again.
+    async fn carried_bin_index(&self) -> Result<BinIndex, Halt> {
+        if let Some(index) = self.established_bin_index.borrow().clone() {
+            return Ok(index);
+        }
+        self.writable_bin_index().await
+    }
+
+    /// Record the index a further entry may be appended to, and let go of the
+    /// hold a refused load took.
+    fn establish_bin_index(&self, index: BinIndex) {
+        *self.established_bin_index.borrow_mut() = Some(index);
+        self.clear_bin_index_hold();
     }
 
     /// Publish the bin index and hold the confirmed record for renewal.
-    async fn publish_bin(&self, index: &BinIndex) -> Result<(), Halt> {
+    async fn publish_bin(&self, index: BinIndex) -> Result<(), Halt> {
+        // A publish that does not confirm leaves the standing index unknown, so
+        // the next rewrite resolves rather than building on this attempt.
+        *self.established_bin_index.borrow_mut() = None;
         let held = publish_bin_index(
             self.transport,
             self.api,
@@ -2502,11 +2620,14 @@ where
             &mut SharedEntropy(self.entropy),
             self.orphan_heads,
             self.bin_keys,
-            index,
+            &index,
         )
         .await
         .map_err(|error| halt_for_bin_publish(&error))?;
         *self.bin_index_record.borrow_mut() = Some(held);
+        // The confirm re-resolved this session's own bytes at its own sequence,
+        // so the published entries are the standing index.
+        self.establish_bin_index(index);
         Ok(())
     }
 
@@ -3907,6 +4028,30 @@ where
         self.base.borrow().parent_of(node).ok_or(Halt::Unclassified)
     }
 
+    /// Every parent inside `scope` that the base links `node` under, winner
+    /// first ([`Snapshot::links_ranked`]).
+    ///
+    /// A delete acts on the whole list, because it re-keys the node out of the
+    /// scope: a link left standing names a record its own folder's readers can
+    /// no longer open (blueprint/engine.md "Delete branch").
+    ///
+    /// A link from outside the scope is dropped rather than halted on. This
+    /// scope's write plane cannot author that folder at all, so waiting on it
+    /// would hold the queue head for as long as the link stands.
+    fn published_parents(&self, scope: &DrainScope<'_>, node: NodeId) -> Result<Vec<NodeId>, Halt> {
+        let parents: Vec<NodeId> = self
+            .base
+            .borrow()
+            .links_ranked_under(node, scope.root)
+            .into_iter()
+            .map(|link| link.parent)
+            .collect();
+        if parents.is_empty() {
+            return Err(Halt::Unclassified);
+        }
+        Ok(parents)
+    }
+
     // -----------------------------------------------------------------------
     // Authoring and publishing one record.
     // -----------------------------------------------------------------------
@@ -4707,13 +4852,16 @@ fn blocks(count: usize) -> u32 {
 }
 
 /// The key-free classification an [`OpPhase::UploadFailed`] carries, or `None`
-/// where the halt is not a failed attempt: either hold keeps the op and its
-/// reservation, and the host reads them from `SnapshotView::blocked` and
-/// `SnapshotView::settings_hold`.
+/// where the halt is not a failed attempt: a hold keeps the op and its
+/// reservation, and the host reads them from `SnapshotView::blocked`,
+/// `SnapshotView::settings_hold` and `SnapshotView::bin_index_hold`.
 fn upload_failure(halt: Halt) -> Option<&'static str> {
     match halt {
         // A cancel reports `UploadCancelled` from the facade that ordered it.
-        Halt::Blocked { .. } | Halt::HeldBySettings(_) | Halt::Cancelled => None,
+        Halt::Blocked { .. }
+        | Halt::HeldBySettings(_)
+        | Halt::HeldByBinIndex(_)
+        | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
@@ -4822,7 +4970,8 @@ mod tests {
     /// The bin index split decides retry against charge for every soft delete,
     /// so a wrong arm either abandons a delete the plane would have taken or
     /// holds the queue head for good. A plane this pass could not read waits
-    /// uncharged; a refusal of bytes the plane actually served is charged.
+    /// uncharged, and it waits as a reported hold rather than in silence; a
+    /// refusal of bytes the plane actually served is charged.
     #[test]
     fn only_a_refusal_of_bytes_the_plane_served_is_charged_against_the_bin_index() {
         for reason in [
@@ -4841,12 +4990,31 @@ mod tests {
         for reason in [
             DefaultsReason::UnprovenFirstRun,
             DefaultsReason::Suppressed,
-            DefaultsReason::Expired,
             DefaultsReason::TimedOut,
             DefaultsReason::FloorUnreadable,
         ] {
-            assert_eq!(halt_for_bin_load(reason), Halt::Unclassified, "{reason:?}");
+            assert_eq!(
+                halt_for_bin_load(reason),
+                Halt::HeldByBinIndex(reason),
+                "{reason:?}",
+            );
+            assert_eq!(
+                upload_failure(halt_for_bin_load(reason)),
+                None,
+                "{reason:?}: a hold keeps the op rather than reporting a failed attempt",
+            );
         }
+    }
+
+    /// A bin the top rung no longer admits is the member's own state, not a
+    /// codec defect and not a spent attempt budget: no re-author shrinks the
+    /// body, so the op ends with a reason that names the full bin.
+    #[test]
+    fn a_bin_index_at_its_ceiling_dead_letters_under_its_own_reason() {
+        assert_eq!(
+            halt_for_bin_publish(&BinIndexPublishError::Full),
+            Halt::Permanent(DeadLetterReason::BinIndexFull),
+        );
     }
 
     /// The publish half of the same split. A lost race and an unanswered

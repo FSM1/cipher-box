@@ -401,6 +401,9 @@ pub enum DeadLetterReason {
     /// Every attempt authored a shared folder's root record that leaves no room
     /// for the re-key a revoke needs.
     ScopeRootNotResealable,
+    /// The owner's bin index holds every entry one record can carry, so the
+    /// soft delete could not be recorded.
+    BinIndexFull,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -426,6 +429,7 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             facade::DeadLetterReason::ScopeRootNotResealable => {
                 DeadLetterReason::ScopeRootNotResealable
             }
+            facade::DeadLetterReason::BinIndexFull => DeadLetterReason::BinIndexFull,
         }
     }
 }
@@ -731,6 +735,34 @@ impl SettingsHold {
     }
 }
 
+/// The queue head held over the owner's bin index, keeping its place and its
+/// staging reservation until that record resolves.
+#[wasm_bindgen]
+pub struct BinIndexHold {
+    inner: facade::BinIndexHold,
+}
+
+#[wasm_bindgen]
+impl BinIndexHold {
+    /// The held op id (a `u64`, crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = opId)]
+    pub fn op_id(&self) -> u64 {
+        self.inner.op_id.0
+    }
+
+    /// The 16 raw bytes of the node the held op targets.
+    #[wasm_bindgen(getter)]
+    pub fn node(&self) -> Vec<u8> {
+        self.inner.node.0.to_vec()
+    }
+
+    /// The stable check name of what the bin index load produced.
+    #[wasm_bindgen(getter)]
+    pub fn check(&self) -> String {
+        self.inner.reason.check().to_owned()
+    }
+}
+
 /// A freshly opened read stream and the plaintext size of the version it
 /// pinned (`Engine::stream_size`).
 #[wasm_bindgen]
@@ -832,6 +864,14 @@ impl SnapshotView {
     #[wasm_bindgen(getter, js_name = settingsHold)]
     pub fn settings_hold(&self) -> Option<SettingsHold> {
         self.inner.settings_hold.map(|inner| SettingsHold { inner })
+    }
+
+    /// The drain's bin-index-refused hold, or `undefined`.
+    #[wasm_bindgen(getter, js_name = binIndexHold)]
+    pub fn bin_index_hold(&self) -> Option<BinIndexHold> {
+        self.inner
+            .bin_index_hold
+            .map(|inner| BinIndexHold { inner })
     }
 
     /// Durable queue entries this session holds but cannot read — another
@@ -2491,6 +2531,11 @@ mod tests {
                     cipherbox_engine::ProviderError::InsecureTransport,
                 ),
             }),
+            bin_index_hold: Some(facade::BinIndexHold {
+                op_id: OpId(14),
+                node: facade::NodeId([7u8; 16]),
+                reason: cipherbox_engine::DefaultsReason::Suppressed,
+            }),
             retained_records: 3,
             staleness: facade::Staleness::Reconciling,
         });
@@ -2517,6 +2562,10 @@ mod tests {
         assert_eq!(held.op_id(), 13);
         assert_eq!(held.node(), vec![6u8; 16]);
         assert_eq!(held.check(), "byo-endpoint-insecure");
+        let bin_held = view.bin_index_hold().expect("the view carries the hold");
+        assert_eq!(bin_held.op_id(), 14);
+        assert_eq!(bin_held.node(), vec![7u8; 16]);
+        assert_eq!(bin_held.check(), "suppressed");
         assert_eq!(view.retained_records(), 3);
         assert_eq!(view.staleness(), Staleness::Reconciling);
 

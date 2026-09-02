@@ -342,6 +342,11 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 cipherbox_engine::ProviderError::BlockedAddress,
             ),
         }),
+        bin_index_hold: Some(facade::BinIndexHold {
+            op_id: OpId(14),
+            node: facade::NodeId([8u8; 16]),
+            reason: cipherbox_engine::DefaultsReason::Suppressed,
+        }),
         retained_records: 0,
         staleness: facade::Staleness::Fresh,
     })
@@ -435,6 +440,24 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         get(&held, "check"),
         JsValue::from_str("byo-endpoint-blocked"),
         "the refusing rule crosses by its stable check name"
+    );
+
+    let bin_held = get(&view, "binIndexHold");
+    assert_eq!(
+        get(&bin_held, "opId").js_typeof(),
+        JsValue::from_str("bigint"),
+        "a held op's opId must cross as a JS bigint, never a number"
+    );
+    assert_eq!(
+        get(&bin_held, "node")
+            .unchecked_into::<Uint8Array>()
+            .to_vec(),
+        vec![8u8; 16]
+    );
+    assert_eq!(
+        get(&bin_held, "check"),
+        JsValue::from_str("suppressed"),
+        "the load outcome crosses by its stable check name, carrying no figures"
     );
 
     let children = get(&view, "children");

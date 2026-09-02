@@ -450,5 +450,6 @@ export interface EngineWasm {
     readonly AlreadyPublished: number;
     readonly TargetStillLinked: number;
     readonly ScopeRootNotResealable: number;
+    readonly BinIndexFull: number;
   };
 }

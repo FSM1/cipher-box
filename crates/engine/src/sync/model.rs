@@ -328,15 +328,37 @@ impl Snapshot {
 
     /// The winning link for a child under the dual-link tiebreak.
     pub fn winning_link(&self, child: NodeId) -> Option<Link> {
-        self.links
-            .iter()
-            .filter(|l| l.child == child)
-            .copied()
-            .max_by(|a, b| {
-                a.link_counter
-                    .cmp(&b.link_counter)
-                    .then(b.parent.cmp(&a.parent))
-            })
+        self.links_ranked(child).into_iter().next()
+    }
+
+    /// Every link to `child`, winner first, under the one dual-link tiebreak
+    /// (highest counter, then lowest parent id).
+    ///
+    /// A caller that acts on the whole set — a delete unlinks from every parent
+    /// — orders it here rather than spelling the comparator again, or the head
+    /// of its list stops being the parent readers resolve the child under.
+    pub fn links_ranked(&self, child: NodeId) -> Vec<Link> {
+        let mut links = self.links_to(child);
+        links.sort_by(|a, b| {
+            b.link_counter
+                .cmp(&a.link_counter)
+                .then(a.parent.cmp(&b.parent))
+        });
+        links
+    }
+
+    /// [`Self::links_ranked`], narrowed to the links whose parent sits at or
+    /// under `under`.
+    ///
+    /// The snapshot spans the whole vault, so a child can be linked from a
+    /// folder outside the scope acting on it. That folder publishes under a
+    /// write plane this caller does not hold, so it is not this caller's link
+    /// to remove.
+    pub fn links_ranked_under(&self, child: NodeId, under: NodeId) -> Vec<Link> {
+        self.links_ranked(child)
+            .into_iter()
+            .filter(|link| link.parent == under || self.is_descendant_of(link.parent, under))
+            .collect()
     }
 
     /// The children linked under `parent`, deterministically ordered by child
@@ -1234,6 +1256,44 @@ mod tests {
         snap.link(id(1), id(2), 1);
         assert_eq!(snap.ancestors(id(2)), vec![id(1), id(0)]);
         assert_eq!(snap.ancestors(id(0)), Vec::<NodeId>::new());
+    }
+
+    /// A delete acts on every link the scope holds, so the set is ranked once
+    /// here — winner first, so the head is the parent readers resolve the child
+    /// under — and narrowed to the scope, because a folder outside it publishes
+    /// under a write plane the caller does not hold.
+    #[test]
+    fn ranked_links_put_the_winner_first_and_drop_the_ones_outside_the_scope() {
+        let mut snap = Snapshot::new(id(0));
+        for node in [1u8, 2, 3, 4] {
+            snap.upsert_node(NodeMeta::new(id(node), "n", NodeKind::Folder));
+        }
+        snap.upsert_node(NodeMeta::new(id(9), "c", NodeKind::File));
+        // scope 1 holds folders 2 and 3; folder 4 hangs off the vault root.
+        snap.link(id(0), id(1), 1);
+        snap.link(id(1), id(2), 1);
+        snap.link(id(1), id(3), 1);
+        snap.link(id(0), id(4), 1);
+        snap.link(id(2), id(9), 1);
+        snap.link(id(3), id(9), 2);
+        snap.link(id(4), id(9), 3);
+
+        assert_eq!(
+            snap.links_ranked(id(9))
+                .into_iter()
+                .map(|link| link.parent)
+                .collect::<Vec<_>>(),
+            vec![id(4), id(3), id(2)],
+            "highest counter first",
+        );
+        assert_eq!(
+            snap.links_ranked_under(id(9), id(1))
+                .into_iter()
+                .map(|link| link.parent)
+                .collect::<Vec<_>>(),
+            vec![id(3), id(2)],
+            "and the link from outside the scope is not the scope's to act on",
+        );
     }
 
     #[test]

@@ -141,6 +141,7 @@ fn reason_tag(reason: DeadLetterReason) -> u8 {
         DeadLetterReason::AlreadyPublished => 12,
         DeadLetterReason::TargetStillLinked => 13,
         DeadLetterReason::ScopeRootNotResealable => 14,
+        DeadLetterReason::BinIndexFull => 15,
     }
 }
 
@@ -163,6 +164,7 @@ fn reason_of_tag(tag: u8) -> Option<DeadLetterReason> {
         12 => DeadLetterReason::AlreadyPublished,
         13 => DeadLetterReason::TargetStillLinked,
         14 => DeadLetterReason::ScopeRootNotResealable,
+        15 => DeadLetterReason::BinIndexFull,
         _ => return None,
     })
 }
@@ -1822,6 +1824,7 @@ mod tests {
             DeadLetterReason::AlreadyPublished,
             DeadLetterReason::TargetStillLinked,
             DeadLetterReason::ScopeRootNotResealable,
+            DeadLetterReason::BinIndexFull,
         ] {
             assert_eq!(
                 reason_of_tag(reason_tag(reason)),

@@ -181,6 +181,11 @@ pub enum DeadLetterReason {
     /// a shared folder's root reserves a fixed share of its record for the
     /// grant section a re-key rebuilds.
     ScopeRootNotResealable,
+    /// The owner's bin index holds every entry one record can carry, so no
+    /// further node can be binned until the retention sweep frees space.
+    /// Distinct from [`Self::AttemptsExhausted`] because no retry shrinks the
+    /// body, and the member's remedy is to empty the bin or to hard-delete.
+    BinIndexFull,
 }
 
 /// One applied op, resolved for republish.

@@ -78,6 +78,7 @@ export const fakeWasmEnums = {
     AlreadyPublished: 11,
     TargetStillLinked: 12,
     ScopeRootNotResealable: 13,
+    BinIndexFull: 14,
   },
 } as const;
 

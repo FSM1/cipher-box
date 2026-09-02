@@ -18,7 +18,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
 use cipherbox_core::seal::{
-    ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
+    BinIndex, ChildRef, GrantSetCommitment, NodeKind as CoreNodeKind, PreservedFields, ReadBody,
     Version as CoreVersion, decode_envelope, encode_envelope, encode_grant_section,
     encode_read_body, open_read_body, seal_settings_record, set_grant_section, sign_grant_set,
 };
@@ -75,7 +75,7 @@ use cipherbox_engine::{
     LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
     OpKind, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordReader,
     RecordSeal, ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory,
-    WriteTarget, decode_queue, load_bin_index, reseal_scope_root, stage_op,
+    WriteTarget, decode_queue, load_bin_index, publish_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -3504,6 +3504,130 @@ fn load_bin(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks) -> BinIndex
         &SyncTimingProfile::CI,
         &BinIndexKeys::derive(&SECRET),
     ))
+    .load
+}
+
+/// The name the account's bin index publishes under.
+fn bin_name() -> IpnsName {
+    BinIndexKeys::derive(&SECRET).name().clone()
+}
+
+/// Provision a first-run vault against the API and run the tasks its start
+/// spawned, so the genesis publishes have all landed.
+fn provision_first_run(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>) {
+    serve_http(device, blocks, 64);
+    let (mut engine, _events) = engine_on_api(device, 42);
+    block_on(engine.start(secret())).expect("start provisions the first-run vault");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    (engine, tasks)
+}
+
+/// The record's existence would otherwise say the bin is non-empty, and the
+/// register-first step would tell the API both that this account has binned
+/// something and when. So the vault publishes the empty index at genesis.
+#[test]
+fn a_first_run_vault_publishes_its_empty_bin_index_at_genesis() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        1,
+        "a vault that has binned nothing still publishes the record",
+    );
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the genesis record resolves off the network");
+    };
+    assert!(
+        index.entries.is_empty(),
+        "and the body is the bottom rung: an empty index",
+    );
+}
+
+/// What the API observes at the first soft delete is a revision of a record it
+/// already registered, so the publish times nothing.
+#[test]
+fn the_first_soft_delete_revises_the_genesis_bin_index_rather_than_minting_one() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    let (mut engine, mut tasks) = provision_first_run(&world, &blocks, &alice);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..40u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks),
+        vec![doomed.0],
+        "the delete binned the node",
+    );
+    assert_eq!(
+        sequence_at(&world, &bin_name()),
+        2,
+        "and it published the second revision of a record that already existed",
+    );
+}
+
+/// The genesis publish is derived-idempotent on ADR 0007's terms: the name comes
+/// from the login secret alone, so a first run that already ran once finds the
+/// record and mints no second one. A publish over it would drop every entry the
+/// standing index holds.
+#[test]
+fn a_repeated_first_run_leaves_the_bin_index_the_last_run_published() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let previous = world.device(b"alice-previous-install");
+    serve_http(&previous, &blocks, 8);
+    block_on(publish_bin_index(
+        &previous.record_store,
+        &ApiClient::new(
+            previous.http.clone(),
+            previous.credential_store.clone(),
+            "http://api.test",
+        ),
+        &previous.floors(&SECRET),
+        &previous.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(9),
+        &OrphanHeads::default(),
+        &BinIndexKeys::derive(&SECRET),
+        &BinIndex::new(0),
+    ))
+    .expect("the previous install published the record");
+    let standing = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], bin_name().as_str())
+        .expect("a bin index record stands at the name");
+
+    let alice = world.device(b"alice");
+    let (_engine, _tasks) = provision_first_run(&world, &blocks, &alice);
+
+    assert_eq!(
+        world
+            .record_store
+            .record_at(&world.record_store.endpoints()[0], bin_name().as_str()),
+        Some(standing),
+        "the repeated first run published no second record over it",
+    );
 }
 
 /// The soft delete is an unlink and nothing more: the parent stops naming the
@@ -4158,6 +4282,332 @@ fn a_restore_with_no_destination_returns_the_node_to_the_folder_its_entry_names(
     assert!(
         !opens_under(&world, &blocks, doomed, &read_key_under(&held, doomed)),
         "and the bin-held key no longer opens it"
+    );
+}
+
+/// A vault holding `photos/deep.bin`, with `deep.bin` also linked under the
+/// root by a second writer — the dual link `Snapshot` models and the delete
+/// branch has to decide (blueprint/engine.md "Delete branch").
+fn seed_dual_linked_file(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, NodeId) {
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(world, engine, tasks);
+    let photos = child_id(engine, ROOT, "photos");
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "deep.bin".into(),
+        },
+        &(0..150u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(world, engine, tasks);
+    let deep = child_id(engine, photos, "deep.bin");
+    concurrent_root_add(&world.record_store, blocks, file_ref(deep.0, "deep.bin"));
+    tick(world, engine, tasks);
+    assert!(
+        block_on(engine.view()).unwrap().attrs(deep).is_some(),
+        "the second link is in gate-passing state"
+    );
+    (photos, deep)
+}
+
+/// The soft delete re-keys the node out of the scope, so a link it leaves
+/// standing names a record that folder's own readers can no longer open. Every
+/// link goes, under one entry.
+#[test]
+fn a_soft_delete_unlinks_a_dual_linked_node_from_every_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let (photos, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+
+    block_on(engine.command(Command::Delete { node: deep })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["photos".to_owned()],
+        "the root stops naming the node it linked second"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        Vec::<String>::new(),
+        "and so does the folder the node was created in"
+    );
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the soft delete published a bin index record");
+    };
+    assert_eq!(index.entries.len(), 1, "two links, one entry");
+    assert_eq!(index.entries[0].node_id, deep.0);
+    assert!(
+        [ROOT.0, photos.0].contains(&index.entries[0].origin_parent),
+        "the entry names one of the folders that linked it"
+    );
+}
+
+/// The entry names one folder, so a restore returns the node to that folder and
+/// to no other: the second link was a delete's to remove, never a restore's to
+/// put back.
+#[test]
+fn a_restore_returns_a_dual_linked_node_to_its_origin_parent_alone() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let (photos, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+
+    block_on(engine.command(Command::Delete { node: deep })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let BinIndexLoad::Resolved(index) = load_bin(&world, &alice, &blocks) else {
+        panic!("the soft delete published a bin index record");
+    };
+    let origin = NodeId(index.entries[0].origin_parent);
+
+    block_on(engine.command(Command::Restore {
+        node: deep,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+
+    let other = if origin == ROOT { photos } else { ROOT };
+    assert!(
+        published_names(&world.record_store, &blocks, origin).contains(&"deep.bin".to_owned()),
+        "the folder the entry named holds the node again"
+    );
+    assert!(
+        !published_names(&world.record_store, &blocks, other).contains(&"deep.bin".to_owned()),
+        "and the folder the entry did not name still does not"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "a restored node leaves the bin"
+    );
+}
+
+/// The purge's own unlink proof passes because the delete left no link to find.
+/// A delete that had unlinked one parent only would leave the purge refusing
+/// for good, and the retention deadline queues it with no owner command.
+#[test]
+fn a_purge_after_a_dual_link_soft_delete_finds_no_link_to_refuse_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let (_, deep) = seed_dual_linked_file(&world, &blocks, &mut engine, &mut tasks);
+    let name = write_name(deep);
+    let content: Vec<String> = registration_entries(&alice, &name)
+        .iter()
+        .flat_map(entry_content_cids)
+        .collect();
+    assert!(!content.is_empty(), "the file published a version");
+
+    block_on(engine.command(Command::Delete { node: deep })).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::Purge { node: deep })).expect("the purge stages");
+    tick(&world, &engine, &mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retired_since(&alice, mark);
+    assert!(
+        retired.contains(&name.as_str().to_owned()),
+        "the purged node leaves the inventory the republisher walks"
+    );
+    assert!(
+        bin_entries(&world, &alice, &blocks).is_empty(),
+        "and the entry goes with it"
+    );
+}
+
+/// A withheld bin index otherwise stops every queued operation for the account
+/// and reports nothing: the head waits, the member sees a stalled queue, and no
+/// budget is spent that would ever end it. The hold names the cause and clears
+/// when the record resolves.
+#[test]
+fn a_withheld_bin_index_reports_a_named_hold_that_clears_when_it_resolves() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    for name in ["a.txt", "b.txt"] {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.into(),
+            },
+            &(0..40u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    // The first delete publishes the record, so this device holds the durable
+    // marks that make a later withholding a suppression and not a first run.
+    let first = child_id(&engine, ROOT, "a.txt");
+    block_on(engine.command(Command::Delete { node: first })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let second = child_id(&engine, ROOT, "b.txt");
+    let bin_name = bin_name();
+    world.record_store.fail_get_for(bin_name.as_str());
+    block_on(engine.command(Command::Delete { node: second })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    let hold = view
+        .bin_index_hold
+        .expect("a bin index the pass cannot read holds the head");
+    assert_eq!(hold.node, second);
+    assert_eq!(hold.reason.check(), "suppressed");
+    assert!(
+        view.dead_letters.is_empty(),
+        "a withheld record is not a failed op"
+    );
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).contains(&"b.txt".to_owned()),
+        "and nothing publishes behind the held head"
+    );
+
+    world.record_store.heal_get_for(bin_name.as_str());
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.bin_index_hold.is_none(),
+        "the hold clears when the record resolves"
+    );
+    assert!(
+        !published_names(&world.record_store, &blocks, ROOT).contains(&"b.txt".to_owned()),
+        "and the delete lands"
+    );
+}
+
+/// Soft-delete `count` files from the root in one pass, reporting how many GETs
+/// that cost at the bin index name.
+fn bin_gets_for_a_pass_deleting(count: usize) -> usize {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    let names: Vec<String> = (0..count).map(|i| format!("f{i}.txt")).collect();
+    for name in &names {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.clone(),
+            },
+            &(0..40u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    let doomed: Vec<NodeId> = names
+        .iter()
+        .map(|name| child_id(&engine, ROOT, name))
+        .collect();
+    let bin_name = bin_name();
+    let before = world.record_store.get_count(bin_name.as_str());
+    for node in doomed {
+        block_on(engine.command(Command::Delete { node })).unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks).len(),
+        count,
+        "every delete of the pass landed its entry"
+    );
+    world.record_store.get_count(bin_name.as_str()) - before
+}
+
+/// One pass establishes the index once and carries it; only the per-operation
+/// publish and its confirm scale with the node count. Deleting a folder of two
+/// hundred files would otherwise resolve a record padded to its rung two
+/// hundred times over.
+#[test]
+fn a_bulk_soft_delete_resolves_the_bin_index_once_for_the_whole_pass() {
+    let fanout = FakeWorld::new().record_store.endpoints().len();
+    let one = bin_gets_for_a_pass_deleting(1);
+    let four = bin_gets_for_a_pass_deleting(4);
+    assert_eq!(
+        four - one,
+        3 * fanout,
+        "three more deletes cost three more confirms and no further load",
+    );
+}
+
+/// A rewrite that removes an entry never builds on the copy the pass carried
+/// for its soft deletes. It runs after a re-key and several folder publishes,
+/// and the index is rewritten whole, so a copy read before those would drop
+/// every entry another device added since.
+#[test]
+fn a_restore_resolves_the_bin_index_rather_than_the_copy_the_pass_carried() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_binning(&world, &blocks, &alice);
+    for name in ["a.txt", "b.txt"] {
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.into(),
+            },
+            &(0..40u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let restored = child_id(&engine, ROOT, "a.txt");
+    let doomed = child_id(&engine, ROOT, "b.txt");
+    block_on(engine.command(Command::Delete { node: restored })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // One fanout GET per resolve, and one per publish confirm.
+    let fanout = world.record_store.endpoints().len();
+    let before = world.record_store.get_count(bin_name().as_str());
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    block_on(engine.command(Command::Restore {
+        node: restored,
+        into: None,
+    }))
+    .expect("the restore stages");
+    tick(&world, &engine, &mut tasks);
+    let spent = world.record_store.get_count(bin_name().as_str()) - before;
+
+    assert_eq!(
+        bin_entries(&world, &alice, &blocks),
+        vec![doomed.0],
+        "the pass binned one node and unbinned the other"
+    );
+    assert_eq!(
+        spent,
+        bin_gets_for_a_pass_deleting(1) + 3 * fanout,
+        "the delete carries one resolve; the restore resolves for its entry \
+         read and again for its rewrite, then confirms",
     );
 }
 
