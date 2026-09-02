@@ -377,6 +377,18 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// unparsable bookmark, an unresolvable name, an unassemblable record, or a
     /// floor this pass could not read — never a removal.
     async fn resolved(&self, share: &ReceivedShare) -> Option<(Candidate, SharedScopeFloors)> {
+        // A floor this pass could not read is availability, not a verdict: with
+        // no floor neither bar can fire, so a superseded or stale record would
+        // read as granted. Absent (`Ok(None)`) is a genuine zero.
+        let sharer_floors = self.sharer_floors(share);
+        let epoch = floor::read_epoch_floor(&sharer_floors, &share.scope_id)
+            .await
+            .ok()?
+            .unwrap_or(0);
+        let cut_epoch = read_cut_epoch_floor(&sharer_floors, &share.scope_id)
+            .await
+            .ok()?;
+
         let name = scope_name(&share.scope_root_name).ok()?;
         let (verified, record_bytes) = fanout_get_verify(self.transport, &name).await?;
         // Fan-out has no memory — it answers with the best of what endpoints
@@ -391,17 +403,6 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             return None;
         }
         let candidate = assemble_candidate(self.gateway, self.http, &name, &record_bytes, None)
-            .await
-            .ok()?;
-        // A floor this pass could not read is availability, not a verdict: with
-        // no floor neither bar can fire, so a superseded or stale record would
-        // read as granted. Absent (`Ok(None)`) is a genuine zero.
-        let sharer_floors = self.sharer_floors(share);
-        let epoch = floor::read_epoch_floor(&sharer_floors, &share.scope_id)
-            .await
-            .ok()?
-            .unwrap_or(0);
-        let cut_epoch = read_cut_epoch_floor(&sharer_floors, &share.scope_id)
             .await
             .ok()?;
         Some((candidate, SharedScopeFloors { epoch, cut_epoch }))
@@ -863,6 +864,19 @@ mod tests {
             ServedScopeRoot::new(&sharer).resolve(&FailingFloorRead(Unreadable::Sequence), &sharer),
             ResolutionClass::Unresolvable,
             "an unread replay bar is availability, never a verdict"
+        );
+    }
+
+    /// The control for the two cut tests below: the same seeded read-epoch and
+    /// sequence bars, with no cut recorded, still reach `Granted`. Without it a
+    /// bar seeded too high would let those tests pass for the wrong reason.
+    #[test]
+    fn seeded_floors_without_a_cut_leave_the_served_root_granted() {
+        let sharer = sharer_signer();
+        assert_eq!(
+            ServedScopeRoot::new(&sharer).resolve(&seeded_floors(SHARER_IDENTITY_PK, 0), &sharer),
+            ResolutionClass::Granted,
+            "only the cut bar may refuse the served root"
         );
     }
 

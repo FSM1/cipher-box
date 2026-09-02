@@ -323,7 +323,7 @@ fn cut_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
 /// replay apart from the set in force (blueprint/engine.md "Adoption gate and
 /// floors"). The classification path a `/shared` row renders holds a record to
 /// this same bar without unsealing it, so the two never disagree.
-pub fn verify_commitment_in_force(
+pub(crate) fn verify_commitment_in_force(
     owner_identity: &EcdsaVerifier,
     section: &GrantSection,
     ipns_name: &[u8],
@@ -342,7 +342,7 @@ pub fn verify_commitment_in_force(
 
 /// `scope_id`'s cut-epoch floor, zero where this device recorded none — the bar
 /// [`refuse_stale_cut_epoch`] holds a commitment to.
-pub async fn read_cut_epoch_floor<F: FloorStore>(
+pub(crate) async fn read_cut_epoch_floor<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
 ) -> SeamResult<u64> {

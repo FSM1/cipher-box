@@ -276,11 +276,13 @@ pub fn author_scope_root_with_section(
 }
 
 /// The checks the gate makes on arrival, run here first so a root this build's
-/// own gate always rejects is never signed (release-active). Stages 2 and 3 in
-/// the gate's own order: without the commitment signature the stage-3 pass is
-/// self-referential — it authenticates structures against the pseudonyms the
-/// section's own commitment names, so a wholly attacker-authored section is
-/// internally consistent.
+/// own gate always rejects is never signed (release-active). The commitment
+/// binding and stage 3, in the gate's own order: without the commitment
+/// signature the stage-3 pass is self-referential — it authenticates structures
+/// against the pseudonyms the section's own commitment names, so a wholly
+/// attacker-authored section is internally consistent. Stage 2's cut bar is
+/// measured against the reader's own durable floor, not a property of these
+/// bytes, so it has no encode-side counterpart.
 fn check_scope_root(
     envelope: &Envelope,
     name: &IpnsName,
