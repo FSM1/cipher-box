@@ -43,8 +43,8 @@ pub fn padding(bytes: usize) -> cipherbox_core::seal::PreservedFields {
 }
 pub use executor::{block_on, poll_tasks_once, poll_tasks_until_parked};
 pub use owner_root::{
-    OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_PSEUDONYM_SEED,
-    OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
-    owner_root_fixture,
+    CARRIED_WRITE_HISTORY_LINK, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY,
+    OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED,
+    OwnerRootFixture, OwnerRootSpec, owner_root_fixture,
 };
 pub use world::{FakeDevice, FakeSeamTypes, FakeWorld};

@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::seal::ChildRef;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+use cipherbox_core::suite::secret::SecretBytes;
 
 use crate::facade::{NodeId, ScopeSeeds, SeedFloor, refresh_seed_floor};
-use crate::seams::{FloorStore, SharerScopedFloorStore};
+use crate::seams::{ContactLabel, FloorStore, SharerScopedFloorStore};
 use crate::sync::model::Snapshot;
 
 /// Scope id -> the identity that granted it, over the scope roots a browse may
@@ -209,15 +210,16 @@ pub(crate) fn in_own_tree(base: &Snapshot, id: NodeId) -> bool {
 pub(crate) fn floor_view<'a, F>(
     floors: &'a F,
     sharers: &GraftedSharers,
+    contact_label_seed: &SecretBytes,
     own_root: &[u8; 16],
     scope_id: &[u8; 16],
 ) -> Option<SharerScopedFloorStore<'a, F>> {
     if scope_id == own_root {
         return Some(SharerScopedFloorStore::own(floors));
     }
-    sharers
-        .get(scope_id)
-        .map(|sharer| SharerScopedFloorStore::granted_by(floors, *sharer))
+    sharers.get(scope_id).map(|sharer| {
+        SharerScopedFloorStore::granted_by(floors, ContactLabel::of(contact_label_seed, sharer))
+    })
 }
 
 /// Evict every grafted scope's cached read seed that its granting identity's
@@ -230,6 +232,7 @@ pub(crate) fn floor_view<'a, F>(
 pub(crate) async fn evict_grafted_read_seeds<F: FloorStore>(
     floors: &F,
     sharers: &GraftedSharers,
+    contact_label_seed: &SecretBytes,
     own_root: &[u8; 16],
     read_seeds: &RefCell<ScopeSeeds>,
 ) {
@@ -238,7 +241,7 @@ pub(crate) async fn evict_grafted_read_seeds<F: FloorStore>(
         if scope_id == *own_root {
             continue;
         }
-        match floor_view(floors, sharers, own_root, &scope_id) {
+        match floor_view(floors, sharers, contact_label_seed, own_root, &scope_id) {
             Some(view) => {
                 refresh_seed_floor(&view, read_seeds, &scope_id, SeedFloor::Read).await;
             }
@@ -255,6 +258,7 @@ mod tests {
 
     use zeroize::Zeroizing;
 
+    use cipherbox_core::kdf;
     use cipherbox_core::seal::{NodeKind as CoreNodeKind, PreservedFields};
 
     use crate::facade::{NodeKind, deposit_seed};
@@ -270,6 +274,10 @@ mod tests {
 
     fn grafted() -> GraftedSharers {
         GraftedSharers::from([(SCOPE, SHARER)])
+    }
+
+    fn label_seed() -> SecretBytes {
+        kdf::contact_label_seed(&[0x4c; 32])
     }
 
     fn seeded(scope_id: [u8; 16], stamp: u64) -> RefCell<ScopeSeeds> {
@@ -448,11 +456,14 @@ mod tests {
     fn a_grafted_scope_reads_the_floor_its_sharer_raised() {
         let floors = InMemoryFloorStore::default();
         // Raised the way the accept and render legs raise it.
-        block_on(SharerScopedFloorStore::granted_by(&floors, SHARER).raise_epoch_floor(&SCOPE, 7))
-            .expect("the floor raises");
+        block_on(
+            SharerScopedFloorStore::granted_by(&floors, ContactLabel::of(&label_seed(), &SHARER))
+                .raise_epoch_floor(&SCOPE, 7),
+        )
+        .expect("the floor raises");
 
-        let view =
-            floor_view(&floors, &grafted(), &OWN_ROOT, &SCOPE).expect("one identity granted it");
+        let view = floor_view(&floors, &grafted(), &label_seed(), &OWN_ROOT, &SCOPE)
+            .expect("one identity granted it");
         assert_eq!(
             block_on(floor::read_epoch_floor(&view, &SCOPE)),
             Ok(Some(7))
@@ -466,7 +477,16 @@ mod tests {
     fn a_scope_no_identity_answers_for_reaches_no_floor() {
         let floors = InMemoryFloorStore::default();
 
-        assert!(floor_view(&floors, &GraftedSharers::new(), &OWN_ROOT, &SCOPE).is_none());
+        assert!(
+            floor_view(
+                &floors,
+                &GraftedSharers::new(),
+                &label_seed(),
+                &OWN_ROOT,
+                &SCOPE
+            )
+            .is_none()
+        );
     }
 
     /// The vault's own root is decided ahead of the map, so a bookmark that
@@ -478,7 +498,8 @@ mod tests {
         block_on(floors.raise_epoch_floor(&OWN_ROOT, 4)).expect("the floor raises");
         let claimed = GraftedSharers::from([(OWN_ROOT, SHARER)]);
 
-        let view = floor_view(&floors, &claimed, &OWN_ROOT, &OWN_ROOT).expect("this vault's own");
+        let view = floor_view(&floors, &claimed, &label_seed(), &OWN_ROOT, &OWN_ROOT)
+            .expect("this vault's own");
         assert_eq!(
             block_on(floor::read_epoch_floor(&view, &OWN_ROOT)),
             Ok(Some(4))
@@ -495,6 +516,7 @@ mod tests {
         block_on(evict_grafted_read_seeds(
             &floors,
             &grafted(),
+            &label_seed(),
             &OWN_ROOT,
             &seeds,
         ));
@@ -503,11 +525,15 @@ mod tests {
             "an unmoved floor evicts nothing"
         );
 
-        block_on(SharerScopedFloorStore::granted_by(&floors, SHARER).raise_epoch_floor(&SCOPE, 2))
-            .expect("the floor raises");
+        block_on(
+            SharerScopedFloorStore::granted_by(&floors, ContactLabel::of(&label_seed(), &SHARER))
+                .raise_epoch_floor(&SCOPE, 2),
+        )
+        .expect("the floor raises");
         block_on(evict_grafted_read_seeds(
             &floors,
             &grafted(),
+            &label_seed(),
             &OWN_ROOT,
             &seeds,
         ));
@@ -526,6 +552,7 @@ mod tests {
         block_on(evict_grafted_read_seeds(
             &floors,
             &grafted(),
+            &label_seed(),
             &OWN_ROOT,
             &seeds,
         ));
@@ -544,6 +571,7 @@ mod tests {
         block_on(evict_grafted_read_seeds(
             &floors,
             &GraftedSharers::new(),
+            &label_seed(),
             &OWN_ROOT,
             &seeds,
         ));
@@ -562,6 +590,7 @@ mod tests {
         block_on(evict_grafted_read_seeds(
             &floors,
             &GraftedSharers::new(),
+            &label_seed(),
             &OWN_ROOT,
             &seeds,
         ));

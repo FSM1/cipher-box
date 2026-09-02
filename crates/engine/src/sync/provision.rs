@@ -565,7 +565,7 @@ where
             prev: None,
             write_scope_seed: root.write_scope_seed,
             write_epoch: GENESIS_EPOCH,
-            write_history: WriteHistory::Carried(b""),
+            write_history: WriteHistory::Genesis,
             pointer_read_key: root.pointer_read_key,
         },
         &CommittedSet {

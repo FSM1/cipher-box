@@ -4,7 +4,9 @@ use core::cell::Cell;
 use std::borrow::Cow;
 use std::rc::Rc;
 
+use cipherbox_core::kdf;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::{SeamError, SeamResult};
@@ -242,9 +244,40 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
     }
 }
 
+/// One contact identity under this account's own `contact-label` edge.
+///
+/// Floor-store keys are plaintext in IndexedDB on web and in the local journal
+/// on desktop, so a raw identity prefix would name every party that shared with
+/// this account to anyone who can read local storage. The label is fixed-width
+/// ([`CONTACT_LABEL_LEN`]) and deterministic, the two properties
+/// [`SharerScopedFloorStore`] depends on, and unlinkable to anyone without the
+/// seed, which is the account's alone.
+///
+/// The seed is the account's, so the label is the same on every device of the
+/// account; its **use** is local. Publishing one makes it the cross-scope
+/// correlator the blinded tag exists to deny ([`kdf::contact_label`]).
+#[derive(Clone, Copy)]
+pub struct ContactLabel([u8; CONTACT_LABEL_LEN]);
+
+/// The fixed-width prefix [`SharerScopedFloorStore`] puts on every epoch key —
+/// [`OWNER_TAG_LEN`]'s counterpart one layer out.
+pub const CONTACT_LABEL_LEN: usize = SECRET_LEN;
+
+impl ContactLabel {
+    /// The label `identity_pk` takes under `contact_label_seed`, this account's
+    /// `contact-label-seed`.
+    #[must_use]
+    pub fn of(contact_label_seed: &SecretBytes, identity_pk: &[u8; IDENTITY_PUBLIC_LEN]) -> Self {
+        Self(kdf::contact_label(
+            contact_label_seed.as_bytes(),
+            identity_pk,
+        ))
+    }
+}
+
 /// A [`FloorStore`] view for a scope this device reads under **another party's**
-/// authority: every epoch-namespace key carries that party's identity key, so
-/// the ratchet is per-granting-authority.
+/// authority: every epoch-namespace key carries that party's [`ContactLabel`],
+/// so the ratchet is per-granting-authority.
 ///
 /// A scope root's `scopeId` is authored by its owner and bound to nothing
 /// outside its own record, so two unrelated grants may carry one id — and a
@@ -255,8 +288,11 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
 /// the granting identity means a raise can only restrict the scopes that
 /// identity actually granted.
 ///
-/// Sequence floors pass through unprefixed: an `ipnsName` is an Ed25519 public
-/// key, so no second authority can name one it holds no signing key for.
+/// Sequence floors pass through unprefixed. An `ipnsName` is an Ed25519 public
+/// key, so no second authority can raise one it holds no signing key for, and
+/// one name keeps one ratchet whoever reads it. That is an authority argument,
+/// not a disclosure one: the key is unblinded, so the durable store still names
+/// every scope root this device holds a share for.
 ///
 /// The prefix changes the durable key shape with no migration, exactly as
 /// [`OwnerScopedFloorStore`]'s does: a device holding pre-cutover floors for an
@@ -264,9 +300,9 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
 #[derive(Clone, Copy)]
 pub struct SharerScopedFloorStore<'a, F> {
     inner: &'a F,
-    /// The granting owner's compressed SEC1 identity key, or `None` for a scope
-    /// this vault owns.
-    sharer: Option<[u8; IDENTITY_PUBLIC_LEN]>,
+    /// The granting owner's device-local label, or `None` for a scope this vault
+    /// owns.
+    sharer: Option<ContactLabel>,
 }
 
 impl<'a, F> SharerScopedFloorStore<'a, F> {
@@ -279,22 +315,22 @@ impl<'a, F> SharerScopedFloorStore<'a, F> {
         }
     }
 
-    /// The view for a scope `sharer` granted this device.
-    pub fn granted_by(inner: &'a F, sharer: [u8; IDENTITY_PUBLIC_LEN]) -> Self {
+    /// The view for a scope the contact `sharer` labels granted this device.
+    pub fn granted_by(inner: &'a F, sharer: ContactLabel) -> Self {
         Self {
             inner,
             sharer: Some(sharer),
         }
     }
 
-    /// `scope_id` under the granting identity, borrowed unchanged on the owner
-    /// arm. The prefix is fixed-width, so no (identity, scope) pair can spell
-    /// another pair's stored key.
+    /// `scope_id` under the granting contact's label, borrowed unchanged on the
+    /// owner arm. The prefix is fixed-width, so no (contact, scope) pair can
+    /// spell another pair's stored key.
     fn scoped<'k>(&self, scope_id: &'k [u8]) -> Cow<'k, [u8]> {
         let Some(sharer) = &self.sharer else {
             return Cow::Borrowed(scope_id);
         };
-        Cow::Owned(prefixed(sharer, scope_id))
+        Cow::Owned(prefixed(&sharer.0, scope_id))
     }
 }
 
@@ -354,6 +390,11 @@ mod tests {
     /// account, which is why the two views below collide without the tag.
     const ROOT_SCOPE: [u8; 16] = [0u8; 16];
     const NAME: &[u8] = b"k51-scope-root-name";
+    const LOGIN_SECRET: [u8; SECRET_LEN] = [0x4c; SECRET_LEN];
+
+    fn label(identity_pk: [u8; IDENTITY_PUBLIC_LEN]) -> ContactLabel {
+        ContactLabel::of(&kdf::contact_label_seed(&LOGIN_SECRET), &identity_pk)
+    }
 
     fn view(
         shared: &InMemoryFloorStore,
@@ -415,8 +456,9 @@ mod tests {
     #[test]
     fn a_sharer_cannot_raise_a_scope_it_did_not_grant() {
         let store = InMemoryFloorStore::default();
-        let hostile = SharerScopedFloorStore::granted_by(&store, [0x03; IDENTITY_PUBLIC_LEN]);
-        let honest = SharerScopedFloorStore::granted_by(&store, [0x02; IDENTITY_PUBLIC_LEN]);
+        let hostile =
+            SharerScopedFloorStore::granted_by(&store, label([0x03; IDENTITY_PUBLIC_LEN]));
+        let honest = SharerScopedFloorStore::granted_by(&store, label([0x02; IDENTITY_PUBLIC_LEN]));
         let mine = SharerScopedFloorStore::own(&store);
 
         block_on(hostile.raise_epoch_floor(&ROOT_SCOPE, u64::MAX)).expect("the floor raises");
@@ -435,10 +477,37 @@ mod tests {
         );
     }
 
+    /// The at-rest disclosure the label closes: no durable key may carry any
+    /// run of a contact's identity key. The witness is distinct per byte and
+    /// the window is short, so a key holding a truncated prefix of the identity
+    /// fails this too — a whole-key match would pass such a leak.
+    #[test]
+    fn no_durable_floor_key_names_the_contact_identity() {
+        let store = InMemoryFloorStore::default();
+        let identity_pk: [u8; IDENTITY_PUBLIC_LEN] =
+            core::array::from_fn(|i| (i as u8).wrapping_mul(37).wrapping_add(3));
+        let sharer = SharerScopedFloorStore::granted_by(&store, label(identity_pk));
+
+        block_on(sharer.raise_epoch_floor(&ROOT_SCOPE, 4)).expect("the floor raises");
+        block_on(sharer.commit_floors(&[FloorRaise::epoch(ROOT_SCOPE.as_slice(), 5)]))
+            .expect("the batch commits");
+
+        let keys = store.epoch_keys();
+        assert!(!keys.is_empty(), "the raises stored something to inspect");
+        for key in keys {
+            for run in identity_pk.windows(8) {
+                assert!(
+                    !key.windows(run.len()).any(|w| w == run),
+                    "a durable floor key carries part of the contact identity key"
+                );
+            }
+        }
+    }
+
     #[test]
     fn sequence_floors_stay_shared_across_sharers() {
         let store = InMemoryFloorStore::default();
-        let sharer = SharerScopedFloorStore::granted_by(&store, [0x02; IDENTITY_PUBLIC_LEN]);
+        let sharer = SharerScopedFloorStore::granted_by(&store, label([0x02; IDENTITY_PUBLIC_LEN]));
 
         block_on(sharer.raise_sequence_floor(NAME, 7)).expect("the floor raises");
         block_on(sharer.commit_floors(&[FloorRaise::sequence(NAME, 9)]))

@@ -70,6 +70,19 @@ impl InMemoryFloorStore {
     pub fn fail_clear(&self) {
         self.inner.lock().expect("lock").failing_clear = true;
     }
+
+    /// Every epoch-namespace key this store holds, exactly as it was written —
+    /// what a test asserts a durable key does not disclose.
+    #[must_use]
+    pub fn epoch_keys(&self) -> Vec<Vec<u8>> {
+        self.inner
+            .lock()
+            .expect("lock")
+            .epoch
+            .keys()
+            .cloned()
+            .collect()
+    }
 }
 
 fn raise(map: &mut HashMap<Vec<u8>, u64>, key: &[u8], value: u64) -> u64 {

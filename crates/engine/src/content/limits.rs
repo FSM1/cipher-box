@@ -60,7 +60,7 @@ const HISTORY_LINK_WIRE_BYTES: usize = 352;
 /// [`MAX_WRITE_HISTORY_LINK_BYTES`](cipherbox_core::seal::MAX_WRITE_HISTORY_LINK_BYTES),
 /// which bounds the same payload shape on the write plane. That one is a frozen
 /// wire bound; this one is a retention budget for links the re-seal keeps, and
-/// [`MAX_RESEALABLE_SECTION_BYTES`] budgets [`HISTORY_LINK_WIRE_BYTES`] for
+/// [`resealable_section_bytes`] budgets [`HISTORY_LINK_WIRE_BYTES`] for
 /// each of them. An honest link seals to at most 103 bytes at a `u64::MAX`
 /// epoch, so the margin holds several additive payload fields — the headroom
 /// matters, because a link over the bound takes every older link with it and
@@ -79,52 +79,75 @@ const _: () = assert!(
 /// framing around every run — none of them count-driven, all of them small.
 const SECTION_FRAMING_SLACK_BYTES: usize = 64 * 1024;
 
-/// The largest grant section a scope-root re-seal can mint, and so the room its
-/// record must always leave beside itself ([`MAX_RESEALABLE_ROOT_REST_BYTES`]).
+/// The granularity [`resealable_section_bytes`] charges the committed grant
+/// count at. A reservation that tracked the count exactly would shrink on every
+/// grant, so a root the owner authored inside its budget could stop fitting the
+/// moment the owner granted once more. Charging a step at a time keeps the
+/// budget flat across ordinary grant churn while still returning most of what
+/// the frozen ceiling reserved.
+const GRANT_RESERVATION_STEP: usize = 64;
+
+/// The largest grant section a scope-root re-seal can mint for a root carrying
+/// `committed_grants` owner-committed entries, and so the room that record must
+/// always leave beside itself ([`resealable_root_rest_bytes`]).
 ///
 /// A re-seal rebuilds the section from the committed set, so it mints one grant
-/// blob per committed row even where the record it re-read carried none — growth
-/// that record never showed. Left uncoordinated, a scope root sits under the
-/// block ceiling with no authorable re-seal, and the owner's revocation cascade
-/// refuses on it identically for ever: whoever can grow that record makes the
-/// scope rotation-proof.
+/// blob per committed row even where the record it re-read carried none. Left
+/// uncoordinated, a scope root sits under the block ceiling with no authorable
+/// re-seal and the owner's revocation cascade refuses on it for ever: whoever
+/// can grow that record makes the scope rotation-proof.
 ///
-/// Derived from the frozen count bounds rather than picked, so a change to any
-/// of them moves the budget with it. Every **write-grantee-authored** per-item
-/// size is bounded too: the re-seal drops each ledger row's and each child
-/// ref's preserved unknown map and bounds a retained history link's `sealed`
-/// ([`MAX_RETAINED_HISTORY_LINK_BYTES`]), so no run a write grantee sizes rides
-/// forward. The owner-signed commitment is the deliberate exception — its
-/// entries' preserved fields ride inside the signature, so dropping them would
-/// break it, and only the owner can author them. A section over the budget is
-/// still a **retryable** refusal on the record the next pass re-resolves, never
-/// a trust verdict.
-pub(crate) const MAX_RESEALABLE_SECTION_BYTES: usize = cipherbox_core::seal::MAX_GRANT_BLOBS
-    * (GRANT_BLOB_WIRE_BYTES + LEDGER_ROW_WIRE_BYTES)
-    + cipherbox_core::seal::MAX_DIRECT_CHILD_SCOPES * CHILD_SCOPE_REF_WIRE_BYTES
-    + cipherbox_core::seal::MAX_HISTORY_LINKS * HISTORY_LINK_WIRE_BYTES
-    + SECTION_FRAMING_SLACK_BYTES;
+/// The count is the record's **own**, and owner-signed, so a writer that edits
+/// it breaks the commitment signature the gate verifies a stage later. It is
+/// charged in whole [`GRANT_RESERVATION_STEP`]s, so a root keeps its budget
+/// across the grants that share its step and only a step crossing can find it
+/// too full. The remaining runs keep their frozen ceilings, because a committed
+/// writer authors both the child index and the carried links.
+///
+/// A section over the budget is a **retryable** refusal on the record the next
+/// pass re-resolves, never a trust verdict. The clamp keeps
+/// [`resealable_root_rest_bytes`]'s complement a total: every caller feeds a
+/// decode-bounded count, and an unclamped one would underflow it.
+pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {
+    // One whole step above the count, so the step a root was authored in always
+    // holds at least one more grant than it committed.
+    let stepped = (committed_grants / GRANT_RESERVATION_STEP + 1) * GRANT_RESERVATION_STEP;
+    let grants = if stepped > cipherbox_core::seal::MAX_GRANT_BLOBS {
+        cipherbox_core::seal::MAX_GRANT_BLOBS
+    } else {
+        stepped
+    };
+    grants * (GRANT_BLOB_WIRE_BYTES + LEDGER_ROW_WIRE_BYTES)
+        + cipherbox_core::seal::MAX_DIRECT_CHILD_SCOPES * CHILD_SCOPE_REF_WIRE_BYTES
+        + cipherbox_core::seal::MAX_HISTORY_LINKS * HISTORY_LINK_WIRE_BYTES
+        + SECTION_FRAMING_SLACK_BYTES
+}
 
 /// The budget every byte of a scope root **outside** its grant section is held
 /// under — the read-sealed body, the typed envelope fields, and the carried
-/// unknown maps. The complement of the section budget, so a root this build
-/// authors always has an authorable re-seal.
-pub(crate) const MAX_RESEALABLE_ROOT_REST_BYTES: usize =
-    MAX_RESOLVED_RECORD_BYTES - MAX_RESEALABLE_SECTION_BYTES;
+/// unknown maps. The complement of [`resealable_section_bytes`] at the same
+/// committed count, so a root this build authors always has an authorable
+/// re-seal. A root whose body alone fills it is refused on both sides, because
+/// no cut shrinks a read-sealed body.
+pub(crate) const fn resealable_root_rest_bytes(committed_grants: usize) -> usize {
+    MAX_RESOLVED_RECORD_BYTES - resealable_section_bytes(committed_grants)
+}
 
 /// The bytes of a scope root that sit **outside** its grant section — what
-/// [`MAX_RESEALABLE_ROOT_REST_BYTES`] holds. One home for the measure, so the
+/// [`resealable_root_rest_bytes`] holds. One home for the measure, so the
 /// author side that enforces it and the adoption side that refuses a foreign
 /// root over it can never charge it differently (AGENTS.md rule 8).
 pub(crate) fn scope_root_rest_bytes(block_len: usize, section_len: usize) -> usize {
     block_len.saturating_sub(section_len)
 }
 
-/// The reservation must leave the body the larger share, or a wire-cost edit has
-/// quietly turned a re-seal budget into a cap on ordinary folders. Compile-time,
-/// so it cannot reach a release build (AGENTS.md rule 8).
+/// The reservation must leave the body the larger share even at the frozen grant
+/// ceiling, or a wire-cost edit has quietly turned a re-seal budget into a cap on
+/// ordinary folders. Compile-time, so it cannot reach a release build
+/// (AGENTS.md rule 8).
 const _: () = assert!(
-    MAX_RESEALABLE_ROOT_REST_BYTES > MAX_RESEALABLE_SECTION_BYTES,
+    resealable_root_rest_bytes(cipherbox_core::seal::MAX_GRANT_BLOBS)
+        > resealable_section_bytes(cipherbox_core::seal::MAX_GRANT_BLOBS),
     "the re-seal reservation must not outweigh the body it reserves against"
 );
 

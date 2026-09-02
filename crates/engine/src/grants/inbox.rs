@@ -24,6 +24,7 @@ use core::cell::RefCell;
 use std::collections::BTreeMap;
 
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 
@@ -66,6 +67,9 @@ pub(crate) struct ShareInbox<'a, M, T, H, F> {
     pub floors: &'a F,
     /// This device's encryption subkey.
     pub enc_secret: &'a X25519Secret,
+    /// This account's contact-label seed — what a share's sharer is labelled
+    /// under before it keys that scope's durable epoch floor.
+    pub contact_label_seed: &'a SecretBytes,
     /// This session's own root scope, which no received share may name
     /// ([`AcceptError::OwnVaultScope`]).
     pub vault_root_scope: [u8; 16],
@@ -158,6 +162,7 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
                 item,
                 contact,
                 self.enc_secret,
+                self.contact_label_seed,
                 &candidate,
                 &blobs,
                 &self.vault_root_scope,
@@ -413,6 +418,7 @@ mod tests {
                     http: &self.http,
                     floors: &self.floors,
                     enc_secret: &my_enc(),
+                    contact_label_seed: &kdf::contact_label_seed(&[0x4c; 32]),
                     vault_root_scope: self.vault_root_scope,
                 }
                 .pull(&self.staging, &self.entropy, V, &sender),

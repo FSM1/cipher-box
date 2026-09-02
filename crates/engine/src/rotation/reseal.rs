@@ -51,7 +51,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::content::limits::{MAX_RESEALABLE_SECTION_BYTES, MAX_RETAINED_HISTORY_LINK_BYTES};
+use crate::content::limits::{MAX_RETAINED_HISTORY_LINK_BYTES, resealable_section_bytes};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
 use crate::grants::{enforce_committed_ledger, recipient_blinded_tag};
@@ -141,11 +141,18 @@ pub struct PrevEpochSeed<'a> {
 /// carrying it would owner-sign a revokee's opaque bytes into the moved root,
 /// where the seed they name is the one an orphaned-name walk would follow.
 pub enum WriteHistory<'a> {
+    /// This re-seal mints the write plane with no predecessor — the state at
+    /// write epoch 1 ([`ResealError::EmptyWriteHistoryAboveFirstEpoch`]).
+    Genesis,
     /// The write plane is untouched (a read rotation or a sweep): the root's
     /// existing opaque link stays byte-for-byte, still openable by the owner at
     /// the write epoch that minted it. A blob past
     /// [`MAX_WRITE_HISTORY_LINK_BYTES`] is dropped rather than refused, so the
     /// re-seal can never emit a write-body its own encoder rejects.
+    ///
+    /// A committed writer authors the value, so an empty one is that record's
+    /// own state and rides through. Refusing it here would hand a write grantee
+    /// a scope root the owner can never re-key.
     Carried(&'a [u8]),
     /// The write plane is being cut: mint a fresh link over the retiring write
     /// scope seed, sealed to the owner at the advanced write epoch.
@@ -190,6 +197,9 @@ impl ResealSeeds<'_> {
     /// chain to hole, and its epoch is monotonic only, the axis
     /// [`build_repoint_object`](super::rotate_write::build_repoint_object)
     /// enforces on `writeEpoch`.
+    ///
+    /// The write plane owes one more, held here because every re-seal runs this
+    /// check ([`ResealError::EmptyWriteHistoryAboveFirstEpoch`]).
     fn check_history_descends(&self) -> Result<(), ResealError> {
         if let Some(prev) = self.prev.as_ref() {
             if prev.epoch >= self.read_epoch {
@@ -200,10 +210,14 @@ impl ResealSeeds<'_> {
                 return Err(ResealError::HistoryLinkNotContiguous);
             }
         }
-        if let WriteHistory::Cut(prev) = &self.write_history {
-            if prev.epoch >= self.write_epoch {
+        match &self.write_history {
+            WriteHistory::Cut(prev) if prev.epoch >= self.write_epoch => {
                 return Err(ResealError::HistoryLinkNotDescending);
             }
+            WriteHistory::Genesis if self.write_epoch != 1 => {
+                return Err(ResealError::EmptyWriteHistoryAboveFirstEpoch);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -303,6 +317,17 @@ pub enum ResealError {
     /// hole becomes unreachable to every reader. Read plane only: the write
     /// plane carries no chain. Release-active (AGENTS.md rule 8).
     HistoryLinkNotContiguous,
+    /// A [`WriteHistory::Genesis`] mint was asked at a write epoch above 1. An
+    /// empty `writeHistoryLink` means "no link" — the state at write epoch 1
+    /// ([`WriteBody::write_history_link`]) — so the pair advertises a
+    /// predecessor epoch it holds no link to walk back to, and an orphaned-name
+    /// walk stops there reporting nothing rather than refusing. Release-active,
+    /// and held against what this build mints rather than what it carries: the
+    /// carried value is a committed writer's, and refusing that would make the
+    /// scope un-re-keyable.
+    ///
+    /// [`WriteBody::write_history_link`]: cipherbox_core::seal::WriteBody::write_history_link
+    EmptyWriteHistoryAboveFirstEpoch,
     /// A [`WriteHistory::Cut`] was asked of a re-sealer holding no owner
     /// encryption subkey — only the owner can mint the link
     /// ([`seal_owner_history_link`]).
@@ -324,9 +349,9 @@ pub enum ResealError {
         limit: usize,
     },
     /// The freshly minted section is past
-    /// [`MAX_RESEALABLE_SECTION_BYTES`](crate::content::limits::MAX_RESEALABLE_SECTION_BYTES),
-    /// the budget the scope root's own authoring reserves room for.
-    /// Release-active (AGENTS.md rule 8).
+    /// [`resealable_section_bytes`](crate::content::limits::resealable_section_bytes)
+    /// at this root's committed grant count — the budget the scope root's own
+    /// authoring reserves room for. Release-active (AGENTS.md rule 8).
     SectionNotResealable {
         /// The minted section's encoded size.
         size: usize,
@@ -374,6 +399,9 @@ impl core::fmt::Display for ResealError {
             ResealError::UnusableAscentPublic => {
                 f.write_str("carried ascent public half is not a usable X25519 key")
             }
+            ResealError::EmptyWriteHistoryAboveFirstEpoch => {
+                f.write_str("write history minted empty at a write epoch above 1")
+            }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
             ResealError::TooManyHistoryLinks => {
                 f.write_str("carried history links exceed the codec's frozen bound")
@@ -417,6 +445,9 @@ impl ResealError {
             ResealError::TooManyCommittedGrants => "too-many-committed-grants",
             ResealError::HistoryLinkNotDescending => "history-link-not-descending",
             ResealError::HistoryLinkNotContiguous => "history-link-not-contiguous",
+            ResealError::EmptyWriteHistoryAboveFirstEpoch => {
+                "empty-write-history-above-first-epoch"
+            }
             ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
             ResealError::WriteBodyTooLarge => "write-body-too-large",
             ResealError::HistoryLinkTooLarge { .. } => "history-link-too-large",
@@ -863,6 +894,7 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- The write-plane history link: carried, or minted by the cut itself. ---
     let write_history_link = match &seeds.write_history {
+        WriteHistory::Genesis => Vec::new(),
         WriteHistory::Carried(sealed) if sealed.len() <= MAX_WRITE_HISTORY_LINK_BYTES => {
             sealed.to_vec()
         }
@@ -883,7 +915,7 @@ pub fn reseal_scope_root<E: Entropy>(
     let write_body = {
         // Every carried unknown map is dropped, so the minted section is a
         // function of the frozen counts alone and the re-seal budget is a real
-        // bound ([`MAX_RESEALABLE_SECTION_BYTES`]). A rotation is not a
+        // bound ([`resealable_section_bytes`]). A rotation is not a
         // republish and owes no byte stability (FSM1/cipher-box-next#27 D10).
         let wb = WriteBody {
             grant_ledger: committed
@@ -941,11 +973,9 @@ pub fn reseal_scope_root<E: Entropy>(
     let size = encode_grant_section(&section)
         .map_err(ResealError::Encode)?
         .len();
-    if size > MAX_RESEALABLE_SECTION_BYTES {
-        return Err(ResealError::SectionNotResealable {
-            size,
-            limit: MAX_RESEALABLE_SECTION_BYTES,
-        });
+    let limit = resealable_section_bytes(committed.commitment.entries.len());
+    if size > limit {
+        return Err(ResealError::SectionNotResealable { size, limit });
     }
     Ok(section)
 }
@@ -1282,7 +1312,7 @@ mod tests {
             prev,
             write_scope_seed,
             write_epoch: 1,
-            write_history: WriteHistory::Carried(b""),
+            write_history: WriteHistory::Genesis,
             pointer_read_key,
         }
     }
@@ -1950,10 +1980,11 @@ mod tests {
             .expect("a maximal committed set re-seals");
         assert_eq!(section.grant_blobs.len(), MAX_GRANT_BLOBS);
         let size = encode_grant_section(&section).expect("encodes").len();
+        let budget = resealable_section_bytes(MAX_GRANT_BLOBS);
         // Headroom, so a wire-shape edit fails here rather than at the cliff.
         assert!(
-            size + 64 * 1024 <= MAX_RESEALABLE_SECTION_BYTES,
-            "a maximal re-seal is {size} bytes against a {MAX_RESEALABLE_SECTION_BYTES}-byte budget"
+            size + 64 * 1024 <= budget,
+            "a maximal re-seal is {size} bytes against a {budget}-byte budget"
         );
     }
 
@@ -2811,6 +2842,10 @@ mod tests {
         let bloated = vec![0x7c; MAX_WRITE_HISTORY_LINK_BYTES + 1];
         let s = ResealSeeds {
             write_history: WriteHistory::Carried(&bloated),
+            // Above write epoch 1, so the degrade is also pinned against
+            // [`ResealError::EmptyWriteHistoryAboveFirstEpoch`], which reads the
+            // caller's input rather than the bytes this drop emits.
+            write_epoch: 3,
             ..seeds(
                 &override_seed,
                 5,
@@ -2823,11 +2858,73 @@ mod tests {
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("the re-seal completes");
 
         assert!(
-            opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 1)
+            opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 3)
                 .write_history_link
                 .is_empty(),
             "the over-length blob is dropped, not carried"
         );
+    }
+
+    #[test]
+    fn a_minted_empty_write_history_above_write_epoch_1_is_refused_before_any_seal() {
+        // `UndrawnEntropy` is the release-active proof: the refusal returns
+        // before any seal draws a byte, in a build that strips `debug_assert!`.
+        let fx = Fixture::new();
+        let (commitment, sig, ledger) = fx.committed(MINTED_NAME);
+        let owner_pub = fx.owner_enc.public();
+        let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
+        let override_seed = [0x0e; 32];
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let at_epoch = |write_epoch| ResealSeeds {
+            write_epoch,
+            ..seeds(
+                &override_seed,
+                1,
+                None,
+                &FRESH_WRITE_SCOPE_SEED,
+                &fx.pointer_read_key,
+            )
+        };
+
+        assert_eq!(
+            reseal_scope_root(&mut UndrawnEntropy, &id, &at_epoch(2), &cs, &[])
+                .expect_err("an empty link above write epoch 1 seals nothing")
+                .check(),
+            "empty-write-history-above-first-epoch"
+        );
+
+        let mut e = SeededEntropy::new(83);
+        reseal_scope_root(&mut e, &id, &at_epoch(1), &cs, &[])
+            .expect("the same mint at write epoch 1 re-seals");
+    }
+
+    /// The refusal covers what this build mints, never what it carries. The
+    /// carried value is a committed writer's, so refusing an empty one would let
+    /// that writer make the scope un-re-keyable — the wedge the budget work
+    /// elsewhere in this file exists to close.
+    #[test]
+    fn a_carried_empty_write_history_above_write_epoch_1_still_re_seals() {
+        let fx = Fixture::new();
+        let (commitment, sig, ledger) = fx.committed(MINTED_NAME);
+        let owner_pub = fx.owner_enc.public();
+        let id = identity(&fx, &owner_pub, MINTED_NAME, Some(&fx.parent_node_seed));
+        let override_seed = [0x0e; 32];
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let s = ResealSeeds {
+            write_epoch: 3,
+            write_history: WriteHistory::Carried(&[]),
+            ..seeds(
+                &override_seed,
+                1,
+                None,
+                &FRESH_WRITE_SCOPE_SEED,
+                &fx.pointer_read_key,
+            )
+        };
+
+        let mut e = SeededEntropy::new(91);
+        reseal_scope_root(&mut e, &id, &s, &cs, &[])
+            .expect("a foreign empty link must not refuse the owner's re-seal");
     }
 
     #[test]

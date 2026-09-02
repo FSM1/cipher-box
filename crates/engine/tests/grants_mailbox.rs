@@ -25,7 +25,7 @@ use cipherbox_core::suite::ecdsa::{
     EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN,
 };
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::ct_eq;
+use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::api::ApiClient;
@@ -39,7 +39,8 @@ use cipherbox_engine::grants::{
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 use cipherbox_engine::net::MAX_RECORD_BYTES;
 use cipherbox_engine::seams::{
-    FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport, SharerScopedFloorStore,
+    ContactLabel, FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport,
+    SharerScopedFloorStore,
 };
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
@@ -50,6 +51,20 @@ use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 const VAULT_ROOT_SCOPE: [u8; 16] = [0u8; 16];
 
 const V: u64 = 1;
+/// The recipient device's login secret — the `contact-label-seed` input its
+/// durable sharer-scoped floor keys are labelled under.
+const RECIPIENT_LOGIN_SECRET: [u8; 32] = [0x4c; 32];
+
+/// That seed, derived the one way the engine derives it.
+fn recipient_contact_label_seed() -> SecretBytes {
+    kdf::contact_label_seed(&RECIPIENT_LOGIN_SECRET)
+}
+
+/// The label a sharer identity takes on the recipient device — what a durable
+/// sharer-scoped floor key is prefixed with.
+fn recipient_label(identity_pk: [u8; IDENTITY_PUBLIC_LEN]) -> ContactLabel {
+    ContactLabel::of(&recipient_contact_label_seed(), &identity_pk)
+}
 const TTL_NANOS: u64 = 2_000_000_000;
 const EOL: &str = "2027-01-01T00:00:00Z";
 const RECORD_VALUE: &[u8] = b"/ipfs/AAAAAAAAAA";
@@ -460,6 +475,7 @@ fn two_instance_share_accept_end_to_end() {
         &items[0],
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &candidate,
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -526,6 +542,7 @@ fn two_instance_share_accept_end_to_end() {
         &again[0],
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate_with_record(fx.record_bytes(2)),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -587,6 +604,7 @@ fn uncommitted_tag_is_rejected_before_the_gate() {
         &items[0],
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &candidate,
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -666,6 +684,7 @@ fn unauthenticated_sender_is_dropped_and_wrong_contact_is_rejected() {
         &items[0],
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -719,6 +738,7 @@ fn a_failed_gate_never_acks_the_item() {
         &items[0],
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &candidate,
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -773,6 +793,7 @@ fn a_failed_persist_never_acks_the_item() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -829,6 +850,7 @@ fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -862,6 +884,7 @@ fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
         &redelivered,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -920,6 +943,7 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -959,6 +983,7 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
         &redelivered,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1023,6 +1048,7 @@ fn a_sequence_replay_for_an_unheld_scope_stays_rejected() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1073,6 +1099,7 @@ fn a_sequence_replay_is_not_reacked_off_another_sharers_bookmark() {
         &other_item,
         &import_contact(&other.owner_contact).unwrap(),
         &other.recipient_enc,
+        &recipient_contact_label_seed(),
         &other.candidate(),
         &other.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1101,6 +1128,7 @@ fn a_sequence_replay_is_not_reacked_off_another_sharers_bookmark() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1148,6 +1176,7 @@ fn a_contact_cannot_ratchet_the_floor_of_a_scope_another_sharer_granted() {
         &hostile_item,
         &import_contact(&hostile.owner_contact).unwrap(),
         &hostile.recipient_enc,
+        &recipient_contact_label_seed(),
         &hostile.candidate(),
         &hostile.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1170,6 +1199,7 @@ fn a_contact_cannot_ratchet_the_floor_of_a_scope_another_sharer_granted() {
         &honest_item,
         &import_contact(&honest.owner_contact).unwrap(),
         &honest.recipient_enc,
+        &recipient_contact_label_seed(),
         &honest.candidate(),
         &honest.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1183,7 +1213,7 @@ fn a_contact_cannot_ratchet_the_floor_of_a_scope_another_sharer_granted() {
         block_on(
             SharerScopedFloorStore::granted_by(
                 &recipient.floor_store,
-                honest.owner_identity_pub.to_sec1(),
+                recipient_label(honest.owner_identity_pub.to_sec1()),
             )
             .epoch_floor(&honest.scope_id)
         )
@@ -1233,6 +1263,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         &item1,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1279,6 +1310,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         &item2,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &candidate2,
         &blobs2,
         &VAULT_ROOT_SCOPE,
@@ -1389,6 +1421,7 @@ fn a_share_naming_this_vaults_own_root_scope_is_refused_and_poisons_no_floor() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &candidate,
         &fx.grant_blobs(),
         &own_root_scope,
@@ -1432,6 +1465,7 @@ fn pointer_sharer_mismatch_is_rejected_and_unacked() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1477,6 +1511,7 @@ fn tampered_commitment_is_rejected_at_the_gate_and_unacked() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &candidate,
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1514,6 +1549,7 @@ fn no_blob_at_tag_is_rejected_and_unacked() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &no_blobs,
         &VAULT_ROOT_SCOPE,
@@ -1556,6 +1592,7 @@ fn tampered_grant_blob_fails_open_and_is_unacked() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &blobs,
         &VAULT_ROOT_SCOPE,
@@ -1596,6 +1633,7 @@ fn resolved_name_mismatch_is_rejected_and_unacked() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &candidate,
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1813,6 +1851,7 @@ fn an_accepted_share_survives_a_restart_and_redelivery_reaccepts_against_the_per
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1869,6 +1908,7 @@ fn an_accepted_share_survives_a_restart_and_redelivery_reaccepts_against_the_per
         &redelivered,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1923,6 +1963,7 @@ fn a_recovered_persist_lands_in_the_durable_list() {
         &item,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,
@@ -1953,6 +1994,7 @@ fn a_recovered_persist_lands_in_the_durable_list() {
         &redelivered,
         &contact,
         &fx.recipient_enc,
+        &recipient_contact_label_seed(),
         &fx.candidate(),
         &fx.grant_blobs(),
         &VAULT_ROOT_SCOPE,

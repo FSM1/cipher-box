@@ -563,7 +563,7 @@ where
             prev: None,
             write_scope_seed: grantee.sealed_write_scope_seed(),
             write_epoch: 1,
-            write_history: WriteHistory::Carried(&[]),
+            write_history: WriteHistory::Genesis,
             pointer_read_key: grantee.pointer_read_key,
         };
         // Mint-canonical: the adopted index carries the same canonicalization the
@@ -740,7 +740,9 @@ mod tests {
         SweptChild, SweptNode, SweptScope,
     };
     use crate::testkit::fakes::InMemoryMailboxHub;
-    use crate::testkit::{SeededEntropy, SilentAtWidth, SilentEntropy, block_on};
+    use crate::testkit::{
+        CARRIED_WRITE_HISTORY_LINK, SeededEntropy, SilentAtWidth, SilentEntropy, block_on,
+    };
     use cipherbox_core::seal::{
         AadContext, AscentLink, ChildRef, NodeKind, ReadBody, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_GRANT_BLOB, open_ascent_link, open_grant_blob, sign_recipient_binding,
@@ -1211,7 +1213,7 @@ mod tests {
                 override_seed: &parent_override_seed,
                 read_epoch: 3,
                 prev: None::<PrevEpochSeed<'_>>,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Carried(CARRIED_WRITE_HISTORY_LINK),
                 write_scope_seed: &parent_write_scope_seed,
                 write_epoch: 2,
                 pointer_read_key: &PARENT_POINTER_READ_KEY,
@@ -1354,7 +1356,7 @@ mod tests {
                     override_seed: &parent_override_seed,
                     read_epoch: 3,
                     prev: None::<PrevEpochSeed<'_>>,
-                    write_history: WriteHistory::Carried(&[]),
+                    write_history: WriteHistory::Carried(CARRIED_WRITE_HISTORY_LINK),
                     write_scope_seed: &parent_write_scope_seed,
                     write_epoch: 2,
                     pointer_read_key: &PARENT_POINTER_READ_KEY,

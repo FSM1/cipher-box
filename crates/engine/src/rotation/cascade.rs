@@ -873,7 +873,7 @@ mod tests {
     use super::*;
     use crate::grants::recipient_blinded_tag;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
+    use crate::testkit::{CARRIED_WRITE_HISTORY_LINK, SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         AadContext, AscentLink, GrantSetEntry, Permission, PreservedFields, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
@@ -1281,7 +1281,7 @@ mod tests {
                 current_read_epoch: 4,
                 write_scope_seed: &self.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: b"",
+                write_history_link: CARRIED_WRITE_HISTORY_LINK,
                 pointer_read_key: &self.pointer_read_key,
                 carried_history_links: &[],
             }

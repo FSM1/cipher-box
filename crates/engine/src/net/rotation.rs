@@ -17,6 +17,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
@@ -52,6 +53,9 @@ use super::record_publish::{
 use super::retire::{retire, root_retire_ready};
 use crate::api::ApiClient;
 use crate::content::Gateway;
+use crate::content::dag::decode_root;
+use crate::content::read::{ContentPlane, read_block};
+use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::NodeId;
@@ -75,7 +79,7 @@ use crate::rotation::{
     derive_write_name, published_override_seed, reseal_scope_root, rotate_scope, seed_at_epoch,
 };
 use crate::seams::{
-    BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
+    BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
     SharerScopedFloorStore,
 };
 use crate::session::SessionIdentity;
@@ -1059,6 +1063,9 @@ pub struct GranteeRotationKeys<'a> {
     pub owner_enc_pub: &'a X25519Public,
     /// The contact-anchored owner identity: the adoption gate's stage-2 anchor.
     pub owner_identity: &'a EcdsaVerifier,
+    /// This account's contact-label seed — what the granting identity is
+    /// labelled under before it keys that scope's durable floors.
+    pub contact_label_seed: &'a SecretBytes,
 }
 
 /// One scope root this device holds a grant for.
@@ -1188,7 +1195,10 @@ where
     /// the floors of scopes it actually granted. `granted` spans several
     /// sharers, so the view is per scope root and never per net.
     fn granted_floors(&self, granted: &GrantedScopeRoot) -> SharerScopedFloorStore<'_, F> {
-        SharerScopedFloorStore::granted_by(self.floors, granted.sharer_identity_pk)
+        SharerScopedFloorStore::granted_by(
+            self.floors,
+            ContactLabel::of(self.keys.contact_label_seed, &granted.sharer_identity_pk),
+        )
     }
 
     /// This device's pairwise ECDH with the verified contact and the blinded tag
@@ -1951,6 +1961,23 @@ where
     }
 }
 
+/// How many of a moved record's content versions the wave expands. A committed
+/// writer sizes the list, and each entry costs one gateway fetch inside a pass
+/// the revocation waits on.
+///
+/// Content past this bound and past [`MAX_MOVED_CONTENT_CIDS`] reaches no
+/// registration under the new name, and the retire that follows drops the old
+/// name's rows, so that content loses its last reference edge. Holding the old
+/// name back instead would leave live a name the revoked grantee's retired write
+/// scope seed still signs for, which is the hole the wave exists to close, so
+/// the bound is charged against reclaim rather than against trust. Carrying the
+/// whole set to the new name in continuation batches is not landed.
+const MAX_MOVED_VERSIONS: usize = 64;
+
+/// How many content CIDs one moved record's registration carries. A committed
+/// writer sizes the leaf list too. Same residual as [`MAX_MOVED_VERSIONS`].
+const MAX_MOVED_CONTENT_CIDS: usize = 8192;
+
 /// The write-plane name wave's transport edge (blueprint/engine.md
 /// "rotateScopeWrite"): the owner arm of both [`WriteSubtreeResolver`] and
 /// [`WriteWavePublisher`] over the same net plane the read-plane seams above run
@@ -2267,6 +2294,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::TooManyCommittedGrants
         | ResealError::HistoryLinkNotDescending
         | ResealError::HistoryLinkNotContiguous
+        | ResealError::EmptyWriteHistoryAboveFirstEpoch
         | ResealError::OwnerKeyRequiredForWriteCut
         | ResealError::WriteBodyTooLarge
         | ResealError::Encode(_) => WritePublishError::Rejected,
@@ -2727,6 +2755,64 @@ where
         .map_err(reseal_verdict)
     }
 
+    /// Every content CID the record the wave moves names, spelled as the
+    /// registry names them, so the new name anchors the pins the retired old
+    /// name anchored. Without them the wave leaves the account holding pin rows
+    /// no record of it names.
+    ///
+    /// The whole version list is a committed writer's, so nothing here may cost
+    /// the wave: a version this pass cannot expand contributes its own root and
+    /// the walk goes on. Aborting instead would let the very party a write
+    /// rotation revokes stall the rotation by naming a block no source serves.
+    /// The leaves come from the manifest the fetched block decodes to, and
+    /// [`read_block`] holds that block to the CID the record names, so a
+    /// writer's `size` steers no CID into or out of the set.
+    ///
+    /// [`MAX_MOVED_VERSIONS`] and [`MAX_MOVED_CONTENT_CIDS`] bound the walk,
+    /// because neither the version count nor the leaf count is bounded by
+    /// anything but the record's own byte ceiling. Both bounds truncate rather
+    /// than refuse, and each names its own residual.
+    async fn moved_content_cids(&self, body: &ReadBody) -> Vec<String> {
+        let ReadBody::File { versions, .. } = body else {
+            return Vec::new();
+        };
+        let mut cids = Vec::new();
+        let mut seen = BTreeSet::new();
+        for version in versions.iter().take(MAX_MOVED_VERSIONS) {
+            if !is_wellformed_content_cid(&version.content_cid) {
+                continue;
+            }
+            let root_cid = encode_content_cid_str(&version.content_cid);
+            let leaves = match read_block(
+                self.gateway,
+                self.http,
+                &root_cid,
+                &version.content_cid,
+                ContentPlane::Root,
+            )
+            .await
+            .ok()
+            .and_then(|block| decode_root(&block).ok())
+            {
+                Some(manifest) => manifest.leaf_cid_vecs(),
+                None => Vec::new(),
+            };
+            for cid in version_cids(
+                &version.content_cid,
+                leaves.iter().map(Vec::as_slice),
+                RootPlacement::Last,
+            ) {
+                if cids.len() == MAX_MOVED_CONTENT_CIDS {
+                    return cids;
+                }
+                if seen.insert(cid.clone()) {
+                    cids.push(cid);
+                }
+            }
+        }
+        cids
+    }
+
     /// Author and CAS-publish `node`'s rewritten record at its new name, signing
     /// under the one narrow capability the wave handed for it.
     async fn publish_moved(
@@ -2750,6 +2836,7 @@ where
             root,
         } = source;
         rewrite_child_names(&mut read_body, &node.child_names)?;
+        let content_cids = self.moved_content_cids(&read_body).await;
 
         // `read_epoch` is the enumeration's envelope epoch, carried across the
         // whole subtree since a name wave cuts no read key — so a read rotation
@@ -2850,7 +2937,7 @@ where
                 name: &node.new_name,
                 signer: &node.signer,
                 head: &preflighted,
-                content_cids: Vec::new(),
+                content_cids,
                 min_current_sequence: None,
             },
         )
@@ -3379,18 +3466,20 @@ mod tests {
     use cipherbox_core::seal::{
         AscentLink, ChildRef, GrantBlobPayload, GrantSetCommitment, NodeKind, Permission,
         STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-        STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_HISTORY_LINK, StructureSigInput,
+        STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_HISTORY_LINK, StructureSigInput, Version,
         decode_envelope, decode_grant_section, encode_envelope, encode_grant_section,
         encode_write_body, grant_section_bytes, open_ascent_link, open_grant_blob,
         open_history_link, open_owner_history_link, open_owner_write_blob, open_read_body, seal,
         seal_read_body, set_grant_section, sign_grant_set, sign_structure, verify_grant_set,
     };
-    use cipherbox_core::suite::ecdsa::EcdsaSignature;
+    use cipherbox_core::suite::ecdsa::{EcdsaSignature, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 
     use super::*;
-    use crate::content::GatewaySource;
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
+
+    use crate::content::{ContentKey, ContentProfile, GatewaySource, assemble, frame_and_seal};
     use crate::rotation::sweep::sim;
     use crate::rotation::{
         CascadeError, CascadeOutcome, CommittedSet, EnumerationError, PrevEpochSeed, ResealSeeds,
@@ -3952,7 +4041,7 @@ mod tests {
                 }),
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Genesis,
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {
@@ -4409,7 +4498,7 @@ mod tests {
                 prev,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Genesis,
                 pointer_read_key: &pointer_read_key,
             },
             &CommittedSet {
@@ -5078,6 +5167,10 @@ mod tests {
         X25519Secret::from_scalar([0xa1; 32])
     }
 
+    fn grantee_label_seed() -> SecretBytes {
+        kdf::contact_label_seed(&[0xa2; 32])
+    }
+
     /// The row the owner mints for this device at the granted root's own name —
     /// the tag it self-locates under and the pseudonym its re-seal signs with.
     fn grantee_row(name: &IpnsName, permission: Permission) -> GrantRow {
@@ -5146,6 +5239,7 @@ mod tests {
         granted: Vec<GrantedScopeRoot>,
         enc_secret: X25519Secret,
         owner_enc_pub: X25519Public,
+        contact_label_seed: SecretBytes,
         /// The sweep `rotate_scope` enqueues; these cases assert the cut, not
         /// the lazy wave it hands the scheduler.
         sweep: Box<dyn Fn([u8; 16]) -> BoxedTask>,
@@ -5166,7 +5260,10 @@ mod tests {
         ) -> Self {
             harness.stage(GRANTEE_SCOPE, &root, None);
             block_on(floor::advance_write_epoch_on_sight(
-                &SharerScopedFloorStore::granted_by(&harness.floors, sharer),
+                &SharerScopedFloorStore::granted_by(
+                    &harness.floors,
+                    ContactLabel::of(&grantee_label_seed(), &sharer),
+                ),
                 &GRANTEE_SCOPE,
                 OWNER_ROOT_EPOCH,
             ))
@@ -5181,6 +5278,7 @@ mod tests {
                 root,
                 enc_secret: grantee_enc(),
                 owner_enc_pub: owner_enc().public(),
+                contact_label_seed: grantee_label_seed(),
                 sweep: Box::new(|_| Box::pin(async {})),
             }
         }
@@ -5199,6 +5297,7 @@ mod tests {
                     enc_secret: &self.enc_secret,
                     owner_enc_pub: &self.owner_enc_pub,
                     owner_identity: &self.harness.identity,
+                    contact_label_seed: &self.contact_label_seed,
                 },
                 granted: &self.granted,
                 sweep: self.sweep.as_ref(),
@@ -5305,7 +5404,10 @@ mod tests {
 
         let world = plain_world(Permission::Write);
         let floors = &world.harness.floors;
-        let other = SharerScopedFloorStore::granted_by(floors, OTHER_SHARER);
+        let other = SharerScopedFloorStore::granted_by(
+            floors,
+            ContactLabel::of(&grantee_label_seed(), &OTHER_SHARER),
+        );
 
         // A contact with no authority over this scope pins its own view as high
         // as the ratchet goes.
@@ -5313,7 +5415,10 @@ mod tests {
 
         world.cut().expect("the flat cut completes");
 
-        let mine = SharerScopedFloorStore::granted_by(floors, world.harness.identity.to_sec1());
+        let mine = SharerScopedFloorStore::granted_by(
+            floors,
+            ContactLabel::of(&grantee_label_seed(), &world.harness.identity.to_sec1()),
+        );
         assert_eq!(
             block_on(floor::read_epoch_floor(&mine, &GRANTEE_SCOPE)).expect("floor read"),
             Some(OWNER_ROOT_EPOCH + 1),
@@ -6071,6 +6176,123 @@ mod tests {
             }
             ReadBody::File { .. } => Vec::new(),
         }
+    }
+
+    /// The `contentCids` the wave registered under `name`.
+    fn registered_content_cids<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        name: &IpnsName,
+    ) -> Vec<String> {
+        harness
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.ends_with("/registry/register"))
+            .flat_map(|request| {
+                serde_json::from_slice::<Vec<serde_json::Value>>(
+                    request.body.as_deref().expect("a register call has a body"),
+                )
+                .expect("a register body is a JSON array")
+            })
+            .filter(|entry| entry["ipnsName"] == name.as_str())
+            .flat_map(|entry| {
+                entry["contentCids"]
+                    .as_array()
+                    .expect("contentCids")
+                    .iter()
+                    .map(|cid| cid.as_str().expect("a CID string").to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The wave retires the old names account-wide, so a new name that claims no
+    /// content edge leaves the account holding pin rows no record of it names —
+    /// and the next doomed-root retire unpins a leaf a live node still names.
+    #[test]
+    fn a_moved_file_registers_the_content_its_record_names() {
+        let harness = Harness::plain();
+        let key = ContentKey::from_bytes([0x99; 32]);
+        // Past one CI-profile 16-byte chunk: several leaves, so the
+        // assertion fails on a root-only registration rather than passing on it.
+        let plaintext = b"two whole chunks of plaintext!!!!";
+        let leaves = frame_and_seal(
+            plaintext,
+            &key,
+            &mut SeededEntropy::new(5),
+            &ContentProfile::CI,
+        )
+        .expect("the leaves seal");
+        let leaf_cids: Vec<Vec<u8>> = leaves.iter().map(|leaf| leaf.cid.clone()).collect();
+        let dag = assemble(&leaf_cids, plaintext.len() as u64, &ContentProfile::CI)
+            .expect("the root manifest assembles");
+        harness.blocks.lock().expect("lock").insert(
+            encode_content_cid_str(&dag.content_cid),
+            dag.root_block.clone(),
+        );
+
+        let node_id = [0x0c; 16];
+        let body = ReadBody::File {
+            created_at: 0,
+            modified_at: 0,
+            versions: vec![Version::new(
+                dag.content_cid.clone(),
+                [0x77; SECRET_LEN],
+                plaintext.len() as u64,
+                0,
+            )],
+            unknown: PreservedFields::new(),
+        };
+        let old_name = stage_node(&harness, node_id, &body);
+
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+        let moved = order(node_id, &old_name, BTreeMap::new(), false);
+        block_on(net.republish(&moved)).expect("the file republishes");
+
+        assert_eq!(
+            registered_content_cids(&harness, &moved.new_name),
+            version_cids(
+                &dag.content_cid,
+                leaf_cids.iter().map(Vec::as_slice),
+                RootPlacement::Last,
+            ),
+            "the moved name must anchor every block its record names"
+        );
+    }
+
+    /// The version list is a committed writer's. A version naming a block no
+    /// source serves must cost that version's leaves and nothing else — a wave
+    /// that aborted here would let the party a write rotation revokes stall the
+    /// rotation that revokes it.
+    #[test]
+    fn an_unservable_version_root_still_registers_and_still_publishes() {
+        let harness = Harness::plain();
+        // Well-formed and never served: no block is filed under it.
+        let unservable = compute_cid(CONTENT_CID_CODEC, b"a root no source serves");
+        let node_id = [0x0d; 16];
+        let body = ReadBody::File {
+            created_at: 0,
+            modified_at: 0,
+            versions: vec![Version::new(unservable.clone(), [0x77; SECRET_LEN], 16, 0)],
+            unknown: PreservedFields::new(),
+        };
+        let old_name = stage_node(&harness, node_id, &body);
+
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+        let moved = order(node_id, &old_name, BTreeMap::new(), false);
+        block_on(net.republish(&moved)).expect("the move publishes anyway");
+
+        assert_eq!(
+            registered_content_cids(&harness, &moved.new_name),
+            vec![encode_content_cid_str(&unservable)],
+            "the version root still anchors, and no leaf is invented for it"
+        );
     }
 
     #[test]
@@ -7717,6 +7939,7 @@ mod tests {
             ResealError::TooManyCommittedGrants,
             ResealError::HistoryLinkNotDescending,
             ResealError::HistoryLinkNotContiguous,
+            ResealError::EmptyWriteHistoryAboveFirstEpoch,
             ResealError::OwnerKeyRequiredForWriteCut,
             ResealError::TagNotBoundToRecipient,
             ResealError::WriteBodyTooLarge,
@@ -7748,6 +7971,7 @@ mod tests {
                 | ResealError::TooManyCommittedGrants
                 | ResealError::HistoryLinkNotDescending
                 | ResealError::HistoryLinkNotContiguous
+                | ResealError::EmptyWriteHistoryAboveFirstEpoch
                 | ResealError::OwnerKeyRequiredForWriteCut
                 | ResealError::WriteBodyTooLarge
                 | ResealError::Encode(_) => (
@@ -9013,7 +9237,7 @@ mod tests {
                 prev: None,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
-                write_history: WriteHistory::Carried(&[]),
+                write_history: WriteHistory::Genesis,
                 pointer_read_key: &POINTER_READ_KEY,
             },
             &CommittedSet {

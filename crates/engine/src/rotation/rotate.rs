@@ -356,7 +356,7 @@ mod tests {
     use crate::entropy::EntropyError;
     use crate::seams::SeamResult;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
-    use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
+    use crate::testkit::{CARRIED_WRITE_HISTORY_LINK, SeededEntropy, SilentEntropy, block_on};
     use cipherbox_core::seal::{
         GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
         sign_grant_set, sign_recipient_binding,
@@ -556,7 +556,7 @@ mod tests {
                 current_read_epoch: 4,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: b"",
+                write_history_link: CARRIED_WRITE_HISTORY_LINK,
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };
@@ -755,7 +755,7 @@ mod tests {
                 current_read_epoch: 4,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: b"",
+                write_history_link: CARRIED_WRITE_HISTORY_LINK,
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };
@@ -820,7 +820,7 @@ mod tests {
                 current_read_epoch: u64::MAX,
                 write_scope_seed: &fx.write_scope_seed,
                 write_epoch: 3,
-                write_history_link: b"",
+                write_history_link: CARRIED_WRITE_HISTORY_LINK,
                 pointer_read_key: &fx.pointer_read_key,
                 carried_history_links: &[],
             };

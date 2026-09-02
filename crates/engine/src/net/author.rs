@@ -31,7 +31,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
 use crate::content::limits::{
-    MAX_RESEALABLE_ROOT_REST_BYTES, MAX_RESOLVED_RECORD_BYTES, scope_root_rest_bytes,
+    MAX_RESOLVED_RECORD_BYTES, resealable_root_rest_bytes, scope_root_rest_bytes,
 };
 use crate::content::root_block_cid;
 use crate::gate::authenticate_section_structures;
@@ -82,7 +82,7 @@ pub enum AuthorError {
         limit: usize,
     },
     /// A scope root's bytes outside its grant section met
-    /// [`MAX_RESEALABLE_ROOT_REST_BYTES`], the budget that leaves its own next
+    /// [`resealable_root_rest_bytes`], the budget that leaves its own next
     /// re-seal room beside it.
     ScopeRootNotResealable {
         /// The bytes outside the section.
@@ -251,8 +251,8 @@ pub fn author_scope_root_envelope(
     owner_identity: &EcdsaVerifier,
 ) -> Result<AuthoredHead, AuthorError> {
     let envelope = seal(&authoring)?;
-    check_scope_root(&envelope, name, owner_identity)?;
-    encode_scope_root(envelope)
+    let committed_grants = check_scope_root(&envelope, name, owner_identity)?;
+    encode_scope_root(envelope, committed_grants)
 }
 
 /// Author a scope root that installs a **freshly assembled** `section` — the
@@ -271,8 +271,8 @@ pub fn author_scope_root_with_section(
         &mut envelope,
         encode_grant_section(section).map_err(grant_section_encode_error)?,
     );
-    check_scope_root(&envelope, name, owner_identity)?;
-    encode_scope_root(envelope)
+    let committed_grants = check_scope_root(&envelope, name, owner_identity)?;
+    encode_scope_root(envelope, committed_grants)
 }
 
 /// The checks the gate makes on arrival, run here first so a root this build's
@@ -283,11 +283,14 @@ pub fn author_scope_root_with_section(
 /// attacker-authored section is internally consistent. Stage 2's cut bar is
 /// measured against the reader's own durable floor, not a property of these
 /// bytes, so it has no encode-side counterpart.
+///
+/// Yields the owner-committed grant count the encode sizes its re-seal
+/// reservation from — verified here, so no caller sizes it off a writer's word.
 fn check_scope_root(
     envelope: &Envelope,
     name: &IpnsName,
     owner_identity: &EcdsaVerifier,
-) -> Result<(), AuthorError> {
+) -> Result<usize, AuthorError> {
     let section = decode_grant_section(
         grant_section_bytes(envelope).ok_or(AuthorError::MissingGrantSection)?,
     )
@@ -306,7 +309,7 @@ fn check_scope_root(
     })?;
     authenticate_section_structures(&section, envelope)
         .map_err(|_| AuthorError::SectionSignatureInvalid)?;
-    Ok(())
+    Ok(section.commitment.entries.len())
 }
 
 fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
@@ -342,18 +345,24 @@ fn encode(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
 }
 
 /// Encode a scope root, holding everything outside its grant section to
-/// [`MAX_RESEALABLE_ROOT_REST_BYTES`] (release-active, security rule 8). The
-/// adoption gate holds a foreign client's root to the same measure
-/// ([`scope_root_rest_bytes`]).
+/// [`resealable_root_rest_bytes`] at this root's own committed grant count
+/// (release-active, security rule 8). The adoption gate holds a foreign
+/// client's root to the same measure ([`scope_root_rest_bytes`]).
+///
+/// `committed_grants` comes from [`check_scope_root`].
 ///
 /// The reservation enters as the encode's own limit, so carried cuttable fields
 /// are **cut** against it rather than refused: a committed write grantee would
 /// otherwise wedge a scope by padding a root with bytes a cut sheds anyway
 /// (blueprint/core.md — an over-length carry is truncated, never refused). Only
 /// what the typed and uncuttable fields alone overflow is refused.
-fn encode_scope_root(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
+fn encode_scope_root(
+    mut envelope: Envelope,
+    committed_grants: usize,
+) -> Result<AuthoredHead, AuthorError> {
+    let budget = resealable_root_rest_bytes(committed_grants);
     let reserved = grant_section_bytes(&envelope).map_or(0, <[u8]>::len);
-    let limit = MAX_RESEALABLE_ROOT_REST_BYTES
+    let limit = budget
         .saturating_add(reserved)
         .min(MAX_RESOLVED_RECORD_BYTES);
     let (block, cut) =
@@ -361,10 +370,10 @@ fn encode_scope_root(mut envelope: Envelope) -> Result<AuthoredHead, AuthorError
 
     let section = grant_section_bytes(&envelope).map_or(0, <[u8]>::len);
     let rest = scope_root_rest_bytes(block.len(), section);
-    if rest > MAX_RESEALABLE_ROOT_REST_BYTES {
+    if rest > budget {
         return Err(AuthorError::ScopeRootNotResealable {
             size: rest,
-            limit: MAX_RESEALABLE_ROOT_REST_BYTES,
+            limit: budget,
         });
     }
     let cid = root_block_cid(&block);
@@ -456,8 +465,8 @@ mod tests {
     use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{
-        GrantSetEntry, Permission, STRUCT_TAG_WRITE_BODY, StructureSigInput, decode_envelope,
-        encode_grant_section, open_read_body, sign_grant_set, sign_structure,
+        GrantSetEntry, MAX_GRANT_BLOBS, Permission, STRUCT_TAG_WRITE_BODY, StructureSigInput,
+        decode_envelope, encode_grant_section, open_read_body, sign_grant_set, sign_structure,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -895,13 +904,13 @@ mod tests {
 
     /// A folder listing that fits the block ceiling but leaves the next
     /// re-seal's section no room beside it.
-    fn folder_past_the_resealable_budget() -> ReadBody {
+    fn folder_past_the_resealable_budget(budget: usize) -> ReadBody {
         // Aimed at the midpoint of the two ceilings off an approximate per-child
         // cost, and the test asserts it landed between them — so a wire-cost
         // drift fails loudly rather than testing nothing.
         const PER_CHILD_BYTES: usize = 165;
-        let target = (MAX_RESEALABLE_ROOT_REST_BYTES + MAX_RESOLVED_RECORD_BYTES) / 2;
-        let children = (0..(target / PER_CHILD_BYTES) as u32)
+        let target = (budget + MAX_RESOLVED_RECORD_BYTES) / 2;
+        let children = (0..u32::try_from(target / PER_CHILD_BYTES).expect("a child count"))
             .map(|i| ChildRef {
                 id: {
                     let mut id = [0u8; 16];
@@ -929,7 +938,8 @@ mod tests {
         // rotation would then refuse the section it mints — the scope becomes
         // rotation-proof. The budget is enforced where the root is grown.
         let fixture = owner_root();
-        let body = folder_past_the_resealable_budget();
+        let budget = resealable_root_rest_bytes(fixture.grant_section.commitment.entries.len());
+        let body = folder_past_the_resealable_budget(budget);
         let carried = carried_section(&fixture.grant_section);
         // let-else: the `Ok` side would render megabytes.
         let Err(AuthorError::ScopeRootNotResealable { size, limit }) =
@@ -937,7 +947,7 @@ mod tests {
         else {
             panic!("a root with no re-seal headroom must be refused");
         };
-        assert_eq!(limit, MAX_RESEALABLE_ROOT_REST_BYTES);
+        assert_eq!(limit, budget);
         assert!(size > limit);
         assert!(
             size < MAX_RESOLVED_RECORD_BYTES,
@@ -945,12 +955,53 @@ mod tests {
         );
     }
 
+    /// The produce-side twin of the adoption budget: the reservation is sized
+    /// from the owner-signed committed count, so a root the frozen ceiling would
+    /// have refused is authored when its committed set is small.
+    #[test]
+    fn a_small_committed_set_buys_back_the_room_the_frozen_ceiling_reserved() {
+        let fixture = owner_root();
+        let entries = fixture.grant_section.commitment.entries.len();
+        assert!(
+            entries < MAX_GRANT_BLOBS,
+            "the fixture must carry fewer than the ceiling for this to say anything"
+        );
+        // Past what the frozen ceiling would have left, inside what this set needs.
+        let body = folder_past_the_resealable_budget(resealable_root_rest_bytes(MAX_GRANT_BLOBS));
+        let carried = carried_section(&fixture.grant_section);
+        let head = author_scope_root_envelope(authoring(&body, carried), &fixture.name, &owner())
+            .expect("a root inside its own committed set's reservation is authored");
+        let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
+        assert!(
+            scope_root_rest_bytes(head.block.len(), section)
+                > resealable_root_rest_bytes(MAX_GRANT_BLOBS),
+            "the frozen ceiling would have refused this root"
+        );
+    }
+
+    /// A grant inside the same reservation step must never un-author a root the
+    /// step before it authored.
+    #[test]
+    fn a_grant_inside_one_reservation_step_never_un_authors_a_live_root() {
+        let fixture = owner_root();
+        let entries = fixture.grant_section.commitment.entries.len();
+        let budget = resealable_root_rest_bytes(entries);
+        assert_eq!(
+            budget,
+            resealable_root_rest_bytes(entries + 1),
+            "one more grant must not move the budget inside a step"
+        );
+    }
+
     #[test]
     fn a_child_record_is_held_to_the_block_ceiling_alone() {
         // Only a scope root owes a re-seal, so reserving that headroom on every
         // interior node would shrink an honest folder for nothing.
+        // The widest budget any committed set leaves, so this folder is past
+        // every scope root's reservation and still inside the block ceiling.
+        let widest = resealable_root_rest_bytes(0);
         author_child_envelope(authoring(
-            &folder_past_the_resealable_budget(),
+            &folder_past_the_resealable_budget(widest),
             PreservedFields::new(),
         ))
         .expect("an interior node fills the block ceiling");
@@ -1018,14 +1069,12 @@ mod tests {
         // never rotate again (blueprint/core.md — an over-length carry is
         // truncated, never refused).
         let fixture = owner_root();
+        let budget = resealable_root_rest_bytes(fixture.grant_section.commitment.entries.len());
         let carried: PreservedFields = carried_section(&fixture.grant_section)
             .entries()
             .iter()
             .cloned()
-            .chain([(
-                "bloat".to_owned(),
-                Value::Bytes(vec![0xab; MAX_RESEALABLE_ROOT_REST_BYTES]),
-            )])
+            .chain([("bloat".to_owned(), Value::Bytes(vec![0xab; budget]))])
             .collect();
 
         let head =
@@ -1033,7 +1082,7 @@ mod tests {
                 .expect("the padding is cut, not refused");
         let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
         assert!(
-            scope_root_rest_bytes(head.block.len(), section) <= MAX_RESEALABLE_ROOT_REST_BYTES,
+            scope_root_rest_bytes(head.block.len(), section) <= budget,
             "the authored root must sit inside its own re-seal reservation"
         );
         assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));

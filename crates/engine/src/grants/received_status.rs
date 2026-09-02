@@ -17,6 +17,7 @@ use cipherbox_core::seal::{
     AadContext, ChildRef, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
@@ -34,7 +35,8 @@ use crate::net::rotation::scope_name;
 use crate::net::{assemble_candidate, fanout_get_verify};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
-    FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore, UnixMillis,
+    ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
+    UnixMillis,
 };
 use crate::sync::model::{NodeMeta, Snapshot, node_id_label};
 use crate::sync::project::project_folder_partial;
@@ -225,6 +227,9 @@ pub(crate) struct ReceivedShareStatus<'a, T, H, F> {
     pub floors: &'a F,
     /// This device's encryption subkey.
     pub enc_secret: &'a X25519Secret,
+    /// This account's contact-label seed — what a share's sharer is labelled
+    /// under before it keys that scope's durable epoch floor.
+    pub contact_label_seed: &'a SecretBytes,
 }
 
 impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F> {
@@ -369,7 +374,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// plain id reaches every other sharer's scope of that id and this vault's
     /// own anchored root scope.
     fn sharer_floors(&self, share: &ReceivedShare) -> SharerScopedFloorStore<'_, F> {
-        SharerScopedFloorStore::granted_by(self.floors, share.sharer_identity_pk)
+        SharerScopedFloorStore::granted_by(
+            self.floors,
+            ContactLabel::of(self.contact_label_seed, &share.sharer_identity_pk),
+        )
     }
 
     /// The record `share`'s scope root answers with now, and the durable bars
@@ -614,6 +622,10 @@ mod tests {
         X25519Secret::from_scalar([0x44; 32])
     }
 
+    fn label_seed() -> SecretBytes {
+        kdf::contact_label_seed(&[0x4c; 32])
+    }
+
     fn scope_root_name() -> IpnsName {
         derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE)
     }
@@ -750,7 +762,10 @@ mod tests {
     fn seeded_floors(sharer: [u8; IDENTITY_PUBLIC_LEN], cut_epoch: u64) -> InMemoryFloorStore {
         let floors = InMemoryFloorStore::default();
         block_on(async {
-            let scoped = SharerScopedFloorStore::granted_by(&floors, sharer);
+            let scoped = SharerScopedFloorStore::granted_by(
+                &floors,
+                ContactLabel::of(&label_seed(), &sharer),
+            );
             record_cut_epoch_floor(&scoped, &SCOPE, cut_epoch).await?;
             scoped.raise_epoch_floor(&SCOPE, OWNER_ROOT_EPOCH).await?;
             floors
@@ -816,6 +831,7 @@ mod tests {
                     http: &self.http,
                     floors,
                     enc_secret: &my_enc(),
+                    contact_label_seed: &label_seed(),
                 }
                 .resolved(&bookmark()),
             );
@@ -1271,6 +1287,7 @@ mod tests {
                     http: &self.http,
                     floors: &self.floors,
                     enc_secret: &my_enc(),
+                    contact_label_seed: &label_seed(),
                 }
                 .refresh(
                     &self.staging,
@@ -1812,6 +1829,7 @@ mod tests {
                     http: &self.http,
                     floors: &self.floors,
                     enc_secret: &my_enc(),
+                    contact_label_seed: &label_seed(),
                 }
                 .refresh(
                     &self.staging,

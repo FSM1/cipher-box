@@ -30,7 +30,7 @@ use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob
 use crate::mailbox::VerifiedMailboxItem;
 use crate::name::MAX_NODE_NAME_BYTES;
 use crate::net::GrantedScopeRoot;
-use crate::seams::{FloorStore, Mailbox, SeamError, SharerScopedFloorStore};
+use crate::seams::{ContactLabel, FloorStore, Mailbox, SeamError, SharerScopedFloorStore};
 
 use super::contact::Contact;
 use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
@@ -838,6 +838,7 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     item: &VerifiedMailboxItem,
     contact: &Contact,
     my_enc_secret: &X25519Secret,
+    contact_label_seed: &SecretBytes,
     candidate: &Candidate,
     grant_blobs: &[PublishedGrantBlob],
     vault_root_scope: &[u8; 16],
@@ -916,7 +917,10 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         }),
     };
     let bookmark_key: BookmarkKey = (pointer.sharer_identity_pk, candidate.envelope.scope);
-    let floors = &SharerScopedFloorStore::granted_by(floors, pointer.sharer_identity_pk);
+    let floors = &SharerScopedFloorStore::granted_by(
+        floors,
+        ContactLabel::of(contact_label_seed, &pointer.sharer_identity_pk),
+    );
 
     // Gate the record but DEFER the floor-law advance so the durable sequence
     // floor never moves ahead of the bookmark it accepts (see `PendingAdoption`).
