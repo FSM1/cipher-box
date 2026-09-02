@@ -39,8 +39,12 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -478,6 +482,22 @@ export class EngineClient implements EngineTransport {
 
   authMethods(): Promise<AuthMethodDescriptor[]> {
     return this.current.authMethods();
+  }
+
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    return this.current.devices();
+  }
+
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    return this.current.deviceRegistrationChallenge(devicePublicKey);
+  }
+
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    return this.current.pendingApprovals();
+  }
+
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    return this.current.deviceRendezvous(step);
   }
 
   siweChallenge(intent: SiweIntent): Promise<string> {

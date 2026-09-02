@@ -13,6 +13,7 @@
 import { errorMessage } from '../errorMessage.js';
 import { WriteQueue } from '../writeQueue.js';
 import type { EngineHostLike } from './engineHost.js';
+import { rendezvousTransfer } from './protocol.js';
 import type { WorkerMessage, WorkerRequest } from './protocol.js';
 
 /** A request driving an already-open write handle, ordered per handle. */
@@ -37,7 +38,8 @@ function errorCode(error: unknown): string | undefined {
 
 /** Wires `scope` to `host`, then signals readiness. */
 export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void {
-  const post = (message: WorkerMessage): void => scope.postMessage(message);
+  const post = (message: WorkerMessage, transfer: Transferable[] = []): void =>
+    scope.postMessage(message, transfer);
   // Transfer the plaintext buffer: no byte copy through the boundary.
   const postOwned = (id: number, result: ArrayBuffer): void =>
     scope.postMessage({ type: 'response', id, ok: true, result }, [result]);
@@ -98,6 +100,28 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
         case 'authMethods': {
           const result = await host.authMethods();
           post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'devices': {
+          const result = await host.devices();
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'deviceRegistrationChallenge': {
+          const result = await host.deviceRegistrationChallenge(request.devicePublicKey);
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'pendingApprovals': {
+          const result = await host.pendingApprovals();
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'deviceRendezvous': {
+          const result = await host.deviceRendezvous(request.step);
+          // The opened factor is transferred, not cloned: a copy left in this
+          // realm would outlive the call with no owner to erase it.
+          post({ type: 'response', id: request.id, ok: true, result }, rendezvousTransfer(result));
           return;
         }
         case 'siweChallenge': {

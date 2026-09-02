@@ -28,7 +28,7 @@ import {
   type IdentityMethod,
 } from '@cipherbox/login';
 import { environment, loginEnv } from '../engine/config';
-import type { DeviceIdentity } from './deviceIdentity';
+import type { DeviceIdentity, DeviceIdentityStore } from './deviceIdentity';
 import { indexedDbWrappingKeys, SealedStore } from './sealedStore';
 
 /** The Core Kit surface the web host drives beyond the shared login flow. */
@@ -48,6 +48,23 @@ export interface WebCoreKitSession extends CoreKitSession {
    * erase of this device's identity key.
    */
   forgetDevice(): Promise<void>;
+  /**
+   * This device's identity key for the subject that signed in, or `null` before
+   * a sign-in names one (ADR 0009 D4).
+   */
+  deviceIdentity(): DeviceIdentity | null;
+  /** The identity token this sign-in used, which the device surface presents. */
+  identityToken(): string | null;
+  /**
+   * A fresh factor for a device this session approves, and never this session's
+   * own (ADR 0009 D5). The bytes are the caller's to seal and then to erase.
+   */
+  mintApprovalFactor(): Promise<Uint8Array>;
+  /**
+   * Adopt the factor an approver sealed back, and keep it as this device's own
+   * so the next sign-in here needs neither a phrase nor a second device.
+   */
+  adoptApprovalFactor(factorKey: Uint8Array): Promise<void>;
 }
 
 /**
@@ -96,10 +113,15 @@ class Web3AuthSession implements WebCoreKitSession {
   /** The address the exchange reported; the token deliberately carries no PII. */
   private signedInEmail: string | null = null;
 
+  /** The identity this sign-in used; kept through a login held at the policy,
+   * which is the state a device-approval request is opened from. */
+  private signedInSubject: string | null = null;
+  private signedInToken: string | null = null;
+
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
-    private readonly identity: DeviceIdentity,
+    private readonly identities: DeviceIdentityStore,
     private readonly verifier: string
   ) {}
 
@@ -126,6 +148,8 @@ class Web3AuthSession implements WebCoreKitSession {
       idToken: credential.token,
     });
     this.signedInEmail = credential.email;
+    this.signedInSubject = credential.verifierId;
+    this.signedInToken = credential.token;
     if (!this.isLoggedIn()) await this.useStoredDeviceFactor();
     if (this.isLoggedIn()) {
       await this.coreKit.commitChanges();
@@ -285,8 +309,59 @@ class Web3AuthSession implements WebCoreKitSession {
       if (this.isLoggedIn() || this.needsRecovery()) await this.coreKit.logout();
     } finally {
       this.signedInEmail = null;
+      this.signedInSubject = null;
+      this.signedInToken = null;
       await this.clearStore();
     }
+  }
+
+  deviceIdentity(): DeviceIdentity | null {
+    const subject = this.subject();
+    return subject === null ? null : this.identities.forSubject(subject);
+  }
+
+  /**
+   * Which member this browser is signed in as. Read back off the SDK's user
+   * info when this instance did not itself log in, which is what a session
+   * restored across a reload looks like.
+   */
+  private subject(): string | null {
+    if (this.signedInSubject !== null) return this.signedInSubject;
+    let claimed: unknown;
+    try {
+      claimed = (this.coreKit.getUserInfo() as { verifierId?: unknown }).verifierId;
+    } catch {
+      return null;
+    }
+    return typeof claimed === 'string' && claimed !== '' ? claimed : null;
+  }
+
+  identityToken(): string | null {
+    return this.signedInToken;
+  }
+
+  async mintApprovalFactor(): Promise<Uint8Array> {
+    if (!this.isLoggedIn()) throw new Error('sign in before you approve a device');
+    const factor = generateFactorKey();
+    await this.coreKit.createFactor({
+      shareType: TssShareType.DEVICE,
+      factorKey: factor.private,
+      shareDescription: FactorKeyTypeShareDescription.DeviceShare,
+    });
+    // Manual sync: an uncommitted factor would open nothing on the new device.
+    await this.coreKit.commitChanges();
+    return scalarBytes(factor.private);
+  }
+
+  async adoptApprovalFactor(factorKey: Uint8Array): Promise<void> {
+    if (!this.needsRecovery()) throw new Error('this device is not waiting on an approval');
+    const scalar = new BN(factorKey);
+    await this.coreKit.inputFactorKey(scalar);
+    if (!this.isLoggedIn()) throw new Error('that approval does not open this account');
+    // Replacing, for the same reason a recovery does: a stored factor the
+    // account never learned about must not refuse the one that just worked.
+    await this.coreKit.setDeviceFactor(scalar, true);
+    await this.coreKit.commitChanges();
   }
 
   async forgetDevice(): Promise<void> {
@@ -294,7 +369,7 @@ class Web3AuthSession implements WebCoreKitSession {
     // The identity key is this device's durable local state, so a forget takes
     // it too: a key left behind keeps signing as a device the member erased.
     // Unlike the factor drop it needs no network, so its refusal is reported.
-    await this.identity.forget();
+    await this.deviceIdentity()?.forget();
   }
 
   private async dropDeviceFactor(): Promise<void> {
@@ -375,11 +450,20 @@ export function sealedCoreKitStore(): SealedStore {
   return new SealedStore(window.localStorage, indexedDbWrappingKeys(), navigator.locks);
 }
 
+/**
+ * A Core Kit factor key as the 32 big-endian bytes the seal takes. The explicit
+ * width is the load-bearing part: `toArray('be')` alone drops leading zeros, so
+ * one factor in 256 would travel short and open under a different scalar.
+ */
+function scalarBytes(scalar: BN): Uint8Array {
+  return Uint8Array.from(scalar.toArray('be', 32));
+}
+
 /** Builds this tab's Core Kit session from the build-time environment. */
 export function createCoreKitSession(
   env: Partial<ImportMetaEnv>,
   store: SealedStore,
-  identity: DeviceIdentity
+  identities: DeviceIdentityStore
 ): WebCoreKitSession {
   const { web3AuthClientId, verifier } = loginEnv(env);
 
@@ -392,5 +476,5 @@ export function createCoreKitSession(
     manualSync: true,
     tssLib,
   });
-  return new Web3AuthSession(coreKit, store, identity, verifier);
+  return new Web3AuthSession(coreKit, store, identities, verifier);
 }

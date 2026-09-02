@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { RecoveryPhraseSetup } from '../components/auth/RecoveryPhraseSetup';
 import { AppShell } from '../components/layout/AppShell';
 import { AuthMethodsPane } from '../components/settings/AuthMethodsPane';
+import { DevicesPane } from '../components/settings/DevicesPane';
 import { ForgetDeviceDialog } from '../components/settings/ForgetDeviceDialog';
 import { QuotaChrome } from '../components/settings/QuotaChrome';
 import { VaultSettingsForm } from '../components/settings/VaultSettingsForm';
@@ -15,9 +16,8 @@ type Raised = 'recovery' | 'forget' | null;
 /**
  * Account and vault settings, behind `RequireAuth` (blueprint/web-client.md
  * "Composition"). The route shell: sign-in identity, the recovery phrase, the
- * login methods on the account, BYO pinning with its quota chrome, and
- * forget-this-device. The MFA/device-approval surface lands here with its own
- * scope.
+ * login methods on the account, the devices that may approve a sign-in, BYO
+ * pinning with its quota chrome, and forget-this-device.
  */
 export function SettingsPage() {
   const account = useEngineAccount();
@@ -87,6 +87,8 @@ export function SettingsPage() {
             <VaultSettingsForm summary={storage.settings} onSaved={reload} />
           )}
         </section>
+
+        <DevicesPane />
 
         <section
           className="settings-section settings-section--danger"

@@ -49,8 +49,12 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -270,6 +274,22 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   authMethods(): Promise<AuthMethodDescriptor[]> {
     return this.read<AuthMethodDescriptor[]>({ kind: 'authMethods' });
+  }
+
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    return this.read<RegisteredDeviceDescriptor[]>({ kind: 'devices' });
+  }
+
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    return this.read<Uint8Array>({ kind: 'deviceRegistrationChallenge', devicePublicKey });
+  }
+
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    return this.read<PendingApprovalDescriptor[]>({ kind: 'pendingApprovals' });
+  }
+
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    return this.read<DeviceRendezvousResult>({ kind: 'deviceRendezvous', step });
   }
 
   siweChallenge(intent: SiweIntent): Promise<string> {

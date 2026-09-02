@@ -12,6 +12,7 @@ import './styles/dialogs.css';
 import './styles/context-menu.css';
 import './styles/settings.css';
 import './styles/shared.css';
+import './styles/devices.css';
 import './styles/responsive.css';
 
 import { StrictMode } from 'react';
@@ -21,7 +22,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { WagmiProvider } from 'wagmi';
 import { App } from './App';
 import { createCoreKitSession, sealedCoreKitStore } from './auth/coreKit';
-import { webDeviceIdentity } from './auth/deviceIdentity';
+import { webDeviceIdentities } from './auth/deviceIdentity';
 import { CoreKitProvider } from './auth/CoreKitProvider';
 import { IdentityProvider } from './auth/IdentityProvider';
 import { createIdentityExchange } from '@cipherbox/login';
@@ -53,7 +54,7 @@ createRoot(rootElement).render(
         >
           <CoreKitProvider
             createSession={() =>
-              createCoreKitSession(import.meta.env, sealedCoreKitStore(), webDeviceIdentity())
+              createCoreKitSession(import.meta.env, sealedCoreKitStore(), webDeviceIdentities())
             }
           >
             <IdentityProvider

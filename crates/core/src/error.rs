@@ -58,6 +58,11 @@ pub enum TrustViolation {
     /// decap and at contact import, distinct from a tag mismatch
     /// ([`Self::HpkeOpenFailed`]).
     HpkeNonContributory,
+    /// An ECIES envelope failed to open: a malformed encapsulated key, a
+    /// recipient scalar outside the group, or an AEAD tag that did not verify.
+    /// *Trust*, not malformation, and one variant for every cause — a caller
+    /// must never learn which part of a relayed envelope was wrong.
+    EciesOpenFailed,
     /// A symmetric sealed body failed to open: the XChaCha20-Poly1305 tag did
     /// not verify under the read/structure key and the structured AAD
     /// `(v, id, scope, epoch, structTag)`. *Trust*, not availability — the
@@ -143,6 +148,7 @@ impl TrustViolation {
         "subkey-binding-invalid",
         "hpke-open-failed",
         "hpke-non-contributory",
+        "ecies-open-failed",
         "seal-open-failed",
         "content-cid-mismatch",
         "duplicate-id",
@@ -168,6 +174,7 @@ impl TrustViolation {
             Self::SubkeyBindingInvalid => "subkey-binding-invalid",
             Self::HpkeOpenFailed => "hpke-open-failed",
             Self::HpkeNonContributory => "hpke-non-contributory",
+            Self::EciesOpenFailed => "ecies-open-failed",
             Self::SealOpenFailed => "seal-open-failed",
             Self::ContentCidMismatch => "content-cid-mismatch",
             Self::DuplicateId => "duplicate-id",
@@ -205,6 +212,7 @@ impl fmt::Display for TrustViolation {
             Self::SubkeyBindingInvalid
             | Self::HpkeOpenFailed
             | Self::HpkeNonContributory
+            | Self::EciesOpenFailed
             | Self::SealOpenFailed
             | Self::ContentCidMismatch
             | Self::DuplicateId

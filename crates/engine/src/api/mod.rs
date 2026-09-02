@@ -19,6 +19,6 @@ pub use signer::{ChallengeSigner, IdentityChallengeSigner};
 #[cfg(test)]
 pub(crate) use types::new_user_login_response;
 pub use types::{
-    AuthMethod, AuthMethodKind, LoginOutcome, MailboxItem, NameRegistration, Quota, RetireEntry,
-    RetireResult, SiweNonce, TestLoginOutcome, UploadResult,
+    AuthMethod, AuthMethodKind, LoginOutcome, MailboxItem, NameRegistration, PendingApproval,
+    Quota, RegisteredDevice, RetireEntry, RetireResult, SiweNonce, TestLoginOutcome, UploadResult,
 };

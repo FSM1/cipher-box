@@ -5,21 +5,29 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type {
+  ApprovalDecision,
   AuthMethodDescriptor,
   BinDescriptor,
   BinRowDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   EngineClient,
   ReceivedShareDescriptor,
+  PendingApprovalDescriptor,
+  RegisteredDeviceDescriptor,
   SiweIntent,
   SnapshotDescriptor,
   VaultSettingsDescriptor,
   VaultStorageDescriptor,
 } from '@cipherbox/client';
+import { rendezvousTransfer } from '@cipherbox/client';
 import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
 import type { WebCoreKitSession } from '../auth/coreKit';
+import { DeviceIdentity } from '../auth/deviceIdentity';
+import { MemoryDeviceKeys, SerialLocks } from './storeFakes';
 
 import { IdentityProvider } from '../auth/IdentityProvider';
 import {
@@ -44,6 +52,80 @@ export const FAKE_IDENTITY_TOKEN = 'header.payload.signature';
 /** The one phrase the fake session enrolls and accepts; 24 words, as a real one is. */
 export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
 
+/** This browser's own device identity key, in the hex the registry takes. */
+export const FAKE_DEVICE_PUBLIC_KEY = 'aa'.repeat(32);
+
+/**
+ * The secp256k1 key the engine cuts for one rendezvous, in the compressed SEC1
+ * hex the field takes: a `02`/`03` prefix and 32 bytes of x, so 66 characters.
+ */
+export const FAKE_EPHEMERAL_PUBLIC_KEY = `02${'bb'.repeat(32)}`;
+
+/**
+ * Detach exactly what the real transport transfers, so a component that then
+ * touches one of those buffers fails here rather than only in a browser. The
+ * rule comes from `@cipherbox/client` itself, so this double cannot drift.
+ */
+function detachTransferred(step: DeviceRendezvousStep): void {
+  for (const buffer of rendezvousTransfer(step)) {
+    structuredClone(buffer, { transfer: [buffer] });
+  }
+}
+
+/** Copies a step's byte fields, so a later detach cannot rewrite the evidence. */
+function snapshotStep(step: DeviceRendezvousStep): DeviceRendezvousStep {
+  return Object.fromEntries(
+    Object.entries(step).map(([field, value]) => [
+      field,
+      value instanceof Uint8Array ? value.slice() : value,
+    ])
+  ) as DeviceRendezvousStep;
+}
+
+/**
+ * Whether a buffer holds no secret in this realm: either it was transferred
+ * away, which detaches the view and leaves it no bytes, or it was erased in
+ * place.
+ */
+export function holdsNoSecret(bytes: Uint8Array): boolean {
+  return bytes.byteLength === 0 || bytes.every((byte) => byte === 0);
+}
+
+/**
+ * The digits both screens show, which the member matches by eye (ADR 0009 D1).
+ * A function of the two fields the requester itself fixed, as the engine's own
+ * is: two screens shown different fields read out different digits.
+ */
+export function fakeComparisonValue(
+  requesterDevicePublicKey: string,
+  ephemeralPublicKey: string
+): string {
+  const transcript = `${requesterDevicePublicKey}/${ephemeralPublicKey}`;
+  let folded = 0;
+  for (const character of transcript) {
+    folded = (folded * 31 + character.charCodeAt(0)) % 100_000_000;
+  }
+  const digits = String(folded).padStart(8, '0');
+  return `${digits.slice(0, 4)} ${digits.slice(4)}`;
+}
+
+/** The factor an approver sealed back, as the relay carries it. */
+export const FAKE_SEALED_FACTOR = 'c2VhbGVkLWZhY3Rvcg';
+
+/** What each rendezvous step hands back for the caller to sign. */
+export const FAKE_REQUEST_PAYLOAD = new Uint8Array([1, 2, 3, 4]);
+export const FAKE_APPROVE_PAYLOAD = new Uint8Array([5, 6, 7, 8]);
+export const FAKE_DENY_PAYLOAD = new Uint8Array([9, 10, 11, 12]);
+
+/**
+ * A stand-in signature that is a function of the message, so a test can bind a
+ * dispatched signature to the payload it was taken over. Nothing verifies it.
+ */
+export function fakeSignatureOver(message: Uint8Array): string {
+  const hex = Array.from(message, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex}${'0'.repeat(128)}`.slice(0, 128);
+}
+
 export interface EngineCalls {
   /** The buffers `start` was handed, still live so a test can check zeroization. */
   started: ArrayBuffer[];
@@ -65,6 +147,33 @@ export interface EngineCalls {
   restores: { node: Uint8Array; into: Uint8Array | null }[];
   /** Each purge, by the node it named. */
   purges: Uint8Array[];
+  /** The public key each registration challenge was asked for. */
+  registrationChallenges: string[];
+  registered: {
+    publicKey: string;
+    signature: string;
+    identityToken: string;
+    label: string | null;
+  }[];
+  /** The device id each revoke named. */
+  revoked: string[];
+  /**
+   * Every rendezvous step, in the order a screen ran them, holding the caller's
+   * own buffers. A step's transferred fields are detached by the time a test
+   * reads them, so this answers what the caller was left holding, never what it
+   * sent. Read [`rendezvousSent`] for the bytes.
+   */
+  rendezvous: DeviceRendezvousStep[];
+  /** What each step carried, copied before the transfer detached it. */
+  rendezvousSent: DeviceRendezvousStep[];
+  answered: {
+    requestId: string;
+    decision: ApprovalDecision;
+    devicePublicKey: string;
+    ephemeralPublicKey: string;
+    signature: string;
+    sealedFactor: string | null;
+  }[];
 }
 
 /** A hosted vault whose ledger has drained, as the storage pane first reads it. */
@@ -121,6 +230,11 @@ export function fakeEngineClient(
     snapshot: () => Promise<SnapshotDescriptor>;
     restore: () => Promise<CommandOutcomeDescriptor>;
     purge: () => Promise<CommandOutcomeDescriptor>;
+    devices: () => Promise<RegisteredDeviceDescriptor[]>;
+    pendingApprovals: () => Promise<PendingApprovalDescriptor[]>;
+    registerDevice: () => Promise<void>;
+    revokeDevice: () => Promise<void>;
+    respondToApproval: () => Promise<void>;
   }> = {}
 ) {
   const calls: EngineCalls = {
@@ -135,6 +249,12 @@ export function fakeEngineClient(
     unlinked: [],
     restores: [],
     purges: [],
+    registrationChallenges: [],
+    registered: [],
+    revoked: [],
+    rendezvous: [],
+    rendezvousSent: [],
+    answered: [],
   };
   const sessionListeners = new Set<() => void>();
   const sessionEndListeners = new Set<() => void>();
@@ -190,6 +310,71 @@ export function fakeEngineClient(
         calls.purges.push(node);
         return overrides.purge?.() ?? Promise.resolve({ kind: 'done' as const });
       },
+      devices: () => overrides.devices?.() ?? Promise.resolve([]),
+      pendingApprovals: () => overrides.pendingApprovals?.() ?? Promise.resolve([]),
+      deviceRegistrationChallenge(devicePublicKey: string) {
+        calls.registrationChallenges.push(devicePublicKey);
+        return Promise.resolve(Uint8Array.from([0xc0, 0xde]));
+      },
+      deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+        calls.rendezvous.push(step);
+        calls.rendezvousSent.push(snapshotStep(step));
+        detachTransferred(step);
+        switch (step.kind) {
+          case 'open':
+            return Promise.resolve({
+              kind: 'opened',
+              ephemeralPublicKey: FAKE_EPHEMERAL_PUBLIC_KEY,
+              requestPayload: FAKE_REQUEST_PAYLOAD,
+              comparisonValue: fakeComparisonValue(step.devicePublicKey, FAKE_EPHEMERAL_PUBLIC_KEY),
+            });
+          case 'approve':
+            return Promise.resolve({
+              kind: 'response',
+              sealedFactor: FAKE_SEALED_FACTOR,
+              payload: FAKE_APPROVE_PAYLOAD,
+            });
+          case 'deny':
+            return Promise.resolve({
+              kind: 'response',
+              sealedFactor: null,
+              payload: FAKE_DENY_PAYLOAD,
+            });
+          case 'openFactor':
+            return Promise.resolve({ kind: 'factor', factorKey: new Uint8Array(32).fill(0x7c) });
+        }
+      },
+      registerDevice(
+        publicKey: string,
+        signature: string,
+        identityToken: string,
+        label: string | null
+      ) {
+        calls.registered.push({ publicKey, signature, identityToken, label });
+        return overrides.registerDevice?.() ?? Promise.resolve();
+      },
+      revokeDevice(deviceId: string) {
+        calls.revoked.push(deviceId);
+        return overrides.revokeDevice?.() ?? Promise.resolve();
+      },
+      respondToApproval(
+        requestId: string,
+        decision: ApprovalDecision,
+        devicePublicKey: string,
+        ephemeralPublicKey: string,
+        signature: string,
+        sealedFactor: string | null
+      ) {
+        calls.answered.push({
+          requestId,
+          decision,
+          devicePublicKey,
+          ephemeralPublicKey,
+          signature,
+          sealedFactor,
+        });
+        return overrides.respondToApproval?.() ?? Promise.resolve();
+      },
       async logout() {
         calls.logouts += 1;
         // The engine is zeroized either way: `EngineFacade.logout` tears the
@@ -229,6 +414,37 @@ export interface CoreKitCalls {
   logouts: number;
   phrases: string[];
   enrollments: number;
+  /** The messages this device's identity key was asked to sign, as they arrived. */
+  signed: Uint8Array[];
+  /** Each fresh approval factor, still the caller's buffer, so a zeroization check reads it. */
+  mintedFactors: Uint8Array[];
+  /** Each adopted factor's live buffer, and what it held on arrival. */
+  adopted: Uint8Array[];
+  adoptedBytes: Uint8Array[];
+}
+
+/**
+ * This device's identity key as the device surfaces drive it. Its signatures are
+ * a function of the message rather than real Ed25519: nothing under test
+ * verifies one, and a test binds a dispatched signature to what was signed.
+ */
+class FakeDeviceIdentity extends DeviceIdentity {
+  constructor(private readonly calls: CoreKitCalls) {
+    super(new MemoryDeviceKeys(), new SerialLocks(), 'fake-device-identity');
+  }
+
+  override publicKeyHex(): Promise<string> {
+    return Promise.resolve(FAKE_DEVICE_PUBLIC_KEY);
+  }
+
+  override sign(message: Uint8Array<ArrayBuffer>): Promise<string> {
+    this.calls.signed.push(message.slice());
+    return Promise.resolve(fakeSignatureOver(message));
+  }
+
+  override forget(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 export function fakeCoreKitSession(
@@ -243,9 +459,26 @@ export function fakeCoreKitSession(
     enrolled?: boolean;
     /** What an enrollment could not confirm after the policy was cut. */
     enrollWarning?: string;
+    /** What `identityToken` reports before a login named one; `null` for a restore. */
+    identityToken?: string | null;
+    /** A browser holding no identity key, as one is left after `forgetDevice`. */
+    noDeviceIdentity?: boolean;
   } = {}
 ) {
-  const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0, phrases: [], enrollments: 0 };
+  const calls: CoreKitCalls = {
+    logins: [],
+    exports: 0,
+    logouts: 0,
+    phrases: [],
+    enrollments: 0,
+    signed: [],
+    mintedFactors: [],
+    adopted: [],
+    adoptedBytes: [],
+  };
+  const device = new FakeDeviceIdentity(calls);
+  let identityToken =
+    options.identityToken === undefined ? FAKE_IDENTITY_TOKEN : options.identityToken;
   let loggedIn = options.loggedIn ?? false;
   // Both read off the redeemed credential, as the real session does: a bare
   // restore knows neither, and a wallet login carries no address.
@@ -259,6 +492,7 @@ export function fakeCoreKitSession(
       calls.logins.push(credential);
       method = credential.method;
       email = credential.email;
+      identityToken = credential.token;
       if (options.needsRecovery) return Promise.reject(new RecoveryRequiredError());
       loggedIn = true;
       return Promise.resolve();
@@ -284,6 +518,19 @@ export function fakeCoreKitSession(
       return Promise.resolve();
     },
     forgetDevice: () => Promise.resolve(),
+    deviceIdentity: () => (options.noDeviceIdentity === true ? null : device),
+    identityToken: () => identityToken,
+    mintApprovalFactor() {
+      const factor = new Uint8Array(32).fill(0x5a);
+      calls.mintedFactors.push(factor);
+      return Promise.resolve(factor);
+    },
+    adoptApprovalFactor(factorKey) {
+      calls.adopted.push(factorKey);
+      calls.adoptedBytes.push(factorKey.slice());
+      loggedIn = true;
+      return Promise.resolve();
+    },
     _UNSAFE_exportTssKey() {
       calls.exports += 1;
       return Promise.resolve(SECRET_HEX);

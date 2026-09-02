@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { byoSettings, fakeWasmEnums, TEST_ACCOUNT_ID } from '../testkit.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmCommandOutcome } from './engineWasm.js';
-import type { WriteTarget } from './protocol.js';
+import type { DeviceRendezvousStep, WriteTarget } from './protocol.js';
 
 /** A second account on the same device — the lockout this namespacing prevents. */
 const OTHER_ACCOUNT_ID = 'acct02';
@@ -460,5 +460,296 @@ describe('EngineHost command outcomes', () => {
       (await commandingHost(outcome)).command({ kind: 'manualRefresh' })
     ).rejects.toThrow('unknown command outcome teleported');
     expect(freed()).toBe(1);
+  });
+});
+
+/** The device-registry rows the read host answers with. */
+const DEVICE_ROW = {
+  id: '7c1e-uuid',
+  publicKey: 'ed25519hex',
+  label: 'Work laptop',
+  createdAt: '2026-08-27T10:00:00.000Z',
+  lastSeenAt: '2026-08-27T11:00:00.000Z',
+};
+
+const PENDING_ROW = {
+  requestId: 'req-1',
+  requesterDevicePublicKey: 'ed25519hex',
+  ephemeralPublicKey: '02beef',
+  comparisonValue: '482913',
+  createdAt: '2026-08-27T10:00:00.000Z',
+  expiresAt: '2026-08-27T10:05:00.000Z',
+};
+
+/** A host whose engine answers the three device reads with fixed rows. */
+function deviceReadHost(): Promise<{ host: EngineHost; challenged: string[] }> {
+  const challenged: string[] = [];
+  const wasm = {
+    ...fakeWasmEnums,
+    EngineHandle: class {
+      start(): Promise<void> {
+        return Promise.resolve();
+      }
+
+      devices(): Promise<unknown[]> {
+        return Promise.resolve([DEVICE_ROW, { ...DEVICE_ROW, id: '9a2b-uuid', label: undefined }]);
+      }
+
+      pendingApprovals(): Promise<unknown[]> {
+        return Promise.resolve([PENDING_ROW]);
+      }
+
+      deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+        challenged.push(devicePublicKey);
+        return Promise.resolve(Uint8Array.of(9, 9));
+      }
+    },
+  } as unknown as EngineWasm;
+  return started(wasm).then((host) => ({ host, challenged }));
+}
+
+/** A wasm module whose rendezvous free functions record what they were called with. */
+function rendezvousWasm(): { wasm: EngineWasm; calls: unknown[][]; freed: () => number } {
+  const calls: unknown[][] = [];
+  let frees = 0;
+  const releasable = (fields: Record<string, unknown>): unknown => ({
+    ...fields,
+    free: () => {
+      frees += 1;
+    },
+  });
+  // A buffer argument is snapshotted at the call, because the host scrubs the
+  // step it was handed: recording the view itself would compare zeroes to
+  // zeroes and assert nothing.
+  const record =
+    (name: string, answer: () => unknown) =>
+    (...args: unknown[]): unknown => {
+      calls.push([name, ...args.map((arg) => (arg instanceof Uint8Array ? arg.slice() : arg))]);
+      return answer();
+    };
+  const wasm = {
+    ...fakeWasmEnums,
+    EngineHandle: class {
+      start(): Promise<void> {
+        return Promise.resolve();
+      }
+    },
+    openDeviceRendezvous: record('openDeviceRendezvous', () =>
+      releasable({
+        ephemeralPublicKey: '02beef',
+        requestPayload: Uint8Array.of(1, 2),
+        comparisonValue: '482913',
+      })
+    ),
+    approveDeviceRendezvous: record('approveDeviceRendezvous', () =>
+      releasable({ sealedFactor: 'c2VhbA==', payload: Uint8Array.of(3) })
+    ),
+    denyDeviceRendezvous: record('denyDeviceRendezvous', () =>
+      releasable({ sealedFactor: undefined, payload: Uint8Array.of(4) })
+    ),
+    openDeviceFactor: record('openDeviceFactor', () => Uint8Array.of(7, 7)),
+  } as unknown as EngineWasm;
+  return { wasm, calls, freed: () => frees };
+}
+
+/**
+ * Minted per use, never shared: a step's buffers are scrubbed by the host, so
+ * one array reused across cases would leave every later case asserting zeroes.
+ */
+const scalarBytes = (): Uint8Array => new Uint8Array(32).fill(5);
+const factorKeyBytes = (): Uint8Array => new Uint8Array(32).fill(6);
+
+describe('EngineHost device reads', () => {
+  it('reads the registry rows through, and an absent label as null', async () => {
+    const { host } = await deviceReadHost();
+
+    await expect(host.devices()).resolves.toEqual([
+      { ...DEVICE_ROW },
+      { ...DEVICE_ROW, id: '9a2b-uuid', label: null },
+    ]);
+  });
+
+  it('reads the pending rows through with the digits each screen must show', async () => {
+    const { host } = await deviceReadHost();
+
+    await expect(host.pendingApprovals()).resolves.toEqual([PENDING_ROW]);
+  });
+
+  it('names the device key the registration challenge is issued for', async () => {
+    const { host, challenged } = await deviceReadHost();
+
+    await expect(host.deviceRegistrationChallenge('ed25519hex')).resolves.toEqual(
+      Uint8Array.of(9, 9)
+    );
+    expect(challenged).toEqual(['ed25519hex']);
+  });
+
+  it('refuses a registration challenge for a key that is not a string', async () => {
+    const { host, challenged } = await deviceReadHost();
+
+    await expect(host.deviceRegistrationChallenge(42 as unknown as string)).rejects.toThrow(
+      'invalid request field devicePublicKey: number'
+    );
+    expect(challenged).toEqual([]);
+  });
+});
+
+describe('EngineHost device rendezvous', () => {
+  // Security rule 7: the realm that holds a copy erases it. The caller keeps
+  // and erases its own, and a transferred buffer is already detached.
+  it('scrubs the rendezvous scalar, the seal scalar and the factor key it was handed', async () => {
+    const { wasm } = rendezvousWasm();
+    const host = await started(wasm);
+    const scalar = scalarBytes();
+    const sealScalar = scalarBytes();
+    const factorKey = factorKeyBytes();
+    const factorScalar = scalarBytes();
+    const zeros = (length: number) => new Uint8Array(length);
+
+    await host.deviceRendezvous({ kind: 'open', devicePublicKey: 'ed25519hex', scalar });
+    await host.deviceRendezvous({
+      kind: 'approve',
+      devicePublicKey: 'ed25519hex',
+      requestId: 'req-1',
+      requesterDevicePublicKey: 'reqhex',
+      ephemeralPublicKey: '02beef',
+      sealScalar,
+      factorKey,
+    });
+    await host.deviceRendezvous({
+      kind: 'openFactor',
+      sealedFactor: 'c2VhbA==',
+      requestId: 'req-1',
+      requesterDevicePublicKey: 'reqhex',
+      scalar: factorScalar,
+    });
+
+    expect(scalar).toEqual(zeros(scalar.length));
+    expect(sealScalar).toEqual(zeros(sealScalar.length));
+    expect(factorKey).toEqual(zeros(factorKey.length));
+    expect(factorScalar).toEqual(zeros(factorScalar.length));
+  });
+
+  it.each([
+    [
+      'open',
+      { kind: 'open', devicePublicKey: 'ed25519hex', scalar: scalarBytes() },
+      ['openDeviceRendezvous', 'ed25519hex', scalarBytes()],
+      {
+        kind: 'opened',
+        ephemeralPublicKey: '02beef',
+        requestPayload: Uint8Array.of(1, 2),
+        comparisonValue: '482913',
+      },
+    ],
+    [
+      'approve',
+      {
+        kind: 'approve',
+        devicePublicKey: 'ed25519hex',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        ephemeralPublicKey: '02beef',
+        sealScalar: scalarBytes(),
+        factorKey: factorKeyBytes(),
+      },
+      [
+        'approveDeviceRendezvous',
+        'ed25519hex',
+        'req-1',
+        'reqhex',
+        '02beef',
+        scalarBytes(),
+        factorKeyBytes(),
+      ],
+      { kind: 'response', sealedFactor: 'c2VhbA==', payload: Uint8Array.of(3) },
+    ],
+    [
+      'deny',
+      {
+        kind: 'deny',
+        devicePublicKey: 'ed25519hex',
+        requestId: 'req-1',
+        ephemeralPublicKey: '02beef',
+      },
+      ['denyDeviceRendezvous', 'ed25519hex', 'req-1', '02beef'],
+      { kind: 'response', sealedFactor: null, payload: Uint8Array.of(4) },
+    ],
+    [
+      'openFactor',
+      {
+        kind: 'openFactor',
+        sealedFactor: 'c2VhbA==',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        scalar: scalarBytes(),
+      },
+      ['openDeviceFactor', 'c2VhbA==', 'req-1', 'reqhex', scalarBytes()],
+      { kind: 'factor', factorKey: Uint8Array.of(7, 7) },
+    ],
+  ] as const)(
+    'runs the %s step against its own free function',
+    async (_case, step, call, result) => {
+      const { wasm, calls } = rendezvousWasm();
+      const host = await started(wasm);
+
+      await expect(host.deviceRendezvous(step as DeviceRendezvousStep)).resolves.toEqual(result);
+      expect(calls).toEqual([call]);
+    }
+  );
+
+  it('releases the boundary object each answering step mints', async () => {
+    const { wasm, freed } = rendezvousWasm();
+    const host = await started(wasm);
+
+    await host.deviceRendezvous({
+      kind: 'open',
+      devicePublicKey: 'ed25519hex',
+      scalar: scalarBytes(),
+    });
+    await host.deviceRendezvous({
+      kind: 'deny',
+      devicePublicKey: 'ed25519hex',
+      requestId: 'req-1',
+      ephemeralPublicKey: '02beef',
+    });
+
+    expect(freed()).toBe(2);
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'bogus' }, 'unknown rendezvous step kind: bogus'],
+    ['no shape at all', null, 'invalid request field step: null'],
+    [
+      'a numeric device key',
+      { kind: 'open', devicePublicKey: 42, scalar: scalarBytes() },
+      'invalid request field devicePublicKey: number',
+    ],
+    [
+      'a string scalar',
+      { kind: 'open', devicePublicKey: 'ed25519hex', scalar: 'thirty-two bytes' },
+      'invalid request field scalar: string',
+    ],
+    [
+      'a numeric factor key',
+      {
+        kind: 'approve',
+        devicePublicKey: 'ed25519hex',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        ephemeralPublicKey: '02beef',
+        sealScalar: scalarBytes(),
+        factorKey: 42,
+      },
+      'invalid request field factorKey: number',
+    ],
+  ])('refuses a step carrying %s', async (_case, step, message) => {
+    const { wasm, calls } = rendezvousWasm();
+    const host = await started(wasm);
+
+    await expect(host.deviceRendezvous(step as unknown as DeviceRendezvousStep)).rejects.toThrow(
+      message
+    );
+    expect(calls).toEqual([]);
   });
 });

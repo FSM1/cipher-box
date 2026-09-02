@@ -18,9 +18,13 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -46,6 +50,7 @@ export const fakeWasmEnums = {
   BinOriginKind: { Root: 0, Folder: 1, Gone: 2 },
   ReclaimStallReason: { NodeUnreadable: 0, TargetStillLive: 1, TargetUnexpandable: 2 },
   AuthMethodKind: { Identity: 0, Wallet: 1, Test: 2, Unknown: 3 },
+  ApprovalDecision: { Approve: 0, Deny: 1 },
   Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
   OpPhase: {
     DownloadStarted: 0,
@@ -204,6 +209,22 @@ export class StubEngineHost implements EngineHostLike {
 
   authMethods(): Promise<AuthMethodDescriptor[]> {
     return notStubbed('authMethods');
+  }
+
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    return notStubbed('devices');
+  }
+
+  deviceRegistrationChallenge(_devicePublicKey: string): Promise<Uint8Array> {
+    return notStubbed('deviceRegistrationChallenge');
+  }
+
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    return notStubbed('pendingApprovals');
+  }
+
+  deviceRendezvous(_step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    return notStubbed('deviceRendezvous');
   }
 
   siweChallenge(_intent: SiweIntent): Promise<string> {
@@ -507,6 +528,17 @@ export function collect(value: unknown): { bytesHex: string; text: string } {
   return { bytesHex: hex(found), text: strings.join(' ') };
 }
 
+/** Copies a rendezvous step's byte fields, so a later scrub cannot rewrite it. */
+function snapshotStep(step: DeviceRendezvousStep): DeviceRendezvousStep {
+  const copied = Object.fromEntries(
+    Object.entries(step).map(([field, value]) => [
+      field,
+      value instanceof Uint8Array ? value.slice() : value,
+    ])
+  );
+  return copied as DeviceRendezvousStep;
+}
+
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
 export class FakeEngineTransport implements EngineTransport {
   readonly commands: CommandDescriptor[] = [];
@@ -518,6 +550,17 @@ export class FakeEngineTransport implements EngineTransport {
   binReads = 0;
   vaultStorageReads = 0;
   authMethodReads = 0;
+  deviceReads = 0;
+  pendingApprovalReads = 0;
+  /** Every device key a registration challenge was asked for, in call order. */
+  readonly registrationChallenges: string[] = [];
+  /**
+   * Every rendezvous step this transport was asked to run, in call order, with
+   * its secret buffers snapshotted at the call: a relay erases the clone it
+   * holds once the step has run, so recording the view itself would assert
+   * nothing.
+   */
+  readonly rendezvousSteps: DeviceRendezvousStep[] = [];
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
   readonly siweChallengeIntents: SiweIntent[] = [];
@@ -548,6 +591,12 @@ export class FakeEngineTransport implements EngineTransport {
   respondVaultStorage: () => Promise<VaultStorageDescriptor> = () =>
     Promise.resolve(emptyVaultStorage());
   respondAuthMethods: () => Promise<AuthMethodDescriptor[]> = () => Promise.resolve([]);
+  respondDevices: () => Promise<RegisteredDeviceDescriptor[]> = () => Promise.resolve([]);
+  respondPendingApprovals: () => Promise<PendingApprovalDescriptor[]> = () => Promise.resolve([]);
+  respondRegistrationChallenge: () => Promise<Uint8Array> = () =>
+    Promise.resolve(new Uint8Array(0));
+  respondRendezvous: (step: DeviceRendezvousStep) => Promise<DeviceRendezvousResult> = () =>
+    Promise.resolve({ kind: 'factor', factorKey: new Uint8Array(0) });
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
@@ -625,6 +674,26 @@ export class FakeEngineTransport implements EngineTransport {
   authMethods(): Promise<AuthMethodDescriptor[]> {
     this.authMethodReads += 1;
     return this.respondAuthMethods();
+  }
+
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    this.deviceReads += 1;
+    return this.respondDevices();
+  }
+
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    this.registrationChallenges.push(devicePublicKey);
+    return this.respondRegistrationChallenge();
+  }
+
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    this.pendingApprovalReads += 1;
+    return this.respondPendingApprovals();
+  }
+
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    this.rendezvousSteps.push(snapshotStep(step));
+    return this.respondRendezvous(step);
   }
 
   siweChallenge(intent: SiweIntent): Promise<string> {

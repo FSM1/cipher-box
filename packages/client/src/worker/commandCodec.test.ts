@@ -5,6 +5,8 @@ import {
   buildCommand,
   readAuthMethods,
   readBin,
+  readDevices,
+  readPendingApprovals,
   readEvent,
   readReceivedShare,
   readSharing,
@@ -25,6 +27,30 @@ import type {
  * value tables the codec's read paths consult.
  */
 const fakeWasm = fakeWasmEnums as unknown as EngineWasm;
+
+/**
+ * A wasm namespace recording the arguments of the last call to each `Command`
+ * builder. Named apart from the per-block `spyWasm` helpers, which record every
+ * call, so a nested block does not shadow it.
+ */
+const lastArgsSpy = (): { wasm: EngineWasm; calls: Record<string, unknown[]> } => {
+  const calls: Record<string, unknown[]> = {};
+  const wasm = {
+    ...fakeWasmEnums,
+    Command: new Proxy(
+      {},
+      {
+        get:
+          (_target, name: string) =>
+          (...args: unknown[]) => {
+            calls[name] = args;
+            return {};
+          },
+      }
+    ),
+  } as unknown as EngineWasm;
+  return { wasm, calls };
+};
 
 describe('buildCommand', () => {
   it('builds a create from parent, name and kind alone — no content argument', () => {
@@ -633,7 +659,7 @@ describe('buildCommand', () => {
     });
 
     it('rejects an unknown pin mode or provider kind rather than defaulting one', () => {
-      const { wasm } = spyWasm();
+      const { wasm } = lastArgsSpy();
       const refusesSettings =
         (settings: unknown): (() => unknown) =>
         () =>
@@ -657,27 +683,8 @@ describe('buildCommand', () => {
   });
 
   describe('auth', () => {
-    const spyWasm = (): { wasm: EngineWasm; calls: Record<string, unknown[]> } => {
-      const calls: Record<string, unknown[]> = {};
-      const wasm = {
-        ...fakeWasmEnums,
-        Command: new Proxy(
-          {},
-          {
-            get:
-              (_target, name: string) =>
-              (...args: unknown[]) => {
-                calls[name] = args;
-                return {};
-              },
-          }
-        ),
-      } as unknown as EngineWasm;
-      return { wasm, calls };
-    };
-
     it('builds a wallet link from the message and its raw signature bytes', () => {
-      const { wasm, calls } = spyWasm();
+      const { wasm, calls } = lastArgsSpy();
       const signature = new Uint8Array(65).fill(9);
 
       buildCommand(wasm, { kind: 'siweLink', message: 'link me', signature });
@@ -686,7 +693,7 @@ describe('buildCommand', () => {
     });
 
     it('builds an unlink from the method id alone', () => {
-      const { wasm, calls } = spyWasm();
+      const { wasm, calls } = lastArgsSpy();
 
       buildCommand(wasm, { kind: 'unlinkAuthMethod', methodId: '3f2a-uuid' });
 
@@ -694,7 +701,7 @@ describe('buildCommand', () => {
     });
 
     it('refuses a link or an unlink whose fields are not what they claim', () => {
-      const { wasm } = spyWasm();
+      const { wasm } = lastArgsSpy();
       const refusesAuth =
         (descriptor: unknown): (() => unknown) =>
         () =>
@@ -710,6 +717,190 @@ describe('buildCommand', () => {
         'invalid request field methodId: null'
       );
     });
+  });
+
+  describe('devices', () => {
+    it('builds a registration from the key, signature, token and label', () => {
+      const { wasm, calls } = lastArgsSpy();
+
+      buildCommand(wasm, {
+        kind: 'registerDevice',
+        publicKey: 'ed25519hex',
+        signature: 'sighex',
+        identityToken: 'token.jwt',
+        label: 'Work laptop',
+      });
+
+      expect(calls.registerDevice).toEqual(['ed25519hex', 'sighex', 'token.jwt', 'Work laptop']);
+    });
+
+    it('hands the builder an absent label as undefined, never as null', () => {
+      const { wasm, calls } = lastArgsSpy();
+
+      buildCommand(wasm, {
+        kind: 'registerDevice',
+        publicKey: 'ed25519hex',
+        signature: 'sighex',
+        identityToken: 'token.jwt',
+        label: null,
+      });
+
+      expect(calls.registerDevice).toEqual(['ed25519hex', 'sighex', 'token.jwt', undefined]);
+    });
+
+    it('builds a device revoke from the device id alone', () => {
+      const { wasm, calls } = lastArgsSpy();
+
+      buildCommand(wasm, { kind: 'revokeDevice', deviceId: '7c1e-uuid' });
+
+      expect(calls.revokeDevice).toEqual(['7c1e-uuid']);
+    });
+
+    it.each([
+      ['approve', fakeWasmEnums.ApprovalDecision.Approve],
+      ['deny', fakeWasmEnums.ApprovalDecision.Deny],
+    ] as const)('maps the %s decision to its mirror-enum value', (decision, mapped) => {
+      const { wasm, calls } = lastArgsSpy();
+
+      buildCommand(wasm, {
+        kind: 'respondToApproval',
+        requestId: 'req-1',
+        decision,
+        devicePublicKey: 'ed25519hex',
+        ephemeralPublicKey: '02beef',
+        signature: 'sighex',
+        sealedFactor: 'c2VhbA==',
+      });
+
+      expect(calls.respondToApproval).toEqual([
+        'req-1',
+        mapped,
+        'ed25519hex',
+        '02beef',
+        'sighex',
+        'c2VhbA==',
+      ]);
+    });
+
+    it('hands the builder an absent sealed factor as undefined, never as null', () => {
+      const { wasm, calls } = lastArgsSpy();
+
+      buildCommand(wasm, {
+        kind: 'respondToApproval',
+        requestId: 'req-1',
+        decision: 'deny',
+        devicePublicKey: 'ed25519hex',
+        ephemeralPublicKey: '02beef',
+        signature: 'sighex',
+        sealedFactor: null,
+      });
+
+      expect(calls.respondToApproval?.[5]).toBeUndefined();
+    });
+
+    it.each([
+      [
+        { kind: 'registerDevice', publicKey: 42, signature: 's', identityToken: 't', label: null },
+        'publicKey: number',
+      ],
+      [
+        {
+          kind: 'registerDevice',
+          publicKey: 'k',
+          signature: 's',
+          identityToken: 't',
+          label: 12345,
+        },
+        'label: number',
+      ],
+      [{ kind: 'revokeDevice', deviceId: null }, 'deviceId: null'],
+      [
+        {
+          kind: 'respondToApproval',
+          requestId: 'req-1',
+          decision: 'maybe',
+          devicePublicKey: 'k',
+          ephemeralPublicKey: 'e',
+          signature: 's',
+          sealedFactor: null,
+        },
+        'decision: string',
+      ],
+      [
+        {
+          kind: 'respondToApproval',
+          requestId: 'req-1',
+          decision: 'approve',
+          devicePublicKey: 'k',
+          ephemeralPublicKey: 'e',
+          signature: 's',
+          sealedFactor: 99,
+        },
+        'sealedFactor: number',
+      ],
+    ])('refuses a device command whose field is not what it claims', (descriptor, message) => {
+      const { wasm, calls } = lastArgsSpy();
+
+      expect(() => buildCommand(wasm, descriptor as CommandDescriptor)).toThrow(
+        `invalid request field ${message}`
+      );
+      expect(calls).toEqual({});
+    });
+  });
+});
+
+describe('readDevices', () => {
+  const row = {
+    id: '7c1e-uuid',
+    publicKey: 'ed25519hex',
+    label: 'Work laptop',
+    createdAt: '2026-08-27T10:00:00.000Z',
+    lastSeenAt: '2026-08-27T11:00:00.000Z',
+  };
+
+  it('reads a registry row through, and an absent label as null', () => {
+    expect(readDevices([row, { ...row, id: '9a2b-uuid', label: undefined }])).toEqual([
+      {
+        id: '7c1e-uuid',
+        publicKey: 'ed25519hex',
+        label: 'Work laptop',
+        createdAt: '2026-08-27T10:00:00.000Z',
+        lastSeenAt: '2026-08-27T11:00:00.000Z',
+      },
+      {
+        id: '9a2b-uuid',
+        publicKey: 'ed25519hex',
+        label: null,
+        createdAt: '2026-08-27T10:00:00.000Z',
+        lastSeenAt: '2026-08-27T11:00:00.000Z',
+      },
+    ]);
+  });
+});
+
+describe('readPendingApprovals', () => {
+  it('reads a pending row through with the digits its screen must show', () => {
+    expect(
+      readPendingApprovals([
+        {
+          requestId: 'req-1',
+          requesterDevicePublicKey: 'ed25519hex',
+          ephemeralPublicKey: '02beef',
+          comparisonValue: '482913',
+          createdAt: '2026-08-27T10:00:00.000Z',
+          expiresAt: '2026-08-27T10:05:00.000Z',
+        },
+      ])
+    ).toEqual([
+      {
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'ed25519hex',
+        ephemeralPublicKey: '02beef',
+        comparisonValue: '482913',
+        createdAt: '2026-08-27T10:00:00.000Z',
+        expiresAt: '2026-08-27T10:05:00.000Z',
+      },
+    ]);
   });
 });
 

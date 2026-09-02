@@ -361,6 +361,68 @@ export interface AuthMethodDescriptor {
 }
 
 /**
+ * One device identity key on the account registry, as data (mirrors the facade
+ * `RegisteredDevice`). The label is context the device chose, never evidence
+ * (ADR 0009 D4).
+ */
+export interface RegisteredDeviceDescriptor {
+  id: string;
+  publicKey: string;
+  label: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+/** One rendezvous this account is asked to approve, as data. */
+export interface PendingApprovalDescriptor {
+  requestId: string;
+  requesterDevicePublicKey: string;
+  ephemeralPublicKey: string;
+  comparisonValue: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** How an approver answered one rendezvous (mirrors the facade `ApprovalDecision`). */
+export type ApprovalDecision = 'approve' | 'deny';
+
+/**
+ * One step of the device-approval rendezvous (ADR 0009). Every step is a pure
+ * function of the exchange transcript; the engine holds no state for it.
+ */
+export type DeviceRendezvousStep =
+  | { kind: 'open'; devicePublicKey: string; scalar: Uint8Array }
+  | {
+      kind: 'approve';
+      devicePublicKey: string;
+      requestId: string;
+      requesterDevicePublicKey: string;
+      ephemeralPublicKey: string;
+      sealScalar: Uint8Array;
+      factorKey: Uint8Array;
+    }
+  | { kind: 'deny'; devicePublicKey: string; requestId: string; ephemeralPublicKey: string }
+  | {
+      kind: 'openFactor';
+      sealedFactor: string;
+      requestId: string;
+      requesterDevicePublicKey: string;
+      scalar: Uint8Array;
+    };
+
+/** What one rendezvous step produced, as data. */
+export type DeviceRendezvousResult =
+  | {
+      kind: 'opened';
+      ephemeralPublicKey: string;
+      requestPayload: Uint8Array;
+      comparisonValue: string;
+    }
+  /** A denial seals nothing, so `sealedFactor` is `null` on that answer. */
+  | { kind: 'response'; sealedFactor: string | null; payload: Uint8Array }
+  | { kind: 'factor'; factorKey: Uint8Array };
+
+/**
  * One write intent, as data. Each variant's `kind` matches the facade command
  * builder name (`crates/wasm` `Command`), so the worker maps it mechanically.
  */
@@ -411,6 +473,24 @@ export type CommandDescriptor =
   /** Links a host-collected wallet signature to the account already signed in. */
   | { kind: 'siweLink'; message: string; signature: Uint8Array }
   | { kind: 'unlinkAuthMethod'; methodId: string }
+  | {
+      kind: 'registerDevice';
+      publicKey: string;
+      signature: string;
+      identityToken: string;
+      label: string | null;
+    }
+  | { kind: 'revokeDevice'; deviceId: string }
+  | {
+      kind: 'respondToApproval';
+      requestId: string;
+      decision: ApprovalDecision;
+      devicePublicKey: string;
+      ephemeralPublicKey: string;
+      signature: string;
+      /** A denial seals nothing, so it carries `null`. */
+      sealedFactor: string | null;
+    }
   | { kind: 'logout' }
   | { kind: 'forgetDevice' };
 
@@ -430,6 +510,32 @@ export function commandTransfer(command: unknown): Transferable[] {
     command as { settings?: { byo?: { accessToken?: unknown } | null } | null } | null | undefined
   )?.settings?.byo?.accessToken;
   return isBuffer(token) ? [token] : [];
+}
+
+/**
+ * The secret buffers a rendezvous step or its result hands over for good, for
+ * the transfer list. They move rather than being cloned, so no realm keeps a
+ * copy nobody owns (AGENTS.md 7). Takes the value unvalidated: a relay reads
+ * one off an untrusted port.
+ *
+ * An `open` step is the exception and clones: its scalar is what the requester
+ * opens the sealed factor with later, so the buffer stays the caller's.
+ *
+ * One backing buffer is listed once, whatever number of fields view it:
+ * `postMessage` refuses a transfer list that repeats one.
+ */
+export function rendezvousTransfer(value: unknown): Transferable[] {
+  const held = value as {
+    kind?: unknown;
+    scalar?: unknown;
+    sealScalar?: unknown;
+    factorKey?: unknown;
+  } | null;
+  if (held?.kind === 'open') return [];
+  const buffers = [held?.scalar, held?.sealScalar, held?.factorKey]
+    .filter((field): field is ArrayBufferView => ArrayBuffer.isView(field))
+    .map((view) => view.buffer);
+  return [...new Set(buffers)] as Transferable[];
 }
 
 /**
@@ -525,6 +631,10 @@ export type WorkerRequest =
   | { type: 'bin'; id: number }
   | { type: 'vaultStorage'; id: number }
   | { type: 'authMethods'; id: number }
+  | { type: 'devices'; id: number }
+  | { type: 'deviceRegistrationChallenge'; id: number; devicePublicKey: string }
+  | { type: 'pendingApprovals'; id: number }
+  | { type: 'deviceRendezvous'; id: number; step: DeviceRendezvousStep }
   | { type: 'siweChallenge'; id: number; intent: SiweIntent }
   | { type: 'download'; id: number; node: Uint8Array }
   | { type: 'openContentStream'; id: number; node: Uint8Array }
@@ -539,7 +649,10 @@ export type WorkerMessage =
    * The correlated result of a request. A value-bearing ok response carries it:
    * a `SnapshotDescriptor` for `snapshot`, a `SharingDescriptor` for `sharing`,
    * the rows for `receivedShares`, the bin read for `bin`, the storage read for
-   * `vaultStorage`, the rows for `authMethods`, the plaintext `ArrayBuffer`
+   * `vaultStorage`, the rows for `authMethods`, the rows for
+   * `devices`/`pendingApprovals`, the challenge bytes for
+   * `deviceRegistrationChallenge`, the step result for `deviceRendezvous`, the
+   * plaintext `ArrayBuffer`
    * (transferred, not copied) for `download`/`readStream`, the nonce string
    * for `siweChallenge`, the write handle for `beginWrite`, the `OpenedStream`
    * for `openContentStream`, the durable op id for `commitWrite`, the outcome
@@ -556,8 +669,12 @@ export type WorkerMessage =
         | BinDescriptor
         | VaultStorageDescriptor
         | AuthMethodDescriptor[]
+        | RegisteredDeviceDescriptor[]
+        | PendingApprovalDescriptor[]
+        | DeviceRendezvousResult
         | CommandOutcomeDescriptor
         | ArrayBuffer
+        | Uint8Array
         | bigint
         | string
         | OpenedStream;

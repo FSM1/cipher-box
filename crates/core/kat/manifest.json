@@ -198,6 +198,14 @@
       "openRejectFile": "vectors/hpke/open_reject.json",
       "openRejectCount": 5
     },
+    "ecies": {
+      "curve": "secp256k1",
+      "encLen": 33,
+      "sealFile": "vectors/ecies/seal.json",
+      "sealCount": 3,
+      "openRejectFile": "vectors/ecies/open_reject.json",
+      "openRejectCount": 7
+    },
     "contact": {
       "accept": {
         "file": "vectors/contact/accept.json",

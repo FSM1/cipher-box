@@ -1477,6 +1477,25 @@ impl From<cipherbox_engine::AuthMethodKind> for AuthMethodKind {
     }
 }
 
+/// How an approver answered one rendezvous (ADR 0009).
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    /// Seal a fresh factor to the requester.
+    Approve,
+    /// Refuse, sealing nothing.
+    Deny,
+}
+
+impl From<ApprovalDecision> for cipherbox_engine::ApprovalDecision {
+    fn from(decision: ApprovalDecision) -> Self {
+        match decision {
+            ApprovalDecision::Approve => cipherbox_engine::ApprovalDecision::Approve,
+            ApprovalDecision::Deny => cipherbox_engine::ApprovalDecision::Deny,
+        }
+    }
+}
+
 /// One login method on the account. Display form only: the identifier hash
 /// never crosses.
 #[wasm_bindgen]
@@ -1520,6 +1539,106 @@ impl AuthMethod {
 impl AuthMethod {
     /// Wraps an engine login-method row. Never exported to JS.
     pub fn from_facade(inner: cipherbox_engine::AuthMethod) -> Self {
+        Self { inner }
+    }
+}
+
+/// One device identity key on the account registry (ADR 0009 D4). The label is
+/// context the device chose, never evidence: only the key is proved.
+#[wasm_bindgen]
+pub struct RegisteredDevice {
+    inner: cipherbox_engine::RegisteredDevice,
+}
+
+#[wasm_bindgen]
+impl RegisteredDevice {
+    /// The row id `Command.revokeDevice` names.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.inner.id.clone()
+    }
+
+    /// The raw Ed25519 device identity public key, lowercase hex.
+    #[wasm_bindgen(getter, js_name = publicKey)]
+    pub fn public_key(&self) -> String {
+        self.inner.public_key.clone()
+    }
+
+    /// The display label the device offered, or `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn label(&self) -> Option<String> {
+        self.inner.label.clone()
+    }
+
+    /// When the key was registered, ISO 8601.
+    #[wasm_bindgen(getter, js_name = createdAt)]
+    pub fn created_at(&self) -> String {
+        self.inner.created_at.clone()
+    }
+
+    /// When the key was last seen, ISO 8601.
+    #[wasm_bindgen(getter, js_name = lastSeenAt)]
+    pub fn last_seen_at(&self) -> String {
+        self.inner.last_seen_at.clone()
+    }
+}
+
+impl RegisteredDevice {
+    /// Wraps an engine device-registry row. Never exported to JS.
+    pub fn from_facade(inner: cipherbox_engine::RegisteredDevice) -> Self {
+        Self { inner }
+    }
+}
+
+/// One rendezvous this account is asked to approve; see
+/// [`cipherbox_engine::PendingApprovalView`] for what a row here guarantees.
+#[wasm_bindgen]
+pub struct PendingApproval {
+    inner: cipherbox_engine::PendingApprovalView,
+}
+
+#[wasm_bindgen]
+impl PendingApproval {
+    /// The rendezvous id.
+    #[wasm_bindgen(getter, js_name = requestId)]
+    pub fn request_id(&self) -> String {
+        self.inner.request_id.clone()
+    }
+
+    /// The requesting device identity public key, lowercase hex.
+    #[wasm_bindgen(getter, js_name = requesterDevicePublicKey)]
+    pub fn requester_device_public_key(&self) -> String {
+        self.inner.requester_device_public_key.clone()
+    }
+
+    /// The compressed secp256k1 key a factor must be sealed to.
+    #[wasm_bindgen(getter, js_name = ephemeralPublicKey)]
+    pub fn ephemeral_public_key(&self) -> String {
+        self.inner.ephemeral_public_key.clone()
+    }
+
+    /// The digits both screens must show before an approval is possible.
+    #[wasm_bindgen(getter, js_name = comparisonValue)]
+    pub fn comparison_value(&self) -> String {
+        self.inner.comparison_value.clone()
+    }
+
+    /// When the rendezvous opened, ISO 8601.
+    #[wasm_bindgen(getter, js_name = createdAt)]
+    pub fn created_at(&self) -> String {
+        self.inner.created_at.clone()
+    }
+
+    /// When the row is gone, ISO 8601.
+    #[wasm_bindgen(getter, js_name = expiresAt)]
+    pub fn expires_at(&self) -> String {
+        self.inner.expires_at.clone()
+    }
+}
+
+impl PendingApproval {
+    /// Wraps an engine pending-approval row. Never exported to JS.
+    pub fn from_facade(inner: cipherbox_engine::PendingApprovalView) -> Self {
         Self { inner }
     }
 }
@@ -1747,6 +1866,49 @@ impl Command {
         Self::wrap(facade::Command::UnlinkAuthMethod { method_id })
     }
 
+    /// Register this device's identity key on the account. The signature is
+    /// made by the browser-held key.
+    #[wasm_bindgen(js_name = registerDevice)]
+    pub fn register_device(
+        public_key: String,
+        signature: String,
+        identity_token: String,
+        label: Option<String>,
+    ) -> Command {
+        Self::wrap(facade::Command::RegisterDevice {
+            public_key,
+            signature,
+            identity_token,
+            label,
+        })
+    }
+
+    /// Revoke a registered device key.
+    #[wasm_bindgen(js_name = revokeDevice)]
+    pub fn revoke_device(device_id: String) -> Command {
+        Self::wrap(facade::Command::RevokeDevice { device_id })
+    }
+
+    /// Answer one rendezvous. A denial carries no sealed factor.
+    #[wasm_bindgen(js_name = respondToApproval)]
+    pub fn respond_to_approval(
+        request_id: String,
+        decision: ApprovalDecision,
+        device_public_key: String,
+        ephemeral_public_key: String,
+        signature: String,
+        sealed_factor: Option<String>,
+    ) -> Command {
+        Self::wrap(facade::Command::RespondToApproval {
+            request_id,
+            decision: decision.into(),
+            device_public_key,
+            ephemeral_public_key,
+            signature,
+            sealed_factor,
+        })
+    }
+
     /// Log out: zeroize engine state; durable seams survive by design.
     pub fn logout() -> Command {
         Self::wrap(facade::Command::Logout)
@@ -1943,6 +2105,186 @@ impl Event {
     /// slice and the boundary tests; never exported to JS.
     pub fn from_facade(inner: facade::Event) -> Self {
         Self { inner }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The device-approval rendezvous (ADR 0009). Pure functions of the exchange
+// transcript, exported free rather than as engine commands: a device that asks
+// to be approved has no session to issue a command through.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+mod rendezvous {
+    use super::*;
+
+    /// What a requester needs to open a rendezvous: the key it offers, the bytes it
+    /// must sign over that key, and the digits its screen shows.
+    #[wasm_bindgen]
+    pub struct DeviceRendezvous {
+        ephemeral_public_key: String,
+        request_payload: Vec<u8>,
+        comparison_value: String,
+    }
+
+    #[wasm_bindgen]
+    impl DeviceRendezvous {
+        /// The compressed secp256k1 key a factor must be sealed to.
+        #[wasm_bindgen(getter, js_name = ephemeralPublicKey)]
+        pub fn ephemeral_public_key(&self) -> String {
+            self.ephemeral_public_key.clone()
+        }
+
+        /// The bytes the requesting device signs.
+        #[wasm_bindgen(getter, js_name = requestPayload)]
+        pub fn request_payload(&self) -> Vec<u8> {
+            self.request_payload.clone()
+        }
+
+        /// The digits this screen shows, for the member to compare with the
+        /// approver's. Both sides derive them from the same two requester fields.
+        #[wasm_bindgen(getter, js_name = comparisonValue)]
+        pub fn comparison_value(&self) -> String {
+            self.comparison_value.clone()
+        }
+    }
+
+    /// What an approver sends: the sealed factor, if it approved, and the bytes it
+    /// must sign over its whole answer.
+    #[wasm_bindgen]
+    pub struct DeviceApprovalResponse {
+        sealed_factor: Option<String>,
+        payload: Vec<u8>,
+    }
+
+    #[wasm_bindgen]
+    impl DeviceApprovalResponse {
+        /// The sealed fresh factor, base64; absent on a denial.
+        #[wasm_bindgen(getter, js_name = sealedFactor)]
+        pub fn sealed_factor(&self) -> Option<String> {
+            self.sealed_factor.clone()
+        }
+
+        /// The bytes the approving device signs.
+        #[wasm_bindgen(getter)]
+        pub fn payload(&self) -> Vec<u8> {
+            self.payload.clone()
+        }
+    }
+
+    /// Open a rendezvous from 32 fresh random bytes. The scalar stays with the
+    /// caller: it is what opens the factor an approver seals back.
+    #[wasm_bindgen(js_name = openDeviceRendezvous)]
+    pub fn open_device_rendezvous(
+        device_public_key: &str,
+        rendezvous_scalar: Vec<u8>,
+    ) -> Result<DeviceRendezvous, JsError> {
+        let ephemeral_public_key =
+            cipherbox_engine::rendezvous_public_key(&*scalar32(rendezvous_scalar)?)
+                .map_err(malformed_device_field)?;
+        let request_payload =
+            cipherbox_engine::approval_request_payload(device_public_key, &ephemeral_public_key)
+                .map_err(malformed_device_field)?;
+        let comparison_value =
+            cipherbox_engine::comparison_value(device_public_key, &ephemeral_public_key)
+                .map_err(malformed_device_field)?;
+        Ok(DeviceRendezvous {
+            ephemeral_public_key,
+            request_payload,
+            comparison_value,
+        })
+    }
+
+    /// Seal a fresh factor to the requester and build the answer to sign.
+    /// `seal_scalar` must be 32 fresh random bytes on every call.
+    #[wasm_bindgen(js_name = approveDeviceRendezvous)]
+    pub fn approve_device_rendezvous(
+        device_public_key: &str,
+        request_id: &str,
+        requester_device_public_key: &str,
+        ephemeral_public_key: &str,
+        seal_scalar: Vec<u8>,
+        factor_key: Vec<u8>,
+    ) -> Result<DeviceApprovalResponse, JsError> {
+        let factor_key = Zeroizing::new(factor_key);
+        let sealed_factor = cipherbox_engine::seal_factor(
+            ephemeral_public_key,
+            request_id,
+            requester_device_public_key,
+            &*scalar32(seal_scalar)?,
+            &factor_key,
+        )
+        .map_err(malformed_device_field)?;
+        let payload = cipherbox_engine::approval_response_payload(
+            device_public_key,
+            request_id,
+            cipherbox_engine::ApprovalDecision::Approve,
+            ephemeral_public_key,
+            &sealed_factor,
+        )
+        .map_err(malformed_device_field)?;
+        Ok(DeviceApprovalResponse {
+            sealed_factor: Some(sealed_factor),
+            payload,
+        })
+    }
+
+    /// Build the denial to sign. A denial seals nothing.
+    #[wasm_bindgen(js_name = denyDeviceRendezvous)]
+    pub fn deny_device_rendezvous(
+        device_public_key: &str,
+        request_id: &str,
+        ephemeral_public_key: &str,
+    ) -> Result<DeviceApprovalResponse, JsError> {
+        let payload = cipherbox_engine::approval_response_payload(
+            device_public_key,
+            request_id,
+            cipherbox_engine::ApprovalDecision::Deny,
+            ephemeral_public_key,
+            "",
+        )
+        .map_err(malformed_device_field)?;
+        Ok(DeviceApprovalResponse {
+            sealed_factor: None,
+            payload,
+        })
+    }
+
+    /// Open the factor an approver sealed, with the scalar that opened the
+    /// rendezvous.
+    ///
+    /// The plaintext crosses into JS from the borrowed slice while its zeroizing
+    /// owner is still alive: a `Vec` return would hand wasm-bindgen a buffer it
+    /// frees without clearing, leaving the factor in linear memory for the life of
+    /// the tab.
+    #[wasm_bindgen(js_name = openDeviceFactor)]
+    pub fn open_device_factor(
+        sealed_factor: &str,
+        request_id: &str,
+        requester_device_public_key: &str,
+        rendezvous_scalar: Vec<u8>,
+    ) -> Result<js_sys::Uint8Array, JsError> {
+        let opened = cipherbox_engine::open_factor(
+            sealed_factor,
+            request_id,
+            requester_device_public_key,
+            &*scalar32(rendezvous_scalar)?,
+        )
+        .map_err(|violation| JsError::new(violation.check()))?;
+        Ok(js_sys::Uint8Array::from(opened.as_slice()))
+    }
+
+    /// Adopt a scalar the host handed in. Taken by value and held zeroizing, so the
+    /// copy wasm-bindgen makes in linear memory does not outlive the call.
+    fn scalar32(bytes: Vec<u8>) -> Result<Zeroizing<[u8; 32]>, JsError> {
+        let bytes = Zeroizing::new(bytes);
+        <[u8; 32]>::try_from(bytes.as_slice())
+            .map(Zeroizing::new)
+            .map_err(|_| JsError::new("a rendezvous scalar is 32 bytes"))
+    }
+
+    fn malformed_device_field(refusal: cipherbox_engine::MalformedDeviceField) -> JsError {
+        JsError::new(refusal.check())
     }
 }
 

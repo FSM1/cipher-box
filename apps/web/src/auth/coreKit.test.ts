@@ -5,12 +5,7 @@ import {
   TssShareType,
 } from '@web3auth/mpc-core-kit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  deviceIdentityTestInstance,
-  MemoryDeviceKeys,
-  MemoryKeys,
-  sealedTestStore,
-} from '../test/storeFakes';
+import { deviceIdentitiesTestInstance, MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
 import { createCoreKitSession } from './coreKit';
 import { RecoveryRequiredError, type IdentityCredential } from '@cipherbox/login';
@@ -141,18 +136,21 @@ const ENV = {
 
 const REFUSED = new Error('the session server is unreachable');
 
+/** The identity subject every credential below signs in as. */
+const SUBJECT = 'subject-42';
+
 let keys: MemoryKeys;
 let store: SealedStore;
-let deviceKeys: MemoryDeviceKeys;
+let deviceIdentities: ReturnType<typeof deviceIdentitiesTestInstance>;
 
 /** A session over a store this test can seed and read back. */
-const session = () => createCoreKitSession(ENV, store, deviceIdentityTestInstance(deviceKeys));
+const session = () => createCoreKitSession(ENV, store, deviceIdentities);
 
 /** What the identity exchange hands back, as the Core Kit seam takes it. */
 const credential = (overrides: Partial<IdentityCredential> = {}): IdentityCredential => ({
   method: 'google',
   token: 'header.payload.signature',
-  verifierId: 'subject-42',
+  verifierId: SUBJECT,
   email: null,
   ...overrides,
 });
@@ -184,7 +182,7 @@ beforeEach(() => {
   window.localStorage.clear();
   keys = new MemoryKeys();
   store = sealedTestStore(keys);
-  deviceKeys = new MemoryDeviceKeys();
+  deviceIdentities = deviceIdentitiesTestInstance();
 });
 
 describe('the Core Kit store', () => {
@@ -289,6 +287,12 @@ describe('the Core Kit store', () => {
 describe('forgetting this device with the account', () => {
   const DEVICE_FACTOR = 'cd'.repeat(32);
 
+  // The identity key is selected by subject, so a session that never logged in
+  // itself reads the signed-in member off the SDK, as a restored tab does.
+  beforeEach(() => {
+    sdk.userInfo = { verifierId: SUBJECT };
+  });
+
   /** An account carrying a recovery phrase, so a dropped factor is not the last. */
   const enrolled = (): void => {
     sdk.shareDescriptions = {
@@ -350,17 +354,17 @@ describe('forgetting this device with the account', () => {
     sdk.shareDescriptions = {};
     sdk.deviceFactor = DEVICE_FACTOR;
     // Seeded through an identity of its own, so a key is really there to erase.
-    await deviceIdentityTestInstance(deviceKeys).publicKeyHex();
+    await deviceIdentities.forSubject(SUBJECT).publicKeyHex();
 
     await session().forgetDevice();
 
     expect(sdk.deleted).toEqual([]);
-    expect(deviceKeys.held).toBeNull();
+    expect(deviceIdentities.keysFor(SUBJECT).held).toBeNull();
   });
 
   it('reports an identity erase the key store refused', async () => {
     enrolled();
-    deviceKeys.refusal = REFUSED;
+    deviceIdentities.keysFor(SUBJECT).refusal = REFUSED;
 
     await expect(session().forgetDevice()).rejects.toThrow(REFUSED);
   });
@@ -559,7 +563,7 @@ describe('a Core Kit login', () => {
     const withoutGoogle = createCoreKitSession(
       { ...ENV, VITE_GOOGLE_CLIENT_ID: undefined },
       store,
-      deviceIdentityTestInstance(deviceKeys)
+      deviceIdentities
     );
 
     await withoutGoogle.login(credential({ method: 'email', verifierId: 'subject-42' }));

@@ -248,6 +248,69 @@ describe('LocalTransport', () => {
     expect(plaintext).toEqual(new Uint8Array(4));
   });
 
+  // A rendezvous step carries the only copy of a scalar or a factor key, so it
+  // moves rather than being cloned into a realm that would keep one.
+  it('transfers every secret buffer a rendezvous step carries', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+    const scalar = new Uint8Array(32).fill(5);
+    const factorKey = new Uint8Array(32).fill(6);
+
+    void transport.deviceRendezvous({
+      kind: 'approve',
+      devicePublicKey: 'ed25519hex',
+      requestId: 'req-1',
+      requesterDevicePublicKey: 'reqhex',
+      ephemeralPublicKey: '02beef',
+      sealScalar: scalar,
+      factorKey,
+    });
+    await tick();
+
+    const posted = worker.posted.at(-1);
+    expect(posted?.message.type).toBe('deviceRendezvous');
+    expect(posted?.transfer).toEqual([scalar.buffer, factorKey.buffer]);
+  });
+
+  // `openFactor` carries the scalar this browser opens the seal with, and it is
+  // the caller's no longer once the worker holds it. `open` is the one step
+  // whose scalar stays the caller's, and `deny` carries no secret at all.
+  it('transfers an openFactor scalar, keeps an open one, and moves nothing for a deny', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+    const openScalar = new Uint8Array(32).fill(5);
+    const factorScalar = new Uint8Array(32).fill(7);
+
+    void transport.deviceRendezvous({
+      kind: 'open',
+      devicePublicKey: 'ed25519hex',
+      scalar: openScalar,
+    });
+    await tick();
+    expect(worker.posted.at(-1)?.transfer).toEqual([]);
+
+    void transport.deviceRendezvous({
+      kind: 'openFactor',
+      sealedFactor: 'c2VhbA==',
+      requestId: 'req-1',
+      requesterDevicePublicKey: 'reqhex',
+      scalar: factorScalar,
+    });
+    await tick();
+    expect(worker.posted.at(-1)?.transfer).toEqual([factorScalar.buffer]);
+
+    void transport.deviceRendezvous({
+      kind: 'deny',
+      devicePublicKey: 'ed25519hex',
+      requestId: 'req-1',
+      ephemeralPublicKey: '02beef',
+    });
+    await tick();
+    expect(worker.posted.at(-1)?.transfer).toEqual([]);
+  });
+
   it('transfers the chunk buffer on pushChunk and resolves the write handle and op id', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);

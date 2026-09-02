@@ -55,6 +55,12 @@ export interface LoginFlow<C extends CollectedMaterial = CollectedMaterial> {
    * held — and when the engine refuses the secret it then exports.
    */
   recoverWithPhrase(phrase: string): Promise<void>;
+  /**
+   * Finishes such a login from the factor another device sealed back instead
+   * (FSM1/cipher-box-next ADR 0009 D3). The caller owns the bytes and erases
+   * them.
+   */
+  completeDeviceApproval(factorKey: Uint8Array): Promise<void>;
   logout(): Promise<void>;
   /**
    * Forget this device: everything a logout does, and first the erase a logout
@@ -294,6 +300,16 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
           throw new Error('recovery is not available on this device');
         retired = null;
         await session.recoverWithPhrase(phrase);
+        await handOff();
+      });
+    },
+
+    completeDeviceApproval(factorKey) {
+      return exclusively(async () => {
+        if (!session?.adoptApprovalFactor)
+          throw new Error('device approval is not available on this device');
+        retired = null;
+        await session.adoptApprovalFactor(factorKey);
         await handOff();
       });
     },

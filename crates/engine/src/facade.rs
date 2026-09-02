@@ -37,7 +37,7 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
-use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner};
+use crate::api::{ApiClient, ApiError, AuthMethod, IdentityChallengeSigner, RegisteredDevice};
 use crate::bin_index::{BinIndexKeys, BinIndexLoad, BinnedNode, load_bin_index};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
@@ -45,6 +45,7 @@ use crate::content::{
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
+use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
@@ -1117,6 +1118,42 @@ pub enum Command {
         /// The row `/auth/methods` served.
         method_id: String,
     },
+    /// Register this device's identity key on the account (ADR 0009 D4).
+    RegisterDevice {
+        /// The raw Ed25519 device identity public key, lowercase hex.
+        public_key: String,
+        /// The device's own signature over
+        /// [`Engine::device_registration_challenge`]; made in browser custody,
+        /// so it crosses as bytes the engine never produced.
+        signature: String,
+        /// The CipherBox identity token this device signed in with.
+        identity_token: String,
+        /// A display label for the approval prompt: context, never evidence.
+        label: Option<String>,
+    },
+    /// Revoke a registered device key. It stops that device approving from now
+    /// on and un-shares nothing it already holds (ADR 0009 D5).
+    RevokeDevice {
+        /// The row `/devices` served.
+        device_id: String,
+    },
+    /// Answer one rendezvous (ADR 0009 D3/D5), after the member confirmed the
+    /// comparison value and a fresh factor was sealed to the requester.
+    RespondToApproval {
+        /// The rendezvous being answered.
+        request_id: String,
+        /// Approve or deny.
+        decision: ApprovalDecision,
+        /// The approving device's registered identity public key.
+        device_public_key: String,
+        /// The rendezvous key the response was signed over, so the engine can
+        /// rebuild exactly the payload the API will verify.
+        ephemeral_public_key: String,
+        /// The device's own signature over the response payload.
+        signature: String,
+        /// The sealed fresh factor; `None` on a denial.
+        sealed_factor: Option<String>,
+    },
     /// Log out: zeroize engine state; durable seams survive by design.
     Logout,
     /// Forget this device: end the session and erase every durable seam —
@@ -1157,6 +1194,9 @@ impl Command {
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLink { .. } => "siweLink",
             Command::UnlinkAuthMethod { .. } => "unlinkAuthMethod",
+            Command::RegisterDevice { .. } => "registerDevice",
+            Command::RevokeDevice { .. } => "revokeDevice",
+            Command::RespondToApproval { .. } => "respondToApproval",
             Command::Logout => "logout",
             Command::ForgetDevice => "forgetDevice",
         }
@@ -1589,6 +1629,14 @@ pub enum EngineError {
         /// The rule that refused; never key material.
         check: &'static str,
     },
+}
+
+/// A device-surface field refusal, as the host sees it: a refusal of the input,
+/// never an auth verdict, so a caller can tell a bad field from a dead session.
+fn malformed<T>(checked: Result<T, MalformedDeviceField>) -> Result<T, EngineError> {
+    checked.map_err(|refusal| EngineError::MalformedInput {
+        check: refusal.check(),
+    })
 }
 
 impl EngineError {
@@ -5187,6 +5235,62 @@ where {
                     .map_err(EngineError::from_api)?;
                 Ok(CommandOutcome::Done)
             }
+            Command::RegisterDevice {
+                public_key,
+                signature,
+                identity_token,
+                label,
+            } => {
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                let account_id = api.account_id().map_err(EngineError::from_api)?;
+                malformed(devices::check_registration(
+                    &account_id,
+                    &public_key,
+                    &signature,
+                    &identity_token,
+                    label.as_deref(),
+                ))?;
+                api.register_device(&public_key, &signature, &identity_token, label.as_deref())
+                    .await
+                    .map_err(EngineError::from_api)?;
+                Ok(CommandOutcome::Done)
+            }
+            Command::RevokeDevice { device_id } => {
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                malformed(devices::check_registry_id(&device_id))?;
+                api.revoke_device(&device_id)
+                    .await
+                    .map_err(EngineError::from_api)?;
+                Ok(CommandOutcome::Done)
+            }
+            Command::RespondToApproval {
+                request_id,
+                decision,
+                device_public_key,
+                ephemeral_public_key,
+                signature,
+                sealed_factor,
+            } => {
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                malformed(devices::check_response(
+                    &device_public_key,
+                    &request_id,
+                    decision,
+                    &ephemeral_public_key,
+                    &signature,
+                    sealed_factor.as_deref(),
+                ))?;
+                api.respond_to_approval(
+                    &request_id,
+                    decision.as_str(),
+                    &device_public_key,
+                    &signature,
+                    sealed_factor.as_deref(),
+                )
+                .await
+                .map_err(EngineError::from_api)?;
+                Ok(CommandOutcome::Done)
+            }
             // The two commands hoisted above the session gate are the only ones
             // this arm can name, so it is the completeness backstop rather than
             // a live verdict: a variant added without an arm reports itself.
@@ -7586,6 +7690,87 @@ where {
         api.auth_methods().await.map_err(EngineError::from_api)
     }
 
+    /// The device identity keys registered to this account (ADR 0009 D4).
+    pub async fn devices(&self) -> Result<Vec<RegisteredDevice>, EngineError> {
+        self.live_session()?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        api.devices().await.map_err(EngineError::from_api)
+    }
+
+    /// The bytes a device signs to join this account's registry.
+    ///
+    /// The account id is read from the engine's own session rather than named
+    /// by the host, so a host cannot ask for a payload naming another account.
+    pub async fn device_registration_challenge(
+        &self,
+        device_public_key: &str,
+    ) -> Result<Vec<u8>, EngineError> {
+        self.live_session()?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let account_id = api.account_id().map_err(EngineError::from_api)?;
+        malformed(devices::registration_payload(
+            &account_id,
+            device_public_key,
+        ))
+    }
+
+    /// What this account is asked to approve, each row carrying the comparison
+    /// value its screen must show (ADR 0009 D3).
+    ///
+    /// A row whose request binding does not verify, or whose relayed fields
+    /// cannot produce a comparison value, is dropped rather than offered: it
+    /// could never be approved safely, and rendering it would ask a member to
+    /// authorise something the requester never signed.
+    pub async fn pending_approvals(&self) -> Result<Vec<PendingApprovalView>, EngineError> {
+        self.live_session()?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let rows = api
+            .pending_approvals()
+            .await
+            .map_err(EngineError::from_api)?;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        // A device already on the registry has a factor of its own and needs no
+        // approval, so a row naming one is a relay's invention rather than a
+        // member's device. The read runs only when a row arrived.
+        let registered = api.devices().await.map_err(EngineError::from_api)?;
+        Ok(rows
+            .into_iter()
+            .filter(|row| {
+                devices::request_binding_holds(
+                    &row.requester_device_public_key,
+                    &row.ephemeral_public_key,
+                    &row.request_signature,
+                ) && !registered
+                    .iter()
+                    .any(|device| device.public_key == row.requester_device_public_key)
+            })
+            .filter_map(|row| {
+                // A row this engine could never answer is never offered: the id
+                // has to survive the same path check the response takes.
+                devices::check_registry_id(&row.request_id).ok()?;
+                let comparison_value = devices::comparison_value(
+                    &row.requester_device_public_key,
+                    &row.ephemeral_public_key,
+                )
+                .ok()?;
+                Some(PendingApprovalView {
+                    request_id: row.request_id,
+                    requester_device_public_key: row.requester_device_public_key,
+                    ephemeral_public_key: row.ephemeral_public_key,
+                    comparison_value,
+                    created_at: row.created_at,
+                    expires_at: row.expires_at,
+                })
+            })
+            // The cap is spent on rows that survived verification, so a relay
+            // cannot bury the member's row behind rows it invented. Lazy, so a
+            // list that yields a full screen stops being read here.
+            .take(devices::MAX_PENDING_APPROVALS)
+            .collect())
+    }
+
     /// The shares this vault has accepted, key-free, each carrying the engine's
     /// own resolution verdict (blueprint/web-client.md "/shared").
     ///
@@ -8859,7 +9044,7 @@ mod tests {
     use crate::api::{ChallengeSigner, new_user_login_response};
     use crate::content::{ByoIpfsConfig, ByoKind, RetentionPolicy};
     use crate::net::retire::ReclaimStallReason;
-    use crate::seams::{CredentialStore, EndpointId, HttpResponse, UnixMillis};
+    use crate::seams::{CredentialStore, EndpointId, HttpMethod, HttpResponse, UnixMillis};
     use crate::settings::{cached_settings_block, settings_name};
     use crate::testkit::fakes::InMemoryRecordStore;
     use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
@@ -13693,6 +13878,335 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- device registry and approval rendezvous (ADR 0009) ---
+
+    /// A raw Ed25519 device identity public key, as the registry spells one.
+    const DEVICE_KEY: &str = "cd11223344556677889900aabbccddeeff00112233445566778899aabbccddee";
+    /// Opaque ciphertext to the engine, which never opens it. It is still a
+    /// whole envelope by length: the produce side refuses anything the
+    /// requester's own opener could not read.
+    const SEALED_FACTOR: &str =
+        "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWg==";
+
+    /// A device signature, in the width the registry's DTOs fix.
+    fn device_signature() -> String {
+        "ab".repeat(64)
+    }
+
+    /// One registry row, as `GET /devices` serves one.
+    fn registry_row(id: &str) -> Value {
+        json!({
+            "id": id,
+            "publicKey": DEVICE_KEY,
+            "label": "Laptop",
+            "createdAt": "2026-08-27T10:00:00.000Z",
+            "lastSeenAt": "2026-08-27T11:00:00.000Z",
+        })
+    }
+
+    /// An engine with a live session, so a device command clears the gate that
+    /// every one of them runs behind.
+    fn started_device_engine() -> (Engine<FakeSeamTypes>, FakeDevice) {
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start");
+        (engine, device)
+    }
+
+    /// [`started_device_engine`] against a configured base, logged in with an
+    /// access token whose subject is `account_id`.
+    fn engine_for_account(account_id: &str) -> (Engine<FakeSeamTypes>, FakeDevice) {
+        use base64::Engine as _;
+
+        let (mut engine, _events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(json!({ "sub": account_id }).to_string());
+        device.http.enqueue_response(json_response(
+            200,
+            new_user_login_response(
+                &format!("header.{claims}.signature"),
+                &"a".repeat(64),
+                "gw-a",
+            ),
+        ));
+        serve_provisioning(&device);
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+        (engine, device)
+    }
+
+    #[test]
+    fn the_register_device_command_posts_the_key_and_signature_it_was_given() {
+        let (mut engine, device) = engine_for_account("account-7");
+        let before = device.http.requests().len();
+        device
+            .http
+            .enqueue_response(json_response(200, registry_row("device-1")));
+
+        block_on(engine.command(Command::RegisterDevice {
+            public_key: DEVICE_KEY.to_owned(),
+            signature: device_signature(),
+            identity_token: "identity-token".to_owned(),
+            label: Some("Laptop".to_owned()),
+        }))
+        .expect("the registry accepted the key");
+
+        let requests = device.http.requests();
+        let sent = &requests[before..];
+        assert_eq!(sent.len(), 1, "one registration and nothing else");
+        assert_eq!(sent[0].method, HttpMethod::Post);
+        assert_eq!(sent[0].url, "http://api.test/devices");
+        let body: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["publicKey"], DEVICE_KEY);
+        assert_eq!(body["signature"], device_signature());
+        assert_eq!(body["identityToken"], "identity-token");
+        assert_eq!(body["label"], "Laptop");
+    }
+
+    #[test]
+    fn the_revoke_device_command_deletes_the_row_the_host_named() {
+        let (mut engine, device) = started_device_engine();
+        let before = device.http.requests().len();
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(engine.command(Command::RevokeDevice {
+            device_id: "device-1".to_owned(),
+        }))
+        .expect("the row is gone");
+
+        let requests = device.http.requests();
+        let sent = &requests[before..];
+        assert_eq!(sent.len(), 1, "one delete and nothing else");
+        assert_eq!(sent[0].method, HttpMethod::Delete);
+        assert_eq!(sent[0].url, "/devices/device-1");
+    }
+
+    #[test]
+    fn the_respond_to_approval_command_answers_the_rendezvous_it_names() {
+        let (mut engine, device) = started_device_engine();
+        let ephemeral = devices::rendezvous_public_key(&[3u8; 32]).expect("a rendezvous key");
+        let before = device.http.requests().len();
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "success": true })));
+
+        block_on(engine.command(Command::RespondToApproval {
+            request_id: "request-1".to_owned(),
+            decision: ApprovalDecision::Approve,
+            device_public_key: DEVICE_KEY.to_owned(),
+            ephemeral_public_key: ephemeral,
+            signature: device_signature(),
+            sealed_factor: Some(SEALED_FACTOR.to_owned()),
+        }))
+        .expect("the rendezvous is answered");
+
+        let requests = device.http.requests();
+        let sent = &requests[before..];
+        assert_eq!(sent.len(), 1, "one response and nothing else");
+        assert_eq!(sent[0].method, HttpMethod::Post);
+        assert_eq!(sent[0].url, "/device-approval/requests/request-1/respond");
+        let body: Value = serde_json::from_slice(sent[0].body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["decision"], "approve");
+        assert_eq!(body["devicePublicKey"], DEVICE_KEY);
+        assert_eq!(body["sealedFactor"], SEALED_FACTOR);
+    }
+
+    /// The engine rebuilds the payload the API verifies, so a response the API
+    /// would refuse is refused here — before it can be sent at all.
+    #[test]
+    fn a_response_the_api_would_refuse_never_leaves_the_device() {
+        let (mut engine, device) = started_device_engine();
+        let ephemeral = devices::rendezvous_public_key(&[3u8; 32]).expect("a rendezvous key");
+        let response =
+            |decision, ephemeral_public_key: String, sealed_factor| Command::RespondToApproval {
+                request_id: "request-1".to_owned(),
+                decision,
+                device_public_key: DEVICE_KEY.to_owned(),
+                ephemeral_public_key,
+                signature: device_signature(),
+                sealed_factor,
+            };
+
+        for (command, check) in [
+            (
+                response(
+                    ApprovalDecision::Deny,
+                    ephemeral.clone(),
+                    Some(SEALED_FACTOR.to_owned()),
+                ),
+                "denial-seals-nothing",
+            ),
+            (
+                response(
+                    ApprovalDecision::Approve,
+                    format!("04{}", "11".repeat(32)),
+                    Some(SEALED_FACTOR.to_owned()),
+                ),
+                "ephemeral-key-not-a-point",
+            ),
+        ] {
+            let before = device.http.requests().len();
+            assert_eq!(
+                block_on(engine.command(command)),
+                Err(EngineError::MalformedInput { check }),
+            );
+            assert_eq!(
+                device.http.requests().len(),
+                before,
+                "{check} built no request"
+            );
+        }
+    }
+
+    /// The account a device registers against is the one the session already
+    /// authenticated as, so a host cannot ask for a payload that names another.
+    #[test]
+    fn the_registration_challenge_names_the_account_the_session_holds() {
+        let (engine, _device) = engine_for_account("account-7");
+
+        let challenge = block_on(engine.device_registration_challenge(DEVICE_KEY))
+            .expect("a registration challenge");
+
+        assert_eq!(
+            String::from_utf8(challenge).expect("the payload is text"),
+            format!("cipherbox/device-registration/v1\naccount-7\n{DEVICE_KEY}"),
+        );
+        assert_eq!(
+            block_on(engine.device_registration_challenge(&DEVICE_KEY.to_uppercase())),
+            Err(EngineError::MalformedInput {
+                check: "device-public-key-not-lowercase-hex",
+            }),
+            "a key outside the registry alphabet is never signed",
+        );
+    }
+
+    /// The bulletin board relays every field of a rendezvous, so a row it
+    /// could have substituted is dropped rather than offered for approval.
+    #[test]
+    fn pending_approvals_drops_a_row_the_requester_did_not_sign() {
+        let (engine, device) = started_device_engine();
+        let signer = Ed25519Signer::from_seed([13u8; 32]);
+        let requester = hex_lower(&signer.verifying_key().to_bytes());
+        let ephemeral = devices::rendezvous_public_key(&[3u8; 32]).expect("a rendezvous key");
+        let payload =
+            devices::approval_request_payload(&requester, &ephemeral).expect("a request payload");
+        let signature = hex_lower(&signer.sign(&payload).to_bytes());
+        let row = |request_id: &str, request_signature: &str| {
+            json!({
+                "requestId": request_id,
+                "requesterDevicePublicKey": requester,
+                "ephemeralPublicKey": ephemeral,
+                "requestSignature": request_signature,
+                "createdAt": "2026-08-27T10:00:00.000Z",
+                "expiresAt": "2026-08-27T10:05:00.000Z",
+            })
+        };
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "requests": [
+                row("request-1", &signature),
+                row("request-2", &"11".repeat(64)),
+                row("../account", &signature),
+            ]}),
+        ));
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "devices": [] })));
+
+        let rows = block_on(engine.pending_approvals()).expect("the board answered");
+
+        assert_eq!(rows.len(), 1, "an unsigned rendezvous is never offered");
+        assert_eq!(rows[0].request_id, "request-1");
+        assert_eq!(
+            rows[0].comparison_value,
+            devices::comparison_value(&requester, &ephemeral).expect("a comparison value"),
+            "the kept row carries the digits its own fields produce",
+        );
+    }
+
+    /// A device on the registry already holds a factor, so a row naming one is
+    /// the relay's invention rather than a member's device.
+    #[test]
+    fn pending_approvals_drops_a_row_naming_a_key_already_on_the_registry() {
+        let (engine, device) = started_device_engine();
+        let signer = Ed25519Signer::from_seed([13u8; 32]);
+        let requester = hex_lower(&signer.verifying_key().to_bytes());
+        let ephemeral = devices::rendezvous_public_key(&[3u8; 32]).expect("a rendezvous key");
+        let payload =
+            devices::approval_request_payload(&requester, &ephemeral).expect("a request payload");
+        let signature = hex_lower(&signer.sign(&payload).to_bytes());
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "requests": [{
+                "requestId": "request-1",
+                "requesterDevicePublicKey": requester,
+                "ephemeralPublicKey": ephemeral,
+                "requestSignature": signature,
+                "createdAt": "2026-08-27T10:00:00.000Z",
+                "expiresAt": "2026-08-27T10:05:00.000Z",
+            }]}),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "devices": [{
+                "id": "device-1",
+                "publicKey": requester,
+                "label": null,
+                "createdAt": "2026-08-01T09:00:00.000Z",
+                "lastSeenAt": "2026-08-20T09:00:00.000Z",
+            }]}),
+        ));
+
+        let rows = block_on(engine.pending_approvals()).expect("the board answered");
+
+        assert!(rows.is_empty(), "a registered key needs no approval");
+    }
+
+    /// The registry read costs a round trip, so an empty board never pays it.
+    #[test]
+    fn pending_approvals_reads_no_registry_when_the_board_is_empty() {
+        let (engine, device) = started_device_engine();
+        let before = device.http.requests().len();
+        device
+            .http
+            .enqueue_response(json_response(200, json!({ "requests": [] })));
+
+        assert!(
+            block_on(engine.pending_approvals())
+                .expect("the board answered")
+                .is_empty()
+        );
+
+        assert_eq!(device.http.requests().len() - before, 1);
+    }
+
+    #[test]
+    fn the_device_list_returns_the_rows_the_registry_served() {
+        let (engine, device) = started_device_engine();
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "devices": [registry_row("device-1")] }),
+        ));
+
+        let rows = block_on(engine.devices()).expect("the registry answered");
+
+        assert_eq!(
+            rows,
+            vec![RegisteredDevice {
+                id: "device-1".to_owned(),
+                public_key: DEVICE_KEY.to_owned(),
+                label: Some("Laptop".to_owned()),
+                created_at: "2026-08-27T10:00:00.000Z".to_owned(),
+                last_seen_at: "2026-08-27T11:00:00.000Z".to_owned(),
+            }]
+        );
     }
 }
 

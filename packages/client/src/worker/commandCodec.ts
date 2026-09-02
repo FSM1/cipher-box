@@ -20,12 +20,14 @@ import type {
   EventDescriptor,
   NodeKind,
   OpProgressPhase,
+  PendingApprovalDescriptor,
   PendingClass,
   Permission,
   PinMode,
   ReceivedShareDescriptor,
   ReceivedShareResolution,
   ReclaimStallReason,
+  RegisteredDeviceDescriptor,
   SettingsOrigin,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -42,7 +44,9 @@ import type {
   WasmEvent,
   WasmByoIpfsConfig,
   WasmNodeId,
+  WasmPendingApproval,
   WasmReceivedShareRow,
+  WasmRegisteredDevice,
   WasmSharingView,
   WasmSnapshotView,
   WasmVaultSettings,
@@ -147,6 +151,17 @@ function permission(wasm: EngineWasm, value: unknown): number {
   if (value === 'read') return wasm.Permission.Read;
   if (value === 'write') return wasm.Permission.Write;
   throw invalidField('permission', value);
+}
+
+function approvalDecision(wasm: EngineWasm, value: unknown): number {
+  if (value === 'approve') return wasm.ApprovalDecision.Approve;
+  if (value === 'deny') return wasm.ApprovalDecision.Deny;
+  throw invalidField('decision', value);
+}
+
+/** An optional wire string: `null` is the absence the builder takes as `undefined`. */
+function optionalText(value: unknown, field: string): string | undefined {
+  return value === null ? undefined : text(value, field);
 }
 
 function pinMode(wasm: EngineWasm, value: unknown): number {
@@ -341,6 +356,24 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       );
     case 'unlinkAuthMethod':
       return wasm.Command.unlinkAuthMethod(text(descriptor.methodId, 'methodId'));
+    case 'registerDevice':
+      return wasm.Command.registerDevice(
+        text(descriptor.publicKey, 'publicKey'),
+        text(descriptor.signature, 'signature'),
+        text(descriptor.identityToken, 'identityToken'),
+        optionalText(descriptor.label, 'label')
+      );
+    case 'revokeDevice':
+      return wasm.Command.revokeDevice(text(descriptor.deviceId, 'deviceId'));
+    case 'respondToApproval':
+      return wasm.Command.respondToApproval(
+        text(descriptor.requestId, 'requestId'),
+        approvalDecision(wasm, descriptor.decision),
+        text(descriptor.devicePublicKey, 'devicePublicKey'),
+        text(descriptor.ephemeralPublicKey, 'ephemeralPublicKey'),
+        text(descriptor.signature, 'signature'),
+        optionalText(descriptor.sealedFactor, 'sealedFactor')
+      );
     case 'logout':
       return wasm.Command.logout();
     case 'forgetDevice':
@@ -706,6 +739,31 @@ export function readAuthMethods(
     identifierDisplay: row.identifierDisplay ?? null,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt ?? null,
+  }));
+}
+
+/** Reads the wasm-bindgen `RegisteredDevice` rows into descriptors. */
+export function readDevices(rows: readonly WasmRegisteredDevice[]): RegisteredDeviceDescriptor[] {
+  return rows.map((row) => ({
+    id: row.id,
+    publicKey: row.publicKey,
+    label: row.label ?? null,
+    createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
+  }));
+}
+
+/** Reads the wasm-bindgen `PendingApproval` rows into descriptors. */
+export function readPendingApprovals(
+  rows: readonly WasmPendingApproval[]
+): PendingApprovalDescriptor[] {
+  return rows.map((row) => ({
+    requestId: row.requestId,
+    requesterDevicePublicKey: row.requesterDevicePublicKey,
+    ephemeralPublicKey: row.ephemeralPublicKey,
+    comparisonValue: row.comparisonValue,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
   }));
 }
 

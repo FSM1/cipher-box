@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useRefreshOnWake } from '../../engine/useRefreshOnWake';
+import { ApprovalPrompt } from '../devices/ApprovalPrompt';
 import { NotificationToast } from '../NotificationToast';
 import { StagingBanner } from '../StagingBanner';
 import { AppFooter } from './AppFooter';
@@ -30,6 +31,8 @@ export function AppShell({ children }: AppShellProps) {
         <AppFooter />
       </div>
       <NotificationToast />
+      {/* Wherever the member is: an approval request arrives unannounced. */}
+      <ApprovalPrompt />
     </div>
   );
 }

@@ -1,0 +1,49 @@
+/* The device registry pane and the approval prompt (ADR 0009). */
+
+.settings-devices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-device-row {
+  display: grid;
+  grid-template-columns: minmax(96px, max-content) max-content 1fr 1fr max-content max-content;
+  gap: var(--spacing-xs) var(--spacing-md);
+  align-items: center;
+  font-size: var(--font-size-md);
+  color: var(--color-text-secondary);
+}
+
+.settings-device-key {
+  overflow-wrap: anywhere;
+  color: var(--color-text-dim);
+}
+
+.settings-device-when {
+  color: var(--color-text-dim);
+}
+
+.settings-device-own {
+  color: var(--color-text-primary);
+}
+
+/*
+ * The one thing on either screen the member has to read carefully, so it is
+ * spaced and sized to be read across a desk from a second device.
+ */
+.approval-value {
+  margin: var(--spacing-md) 0;
+  padding: var(--spacing-sm);
+  border: var(--border-thickness) solid var(--color-border-dim);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.2em;
+  text-align: center;
+  color: var(--color-text-primary);
+  text-shadow: var(--glow-green);
+}

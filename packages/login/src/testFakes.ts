@@ -74,6 +74,7 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
     logouts: 0,
     forgets: 0,
     phrases: [] as string[],
+    adoptedFactors: [] as Uint8Array[],
   };
   let loggedIn = options.loggedIn ?? false;
   let method: IdentityMethod | null = null;
@@ -92,6 +93,12 @@ export function fakeSession(options: { loggedIn?: boolean; needsRecovery?: boole
     recoverWithPhrase(phrase) {
       calls.phrases.push(phrase);
       if (phrase !== FAKE_PHRASE) return Promise.reject(new Error('wrong phrase'));
+      loggedIn = true;
+      return Promise.resolve();
+    },
+    adoptApprovalFactor(factorKey) {
+      calls.adoptedFactors.push(Uint8Array.from(factorKey));
+      if (factorKey.length !== 32) return Promise.reject(new Error('that approval opens nothing'));
       loggedIn = true;
       return Promise.resolve();
     },

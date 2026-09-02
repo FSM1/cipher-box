@@ -10,15 +10,19 @@
  */
 
 import { CorrelatedTransport } from './correlatedTransport.js';
-import { commandTransfer } from './worker/protocol.js';
+import { commandTransfer, rendezvousTransfer } from './worker/protocol.js';
 import type {
   AuthMethodDescriptor,
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
+  DeviceRendezvousResult,
+  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
+  PendingApprovalDescriptor,
   ReceivedShareDescriptor,
+  RegisteredDeviceDescriptor,
   SharingDescriptor,
   SiweIntent,
   SnapshotDescriptor,
@@ -75,6 +79,14 @@ export interface EngineTransport {
   vaultStorage(): Promise<VaultStorageDescriptor>;
   /** Reads the login methods on this account, in the display form the API serves. */
   authMethods(): Promise<AuthMethodDescriptor[]>;
+  /** Reads the device identity keys registered to this account. */
+  devices(): Promise<RegisteredDeviceDescriptor[]>;
+  /** The bytes this device signs to join the account registry. */
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
+  /** Reads the rendezvous rows this account is asked to approve. */
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]>;
+  /** Runs one pure rendezvous step (ADR 0009); the engine holds no state for it. */
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult>;
   /** Issues the single-use nonce an EIP-4361 message must embed. */
   siweChallenge(intent: SiweIntent): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
@@ -226,6 +238,33 @@ export class LocalTransport extends CorrelatedTransport {
   authMethods(): Promise<AuthMethodDescriptor[]> {
     return this.request<AuthMethodDescriptor[]>(this.ready, (id) =>
       this.worker.postMessage({ type: 'authMethods', id }, [])
+    );
+  }
+
+  devices(): Promise<RegisteredDeviceDescriptor[]> {
+    return this.request<RegisteredDeviceDescriptor[]>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'devices', id }, [])
+    );
+  }
+
+  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
+    return this.request<Uint8Array>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'deviceRegistrationChallenge', id, devicePublicKey }, [])
+    );
+  }
+
+  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
+    return this.request<PendingApprovalDescriptor[]>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'pendingApprovals', id }, [])
+    );
+  }
+
+  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
+    const transfer = rendezvousTransfer(step);
+    return this.request<DeviceRendezvousResult>(
+      this.ready,
+      (id) => this.worker.postMessage({ type: 'deviceRendezvous', id, step }, transfer),
+      transfer
     );
   }
 
