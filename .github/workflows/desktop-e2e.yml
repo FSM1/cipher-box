@@ -18,10 +18,6 @@
 # Job names are the contract (blueprint/deploy.md freeze step 4). `ci-e2e.yml`
 # and `tag-staging.yml` call this workflow and read the `ref` input.
 #
-# The Windows shell links the WinFsp adapter and its mount does not land, so its
-# projection never leaves `opening`; it joins this matrix when it does. Every
-# step that leg needs is here already.
-#
 # The cross-client suite runs one leg, macOS. The Playwright cache step below
 # names the condition a second cross-client host has to clear.
 name: Desktop E2E Tests
@@ -55,6 +51,11 @@ jobs:
             timeoutMinutes: 45
           - platform: linux
             os: ubuntu-latest
+            suite: mounted
+            label: Desktop E2E
+            timeoutMinutes: 45
+          - platform: windows
+            os: windows-latest
             suite: mounted
             label: Desktop E2E
             timeoutMinutes: 45
