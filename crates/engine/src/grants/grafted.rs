@@ -24,16 +24,40 @@ pub(crate) type GraftedSharers = BTreeMap<[u8; 16], [u8; IDENTITY_PUBLIC_LEN]>;
 /// that linked it would hold it the moment the contest resolves.
 pub(crate) type BookmarkedScopeRoots = BTreeSet<[u8; 16]>;
 
+/// Every node id each renderable grafted scope's body names, by scope id.
+pub(crate) type NamedNodes = BTreeMap<[u8; 16], BTreeSet<[u8; 16]>>;
+
+/// The node ids more than one [`NamedNodes`] entry names.
+pub(crate) type ContestedNodes = BTreeSet<[u8; 16]>;
+
+pub(crate) fn contested_nodes(named: &NamedNodes) -> ContestedNodes {
+    let mut once = BTreeSet::new();
+    let mut contested = ContestedNodes::new();
+    for id in named.values().flatten() {
+        if !once.insert(*id) {
+            contested.insert(*id);
+        }
+    }
+    contested
+}
+
 /// The plane one read leg runs on when that plane is a grafted scope.
 ///
 /// A leg on this vault's own plane has no such value. Its records are this
 /// vault's own to author, and a rule there would only let a sharer deny the
 /// vault a node of its own by bookmarking that node's id.
+///
+/// A node id more than one grafted body names renders under no scope, for this
+/// pass and for every later pass while both bodies name it; the scope that stays
+/// alone on the id renders it on the next pass that reaches its body. The sharer
+/// authors every id, so a claim settled by which scope grafted first would be
+/// settled by the sharer-authored bookmark order.
 #[derive(Clone, Copy)]
 pub(crate) struct GraftedPlane<'a> {
     /// The scope every body this leg reads is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_roots: &'a BookmarkedScopeRoots,
+    pub(crate) contested: &'a ContestedNodes,
 }
 
 /// One body's children, split by which plane may speak for each id.
@@ -68,6 +92,9 @@ impl GraftedPlane<'_> {
         for child in children {
             match self.claim(base, NodeId(child.id)) {
                 None => split.linkable.push(child.clone()),
+                // A contested id is in neither list, so the merge departs it
+                // from the plane that rendered it before the contest.
+                Some(Claim::Contested) => {}
                 Some(claim) => {
                     split.names_own_tree |= claim == Claim::OwnTree;
                     split.withheld.push(child.id);
@@ -96,7 +123,9 @@ impl GraftedPlane<'_> {
                 None
             }
         };
-        claim(id).or_else(|| base.ancestors(id).into_iter().find_map(claim))
+        claim(id)
+            .or_else(|| base.ancestors(id).into_iter().find_map(claim))
+            .or_else(|| self.contested.contains(&id.0).then_some(Claim::Contested))
     }
 }
 
@@ -108,6 +137,8 @@ pub(crate) enum Claim {
     /// Another bookmarked scope root, a node below one, or this plane's own
     /// root, which is never a node below itself.
     OtherPlane,
+    /// An id more than one grafted body names, which no plane holds.
+    Contested,
 }
 
 /// Whether `id` is a node this vault's own tree holds.
@@ -219,6 +250,10 @@ mod tests {
     }
 
     fn split(ids: &[[u8; 16]]) -> PlaneSplit {
+        split_contesting(ids, &ContestedNodes::new())
+    }
+
+    fn split_contesting(ids: &[[u8; 16]], contested: &ContestedNodes) -> PlaneSplit {
         let roots = BookmarkedScopeRoots::from([SCOPE, OTHER_SCOPE]);
         let children: Vec<ChildRef> = ids
             .iter()
@@ -234,6 +269,7 @@ mod tests {
         GraftedPlane {
             scope_id: SCOPE,
             scope_roots: &roots,
+            contested,
         }
         .split(&tree(), &children)
     }
@@ -269,6 +305,39 @@ mod tests {
     fn naming_this_vaults_own_node_is_reported_and_a_foreign_scope_is_not() {
         assert!(split(&[OWN_CHILD]).names_own_tree);
         assert!(!split(&[OTHER_SCOPE, UNDER_OTHER]).names_own_tree);
+    }
+
+    /// A contested id is left out of both lists. Withholding it would keep it
+    /// standing under the plane that rendered it before the contest, and the
+    /// rule is that no plane renders it.
+    #[test]
+    fn a_contested_id_is_neither_linked_nor_withheld() {
+        let split = split_contesting(&[UNCLAIMED], &ContestedNodes::from([UNCLAIMED]));
+
+        assert!(split.linkable.is_empty());
+        assert!(split.withheld.is_empty());
+    }
+
+    /// The contest is between sharers. A body that names a node of this vault's
+    /// own tree is attributable whatever a second sharer names.
+    #[test]
+    fn a_contest_does_not_hide_a_body_that_names_this_vaults_own_node() {
+        let split = split_contesting(&[OWN_CHILD], &ContestedNodes::from([OWN_CHILD]));
+
+        assert!(split.names_own_tree);
+        assert_eq!(split.withheld, vec![OWN_CHILD]);
+    }
+
+    /// The claim record answers over every renderable scope at once, so an id
+    /// one body alone names stays that body's to render.
+    #[test]
+    fn only_an_id_two_bodies_name_is_contested() {
+        let named = NamedNodes::from([
+            (SCOPE, BTreeSet::from([UNCLAIMED, OWN_CHILD])),
+            (OTHER_SCOPE, BTreeSet::from([UNCLAIMED])),
+        ]);
+
+        assert_eq!(contested_nodes(&named), ContestedNodes::from([UNCLAIMED]));
     }
 
     /// The accept and render legs raise a granted scope's read-epoch floor under

@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
+    AadContext, ChildRef, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
     verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
@@ -41,7 +41,10 @@ use super::accept::ReceivedShareStore;
 use super::accept::{BookmarkKey, ReceivedShare};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
-use super::grafted::{BookmarkedScopeRoots, GraftedPlane, GraftedSharers, in_own_tree};
+use super::grafted::{
+    BookmarkedScopeRoots, ContestedNodes, GraftedPlane, GraftedSharers, NamedNodes,
+    contested_nodes, in_own_tree,
+};
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
 use super::revocation::{ResolutionClass, ResolutionFacts, classify};
@@ -82,8 +85,101 @@ pub(crate) struct ScopeRender<'a> {
     /// The bookmarked scope-root set every leg below a grafted root applies its
     /// cross-plane rule against ([`GraftedPlane`]).
     pub scope_roots: &'a RefCell<BookmarkedScopeRoots>,
+    /// What each renderable scope's body last named — the per-node claim this
+    /// pass rebuilds and every leg below a grafted root reads.
+    pub named_nodes: &'a RefCell<NamedNodes>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
+}
+
+/// One resolved scope root this pass may render: the bookmark it resolved from,
+/// and what its body named.
+struct Opened<'a> {
+    share: &'a ReceivedShare,
+    children: Vec<ChildRef>,
+    sequence: u64,
+    modified_at: u64,
+}
+
+/// Rebuild the per-node claim over every renderable scope, and answer with the
+/// ids more than one of them names.
+///
+/// A scope this pass did not open keeps the entry its last opened body wrote, so
+/// a fresh body does not take an id from a scope this pass could not reach.
+fn claim_contest(
+    opened: &[Opened<'_>],
+    renderable: &BTreeSet<[u8; 16]>,
+    named: &RefCell<NamedNodes>,
+) -> ContestedNodes {
+    let mut named = named.borrow_mut();
+    named.retain(|scope_id, _| renderable.contains(scope_id));
+    for open in opened {
+        named.insert(
+            open.share.scope_id,
+            open.children.iter().map(|child| child.id).collect(),
+        );
+    }
+    contested_nodes(&named)
+}
+
+/// Depart every contested id the render tree still holds on a grafted plane.
+///
+/// A merge speaks only for a plane this pass re-opened, so a plane that stops
+/// answering would keep an id the contest has since taken from it. A bookmarked
+/// scope root is spared: it is a plane, not a node a body wins. So is a node of
+/// this vault's own tree, which this vault authors.
+fn depart_contested(contested: &ContestedNodes, render: &ScopeRender<'_>) -> bool {
+    let scope_roots = render.scope_roots.borrow();
+    let mut base = render.base.borrow_mut();
+    let mut departed = false;
+    for id in contested.difference(&scope_roots).map(|id| NodeId(*id)) {
+        if base.contains(id) && !in_own_tree(&base, id) {
+            base.remove_deleted(id);
+            departed = true;
+        }
+    }
+    departed
+}
+
+/// Merge one opened scope root into the render tree, under the cross-plane rule
+/// its plane applies ([`GraftedPlane`]).
+fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRender<'_>) {
+    let share = open.share;
+    let root = NodeId(share.scope_id);
+    let scope_roots = render.scope_roots.borrow();
+    let mut base = render.base.borrow_mut();
+    let split = GraftedPlane {
+        scope_id: share.scope_id,
+        scope_roots: &scope_roots,
+        contested,
+    }
+    .split(&base, &open.children);
+    // The scope root has no parent here to name it, so the pointer's label is
+    // the only name a browse can show.
+    let renamed = match base.node_mut(root) {
+        Some(meta) if meta.name() != share.display_name => {
+            meta.rename(share.display_name.clone());
+            true
+        }
+        Some(_) => false,
+        None => {
+            let mut meta = NodeMeta::new(root, share.display_name.clone(), NodeKind::Folder);
+            meta.ipns_name = Some(share.scope_root_name.clone());
+            base.upsert_node(meta);
+            true
+        }
+    };
+    if project_folder_partial(
+        &mut base,
+        root,
+        &split.linkable,
+        &split.withheld,
+        open.sequence,
+        open.modified_at,
+    ) || renamed
+    {
+        let _ = render.events.unbounded_send(Event::SnapshotUpdated);
+    }
 }
 
 /// The seams one received-share resolve reads, plus this device's own
@@ -140,6 +236,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             verdicts.borrow_mut().clear();
             render.grafted_sharers.borrow_mut().clear();
             render.scope_roots.borrow_mut().clear();
+            render.named_nodes.borrow_mut().clear();
             return;
         }
         let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
@@ -177,6 +274,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
         let mut refreshed = BTreeMap::new();
         let mut budget = MAX_RESOLVES_PER_PASS;
+        let mut opened: Vec<Opened<'_>> = Vec::new();
         for share in received.iter() {
             let key = share.key();
             let held = verdicts.borrow().get(&key).copied();
@@ -216,13 +314,25 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             if class == ResolutionClass::Granted && renderable.contains(&share.scope_id) {
                 if let Some(candidate) = &candidate {
-                    self.graft(candidate, share, contact, epoch_floor, render)
-                        .await;
+                    if let Some(open) = self
+                        .open(candidate, share, contact, epoch_floor, render)
+                        .await
+                    {
+                        opened.push(open);
+                    }
                 }
             }
             refreshed.insert(key, ReceivedVerdict { class, at: now });
         }
         *verdicts.borrow_mut() = refreshed;
+
+        let contested = claim_contest(&opened, &renderable, render.named_nodes);
+        if depart_contested(&contested, render) {
+            let _ = render.events.unbounded_send(Event::SnapshotUpdated);
+        }
+        for open in &opened {
+            merge_grafted(open, &contested, render);
+        }
     }
 
     /// `share`'s floors, filed under the identity that granted it.
@@ -276,8 +386,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         (Some(candidate), epoch_floor)
     }
 
-    /// Merge the accepted scope's own folder into the render tree, and cache the
-    /// read scope seed the leg below its root reads with.
+    /// Open the accepted scope's own folder body, and cache the read scope seed
+    /// the leg below its root reads with. `None` leaves the render tree as the
+    /// last pass left it.
     ///
     /// Two records may render, and no third. A strictly-newer one adopts through
     /// the gate. One at exactly the durable sequence floor, at or above the
@@ -286,19 +397,19 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// makes, and sound for the same reason: the gate authenticates the grant
     /// section under the contact-anchored owner identity before any floor stage
     /// runs.
-    async fn graft(
+    async fn open<'s>(
         &self,
         candidate: &Candidate,
-        share: &ReceivedShare,
+        share: &'s ReceivedShare,
         contact: &Contact,
         epoch_floor: u64,
         render: &ScopeRender<'_>,
-    ) {
+    ) -> Option<Opened<'s>> {
         // A scope root is the node its own scope is named for, and the bookmark
         // opens under that id. The reader-scope bind is stage 6's, so state it
         // here too: the equal-floor arm below unseals without reaching stage 6.
         if candidate.envelope.id != share.scope_id || candidate.envelope.scope != share.scope_id {
-            return;
+            return None;
         }
         // The scope root is a node id like any other, and a sharer authors it.
         // One this vault's own tree holds would be renamed here and pruned to the
@@ -307,18 +418,14 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // and refusing on that alone would let one contact deny another contact's
         // share for good.
         if in_own_tree(&render.base.borrow(), NodeId(share.scope_id)) {
-            return;
+            return None;
         }
-        let Some(tag) = recipient_blinded_tag(
+        let tag = recipient_blinded_tag(
             self.enc_secret,
             &contact.enc_subkey(),
             &share.scope_root_name,
-        ) else {
-            return;
-        };
-        let Some(blob) = self_locate_signed(&candidate.grant_section.grant_blobs, &tag) else {
-            return;
-        };
+        )?;
+        let blob = self_locate_signed(&candidate.grant_section.grant_blobs, &tag)?;
         let aad = AadContext {
             v: candidate.envelope.v,
             id: candidate.envelope.id,
@@ -327,7 +434,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             struct_tag: STRUCT_TAG_GRANT_BLOB,
         };
         let Ok(grant) = open_grant_blob(self.enc_secret, &blob.enc, &aad, &blob.ciphertext) else {
-            return;
+            return None;
         };
         let node_seed = kdf::node_seed(grant.read_scope_seed(), &candidate.envelope.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
@@ -346,7 +453,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // The seed's stamp is the epoch that entitles it: an adopt names the one
         // it just raised the floor to, and an equal-floor recovery takes the
         // pre-resolve floor, so no record can extend its own seed's residency.
-        let opened = match adopt(&self.sharer_floors(share), &reader, candidate).await {
+        let body = match adopt(&self.sharer_floors(share), &reader, candidate).await {
             Ok((adopted, _)) => Some((adopted.read_body, adopted.sequence, adopted.epoch)),
             Err(e) => match e.rejection().map(|r| &r.reason) {
                 Some(RejectionReason::SequenceNotNewer { floor, sequence })
@@ -367,9 +474,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             },
             sequence,
             epoch,
-        )) = opened
+        )) = body
         else {
-            return;
+            return None;
         };
         deposit_seed(
             render.read_seeds,
@@ -377,40 +484,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             Zeroizing::new(*grant.read_scope_seed()),
             Some(epoch),
         );
-
-        let root = NodeId(share.scope_id);
-        let mut base = render.base.borrow_mut();
-        let split = GraftedPlane {
-            scope_id: share.scope_id,
-            scope_roots: &render.scope_roots.borrow(),
-        }
-        .split(&base, &children);
-        // The scope root has no parent here to name it, so the pointer's label
-        // is the only name a browse can show.
-        let named = match base.node_mut(root) {
-            Some(meta) if meta.name() != share.display_name => {
-                meta.rename(share.display_name.clone());
-                true
-            }
-            Some(_) => false,
-            None => {
-                let mut meta = NodeMeta::new(root, share.display_name.clone(), NodeKind::Folder);
-                meta.ipns_name = Some(share.scope_root_name.clone());
-                base.upsert_node(meta);
-                true
-            }
-        };
-        if project_folder_partial(
-            &mut base,
-            root,
-            &split.linkable,
-            &split.withheld,
+        Some(Opened {
+            share,
+            children,
             sequence,
             modified_at,
-        ) || named
-        {
-            let _ = render.events.unbounded_send(Event::SnapshotUpdated);
-        }
+        })
     }
 }
 
@@ -471,12 +550,15 @@ mod tests {
     use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::secret::SecretBytes;
 
+    use std::sync::{Arc, Mutex};
+
     use crate::content::GatewaySource;
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, HttpResponse};
     use crate::seams::{FloorRaise, SeamError, SeamResult};
     use crate::testkit::fakes::InMemoryFloorStore;
     use crate::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore, ScriptedHttp};
+    use crate::testkit::requested_cid;
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
         SeededEntropy, block_on, owner_root_fixture,
@@ -881,6 +963,7 @@ mod tests {
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
+        named_nodes: RefCell<NamedNodes>,
         verdicts: RefCell<ReceivedVerdicts>,
     }
 
@@ -948,6 +1031,7 @@ mod tests {
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
+                named_nodes: RefCell::new(NamedNodes::new()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
             };
             block_on(
@@ -1039,6 +1123,7 @@ mod tests {
                         read_seeds: &self.read_seeds,
                         grafted_sharers: &self.grafted_sharers,
                         scope_roots: &self.scope_roots,
+                        named_nodes: &self.named_nodes,
                         events: &events,
                     },
                     UnixMillis(at_millis),
@@ -1391,6 +1476,372 @@ mod tests {
             fx.grafted_sharers.borrow().is_empty(),
             "no identity answers for a contested id"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The per-node claim: which scope renders an id both bodies name.
+    // -----------------------------------------------------------------------
+
+    /// The id both bodies name in the tests below.
+    const CONTESTED_NODE: [u8; 16] = [0xcc; 16];
+
+    /// Two sharers, each with an accepted scope of its own, in one render tree.
+    /// The pair is ordered the way the bookmark list is: by sharer identity,
+    /// which the sharer authors and can grind.
+    struct TwoSharers {
+        sharers: [EcdsaSigner; 2],
+        encs: [X25519Secret; 2],
+        scopes: [[u8; 16]; 2],
+        records: InMemoryRecordStore,
+        endpoint: EndpointId,
+        blocks: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+        http: ScriptedHttp,
+        gateway: Gateway,
+        floors: InMemoryFloorStore,
+        staging: InMemoryStagingStore,
+        entropy: RefCell<SeededEntropy>,
+        base: RefCell<Snapshot>,
+        read_seeds: RefCell<ScopeSeeds>,
+        grafted_sharers: RefCell<GraftedSharers>,
+        scope_roots: RefCell<BookmarkedScopeRoots>,
+        named_nodes: RefCell<NamedNodes>,
+        verdicts: RefCell<ReceivedVerdicts>,
+    }
+
+    impl TwoSharers {
+        fn new() -> Self {
+            let mut parties = [
+                (
+                    EcdsaSigner::from_scalar(&[0x31; 32]).expect("valid scalar"),
+                    X25519Secret::from_scalar([0x33; 32]),
+                    SCOPE,
+                ),
+                (
+                    EcdsaSigner::from_scalar(&[0x51; 32]).expect("valid scalar"),
+                    X25519Secret::from_scalar([0x53; 32]),
+                    [0x6d; 16],
+                ),
+            ];
+            parties.sort_by_key(|(signer, _, _)| signer.verifying_key().to_sec1());
+            let [
+                (first, first_enc, first_scope),
+                (second, second_enc, second_scope),
+            ] = parties;
+            let blocks: Arc<Mutex<BTreeMap<String, Vec<u8>>>> = Arc::default();
+            let served = Arc::clone(&blocks);
+            let endpoint = EndpointId::new("e0");
+            let fx = Self {
+                sharers: [first, second],
+                encs: [first_enc, second_enc],
+                scopes: [first_scope, second_scope],
+                records: InMemoryRecordStore::new(vec![endpoint.clone()]),
+                endpoint,
+                blocks,
+                http: ScriptedHttp::with_route(move |request| {
+                    let blocks = served.lock().expect("lock");
+                    let body = blocks.get(&requested_cid(&request.url))?.clone();
+                    Some(Ok(HttpResponse {
+                        status: 200,
+                        headers: Vec::new(),
+                        body,
+                    }))
+                }),
+                gateway: Gateway {
+                    accelerator: None,
+                    public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                },
+                floors: InMemoryFloorStore::default(),
+                staging: InMemoryStagingStore::default(),
+                entropy: RefCell::new(SeededEntropy::new(9)),
+                base: RefCell::new(Snapshot::new(NodeId(VAULT_ROOT))),
+                read_seeds: RefCell::new(ScopeSeeds::new()),
+                grafted_sharers: RefCell::new(GraftedSharers::new()),
+                scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
+                named_nodes: RefCell::new(NamedNodes::new()),
+                verdicts: RefCell::new(ReceivedVerdicts::new()),
+            };
+            let mine = my_enc();
+            let contacts = StagingContactStore::new(&fx.staging, &mine, &fx.entropy);
+            let mut bookmarks = ReceivedSharesList::new();
+            for which in 0..2 {
+                block_on(contacts.record(
+                    &ContactCode::create(&fx.sharers[which], fx.encs[which].public()).encode(),
+                ))
+                .expect("the sharer's code imports");
+                bookmarks.reconcile(ReceivedShare {
+                    scope_root_name: fx.scope_name(which).as_str().as_bytes().to_vec(),
+                    scope_id: fx.scopes[which],
+                    sharer_identity_pk: fx.sharers[which].verifying_key().to_sec1(),
+                    display_name: format!("share-{which}"),
+                    permission: Permission::Read,
+                    pointer_read_key: SecretBytes::new([0x9a; 32]),
+                });
+            }
+            block_on(
+                StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy)
+                    .persist(&bookmarks),
+            )
+            .expect("the bookmarks persist");
+            fx
+        }
+
+        fn scope_name(&self, which: usize) -> IpnsName {
+            derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &self.scopes[which])
+        }
+
+        /// Publish `which` sharer's scope root at `sequence`, serving `children`.
+        fn publish(&self, which: usize, children: Vec<ChildRef>, sequence: u64) {
+            let scope = self.scopes[which];
+            let name = self.scope_name(which);
+            let grants = vec![
+                mint_grant_row(
+                    &self.sharers[which],
+                    &self.encs[which],
+                    self.sharers[which].verifying_key().to_sec1(),
+                    &my_enc().public(),
+                    &scope,
+                    name.as_str().as_bytes(),
+                    Permission::Read,
+                )
+                .expect("a contributory recipient key"),
+            ];
+            let fixture = owner_root_fixture(OwnerRootSpec {
+                owner_identity: &self.sharers[which],
+                owner_enc: &self.encs[which].public(),
+                scope_id: scope,
+                root_id: scope,
+                children,
+                child_scope_index: Vec::new(),
+                grants,
+                parent_node_seed: None,
+                owner_write_blob_epoch: None,
+                write_history_link: Vec::new(),
+            });
+            self.blocks
+                .lock()
+                .expect("lock")
+                .insert(fixture.head_cid_str.clone(), fixture.head_block.clone());
+            self.records.seed_record(
+                &self.endpoint,
+                name.as_str(),
+                IpnsRecord::create_v2(
+                    &kdf::ipns_keypair(
+                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &scope).as_bytes(),
+                    ),
+                    format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+                    sequence,
+                    2_000_000_000,
+                    "2099-01-01T00:00:00Z",
+                )
+                .marshal(),
+            );
+        }
+
+        /// Leave `which` sharer's name serving bytes no verify accepts, so this
+        /// pass reaches no body for it.
+        fn unreachable(&self, which: usize) {
+            self.records
+                .seed_record(&self.endpoint, self.scope_name(which).as_str(), Vec::new());
+        }
+
+        fn pass(&self, at_millis: u64) {
+            let (events, _rx) = mpsc::unbounded();
+            block_on(
+                ReceivedShareStatus {
+                    transport: &self.records,
+                    gateway: &self.gateway,
+                    http: &self.http,
+                    floors: &self.floors,
+                    enc_secret: &my_enc(),
+                }
+                .refresh(
+                    &self.staging,
+                    &self.entropy,
+                    &self.verdicts,
+                    &ScopeRender {
+                        base: &self.base,
+                        read_seeds: &self.read_seeds,
+                        grafted_sharers: &self.grafted_sharers,
+                        scope_roots: &self.scope_roots,
+                        named_nodes: &self.named_nodes,
+                        events: &events,
+                    },
+                    UnixMillis(at_millis),
+                    &SyncTimingProfile::CI,
+                ),
+            );
+        }
+
+        /// The names the render tree lists under `which` sharer's scope root.
+        fn listing(&self, which: usize) -> Vec<String> {
+            self.base
+                .borrow()
+                .children(NodeId(self.scopes[which]))
+                .into_iter()
+                .map(|child| child.name().to_owned())
+                .collect()
+        }
+
+        fn holds_contested(&self) -> bool {
+            self.base.borrow().contains(NodeId(CONTESTED_NODE))
+        }
+    }
+
+    /// A node id both grafted bodies name renders under neither scope. The
+    /// sharer authors every id, so the body the pass reaches first must not take
+    /// it.
+    #[test]
+    fn a_node_id_two_grafted_scopes_name_renders_under_neither() {
+        let fx = TwoSharers::new();
+        fx.publish(
+            0,
+            vec![
+                shared_child(0xa1, "first-own"),
+                shared_child(0xcc, "by-first"),
+            ],
+            1,
+        );
+        fx.publish(
+            1,
+            vec![
+                shared_child(0xa2, "second-own"),
+                shared_child(0xcc, "by-second"),
+            ],
+            1,
+        );
+
+        fx.pass(0);
+
+        assert_eq!(fx.listing(0), vec!["first-own".to_owned()]);
+        assert_eq!(fx.listing(1), vec!["second-own".to_owned()]);
+        assert!(!fx.holds_contested(), "and no browse opens the id at all");
+    }
+
+    /// The bookmark order is sharer-authored: the key leads with the sharer
+    /// identity, and a contact can grind one that sorts first. The side that
+    /// already renders the id therefore loses it to the contest whichever side
+    /// that is.
+    #[test]
+    fn the_bookmark_order_does_not_decide_a_contested_node() {
+        for (holder, contester) in [(0, 1), (1, 0)] {
+            let fx = TwoSharers::new();
+            fx.publish(holder, vec![shared_child(0xcc, "held")], 1);
+            fx.publish(contester, vec![shared_child(0xa2, "own")], 1);
+            fx.pass(0);
+            assert_eq!(
+                fx.listing(holder),
+                vec!["held".to_owned()],
+                "one body alone names it, so it renders"
+            );
+
+            fx.publish(
+                contester,
+                vec![shared_child(0xa2, "own"), shared_child(0xcc, "taken")],
+                2,
+            );
+            fx.pass(60_000);
+
+            assert!(fx.listing(holder).is_empty());
+            assert_eq!(fx.listing(contester), vec!["own".to_owned()]);
+            assert!(!fx.holds_contested());
+        }
+    }
+
+    /// The claim lasts exactly as long as the contest: the body that stops
+    /// naming the id leaves it to the body that still does.
+    #[test]
+    fn a_node_one_body_stops_naming_returns_to_the_other_scope() {
+        let fx = TwoSharers::new();
+        fx.publish(0, vec![shared_child(0xcc, "by-first")], 1);
+        fx.publish(1, vec![shared_child(0xcc, "by-second")], 1);
+        fx.pass(0);
+        assert!(!fx.holds_contested());
+
+        fx.publish(1, vec![shared_child(0xa2, "second-own")], 2);
+        fx.pass(60_000);
+
+        assert_eq!(fx.listing(0), vec!["by-first".to_owned()]);
+        assert_eq!(fx.listing(1), vec!["second-own".to_owned()]);
+    }
+
+    /// The claim outlives the pass that recorded it. A scope whose record this
+    /// pass could not read still names what it last named, so an unreachable
+    /// record does not hand the id to the body the pass did open.
+    #[test]
+    fn a_contest_holds_while_one_side_does_not_resolve() {
+        let fx = TwoSharers::new();
+        fx.publish(0, vec![shared_child(0xcc, "by-first")], 1);
+        fx.publish(1, vec![shared_child(0xcc, "by-second")], 1);
+        fx.pass(0);
+
+        fx.unreachable(1);
+        fx.pass(60_000);
+
+        assert!(fx.listing(0).is_empty());
+        assert!(!fx.holds_contested());
+    }
+
+    /// A plane that stops answering is never re-opened, so no merge speaks for
+    /// it. A thief that goes silent after one success must still lose the id.
+    #[test]
+    fn a_contested_id_departs_a_plane_this_pass_does_not_re_open() {
+        let fx = TwoSharers::new();
+        fx.publish(0, vec![shared_child(0xcc, "held")], 1);
+        fx.pass(0);
+        assert_eq!(
+            fx.listing(0),
+            vec!["held".to_owned()],
+            "one body alone names it, so it renders"
+        );
+
+        fx.unreachable(0);
+        fx.publish(1, vec![shared_child(0xcc, "taken")], 1);
+        fx.pass(60_000);
+
+        assert!(fx.listing(1).is_empty());
+        assert!(!fx.holds_contested(), "and the silent plane keeps nothing");
+    }
+
+    /// The sweep is over nodes, not planes. A bookmarked scope root stays, and
+    /// so does a node of this vault's own tree, whatever a grafted body names.
+    #[test]
+    fn the_contest_sweep_spares_a_scope_root_and_this_vaults_own_node() {
+        const GRAFTED_NODE: [u8; 16] = [0xd1; 16];
+        const OWN_NODE: [u8; 16] = [0xd2; 16];
+        let mut snapshot = Snapshot::new(NodeId(VAULT_ROOT));
+        for (id, parent) in [
+            (SCOPE, None),
+            (GRAFTED_NODE, Some(SCOPE)),
+            (OWN_NODE, Some(VAULT_ROOT)),
+        ] {
+            snapshot.upsert_node(NodeMeta::new(NodeId(id), "n", NodeKind::Folder));
+            if let Some(parent) = parent {
+                snapshot.link_next(NodeId(parent), NodeId(id));
+            }
+        }
+        let base = RefCell::new(snapshot);
+        let read_seeds = RefCell::new(ScopeSeeds::new());
+        let grafted_sharers = RefCell::new(GraftedSharers::new());
+        let scope_roots = RefCell::new(BookmarkedScopeRoots::from([SCOPE]));
+        let named_nodes = RefCell::new(NamedNodes::new());
+        let (events, _rx) = mpsc::unbounded();
+
+        let departed = depart_contested(
+            &ContestedNodes::from([SCOPE, OWN_NODE, GRAFTED_NODE]),
+            &ScopeRender {
+                base: &base,
+                read_seeds: &read_seeds,
+                grafted_sharers: &grafted_sharers,
+                scope_roots: &scope_roots,
+                named_nodes: &named_nodes,
+                events: &events,
+            },
+        );
+
+        assert!(departed);
+        assert!(base.borrow().contains(NodeId(SCOPE)));
+        assert!(base.borrow().contains(NodeId(OWN_NODE)));
+        assert!(!base.borrow().contains(NodeId(GRAFTED_NODE)));
     }
 
     /// The steady state: the transport re-serves the record this vault already

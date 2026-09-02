@@ -19,7 +19,7 @@ use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
 use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError, RejectionReason};
-use crate::grants::grafted::{BookmarkedScopeRoots, GraftedPlane, PlaneSplit};
+use crate::grants::grafted::{GraftedPlane, PlaneSplit};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::project::{UnlinkedChild, merge_folder, project_child_version};
@@ -87,9 +87,9 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// The scope every focus folder is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
-    /// The bookmarked scope-root set this leg's cross-plane rule reads, or
-    /// `None` on this vault's own plane ([`GraftedPlane`]).
-    pub(crate) plane_roots: Option<&'a BookmarkedScopeRoots>,
+    /// The plane this leg runs on, or `None` on this vault's own plane
+    /// ([`GraftedPlane`]).
+    pub(crate) plane: Option<GraftedPlane<'a>>,
     /// How this pass resolves each folder's record: a manual refresh forces
     /// [`ResolveMode::NoCache`], so an unreachable record is reported as
     /// staleness rather than re-projected from cached bytes.
@@ -170,12 +170,7 @@ where
     /// How this leg's plane splits a foreign body's children
     /// ([`GraftedPlane::split`]), or `None` on this vault's own plane.
     fn split(&self, children: &[ChildRef]) -> Option<PlaneSplit> {
-        let scope_roots = self.plane_roots?;
-        let plane = GraftedPlane {
-            scope_id: self.scope_id,
-            scope_roots,
-        };
-        Some(plane.split(&self.base.borrow(), children))
+        Some(self.plane?.split(&self.base.borrow(), children))
     }
 
     /// Fold each file's published head into the base, reporting whether the base
@@ -299,7 +294,7 @@ mod tests {
     };
 
     use crate::content::{DAG_ROOT_CODEC, GatewaySource};
-    use crate::grants::grafted::BookmarkedScopeRoots;
+    use crate::grants::grafted::{BookmarkedScopeRoots, ContestedNodes};
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, HttpResponse};
     use crate::sync::model::NodeMeta;
@@ -431,6 +426,17 @@ mod tests {
         /// One folder-leg pass over `FOLDER`, with the head block its resolve
         /// fetches served.
         fn run(&self, scope_id: [u8; 16], plane_roots: Option<&BookmarkedScopeRoots>) -> bool {
+            self.run_contesting(scope_id, plane_roots, &ContestedNodes::new())
+        }
+
+        /// The same pass, with a claim record that gives `contested` to no
+        /// plane.
+        fn run_contesting(
+            &self,
+            scope_id: [u8; 16],
+            plane_roots: Option<&BookmarkedScopeRoots>,
+            contested: &ContestedNodes,
+        ) -> bool {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
@@ -448,7 +454,11 @@ mod tests {
                     events: &events,
                     scope_id,
                     scope_read_seed: &self.read_seed,
-                    plane_roots,
+                    plane: plane_roots.map(|scope_roots| GraftedPlane {
+                        scope_id,
+                        scope_roots,
+                        contested,
+                    }),
                     mode: ResolveMode::NoCache,
                     observed_at: 0,
                 }
@@ -562,6 +572,26 @@ mod tests {
             vec![NodeId(DROPPED)],
             "a withheld id is no departure, so the bin never captures it"
         );
+    }
+
+    /// The claim record reaches every leg below a grafted root, not the graft
+    /// alone: a body may move a contested id down into a folder of its own, and
+    /// no plane renders such an id.
+    #[test]
+    fn a_folder_below_a_grafted_root_departs_a_contested_child() {
+        let leg = FolderLeg::new(SCOPE_A, vec![child_ref(CONTESTED, "still-mine", 1)]);
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        leg.place(CONTESTED, "still-mine", Some(FOLDER));
+
+        leg.run_contesting(
+            SCOPE_A,
+            Some(&scope_roots()),
+            &ContestedNodes::from([CONTESTED]),
+        );
+
+        assert!(leg.listing(FOLDER).is_empty());
+        assert!(!leg.holds(CONTESTED));
     }
 
     /// The rule is the grafted plane's alone. On this vault's own plane every
