@@ -633,9 +633,23 @@ impl SettingsRead {
     ///
     /// Every caller enrols: a load that reads and does not enrol is what lets
     /// the record's EOL lapse under a session that publishes nothing.
-    pub fn enrol(self, slot: &RefCell<Option<HeldRecord>>) -> SettingsLoad {
+    ///
+    /// `observed` is the record bytes the slot held when the load began, and
+    /// the write happens only while the slot still holds them. A save that
+    /// landed across the load put its own confirmed record here, and the
+    /// renewal re-signs at `floor + 1`: re-signing this pass's older read would
+    /// win record selection and roll the account back to the body the save
+    /// replaced. The same bar `live_account_record` holds this slot to.
+    pub fn enrol(
+        self,
+        slot: &RefCell<Option<HeldRecord>>,
+        observed: Option<Vec<u8>>,
+    ) -> SettingsLoad {
         if let Some(renewable) = self.renewable {
-            *slot.borrow_mut() = Some(renewable);
+            let mut slot = slot.borrow_mut();
+            if slot.as_ref().map(|held| held.record_bytes.as_slice()) == observed.as_deref() {
+                *slot = Some(renewable);
+            }
         }
         self.load
     }

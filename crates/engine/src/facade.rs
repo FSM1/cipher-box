@@ -3754,6 +3754,11 @@ impl<T: SeamTypes> Engine<T> {
         // Where this session's bytes go. Server-free and ahead of any vault
         // resolve, so a self-hosting owner never needs CipherBox to tell them
         // where their own node is (blueprint/engine.md "Vault settings record").
+        let observed = self
+            .settings_record
+            .borrow()
+            .as_ref()
+            .map(|held| held.record_bytes.clone());
         let settings = load_settings(
             &self.seams.record_transport,
             &self.gateway,
@@ -3765,7 +3770,7 @@ impl<T: SeamTypes> Engine<T> {
             secret.expose(),
         )
         .await
-        .enrol(&self.settings_record);
+        .enrol(&self.settings_record, observed);
         *self.placement.borrow_mut() = Some(decide_placement(&settings));
         *self.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
         // The secret zeroizes on drop here, at its terminal owner.
@@ -4676,6 +4681,10 @@ where {
                         || elapsed_at_least(now, last_checked, profile.settings_recheck_interval)
                     {
                         settings_rechecked.set(now);
+                        let observed = settings_record
+                            .borrow()
+                            .as_ref()
+                            .map(|held| held.record_bytes.clone());
                         let read = load_settings_at(
                             &transport,
                             &gateway,
@@ -4697,7 +4706,7 @@ where {
                         if !alive.get() {
                             return TickControl::Stop;
                         }
-                        let load = read.enrol(&settings_record);
+                        let load = read.enrol(&settings_record, observed);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
                             *settings_summary.borrow_mut() = Some(summarize_settings(&load));

@@ -3641,7 +3641,6 @@ fn a_repeated_first_run_leaves_the_bin_index_the_last_run_published() {
     );
 }
 
-/// The record standing at the account's bin index name, or `None`.
 fn standing_bin_record(world: &FakeWorld) -> Option<Vec<u8>> {
     world
         .record_store
@@ -3729,8 +3728,24 @@ fn a_start_that_holds_the_bin_index_spends_no_publish_and_no_resolve() {
     );
     assert_eq!(
         standing_bin_record(&world),
-        Some(standing),
+        Some(standing.clone()),
         "and it published nothing over the standing record",
+    );
+
+    // Then the tasks the start spawned: a resolve or a publish the gate
+    // deferred rather than refused would land here.
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    assert!(!tasks.is_empty(), "the start spawned its loops");
+    poll_tasks_until_parked(&mut tasks);
+    assert_eq!(
+        world.record_store.get_count(bin_name().as_str()),
+        resolves,
+        "and the session spawned no resolve of the name either",
+    );
+    assert_eq!(
+        standing_bin_record(&world),
+        Some(standing),
+        "nor any publish over the standing record",
     );
 
     // The control: a device with no mark of its own does reach the network, so
