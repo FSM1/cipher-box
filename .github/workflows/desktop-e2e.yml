@@ -18,8 +18,8 @@
 # Job names are the contract (blueprint/deploy.md freeze step 4). `ci-e2e.yml`
 # and `tag-staging.yml` call this workflow and read the `ref` input.
 #
-# The cross-client suite runs one leg, macOS. The Playwright cache step below
-# names the condition a second cross-client host has to clear.
+# The cross-client suite runs one leg, macOS — a runner-cost choice, not a
+# harness limit.
 name: Desktop E2E Tests
 
 on:
@@ -252,30 +252,11 @@ jobs:
           # a `VITE_` value there is a compile-time input to the desktop binary.
           VITE_GOOGLE_CLIENT_ID: cross-client-google-client-id
 
-      - name: Resolve the Playwright version
+      - uses: ./.github/actions/playwright-chromium
         if: matrix.suite == 'cross-client'
-        id: playwright
-        working-directory: tests/cross-client
-        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-
-      # The path is the macOS browser cache, which is what holds this suite to
-      # one leg: a second cross-client host needs the path chosen by runner.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: matrix.suite == 'cross-client'
-        id: playwright-cache
         with:
-          path: ~/Library/Caches/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-
-      # The real Chrome headless, not `chrome-headless-shell`: the shell
-      # segfaults on a page that registers a Service Worker, and the bundle
-      # registers one.
-      - name: Install Playwright Chromium
-        if: matrix.suite == 'cross-client' && steps.playwright-cache.outputs.cache-hit != 'true'
-        # A stalled browser download otherwise runs to the job cap, and reports
-        # as a suite failure rather than as the install failure it is.
-        timeout-minutes: 10
-        run: pnpm --filter @cipherbox/cross-client-e2e exec playwright install chromium
+          package: '@cipherbox/cross-client-e2e'
+          working-directory: tests/cross-client
 
       # The orchestrator owns the API process, because a scenario needs a real
       # outage.

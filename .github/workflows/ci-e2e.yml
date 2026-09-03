@@ -1,17 +1,23 @@
-# DORMANT during the v2 build: the v1 e2e suites were demolished with the v1
-# layout, and the v2 main-gate suites land per blueprint/testing.md. The full
-# web-e2e slice is wired below; the desktop mounted matrix and the cross-client
-# matrix are not. Re-engage by restoring the push->main trigger once they are.
+# The main gate (blueprint/testing.md "CI gates"): a push to main runs the full
+# web e2e suite, the desktop mounted matrix, and the cross-client leg. It bounds
+# the blast radius of what the PR smoke slice missed; it is not the first line.
+#
+# A red run is a REVERT trigger, not a fix-forward one: revert the merge that
+# turned it red, then land the fix through the PR gate.
+#
+# Job names are the contract (blueprint/deploy.md freeze step 4).
 name: CI E2E Tests
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
   detect-changes:
-    name: Detect Changes
+    name: Detect Main Gate Changes
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,6 +42,9 @@ jobs:
         id: filter
         with:
           base: ${{ (github.event.before != '' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'HEAD~1' }}
+          # Each filter names everything its suite reads: both compile the
+          # engine out of `crates/**` and boot the same API and record store,
+          # and the cross-client leg also serves the web bundle.
           filters: |
             web:
               - 'apps/web/**'
@@ -43,28 +52,30 @@ jobs:
               - 'packages/**'
               - 'tests/web-e2e/**'
               - 'tools/mock-ipns-routing/**'
-              - '.github/workflows/web-e2e.yml'
-              - '.github/workflows/ci-e2e.yml'
-            desktop:
-              - 'apps/desktop/src/**'
-              - 'apps/desktop/src-tauri/src/**'
-              - 'apps/desktop/src-tauri/vendor/**'
-              - 'apps/desktop/src-tauri/capabilities/**'
-              - 'apps/desktop/src-tauri/resources/**'
-              - 'apps/desktop/src-tauri/Cargo.toml'
-              - 'apps/desktop/src-tauri/build.rs'
-              - 'apps/desktop/src-tauri/rust-toolchain.toml'
-              - 'apps/desktop/index.html'
-              - 'apps/desktop/vite.config.*'
-              - 'apps/desktop/tsconfig*'
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - 'tests/vectors/**'
+              - 'rust-toolchain.toml'
+              - '.cargo/config.toml'
+              - 'pnpm-lock.yaml'
+              - '.github/actions/**'
+              - '.github/workflows/web-e2e.yml'
+              - '.github/workflows/ci-e2e.yml'
+            desktop:
+              - 'apps/desktop/**'
+              - 'apps/web/**'
+              - 'apps/api/**'
+              - 'packages/**'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/config.toml'
               - 'tests/desktop-e2e/**'
               - 'tests/cross-client/**'
-              - 'packages/crypto/src/**'
-              - 'packages/crypto/tsconfig*'
+              - 'tools/mock-ipns-routing/**'
+              - 'pnpm-lock.yaml'
+              - '.github/actions/**'
               - '.github/workflows/desktop-e2e.yml'
               - '.github/workflows/ci-e2e.yml'
 
@@ -79,7 +90,7 @@ jobs:
   web-e2e:
     name: Web E2E
     needs: detect-changes
-    if: needs.detect-changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.detect-changes.outputs.web == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/web-e2e.yml
@@ -89,8 +100,7 @@ jobs:
   desktop-e2e:
     name: Desktop E2E
     needs: detect-changes
-    if: needs.detect-changes.outputs.desktop == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.detect-changes.outputs.desktop == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/desktop-e2e.yml
-    secrets: inherit
