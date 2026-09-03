@@ -71,7 +71,9 @@ use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ecies::{
-    ENC_LEN as ECIES_ENC_LEN, ecies_open, ecies_public_key, ecies_seal,
+    ENC_LEN as ECIES_ENC_LEN, KEY_CONTEXT as ECIES_KEY_CONTEXT,
+    NONCE_CONTEXT as ECIES_NONCE_CONTEXT, ecies_open, ecies_public_key, ecies_recipient_is_a_point,
+    ecies_seal,
 };
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
 use cipherbox_core::suite::hash::hash;
@@ -246,6 +248,17 @@ struct EciesOpenRejectVector {
     ciphertext: String,
     check: String,
     class: String,
+}
+
+/// One input `ecies_seal` must refuse to turn into an envelope.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EciesSealRejectVector {
+    name: String,
+    recipient: String,
+    ephemeral_scalar: String,
+    aad: String,
+    plaintext: String,
 }
 
 // --- Contact code vectors ---------------------------------------------------
@@ -1067,10 +1080,22 @@ struct HpkeMeta {
 struct EciesMeta {
     curve: String,
     enc_len: usize,
+    contexts: EciesContexts,
     seal_file: String,
     seal_count: usize,
     open_reject_file: String,
     open_reject_count: usize,
+    seal_reject_file: String,
+    seal_reject_count: usize,
+}
+
+/// The primitive-internal key-schedule contexts, frozen here rather than in
+/// the edge string table (FSM1/cipher-box-next ADR 0015 D3).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EciesContexts {
+    aead_key: String,
+    aead_nonce: String,
 }
 
 #[derive(Serialize)]
@@ -1171,6 +1196,7 @@ fn main() {
     let hpke_open_reject = build_hpke_open_reject();
     let ecies_seal_vectors = build_ecies_seal();
     let ecies_open_reject = build_ecies_open_reject();
+    let ecies_seal_reject = build_ecies_seal_reject();
     let contact_accept = build_contact_accept();
     let contact_reject = build_contact_reject();
 
@@ -1179,6 +1205,7 @@ fn main() {
     write_pretty(&hpke_dir.join("open_reject.json"), &hpke_open_reject);
     write_pretty(&ecies_dir.join("seal.json"), &ecies_seal_vectors);
     write_pretty(&ecies_dir.join("open_reject.json"), &ecies_open_reject);
+    write_pretty(&ecies_dir.join("seal_reject.json"), &ecies_seal_reject);
     write_pretty(&contact_dir.join("accept.json"), &contact_accept);
     write_pretty(&contact_dir.join("reject.json"), &contact_reject);
 
@@ -1388,6 +1415,7 @@ fn main() {
         hpke_open_reject: &hpke_open_reject,
         ecies_seal: &ecies_seal_vectors,
         ecies_open_reject: &ecies_open_reject,
+        ecies_seal_reject: &ecies_seal_reject,
         contact_accept: &contact_accept,
         contact_reject: &contact_reject,
         seal: &seal_vectors,
@@ -1427,7 +1455,7 @@ fn main() {
 
     println!(
         "kat_gen: wrote {} accept, {} reject, {} unknown-field, {} kdf-edge, {} hpke-seal, \
-         {} hpke-open-reject, {} ecies-seal, {} ecies-open-reject, {} contact-accept, {} contact-reject, {} seal, {} seal-open-reject, \
+         {} hpke-open-reject, {} ecies-seal, {} ecies-open-reject, {} ecies-seal-reject, {} contact-accept, {} contact-reject, {} seal, {} seal-open-reject, \
          {} read-body-accept, {} read-body-reject, {} envelope-accept, {} envelope-reject, \
          {} name-accept, {} name-reject, {} record-accept, {} record-reject, {} record-reput, \
          {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject, \
@@ -1445,6 +1473,7 @@ fn main() {
         hpke_open_reject.len(),
         ecies_seal_vectors.len(),
         ecies_open_reject.len(),
+        ecies_seal_reject.len(),
         contact_accept.len(),
         contact_reject.len(),
         seal_vectors.len(),
@@ -2216,6 +2245,7 @@ struct ManifestInputs<'a> {
     hpke_open_reject: &'a [HpkeOpenRejectVector],
     ecies_seal: &'a [EciesSealVector],
     ecies_open_reject: &'a [EciesOpenRejectVector],
+    ecies_seal_reject: &'a [EciesSealRejectVector],
     contact_accept: &'a [ContactAcceptVector],
     contact_reject: &'a [RejectVector],
     seal: &'a [SealVector],
@@ -2261,6 +2291,7 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
     let hpke_open_reject = m.hpke_open_reject;
     let ecies_seal_vectors = m.ecies_seal;
     let ecies_open_reject = m.ecies_open_reject;
+    let ecies_seal_reject = m.ecies_seal_reject;
     let contact_accept = m.contact_accept;
     let contact_reject = m.contact_reject;
 
@@ -2332,10 +2363,16 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
             ecies: EciesMeta {
                 curve: "secp256k1".to_string(),
                 enc_len: ECIES_ENC_LEN,
+                contexts: EciesContexts {
+                    aead_key: ECIES_KEY_CONTEXT.to_string(),
+                    aead_nonce: ECIES_NONCE_CONTEXT.to_string(),
+                },
                 seal_file: "vectors/ecies/seal.json".to_string(),
                 seal_count: ecies_seal_vectors.len(),
                 open_reject_file: "vectors/ecies/open_reject.json".to_string(),
                 open_reject_count: ecies_open_reject.len(),
+                seal_reject_file: "vectors/ecies/seal_reject.json".to_string(),
+                seal_reject_count: ecies_seal_reject.len(),
             },
             contact: ContactMeta {
                 accept: FileCount {
@@ -4055,6 +4092,27 @@ const SECP256K1_FIELD_PRIME: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2f,
 ];
 
+/// secp256k1's group order `n`, big-endian. `n` itself is the tightest scalar
+/// outside the group: an off-by-one bound accepts it, and the vector catches
+/// that where a wildly out-of-range scalar would not.
+const SECP256K1_GROUP_ORDER: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+    0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+];
+
+/// A compressed x with no square root on secp256k1: `x = 5`. Refused by the
+/// curve arithmetic rather than by a prefix check.
+fn ecies_off_curve_point() -> [u8; ECIES_ENC_LEN] {
+    let mut off_curve = [0u8; ECIES_ENC_LEN];
+    off_curve[0] = 0x02;
+    off_curve[ECIES_ENC_LEN - 1] = 0x05;
+    assert!(
+        !ecies_recipient_is_a_point(&off_curve),
+        "x = 5 has no square root on secp256k1"
+    );
+    off_curve
+}
+
 /// The single verdict every ECIES open failure reports. The primitive gives one
 /// indistinguishable refusal, so freezing one check string across every reject
 /// shape is what pins that indistinguishability.
@@ -4083,25 +4141,19 @@ fn build_ecies_open_reject() -> Vec<EciesOpenRejectVector> {
     // An uncompressed SEC1 prefix on 33 bytes: never a point.
     let mut not_a_point = sealed.enc;
     not_a_point[0] = 0x04;
-    // A well-prefixed x with no square root on the curve: refused by the curve
-    // arithmetic rather than by the tag, which is the check the prefix case
-    // never reaches.
-    let mut off_curve = [0u8; ECIES_ENC_LEN];
-    off_curve[0] = 0x02;
-    off_curve[ECIES_ENC_LEN - 1] = 0x05;
-    assert!(
-        !cipherbox_core::suite::ecies::ecies_recipient_is_a_point(&off_curve),
-        "x = 5 has no square root on secp256k1"
-    );
+    let off_curve = ecies_off_curve_point();
     // An x at the field prime: a non-canonical field element, refused before
     // any square root is tried.
     let mut above_prime = [0u8; ECIES_ENC_LEN];
     above_prime[0] = 0x02;
     above_prime[1..].copy_from_slice(&SECP256K1_FIELD_PRIME);
     assert!(
-        !cipherbox_core::suite::ecies::ecies_recipient_is_a_point(&above_prime),
+        !ecies_recipient_is_a_point(&above_prime),
         "an x at the field prime is not canonical"
     );
+    // Shorter than one tag: the length check the AEAD makes before it can even
+    // reach a tag comparison, and the same single verdict comes back.
+    let short_ciphertext = sealed.ciphertext[..TAG_LEN - 1].to_vec();
 
     let cases: Vec<EciesOpenRejectCase> = vec![
         (
@@ -4153,6 +4205,20 @@ fn build_ecies_open_reject() -> Vec<EciesOpenRejectVector> {
             sealed.ciphertext.clone(),
             aad,
         ),
+        (
+            "recipient-scalar-at-the-group-order",
+            SECP256K1_GROUP_ORDER,
+            sealed.enc,
+            sealed.ciphertext.clone(),
+            aad,
+        ),
+        (
+            "ciphertext-shorter-than-the-tag",
+            recipient_scalar,
+            sealed.enc,
+            short_ciphertext,
+            aad,
+        ),
     ];
 
     let mut names = BTreeSet::new();
@@ -4174,6 +4240,46 @@ fn build_ecies_open_reject() -> Vec<EciesOpenRejectVector> {
             ciphertext: hexstr(&ct),
             check: ECIES_OPEN_CHECK.to_string(),
             class: "trust".to_string(),
+        });
+    }
+    out
+}
+
+/// The produce-side mirror of the open rejects: a release build must never emit
+/// an envelope its own opener refuses (AGENTS.md rule 8, ADR 0015 D5).
+fn build_ecies_seal_reject() -> Vec<EciesSealRejectVector> {
+    let recipient_public =
+        ecies_public_key(&ecies_recipient_scalar()).expect("a valid recipient scalar");
+    let eph: [u8; SECRET_LEN] = std::array::from_fn(|i| (0xe1 + i) as u8);
+    let aad: &[u8] = b"cipherbox/device-approval/request/v1";
+    let plaintext: &[u8] = b"a fresh factor key";
+
+    let cases: Vec<(&str, [u8; ECIES_ENC_LEN], [u8; SECRET_LEN])> = vec![
+        ("recipient-off-the-curve", ecies_off_curve_point(), eph),
+        (
+            "ephemeral-scalar-at-the-group-order",
+            recipient_public,
+            SECP256K1_GROUP_ORDER,
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, recipient, ephemeral_scalar) in cases {
+        assert!(
+            names.insert(name),
+            "duplicate ecies seal-reject vector {name}"
+        );
+        assert!(
+            ecies_seal(&recipient, &ephemeral_scalar, aad, plaintext).is_none(),
+            "ecies seal-reject {name}: seal produced an envelope"
+        );
+        out.push(EciesSealRejectVector {
+            name: name.to_string(),
+            recipient: hexstr(&recipient),
+            ephemeral_scalar: hexstr(&ephemeral_scalar),
+            aad: hexstr(aad),
+            plaintext: hexstr(plaintext),
         });
     }
     out

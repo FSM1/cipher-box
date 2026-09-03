@@ -1,0 +1,16 @@
+[
+  {
+    "name": "recipient-off-the-curve",
+    "recipient": "020000000000000000000000000000000000000000000000000000000000000005",
+    "ephemeralScalar": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff00",
+    "aad": "636970686572626f782f6465766963652d617070726f76616c2f726571756573742f7631",
+    "plaintext": "6120667265736820666163746f72206b6579"
+  },
+  {
+    "name": "ephemeral-scalar-at-the-group-order",
+    "recipient": "029b97f3e12dac7aa011582c831049640bfcff00adfe003625db4e34d5220e085e",
+    "ephemeralScalar": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+    "aad": "636970686572626f782f6465766963652d617070726f76616c2f726571756573742f7631",
+    "plaintext": "6120667265736820666163746f72206b6579"
+  }
+]

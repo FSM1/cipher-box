@@ -10,7 +10,8 @@
 //! over `shared_x || enc || recipient` for the AEAD key and the nonce, then
 //! XChaCha20-Poly1305. Binding the whole transcript into both derivations is
 //! what makes a substituted `enc` open nothing. This key schedule is internal
-//! to the primitive, in the same class as HPKE's — not a KDF-catalog edge.
+//! to the primitive, in the same class as HPKE's — not a KDF-catalog edge
+//! (FSM1/cipher-box-next ADR 0015 D2).
 //!
 //! Determinism (blueprint/core.md "Doctrine"): the sender's ephemeral scalar is
 //! an injected parameter, never sampled here.
@@ -29,9 +30,10 @@ use crate::error::TrustViolation;
 pub const ENC_LEN: usize = 33;
 
 /// BLAKE3 `derive_key` contexts. Two distinct contexts over one transcript, so
-/// the AEAD key and the nonce cannot collide.
-const KEY_CONTEXT: &str = "cipherbox/device-factor-seal/v1 aead-key";
-const NONCE_CONTEXT: &str = "cipherbox/device-factor-seal/v1 aead-nonce";
+/// the AEAD key and the nonce cannot collide. The KAT manifest freezes both
+/// (FSM1/cipher-box-next ADR 0015 D3).
+pub const KEY_CONTEXT: &str = "cipherbox/device-factor-seal/v1 aead-key";
+pub const NONCE_CONTEXT: &str = "cipherbox/device-factor-seal/v1 aead-nonce";
 
 /// The output of a single-shot seal: the encapsulated ephemeral public key and
 /// the AEAD ciphertext (`ciphertext || tag`). `enc` travels with the ciphertext
