@@ -1242,12 +1242,23 @@ where
         while !frontier.is_empty() {
             let mut next = Vec::new();
             for (parent_read_scope_seed, index) in frontier {
-                let index = canonicalize(&index);
+                // Ahead of the canonicalization, which drops every later entry
+                // for one `scope_id`: a level that names one scope twice at two
+                // labels would otherwise bind whichever entry the writer put
+                // first, and first-entry-wins in a revocation cascade re-keys a
+                // dead name (`eager_set::ResolveFailure::ConflictingChildLabel`).
                 if bind_child_labels(&mut labels, index.iter(), root_scope_id).is_err() {
                     WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
                     continue;
                 }
-                for child in index {
+                for child in canonicalize(&index) {
+                    // Ahead of both bounds: a back-edge to a scope this walk
+                    // already visited costs no descent and leaves no boundary
+                    // unnamed, so charging the bound for it would report a
+                    // complete set incomplete.
+                    if !visited.insert(child.scope_id) {
+                        continue;
+                    }
                     if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS
                         || attempts >= MAX_SCOPE_DESCENT_ATTEMPTS
                     {
@@ -1255,9 +1266,6 @@ where
                         // a bound a legitimately wide vault reaches names no
                         // party: availability, never a trust verdict.
                         WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
-                        continue;
-                    }
-                    if !visited.insert(child.scope_id) {
                         continue;
                     }
                     attempts += 1;
@@ -5302,35 +5310,78 @@ mod tests {
     }
 
     /// The admission bound is the other end of the same guard: a walk that
-    /// fills it names the boundaries it admitted and reports the set
-    /// incomplete, rather than claiming a set that stops at the bound.
+    /// fills it reports the set incomplete, rather than claiming a set that
+    /// stops at the bound. An entry past the bound that names a scope the walk
+    /// already visited leaves nothing unnamed, so it reports nothing.
     #[test]
-    fn the_admission_bound_reports_the_set_incomplete() {
-        let over_bound = MAX_DESCENDANT_SCOPE_ROOTS + 1;
+    fn the_admission_bound_reports_only_the_set_it_left_incomplete() {
         let harness = Harness::plain();
-        // One head fetch per level, past the responses one `serve_plane` holds.
-        serve_plane(&harness.http, &harness.blocks);
-        let mut index = Vec::with_capacity(over_bound);
-        for i in 0..over_bound {
+        let mut index = Vec::with_capacity(MAX_DESCENDANT_SCOPE_ROOTS + 1);
+        for i in 0..=MAX_DESCENDANT_SCOPE_ROOTS {
             let mut scope_id = [0xe0u8; 16];
             scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
             let child = interior(scope_id, &OWNER_ROOT_SCOPE_SEED, Vec::new());
             index.push(child_ref(scope_id, &child));
             harness.stage(scope_id, &child, Some(OWNER_ROOT_EPOCH));
         }
-        let root = vault_root(SCOPE, index);
+        // The walk seeds its visited set with the root it starts from, so an
+        // entry naming the root is the back-edge every level may carry.
+        let back_edge = ChildScopeRef {
+            scope_id: SCOPE,
+            ipns_name: derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+            unknown: PreservedFields::new(),
+        };
+        let filled = [&index[..MAX_DESCENDANT_SCOPE_ROOTS], &[back_edge]].concat();
+
+        for (label, index, failure) in [
+            ("a back-edge past the bound", filled, None),
+            (
+                "one more scope root than the bound admits",
+                index,
+                Some(WalkFailure::Unavailable),
+            ),
+        ] {
+            serve_plane(&harness.http, &harness.blocks);
+            let root = vault_root(SCOPE, index);
+            harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+            let walked = harness
+                .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+                .expect("the vault root gates");
+
+            assert_eq!(walked.proved.len(), MAX_DESCENDANT_SCOPE_ROOTS, "{label}");
+            assert_eq!(walked.failure, failure, "{label}");
+        }
+    }
+
+    /// One level that names a scope twice under two labels costs that level.
+    /// The canonicalization keeps whichever entry the writer put first, so a
+    /// walk that bound its labels after it would take the writer's pick.
+    #[test]
+    fn a_level_that_names_one_scope_at_two_labels_costs_that_level() {
+        let (child, child_ref, _) = one_level();
+        let harness = Harness::plain();
+        let conflicting = ChildScopeRef {
+            scope_id: CHILD_SCOPE,
+            ipns_name: derive_write_name(&[0x5A; 32], &CHILD_SCOPE)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+            unknown: PreservedFields::new(),
+        };
+        let root = vault_root(SCOPE, vec![child_ref, conflicting]);
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
 
         let walked = harness
             .walk_boundaries(&InMemorySnapshotCache::default(), &root)
             .expect("the vault root gates");
 
-        assert_eq!(walked.proved.len(), MAX_DESCENDANT_SCOPE_ROOTS);
-        assert_eq!(
-            walked.failure,
-            Some(WalkFailure::Unavailable),
-            "every level gated, so only the bound left the set incomplete"
-        );
+        assert!(walked.proved.is_empty());
+        assert_eq!(walked.failure, Some(WalkFailure::Unavailable));
     }
 
     /// Every entry of a writer-authored index costs a fan-out GET whether or
