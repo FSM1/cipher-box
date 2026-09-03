@@ -441,9 +441,6 @@ fn grant_to_recipient(engine: &mut Engine<FakeSeamTypes>, node: NodeId) {
 /// root. The write is the owner's, on the owner's own vault, so it has to reach
 /// the record plane and then the owner's other device.
 #[test]
-#[ignore = "this build reads and writes one scope per session: the child gate refuses a \
-            record carrying a grant section, and the drain opens one scope's material, so \
-            an owner's own nested scope root is unreachable from either plane"]
 fn a_folder_created_inside_a_granted_scope_root_reaches_the_owners_second_device() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
@@ -517,8 +514,6 @@ fn a_folder_created_inside_a_granted_scope_root_reaches_the_owners_second_device
 /// publish below the promoted root for the second device to render it. Only the
 /// child-record read path stands between the mount and the folder's contents.
 #[test]
-#[ignore = "this build reads one scope per session: the child gate refuses a record \
-            carrying a grant section, so an owner's own nested scope root never opens"]
 fn a_folder_that_predates_a_grant_lists_on_the_owners_second_device() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();

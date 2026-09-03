@@ -620,10 +620,18 @@ pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<Unl
 /// stay the source scope's ([`Drain::rekey_into_bin`]).
 #[derive(Clone, Copy)]
 pub(crate) struct DrainScope<'a> {
-    /// The vault root node — also the root scope id (the cold-start anchor).
+    /// The scope root node this pass publishes below — also the scope id.
     pub(crate) root: NodeId,
     /// The root's write-plane IPNS name.
     pub(crate) root_name: &'a IpnsName,
+    /// The ancestor node seed the gate re-derives this root's expected ascent
+    /// keypair from, for a root a grant cut promoted below the vault root.
+    /// `None` for the vault root, which carries no ascent link.
+    pub(crate) parent_node_seed: Option<&'a Zeroizing<[u8; 32]>>,
+    /// Every scope root this session proved, [`root`](Self::root) included, so a
+    /// walk over link ancestry can tell which scope owns a node
+    /// ([`crate::sync::tick::scope_root_of`]).
+    pub(crate) scope_roots: &'a [NodeId],
     /// The scope read seed per-node read keys derive from.
     pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// The scope write seed per-node IPNS names and signers derive from.
@@ -985,10 +993,12 @@ where
         BookkeepingSeal::new(scope.enc_secret, self.entropy)
     }
 
-    /// Run one pass: rebase the queue onto gate-passing state and publish every
-    /// applied op it can, stopping at the first it cannot, then clear what the
-    /// pass orphaned.
-    pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
+    /// One scope's queue pass: rebase the queue onto gate-passing state and
+    /// publish every applied op it can, stopping at the first it cannot, then
+    /// clear what the pass orphaned in this scope's own bin. A tick runs one of
+    /// these per scope it holds and [`settle`](Self::settle) once, because
+    /// everything settle touches is keyed by the identity.
+    pub(crate) async fn run_queue(&self, scope: &DrainScope<'_>) -> DrainReport {
         let (report, queued_purges) = self.drain_queue(scope).await;
         self.adopt_observed_unlinks(scope).await;
         // A queue this pass could not read cannot say which purges are already
@@ -996,6 +1006,13 @@ where
         if let Some(queued) = queued_purges {
             self.expire_bin_entries(scope, &queued).await;
         }
+        report
+    }
+
+    /// The identity-wide bookkeeping a tick owes once: the retire ledger, the
+    /// reclamation journal and the staging sweep. `scope` supplies the material
+    /// every name in that ledger is read under, so it is the vault root's.
+    pub(crate) async fn settle(&self, scope: &DrainScope<'_>, journalled_deletes: &[NodeId]) {
         self.orphan_heads.retire_pending(self.api).await;
         // One enumeration serves every consumer below. A desktop vault stages
         // on the order of ten thousand keys, and each of these was listing the
@@ -1005,13 +1022,13 @@ where
         // for the next pass: "no debt" and "no residue" are claims this one
         // cannot make.
         let Ok(staged) = self.staging.staged_keys().await else {
-            return report;
+            return;
         };
         // An X25519 base-point multiply, so the pass derives it once and threads
         // it through every consumer below.
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
-        self.settle_journalled_deletes(scope, seal, &owner, &staged, &report.journalled_deletes)
+        self.settle_journalled_deletes(scope, seal, &owner, &staged, journalled_deletes)
             .await;
         if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, seal, &staged),
@@ -1034,7 +1051,6 @@ where
             PreservedBounds::at(self.scheduler.now(), self.storage_policy, self.profile),
         )
         .await;
-        report
     }
 
     /// The queue loop, reporting the purge targets it saw so the expiry leg does
@@ -1092,9 +1108,7 @@ where
             let base = self.base.borrow();
             let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
             let local = apply_overlay(&base, &ops);
-            // This session holds one scope, so its root is the only scope root
-            // a full-depth exit walk can land on.
-            replay(&base, &local, queued, &[scope.root])
+            replay(&base, &local, queued, scope.scope_roots)
         };
 
         for (op_id, reason) in &rebased.dead_letters {
@@ -1484,14 +1498,7 @@ where
     /// whatever the network now carries. Only a gate-passing adopt writes the
     /// cache, so a rejected or unreachable record leaves last-known-good.
     async fn refresh_scope_root_cache(&self, scope: &DrainScope<'_>) -> Result<(), Halt> {
-        let adopter = RootAdopter::new(
-            self.gateway,
-            self.http,
-            self.floors,
-            scope.enc_secret,
-            scope.owner_identity,
-            scope.root.0,
-        );
+        let adopter = self.scope_root_adopter(scope);
         let resolved = resolve(
             self.transport,
             self.snapshot_cache,
@@ -1625,18 +1632,25 @@ where
         if pass.holds(folder) {
             return Ok(());
         }
-        let chain = {
+        let mut chain = {
             let base = self.base.borrow();
             let mut chain = base.ancestors(folder);
             chain.reverse();
             chain.push(folder);
             chain
         };
-        // A folder whose chain does not reach the scope root is not a folder
-        // this scope's write plane may author.
-        if chain.first() != Some(&scope.root) {
+        // A folder the nearest proved scope root above it does not put in this
+        // pass is not a folder this scope's write plane may author.
+        let Some(nearest) = chain
+            .iter()
+            .rposition(|node| scope.scope_roots.contains(node))
+        else {
+            return Err(Halt::Unclassified);
+        };
+        if chain[nearest] != scope.root {
             return Err(Halt::Unclassified);
         }
+        chain.drain(..nearest);
         for node in chain {
             if pass.holds(node) {
                 continue;
@@ -2675,8 +2689,12 @@ where
         let mut set = self.observed_unlinks.borrow_mut();
         let mut taken = Vec::new();
         set.retain(|unlinked| {
-            if unlinked.scope_id != scope.root.0
-                || base.contains(unlinked.node)
+            // A tick runs one pass per scope root it proved, so a capture from
+            // another scope is that pass's to adopt, not this one's to drop.
+            if unlinked.scope_id != scope.root.0 {
+                return true;
+            }
+            if base.contains(unlinked.node)
                 || unlinked.name.len() > MAX_NODE_NAME_BYTES
                 || derive_write_name(scope.write_scope_seed, &unlinked.node.0)
                     .as_str()
@@ -4308,14 +4326,7 @@ where
         // The record is live from here: everything below is a local step.
         let local = local_head(&head);
         let sequence = if is_scope_root {
-            let adopter = RootAdopter::new(
-                self.gateway,
-                self.http,
-                self.floors,
-                scope.enc_secret,
-                scope.owner_identity,
-                scope.root.0,
-            );
+            let adopter = self.scope_root_adopter(scope);
             adopter.hold_local_head(local);
             adopter
                 .adopt(name, &record_bytes)
@@ -4764,6 +4775,24 @@ where
         )
         .await
         .map_err(seam)
+    }
+
+    /// The adopter this scope's own root gates under. A root a grant cut
+    /// promoted carries an ascent link, which the gate can verify only under the
+    /// ancestor node seed the descent proved (`gate::adoption` stage 3).
+    fn scope_root_adopter<'s>(&'s self, scope: &'s DrainScope<'_>) -> RootAdopter<'s, H, F> {
+        let adopter = RootAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            scope.enc_secret,
+            scope.owner_identity,
+            scope.root.0,
+        );
+        match scope.parent_node_seed {
+            Some(seed) => adopter.under_parent_node_seed(seed.clone()),
+            None => adopter,
+        }
     }
 
     /// The per-node read key (`node-seed` → `read-key`), owned by the caller of

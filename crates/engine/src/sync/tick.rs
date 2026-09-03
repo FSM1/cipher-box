@@ -11,7 +11,7 @@
 use core::pin::pin;
 use core::task::Poll;
 use core::time::Duration;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::facade::NodeId;
 use crate::profile::SyncTimingProfile;
@@ -115,12 +115,26 @@ pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
         .collect()
 }
 
-/// The scope root a focused node belongs to: its topmost ancestor, or itself
-/// when no link names it. A shared scope this vault accepted is grafted in
-/// parentless, so it anchors its own subtree and one window may span several
-/// scopes.
-pub fn scope_root_of(snapshot: &Snapshot, node: NodeId) -> NodeId {
-    snapshot.ancestors(node).last().copied().unwrap_or(node)
+/// The scope root a focused node belongs to: the nearest ancestor in
+/// `scope_roots`, else its topmost ancestor, else itself.
+///
+/// `scope_roots` are the roots below the vault root that a gated descent proved
+/// this session holds — a grant cut promotes an interior folder into one, and
+/// it keeps the parent link that put it there. Link ancestry alone therefore
+/// cannot name it, and reading its subtree under the enclosing scope's seed
+/// opens nothing. A shared scope this vault accepted is grafted in parentless,
+/// so it anchors its own subtree without an entry here.
+pub fn scope_root_of(snapshot: &Snapshot, node: NodeId, scope_roots: &BTreeSet<NodeId>) -> NodeId {
+    if scope_roots.contains(&node) {
+        return node;
+    }
+    let ancestors = snapshot.ancestors(node);
+    ancestors
+        .iter()
+        .find(|ancestor| scope_roots.contains(ancestor))
+        .or_else(|| ancestors.last())
+        .copied()
+        .unwrap_or(node)
 }
 
 /// One scope's share of the focus window.
@@ -138,16 +152,20 @@ pub struct ScopeFocus {
 ///
 /// A scope's own root never appears: it resolves on its own leg (the vault
 /// pointer, or the received-share render), never through the child gate.
-pub fn focus_by_scope(snapshot: &Snapshot, focus: &FocusWindow) -> BTreeMap<NodeId, ScopeFocus> {
+pub fn focus_by_scope(
+    snapshot: &Snapshot,
+    focus: &FocusWindow,
+    scope_roots: &BTreeSet<NodeId>,
+) -> BTreeMap<NodeId, ScopeFocus> {
     let mut grouped: BTreeMap<NodeId, ScopeFocus> = BTreeMap::new();
     for node in focus_folders(snapshot, focus) {
-        let root = scope_root_of(snapshot, node);
+        let root = scope_root_of(snapshot, node, scope_roots);
         if node != root {
             grouped.entry(root).or_default().folders.push(node);
         }
     }
     for node in focus_files(snapshot, focus) {
-        let root = scope_root_of(snapshot, node);
+        let root = scope_root_of(snapshot, node, scope_roots);
         grouped.entry(root).or_default().files.push(node);
     }
     grouped
@@ -680,6 +698,7 @@ mod tests {
                 open_shared_scopes: vec![id(7)],
                 open_files: vec![id(9)],
             },
+            &BTreeSet::new(),
         );
 
         assert_eq!(
@@ -703,6 +722,7 @@ mod tests {
                 open_shared_scopes: Vec::new(),
                 open_files: Vec::new(),
             },
+            &BTreeSet::new(),
         );
         assert_eq!(
             grouped.get(&id(0)),
@@ -711,5 +731,52 @@ mod tests {
                 files: Vec::new(),
             }),
         );
+    }
+
+    /// A grant cut promotes an interior folder into a scope root of its own and
+    /// leaves the link that put it under its old parent, so the window must
+    /// split at the **nearest** proved root rather than the topmost ancestor.
+    #[test]
+    fn a_promoted_scope_root_takes_its_own_subtree_off_the_enclosing_leg() {
+        let mut snap = Snapshot::new(id(0));
+        snap.upsert_node(NodeMeta::new(id(1), "shared", NodeKind::Folder));
+        snap.link(id(0), id(1), 1);
+        snap.upsert_node(NodeMeta::new(id(2), "shared/2026", NodeKind::Folder));
+        snap.link(id(1), id(2), 1);
+        snap.upsert_node(NodeMeta::new(id(3), "shared/2026/q3", NodeKind::Folder));
+        snap.link(id(2), id(3), 1);
+        snap.upsert_node(NodeMeta::new(id(4), "shared/2026/q3/note", NodeKind::File));
+        snap.link(id(3), id(4), 1);
+        let window = FocusWindow {
+            open_folder: Some(id(3)),
+            open_shared_scopes: Vec::new(),
+            open_files: vec![id(4)],
+        };
+
+        let one = focus_by_scope(&snap, &window, &BTreeSet::from([id(1)]));
+        assert_eq!(
+            one.get(&id(1)),
+            Some(&ScopeFocus {
+                folders: vec![id(3), id(2)],
+                files: vec![id(4)],
+            }),
+            "the promoted root serves its own subtree",
+        );
+        assert_eq!(
+            one.get(&id(0)),
+            None,
+            "and its own record leaves the enclosing scope's child-gate leg",
+        );
+
+        let nested = focus_by_scope(&snap, &window, &BTreeSet::from([id(1), id(2)]));
+        assert_eq!(
+            nested.get(&id(2)),
+            Some(&ScopeFocus {
+                folders: vec![id(3)],
+                files: vec![id(4)],
+            }),
+            "a promotion inside a promotion serves what is nearest to it",
+        );
+        assert_eq!(nested.get(&id(1)), None);
     }
 }

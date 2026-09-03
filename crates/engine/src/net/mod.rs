@@ -67,8 +67,10 @@ pub use retire::{
     StagingRetireLedger, drain_owed_retires, orphaned_head, retire, root_retire_ready,
 };
 pub use revival::{ReviveError, ReviveRequest, revive};
+pub(crate) use rotation::{
+    DescendantScopeRoot, ScopePointerEnrolment, ScopeWalk, enrol_owned_scope_pointers,
+};
 pub use rotation::{
     GrantedScopeRoot, GranteeRotationKeys, GranteeRotationNet, OwnerRotationKeys, OwnerRotationNet,
     PointerConsultArm, WriteWaveNet,
 };
-pub(crate) use rotation::{ScopePointerEnrolment, enrol_owned_scope_pointers};
