@@ -3935,30 +3935,34 @@ where
             // undoing the dest-add would strip the child from the only parent
             // that still names it. The compensation decides that by re-reading
             // the source, which this very publish left stale in the cache; the
-            // publish itself already knows.
-            if !failure.confirmed {
-                let undone = self
-                    .compensate_dest_add(
-                        scope,
-                        pass,
-                        DestAdd {
-                            dest,
-                            source,
-                            target,
-                            replaced,
-                            cas_base,
-                            modified_at,
-                        },
-                    )
-                    .await;
-                // Whether the undo landed or not: nothing this pass leaves
-                // behind references what the re-seal published, and its records
-                // keep the source end's holds, so they are unrenewed. Standing
-                // their names down is what keeps a rolled-back crossing from
-                // leaving the subtree live under a scope the move did not reach.
-                self.retire_names(&resealed.published);
-                undone?;
+            // publish itself already knows. Its published-op mark is raised,
+            // so the next pass drops the op: what the re-seal published commits
+            // here or never.
+            if failure.confirmed {
+                self.commit_crossing(scope, &source_plane, resealed);
+                return Err(failure.halt);
             }
+            let undone = self
+                .compensate_dest_add(
+                    scope,
+                    pass,
+                    DestAdd {
+                        dest,
+                        source,
+                        target,
+                        replaced,
+                        cas_base,
+                        modified_at,
+                    },
+                )
+                .await;
+            // Whether the undo landed or not: nothing this pass leaves behind
+            // references what the re-seal published, and its records keep the
+            // source end's holds, so they are unrenewed. Standing their names
+            // down is what keeps a rolled-back crossing from leaving the
+            // subtree live under a scope the move did not reach.
+            self.retire_names(&resealed.published);
+            undone?;
             return Err(failure.halt);
         }
         // Last, and only here: the source-remove is what makes the subtree's

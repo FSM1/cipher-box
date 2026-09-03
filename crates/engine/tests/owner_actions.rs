@@ -1774,6 +1774,84 @@ fn a_move_out_of_a_granted_folder_cuts_the_scope_it_left_once() {
     );
 }
 
+/// A source-remove that confirms at its name and then fails a local step is the
+/// move complete on the network. Its published-op mark drops the op on the next
+/// pass, so what the re-seal published commits at that failure or never: the
+/// destination holds, the vacated names, and the cut the exit owes. The cut is
+/// the half a later read observes; the fault that fails the self-adopt fails
+/// the cut's own read of that root too, so a healed later pass drives it.
+#[test]
+fn a_source_remove_that_confirms_and_then_fails_still_commits_the_crossing() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (granted_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move out of the granted scope journals its crossing");
+    // The source-remove is the one publish this pass makes at the source
+    // root's name, and the raise is its self-adopt's last step: the record is
+    // live when the failure lands.
+    fx.owner_device
+        .floor_store
+        .fail_floor_raises_for(write_name(fx.folder).as_str().as_bytes());
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.floor_store.heal_floors();
+
+    assert!(
+        names_child(
+            &published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(album),
+                &node_read_key(&READ_SCOPE_SEED, album),
+            )
+            .2,
+            holiday,
+        ),
+        "the dest-add landed"
+    );
+    assert!(
+        !names_child(
+            &published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(fx.folder),
+                &node_read_key(&granted_seed, fx.folder),
+            )
+            .2,
+            holiday,
+        ),
+        "and the source-remove confirmed at its name before its self-adopt failed"
+    );
+
+    // The owed cut is driven on a pass, and a queue the mark emptied runs
+    // none: one more op gives the next tick a pass.
+    create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "later");
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the next pass dropped the op through its published-op mark"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and drove the cut the commit at the failure owed the scope the move left"
+    );
+}
+
 /// A crossing between two scopes that grant nobody owes no cut. The vault root
 /// is that scope: no share reaches it, so a move *into* a granted folder leaves
 /// nothing behind a rotation would protect.
