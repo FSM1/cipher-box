@@ -1669,7 +1669,7 @@ fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() 
     let (photos, albums) = two_root_folders(&mut fx);
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    let gates = published_value(&fx.world, &write_name(fx.folder));
+    let gate_passing = published_value(&fx.world, &write_name(fx.folder));
 
     let (mut fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
     // The vault root's own record at the granted scope's name: owner-signed,
@@ -1703,7 +1703,7 @@ fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() 
         "so no drain pass can publish one"
     );
 
-    publish_value_at(&fx.world, fx.folder, &gates);
+    publish_value_at(&fx.world, fx.folder, &gate_passing);
     tick(&fx.world, &fresh, &mut tasks);
 
     assert!(

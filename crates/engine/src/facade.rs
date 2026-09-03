@@ -9291,7 +9291,8 @@ where {
     ) -> Result<(NodeId, u64, ScopeCrossing), EngineError> {
         if self.boundary_walk_rejected.get() {
             return Err(EngineError::TrustViolation {
-                message: "a scope root below this vault failed the adoption gate, so this                           session cannot name every boundary a move would cross"
+                message: "a scope root below this vault failed the adoption gate, so this \
+                          session cannot name every boundary a move would cross"
                     .to_owned(),
             });
         }
