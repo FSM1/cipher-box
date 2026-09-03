@@ -251,6 +251,15 @@ pub struct ReplayReport {
     /// first-seen order: N ops leaving one scope are one rotation, never N
     /// (blueprint/engine.md "Rotation primitives: Triggers").
     pub scope_exit_triggers: Vec<crate::facade::NodeId>,
+    /// The subset of those an op **dropped** rather than applied.
+    ///
+    /// A drop is the move already landed, here or on another device, so the
+    /// rotation it owes has no publish left to derive it from and this verdict
+    /// is all there is. An applied one is not owed here: its cut follows from
+    /// the two planes its publish resolves, which is the stronger evidence and
+    /// the only one that proves the op reached the network
+    /// ([`crate::sync::drain::Drain::commit_crossing`]).
+    pub dropped_scope_exits: Vec<crate::facade::NodeId>,
 }
 
 /// Decoded op-queue entries, in FIFO order.
@@ -372,6 +381,7 @@ pub fn replay(
     let mut dropped = Vec::new();
     let mut dead_letters = Vec::new();
     let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
+    let mut dropped_scope_exits: Vec<crate::facade::NodeId> = Vec::new();
 
     for (op_id, op) in ops {
         // Only this op mutates `working` across the call, so a node the move
@@ -406,6 +416,7 @@ pub fn replay(
                 scope_exit_trigger,
             } => {
                 queue_trigger(&mut scope_exit_triggers, scope_exit_trigger);
+                queue_trigger(&mut dropped_scope_exits, scope_exit_trigger);
                 dropped.push((*op_id, reason));
             }
             OpResolution::DeadLetter(reason) => dead_letters.push((*op_id, reason)),
@@ -418,6 +429,7 @@ pub fn replay(
         dropped,
         dead_letters,
         scope_exit_triggers,
+        dropped_scope_exits,
     }
 }
 
@@ -1727,6 +1739,39 @@ mod tests {
             report.scope_exit_triggers,
             [id(5)],
             "and the granted scope it left is the one cut it owes"
+        );
+        assert!(
+            report.dropped_scope_exits.is_empty(),
+            "an applied exit owes its cut where the publish proves the planes"
+        );
+    }
+
+    /// A relocation the base already shows at its destination has no publish
+    /// left to derive a plane pair from, so the replay's own verdict is the
+    /// only thing that can still name the scope it left.
+    #[test]
+    fn a_dropped_exit_is_the_one_the_replay_still_owes_a_cut_for() {
+        let mut landed = granted_scope();
+        with_node(&mut landed, id(6), id(7), "moved", NodeKind::File);
+        let ops = [(
+            OpId(1),
+            Op::relink(
+                id(7),
+                id(12),
+                id(6),
+                1,
+                AT,
+                ScopeCrossing::ExitsGrantedSource,
+            ),
+        )];
+
+        let report = replay(&landed, &landed.clone(), &ops, replay_scopes(NESTED_ROOTS));
+
+        assert_eq!(report.dropped.len(), 1, "the move already landed");
+        assert_eq!(
+            report.dropped_scope_exits,
+            [id(5)],
+            "and the granted scope it left is still owed its cut"
         );
     }
 

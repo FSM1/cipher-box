@@ -1525,6 +1525,12 @@ where
             self.dequeue_op(*op_id).await?;
             report.dropped.push(*op_id);
         }
+        // A dropped relocation is the move already landed, so its cut has no
+        // publish left to derive the planes from and the replay's own verdict is
+        // all there is.
+        for root in &rebased.dropped_scope_exits {
+            self.owe_scope_exit(*root);
+        }
 
         for applied in &rebased.applied {
             let published = self
@@ -2770,7 +2776,8 @@ where
         // The scope root is the record the pass opened on, and it publishes
         // under the scope's own name rather than a derived child name.
         let named = if origin == plane.end.root {
-            pass.folder(plane.end.root)?
+            pass.folder(plane.end.root)
+                .map_err(charge_bin_read)?
                 .children
                 .iter()
                 .any(|child| child.id == target.0)
@@ -3697,9 +3704,10 @@ where
                 // The entry was authored under the plane its delete resolved
                 // onto, and one settle carries one end. Deciding a name this end
                 // does not derive would prove the retire against a record of
-                // another scope, so it waits with its attempts intact.
-                held_over.push(entry.clone());
-                continue;
+                // another scope. Retried rather than held: an entry no settle
+                // can name would otherwise stand in the journal for good and
+                // spend a replay slot on every tick.
+                Verdict::Retry
             } else if *budget == 0 {
                 // The budget bounds the resolves one pass spends, never the
                 // entry: one it does not reach waits with its attempts intact.
