@@ -632,6 +632,11 @@ pub(crate) struct DrainScope<'a> {
     /// walk over link ancestry can tell which scope owns a node
     /// ([`crate::sync::tick::scope_root_of`]).
     pub(crate) scope_roots: &'a [NodeId],
+    /// The scope roots this tick runs a queue pass for — the proved roots this
+    /// device also holds a write plane on. A capture belongs to whichever pass
+    /// names its scope, and one no pass names is a capture no pass will adopt
+    /// ([`Drain::take_captures`]).
+    pub(crate) drained_roots: &'a [NodeId],
     /// The scope read seed per-node read keys derive from.
     pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// The scope write seed per-node IPNS names and signers derive from.
@@ -2689,10 +2694,13 @@ where
         let mut set = self.observed_unlinks.borrow_mut();
         let mut taken = Vec::new();
         set.retain(|unlinked| {
-            // A tick runs one pass per scope root it proved, so a capture from
-            // another scope is that pass's to adopt, not this one's to drop.
+            // A tick runs one pass per scope it drains, so a capture from
+            // another such scope is that pass's to adopt. One no pass names —
+            // a grafted root's focus leg captures these, and no pass ever
+            // drains a grafted root — would otherwise sit here for the session
+            // and starve the owner's own captures out of the bounded set.
             if unlinked.scope_id != scope.root.0 {
-                return true;
+                return scope.drained_roots.contains(&NodeId(unlinked.scope_id));
             }
             if base.contains(unlinked.node)
                 || unlinked.name.len() > MAX_NODE_NAME_BYTES

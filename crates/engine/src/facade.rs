@@ -54,6 +54,7 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
     BookmarkedScopeRoots, GraftedSharers, NamedNodes, evict_grafted_read_seeds, floor_view,
+    is_own_scope,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{
@@ -5041,16 +5042,11 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
-                            // A scope root a gated descent proved below the
-                            // vault root is this vault's own plane: a grant cut
-                            // minted it out of this vault's own interior, so
-                            // every child of a body it names is this vault's.
-                            plane: (scope_root.0 != root_id
-                                && !proved_scope_ids.contains(&scope_root))
-                            .then_some(GraftedLeg {
-                                scope_roots: &scope_roots,
-                                named_nodes: &grafted_named_nodes,
-                            }),
+                            plane: (!is_own_scope(&root_id, &proved_scope_ids, &scope_root.0))
+                                .then_some(GraftedLeg {
+                                    scope_roots: &scope_roots,
+                                    named_nodes: &grafted_named_nodes,
+                                }),
                             mode,
                             observed_at: now.0,
                         };
@@ -5112,18 +5108,35 @@ where {
                     let write_seed = cached_seed(&scope_write_seeds, &root_id);
                     // One pass per scope: a pass seals every record it publishes
                     // at one scope root's epoch under that root's seeds.
+                    //
+                    // The boundary set is the session's, not this walk's. A
+                    // promotion a pass could not re-prove keeps its entry, so
+                    // the vault root's pass still stops at it rather than
+                    // claiming the whole suffix below it
+                    // ([`install_descendant_scopes`]).
                     let proved_roots: Vec<NodeId> = core::iter::once(NodeId(root_id))
-                        .chain(descendants.iter().map(|scope| NodeId(scope.scope_id)))
+                        .chain(proved_scope_ids.iter().copied())
                         .collect();
-                    let mut scopes: Vec<DrainScope<'_>> = Vec::new();
                     // Index 0 is the vault root's own pass whenever this holds.
                     let root_scope_held = read_seed.is_some() && write_seed.is_some();
+                    let drained_roots: Vec<NodeId> = root_scope_held
+                        .then_some(NodeId(root_id))
+                        .into_iter()
+                        .chain(
+                            descendants
+                                .iter()
+                                .filter(|scope| scope.write.is_some())
+                                .map(|scope| NodeId(scope.scope_id)),
+                        )
+                        .collect();
+                    let mut scopes: Vec<DrainScope<'_>> = Vec::new();
                     if let (Some(read_seed), Some(write_seed)) = (&read_seed, &write_seed) {
                         scopes.push(DrainScope {
                             root: NodeId(root_id),
                             root_name: &root_name,
                             parent_node_seed: None,
                             scope_roots: &proved_roots,
+                            drained_roots: &drained_roots,
                             read_scope_seed: read_seed,
                             write_scope_seed: write_seed,
                             enc_secret: &enc_subkey,
@@ -5137,6 +5150,7 @@ where {
                             root_name: &scope.name,
                             parent_node_seed: Some(&scope.parent_node_seed),
                             scope_roots: &proved_roots,
+                            drained_roots: &drained_roots,
                             read_scope_seed: &scope.read_scope_seed,
                             write_scope_seed: &write.seed,
                             enc_secret: &enc_subkey,
@@ -7204,13 +7218,12 @@ where {
             self.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
-        let descendants = self.descendant_scope_roots.borrow().clone();
         let Some(floors) = floor_view(
             &self.seams.floor_store,
             &sharers,
             session.contact_label_seed(),
             &own_root,
-            &descendants,
+            &self.descendant_scope_roots.borrow(),
             scope_id,
         ) else {
             self.scope_read_seeds.borrow_mut().remove(scope_id);

@@ -670,7 +670,7 @@ where
             .snapshot_cache
             .put(name.as_str().as_bytes(), &record_bytes)
             .await;
-        let (write, grandchildren) = self.write_plane(&gated, child.scope_id).await;
+        let (write, grandchildren) = self.write_plane(&gated, &name, child.scope_id).await;
         Some((
             DescendantScopeRoot {
                 scope_id: child.scope_id,
@@ -691,14 +691,26 @@ where
     /// A gated scope root's own write plane and the `directChildScopeIndex` it
     /// names, both empty where this device holds the root keyless: the index is
     /// a write-plane read.
+    ///
+    /// The seed must derive `name`, the very name this root publishes under. A
+    /// write-capable grantee can commit an owner-write-blob wrapping a seed of
+    /// its choosing, and a drain pass mints every new node's `ipnsName` and its
+    /// narrow signer from this seed, so a seed that cannot name our own root is
+    /// not our scope's — held keyless, never a trust verdict. This is
+    /// `deposit_write_seed`'s deposit-time proof, at the point the material is
+    /// minted rather than at each consumer.
     async fn write_plane(
         &self,
         gated: &GatedScopeRoot,
+        name: &IpnsName,
         scope_id: [u8; 16],
     ) -> (Option<ScopeWritePlane>, Vec<ChildScopeRef>) {
         let Some(seed) = gated.write_scope_seed.clone() else {
             return (None, Vec::new());
         };
+        if derive_write_name(&seed, &scope_id) != *name {
+            return (None, Vec::new());
+        }
         let Ok((write_body, epoch)) = write_plane_of(
             self.floors,
             &gated.envelope,
@@ -750,7 +762,7 @@ where
         let gated = gated_scope_root(&adopter, root_name, root_record_bytes)
             .await
             .ok()?;
-        let (_, index) = self.write_plane(&gated, root_scope_id).await;
+        let (_, index) = self.write_plane(&gated, root_name, root_scope_id).await;
         let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
         let mut descendants: Vec<DescendantScopeRoot> = Vec::new();
         let mut visited = BTreeSet::from([root_scope_id]);
@@ -4447,9 +4459,15 @@ mod tests {
         );
         let descendant = &proved[0];
         assert_eq!(descendant.name, child.name);
-        assert!(
-            descendant.write.is_some(),
-            "a root the owner holds write material for is not keyless"
+        let write = descendant
+            .write
+            .as_ref()
+            .expect("a root the owner holds write material for is not keyless");
+        assert_eq!(
+            derive_write_name(&write.seed, &CHILD_SCOPE),
+            descendant.name,
+            "a drain pass mints every node's name and signer from this seed, so the \
+             walk yields only a seed that derives the root's own name"
         );
         assert!(
             ct_eq(

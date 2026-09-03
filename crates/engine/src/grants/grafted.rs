@@ -199,6 +199,22 @@ pub(crate) fn in_own_tree(base: &Snapshot, id: NodeId) -> bool {
     id == base.root || base.is_descendant_of(id, base.root)
 }
 
+/// Whether this identity answers for `scope_id` itself: the vault root, or a
+/// scope root a gated descent proved below it
+/// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+/// A grant cut mints one out of this vault's own interior, so no sharer answers
+/// for it and its floors and its records are this identity's own.
+///
+/// Stated once, because two legs read it: [`floor_view`] picks the floor
+/// namespace with it, and the focus refresh picks the claim plane with it.
+pub(crate) fn is_own_scope(
+    own_root: &[u8; 16],
+    own_descendants: &BTreeSet<NodeId>,
+    scope_id: &[u8; 16],
+) -> bool {
+    scope_id == own_root || own_descendants.contains(&NodeId(*scope_id))
+}
+
 /// The floor namespace `scope_id`'s read leg must use, or `None` when no
 /// authority answers for the id and the leg may not run at all.
 ///
@@ -208,11 +224,6 @@ pub(crate) fn in_own_tree(base: &Snapshot, id: NodeId) -> bool {
 /// arm is decided ahead of the map, so a bookmark that names one of this
 /// vault's own roots cannot redirect that root's leg.
 ///
-/// `own_descendants` are the scope roots below `own_root` that a gated descent
-/// proved this session holds
-/// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
-/// A grant cut mints one out of this vault's own interior, so its floors are
-/// this identity's own and no sharer answers for it.
 pub(crate) fn floor_view<'a, F>(
     floors: &'a F,
     sharers: &GraftedSharers,
@@ -221,7 +232,7 @@ pub(crate) fn floor_view<'a, F>(
     own_descendants: &BTreeSet<NodeId>,
     scope_id: &[u8; 16],
 ) -> Option<SharerScopedFloorStore<'a, F>> {
-    if scope_id == own_root || own_descendants.contains(&NodeId(*scope_id)) {
+    if is_own_scope(own_root, own_descendants, scope_id) {
         return Some(SharerScopedFloorStore::own(floors));
     }
     sharers.get(scope_id).map(|sharer| {
