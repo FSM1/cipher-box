@@ -5202,6 +5202,43 @@ mod tests {
         assert_eq!(walked.failure, None, "an absence is not a failure to walk");
     }
 
+    /// A boundary the index states is not an unproved one, whatever this pass
+    /// made of the record at its name.
+    #[test]
+    fn a_child_the_index_names_is_no_unproved_boundary() {
+        let promoted = [0xba; 16];
+        let name = derive_write_name(&[0x5A; 32], &promoted);
+        let root = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children: vec![child_link(promoted, NodeKind::Folder, &name)],
+            child_scope_index: vec![ChildScopeRef {
+                scope_id: promoted,
+                ipns_name: name.as_str().as_bytes().to_vec(),
+                unknown: PreservedFields::new(),
+            }],
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        });
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert!(walked.unproved.is_empty());
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Unavailable),
+            "the record at that name is what this pass could not read"
+        );
+    }
+
     /// The other direction: a child at the name this scope's write seed derives
     /// is this scope's own, and only a folder can be promoted into a scope root
     /// at all.
