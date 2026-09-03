@@ -51,21 +51,25 @@ runs:
       env:
         PACKAGE: ${{ inputs.package }}
       run: |
-        # coreutils' `timeout` answers to `gtimeout` on a macOS runner.
-        TIMEOUT=$(command -v timeout || command -v gtimeout) || {
-          echo "::error::neither timeout nor gtimeout is on PATH"
-          exit 1
-        }
-        # The marker records the install's own status, so a stall is told apart
-        # from the command exiting 124 on its own. `--kill-after` matters most:
-        # without it `timeout` waits forever on a child that ignores SIGTERM,
-        # which is the stall this step exists to bound.
+        # A watchdog rather than `timeout`, which is coreutils' and which a macOS
+        # runner carries under neither name. `set -m` gives each attempt its own
+        # process group, so the kill reaches the download and not merely the
+        # shell above it.
+        set -m
+        # The marker carries the install's own status, so an attempt the watchdog
+        # killed is told apart from one that exited non-zero by itself.
         marker="$RUNNER_TEMP/playwright-browser-status"
         for attempt in 1 2 3; do
           rm -f "$marker"
           # shellcheck disable=SC2016  # the inner shell expands $1 and $2, not this one
-          "$TIMEOUT" --kill-after=30 150 bash -c \
-            'pnpm --filter "$2" exec playwright install chromium; echo "$?" > "$1"' _ "$marker" "$PACKAGE" || true
+          bash -c 'pnpm --filter "$2" exec playwright install chromium; echo "$?" > "$1"' _ "$marker" "$PACKAGE" &
+          child=$!
+          (sleep 150; kill -9 -"$child" 2> /dev/null) &
+          watchdog=$!
+          # Off the job table, so ending it below prints no "Killed" notice.
+          disown "$watchdog"
+          wait "$child" 2> /dev/null || true
+          kill -9 -"$watchdog" 2> /dev/null || true
           if [ -f "$marker" ]; then
             install_status=$(cat "$marker")
             if [ "$install_status" -eq 0 ]; then
