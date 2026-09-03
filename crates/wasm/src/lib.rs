@@ -404,6 +404,9 @@ pub enum DeadLetterReason {
     /// The owner's bin index holds every entry one record can carry, so the
     /// soft delete could not be recorded.
     BinIndexFull,
+    /// A relocation whose two ends now sit in two different shared folders, a
+    /// crossing no pass can author.
+    CrossingUnauthorable,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -430,6 +433,9 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
                 DeadLetterReason::ScopeRootNotResealable
             }
             facade::DeadLetterReason::BinIndexFull => DeadLetterReason::BinIndexFull,
+            facade::DeadLetterReason::CrossingUnauthorable => {
+                DeadLetterReason::CrossingUnauthorable
+            }
         }
     }
 }

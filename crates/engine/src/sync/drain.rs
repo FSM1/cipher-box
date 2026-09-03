@@ -98,7 +98,7 @@ use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::{UnlinkedChild, project_child_version, project_folder};
-use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
+use crate::sync::rebase::{AppliedOp, DeadLetterReason, ReplayScopes, decode_queue, replay};
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::{
     LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter, reconcile_staging_over,
@@ -1498,7 +1498,15 @@ where
             let base = self.base.borrow();
             let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
             let local = apply_overlay(&base, &ops);
-            replay(&base, &local, queued, scope.scope_roots)
+            replay(
+                &base,
+                &local,
+                queued,
+                ReplayScopes {
+                    roots: scope.scope_roots,
+                    anchor: scope.source.root,
+                },
+            )
         };
         for root in &rebased.scope_exit_triggers {
             self.owe_scope_exit(*root);
@@ -6047,6 +6055,40 @@ mod tests {
             Ok(None),
             "a root neither end is anchored on resolves to no plane"
         );
+    }
+
+    /// The set a pass seals under and the set it classifies against answer two
+    /// questions. Every root on the first carries a seed pair, so it resolves a
+    /// plane; every root on it must also be on the second, or a node under it
+    /// would resolve onto the enclosing scope and seal under that material.
+    #[test]
+    fn every_end_this_pass_seals_under_is_a_boundary_it_can_classify() {
+        let (source, destination) = ends();
+        let seams = OwnerSeams::new();
+        let both = &[SOURCE_ROOT, DESTINATION_ROOT];
+        let scope = two_ended(&seams, &source, &destination, both);
+
+        assert_eq!(scope.sealable_scope_roots(), both);
+        for root in scope.sealable_scope_roots() {
+            assert!(
+                matches!(scope.plane_rooted_at(SOURCE_EPOCH, root), Ok(Some(_))),
+                "{root:?} seals under no plane, so no pass may drive it"
+            );
+        }
+        assert_eq!(scope.ends_are_classifiable(), Ok(()));
+
+        let unlisted = two_ended(&seams, &source, &destination, &[SOURCE_ROOT]);
+        assert_eq!(
+            unlisted.ends_are_classifiable(),
+            Err(Halt::UploadAttempt),
+            "a second end no walk would stop at is charged, not published under"
+        );
+
+        let one_ended = DrainScope {
+            destination: None,
+            ..scope
+        };
+        assert_eq!(one_ended.sealable_scope_roots(), [SOURCE_ROOT]);
     }
 
     /// Two ends rooted at one node name one scope under two sets of material.

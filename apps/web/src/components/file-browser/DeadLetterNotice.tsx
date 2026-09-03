@@ -23,6 +23,8 @@ const REASONS: Record<DeadLetterReason, string> = {
     "this shared folder's own record leaves no room for the re-key a revoke needs; the folder has to carry fewer direct subfolders or fewer people before it can be saved",
   binIndexFull:
     'your bin is full, so this item could not be moved to it; empty the bin, or delete this item permanently',
+  crossingUnauthorable:
+    'this item was moved between two shared folders, which CipherBox cannot do in one step; move it out to a folder you do not share first, then into the one you want',
 };
 
 /**
