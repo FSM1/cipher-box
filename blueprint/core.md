@@ -104,9 +104,8 @@ Functional decomposition, not final file layout:
   the rendezvous key field to secp256k1 and HPKE's KEM is DHKEM(X25519)).
 - HPKE envelopes are spec-defined with a full-envelope KAT under a fixed
   ephemeral key — the eciesjs lesson (a library major bump must never be able
-  to silently orphan stored ciphertexts). The ECIES envelope is defined in this
-  repository and takes the same KAT, which is what separates it from the
-  library-defined envelope the "Gone" table retires.
+  to silently orphan stored ciphertexts). The ECIES envelope takes the same
+  KAT.
 
 ## Envelope and structures
 
@@ -589,7 +588,7 @@ A key schedule internal to one primitive is **not** a catalog edge (ADR 0015
 D2): an edge derives material other code holds, names, and passes on, and a
 primitive-internal output never leaves its primitive. The two cases are HPKE's
 HKDF schedule and the ECIES `aead-key`/`aead-nonce` schedule. Their context
-strings keep their own form, stay out of the table above, and freeze beside
+strings keep their own form, stay out of the table below, and freeze beside
 their suite entry in the KAT manifest (ADR 0015 D3).
 
 | Edge                     | Inputs                                                          | Output                                          |

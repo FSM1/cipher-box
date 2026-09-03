@@ -250,10 +250,7 @@ struct EciesOpenRejectVector {
     class: String,
 }
 
-/// A produce-side refusal of the rendezvous seal. `ecies_seal` answers `None`
-/// and names nothing, so the frozen field is `refusal`, not an error-surface
-/// `check` — these vectors carry no verdict the crate-wide check-coverage law
-/// can consume.
+/// One input `ecies_seal` must refuse to turn into an envelope.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EciesSealRejectVector {
@@ -262,7 +259,6 @@ struct EciesSealRejectVector {
     ephemeral_scalar: String,
     aad: String,
     plaintext: String,
-    refusal: String,
 }
 
 // --- Contact code vectors ---------------------------------------------------
@@ -1093,9 +1089,8 @@ struct EciesMeta {
     seal_reject_count: usize,
 }
 
-/// The primitive-internal key-schedule contexts. Not catalog edges, so they
-/// keep their own form and freeze here rather than in the edge string table
-/// (FSM1/cipher-box-next ADR 0015 D3).
+/// The primitive-internal key-schedule contexts, frozen here rather than in
+/// the edge string table (FSM1/cipher-box-next ADR 0015 D3).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EciesContexts {
@@ -4146,9 +4141,6 @@ fn build_ecies_open_reject() -> Vec<EciesOpenRejectVector> {
     // An uncompressed SEC1 prefix on 33 bytes: never a point.
     let mut not_a_point = sealed.enc;
     not_a_point[0] = 0x04;
-    // A well-prefixed x with no square root on the curve: refused by the curve
-    // arithmetic rather than by the tag, which is the check the prefix case
-    // never reaches.
     let off_curve = ecies_off_curve_point();
     // An x at the field prime: a non-canonical field element, refused before
     // any square root is tried.
@@ -4253,10 +4245,6 @@ fn build_ecies_open_reject() -> Vec<EciesOpenRejectVector> {
     out
 }
 
-/// The single refusal the produce side gives. `ecies_seal` answers `None` for
-/// every bad input, so one frozen string covers the family.
-const ECIES_SEAL_REFUSAL: &str = "ecies-seal-refused";
-
 /// The produce-side mirror of the open rejects: a release build must never emit
 /// an envelope its own opener refuses (AGENTS.md rule 8, ADR 0015 D5).
 fn build_ecies_seal_reject() -> Vec<EciesSealRejectVector> {
@@ -4292,7 +4280,6 @@ fn build_ecies_seal_reject() -> Vec<EciesSealRejectVector> {
             ephemeral_scalar: hexstr(&ephemeral_scalar),
             aad: hexstr(aad),
             plaintext: hexstr(plaintext),
-            refusal: ECIES_SEAL_REFUSAL.to_string(),
         });
     }
     out

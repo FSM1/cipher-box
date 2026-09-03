@@ -1,12 +1,9 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these twenty-four edges. A key
-//! schedule internal to one primitive is not an edge, because its output never
-//! leaves the primitive for other code to hold and name — HPKE's schedule and
-//! the ECIES device-factor seal's are the two (FSM1/cipher-box-next ADR 0015
-//! D2). Every edge is domain-separated by a fixed `cipherbox/v2/<edge>`
-//! context string fed to BLAKE3 `derive_key`; per-node/per-id material takes
-//! the frozen shape
+//! Nothing in CipherBox derives a key outside these twenty-four edges, save the
+//! primitive-internal schedules named below. Every edge is domain-separated by
+//! a fixed `cipherbox/v2/<edge>` context string fed to
+//! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
 //! **fixed-length message input**, never variable context, which would admit
 //! cross-edge collisions. Composite-material edges hash a fixed-prefix
@@ -19,8 +16,11 @@
 //!
 //! Non-edges, stated to stay non-edges (blueprint/core.md): content keys, and
 //! every scope seed a rotation or a grant cut mints — all random, none derived
-//! here. The genesis pair below is the one exception, and only because genesis
-//! has no predecessor to be idempotent against (ADR 0007).
+//! here; and a key schedule internal to one primitive, whose output never
+//! leaves it for other code to hold and name — HPKE's and the ECIES
+//! device-factor seal's (FSM1/cipher-box-next ADR 0015 D2). The genesis pair
+//! below is the one exception, and only because genesis has no predecessor to
+//! be idempotent against (ADR 0007).
 
 use zeroize::Zeroize;
 

@@ -1262,7 +1262,6 @@ struct EciesSealRejectVector {
     ephemeral_scalar: String,
     aad: String,
     plaintext: String,
-    refusal: String,
 }
 
 #[derive(Deserialize)]
@@ -3040,23 +3039,20 @@ fn ecies_envelope_shape_is_frozen() {
         m.suite.ecies.enc_len, ECIES_ENC_LEN,
         "enc is one compressed SEC1 point"
     );
-    // A primitive-internal schedule, so these strings freeze here rather than
-    // in the KDF edge table (FSM1/cipher-box-next ADR 0015 D3). A drift orphans
-    // every stored envelope.
+    // A drift in either string orphans every stored envelope.
     assert_eq!(m.suite.ecies.contexts.aead_key, ECIES_KEY_CONTEXT);
     assert_eq!(m.suite.ecies.contexts.aead_nonce, ECIES_NONCE_CONTEXT);
     assert_ne!(
         m.suite.ecies.contexts.aead_key, m.suite.ecies.contexts.aead_nonce,
         "the key and the nonce must not share one context"
     );
-    let catalog: BTreeSet<&str> = m.kdf.edges.iter().map(|e| e.context.as_str()).collect();
     for context in [
         &m.suite.ecies.contexts.aead_key,
         &m.suite.ecies.contexts.aead_nonce,
     ] {
         assert!(
-            !catalog.contains(context.as_str()),
-            "a primitive-internal context must stay out of the edge catalog: {context}"
+            !context.starts_with("cipherbox/v2/"),
+            "a primitive-internal context must stay out of the edge namespace: {context}"
         );
     }
 }
@@ -3165,9 +3161,9 @@ fn ecies_open_reject_vectors_fail_closed() {
     }
 }
 
-/// The produce side of the same law. `#[test]` runs under `--release` too, so
-/// this is the release-active cover AGENTS.md rule 8 asks for: no build can
-/// emit an envelope the open path always refuses.
+/// The produce side of the same law, frozen for any implementation that reads
+/// the corpus: these inputs never become an envelope (AGENTS.md rule 8). The
+/// in-crate cover is `suite::ecies`'s own seal tests.
 #[test]
 fn ecies_seal_reject_vectors_refuse_to_produce() {
     let m = manifest();
@@ -3183,11 +3179,6 @@ fn ecies_seal_reject_vectors_refuse_to_produce() {
         assert!(
             names.insert(v.name.clone()),
             "duplicate ecies seal-reject {}",
-            v.name
-        );
-        assert_eq!(
-            v.refusal, "ecies-seal-refused",
-            "seal-reject {}: refusal",
             v.name
         );
         assert_eq!(
