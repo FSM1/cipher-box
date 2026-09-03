@@ -186,6 +186,14 @@ pub enum DeadLetterReason {
     /// Distinct from [`Self::AttemptsExhausted`] because no retry shrinks the
     /// body, and the member's remedy is to empty the bin or to hard-delete.
     BinIndexFull,
+    /// An op that would move a node into a scope no pass can seal it into: a
+    /// relocation whose two ends now sit in two different interior scopes, or a
+    /// restore into a scope other than the one that binned the node. A pass
+    /// anchors on one scope and carries one interior end beside it, so neither
+    /// re-seal has a pass to author it. The command refuses the relocation shape
+    /// at journal time; a grant minted after the op was queued is what moves a
+    /// boundary under one already journaled.
+    CrossingUnauthorable,
 }
 
 /// One applied op, resolved for republish.
@@ -243,6 +251,15 @@ pub struct ReplayReport {
     /// first-seen order: N ops leaving one scope are one rotation, never N
     /// (blueprint/engine.md "Rotation primitives: Triggers").
     pub scope_exit_triggers: Vec<crate::facade::NodeId>,
+    /// The subset of those an op **dropped** rather than applied.
+    ///
+    /// A drop is the move already landed, here or on another device, so the
+    /// rotation it owes has no publish left to derive it from and this verdict
+    /// is all there is. An applied one is not owed here: its cut follows from
+    /// the two planes its publish resolves, which is the stronger evidence and
+    /// the only one that proves the op reached the network
+    /// ([`crate::sync::drain::Drain::commit_crossing`]).
+    pub dropped_scope_exits: Vec<crate::facade::NodeId>,
 }
 
 /// Decoded op-queue entries, in FIFO order.
@@ -333,16 +350,29 @@ impl QueueScanMemo {
     }
 }
 
+/// The two scope questions one replay asks, which are not the same set.
+#[derive(Clone, Copy)]
+pub struct ReplayScopes<'a> {
+    /// What the session **knows**: every boundary it has proved, so a walk over
+    /// link ancestry can say which scope owns a node
+    /// ([`enclosing_scope_root`]).
+    pub roots: &'a [crate::facade::NodeId],
+    /// The one scope this pass **publishes under**, and so the one end a
+    /// crossing may name beside an interior end. Also what an end reaching no
+    /// listed root belongs to. Reading this set as the other turns a legitimate
+    /// scope exit into a refusal, or the reverse.
+    pub anchor: crate::facade::NodeId,
+}
+
 /// Replay `ops` FIFO onto the gate-passing base. `local` (the pre-rebase
 /// overlay view) supplies node metadata for the edit-resurrects-a-delete case
 /// — the only rule that must re-materialize a node the gate-passing base no
-/// longer carries. `scope_roots` is the scope-root policy the full-depth
-/// scope-exit walk resolves against ([`enclosing_scope_root`]).
+/// longer carries.
 pub fn replay(
     gate_passing: &Snapshot,
     local: &Snapshot,
     ops: &[(OpId, Op)],
-    scope_roots: &[crate::facade::NodeId],
+    scopes: ReplayScopes<'_>,
 ) -> ReplayReport {
     // The one necessary clone: rebase advances `working` but must never mutate
     // the caller's gate-passing base.
@@ -351,6 +381,7 @@ pub fn replay(
     let mut dropped = Vec::new();
     let mut dead_letters = Vec::new();
     let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
+    let mut dropped_scope_exits: Vec<crate::facade::NodeId> = Vec::new();
 
     for (op_id, op) in ops {
         // Only this op mutates `working` across the call, so a node the move
@@ -361,7 +392,11 @@ pub fn replay(
             _ => None,
         }
         .filter(|node| working.contains(*node));
-        match rebase_one(&mut working, local, op, scope_roots) {
+        if names_three_scopes(&working, op, scopes) {
+            dead_letters.push((*op_id, DeadLetterReason::CrossingUnauthorable));
+            continue;
+        }
+        match rebase_one(&mut working, local, op, scopes.roots) {
             OpResolution::Applied {
                 effective_name,
                 suffixed,
@@ -381,6 +416,7 @@ pub fn replay(
                 scope_exit_trigger,
             } => {
                 queue_trigger(&mut scope_exit_triggers, scope_exit_trigger);
+                queue_trigger(&mut dropped_scope_exits, scope_exit_trigger);
                 dropped.push((*op_id, reason));
             }
             OpResolution::DeadLetter(reason) => dead_letters.push((*op_id, reason)),
@@ -393,6 +429,7 @@ pub fn replay(
         dropped,
         dead_letters,
         scope_exit_triggers,
+        dropped_scope_exits,
     }
 }
 
@@ -723,6 +760,28 @@ fn relocation_guards(
     Some(OpResolution::DeadLetter(reason))
 }
 
+/// Whether a relocation names three scopes as the pass now resolves it — the
+/// one crossing shape no pass can author.
+///
+/// A pass anchors on one scope and carries one interior end beside it
+/// (`crate::sync::drain::DrainScope`), so a crossing neither end of which is
+/// the anchor has no pass to author it. The command refuses that same shape at
+/// journal time; what re-derives it here is a grant minted after the op was
+/// queued, which moves a boundary under an end already journaled.
+///
+/// Re-derived rather than read off the op's own crossing field: the entry says
+/// what was true when the caller acted, and this says what the pass about to
+/// publish would have to seal. Charged, because no later tick makes a
+/// three-scope crossing authorable.
+fn names_three_scopes(working: &Snapshot, op: &Op, scopes: ReplayScopes<'_>) -> bool {
+    let Some((from_parent, new_parent, _)) = op.relocation() else {
+        return false;
+    };
+    let ends = [from_parent, new_parent]
+        .map(|end| enclosing_scope_root(working, end, scopes.roots).unwrap_or(scopes.anchor));
+    ends[0] != ends[1] && !ends.contains(&scopes.anchor)
+}
+
 /// Combined move: the relink rule's races, then the rename rule's collision
 /// resolution, over a destination this op vacates first — which is what makes a
 /// replace land under the entered name instead of auto-suffixing off the node
@@ -1028,6 +1087,15 @@ mod tests {
     /// scope-exit walk resolves against it.
     const SCOPE_ROOTS: &[NodeId] = &[NodeId([0; 16])];
 
+    /// The vault root heads every root list here, and is the scope each replay
+    /// publishes under.
+    fn replay_scopes(roots: &[NodeId]) -> ReplayScopes<'_> {
+        ReplayScopes {
+            roots,
+            anchor: roots[0],
+        }
+    }
+
     fn tree() -> Snapshot {
         Snapshot::new(id(0))
     }
@@ -1312,7 +1380,7 @@ mod tests {
             ),
         ];
 
-        let report = replay(&working, &local, &ops, SCOPE_ROOTS);
+        let report = replay(&working, &local, &ops, replay_scopes(SCOPE_ROOTS));
 
         assert!(report.dead_letters.is_empty(), "neither edit is a loser");
         assert_eq!(report.applied.len(), 2);
@@ -1340,7 +1408,7 @@ mod tests {
             ),
         ];
 
-        let report = replay(&working, &local, &ops, SCOPE_ROOTS);
+        let report = replay(&working, &local, &ops, replay_scopes(SCOPE_ROOTS));
 
         assert_eq!(
             report.dead_letters,
@@ -1611,6 +1679,102 @@ mod tests {
     /// scope nested under it.
     const NESTED_ROOTS: &[NodeId] = &[NodeId([0; 16]), NodeId([5; 16])];
 
+    /// A crossing is classified once, at journal time, and a grant minted since
+    /// can move a boundary under either end. Re-derived here: a move that now
+    /// names three scopes has no pass to author it, so it is terminal rather
+    /// than a queue head no later tick clears.
+    #[test]
+    fn a_relocation_the_grants_moved_onto_three_scopes_dead_letters() {
+        let mut base = granted_scope();
+        with_node(&mut base, id(0), id(8), "other", NodeKind::Folder);
+        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
+        let local = base.clone();
+        // Journaled intra-scope, before either grant cut a boundary.
+        let ops = [(
+            OpId(1),
+            Op::relink(id(7), id(12), id(8), 1, AT, ScopeCrossing::Intra),
+        )];
+        let three = &[NodeId([0; 16]), NodeId([5; 16]), NodeId([8; 16])];
+
+        let report = replay(&base, &local, &ops, replay_scopes(three));
+
+        assert_eq!(
+            report.dead_letters,
+            [(OpId(1), DeadLetterReason::CrossingUnauthorable)],
+            "the two ends now sit in two shared folders, and no pass carries three"
+        );
+        assert!(
+            report.scope_exit_triggers.is_empty(),
+            "and nothing was applied, so the exit it would have owed is not queued"
+        );
+    }
+
+    /// The anchor is the one end a crossing may name beside an interior one.
+    /// Reading the known set as the driving set would make this exit read as a
+    /// three-scope crossing and refuse an op every pass can publish.
+    #[test]
+    fn an_exit_onto_the_anchor_stays_authorable() {
+        let mut base = granted_scope();
+        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
+        let local = base.clone();
+        let ops = [(
+            OpId(1),
+            Op::relink(
+                id(7),
+                id(12),
+                id(6),
+                1,
+                AT,
+                ScopeCrossing::ExitsGrantedSource,
+            ),
+        )];
+
+        let report = replay(&base, &local, &ops, replay_scopes(NESTED_ROOTS));
+
+        assert!(
+            report.dead_letters.is_empty(),
+            "the anchor is one of the ends"
+        );
+        assert_eq!(
+            report.scope_exit_triggers,
+            [id(5)],
+            "and the granted scope it left is the one cut it owes"
+        );
+        assert!(
+            report.dropped_scope_exits.is_empty(),
+            "an applied exit owes its cut where the publish proves the planes"
+        );
+    }
+
+    /// A relocation the base already shows at its destination has no publish
+    /// left to derive a plane pair from, so the replay's own verdict is the
+    /// only thing that can still name the scope it left.
+    #[test]
+    fn a_dropped_exit_is_the_one_the_replay_still_owes_a_cut_for() {
+        let mut landed = granted_scope();
+        with_node(&mut landed, id(6), id(7), "moved", NodeKind::File);
+        let ops = [(
+            OpId(1),
+            Op::relink(
+                id(7),
+                id(12),
+                id(6),
+                1,
+                AT,
+                ScopeCrossing::ExitsGrantedSource,
+            ),
+        )];
+
+        let report = replay(&landed, &landed.clone(), &ops, replay_scopes(NESTED_ROOTS));
+
+        assert_eq!(report.dropped.len(), 1, "the move already landed");
+        assert_eq!(
+            report.dropped_scope_exits,
+            [id(5)],
+            "and the granted scope it left is still owed its cut"
+        );
+    }
+
     #[test]
     fn a_scope_exit_names_the_granted_root_at_depth_one_and_at_depth_n() {
         // The v1 coverage hole: a one-level check names `from_parent`, which is
@@ -1857,7 +2021,7 @@ mod tests {
                 ),
                 (OpId(2), Op::rename(id(4), "renamed.bin", 1, AT)),
             ],
-            SCOPE_ROOTS,
+            replay_scopes(SCOPE_ROOTS),
         );
 
         assert_eq!(report.applied.len(), 1, "the move applies");
@@ -2300,7 +2464,12 @@ mod tests {
                 ),
             ),
         ];
-        let report = replay(&gate_passing, &gate_passing, &ops, SCOPE_ROOTS);
+        let report = replay(
+            &gate_passing,
+            &gate_passing,
+            &ops,
+            replay_scopes(SCOPE_ROOTS),
+        );
 
         assert_eq!(report.applied.len(), 2);
         assert!(
@@ -2339,7 +2508,12 @@ mod tests {
                 ScopeCrossing::Intra,
             ),
         )];
-        let report = replay(&gate_passing, &gate_passing, &ops, SCOPE_ROOTS);
+        let report = replay(
+            &gate_passing,
+            &gate_passing,
+            &ops,
+            replay_scopes(SCOPE_ROOTS),
+        );
 
         assert_eq!(report.applied[0].vacated, Some(id(2)));
         assert!(!report.rebased.contains(id(2)));
@@ -2385,7 +2559,12 @@ mod tests {
                 ),
             ), // dead-letter
         ];
-        let report = replay(&gate_passing, &gate_passing, &ops, SCOPE_ROOTS);
+        let report = replay(
+            &gate_passing,
+            &gate_passing,
+            &ops,
+            replay_scopes(SCOPE_ROOTS),
+        );
 
         assert_eq!(report.applied.len(), 2);
         assert!(report.applied[1].suffixed);

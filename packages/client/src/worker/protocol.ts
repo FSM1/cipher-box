@@ -77,7 +77,8 @@ export type DeadLetterReason =
   | 'alreadyPublished'
   | 'targetStillLinked'
   | 'scopeRootNotResealable'
-  | 'binIndexFull';
+  | 'binIndexFull'
+  | 'crossingUnauthorable';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {

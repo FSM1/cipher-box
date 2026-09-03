@@ -91,17 +91,18 @@ use crate::net::{
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
+use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
-    RevokeError, RevokedCommittedSet, RotateError, RotateScopePlan, ScopeRootIdentity,
-    ScopeRootPublisher, SweepResolveFailure, WalkedReadEpochs, WriteHistory, WriteRevokeKind,
-    bounded, cut_for_write_grant, derive_write_name, install_walked_read_epochs,
+    RevokeError, RevokedCommittedSet, RotateError, RotateOnExit, RotateScopePlan, RotationOutcome,
+    ScopeRootIdentity, ScopeRootPublisher, SweepResolveFailure, WalkedReadEpochs, WriteHistory,
+    WriteRevokeKind, bounded, cut_for_write_grant, derive_write_name, install_walked_read_epochs,
     record_grant_floor, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
     rotate_scope, run_sweep,
 };
 use crate::seams::{
-    BoxedTask, CredentialStore, FloorStore, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
+    BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
     RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes, SnapshotCache,
     StagingStore, UnixMillis,
 };
@@ -116,7 +117,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{
-    Drain, DrainReport, DrainScope, ScopeEnd, bin_load_is_a_verdict, hold_captures,
+    Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict, hold_captures,
     published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
@@ -2207,16 +2208,20 @@ impl EngineView {
 /// pure relink from a move that leaves a granted scope. A crossing changes what
 /// the relocation owes: the moved subtree re-seals at the destination scope's
 /// epoch, and an exit from a granted scope cuts the source
-/// (blueprint/engine.md "Sync core: Ops"). No driver authors that plan, and a
-/// plain relink is not a substitute — it would carry the subtree into the
-/// destination still sealed at the source epoch, where the source's grantees can
-/// still open it. So a crossing is refused here, in the same order and for the
-/// same reason a destination outside the scope is.
+/// (blueprint/engine.md "Sync core: Ops").
 ///
 /// An interior scope root exists only because a grant cut one (CONTEXT.md
-/// "Scope"), so `scope_roots` names the boundaries this session has proved. A
-/// boundary it does not know reads as no boundary, which is the classification
-/// every relocation had before the source end was read at all.
+/// "Scope"), so `scope_roots` here is the **known** set: every boundary this
+/// session has proved, from its own mints and from the durable
+/// direct-child-scope index the tick walks. A boundary it does not know reads as
+/// no boundary. Full-depth, because each end resolves to the nearest listed root
+/// above it rather than one level (FSM1/cipher-box-next#26 D7). That same law is
+/// what makes any interior source a **granted** source here: the cut that
+/// created it granted somebody, and a set of recipients that has since gone
+/// empty costs a rotation nobody needed rather than leaving a live seed out.
+///
+/// The known set, never the set a pass can seal under
+/// ([`ReplayScopes`](crate::sync::rebase::ReplayScopes)).
 fn classify_crossing(
     rendered: &Snapshot,
     from_parent: NodeId,
@@ -2231,14 +2236,27 @@ fn classify_crossing(
             message: "its destination folder is not in this session's scope".to_owned(),
         });
     }
-    if scope_of(rendered, from_parent, scope_roots) != scope_of(rendered, new_parent, scope_roots) {
+    let source = scope_of(rendered, from_parent, scope_roots);
+    let destination = scope_of(rendered, new_parent, scope_roots);
+    if source == destination {
+        return Ok(ScopeCrossing::Intra);
+    }
+    // One drain pass anchors on the vault root and carries one interior end
+    // beside it, so a crossing between two interior scopes has no pass that can
+    // author it. Refused where the caller is still there to be told, rather than
+    // journaled as an op the drain could only stall on.
+    if source != rendered.root && destination != rendered.root {
         return Err(EngineError::ScopeExitRefused {
-            message: "it crosses a shared folder's boundary, which needs a re-seal this session \
-                      cannot author"
+            message: "it crosses from one shared folder straight into another, which needs a \
+                      re-seal this session cannot author"
                 .to_owned(),
         });
     }
-    Ok(ScopeCrossing::Intra)
+    Ok(if source == rendered.root {
+        ScopeCrossing::Cross
+    } else {
+        ScopeCrossing::ExitsGrantedSource
+    })
 }
 
 /// The scope `node` belongs to, named by its root. The render root is the
@@ -2246,6 +2264,125 @@ fn classify_crossing(
 /// initial scope, which every node reaching no listed root belongs to.
 fn scope_of(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> NodeId {
     enclosing_scope_root(rendered, node, scope_roots).unwrap_or(rendered.root)
+}
+
+/// The interior scope one drain pass carries as its second end: the boundary the
+/// queue's **head** crossing names, with the material the tick's boundary walk
+/// proved for it.
+///
+/// The two ends are resolved from the base here, not read off the crossing the
+/// command journaled. A grant minted after a relocation was queued turns an
+/// intra-scope relink into one that leaves a scope somebody now reads, and that
+/// relocation needs the same second end the drain re-seals under.
+///
+/// One pass carries one interior end and the queue drains strict FIFO, so the
+/// head crossing decides and no later one may take its place — an end resolved
+/// for a crossing further back leaves the head walking a chain neither end
+/// roots, which stalls it where no budget reaches. A head whose boundary this
+/// session has proved no material for therefore answers `None`, and the drain
+/// charges it.
+///
+/// The decode rides the session's own queue memo: it is an HPKE open per owned
+/// record.
+async fn queued_crossing_scope<St: StagingStore>(
+    staging: &St,
+    enc_secret: &X25519Secret,
+    memo: &RefCell<QueueScanMemo>,
+    boundaries: &Boundaries<'_>,
+) -> Option<SecondEnd> {
+    let listed = &boundaries.scope_roots;
+    if listed.is_empty() {
+        return None;
+    }
+    let raw = staging.queued_ops().await.ok()?;
+    let reader = RecordReader::new(enc_secret);
+    let mut memo = memo.borrow_mut();
+    let base = boundaries.base.borrow();
+    let scope = memo
+        .scan(&reader, &raw, decode_queue)
+        .mine
+        .iter()
+        .find_map(|(_, op)| {
+            let (from_parent, new_parent, _) = op.relocation()?;
+            let source = enclosing_scope_root(&base, from_parent, listed);
+            let destination = enclosing_scope_root(&base, new_parent, listed);
+            if source == destination {
+                return None;
+            }
+            source.or(destination)
+        })?;
+    let proved = boundaries.material.get(&scope)?;
+    Some(SecondEnd {
+        ascent: ascent_node_seed(
+            &base,
+            &boundaries.material,
+            boundaries.root,
+            boundaries.root_read_seed,
+            scope,
+        ),
+        name: derive_write_name(&proved.write_scope_seed, &scope.0),
+        material: ScopeMaterial {
+            read_scope_seed: proved.read_scope_seed.clone(),
+            write_scope_seed: proved.write_scope_seed.clone(),
+            read_epoch: proved.read_epoch,
+        },
+        root: scope,
+    })
+}
+
+/// The boundaries this session has proved, and the vault root they hang under —
+/// what both the second-end lookup and the scope-exit cut read.
+struct Boundaries<'a> {
+    /// The gate-passing base a boundary's place is read off.
+    base: &'a RefCell<Snapshot>,
+    /// The known set ([`Engine::relocation_scope_roots`]).
+    scope_roots: Vec<NodeId>,
+    /// What each **walked** boundary seals under, assembled from the read epoch
+    /// this tick's walk proved and the two seed caches
+    /// ([`crate::rotation::scope_material`]).
+    material: BTreeMap<NodeId, ScopeMaterial>,
+    /// The vault root: the ascent authority of every boundary directly below it.
+    root: NodeId,
+    root_read_seed: &'a Zeroizing<[u8; 32]>,
+}
+
+/// The interior end one pass carries, owned for exactly that pass so
+/// [`ScopeEnd`] can borrow every part of it.
+struct SecondEnd {
+    /// The scope root, which is also the scope id its records bind.
+    root: NodeId,
+    /// What that scope seals and names under, off the boundary walk.
+    material: ScopeMaterial,
+    /// The name its scope root publishes at.
+    name: IpnsName,
+    /// The ascent authority its gate needs; `None` where this session cannot
+    /// place the boundary, which the gate then refuses.
+    ascent: Option<Zeroizing<[u8; 32]>>,
+}
+
+/// `nodeSeed(enclosingOverrideSeed, scopeId)` — the ascent authority an interior
+/// scope root's gate derives its expected ascent keypair from
+/// (`RootAdopter::under_parent_node_seed`).
+///
+/// `None` where the enclosing scope's own seed is not in hand: the gate then
+/// refuses the read, which is the fail-closed answer for a boundary this session
+/// cannot place.
+fn ascent_node_seed(
+    base: &Snapshot,
+    material: &BTreeMap<NodeId, ScopeMaterial>,
+    root: NodeId,
+    root_read_seed: &Zeroizing<[u8; 32]>,
+    scope: NodeId,
+) -> Option<Zeroizing<[u8; 32]>> {
+    let parent = base.parent_of(scope)?;
+    let listed: Vec<NodeId> = material.keys().copied().collect();
+    let enclosing = enclosing_scope_root(base, parent, &listed).unwrap_or(root);
+    let seed = if enclosing == root {
+        root_read_seed
+    } else {
+        &material.get(&enclosing)?.read_scope_seed
+    };
+    Some(Zeroizing::new(*kdf::node_seed(seed, &scope.0).as_bytes()))
 }
 
 /// Refuse a journal target the write plane cannot author under.
@@ -2281,6 +2418,183 @@ fn origin_folder(rendered: &Snapshot, parent: NodeId) -> BinOrigin {
         Some(_) => BinOrigin::Folder(rendered_name(rendered, parent)),
         None => BinOrigin::Gone,
     }
+}
+
+/// What the tick's scope-exit arm needs to cut one interior scope of this vault.
+///
+/// The grantee arm ([`GranteeRotationNet`]) cuts a scope a device holds a grant
+/// *for*. A relocation out of a folder this vault granted leaves a scope the
+/// vault **owns**, so its plan is the owner's — the same flat root cut
+/// [`Engine::rotate_now`] assembles.
+struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+    transport: &'a T,
+    api: &'a ApiClient<H, C>,
+    gateway: &'a Gateway,
+    http: &'a H,
+    floors: &'a F,
+    scheduler: &'a Sch,
+    profile: &'a SyncTimingProfile,
+    entropy: &'a RefCell<E>,
+    /// The session's own rotation material, empty once it has torn down.
+    keys: &'a RefCell<Option<Rc<SweepKeys>>>,
+    /// The lazy-wave sweep every cut enqueues, emptied once the session has
+    /// torn down.
+    sweep: &'a RefCell<Option<SweepTaskFactory>>,
+    /// The boundaries this session has proved and what they seal under.
+    boundaries: &'a Boundaries<'a>,
+    /// The read epoch each walked boundary sits at. A cut supersedes the epoch
+    /// it names, so dropping that entry is what makes the next pass re-walk
+    /// rather than seal under material the cut has replaced.
+    walked_epochs: &'a RefCell<WalkedReadEpochs>,
+}
+
+/// Run the flat [`RotationTrigger::ScopeExit`] cut at one scope root this vault
+/// owns.
+///
+/// A trigger naming a boundary this session has not proved is refused rather
+/// than cut under material it would have to guess at.
+async fn cut_exited_scope<T, H, C, F, Sch, E>(
+    arm: ScopeExitArm<'_, T, H, C, F, Sch, E>,
+    scope_root: NodeId,
+) -> Result<RotationOutcome, RotateError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    let (Some(keys), Some(sweep)) = (arm.keys.borrow().clone(), arm.sweep.borrow().clone()) else {
+        return Err(RotateError::Resolve(ResolveFailure::Unavailable));
+    };
+    let proved = arm
+        .boundaries
+        .material
+        .get(&scope_root)
+        .ok_or(RotateError::Resolve(ResolveFailure::Rejected))?;
+    let scope = ChildScopeRef::new(
+        scope_root.0,
+        derive_write_name(&proved.write_scope_seed, &scope_root.0)
+            .as_str()
+            .as_bytes()
+            .to_vec(),
+    );
+    let ascent = ascent_node_seed(
+        &arm.boundaries.base.borrow(),
+        &arm.boundaries.material,
+        arm.boundaries.root,
+        arm.boundaries.root_read_seed,
+        scope_root,
+    );
+    let net = OwnerRotationNet {
+        transport: arm.transport,
+        api: arm.api,
+        gateway: arm.gateway,
+        http: arm.http,
+        floors: arm.floors,
+        scheduler: arm.scheduler,
+        profile: arm.profile,
+        entropy: arm.entropy,
+        keys: OwnerRotationKeys {
+            enc_secret: &keys.enc_secret,
+            identity: &keys.owner_identity,
+            scope_keys: &keys.scope_keys,
+        },
+        ancestry: RotationAncestry::default()
+            .under_parent_node_seed(scope_root.0, ascent.as_deref()),
+        pointer_consult: PointerConsultArm::Refused,
+        payload_version: POINTER_PAYLOAD_VERSION,
+        gated: GatedRoots::default(),
+        swept: SweptScopeState::default(),
+    };
+    // The cut about to run mints a fresh seed at a fresh epoch, so the walked
+    // material for this scope is superseded the moment it lands. Standing the
+    // walk down before the cut rather than after keeps a failed one from leaving
+    // material a later pass would seal under.
+    arm.walked_epochs.borrow_mut().remove(&scope_root);
+    flat_root_cut(
+        &net,
+        FlatCut {
+            scope: &scope,
+            ascent: ascent.as_deref(),
+            make_sweep: || sweep(scope.clone(), ascent.clone()),
+        },
+    )
+    .await
+}
+
+/// The flat read-plane root cut, over one already-assembled owner net: gate the
+/// scope root, re-seal the **unchanged** committed set under a fresh override
+/// seed at the next epoch, publish under a compare-and-set, raise the epoch
+/// floor, and enqueue the lazy wave.
+///
+/// The one plan a manual rotation and a scope exit share (blueprint/engine.md
+/// "Triggers": both re-seal an unchanged committed set, so neither is the
+/// revocation cascade). Only which scope, whose seams and which sweep differ.
+async fn flat_root_cut<T, H, C, F, Sch, E>(
+    net: &OwnerRotationNet<'_, T, H, C, F, Sch, E>,
+    cut: FlatCut<'_, impl Fn() -> BoxedTask>,
+) -> Result<RotationOutcome, RotateError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+    E: Entropy,
+{
+    let FlatCut {
+        scope,
+        ascent,
+        make_sweep,
+    } = cut;
+    let current = net
+        .resolve_anchored(scope)
+        .await
+        .map_err(RotateError::Resolve)?;
+    rotate_scope(
+        &mut SharedEntropy(net.entropy),
+        net.floors,
+        net.scheduler,
+        net,
+        &RotateScopePlan {
+            identity: ScopeRootIdentity {
+                v: current.v,
+                scope_id: scope.scope_id,
+                ipns_name: &scope.ipns_name,
+                owner_enc_pub: &current.owner_enc_pub,
+                owner_enc_secret: Some(net.keys.enc_secret),
+                ascent: ascent.map(AscentAuthority::ParentSeed),
+                owes_ascent_link: current.carried_ascent_link,
+                pseudonym_signer: &current.pseudonym_signer,
+            },
+            committed: CommittedSet {
+                commitment: &current.commitment,
+                commitment_sig: &current.commitment_sig,
+                grant_ledger: &current.grant_ledger,
+                direct_child_scope_index: &current.direct_child_scope_index,
+                revoked_recipients: &[],
+            },
+            current_override_seed: &current.override_seed,
+            current_read_epoch: current.current_read_epoch,
+            write_scope_seed: &current.write_scope_seed,
+            write_epoch: current.write_epoch,
+            write_history_link: &current.write_history_link,
+            pointer_read_key: &current.pointer_read_key,
+            carried_history_links: &current.carried_history_links,
+        },
+        make_sweep,
+    )
+    .await
+}
+
+/// What one flat root cut acts on: the scope it gates, the ascent authority that
+/// scope's own record proves under, and the lazy wave the cut enqueues.
+struct FlatCut<'a, S: Fn() -> BoxedTask> {
+    scope: &'a ChildScopeRef,
+    ascent: Option<&'a [u8; 32]>,
+    make_sweep: S,
 }
 
 /// The owner rotation arm over one engine's seam family.
@@ -3150,6 +3464,36 @@ async fn refresh_seed_floors<F: FloorStore>(
     }
 }
 
+/// What each boundary the last walk proved seals under: the read epoch that walk
+/// recorded, paired with the two seeds the per-scope caches hold. A boundary
+/// missing either seed is left out.
+///
+/// The copy is not eviction-tracked — [`cached_seed`] runs no floor pass — so it
+/// is not the authority on whether a seed is still current. Every consumer
+/// re-proves the epoch against a gate-passing scope root record before it
+/// authors anything ([`crate::sync::drain::Drain::open_scope_root`]), and a
+/// below-floor seed opens no root body at all.
+fn walked_boundary_material(
+    walked: &RefCell<WalkedReadEpochs>,
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
+) -> BTreeMap<NodeId, ScopeMaterial> {
+    walked
+        .borrow()
+        .iter()
+        .filter_map(|(root, read_epoch)| {
+            Some((
+                *root,
+                ScopeMaterial {
+                    read_scope_seed: cached_seed(read_seeds, &root.0)?,
+                    write_scope_seed: cached_seed(write_seeds, &root.0)?,
+                    read_epoch: *read_epoch,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// The scope's cached seed, without an eviction pass.
 fn cached_seed(cell: &RefCell<ScopeSeeds>, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
     cell.borrow()
@@ -3538,6 +3882,9 @@ pub struct Engine<T: SeamTypes> {
     /// same reason the settings record has one, and shared with the drain,
     /// which is what writes a bin entry.
     bin_index_record: Rc<RefCell<Option<HeldRecord>>>,
+    /// Scope roots this session owes a scope-exit cut for, driven by the drain.
+    /// Session-lived, like the orphan-head set.
+    pending_scope_exits: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](Self::snapshot)
     /// classifies at read time off the same cell.
@@ -3630,7 +3977,7 @@ pub struct Engine<T: SeamTypes> {
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
     /// Memo of the durable queue scan every read renders through
     /// ([`scan_queue`](Self::scan_queue)).
-    queue_scan: RefCell<QueueScanMemo>,
+    queue_scan: Rc<RefCell<QueueScanMemo>>,
     /// The drain's over-quota hold, written by the drain tick and read by
     /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
     /// next drain attempt's own 413 rather than trusting a stale verdict.
@@ -3699,7 +4046,7 @@ pub struct Engine<T: SeamTypes> {
     /// Builds the sweep task every rotation arm enqueues. Built at
     /// [`start`](Self::start) for the same reason the tick loop is: a spawned
     /// task is `'static`, and the command path's seam bounds are narrower.
-    sweep_tasks: RefCell<Option<SweepTaskFactory>>,
+    sweep_tasks: Rc<RefCell<Option<SweepTaskFactory>>>,
     /// What a spawned sweep opens and signs with, shared with every task it
     /// produces and emptied on drop — the tasks read through this cell, so
     /// teardown revokes the material instead of waiting out the last pass. The
@@ -3780,6 +4127,7 @@ impl<T: SeamTypes> Engine<T> {
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 settings_record: Rc::new(RefCell::new(None)),
                 bin_index_record: Rc::new(RefCell::new(None)),
+                pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
@@ -3798,7 +4146,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
-                queue_scan: RefCell::new(QueueScanMemo::default()),
+                queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
                 blocked: Rc::new(RefCell::new(None)),
                 settings_hold: Rc::new(RefCell::new(None)),
                 bin_index_hold: Rc::new(RefCell::new(None)),
@@ -3814,7 +4162,7 @@ impl<T: SeamTypes> Engine<T> {
                 tick_settings_signer: Rc::new(RefCell::new(None)),
                 tick_contact_label_seed: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
-                sweep_tasks: RefCell::new(None),
+                sweep_tasks: Rc::new(RefCell::new(None)),
                 sweep_keys: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
                 settings_summary: Rc::new(RefCell::new(None)),
@@ -4793,6 +5141,10 @@ where {
         let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
         let grafted_named_nodes = self.grafted_named_nodes.clone();
         let consult_keys = self.sweep_keys.clone();
+        let minted_roots = self.minted_scope_roots.clone();
+        let pending_scope_exits = self.pending_scope_exits.clone();
+        let sweep_tasks = self.sweep_tasks.clone();
+        let queue_scan = self.queue_scan.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
@@ -5191,6 +5543,54 @@ where {
                         .filter(|scope| matches!(scope.write, Err(WritePlaneDark::Keyless)))
                         .map(|scope| NodeId(scope.scope_id))
                         .collect();
+                    // The vault-root pass's second end, and the cut a scope exit
+                    // owes: both read the boundaries this session knows, at the
+                    // material the walk proved for them.
+                    let boundaries = read_seed.as_ref().map(|root_read_seed| Boundaries {
+                        base: &base,
+                        scope_roots: minted_roots
+                            .borrow()
+                            .union(&proved_scope_ids)
+                            .copied()
+                            .collect(),
+                        material: walked_boundary_material(
+                            &walked_read_epochs,
+                            &scope_read_seeds,
+                            &scope_write_seeds,
+                        ),
+                        root: NodeId(root_id),
+                        root_read_seed,
+                    });
+                    let second = match &boundaries {
+                        Some(boundaries) => {
+                            queued_crossing_scope(&staging, &enc_subkey, &queue_scan, boundaries)
+                                .await
+                        }
+                        None => None,
+                    };
+                    let exits = RotateOnExit(async |scope_root: NodeId| {
+                        let Some(boundaries) = &boundaries else {
+                            return Err(RotateError::Resolve(ResolveFailure::Unavailable));
+                        };
+                        cut_exited_scope(
+                            ScopeExitArm {
+                                transport: &transport,
+                                api: &api,
+                                gateway: &gateway,
+                                http: &http,
+                                floors: &floors,
+                                scheduler: &scheduler,
+                                profile: &profile,
+                                entropy: &entropy,
+                                keys: &consult_keys,
+                                sweep: &sweep_tasks,
+                                boundaries,
+                                walked_epochs: &walked_read_epochs,
+                            },
+                            scope_root,
+                        )
+                        .await
+                    });
                     let mut scopes: Vec<DrainScope<'_>> = Vec::new();
                     if let Some((read_seed, write_seed)) = vault_seeds {
                         scopes.push(DrainScope {
@@ -5199,9 +5599,19 @@ where {
                                 root_name: &root_name,
                                 read_scope_seed: read_seed,
                                 write_scope_seed: write_seed,
+                                // The vault root carries no ascent link.
+                                ascent_node_seed: None,
                             },
-                            destination: None,
-                            parent_node_seed: None,
+                            destination: second.as_ref().map(|end| SealPlane {
+                                end: ScopeEnd {
+                                    root: end.root,
+                                    root_name: &end.name,
+                                    read_scope_seed: &end.material.read_scope_seed,
+                                    write_scope_seed: &end.material.write_scope_seed,
+                                    ascent_node_seed: end.ascent.as_ref(),
+                                },
+                                epoch: end.material.read_epoch,
+                            }),
                             scope_roots: &proved_roots,
                             keyless_roots: &keyless_roots,
                             enc_secret: &enc_subkey,
@@ -5214,9 +5624,9 @@ where {
                             root_name: &scope.name,
                             read_scope_seed: &scope.read_scope_seed,
                             write_scope_seed: &write.seed,
+                            ascent_node_seed: Some(&scope.parent_node_seed),
                         },
                         destination: None,
-                        parent_node_seed: Some(&scope.parent_node_seed),
                         scope_roots: &proved_roots,
                         keyless_roots: &keyless_roots,
                         enc_secret: &enc_subkey,
@@ -5255,10 +5665,11 @@ where {
                             bin_index_hold: &bin_index_hold,
                             established_bin_index: RefCell::new(None),
                             observed_unlinks: &observed_unlinks,
+                            pending_scope_exits: &pending_scope_exits,
                         };
                         let mut journalled = Vec::new();
                         for scope in &scopes {
-                            let mut report = drain.run_queue(scope).await;
+                            let mut report = drain.run_queue(scope, &exits).await;
                             journalled.append(&mut report.journalled_deletes);
                             surface_drain_report(&events, &dead_letters, &report);
                         }
@@ -6016,45 +6427,13 @@ where {
                 target.ancestry(),
                 PointerConsultArm::Refused,
             );
-            let current = net
-                .resolve_anchored(&target.scope)
-                .await
-                .map_err(RotateError::Resolve)?;
-            rotate_scope(
-                &mut SharedEntropy(&self.entropy),
-                &self.seams.floor_store,
-                &self.seams.scheduler,
+            flat_root_cut(
                 &net,
-                &RotateScopePlan {
-                    identity: ScopeRootIdentity {
-                        v: current.v,
-                        scope_id: target.scope.scope_id,
-                        ipns_name: &target.scope.ipns_name,
-                        owner_enc_pub: &current.owner_enc_pub,
-                        owner_enc_secret: Some(session.enc_subkey()),
-                        ascent: target
-                            .parent_node_seed
-                            .as_deref()
-                            .map(AscentAuthority::ParentSeed),
-                        owes_ascent_link: current.carried_ascent_link,
-                        pseudonym_signer: &current.pseudonym_signer,
-                    },
-                    committed: CommittedSet {
-                        commitment: &current.commitment,
-                        commitment_sig: &current.commitment_sig,
-                        grant_ledger: &current.grant_ledger,
-                        direct_child_scope_index: &current.direct_child_scope_index,
-                        revoked_recipients: &[],
-                    },
-                    current_override_seed: &current.override_seed,
-                    current_read_epoch: current.current_read_epoch,
-                    write_scope_seed: &current.write_scope_seed,
-                    write_epoch: current.write_epoch,
-                    write_history_link: &current.write_history_link,
-                    pointer_read_key: &current.pointer_read_key,
-                    carried_history_links: &current.carried_history_links,
+                FlatCut {
+                    scope: &target.scope,
+                    ascent: target.parent_node_seed.as_deref(),
+                    make_sweep: || sweep(target.scope.clone(), target.parent_node_seed.clone()),
                 },
-                || sweep(target.scope.clone(), target.parent_node_seed.clone()),
             )
             .await
         })
@@ -9606,10 +9985,12 @@ mod tests {
     }
 
     /// The source end is read too, so a boundary the destination check cannot
-    /// see still refuses. A crossing owes a re-seal no driver authors, and the
-    /// refusal precedes the journal entry rather than following it.
+    /// see is still classified. What the source resolves to decides which
+    /// crossing it is: an interior root only exists because a grant cut it, so
+    /// leaving one owes the source a rotation, and leaving the vault root — the
+    /// one scope no share can reach — owes none.
     #[test]
-    fn a_relocation_that_crosses_a_scope_boundary_is_refused_from_either_side() {
+    fn a_relocation_that_crosses_a_scope_boundary_is_classified_from_either_side() {
         let root = NodeId([1; 16]);
         let granted = NodeId([2; 16]);
         let inside_granted = NodeId([3; 16]);
@@ -9625,24 +10006,30 @@ mod tests {
         }
         let roots = [granted];
 
-        for (from_parent, new_parent, why) in [
+        for (from_parent, new_parent, crossing, why) in [
             (
                 inside_granted,
                 root,
+                ScopeCrossing::ExitsGrantedSource,
                 "full depth: a source below the granted root exits it",
             ),
-            (granted, root, "a scope root sits inside its own scope"),
+            (
+                granted,
+                root,
+                ScopeCrossing::ExitsGrantedSource,
+                "a scope root sits inside its own scope",
+            ),
             (
                 plain,
                 granted,
-                "and a move into the granted scope crosses the same boundary",
+                ScopeCrossing::Cross,
+                "and a move into the granted scope crosses the same boundary, \
+                 leaving a scope no share can reach",
             ),
         ] {
-            assert!(
-                matches!(
-                    classify_crossing(&rendered, from_parent, new_parent, &roots),
-                    Err(EngineError::ScopeExitRefused { .. })
-                ),
+            assert_eq!(
+                classify_crossing(&rendered, from_parent, new_parent, &roots),
+                Ok(crossing),
                 "{why}"
             );
         }
@@ -9660,6 +10047,44 @@ mod tests {
                 "{why}"
             );
         }
+    }
+
+    /// One drain pass anchors on the vault root and carries one interior end
+    /// beside it, so a crossing between two interior scopes has no pass that can
+    /// author it. Refused at the command, where the caller is still there to be
+    /// told, rather than journaled as an op that could only stall.
+    #[test]
+    fn a_relocation_between_two_shared_folders_is_refused() {
+        let root = NodeId([1; 16]);
+        let (first, second) = (NodeId([2; 16]), NodeId([3; 16]));
+        let inside_first = NodeId([4; 16]);
+        let mut rendered = Snapshot::new(root);
+        for (parent, node, name) in [
+            (root, first, "one"),
+            (root, second, "two"),
+            (first, inside_first, "deep"),
+        ] {
+            rendered.upsert_node(NodeMeta::new(node, name, NodeKind::Folder));
+            rendered.link_next(parent, node);
+        }
+
+        for (from_parent, new_parent, why) in [
+            (first, second, "one shared folder straight into another"),
+            (inside_first, second, "and the same at depth"),
+        ] {
+            assert!(
+                matches!(
+                    classify_crossing(&rendered, from_parent, new_parent, &[first, second]),
+                    Err(EngineError::ScopeExitRefused { .. })
+                ),
+                "{why}"
+            );
+        }
+        assert_eq!(
+            classify_crossing(&rendered, inside_first, root, &[first, second]),
+            Ok(ScopeCrossing::ExitsGrantedSource),
+            "while a crossing one end of which is the vault root is authorable"
+        );
     }
 
     /// An accepted shared scope is grafted in parentless, so a browse reaches it

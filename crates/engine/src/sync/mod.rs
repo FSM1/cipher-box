@@ -53,7 +53,8 @@ pub use pointer::{
 };
 pub use rebase::{
     AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, QueueScan, Repair,
-    ReplayReport, apply_repairs, decode_queue, observed_repair, rebase_one, reconcile_head, replay,
+    ReplayReport, ReplayScopes, apply_repairs, decode_queue, observed_repair, rebase_one,
+    reconcile_head, replay,
 };
 pub use record::{
     OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,

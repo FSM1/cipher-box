@@ -90,6 +90,20 @@ fn a_rename_wipes_the_name_it_displaces() {
     assert_wiped(&seen, "the name a rename displaced");
 }
 
+/// A repoint displaces the old `ipnsName` the same way, and the crossing arm
+/// runs one over every folder of a moved subtree.
+#[test]
+fn a_repoint_wipes_the_ipns_name_it_displaces() {
+    let mut child = marked_child(NAME_MARK, IPNS_MARK);
+    let seen = watched(&[IPNS_MARK], || child.repoint(&[RENAMED_MARK; FIELD_LEN]));
+    assert_eq!(
+        child.ipns_name,
+        vec![RENAMED_MARK; FIELD_LEN],
+        "the rewrite landed"
+    );
+    assert_wiped(&seen, "the ipnsName a repoint displaced");
+}
+
 /// The body types that hold child refs inherit the wipe: nothing in `ReadBody`
 /// needs its own, and a folder decoded off the wire is the shape that matters.
 #[test]

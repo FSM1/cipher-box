@@ -122,6 +122,13 @@ impl ChildRef {
         self.name = name;
     }
 
+    /// Rewrite the child's `ipnsName`, wiping the one it displaces — the same
+    /// terminal-owner rule [`Self::rename`] keeps.
+    pub fn repoint(&mut self, ipns_name: &[u8]) {
+        self.ipns_name.zeroize();
+        self.ipns_name = ipns_name.to_vec();
+    }
+
     fn from_value(v: &Value) -> Result<Self, CodecError> {
         let map = v.as_map()?;
         let id = bytes_fixed::<16>(req(map, "id")?, "id")?;

@@ -147,6 +147,7 @@ fn reason_tag(reason: DeadLetterReason) -> u8 {
         DeadLetterReason::TargetStillLinked => 13,
         DeadLetterReason::ScopeRootNotResealable => 14,
         DeadLetterReason::BinIndexFull => 15,
+        DeadLetterReason::CrossingUnauthorable => 16,
     }
 }
 
@@ -170,6 +171,7 @@ fn reason_of_tag(tag: u8) -> Option<DeadLetterReason> {
         13 => DeadLetterReason::TargetStillLinked,
         14 => DeadLetterReason::ScopeRootNotResealable,
         15 => DeadLetterReason::BinIndexFull,
+        16 => DeadLetterReason::CrossingUnauthorable,
         _ => return None,
     })
 }
