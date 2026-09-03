@@ -352,18 +352,21 @@ pub(crate) async fn read_cut_epoch_floor<F: FloorStore>(
         .unwrap_or(0))
 }
 
-/// Raise `scope_id`'s cut-epoch floor to the epoch a cut this device just
-/// published carries.
+/// Raise `scope_id`'s cut-epoch floor to `cut_epoch` — a maximum against the
+/// stored value, like every other floor advance.
 ///
-/// The gate raises the same floor from any record it adopts, which is what
-/// makes a rollback refusable everywhere. This is the cutting device's own
-/// raise, and without it the owner keeps accepting the set it just cut until
-/// its next resolve of that scope — long enough for the revokee to republish
-/// the pre-cut root and have the next cut sign off that base.
+/// Three paths reach one bar, which is what makes a rollback refusable
+/// everywhere. The cutting device raises it from the cut it just published; the
+/// gate raises it at the commit of an adoption; and the `/shared` classification
+/// path raises it from any commitment that clears stage 2
+/// ([ADR 0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)).
 ///
-/// Call it **after** the cut publishes. A raise ahead of the publish would
-/// leave this device refusing the record the scope still carries, with the
-/// fresh set nowhere on the network to replace it.
+/// Without the cutting device's own raise the owner keeps accepting the set it
+/// just cut until its next resolve of that scope — long enough for the revokee
+/// to republish the pre-cut root and have the next cut sign off that base. Call
+/// it **after** the cut publishes: a raise ahead of the publish would leave the
+/// device refusing the record the scope still carries, with the fresh set
+/// nowhere on the network to replace it.
 pub async fn record_cut_epoch_floor<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],

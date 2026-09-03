@@ -6,8 +6,8 @@
 //! goes through this module's accessors, and it is the only place that advances
 //! them **from the record plane** — the owner-authored rotation cut raises the
 //! read-epoch floor directly ([`crate::rotation::rotate`],
-//! [`crate::rotation::cascade`]). The record-plane advances are the four the law
-//! admits:
+//! [`crate::rotation::cascade`]). These are the record-plane advances the law
+//! admits, with the monotonicity every one of them keeps:
 //!
 //! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`] for
 //!    gate-adopted roots, [`advance_sequence_on_unseal`] for child records) —
@@ -30,6 +30,14 @@
 //!    scope root knows its epoch by construction. A device that only proves the
 //!    root takes that epoch from the scope pointer under item 3, never from the
 //!    record (`crate::net::rotation` `recover_write_plane_from_pointer`).
+//! 6. **A verified commitment's cut epoch, with no unseal**
+//!    ([`crate::gate::record_cut_epoch_floor`]) — the one exception to item 1,
+//!    and the list of exceptions is closed. The owner signs the field and the
+//!    signed preimage names the scope root it is presented under, so stage 2 of
+//!    the gate proves it without a body ([ADR
+//!    0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)).
+//!    The floor it raises is read against commitments alone, so a raise from a
+//!    record a later stage rejects leaves every readable plane readable.
 //!
 //! A grant blob's epoch field is an advisory routing hint and has **no**
 //! advancement path here — deliberately. Nothing reads it as authority.
