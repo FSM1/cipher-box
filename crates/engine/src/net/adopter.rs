@@ -295,8 +295,6 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
-        // The floor moves on the AAD-confirmed unseal of a *kept* adopt; this
-        // sighting is discarded, so its pending advance is dropped with it.
         let gated = self.gate_root(name, record_bytes).await?;
         Ok(Some(gated.read_scope_seed))
     }

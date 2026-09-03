@@ -592,13 +592,14 @@ fn bin_expiry_cutoff(now: UnixMillis, retention_days: Option<u32>) -> Option<u64
 ///
 /// A binned subtree takes no ordinary write and joins no eager set, so a scope
 /// rotation can leave it sealed at an epoch the gate refuses for good
-/// (FSM1/cipher-box-next ADR 0011). Unclassified, such a read would hold the
-/// strict-FIFO head for every pass thereafter, and the expiry sweep queues these
-/// ops without an owner command. Charged, the op spends its attempt budget and
-/// dead-letters, which keeps the entry and its content — a leak, never a loss.
+/// (FSM1/cipher-box-next ADR 0011) and no wave ever lifts it. Left uncharged —
+/// unclassified, or held for that wave — such a read would hold the strict-FIFO
+/// head for every pass thereafter, and the expiry sweep queues these ops without
+/// an owner command. Charged, the op spends its attempt budget and dead-letters,
+/// which keeps the entry and its content — a leak, never a loss.
 fn charge_bin_read(halt: Halt) -> Halt {
     match halt {
-        Halt::Unclassified => Halt::UploadAttempt,
+        Halt::Unclassified | Halt::EpochLagged => Halt::UploadAttempt,
         other => other,
     }
 }
@@ -1456,10 +1457,12 @@ where
             return Err(Halt::Unclassified);
         };
         let epoch = envelope.epoch;
+        // A scope root the root gate passed carries a decodable section; bytes
+        // that do not are not a root this pass may anchor a ratchet on.
         let history_links = grant_section_bytes(&envelope)
             .and_then(|bytes| decode_grant_section(bytes).ok())
-            .map(|section| section.history_links)
-            .unwrap_or_default();
+            .ok_or(Halt::Unclassified)?
+            .history_links;
         Ok(LoadedRoot {
             state: FolderState {
                 name: scope.root_name.clone(),
@@ -5596,6 +5599,20 @@ mod tests {
         assert!(
             upload_failure(Halt::EpochLagged).is_some(),
             "the member is told the write is waiting, never left with silence",
+        );
+    }
+
+    /// The wave that clears an epoch-lag hold never reaches a binned subtree, so
+    /// uncharged it would hold the strict-FIFO head for ever — the silent
+    /// permanent stall this class exists to remove.
+    #[test]
+    fn a_bin_paths_epoch_lag_is_charged_because_no_wave_reaches_a_binned_subtree() {
+        assert_eq!(charge_bin_read(Halt::EpochLagged), Halt::UploadAttempt);
+        assert_eq!(charge_bin_read(Halt::Unclassified), Halt::UploadAttempt);
+        assert_eq!(
+            charge_bin_read(Halt::Permanent(DeadLetterReason::TargetGone)),
+            Halt::Permanent(DeadLetterReason::TargetGone),
+            "an attributable verdict keeps the one its own leg gave it",
         );
     }
 

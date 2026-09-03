@@ -386,6 +386,12 @@ fn published_names(
     names
 }
 
+/// The epoch tag the record published at `node` carries.
+fn published_epoch(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> u64 {
+    let head = published_head(world, blocks, &write_name(node)).expect("a published record");
+    decode_envelope(&head).expect("the head decodes").epoch
+}
+
 /// The ops still sitting in `device`'s durable queue.
 fn queued(device: &FakeDevice) -> usize {
     block_on(StagingStore::queued_ops(&device.staging_store))
@@ -597,5 +603,12 @@ fn a_write_staged_across_a_cut_publishes_rather_than_dead_lettering() {
         published_names(&world, &blocks, &scope_seed, reports),
         ["q3"],
         "and the write lands on the record plane"
+    );
+    // A record left tagged behind opens under the right key and is still
+    // refused by the device's own epoch floor.
+    assert_eq!(
+        published_epoch(&world, &blocks, reports),
+        published_epoch(&world, &blocks, ROOT),
+        "the re-authored node is tagged at the epoch its scope root now carries"
     );
 }
