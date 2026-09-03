@@ -80,6 +80,25 @@ pub trait ScopeExitRotator {
     ) -> Result<RotationOutcome, RotateError>;
 }
 
+/// A [`ScopeExitRotator`] over a call.
+///
+/// The tick's arm borrows a whole seam family, none of which the drain names, so
+/// it enters the driver as one call rather than as a second generic surface on
+/// every type between the two.
+pub struct RotateOnExit<A>(pub A);
+
+impl<A> ScopeExitRotator for RotateOnExit<A>
+where
+    A: AsyncFn(NodeId) -> Result<RotationOutcome, RotateError>,
+{
+    async fn rotate_on_scope_exit(
+        &self,
+        scope_root: NodeId,
+    ) -> Result<RotationOutcome, RotateError> {
+        (self.0)(scope_root).await
+    }
+}
+
 /// What one pass of [`consume_scope_exit_triggers`] cut, and what it did not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeExitReport {

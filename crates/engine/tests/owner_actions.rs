@@ -12,10 +12,10 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, GrantSection, GrantSetCommitment, Permission as CorePermission,
-    PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, decode_envelope,
-    decode_grant_section, grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body,
-    sign_grant_set,
+    AadContext, AscentLink, BinEntry, GrantSection, GrantSetCommitment,
+    Permission as CorePermission, PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_GRANT_BLOB, decode_envelope, decode_grant_section, grant_section_bytes,
+    open_ascent_link, open_grant_blob, open_read_body, sign_grant_set,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -40,6 +40,7 @@ use cipherbox_engine::seams::{
     BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::SessionRole;
+use cipherbox_engine::sync::op::ScopeCrossing;
 use cipherbox_engine::sync::pointer::{
     open_repoint, scope_pointer_name, seal_repoint, vault_pointer_name,
 };
@@ -53,10 +54,11 @@ use cipherbox_engine::testkit::{
     SeededEntropy, block_on, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, Engine, EngineError,
-    EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission, RecordReader,
-    ResealSeeds, ScopeRootIdentity, SharePointer, SharingInviteLinks, StoragePolicy,
-    SyncTimingProfile, WriteHistory, decode_queue, poll_verified, post_sealed, reseal_scope_root,
+    ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, CommittedSet, ContentProfile,
+    DeadLetterReason, Engine, EngineError, EventStream, GatewayConfig, LoginSecret, NodeId,
+    NodeKind, Permission, RecordReader, ResealSeeds, ScopeRootIdentity, SessionBearer,
+    SharePointer, SharingInviteLinks, StoragePolicy, SyncTimingProfile, WriteHistory, decode_queue,
+    load_bin_index, poll_verified, post_sealed, reseal_scope_root,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -1346,13 +1348,12 @@ fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
     );
 }
 
-/// The boundary reads the crossing from both ends. A move out of the folder a
-/// grant just promoted leaves that scope, and the engine refuses it where the
-/// caller is still there to be told, rather than queueing an op whose subtree
-/// the drain would publish still sealed at the source epoch. A move that stays
-/// inside that folder crosses nothing and still queues.
+/// A relocation is classified from both ends. A move out of the folder a grant
+/// just promoted leaves that scope and journals the crossing the drain acts on;
+/// a move that stays inside that folder crosses nothing and journals an
+/// intra-scope relink.
 #[test]
-fn a_move_out_of_a_granted_folder_is_refused_while_one_inside_it_still_queues() {
+fn a_move_out_of_a_granted_folder_journals_the_crossing_it_makes() {
     let mut fx = GrantScenario::new();
     let holiday = create_published_folder(
         &fx.world,
@@ -1370,28 +1371,28 @@ fn a_move_out_of_a_granted_folder_is_refused_while_one_inside_it_still_queues() 
     );
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
 
-    assert!(
-        matches!(
-            block_on(fx.engine.command(Command::Relink {
-                node: holiday,
-                new_parent: ROOT,
-            })),
-            Err(EngineError::ScopeExitRefused { .. })
-        ),
-        "the source end names the granted scope the move would leave"
-    );
+    block_on(fx.engine.command(Command::Relink {
+        node: album,
+        new_parent: holiday,
+    }))
+    .expect("a relocation between two folders of the granted scope queues");
     assert_eq!(
-        queued_relocations(&fx.owner_device),
-        0,
-        "and nothing was journaled, so no drain pass can publish it"
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra],
+        "a move that stays inside the granted scope crosses nothing"
     );
 
     block_on(fx.engine.command(Command::Relink {
         node: holiday,
-        new_parent: album,
+        new_parent: ROOT,
     }))
-    .expect("a relocation between two folders of the granted scope queues");
-    assert_eq!(queued_relocations(&fx.owner_device), 1);
+    .expect("a move out of the granted scope journals its crossing");
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra, ScopeCrossing::ExitsGrantedSource],
+        "and the source end names the granted scope the next one leaves, which \
+         owes it a cut"
+    );
 }
 
 /// A session that does not hold the target cannot name the scope the move would
@@ -1430,9 +1431,9 @@ fn a_relocation_whose_source_the_view_does_not_hold_reports_it_gone() {
         "the same verdict every other read gives a node it does not hold"
     );
     assert_eq!(
-        queued_relocations(&fx.owner_device),
+        queued_crossings(&fx.owner_device).len(),
         0,
-        "and nothing was journaled, so no drain pass can act on it"
+        "and nothing was journaled, so no drain pass can publish it"
     );
 }
 
@@ -1453,7 +1454,7 @@ fn a_relocation_of_the_vault_root_is_an_unsupported_target() {
         "the root is refused as a target, not classified as a crossing"
     );
     assert_eq!(
-        queued_relocations(&fx.owner_device),
+        queued_crossings(&fx.owner_device).len(),
         0,
         "and nothing was journaled, so no pass can link the root under a folder"
     );
@@ -1579,15 +1580,562 @@ fn a_level_below_its_read_epoch_floor_supplies_no_material() {
     );
 }
 
-/// How many relocations sit on this device's durable queue.
-fn queued_relocations(device: &FakeDevice) -> usize {
+/// The override seed the owner's own blob at `node`'s scope root conveys, with
+/// the read epoch that record carries.
+fn scope_material_of(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    node: NodeId,
+) -> (Zeroizing<[u8; 32]>, u64) {
+    let epoch = published_read_epoch(world, blocks, node);
+    let section = published_grant_section(world, blocks, node).expect("a scope root");
+    let seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        node.0,
+        epoch,
+        &section,
+    )
+    .expect("the owner blob yields the scope's override seed");
+    (seed, epoch)
+}
+
+/// Stand a node the mint left behind onto the scope it now belongs to. A mint
+/// promotes a folder to a scope root under a fresh override seed and leaves the
+/// nodes it carried sealed under the scope they left; the lazy wave converges
+/// them, and no drain pass drives that wave.
+fn converge_into_granted_scope(fx: &GrantScenario, node: NodeId) {
+    let (seed, epoch) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    reseal_interior_node(&fx.world, &fx.blocks, node, fx.folder.0, &seed, epoch);
+}
+
+/// The scope id and read epoch the record at `name` binds, and its read body
+/// under `read_key` — `None` where that key does not open it.
+fn published_seal(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    name: &IpnsName,
+    read_key: &[u8; 32],
+) -> ([u8; 16], u64, Option<ReadBody>) {
+    let head = published_head(world, blocks, name).expect("a published record");
+    let envelope = decode_envelope(&head).expect("the head decodes");
+    let body = open_read_body(&envelope, read_key).ok();
+    (envelope.scope, envelope.epoch, body)
+}
+
+/// The per-node read key one scope's override seed derives.
+fn node_read_key(scope_seed: &[u8; 32], node: NodeId) -> [u8; 32] {
+    *kdf::read_key(kdf::node_seed(scope_seed, &node.0).as_bytes()).as_bytes()
+}
+
+/// Whether a folder body names `child`.
+fn names_child(body: &Option<ReadBody>, child: NodeId) -> bool {
+    matches!(body, Some(ReadBody::Folder { children, .. })
+        if children.iter().any(|entry| entry.id == child.0))
+}
+
+/// The blueprint rule for a move out of a granted folder, end to end: the
+/// crossing publishes on the first pass, the moved subtree re-seals at the
+/// destination scope's epoch, and the grantee of the source scope no longer
+/// reaches it — the source root's listing has dropped it, and the seed that
+/// grantee holds no longer opens its record.
+#[test]
+fn a_move_out_of_a_granted_folder_re_seals_the_subtree_into_the_destination() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (granted_seed, granted_epoch) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &node_read_key(&granted_seed, holiday),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (fx.folder.0, granted_epoch, true),
+        "the moved node starts inside the granted scope, at that scope's epoch"
+    );
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move out of the granted scope journals its crossing");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the crossing published on the first pass rather than halting"
+    );
+    let vault_epoch = published_read_epoch(&fx.world, &fx.blocks, ROOT);
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &node_read_key(&READ_SCOPE_SEED, holiday),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (ROOT.0, vault_epoch, true),
+        "and it now binds the destination scope, at the destination's own epoch"
+    );
+    assert!(
+        published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(holiday),
+            &node_read_key(&granted_seed, holiday),
+        )
+        .2
+        .is_none(),
+        "the source scope's read key at the source epoch no longer opens it"
+    );
+    assert!(
+        !names_child(
+            &published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(fx.folder),
+                &node_read_key(&granted_seed, fx.folder),
+            )
+            .2,
+            holiday,
+        ),
+        "the granted scope root republished under its own end, without the node"
+    );
+    assert!(
+        names_child(
+            &published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(album),
+                &node_read_key(&READ_SCOPE_SEED, album),
+            )
+            .2,
+            holiday,
+        ),
+        "and the destination folder names it"
+    );
+}
+
+/// A relocation that leaves a granted source is a scope-exit rotation trigger
+/// for the source (blueprint/engine.md "Sync core: Ops"). The cut runs once per
+/// source scope however many ops left it, and raises that scope's durable
+/// read-epoch floor, which is the boundary every later read of it is measured
+/// against.
+#[test]
+fn a_move_out_of_a_granted_folder_cuts_the_scope_it_left_once() {
+    let mut fx = GrantScenario::new();
+    let one = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "one");
+    let two = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "two");
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, one);
+    converge_into_granted_scope(&fx, two);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    for node in [one, two] {
+        block_on(fx.engine.command(Command::Relink {
+            node,
+            new_parent: album,
+        }))
+        .expect("a move out of the granted scope journals its crossing");
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "both crossings published"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "two exits from one scope are one cut, not two"
+    );
+    assert_eq!(
+        block_on(floor::read_epoch_floor(
+            &fx.owner_device.floors(&SECRET),
+            &fx.folder.0
+        )),
+        Ok(Some(before + 1)),
+        "and the cut raised the durable read-epoch floor of the scope it left"
+    );
+}
+
+/// A crossing between two scopes that grant nobody owes no cut. The vault root
+/// is that scope: no share reaches it, so a move *into* a granted folder leaves
+/// nothing behind a rotation would protect.
+#[test]
+fn a_move_into_a_granted_folder_re_seals_and_cuts_nothing() {
+    let mut fx = GrantScenario::new();
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let before = published_read_epoch(&fx.world, &fx.blocks, ROOT);
+    block_on(fx.engine.command(Command::Relink {
+        node: album,
+        new_parent: fx.folder,
+    }))
+    .expect("a move into the granted scope journals its crossing");
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Cross],
+        "the source is the vault root, which grants nobody"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the crossing published on the first pass"
+    );
+    let (granted_seed, granted_epoch) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(album),
+        &node_read_key(&granted_seed, album),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (fx.folder.0, granted_epoch, true),
+        "the moved node re-sealed into the granted scope at that scope's epoch"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, ROOT),
+        before,
+        "and the source scope, which grants nobody, was not cut"
+    );
+}
+
+/// The second end's epoch arrives from the tick's boundary walk, and a rotation
+/// elsewhere supersedes it. The pass proves the end against the scope root's own
+/// record before it authors anything under it, so a superseded end publishes
+/// nothing at all rather than sealing a live record under a revoked seed and
+/// learning it past the PUT.
+#[test]
+fn a_second_end_the_record_plane_moved_past_publishes_nothing() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done),
+        "the walked material is now one cut behind the record it was read from"
+    );
+
+    let album_sequence = sequence_at(&fx.world, &write_name(album));
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move out of the granted scope journals its crossing");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::ExitsGrantedSource],
+        "the superseded end held the op rather than publishing under it"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(album)),
+        album_sequence,
+        "and the destination folder never republished, so the halt came before \
+         the first authoring"
+    );
+}
+
+/// A crossing whose boundary this session has proved no material for is one it
+/// cannot author. It is charged rather than held: a member watching a move that
+/// will never publish reads a dead letter, never a vault that says it is fresh.
+#[test]
+fn a_crossing_whose_boundary_material_is_absent_dead_letters() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    // The mint recorded the boundary, so the crossing is classified; the walk
+    // that would resolve what it seals under reads below the floor and proves
+    // nothing.
+    let epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_epoch_floor(&fx.folder.0, epoch + 1),
+    )
+    .expect("the floor raises");
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move out of the granted scope journals its crossing");
+
+    // One charge per pass, past the drain's own attempt budget.
+    for _ in 0..8 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "a bounded budget ends the retries rather than holding the queue head"
+    );
+    let status = block_on(fx.engine.status()).expect("the session status reads");
+    assert_eq!(
+        status
+            .dead_letters
+            .iter()
+            .map(|dead| dead.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted],
+        "and the member reads why the move never published"
+    );
+}
+
+/// Every entry the account's published bin index carries.
+fn published_bin_entries(fx: &GrantScenario) -> Vec<BinEntry> {
+    serve_http(&fx.owner_device, &fx.blocks, 8);
+    let keys = BinIndexKeys::derive(&SECRET);
+    let load = block_on(load_bin_index(
+        &fx.owner_device.record_store,
+        &GatewayConfig {
+            accelerator: None,
+            public_fallbacks: vec!["http://gateway.test".to_owned()],
+        }
+        .into_gateway(SessionBearer::default()),
+        &fx.owner_device.http,
+        &fx.owner_device.floor_store,
+        &fx.owner_device.snapshot_cache,
+        &fx.world.scheduler,
+        fx.engine.profile(),
+        &keys,
+    ))
+    .enrol(&RefCell::new(None));
+    let (BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. }) = load else {
+        panic!("the account's bin index reads");
+    };
+    index.entries
+}
+
+/// Every publish helper resolves the plane of the node it seals, so a pass that
+/// carries a second end serves the ops inside that scope from it. A soft delete
+/// of a node in the granted scope files its bin entry under **that** scope's id
+/// and under the name that scope's own write seed derives; the source end's id
+/// would name a scope the entry's record does not belong to, and a restore
+/// would re-key it into the wrong one.
+#[test]
+fn a_delete_inside_the_second_end_files_its_bin_entry_under_that_scope() {
+    let mut fx = GrantScenario::new();
+    let keeper = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "keeper",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, keeper);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (granted_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let granted_write_seed = block_on(fx.engine.walked_scope_material(fx.folder))
+        .expect("the walk proved the granted scope")
+        .write_scope_seed;
+
+    block_on(fx.engine.command(Command::Delete { node: keeper }))
+        .expect("a soft delete inside the granted scope queues");
+    // A move into the granted folder is what gives the pass its second end, and
+    // it leaves the vault root, which grants nobody, so nothing rotates under
+    // the assertions below.
+    block_on(fx.engine.command(Command::Relink {
+        node: album,
+        new_parent: fx.folder,
+    }))
+    .expect("the crossing queues");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let entries = published_bin_entries(&fx);
+    let entry = entries
+        .iter()
+        .find(|entry| entry.node_id == keeper.0)
+        .expect("the soft delete filed a bin entry");
+    assert_eq!(
+        entry.scope_id, fx.folder.0,
+        "the entry names the scope the deleted node belonged to"
+    );
+    assert_eq!(
+        entry.ipns_name(),
+        derive_write_name(&granted_write_seed, &keeper.0)
+            .as_str()
+            .as_bytes(),
+        "at the name that scope's own write seed derives"
+    );
+    let (scope, _, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(keeper),
+        &node_read_key(&granted_seed, keeper),
+    );
+    assert_eq!(
+        (scope, opened.is_some()),
+        (fx.folder.0, false),
+        "and the soft branch left the record published under that scope, re-keyed \
+         out of the seed the grantee still holds"
+    );
+}
+
+/// The same per-node plane resolution on the authoring side: a create under a
+/// parent that resolves onto the second end seals its new record into that
+/// scope, at that scope's epoch. Under the source end it would seal a record the
+/// granted scope's own readers reject as a transplant, and probe the wrong name
+/// for a replay of its own publish.
+#[test]
+fn a_create_inside_the_second_end_seals_into_that_scope() {
+    let mut fx = GrantScenario::new();
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (granted_seed, granted_epoch) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+
+    block_on(fx.engine.command(Command::Create {
+        parent: fx.folder,
+        name: "note".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a create inside the granted scope queues");
+    block_on(fx.engine.command(Command::Relink {
+        node: album,
+        new_parent: fx.folder,
+    }))
+    .expect("and the crossing that gives the pass its second end");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let note = block_on(fx.engine.view())
+        .expect("a rendered view")
+        .children(fx.folder)
+        .into_iter()
+        .find(|child| child.name == "note")
+        .expect("the create published")
+        .id;
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(note),
+        &node_read_key(&granted_seed, note),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (fx.folder.0, granted_epoch, true),
+        "the new record binds the scope its parent sits in, at that scope's epoch"
+    );
+}
+
+/// A relocation carries the crossing it was classified under, and a grant
+/// minted after it was queued moves the boundary under it. The drain reads the
+/// two planes it actually resolved rather than that stale field: publishing the
+/// move as a plain ref move would carry the subtree out of the granted scope
+/// still sealed where the new grantee opens it.
+#[test]
+fn a_relink_the_grant_overtook_still_re_seals_and_cuts() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    // Journaled while both ends are still the vault root's.
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("an intra-scope relink queues");
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra],
+        "the boundary the grant is about to mint does not exist yet"
+    );
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(&fx, holiday);
+    let (granted_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the move published"
+    );
+    let vault_epoch = published_read_epoch(&fx.world, &fx.blocks, ROOT);
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &node_read_key(&READ_SCOPE_SEED, holiday),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (ROOT.0, vault_epoch, true),
+        "and it re-sealed into the destination scope all the same"
+    );
+    assert!(
+        published_seal(
+            &fx.world,
+            &fx.blocks,
+            &write_name(holiday),
+            &node_read_key(&granted_seed, holiday),
+        )
+        .2
+        .is_none(),
+        "the scope it left no longer opens it"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        before + 1,
+        "and that scope was cut, off the plane the pass proved rather than the \
+         crossing the op carries"
+    );
+}
+
+/// The crossing every relocation on this device's durable queue carries, in
+/// queue order.
+fn queued_crossings(device: &FakeDevice) -> Vec<ScopeCrossing> {
     let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
     let enc_subkey = kdf::enc_subkey(&SECRET);
     decode_queue(&RecordReader::new(&enc_subkey), &raw)
         .mine
         .iter()
-        .filter(|(_, op)| op.relocation().is_some())
-        .count()
+        .filter_map(|(_, op)| op.relocation().map(|(_, _, crossing)| crossing))
+        .collect()
 }
 
 /// The parent's index is written last, so a mint that published the grantee

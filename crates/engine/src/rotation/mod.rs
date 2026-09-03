@@ -80,7 +80,7 @@ pub use sweep::{
 };
 pub use trigger::{
     CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,
-    RotateOnCutError, RotationPlanes, RotationTrigger, ScopeExitReport, ScopeExitRotator,
-    WriteRevokeKind, consume_scope_exit_triggers, cut_for_write_grant, prune_expired_grants,
-    revoke_read_grant, revoke_write_grant, rotate_on_cut,
+    RotateOnCutError, RotateOnExit, RotationPlanes, RotationTrigger, ScopeExitReport,
+    ScopeExitRotator, WriteRevokeKind, consume_scope_exit_triggers, cut_for_write_grant,
+    prune_expired_grants, revoke_read_grant, revoke_write_grant, rotate_on_cut,
 };
