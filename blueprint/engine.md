@@ -493,17 +493,27 @@ delete does.
   name this scope's write seed does not derive. Its subtree is sealed under a
   grantee's own seed, and cutting that grantee is a rotation, not a bin entry.
 - **A node the base links more than once unlinks from every one of them.** The
-  delete removes the child ref from every folder in this scope that the base
-  links the node under and republishes each, under one bin entry whose
+  delete removes the child ref from every folder the base links the node under
+  and republishes each under its own plane, under one bin entry whose
   `originParent` names the highest-ranked of those links — the folder a reader
-  resolves the node under, and so the folder a restore returns it to. The soft
-  branch re-keys the node out of the scope, so a link left standing would name a
-  record its own folder's readers can no longer open; the hard branch's own
-  reclamation already assumes no link survives. A folder the pass cannot load
-  holds the op rather than publishing a partial unlink. A link from _outside_
-  the scope is left standing instead: this scope's write plane cannot author
-  that folder at all, so waiting on it would hold the queue head for as long as
-  the link stands.
+  resolves the node under, and so the folder a restore returns it to — and whose
+  `scopeId` names the scope that link resolved onto. The soft branch re-keys the
+  node out of the scope, so a link left standing would name a record its own
+  folder's readers can no longer open; the hard branch's own reclamation already
+  assumes no link survives. A folder the pass cannot load holds the op rather
+  than publishing a partial unlink.
+- **A link the pass cannot author refuses the delete; it is never dropped.** A
+  pass anchors on one scope and carries one interior end beside it, and a delete
+  is what puts a second end on a queue with no crossing in it: the boundary a
+  link of the queue's first such op sits under is the end the tick resolves.
+  What the pass still cannot reach takes one of three exits. A link under a
+  boundary this tick proved no material for is **charged** — the op spends its
+  attempt budget and dead-letters where the member sees it, rather than
+  publishing the dangling link the rule exists to prevent. A target whose links
+  name two interior scopes, or three scopes in all, is one no pass will ever
+  pair, and the replay dead-letters it as `targetLinkedAcrossScopes` before a
+  record is authored. A target whose every link sits under one scope root other
+  than this pass's own is that scope's own pass to take, and waits for it.
 
 ### Re-key into the bin
 
@@ -728,7 +738,12 @@ Per-op rebase rules (FSM1/cipher-box-next#33 D5):
 
 Terminally unrebasable ops (e.g. access revoked while offline) **dead-letter**
 with a visible notice and staged bytes preserved; nothing is silently dropped
-(FSM1/cipher-box-next#33 D6). Web reaches full offline parity: uploads stage into OPFS/IndexedDB
+(FSM1/cipher-box-next#33 D6). The notice and the custody of a content key ride
+separate carriers, because the preserved set evicts oldest-first: an op that
+staged a version parks its op record there, and one that staged none takes a
+per-owner notice of its id and its reason instead, which costs no slot and holds
+no record bytes. A cold start reads both back, so every dead letter is nameable
+and discardable after a restart. Web reaches full offline parity: uploads stage into OPFS/IndexedDB
 behind the profile budget (past it, only new uploads fail fast; metadata ops
 queue unbounded).
 

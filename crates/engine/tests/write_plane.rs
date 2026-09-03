@@ -9488,6 +9488,102 @@ fn a_dead_lettered_ops_blocks_survive_a_cold_start_and_a_gc_pass() {
     );
 }
 
+/// A dead letter with no staged version, and the id the host reads it by.
+///
+/// A rename of a node no gate-passing state holds is terminal, and it stages
+/// nothing: the shape whose dead letter has no content key to keep custody of.
+fn versionless_dead_letter(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>, DeadLetter) {
+    let (engine, _events, mut tasks) = boot(world, blocks, device, 42);
+    stage(
+        device,
+        &Op::rename(NodeId([0xAB; 16]), "renamed", 1, UnixMillis(4_242)),
+        None,
+    );
+    tick(world, &engine, &mut tasks);
+
+    let parked = block_on(engine.status())
+        .expect("the status reads")
+        .dead_letters;
+    assert_eq!(
+        parked.len(),
+        1,
+        "the op is terminally unrebasable, and it staged no version"
+    );
+    assert_eq!(parked[0].reason, DeadLetterReason::TargetGone);
+    (engine, tasks, parked[0])
+}
+
+/// The preserved set holds a record because that record carries a version's
+/// only content key, and it evicts oldest-first. An op with no version takes a
+/// notice instead — and the notice map does not outlive the process, so the
+/// notice is the only thing that can name it again.
+#[test]
+fn a_versionless_dead_letter_is_named_again_after_a_cold_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, _tasks, parked) = versionless_dead_letter(&world, &blocks, &alice);
+    drop(engine);
+
+    let (restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+
+    assert_eq!(
+        block_on(restarted.status())
+            .expect("the status reads")
+            .dead_letters,
+        vec![parked],
+        "the restart names it by the id its dead letter announced"
+    );
+}
+
+/// Listing it is half of what the host owes the member; the exit is the other.
+#[test]
+fn discarding_a_noticed_dead_letter_clears_it_across_the_next_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, _tasks, parked) = versionless_dead_letter(&world, &blocks, &alice);
+    drop(engine);
+    let (mut restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+
+    assert!(
+        matches!(
+            block_on(restarted.command(Command::RecoverDeadLetter {
+                op_id: parked.op_id
+            })),
+            Err(EngineError::MalformedInput { .. })
+        ),
+        "there is no version to re-stage, which is the refusal every metadata intent earns"
+    );
+    block_on(restarted.command(Command::DiscardDeadLetter {
+        op_id: parked.op_id,
+    }))
+    .expect("the discard lands");
+    assert!(
+        block_on(restarted.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "the notice goes with it"
+    );
+    drop(restarted);
+
+    let (again, _events, _tasks) = boot(&world, &blocks, &alice, 44);
+    assert!(
+        block_on(again.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "and no later boot brings it back"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Parked writes: durable identity, discard, and recover.
 // ---------------------------------------------------------------------------

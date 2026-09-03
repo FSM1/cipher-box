@@ -1532,6 +1532,164 @@ fn the_tick_resolves_the_material_of_an_owner_minted_interior_scope() {
     );
 }
 
+/// One node linked from a folder of the vault's own scope and from a folder of
+/// an owner-minted interior scope, with the interior folder's read key.
+///
+/// Both links are planted while both folders are still the vault's own; the
+/// grant is what moves one of them under a boundary, which is also how a live
+/// vault reaches this state.
+fn dual_linked_across_a_grant(fx: &mut GrantScenario) -> (NodeId, NodeId, NodeId, [u8; 32]) {
+    let keep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "keep");
+    let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, keep, "deep");
+    let inner =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "box");
+    concurrent_add(
+        &fx.world,
+        &fx.blocks,
+        inner,
+        &read_key_of(inner),
+        SCOPE,
+        ChildRef {
+            id: deep.0,
+            name: "deep".to_owned(),
+            ipns_name: write_name(deep).as_str().as_bytes().to_vec(),
+            kind: CoreNodeKind::Folder,
+            // Above the create's own, so the folder the grant moves is the one
+            // a reader resolves the node under, and so the one whose plane the
+            // node's own record is re-keyed to.
+            link_counter: 1,
+            unknown: PreservedFields::new(),
+        },
+    );
+    block_on(fx.engine.command(Command::SetFocus { node: Some(inner) })).expect("the focus moves");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(inner)
+            .iter()
+            .any(|child| child.id == deep),
+        "the second link is in gate-passing state"
+    );
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (override_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let inner_read_key =
+        *kdf::read_key(kdf::node_seed(&override_seed, &inner.0).as_bytes()).as_bytes();
+    assert_eq!(
+        published_child_names(&fx.world, &fx.blocks, inner, &inner_read_key),
+        vec!["deep".to_owned()],
+        "the grant left the second link standing in a scope of its own"
+    );
+    assert_eq!(
+        published_child_names(&fx.world, &fx.blocks, keep, &read_key_of(keep)),
+        vec!["deep".to_owned()],
+        "and the first where it was"
+    );
+    (keep, deep, inner, inner_read_key)
+}
+
+/// A soft delete unlinks its target from every folder that links it, and a
+/// grant minted since one of those links landed puts that folder in another
+/// scope. The pass carries both ends, so each folder republishes under its own
+/// plane (blueprint/engine.md "Delete branch").
+#[test]
+fn a_delete_unlinks_a_node_from_a_folder_in_each_end_of_the_pass() {
+    let mut fx = GrantScenario::new();
+    let (keep, deep, inner, inner_read_key) = dual_linked_across_a_grant(&mut fx);
+
+    block_on(fx.engine.command(Command::Delete { node: deep })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        published_child_names(&fx.world, &fx.blocks, inner, &inner_read_key),
+        Vec::<String>::new(),
+        "the folder inside the grant republished under the second end's plane"
+    );
+    assert_eq!(
+        published_child_names(&fx.world, &fx.blocks, keep, &read_key_of(keep)),
+        Vec::<String>::new(),
+        "and the folder in the vault's own scope under the anchor's"
+    );
+}
+
+/// A link under a boundary this tick proved no material for is charged, never
+/// dropped: dropping it publishes the dangling link the delete exists to
+/// prevent, and holding it stalls the strict-FIFO head with nothing reported.
+#[test]
+fn a_delete_charges_a_link_under_a_boundary_no_pass_can_seal() {
+    let mut fx = GrantScenario::new();
+    let (keep, deep, inner, inner_read_key) = dual_linked_across_a_grant(&mut fx);
+    let epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_epoch_floor(&fx.folder.0, epoch + 1),
+    )
+    .expect("the floor raises");
+
+    block_on(fx.engine.command(Command::Delete { node: deep })).expect("the delete stages");
+    // The drain's attempt budget, spent one charge per pass.
+    for _ in 0..5 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert_eq!(
+        block_on(fx.engine.status())
+            .expect("the status reads")
+            .dead_letters
+            .into_iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted],
+        "the spent budget is what reports it"
+    );
+    assert_eq!(
+        published_child_names(&fx.world, &fx.blocks, inner, &inner_read_key),
+        vec!["deep".to_owned()],
+        "and neither folder published a part-way unlink"
+    );
+    assert_eq!(
+        published_child_names(&fx.world, &fx.blocks, keep, &read_key_of(keep)),
+        vec!["deep".to_owned()],
+    );
+}
+
+/// A target every link of which sits under one scope root other than this
+/// pass's own is that scope's own pass to take. Charging it here would spend a
+/// budget on an op another pass publishes, and abandon one whose material is
+/// only a tick away.
+#[test]
+fn a_delete_wholly_inside_a_dark_grant_waits_rather_than_charging() {
+    let mut fx = GrantScenario::new();
+    let inner =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "box");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_epoch_floor(&fx.folder.0, epoch + 1),
+    )
+    .expect("the floor raises");
+
+    block_on(fx.engine.command(Command::Delete { node: inner })).expect("the delete stages");
+    // The drain's attempt budget, spent one charge per pass.
+    for _ in 0..5 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    assert!(
+        block_on(fx.engine.status())
+            .expect("the status reads")
+            .dead_letters
+            .is_empty(),
+        "the op waits on the scope that holds every link"
+    );
+}
+
 /// The minting session is the only one that ever held this material without a
 /// walk. A second session over the same vault must reach the same seeds and the
 /// same epoch, or the destination end of a crossing depends on which session
@@ -1865,6 +2023,78 @@ fn a_child_the_scopes_write_seed_does_not_name_is_a_boundary_no_index_states() {
             "{label}: and carries the crossing the boundary set names"
         );
     }
+}
+
+/// Another writer publishes `folder`'s next record, adding `extra` on top of
+/// whatever the folder currently carries.
+fn concurrent_add(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    folder: NodeId,
+    read_key: &[u8; 32],
+    scope_id: [u8; 16],
+    extra: ChildRef,
+) {
+    let name = write_name(folder);
+    let head = published_head(world, blocks, &name).expect("the folder is published");
+    let envelope = decode_envelope(&head).expect("the head block decodes");
+    let ReadBody::Folder {
+        created_at,
+        modified_at,
+        mut children,
+        unknown,
+    } = open_read_body(&envelope, read_key).expect("the folder body opens")
+    else {
+        panic!("expected a folder body");
+    };
+    children.push(extra);
+    let authored = author_child_envelope(EnvelopeAuthoring {
+        node_id: folder.0,
+        scope_id,
+        epoch: envelope.epoch,
+        read_key,
+        nonce: &[0x77; 24],
+        body: &ReadBody::Folder {
+            created_at,
+            modified_at,
+            children,
+            unknown,
+        },
+        carried_unknown: envelope.unknown.clone(),
+        carried_epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
+    })
+    .expect("the concurrent writer authors a valid record");
+    blocks.put(authored.block.clone());
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes()),
+        format!("/ipfs/{}", authored.cid).as_bytes(),
+        sequence_at(world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// The names `folder`'s published record carries, read under `read_key`.
+fn published_child_names(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    folder: NodeId,
+    read_key: &[u8; 32],
+) -> Vec<String> {
+    let head = published_head(world, blocks, &write_name(folder)).expect("a published record");
+    let envelope = decode_envelope(&head).expect("the head block decodes");
+    let ReadBody::Folder { children, .. } =
+        open_read_body(&envelope, read_key).expect("the folder body opens")
+    else {
+        panic!("expected a folder body");
+    };
+    children.iter().map(|child| child.name.clone()).collect()
 }
 
 /// A folder of the vault root's own scope, published at `name`.

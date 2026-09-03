@@ -633,6 +633,7 @@ fn every_dead_letter_reason_crosses_at_the_ordinal_typescript_decodes() {
         (facade::DeadLetterReason::ScopeRootNotResealable, 13),
         (facade::DeadLetterReason::BinIndexFull, 14),
         (facade::DeadLetterReason::CrossingUnauthorable, 15),
+        (facade::DeadLetterReason::TargetLinkedAcrossScopes, 16),
     ] {
         assert_eq!(DeadLetterReason::from(reason) as u32, ordinal, "{reason:?}");
     }

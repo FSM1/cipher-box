@@ -455,5 +455,6 @@ export interface EngineWasm {
     readonly BinIndexFull: number;
     readonly CrossingUnauthorable: number;
     readonly BinIndexStrandedMint: number;
+    readonly TargetLinkedAcrossScopes: number;
   };
 }

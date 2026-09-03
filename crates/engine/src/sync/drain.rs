@@ -98,11 +98,13 @@ use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::{UnlinkedChild, project_child_version, project_folder};
-use crate::sync::rebase::{AppliedOp, DeadLetterReason, ReplayScopes, decode_queue, replay};
+use crate::sync::rebase::{
+    AppliedOp, DeadLetterReason, ReplayScopes, decode_queue, enclosing_scope_root, replay,
+};
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::{
-    LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter, reconcile_staging_over,
-    release_version_blocks, stage_op, version_leaf_cids,
+    DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter,
+    reconcile_staging_over, release_version_blocks, stage_op, version_leaf_cids,
 };
 use crate::sync::upload_mark::{Resume, encode_upload_mark, resume_from, upload_mark_key};
 
@@ -1531,10 +1533,7 @@ where
             // A terminally unrebasable op keeps its staged bytes, and this is
             // what keeps them reachable — and openable — once the abandonment
             // has dropped its record from the queue.
-            let preserved = match op.content_root_cid() {
-                Some(_) => self.preserve_dead_letter(*op_id, *reason).await?,
-                None => Preservation::Kept,
-            };
+            let preserved = self.preserve_dead_letter(scope, *op_id, *reason).await?;
             self.abandon(scope, *op_id, op).await?;
             self.release_if_refused(preserved, op).await;
             report
@@ -1664,12 +1663,8 @@ where
                     }
                     _ => (DeadLetterReason::AttemptsExhausted, true),
                 };
-                let preserved = match op.content_root_cid() {
-                    Some(_) => match self.preserve_dead_letter(op_id, reason).await {
-                        Ok(preserved) => preserved,
-                        Err(_) => return,
-                    },
-                    None => Preservation::Kept,
+                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
+                    return;
                 };
                 let handed_back = if owes_its_name {
                     self.retire_unreferenced_name(scope, op).await
@@ -1688,7 +1683,7 @@ where
             // upload of the version now at the name, and unpinning content a
             // live record names is loss where leaving rows charged is a leak.
             Halt::Permanent(reason @ DeadLetterReason::BaseSuperseded) => {
-                let Ok(preserved) = self.preserve_dead_letter(op_id, reason).await else {
+                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
                     return;
                 };
                 if self.dequeue_op(op_id).await.is_ok() {
@@ -1705,7 +1700,7 @@ where
             // which for a restored replay keeps the resurrection candidate alive
             // at the owner's own expense.
             Halt::Permanent(reason @ DeadLetterReason::AlreadyPublished) => {
-                let Ok(preserved) = self.preserve_dead_letter(op_id, reason).await else {
+                let Ok(preserved) = self.preserve_dead_letter(scope, op_id, reason).await else {
                     return;
                 };
                 if self.retire_unreferenced_name(scope, op).await.is_ok()
@@ -2497,7 +2492,7 @@ where
         let target = applied.op.target;
         let mut unlink_from = Vec::new();
         let mut named = None;
-        for parent in self.published_parents(scope, target)? {
+        for parent in self.published_parents(scope, pass, target)? {
             self.ensure_folder(scope, pass, parent).await?;
             let Some(child) = pass
                 .folder(parent)?
@@ -5073,28 +5068,59 @@ where
         self.base.borrow().parent_of(node).ok_or(Halt::Unclassified)
     }
 
-    /// Every parent inside `scope` that the base links `node` under, winner
-    /// first ([`Snapshot::links_ranked`]).
+    /// Every parent the base links `node` under, winner first
+    /// ([`Snapshot::links_ranked`]), once this pass has proved it can author
+    /// each of them.
     ///
     /// A delete acts on the whole list, because it re-keys the node out of the
     /// scope: a link left standing names a record its own folder's readers can
-    /// no longer open (blueprint/engine.md "Delete branch").
+    /// no longer open (blueprint/engine.md "Delete branch"). A pass carries two
+    /// ends, so a folder in the second end's scope is this pass's to unlink and
+    /// republishes under its own plane.
     ///
-    /// A link from outside the scope is dropped rather than halted on. This
-    /// scope's write plane cannot author that folder at all, so waiting on it
-    /// would hold the queue head for as long as the link stands.
-    fn published_parents(&self, scope: &DrainScope<'_>, node: NodeId) -> Result<Vec<NodeId>, Halt> {
-        let parents: Vec<NodeId> = self
-            .base
-            .borrow()
-            .links_ranked_under(node, scope.source.root)
-            .into_iter()
-            .map(|link| link.parent)
-            .collect();
-        if parents.is_empty() {
-            return Err(Halt::Unclassified);
+    /// A link neither end roots is never dropped. Which halt it takes turns on
+    /// whether this pass authors any of the others:
+    ///
+    /// - none of them, so every link sits under one other scope root: that
+    ///   scope's own pass takes the op, and this one leaves it where
+    ///   [`halt_below_another_scope_root`] leaves every op below a root that is
+    ///   not its own.
+    /// - some of them: no pass reaches further than this one, and dropping the
+    ///   rest would publish the dangling link the whole rule exists to prevent.
+    ///   Charged, so the strict-FIFO head reports rather than stalls. The
+    ///   replay dead-letters the spans no pass will ever pair
+    ///   ([`delete_spans_unpairable_scopes`](crate::sync::rebase)), so what
+    ///   reaches here is a boundary this tick proved no material for.
+    fn published_parents(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &Pass,
+        node: NodeId,
+    ) -> Result<Vec<NodeId>, Halt> {
+        let base = self.base.borrow();
+        let mut parents = Vec::new();
+        let mut beyond = None;
+        for link in base.links_ranked(node) {
+            // A chain that stops at no proved boundary roots at the parent
+            // itself, which no end is anchored on.
+            let root =
+                enclosing_scope_root(&base, link.parent, scope.scope_roots).unwrap_or(link.parent);
+            match scope.plane_rooted_at(pass.epoch, root)? {
+                Some(_) => parents.push(link.parent),
+                None => {
+                    beyond = beyond.or(Some(halt_below_another_scope_root(
+                        scope.keyless_roots,
+                        scope.source.ascent_node_seed.is_none(),
+                        root,
+                    )));
+                }
+            }
         }
-        Ok(parents)
+        match (parents.is_empty(), beyond) {
+            (false, None) => Ok(parents),
+            (false, Some(_)) => Err(Halt::UploadAttempt),
+            (true, halt) => Err(halt.unwrap_or(Halt::Unclassified)),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5362,11 +5388,12 @@ where
     /// Copy one queued op's record into the preserved set before the
     /// abandonment removes it, so the version it stages stays both referenced
     /// and openable ([`preserve_dead_letter`]).
-    /// Callers pass only an op that has a staged version. The preserved set
-    /// evicts oldest-first, so a slot spent on a record with no content would
-    /// release a version whose per-version key nothing re-derives.
+    ///
+    /// An op that staged no version takes a notice there instead, which is what
+    /// makes it nameable again after a cold start.
     async fn preserve_dead_letter(
         &self,
+        scope: &DrainScope<'_>,
         op_id: OpId,
         reason: DeadLetterReason,
     ) -> Result<Preservation, Halt> {
@@ -5374,9 +5401,16 @@ where
         let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Ok(Preservation::Kept);
         };
-        preserve_dead_letter(self.staging, op_id, reason, record, self.scheduler.now())
-            .await
-            .map_err(seam)
+        preserve_dead_letter(
+            self.staging,
+            &owner_scoped_key(DEAD_LETTER_NOTICES_PREFIX, scope.enc_secret),
+            op_id,
+            reason,
+            record,
+            self.scheduler.now(),
+        )
+        .await
+        .map_err(seam)
     }
 
     /// Drop the version a [`Preservation::Refused`] set could not hold, once the

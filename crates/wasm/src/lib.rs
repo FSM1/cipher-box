@@ -413,6 +413,9 @@ pub enum DeadLetterReason {
     /// device of the account clears this; until one does, a delete here must be
     /// permanent.
     BinIndexStrandedMint,
+    /// A delete whose target is also in a folder of a shared folder this
+    /// device cannot write in the same pass.
+    TargetLinkedAcrossScopes,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -444,6 +447,8 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             }
             facade::DeadLetterReason::BinIndexStrandedMint => {
                 DeadLetterReason::BinIndexStrandedMint
+            facade::DeadLetterReason::TargetLinkedAcrossScopes => {
+                DeadLetterReason::TargetLinkedAcrossScopes
             }
         }
     }
