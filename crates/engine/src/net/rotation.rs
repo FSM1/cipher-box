@@ -10665,9 +10665,12 @@ mod tests {
         let net = harness.net(&[]);
         block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
         // The root's own derived name, so the name half of the refusal holds and
-        // only the node id can reject.
-        let name = interior_name(GRANTED_FOLDER);
-        let sequence_before = sequence_at(&harness, &name);
+        // only the node id can reject. Staged, so a signature the guard failed
+        // to stop would move a sequence this test can read.
+        let (name, block) = interior_record(GRANTED_FOLDER, OWNER_ROOT_EPOCH, Vec::new());
+        harness.stage_node(GRANTED_FOLDER, &name, &block);
+        let sequence_before =
+            sequence_at(&harness, &name).expect("the target name carries a record");
         let root = promoted_folder_root();
         let body = interior_body();
         let empty = PreservedFields::new();
@@ -10682,7 +10685,7 @@ mod tests {
         );
         assert_eq!(
             sequence_at(&harness, &name),
-            sequence_before,
+            Some(sequence_before),
             "and nothing was signed",
         );
     }
@@ -10696,9 +10699,12 @@ mod tests {
         let net = harness.net(&[]);
         block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
         // Another node's name: derivable, and owned by a key this publish does
-        // not sign with.
-        let elsewhere = interior_name([0x02; 16]);
-        let sequence_before = sequence_at(&harness, &elsewhere);
+        // not sign with. Staged, so a signature the guard failed to stop would
+        // move a sequence this test can read.
+        let (elsewhere, block) = interior_record([0x02; 16], OWNER_ROOT_EPOCH, Vec::new());
+        harness.stage_node([0x02; 16], &elsewhere, &block);
+        let sequence_before =
+            sequence_at(&harness, &elsewhere).expect("the target name carries a record");
         let root = promoted_folder_root();
         let body = interior_body();
         let empty = PreservedFields::new();
@@ -10713,7 +10719,7 @@ mod tests {
         );
         assert_eq!(
             sequence_at(&harness, &elsewhere),
-            sequence_before,
+            Some(sequence_before),
             "and nothing was signed",
         );
     }

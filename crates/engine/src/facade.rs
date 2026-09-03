@@ -116,7 +116,8 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{
-    Drain, DrainReport, DrainScope, bin_load_is_a_verdict, hold_captures, published_op_mark,
+    Drain, DrainReport, DrainScope, ScopeEnd, bin_load_is_a_verdict, hold_captures,
+    published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -5193,25 +5194,31 @@ where {
                     let mut scopes: Vec<DrainScope<'_>> = Vec::new();
                     if let Some((read_seed, write_seed)) = vault_seeds {
                         scopes.push(DrainScope {
-                            root: NodeId(root_id),
-                            root_name: &root_name,
+                            source: ScopeEnd {
+                                root: NodeId(root_id),
+                                root_name: &root_name,
+                                read_scope_seed: read_seed,
+                                write_scope_seed: write_seed,
+                            },
+                            destination: None,
                             parent_node_seed: None,
                             scope_roots: &proved_roots,
                             keyless_roots: &keyless_roots,
-                            read_scope_seed: read_seed,
-                            write_scope_seed: write_seed,
                             enc_secret: &enc_subkey,
                             owner_identity: &owner_identity,
                         });
                     }
                     scopes.extend(drivable.iter().map(|(scope, write)| DrainScope {
-                        root: NodeId(scope.scope_id),
-                        root_name: &scope.name,
+                        source: ScopeEnd {
+                            root: NodeId(scope.scope_id),
+                            root_name: &scope.name,
+                            read_scope_seed: &scope.read_scope_seed,
+                            write_scope_seed: &write.seed,
+                        },
+                        destination: None,
                         parent_node_seed: Some(&scope.parent_node_seed),
                         scope_roots: &proved_roots,
                         keyless_roots: &keyless_roots,
-                        read_scope_seed: &scope.read_scope_seed,
-                        write_scope_seed: &write.seed,
                         enc_secret: &enc_subkey,
                         owner_identity: &owner_identity,
                     }));
