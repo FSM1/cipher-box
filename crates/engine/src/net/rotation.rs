@@ -18,12 +18,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::content::{encode_content_cid_str, is_wellformed_content_cid};
+use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantBlobPayload, GrantLedgerEntry, GrantSection,
-    GrantSetCommitment, GrantSetEntry, Permission, PreservedFields, ReadBody,
+    GrantSetCommitment, GrantSetEntry, NodeKind, Permission, PreservedFields, ReadBody,
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, SignedSealed,
     WriteBody, decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
     open_owner_history_link, open_read_body, sign_grant_set, unseal,
@@ -633,6 +634,106 @@ pub(crate) enum WritePlaneDark {
     Unavailable,
 }
 
+/// Which failure one boundary walk met. The tick tells the two apart: a trust
+/// rejection refuses every relocation and raises an attributable abuse event,
+/// an availability failure keeps the retry it has (#1663 D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WalkFailure {
+    /// A scope root on the walk failed the adoption gate, or a parent index
+    /// named one at bytes that are no `ipnsName`: fail-closed trust, never
+    /// staleness (AGENTS.md rule 6).
+    Rejected {
+        /// The scope root the verdict is about. A scope id is a node id, and no
+        /// key material.
+        scope_id: [u8; 16],
+    },
+    /// A record this pass could not fetch or read, two parents that name one
+    /// scope at different labels, or a bound that ended the descent. Retryable.
+    Unavailable,
+}
+
+impl WalkFailure {
+    /// Hold the trust verdict where one walk meets both, so a party who can
+    /// also darken a record cannot mask a forged one behind it.
+    fn accumulate(slot: &mut Option<Self>, met: Self) {
+        if !matches!(slot, Some(Self::Rejected { .. })) {
+            *slot = Some(met);
+        }
+    }
+}
+
+impl core::fmt::Display for WalkFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Rejected { scope_id } => write!(
+                f,
+                "boundary walk: scope root [{}] rejected by the adoption gate",
+                hex_lower(scope_id)
+            ),
+            Self::Unavailable => f.write_str("boundary walk: a scope root is unavailable"),
+        }
+    }
+}
+
+/// What one boundary walk named below a vault root that gated.
+pub(crate) struct WalkedBoundaries {
+    /// The scope roots the walk gated, each with the material its legs need.
+    /// A level the walk could not gate costs that level's subtree, so this set
+    /// is complete only while [`Self::failure`] is `None`.
+    pub(crate) proved: Vec<DescendantScopeRoot>,
+    /// Scope roots the walked bodies name but this walk holds no material for
+    /// ([`note_unindexed_scope_roots`]).
+    pub(crate) unproved: BTreeSet<NodeId>,
+    /// The failure this walk met, a rejection outranking an unavailability.
+    /// `None` names a complete boundary set — the one state in which a
+    /// classifier may treat what is missing from it as inside its parent scope.
+    pub(crate) failure: Option<WalkFailure>,
+}
+
+/// A boundary walk's reading of a root gate verdict. A superseded name is this
+/// pass's copy trailing a floor a rotation raised, and it converges, so only a
+/// rejection is a trust verdict here (ADR 0003 D2).
+fn walk_verdict(verdict: RootGateVerdict, scope_id: [u8; 16]) -> WalkFailure {
+    match verdict {
+        RootGateVerdict::Rejected => WalkFailure::Rejected { scope_id },
+        RootGateVerdict::Unavailable | RootGateVerdict::Superseded => WalkFailure::Unavailable,
+    }
+}
+
+/// Record every folder of a walked scope that publishes under a name that
+/// scope's own write seed does not derive. Such a folder is a scope root of its
+/// own — a scope's own records sit at derived names and nowhere else (CONTEXT.md
+/// "name law") — so the boundary stands whether or not this level's
+/// `directChildScopeIndex` still names it. That index rides the sealed write
+/// body, which any committed writer of the scope authors and no owner signature
+/// covers, and an additive set cannot observe an entry a writer removed.
+///
+/// Reaches the direct children of a walked scope root, which is where the walk
+/// holds both halves: the body that names them and the seed that derives what
+/// their names would be.
+fn note_unindexed_scope_roots(
+    out: &mut BTreeSet<NodeId>,
+    body: &ReadBody,
+    write: Option<&ScopeWritePlane>,
+    index: &[ChildScopeRef],
+) {
+    let (Some(write), ReadBody::Folder { children, .. }) = (write, body) else {
+        return;
+    };
+    for child in children {
+        if child.kind != NodeKind::Folder
+            || index.iter().any(|entry| entry.scope_id == child.id)
+            || derive_write_name(&write.seed, &child.id)
+                .as_str()
+                .as_bytes()
+                == child.ipns_name
+        {
+            continue;
+        }
+        out.insert(NodeId(child.id));
+    }
+}
+
 /// How many descendant scope roots one walk admits.
 const MAX_DESCENDANT_SCOPE_ROOTS: usize = 256;
 
@@ -900,14 +1001,18 @@ where
     F: FloorStore,
 {
     /// Descend into one claimed child scope root and read the index of its own
-    /// children out of its write body. `None` on any verdict short of a gate
-    /// pass: a level this reader cannot prove costs that level's subtree alone.
+    /// children out of its write body. Every verdict short of a gate pass is
+    /// classified rather than dropped, because the two classes end differently
+    /// at the tick ([`WalkFailure`]).
     async fn descend(
         &self,
         parent_read_scope_seed: &[u8; SECRET_LEN],
         child: &ChildScopeRef,
-    ) -> Option<(DescendantScopeRoot, Vec<ChildScopeRef>)> {
-        let name = scope_name(&child.ipns_name).ok()?;
+    ) -> Result<(DescendantScopeRoot, Vec<ChildScopeRef>), WalkFailure> {
+        let rejected = WalkFailure::Rejected {
+            scope_id: child.scope_id,
+        };
+        let name = scope_name(&child.ipns_name).map_err(|_| rejected)?;
         let parent_node_seed =
             Zeroizing::new(*kdf::node_seed(parent_read_scope_seed, &child.scope_id).as_bytes());
         let adopter = RootAdopter::new(
@@ -919,10 +1024,12 @@ where
             child.scope_id,
         )
         .under_parent_node_seed(parent_node_seed.clone());
-        let (_, record_bytes) = fanout_get_verify(self.transport, &name).await?;
+        let (_, record_bytes) = fanout_get_verify(self.transport, &name)
+            .await
+            .ok_or(WalkFailure::Unavailable)?;
         let gated = gated_child_root(&adopter, &name, &record_bytes, child.scope_id)
             .await
-            .ok()?;
+            .map_err(|verdict| walk_verdict(verdict, child.scope_id))?;
         // Only a gate pass writes the record cache.
         let _ = self
             .snapshot_cache
@@ -931,7 +1038,7 @@ where
         let (write, grandchildren) = self
             .write_plane(&gated, &name, child.scope_id, RootAnchor::Descendant)
             .await;
-        Some((
+        Ok((
             DescendantScopeRoot {
                 scope_id: child.scope_id,
                 name,
@@ -1086,8 +1193,15 @@ where
     /// derived name by a committed writer is refused.
     ///
     /// `root_record_bytes` are the vault root's own record, which the caller
-    /// already holds. `None` where the vault root itself did not gate: a caller
+    /// already holds. `Err` where the vault root itself did not gate: a caller
     /// must tell that apart from a vault that holds no descendant scope.
+    ///
+    /// Every failure is classified rather than dropped ([`WalkFailure`]), and a
+    /// rejection anywhere on the walk outranks an unavailability, so a party who
+    /// can also darken a record cannot mask a forged one behind it. A level the
+    /// walk could not gate still costs that level's subtree alone — what the
+    /// caller may do with an incomplete set is the caller's rule
+    /// ([`WalkedBoundaries::failure`]).
     ///
     /// Each level is canonicalized and its labels bound before the descent, so
     /// the walk is permutation-independent and a `scopeId` two parents name at
@@ -1098,7 +1212,7 @@ where
         root_scope_id: [u8; 16],
         root_name: &IpnsName,
         root_record_bytes: &[u8],
-    ) -> Option<Vec<DescendantScopeRoot>> {
+    ) -> Result<WalkedBoundaries, WalkFailure> {
         let adopter = RootAdopter::new(
             self.gateway,
             self.http,
@@ -1109,42 +1223,67 @@ where
         );
         let gated = gated_scope_root(&adopter, root_name, root_record_bytes)
             .await
-            .ok()?;
-        let (_, index) = self
+            .map_err(|verdict| walk_verdict(verdict, root_scope_id))?;
+        let (root_write, index) = self
             .write_plane(&gated, root_name, root_scope_id, RootAnchor::VaultRoot)
             .await;
+        let mut unproved = BTreeSet::new();
+        note_unindexed_scope_roots(
+            &mut unproved,
+            &gated.read_body,
+            root_write.as_ref().ok(),
+            &index,
+        );
         let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
         let mut descendants: Vec<DescendantScopeRoot> = Vec::new();
         let mut visited = BTreeSet::from([root_scope_id]);
         let mut attempts = 0usize;
+        let mut failure = None;
         let mut frontier = vec![(gated.read_scope_seed, index)];
-        while !frontier.is_empty() && descendants.len() < MAX_DESCENDANT_SCOPE_ROOTS {
+        while !frontier.is_empty() {
             let mut next = Vec::new();
             for (parent_read_scope_seed, index) in frontier {
                 let index = canonicalize(&index);
                 if bind_child_labels(&mut labels, index.iter(), root_scope_id).is_err() {
+                    WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
                     continue;
                 }
                 for child in index {
                     if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS
                         || attempts >= MAX_SCOPE_DESCENT_ATTEMPTS
-                        || !visited.insert(child.scope_id)
                     {
+                        // The set this walk could still admit is incomplete, and
+                        // a bound a legitimately wide vault reaches names no
+                        // party: availability, never a trust verdict.
+                        WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
+                        continue;
+                    }
+                    if !visited.insert(child.scope_id) {
                         continue;
                     }
                     attempts += 1;
-                    let Some((descendant, grandchildren)) =
-                        self.descend(&parent_read_scope_seed, &child).await
-                    else {
-                        continue;
-                    };
-                    next.push((descendant.read_scope_seed.clone(), grandchildren));
-                    descendants.push(descendant);
+                    match self.descend(&parent_read_scope_seed, &child).await {
+                        Ok((descendant, grandchildren)) => {
+                            note_unindexed_scope_roots(
+                                &mut unproved,
+                                &descendant.adopted.read_body,
+                                descendant.write.as_ref().ok(),
+                                &grandchildren,
+                            );
+                            next.push((descendant.read_scope_seed.clone(), grandchildren));
+                            descendants.push(descendant);
+                        }
+                        Err(met) => WalkFailure::accumulate(&mut failure, met),
+                    }
                 }
             }
             frontier = next;
         }
-        Some(descendants)
+        Ok(WalkedBoundaries {
+            proved: descendants,
+            unproved,
+            failure,
+        })
     }
 }
 
@@ -4334,6 +4473,7 @@ mod tests {
 
     const SCOPE: [u8; 16] = [0x44; 16];
     const CHILD_SCOPE: [u8; 16] = [0xc1; 16];
+    const GRANDCHILD_SCOPE: [u8; 16] = [0xd2; 16];
     const OWNER_SCALAR: [u8; 32] = [0x11; 32];
     const OWNER_ENC_SCALAR: [u8; 32] = [0x33; 32];
     const POINTER_READ_KEY: [u8; 32] = [0x5a; 32];
@@ -4729,13 +4869,17 @@ mod tests {
         }
     }
 
+    /// The leaf [`one_level`]'s child names in its own index. A walk gates the
+    /// whole tree, so a test that runs one stages this too.
+    fn one_level_leaf() -> OwnerRootFixture {
+        interior(GRANDCHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, Vec::new())
+    }
+
     /// A one-level tree: the vault root names `CHILD_SCOPE`, an interior scope
     /// root whose own write body names a grandchild.
     fn one_level() -> (OwnerRootFixture, ChildScopeRef, ChildScopeRef) {
-        let grandchild_scope = [0xd2; 16];
-        let child_seed = OWNER_ROOT_SCOPE_SEED;
-        let leaf = interior(grandchild_scope, &child_seed, Vec::new());
-        let grandchild = child_ref(grandchild_scope, &leaf);
+        let leaf = one_level_leaf();
+        let grandchild = child_ref(GRANDCHILD_SCOPE, &leaf);
         let child = interior(
             CHILD_SCOPE,
             &OWNER_ROOT_SCOPE_SEED,
@@ -4750,12 +4894,22 @@ mod tests {
     // -----------------------------------------------------------------------
 
     impl Harness<InMemoryRecordStore> {
-        /// Run the walk from a staged vault root.
+        /// The scope roots one walk from a staged vault root proved.
         fn walk(
             &self,
             cache: &InMemorySnapshotCache,
             root: &OwnerRootFixture,
-        ) -> Option<Vec<DescendantScopeRoot>> {
+        ) -> Result<Vec<DescendantScopeRoot>, WalkFailure> {
+            self.walk_boundaries(cache, root)
+                .map(|walked| walked.proved)
+        }
+
+        /// The whole boundary set one walk named, proved and unproved alike.
+        fn walk_boundaries(
+            &self,
+            cache: &InMemorySnapshotCache,
+            root: &OwnerRootFixture,
+        ) -> Result<WalkedBoundaries, WalkFailure> {
             block_on(
                 ScopeWalk {
                     transport: &self.transport,
@@ -4779,7 +4933,7 @@ mod tests {
         /// The scope ids a walk from `root` proved.
         fn walked(&self, cache: &InMemorySnapshotCache, root: &OwnerRootFixture) -> Vec<[u8; 16]> {
             self.walk(cache, root)
-                .expect("the vault root gates")
+                .expect("the walk names its whole boundary set")
                 .iter()
                 .map(|scope| scope.scope_id)
                 .collect()
@@ -4795,6 +4949,7 @@ mod tests {
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
         let cache = InMemorySnapshotCache::default();
 
         let proved = harness.walk(&cache, &root).expect("the vault root gates");
@@ -4804,8 +4959,8 @@ mod tests {
                 .iter()
                 .map(|scope| scope.scope_id)
                 .collect::<Vec<_>>(),
-            vec![CHILD_SCOPE],
-            "the walk descends one level into the index"
+            vec![CHILD_SCOPE, GRANDCHILD_SCOPE],
+            "the walk descends every level of the index"
         );
         let descendant = &proved[0];
         assert_eq!(descendant.name, child.name);
@@ -4846,9 +5001,19 @@ mod tests {
         harness.stage(CHILD_SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
         let cache = InMemorySnapshotCache::default();
 
+        let walked = harness
+            .walk_boundaries(&cache, &root)
+            .expect("the vault root gates");
         assert!(
-            harness.walked(&cache, &root).is_empty(),
+            walked.proved.is_empty(),
             "a root that proves no descent from this scope is not this scope's"
+        );
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Rejected {
+                scope_id: CHILD_SCOPE
+            }),
+            "and the refusal is a trust verdict the session acts on"
         );
         assert_eq!(
             block_on(cache.get(planted.name.as_str().as_bytes())).expect("cache read"),
@@ -4869,7 +5034,245 @@ mod tests {
         assert!(
             harness
                 .walk(&InMemorySnapshotCache::default(), &root)
-                .is_none()
+                .is_err()
+        );
+    }
+
+    /// A vault root whose read body names `children` and whose write body names
+    /// no child scope at all — the state a committed writer leaves by dropping
+    /// an index entry.
+    fn vault_root_naming(children: Vec<ChildRef>) -> OwnerRootFixture {
+        owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children,
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        })
+    }
+
+    /// A folder link at `ipns_name`, which is the whole signal the derived-name
+    /// cross-check reads.
+    fn child_link(node_id: [u8; 16], kind: NodeKind, ipns_name: &IpnsName) -> ChildRef {
+        ChildRef {
+            id: node_id,
+            name: "child".to_owned(),
+            ipns_name: ipns_name.as_str().as_bytes().to_vec(),
+            kind,
+            link_counter: 1,
+            unknown: PreservedFields::new(),
+        }
+    }
+
+    /// A descendant no endpoint serves names no party: the walk reports the set
+    /// incomplete, and a session that refused on this would refuse every move
+    /// it has not walked yet.
+    #[test]
+    fn a_descendant_no_endpoint_serves_is_availability_on_the_walk() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        drop(child);
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert!(walked.proved.is_empty());
+        assert_eq!(walked.failure, Some(WalkFailure::Unavailable));
+    }
+
+    /// A record whose own name the index misstates is writer-authored
+    /// corruption, refused before any fetch.
+    #[test]
+    fn an_index_entry_naming_no_ipns_name_is_a_trust_verdict() {
+        let root = vault_root(
+            SCOPE,
+            vec![ChildScopeRef {
+                scope_id: CHILD_SCOPE,
+                ipns_name: b"not-an-ipns-name".to_vec(),
+                unknown: PreservedFields::new(),
+            }],
+        );
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Rejected {
+                scope_id: CHILD_SCOPE
+            })
+        );
+    }
+
+    /// One walk that meets both failures reports the trust verdict, so a party
+    /// who can also darken a record cannot mask a forged one behind it.
+    #[test]
+    fn a_rejection_outranks_an_unavailability_on_one_walk() {
+        let dark = [0x01; 16];
+        let planted = vault_root(CHILD_SCOPE, Vec::new());
+        let root = vault_root(
+            SCOPE,
+            vec![
+                ChildScopeRef {
+                    scope_id: dark,
+                    ipns_name: derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &dark)
+                        .as_str()
+                        .as_bytes()
+                        .to_vec(),
+                    unknown: PreservedFields::new(),
+                },
+                child_ref(CHILD_SCOPE, &planted),
+            ],
+        );
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Rejected {
+                scope_id: CHILD_SCOPE
+            }),
+            "the dark entry is met first and the rejection still stands"
+        );
+    }
+
+    /// A rotation publishes before it raises the floor, so a name below its own
+    /// read-epoch floor is this pass's copy trailing that raise. It converges:
+    /// availability, never an accusation.
+    #[test]
+    fn a_descendant_below_its_read_epoch_floor_is_availability_not_abuse() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        block_on(
+            harness
+                .floors
+                .raise_epoch_floor(&CHILD_SCOPE, OWNER_ROOT_EPOCH + 1),
+        )
+        .expect("the floor raises");
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(walked.failure, Some(WalkFailure::Unavailable));
+    }
+
+    /// The child-scope index rides a body every committed writer of the scope
+    /// authors, so an entry one of them removes erases a boundary. A folder
+    /// publishing under a name this scope's write seed does not derive states
+    /// that boundary on its own.
+    #[test]
+    fn a_child_no_derived_name_names_is_a_boundary_the_index_did_not_state() {
+        let promoted = [0xb7; 16];
+        let root = vault_root_naming(vec![child_link(
+            promoted,
+            NodeKind::Folder,
+            &derive_write_name(&[0x5A; 32], &promoted),
+        )]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            walked.unproved.iter().copied().collect::<Vec<_>>(),
+            vec![NodeId(promoted)]
+        );
+        assert_eq!(walked.failure, None, "an absence is not a failure to walk");
+    }
+
+    /// The other direction: a child at the name this scope's write seed derives
+    /// is this scope's own, and only a folder can be promoted into a scope root
+    /// at all.
+    #[test]
+    fn a_child_at_the_derived_name_and_a_foreign_named_file_are_no_boundary() {
+        let own = [0xb8; 16];
+        let file = [0xb9; 16];
+        let root = vault_root_naming(vec![
+            child_link(
+                own,
+                NodeKind::Folder,
+                &derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &own),
+            ),
+            child_link(file, NodeKind::File, &derive_write_name(&[0x5A; 32], &file)),
+        ]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert!(walked.unproved.is_empty());
+    }
+
+    /// Every entry of a writer-authored index costs a fan-out GET whether or
+    /// not it gates, so the descent is charged per attempt. The bound ends the
+    /// walk rather than the traffic a writer can name.
+    #[test]
+    fn the_descent_bound_ends_the_walk_and_names_no_party() {
+        let over_bound = MAX_SCOPE_DESCENT_ATTEMPTS + 1;
+        let names: Vec<IpnsName> = (0..over_bound)
+            .map(|i| {
+                let mut scope_id = [0u8; 16];
+                scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &scope_id)
+            })
+            .collect();
+        let index = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let mut scope_id = [0u8; 16];
+                scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                ChildScopeRef {
+                    scope_id,
+                    ipns_name: name.as_str().as_bytes().to_vec(),
+                    unknown: PreservedFields::new(),
+                }
+            })
+            .collect();
+        let root = vault_root(SCOPE, index);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Unavailable),
+            "a bound a wide vault reaches too is no accusation"
+        );
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| harness.store.get_count(name.as_str()) > 0)
+                .count(),
+            MAX_SCOPE_DESCENT_ATTEMPTS,
+            "and the walk paid for no descent past it"
         );
     }
 
@@ -5007,6 +5410,7 @@ mod tests {
         let harness = Harness::plain();
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         harness.stage(CHILD_SCOPE, &child, None);
+        harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
         vouch(&harness, MINT_EPOCH, &child.name);
 
         let proved = harness

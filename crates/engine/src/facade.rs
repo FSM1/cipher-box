@@ -85,8 +85,8 @@ use crate::net::{
     GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
     OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
     PublishOutcome, RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    ScopePointerEnrolment, ScopePointerMint, ScopeWalk, VaultProvisionNet, WritePlaneDark,
-    enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    ScopePointerEnrolment, ScopePointerMint, ScopeWalk, VaultProvisionNet, WalkFailure,
+    WritePlaneDark, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
     refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
@@ -3909,6 +3909,21 @@ pub struct Engine<T: SeamTypes> {
     /// grow-only within a session ([`install_descendant_scopes`]); the read legs
     /// group focus targets against it ([`scope_root_of`]).
     descendant_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// Scope roots the same walk named but proved no material for: a folder
+    /// publishing under a name its parent scope's write seed does not derive is
+    /// a scope root of its own, whether or not the parent's child-scope index
+    /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grow-only within
+    /// a session, and read by
+    /// [`relocation_scope_roots`](Self::relocation_scope_roots) alone: the legs
+    /// that need material read the proved set above.
+    unproved_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// Whether the last boundary walk to reach a verdict met a trust rejection.
+    /// While it stands the session refuses every relocation, because a walk
+    /// that could not gate a descendant scope root names no boundary below it
+    /// and every move out of that scope would read intra-scope (#1663 D1). Only
+    /// a later walk that proves its whole boundary set lifts it; an
+    /// availability failure neither raises nor lifts it.
+    boundary_walk_rejected: Rc<Cell<bool>>,
     /// The read epoch the same walk proved each of them at, which no seed cache
     /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
     /// the set above.
@@ -4132,6 +4147,8 @@ impl<T: SeamTypes> Engine<T> {
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+                unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+                boundary_walk_rejected: Rc::new(Cell::new(false)),
                 walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
                 current_root_name: Rc::new(RefCell::new(None)),
                 vault_pointer_index: Cell::new(None),
@@ -4495,6 +4512,10 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut roots) = self.descendant_scope_roots.try_borrow_mut() {
             roots.clear();
         }
+        if let Ok(mut roots) = self.unproved_scope_roots.try_borrow_mut() {
+            roots.clear();
+        }
+        self.boundary_walk_rejected.set(false);
         if let Ok(mut epochs) = self.walked_read_epochs.try_borrow_mut() {
             epochs.clear();
         }
@@ -5130,6 +5151,8 @@ where {
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
         let descendant_roots = self.descendant_scope_roots.clone();
+        let unproved_roots = self.unproved_scope_roots.clone();
+        let boundary_walk_rejected = self.boundary_walk_rejected.clone();
         let walked_read_epochs = self.walked_read_epochs.clone();
         let current_root_name = self.current_root_name.clone();
         let focus = self.focus.clone();
@@ -5389,20 +5412,38 @@ where {
                     if let Some(walk) = &walk
                         && let Some((name, root_bytes)) = held_root
                         && let Ok(name) = IpnsName::parse(&name)
-                        && let Some(proved) = walk
-                            .descendant_scope_roots(root_id, &name, &root_bytes)
-                            .await
                     {
-                        install_descendant_scopes(
-                            &descendant_roots,
-                            &scope_read_seeds,
-                            &scope_write_seeds,
-                            &base,
-                            &events,
-                            &proved,
-                        );
-                        install_walked_read_epochs(&walked_read_epochs, &proved);
-                        descendants = proved;
+                        let walked = walk
+                            .descendant_scope_roots(root_id, &name, &root_bytes)
+                            .await;
+                        let failure = walked
+                            .as_ref()
+                            .map_or_else(|met| Some(*met), |walked| walked.failure);
+                        if let Ok(walked) = walked {
+                            install_descendant_scopes(
+                                &descendant_roots,
+                                &scope_read_seeds,
+                                &scope_write_seeds,
+                                &base,
+                                &events,
+                                &walked.proved,
+                            );
+                            install_walked_read_epochs(&walked_read_epochs, &walked.proved);
+                            unproved_roots.borrow_mut().extend(walked.unproved);
+                            descendants = walked.proved;
+                        }
+                        // The boundary set a rejection leaves is incomplete, and
+                        // what is missing from it reads as its parent's scope,
+                        // so the session refuses to classify a move at all until
+                        // a walk names the whole set again (#1663 D1).
+                        match failure {
+                            None => boundary_walk_rejected.set(false),
+                            Some(rejected @ WalkFailure::Rejected { .. }) => {
+                                boundary_walk_rejected.set(true);
+                                emit_trust_violation(&events, name.as_str(), rejected);
+                            }
+                            Some(WalkFailure::Unavailable) => {}
+                        }
                     }
                     // A host that derives focus from an operation stream cannot
                     // close its own window: a stream that stops arriving produces
@@ -9216,16 +9257,22 @@ where {
             .collect())
     }
 
-    /// Every scope boundary this session has proved: the roots its own grants
-    /// minted, plus the roots a gated descent proved
-    /// ([`install_descendant_scopes`]). Wider than the set the drain drives,
-    /// which lists only the scopes it holds a seed pair for.
+    /// Every scope boundary this session has named: the roots its own grants
+    /// minted, the roots a gated descent proved ([`install_descendant_scopes`]),
+    /// and the roots the walk named without material
+    /// ([`unproved_scope_roots`](Self::unproved_scope_roots)). Wider than the
+    /// set the drain drives, which lists only the scopes it holds a seed pair
+    /// for: a boundary the drain cannot author is one a relocation must still
+    /// be classified against.
     fn relocation_scope_roots(&self) -> Vec<NodeId> {
-        self.minted_scope_roots
+        let mut roots: BTreeSet<NodeId> = self
+            .minted_scope_roots
             .borrow()
             .union(&self.descendant_scope_roots.borrow())
             .copied()
-            .collect()
+            .collect();
+        roots.extend(self.unproved_scope_roots.borrow().iter().copied());
+        roots.into_iter().collect()
     }
 
     /// What a relocation op anchors on: the source parent, the target's base
@@ -9242,6 +9289,12 @@ where {
         node: NodeId,
         new_parent: NodeId,
     ) -> Result<(NodeId, u64, ScopeCrossing), EngineError> {
+        if self.boundary_walk_rejected.get() {
+            return Err(EngineError::TrustViolation {
+                message: "a scope root below this vault failed the adoption gate, so this                           session cannot name every boundary a move would cross"
+                    .to_owned(),
+            });
+        }
         refuse_outside_vault(rendered, node)?;
         let Some(from_parent) = rendered.parent_of(node) else {
             // The guard above owns every other unplaced target, so the vault
