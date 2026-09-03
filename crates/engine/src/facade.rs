@@ -9318,16 +9318,19 @@ where {
     /// the durable read-epoch floor has risen past. That seed's stamp is the
     /// epoch held here ([`install_descendant_scopes`]), so a seed that survives
     /// the eviction proves the epoch beside it is not retired.
+    ///
+    /// All three parts are read below the one await, so a walk that lands while
+    /// it is pending cannot pair one pass's seed with another pass's epoch.
     #[cfg(feature = "test-kit")]
     pub async fn walked_scope_material(
         &self,
         scope: NodeId,
-    ) -> Option<crate::rotation::ScopeMaterial> {
-        let read_epoch = *self.walked_read_epochs.borrow().get(&scope)?;
-        Some(crate::rotation::ScopeMaterial {
-            read_scope_seed: self.scope_read_seed(&scope.0).await?,
+    ) -> Option<crate::rotation::scope_material::ScopeMaterial> {
+        let read_scope_seed = self.scope_read_seed(&scope.0).await?;
+        Some(crate::rotation::scope_material::ScopeMaterial {
+            read_scope_seed,
             write_scope_seed: cached_seed(&self.scope_write_seeds, &scope.0)?,
-            read_epoch,
+            read_epoch: *self.walked_read_epochs.borrow().get(&scope)?,
         })
     }
 }

@@ -72,7 +72,6 @@ pub use rotate_write::{
     WriteSubtreeResolver, WriteWavePublisher, build_repoint_object, derive_write_name,
     rotate_scope_write,
 };
-pub use scope_material::ScopeMaterial;
 pub(crate) use scope_material::{WalkedReadEpochs, install_walked_read_epochs};
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
