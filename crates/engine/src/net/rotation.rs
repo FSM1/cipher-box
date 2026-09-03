@@ -5021,6 +5021,44 @@ mod tests {
         );
     }
 
+    /// A scope root another owner signed is that owner's, wherever an index
+    /// names it. The gate anchors on this vault's own contact-anchored owner
+    /// identity, so a bookmarked sharer's root cannot enter the proved set.
+    #[test]
+    fn a_root_another_owner_signed_cannot_enter_the_proved_set() {
+        let sharer = EcdsaSigner::from_scalar(&[0x21; 32]).expect("valid scalar");
+        let theirs = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &sharer,
+            owner_enc: &owner_enc().public(),
+            scope_id: CHILD_SCOPE,
+            root_id: CHILD_SCOPE,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: Some(
+                *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes(),
+            ),
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        });
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &theirs)]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &theirs, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert!(walked.proved.is_empty());
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Rejected {
+                scope_id: CHILD_SCOPE
+            })
+        );
+    }
+
     /// A vault root this pass cannot gate is not a vault that holds no
     /// descendant scope: the caller must keep serving the promotions it already
     /// proved rather than fold their subtrees back onto this scope's seed.
