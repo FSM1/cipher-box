@@ -43,6 +43,12 @@ impl OwnerPointerRead for OwnerSessionKeys<'_> {
     }
 }
 
+impl OwnerPointerSign for OwnerSessionKeys<'_> {
+    fn pointer_signer(&self, scope_id: &[u8; 16]) -> Ed25519Signer {
+        self.session.scope_pointer_signer(scope_id)
+    }
+}
+
 /// The same derivations over **owned** seeds, for the spawned sweep task,
 /// which is polled after every borrow of the session has ended.
 ///

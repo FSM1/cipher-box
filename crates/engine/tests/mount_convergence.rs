@@ -265,6 +265,26 @@ fn create_published_folder(
         .1
 }
 
+/// A second device that only ever saw the network, booted with `scope` in focus
+/// and one refresh taken.
+fn mounted_reader(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+    scope: NodeId,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    let (mut engine, events, mut tasks) = boot(world, blocks, device, 7);
+    block_on(engine.command(Command::SetFocus { node: Some(scope) }))
+        .expect("focus moves to the granted folder");
+    let refreshed = command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks);
+    assert!(
+        refreshed.is_ok(),
+        "the focus refresh reads the granted folder's own record: {refreshed:?}"
+    );
+    tick(world, &engine, &mut tasks);
+    (engine, events, tasks)
+}
+
 /// The `(name, id)` pairs a device's rendered view lists under `parent`.
 fn listed(engine: &Engine<FakeSeamTypes>, parent: NodeId) -> Vec<(String, NodeId)> {
     block_on(engine.view())
@@ -493,20 +513,63 @@ fn a_folder_created_inside_a_granted_scope_root_reaches_the_owners_second_device
 
     // Device M: the mounted desktop, which only ever saw the network.
     let mount = world.device(b"mounted-desktop");
-    let (mut engine_m, _events_m, mut tasks_m) = boot(&world, &blocks, &mount, 7);
-    block_on(engine_m.command(Command::SetFocus { node: Some(shared) }))
-        .expect("focus moves to the granted folder");
-    let refreshed = command_while_ticking(&mut engine_m, Command::ManualRefresh, &mut tasks_m);
-    assert!(
-        refreshed.is_ok(),
-        "the focus refresh reads the granted folder's own record: {refreshed:?}"
-    );
-    tick(&world, &engine_m, &mut tasks_m);
+    let (engine_m, _events_m, _tasks_m) = mounted_reader(&world, &blocks, &mount, shared);
 
     assert_eq!(
         listed_names(&engine_m, shared),
         ["2026"],
         "the owner's second device lists what the tab published inside the cut scope"
+    );
+}
+
+/// The write half from the other side: the mount writes inside a folder the
+/// tab's grant cut. The mount minted nothing, so no local state anchors that
+/// scope's write-epoch floor and only the promoted root's own write plane can.
+#[test]
+fn a_mount_write_inside_a_promoted_scope_root_publishes_on_a_non_minting_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    // Device T: the tab makes the grant, so it is the minting device.
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    import_recipient(&mut engine_t);
+    grant_to_recipient(&mut engine_t, shared);
+
+    // Device M: the mounted desktop, which only ever saw the network.
+    let mount = world.device(b"mounted-desktop");
+    let (mut engine_m, mut events_m, mut tasks_m) = mounted_reader(&world, &blocks, &mount, shared);
+
+    let op = block_on(engine_m.command(Command::Create {
+        parent: shared,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a create inside the granted folder stages")
+    .op_id()
+    .expect("a create queues an op");
+    let _ = events_so_far(&mut events_m);
+    for _ in 0..8 {
+        tick(&world, &engine_m, &mut tasks_m);
+    }
+
+    assert_eq!(
+        dead_letters(&mut events_m, op),
+        Vec::new(),
+        "no reason to abandon the owner's own write"
+    );
+    assert_eq!(
+        queued(&mount),
+        0,
+        "the mount's write below a promoted scope root drains on a device that made no grant"
+    );
+    let scope_seed = owner_scope_seed(&world, &blocks, shared);
+    assert_eq!(
+        published_names(&world, &blocks, &scope_seed, shared),
+        ["2026"],
+        "and the promoted root publishes the child the mount named"
     );
 }
 
@@ -528,15 +591,7 @@ fn a_folder_that_predates_a_grant_lists_on_the_owners_second_device() {
     grant_to_recipient(&mut engine_t, shared);
 
     let mount = world.device(b"mounted-desktop");
-    let (mut engine_m, _events_m, mut tasks_m) = boot(&world, &blocks, &mount, 7);
-    block_on(engine_m.command(Command::SetFocus { node: Some(shared) }))
-        .expect("focus moves to the granted folder");
-    let refreshed = command_while_ticking(&mut engine_m, Command::ManualRefresh, &mut tasks_m);
-    assert!(
-        refreshed.is_ok(),
-        "the focus refresh reads the granted folder's own record: {refreshed:?}"
-    );
-    tick(&world, &engine_m, &mut tasks_m);
+    let (engine_m, _events_m, _tasks_m) = mounted_reader(&world, &blocks, &mount, shared);
 
     assert_eq!(
         listed_names(&engine_m, shared),

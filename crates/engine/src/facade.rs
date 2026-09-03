@@ -85,9 +85,9 @@ use crate::net::{
     GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
     OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
     PublishOutcome, RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    ScopePointerEnrolment, ScopeWalk, VaultProvisionNet, enrol_owned_scope_pointers,
-    eol_renew_pass, fanout_get_verify, keyless_re_put, refresh_base_from_resolved,
-    resolve_and_hold, resolve_child, run_liveness_loop,
+    ScopePointerEnrolment, ScopePointerMint, ScopeWalk, VaultProvisionNet, WritePlaneDark,
+    enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -3162,7 +3162,7 @@ fn install_descendant_scopes(
             scope.read_scope_seed.clone(),
             Some(scope.adopted.epoch),
         );
-        if let Some(write) = &scope.write {
+        if let Ok(write) = &scope.write {
             deposit_write_seed(
                 write_seeds,
                 scope.scope_id,
@@ -4971,7 +4971,11 @@ where {
                         .borrow()
                         .get(&HeldKey::node(root_id))
                         .map(|record| (record.routing_key.clone(), record.record_bytes.clone()));
-                    let walk = ScopeWalk {
+                    // Cloned out of the cell: a `Ref` cannot be held across the
+                    // walk's awaits.
+                    let walk_keys = consult_keys.borrow().clone();
+                    let mut descendants = Vec::new();
+                    let walk = walk_keys.as_ref().map(|keys| ScopeWalk {
                         transport: &transport,
                         snapshot_cache: &snapshot_cache,
                         gateway: &gateway,
@@ -4979,9 +4983,11 @@ where {
                         floors: &floors,
                         enc_secret: &enc_subkey,
                         identity: &owner_identity,
-                    };
-                    let mut descendants = Vec::new();
-                    if let Some((name, root_bytes)) = held_root
+                        scope_keys: &keys.scope_keys,
+                        payload_version: POINTER_PAYLOAD_VERSION,
+                    });
+                    if let Some(walk) = &walk
+                        && let Some((name, root_bytes)) = held_root
                         && let Ok(name) = IpnsName::parse(&name)
                         && let Some(proved) = walk
                             .descendant_scope_roots(root_id, &name, &root_bytes)
@@ -5122,33 +5128,44 @@ where {
                     let proved_roots: Vec<NodeId> = core::iter::once(NodeId(root_id))
                         .chain(proved_scope_ids.iter().copied())
                         .collect();
+                    let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
                     // Index 0 is the vault root's own pass whenever this holds.
-                    let root_scope_held = read_seed.is_some() && write_seed.is_some();
+                    let root_scope_held = vault_seeds.is_some();
+                    let drivable: Vec<_> = descendants
+                        .iter()
+                        .filter_map(|scope| Some((scope, scope.write.as_ref().ok()?)))
+                        .collect();
+                    // A scope this pass merely could not reach is absent from
+                    // both lists: the valve waits on it rather than charging.
+                    let keyless_roots: Vec<NodeId> = descendants
+                        .iter()
+                        .filter(|scope| matches!(scope.write, Err(WritePlaneDark::Keyless)))
+                        .map(|scope| NodeId(scope.scope_id))
+                        .collect();
                     let mut scopes: Vec<DrainScope<'_>> = Vec::new();
-                    if let (Some(read_seed), Some(write_seed)) = (&read_seed, &write_seed) {
+                    if let Some((read_seed, write_seed)) = vault_seeds {
                         scopes.push(DrainScope {
                             root: NodeId(root_id),
                             root_name: &root_name,
                             parent_node_seed: None,
                             scope_roots: &proved_roots,
+                            keyless_roots: &keyless_roots,
                             read_scope_seed: read_seed,
                             write_scope_seed: write_seed,
                             enc_secret: &enc_subkey,
                             owner_identity: &owner_identity,
                         });
                     }
-                    scopes.extend(descendants.iter().filter_map(|scope| {
-                        let write = scope.write.as_ref()?;
-                        Some(DrainScope {
-                            root: NodeId(scope.scope_id),
-                            root_name: &scope.name,
-                            parent_node_seed: Some(&scope.parent_node_seed),
-                            scope_roots: &proved_roots,
-                            read_scope_seed: &scope.read_scope_seed,
-                            write_scope_seed: &write.seed,
-                            enc_secret: &enc_subkey,
-                            owner_identity: &owner_identity,
-                        })
+                    scopes.extend(drivable.iter().map(|(scope, write)| DrainScope {
+                        root: NodeId(scope.scope_id),
+                        root_name: &scope.name,
+                        parent_node_seed: Some(&scope.parent_node_seed),
+                        scope_roots: &proved_roots,
+                        keyless_roots: &keyless_roots,
+                        read_scope_seed: &scope.read_scope_seed,
+                        write_scope_seed: &write.seed,
+                        enc_secret: &enc_subkey,
+                        owner_identity: &owner_identity,
                     }));
                     if !scopes.is_empty() {
                         let drain = Drain {
@@ -6395,6 +6412,19 @@ where {
         };
 
         let scope_root_name = grantee.ipns_name();
+        let voucher = ScopePointerMint {
+            transport: &self.seams.record_transport,
+            api,
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            keys: &scope_keys,
+            identity_signer: session.identity(),
+            identity: &owner_identity,
+            held: &self.held_records,
+            payload_version: POINTER_PAYLOAD_VERSION,
+        };
         let pending = match &share {
             ScopeShare::Contact(contact) => {
                 let recipient = GrantRecipient {
@@ -6404,7 +6434,7 @@ where {
                 create_grant(
                     &mut SharedEntropy(&self.entropy),
                     &net,
-                    &net,
+                    &voucher,
                     &grantee,
                     &recipient,
                     &owner,
@@ -6418,7 +6448,7 @@ where {
                 mint_invite_link(
                     &mut SharedEntropy(&self.entropy),
                     &net,
-                    &net,
+                    &voucher,
                     &StagingInviteStore::new(
                         &self.seams.staging_store,
                         session.enc_subkey(),

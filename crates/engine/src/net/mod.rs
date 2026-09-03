@@ -68,7 +68,8 @@ pub use retire::{
 };
 pub use revival::{ReviveError, ReviveRequest, revive};
 pub(crate) use rotation::{
-    DescendantScopeRoot, ScopePointerEnrolment, ScopeWalk, enrol_owned_scope_pointers,
+    DescendantScopeRoot, ScopePointerEnrolment, ScopePointerMint, ScopeWalk, WritePlaneDark,
+    enrol_owned_scope_pointers,
 };
 pub use rotation::{
     GrantedScopeRoot, GranteeRotationKeys, GranteeRotationNet, OwnerRotationKeys, OwnerRotationNet,

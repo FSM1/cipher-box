@@ -394,6 +394,35 @@ enum Halt {
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass.
     Cancelled,
+    /// The op sits below a proved scope root whose record carries no write
+    /// plane this device opens, so no pass takes it while that stands. Charged
+    /// like [`Halt::Attempt`]: an uncharged hold here stalls the queue behind
+    /// it for ever and surfaces nothing (ADR 0012 D6). Nothing was authored and
+    /// nothing registered, so a spent budget hands back no name and the dead
+    /// letter keeps the staged version.
+    UnwritableScope,
+}
+
+/// Which halt an op below a scope root other than this pass's own takes.
+///
+/// Only a root this device holds keyless is charged: the op will not publish on
+/// a later pass either, and the budget is what bounds the stall (ADR 0012 D6).
+/// A root that is merely dark this pass, or one another pass of this tick owns,
+/// leaves the op where it is with no charge.
+///
+/// The charge is the identity's rather than one scope's, so exactly one pass a
+/// tick makes it — the vault root's, which is also the pass that owns the
+/// identity-wide bookkeeping ([`Drain::settle`]).
+fn halt_below_another_scope_root(
+    keyless_roots: &[NodeId],
+    charges_the_identity: bool,
+    nearest: NodeId,
+) -> Halt {
+    if charges_the_identity && keyless_roots.contains(&nearest) {
+        Halt::UnwritableScope
+    } else {
+        Halt::Unclassified
+    }
 }
 
 /// The scope read seed a node the lazy wave has not reached must be opened
@@ -632,6 +661,10 @@ pub(crate) struct DrainScope<'a> {
     /// walk over link ancestry can tell which scope owns a node
     /// ([`crate::sync::tick::scope_root_of`]).
     pub(crate) scope_roots: &'a [NodeId],
+    /// The proved scope roots whose own records carry no write plane this
+    /// device opens. No pass will ever take an op below one, so the valve
+    /// charges rather than stalls ([`halt_below_another_scope_root`]).
+    pub(crate) keyless_roots: &'a [NodeId],
     /// The scope read seed per-node read keys derive from.
     pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// The scope write seed per-node IPNS names and signers derive from.
@@ -1191,7 +1224,8 @@ where
             Halt::Attempt
             | Halt::UploadAttempt
             | Halt::HeadOversized
-            | Halt::ScopeRootNotResealable => {
+            | Halt::ScopeRootNotResealable
+            | Halt::UnwritableScope => {
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
                 }
@@ -1199,7 +1233,9 @@ where
                 // version and hands back at most the name no published record
                 // ever reached ([`Halt`]).
                 let (reason, owes_its_name) = match halt {
-                    Halt::Attempt => (DeadLetterReason::AttemptsExhausted, false),
+                    Halt::Attempt | Halt::UnwritableScope => {
+                        (DeadLetterReason::AttemptsExhausted, false)
+                    }
                     Halt::HeadOversized => (DeadLetterReason::HeadTooLarge, true),
                     Halt::ScopeRootNotResealable => {
                         (DeadLetterReason::ScopeRootNotResealable, true)
@@ -1648,7 +1684,11 @@ where
             return Err(Halt::Unclassified);
         };
         if chain[nearest] != scope.root {
-            return Err(Halt::Unclassified);
+            return Err(halt_below_another_scope_root(
+                scope.keyless_roots,
+                scope.parent_node_seed.is_none(),
+                chain[nearest],
+            ));
         }
         chain.drain(..nearest);
         for node in chain {
@@ -5051,6 +5091,9 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
         }
+        Halt::UnwritableScope => {
+            Some("this device cannot write to the shared folder this change is in")
+        }
         Halt::HeadOversized => Some("the record this change publishes is over the size limit"),
         Halt::ScopeRootNotResealable => {
             Some("this shared folder's own record leaves no room for the re-key a revoke needs")
@@ -5701,6 +5744,40 @@ mod tests {
             history_links: &[],
         };
         assert!(seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 4).is_ok());
+    }
+
+    /// A strict-FIFO stall with no dead letter is a liveness defect, never an
+    /// accepted outcome (ADR 0012 D6). An op below a keyless scope root is
+    /// charged, bounded and reported; one below a root another pass owns, or a
+    /// root merely dark this pass, waits with no charge.
+    #[test]
+    fn an_op_below_a_keyless_scope_root_is_charged_rather_than_stalled() {
+        let keyless = [NodeId([0x99; 16])];
+        assert_eq!(
+            halt_below_another_scope_root(&keyless, true, NodeId([0x99; 16])),
+            Halt::UnwritableScope,
+        );
+        assert_eq!(
+            halt_below_another_scope_root(&keyless, true, NodeId([0x22; 16])),
+            Halt::Unclassified,
+            "a root this pass proved a write plane for is another pass's to publish",
+        );
+        assert!(
+            upload_failure(Halt::UnwritableScope).is_some(),
+            "the member is told the write cannot land, never left with silence",
+        );
+    }
+
+    /// Every pass of a tick reads the same queue and takes the same halt on the
+    /// same op, so charging in each would divide the budget by however many
+    /// scope write planes happened to open.
+    #[test]
+    fn only_the_vault_root_pass_charges_an_op_below_a_keyless_scope_root() {
+        let keyless = [NodeId([0x99; 16])];
+        assert_eq!(
+            halt_below_another_scope_root(&keyless, false, NodeId([0x99; 16])),
+            Halt::Unclassified,
+        );
     }
 
     /// A link that will not open is a walk this pass cannot complete, never a

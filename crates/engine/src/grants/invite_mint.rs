@@ -26,13 +26,16 @@ use cipherbox_core::suite::contact::ContactCode;
 use zeroize::Zeroizing;
 
 use crate::entropy::Entropy;
+#[cfg(test)]
 use crate::grants::ScopeRootPromoter;
+use crate::grants::create::{MintNet, ScopePointerVoucher};
+#[cfg(test)]
 use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher, SweepResolver};
 use crate::seams::UnixMillis;
 
 use super::create::{
-    CreateGrantError, GrantResumeResolver, GranteeScopePlan, InteriorResealer, OwnerGrantKeys,
-    ParentScopePlan, converge_grant_subtree, mint_grantee_scope,
+    CreateGrantError, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, converge_grant_subtree,
+    mint_grantee_scope,
 };
 use super::invite::{EphemeralInvitee, InviteError, InviteFragment, mint_invite_grant};
 use super::invite_store::{InviteStore, InviteStoreError};
@@ -148,19 +151,19 @@ impl std::error::Error for InviteMintError {}
 /// Owner-only by construction, exactly as [`create_grant`](super::create_grant)
 /// is: the scope this publishes is signed under the owner's writer pseudonym and
 /// its commitment under the owner identity, so no other session can author it.
-pub async fn mint_invite_link<E, R, P, S>(
+pub async fn mint_invite_link<E, N, S, V>(
     entropy: &mut E,
-    resolver: &R,
-    publisher: &P,
+    net: &N,
+    voucher: &V,
     store: &S,
     owner: &OwnerGrantKeys<'_>,
     plan: &InviteMintPlan<'_>,
 ) -> Result<PendingInviteLink, InviteMintError>
 where
     E: Entropy,
-    R: SweepResolver + CascadeResealResolver + GrantResumeResolver,
-    P: ScopeRootPublisher + SweepPublisher + ScopeRootPromoter + InteriorResealer,
+    N: MintNet,
     S: InviteStore,
+    V: ScopePointerVoucher,
 {
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
     let minted = mint_invite_grant(
@@ -187,7 +190,7 @@ where
 
     // Ahead of the record, so a subtree the gate cannot prove converged costs no
     // durable slot.
-    let converged = converge_grant_subtree(resolver, publisher, plan.grantee, plan.parent)
+    let converged = converge_grant_subtree(net, net, plan.grantee, plan.parent)
         .await
         .map_err(InviteMintError::Create)?;
     // An invitee is drawn fresh per call, so its row can never be the one a
@@ -208,7 +211,7 @@ where
         .await
         .map_err(InviteMintError::Store)?;
 
-    mint_grantee_scope(entropy, resolver, publisher, converged, &minted.row, owner)
+    mint_grantee_scope(entropy, net, voucher, converged, &minted.row, owner)
         .await
         .map_err(InviteMintError::Create)?;
 
@@ -217,9 +220,24 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::create::{InteriorRecord, PromotedScopeRoot};
+    use super::super::create::{
+        GrantResumeResolver, InteriorRecord, InteriorResealer, PromotedScopeRoot,
+    };
     use super::*;
     use crate::rotation::published_override_seed;
+
+    /// Always accepts.
+    struct AcceptingVoucher;
+
+    impl ScopePointerVoucher for AcceptingVoucher {
+        async fn vouch_scope(
+            &self,
+            _repoint: &cipherbox_core::payload::RepointObject,
+        ) -> Result<(), crate::rotation::RotationPublishError> {
+            Ok(())
+        }
+    }
+
     use core::cell::RefCell;
     use std::rc::Rc;
 
@@ -615,7 +633,7 @@ mod tests {
             block_on(mint_invite_link(
                 &mut crate::entropy::SharedEntropy(&self.entropy),
                 &self.net,
-                &self.net,
+                &AcceptingVoucher,
                 &self.store(),
                 &self.keys(),
                 &InviteMintPlan {

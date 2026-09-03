@@ -25,9 +25,11 @@
 //! 4. **Regression is fail-closed** — every advance is monotonic-max via the
 //!    store (raising below the stored floor is a no-op that keeps the max), so
 //!    a floor can never move backward.
-//! 5. **A minted scope seeds its own write-epoch floor**
-//!    ([`seed_write_epoch_on_mint`]) — no pointer plane speaks for a scope that
-//!    does not exist yet, so the device that mints one anchors it.
+//! 5. **A minting device anchors its own write-epoch floor**
+//!    ([`seed_scope_root_write_epoch`]) — the device that mints a promoted
+//!    scope root knows its epoch by construction. A device that only proves the
+//!    root takes that epoch from the scope pointer under item 3, never from the
+//!    record (`crate::net::rotation` `recover_write_plane_from_pointer`).
 //!
 //! A grant blob's epoch field is an advisory routing hint and has **no**
 //! advancement path here — deliberately. Nothing reads it as authority.
@@ -535,17 +537,19 @@ pub async fn advance_write_epoch_on_sight<F: FloorStore>(
         .await
 }
 
-/// Seed the write-epoch floor of a scope this device is **minting** (floor law
-/// item 5) — a grant's promoted scope root, which no pointer plane speaks for
-/// until it exists. Returns the resulting floor.
+/// Seed a scope root's write-epoch floor (floor law item 5) — the anchor for a
+/// scope no pointer plane speaks for yet. Returns the resulting floor.
+///
+/// `write_epoch` must be an epoch the caller holds proof of, never one it read
+/// off the wire (`crate::net::rotation`).
 ///
 /// A pre-advance, which [`WriteEpochLease`] forbids for a *rotation*: there the
 /// target is an epoch the publish has yet to reach, so raising first would lock
 /// the write plane out on a retryable failure. A read grant cuts no write scope,
-/// so `write_epoch` here is the epoch the node's write plane already publishes
-/// at, and the root about to be signed binds that same value as its
+/// so `write_epoch` at a mint is the epoch the node's write plane already
+/// publishes at, and the root about to be signed binds that same value as its
 /// owner-write-blob AAD — raising after the signature is what would strand it.
-pub async fn seed_write_epoch_on_mint<F: FloorStore>(
+pub async fn seed_scope_root_write_epoch<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
     write_epoch: u64,
