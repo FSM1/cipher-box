@@ -80,6 +80,7 @@ export const fakeWasmEnums = {
     ScopeRootNotResealable: 13,
     BinIndexFull: 14,
     CrossingUnauthorable: 15,
+    BinIndexStrandedMint: 16,
   },
 } as const;
 

@@ -39,7 +39,7 @@ use crate::profile::SyncTimingProfile;
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
 };
-use crate::settings::{DefaultsReason, prefixed_key, within};
+use crate::settings::{DefaultsReason, prefixed_key, unresolved_reason, within};
 
 /// What a bin index load produced.
 ///
@@ -403,9 +403,25 @@ impl BinIndexRead {
     ///
     /// Every caller enrols: a load that reads and does not enrol is what lets
     /// the record's EOL lapse under a session that publishes nothing.
-    pub fn enrol(self, slot: &RefCell<Option<HeldRecord>>) -> BinIndexLoad {
+    ///
+    /// `observed` is the record bytes the slot held when the load began, and the
+    /// write happens only while the slot still holds them. A command load and
+    /// the drain interleave on one executor, so a publish that landed across
+    /// this load has already put its own confirmed record here; the renewal
+    /// re-signs at `floor + 1`, so re-signing this pass's older read would win
+    /// record selection and bring back the entries that publish removed. The
+    /// bar [`SettingsRead::enrol`](crate::settings::SettingsRead::enrol) holds
+    /// its own slot to.
+    pub fn enrol(
+        self,
+        slot: &RefCell<Option<HeldRecord>>,
+        observed: Option<Vec<u8>>,
+    ) -> BinIndexLoad {
         if let Some(renewable) = self.renewable {
-            *slot.borrow_mut() = Some(renewable);
+            let mut slot = slot.borrow_mut();
+            if slot.as_ref().map(|held| held.record_bytes.as_slice()) == observed.as_deref() {
+                *slot = Some(renewable);
+            }
         }
         self.load
     }
@@ -513,10 +529,7 @@ where
         ) else {
             return Err(DefaultsReason::FloorUnreadable);
         };
-        return Err(match durable.or(minted).or(adopted) {
-            Some(_) => DefaultsReason::Suppressed,
-            None => DefaultsReason::UnprovenFirstRun,
-        });
+        return Err(unresolved_reason(durable, minted, adopted));
     };
     let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);

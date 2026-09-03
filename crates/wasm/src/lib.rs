@@ -408,6 +408,11 @@ pub enum DeadLetterReason {
     /// move between two shared folders, or a restore into a folder in a
     /// different shared folder than the one the node was deleted from.
     CrossingUnauthorable,
+    /// This device cannot read the account's bin, and its own first attempt to
+    /// write one did not finish, so it may not write over it either. Another
+    /// device of the account clears this; until one does, a delete here must be
+    /// permanent.
+    BinIndexStrandedMint,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -436,6 +441,9 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             facade::DeadLetterReason::BinIndexFull => DeadLetterReason::BinIndexFull,
             facade::DeadLetterReason::CrossingUnauthorable => {
                 DeadLetterReason::CrossingUnauthorable
+            }
+            facade::DeadLetterReason::BinIndexStrandedMint => {
+                DeadLetterReason::BinIndexStrandedMint
             }
         }
     }

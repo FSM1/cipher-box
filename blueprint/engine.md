@@ -423,13 +423,24 @@ per-name sequence floor. Only what differs is stated here.
   publish cadence is what closes the last of these, and the fresh-nonce rule
   above is what makes one work — a no-op republish is byte-indistinguishable
   from a real edit — but no decoy is scheduled in v2.0.0.
+- **A mint counter with no adoption beside it is its own verdict.** The two
+  adoption marks — the per-name sequence floor and the adopted body revision —
+  prove a record this device took, so an absent record is withheld and the
+  rewrite refuses. The mint counter alone proves only an attempt this device
+  made, and one residual case where it is more: a publish that confirmed and
+  then lost its floor write. That case is why the load still refuses, and the
+  attempt case is why it refuses under its own reason, `StrandedMint`. The
+  refusal is a device-local state: another device of the account holds no mark,
+  so it publishes the record and clears it.
 - **The queue head never waits on the bin plane in silence.** Every state the
   load can leave the head in has an exit and a reported cause. A refusal of
-  bytes the plane served is charged against the attempt budget. Every other
-  outcome takes a reported hold the host reads beside the quota and settings
-  holds, and the hold clears when the record resolves. A body no rung admits is
-  its own dead-letter reason rather than a codec fault, because no retry shrinks
-  it.
+  bytes the plane served is charged against the attempt budget. A stranded mint
+  dead-letters, because the hold's only exit is the record resolving and a
+  single-device account has nothing left to publish one — the member is told
+  the state and may hard-delete instead. Every other outcome takes a reported
+  hold the host reads beside the quota and settings holds, and the hold clears
+  when the record resolves. A body no rung admits is its own dead-letter reason
+  rather than a codec fault, because no retry shrinks it.
 - **A lapsed EOL is availability here, and the settings carve-out does not carry
   over** ([ADR 0013](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0013-a-lapsed-bin-index-record-is-rewritten-not-refused.md)).
   Nothing on this plane re-signs the record but the rewrite a refusal

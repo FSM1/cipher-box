@@ -8,6 +8,9 @@
 //! whole, so a load that cannot establish the current index must refuse to be
 //! published over.
 
+use core::cell::RefCell;
+use std::rc::Rc;
+
 use cipherbox_core::codec::decode;
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -23,12 +26,14 @@ use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::net::keyless_re_put;
 use cipherbox_engine::seams::{EndpointId, FloorStore, RecordTransport, SeamResult};
 use cipherbox_engine::testkit::account::{Blocks, serve_http};
-use cipherbox_engine::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
+use cipherbox_engine::testkit::fakes::{
+    InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp,
+};
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     BinIndexKeys, BinIndexLoad, BinIndexPublishError, BinIndexRead, DefaultsReason, Gateway,
-    GatewayConfig, OrphanHeads, SessionBearer, SyncTimingProfile, load_bin_index,
-    publish_bin_index,
+    GatewayConfig, HeldRecord, HeldValue, OrphanHeads, SessionBearer, SyncTimingProfile,
+    load_bin_index, publish_bin_index,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -550,28 +555,39 @@ fn a_cold_start_with_no_published_record_loads_an_empty_bin() {
 }
 
 /// A device that has adopted or attempted a record holds a durable mark, so a
-/// withheld record reads as suppression. Publishing over it would drop every
-/// entry the withheld record names — v1's whole-list rewrite.
+/// withheld record never reads as a first run. Publishing over it would drop
+/// every entry the withheld record names — v1's whole-list rewrite. An adoption
+/// mark reports suppression; the mint counter alone reports its own stranded
+/// mint, because no other device is needed to reach that state.
 #[test]
 fn a_withheld_record_refuses_the_rewrite_rather_than_minting_a_first_bin() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let name = name();
     let marks = [
-        name.as_str().as_bytes().to_vec(),
-        mark(b"bin-index-revision/", &name),
-        mark(b"bin-index-revision-mint/", &name),
+        (
+            name.as_str().as_bytes().to_vec(),
+            DefaultsReason::Suppressed,
+        ),
+        (
+            mark(b"bin-index-revision/", &name),
+            DefaultsReason::Suppressed,
+        ),
+        (
+            mark(b"bin-index-revision-mint/", &name),
+            DefaultsReason::StrandedMint,
+        ),
     ];
-    for mark in &marks {
+    for (mark, expected) in &marks {
         let device = world.device(b"cold");
         block_on(device.floor_store.raise_sequence_floor(mark, 3)).expect("the mark raises");
         let load = load(&world, &device, &blocks, &keys());
         assert_eq!(
             load,
-            BinIndexLoad::Empty(DefaultsReason::Suppressed),
+            BinIndexLoad::Empty(*expected),
             "one mark alone must not read as a first run",
         );
-        assert_eq!(load.writable().unwrap_err(), DefaultsReason::Suppressed);
+        assert_eq!(load.writable().unwrap_err(), *expected);
     }
 }
 
@@ -802,4 +818,220 @@ fn a_bin_past_the_top_rung_is_refused_as_a_full_bin_and_not_as_a_codec_fault() {
             .is_none(),
         "a refused publish never reaches the network",
     );
+}
+
+// ---------------------------------------------------------------------------
+// The stranded mint, and the enrolment's own bar
+// ---------------------------------------------------------------------------
+
+/// A publish that fails after the mint leaves the counter as the device's only
+/// mark. The load names that state under its own reason and still refuses the
+/// rewrite, because the same attempt may have confirmed and lost only its floor
+/// write. The queue head's exit from it is a dead letter, which the drain's own
+/// split pins.
+#[test]
+fn a_publish_that_fails_behind_its_mint_reads_as_a_stranded_mint() {
+    /// A transport that acks every PUT and serves nothing back, so the publish
+    /// gets past the mint and fails at the confirm.
+    #[derive(Clone)]
+    struct AcksNothingBack;
+
+    impl RecordTransport for AcksNothingBack {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            vec![EndpointId::new("fake:write-only")]
+        }
+
+        async fn get_record(
+            &self,
+            _endpoint: &EndpointId,
+            _routing_key: &str,
+            _max_bytes: usize,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+
+        async fn put_record(
+            &self,
+            _endpoint: &EndpointId,
+            _routing_key: &str,
+            _record: &[u8],
+        ) -> SeamResult<()> {
+            Ok(())
+        }
+    }
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"only-device");
+    serve_http(&device, &blocks, 4);
+    assert_eq!(
+        block_on(publish_bin_index(
+            &AcksNothingBack,
+            &api(&device),
+            &device.floor_store,
+            &device.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &mut SeededEntropy::new(6),
+            &OrphanHeads::default(),
+            &keys(),
+            &binned(&[1]),
+        ))
+        .unwrap_err(),
+        BinIndexPublishError::Unconfirmed,
+    );
+    let name = name();
+    let floor = |key: Vec<u8>| block_on(device.floor_store.sequence_floor(&key)).expect("read");
+    assert_eq!(floor(name.as_str().as_bytes().to_vec()), None);
+    assert_eq!(floor(mark(b"bin-index-revision/", &name)), None);
+    assert_eq!(floor(mark(b"bin-index-revision-mint/", &name)), Some(1));
+
+    let load = load(&world, &device, &blocks, &keys());
+    assert_eq!(
+        load,
+        BinIndexLoad::Empty(DefaultsReason::StrandedMint),
+        "the mint counter alone is neither a first run nor a withheld record",
+    );
+    assert_eq!(
+        load.writable().unwrap_err(),
+        DefaultsReason::StrandedMint,
+        "and the rewrite still refuses, because the attempt may have landed",
+    );
+}
+
+/// A second device of the account holds no mark, so it publishes the record the
+/// stranded device could not — the recovery the dead-letter reason names.
+#[test]
+fn a_second_device_publishes_the_record_a_stranded_mint_could_not() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let stranded = world.device(b"only-device");
+    block_on(
+        stranded
+            .floor_store
+            .raise_sequence_floor(&mark(b"bin-index-revision-mint/", &name()), 1),
+    )
+    .expect("the mint counter raises");
+
+    let second = world.device(b"second-device");
+    assert_eq!(
+        load(&world, &second, &blocks, &keys()),
+        BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun),
+        "the mark is one device's own state, never the account's",
+    );
+    publish(&world, &second, &blocks, &binned(&[1]), 1);
+
+    assert!(
+        matches!(
+            load(&world, &stranded, &blocks, &keys()),
+            BinIndexLoad::Resolved(_),
+        ),
+        "and the record it published clears the stranded device",
+    );
+}
+
+/// A transport that lands a bin index publish in `slot` before the resolve it
+/// wraps can answer — the interleaving a single-threaded executor allows at any
+/// `.await`, since a command load and the drain are separate futures on it.
+struct PublishesAcrossTheLoad {
+    inner: InMemoryRecordStore,
+    slot: Rc<RefCell<Option<HeldRecord>>>,
+    published: HeldRecord,
+}
+
+impl RecordTransport for PublishesAcrossTheLoad {
+    fn endpoints(&self) -> Vec<EndpointId> {
+        self.inner.endpoints()
+    }
+
+    async fn get_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        max_bytes: usize,
+    ) -> SeamResult<Option<Vec<u8>>> {
+        *self.slot.borrow_mut() = Some(self.published.clone());
+        self.inner
+            .get_record(endpoint, routing_key, max_bytes)
+            .await
+    }
+
+    async fn put_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        record: &[u8],
+    ) -> SeamResult<()> {
+        self.inner.put_record(endpoint, routing_key, record).await
+    }
+}
+
+/// The renewal re-signs a held record at `floor + 1`, so an enrolment that
+/// overwrites the record a publish confirmed across the load would bring back
+/// the entries that publish removed. The bar rests on the capture running ahead
+/// of the load: one taken after it reads back the publish's own record, matches
+/// it, and hands the slot straight to the older read.
+#[test]
+fn the_bin_index_enrolment_captures_the_slot_ahead_of_its_load() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &binned(&[1]), 1);
+
+    // The record the drain confirms while the command's load is in flight. It
+    // stands above the published one, which is what the load reads.
+    let published = held_bin_record("bafypublishedhead", 9);
+    let published_bytes = published.record_bytes.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let transport = PublishesAcrossTheLoad {
+        inner: device.record_store.clone(),
+        slot: Rc::clone(&slot),
+        published,
+    };
+
+    serve_http(&device, &blocks, 4);
+    let observed = slot.borrow().as_ref().map(|held| held.record_bytes.clone());
+    let read = block_on(load_bin_index(
+        &transport,
+        &gateway(),
+        &device.http,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &keys(),
+    ));
+    assert!(
+        read.renewable.is_some(),
+        "the load resolved a record it would enrol",
+    );
+    read.enrol(&slot, observed);
+
+    assert_eq!(
+        slot.borrow()
+            .as_ref()
+            .expect("the slot still holds a record")
+            .record_bytes,
+        published_bytes,
+        "the load ran against a slot the capture had already read",
+    );
+}
+
+/// A held bin index record at `head` and `sequence`, signed by the name's own
+/// keypair so the resolve verifies it.
+fn held_bin_record(head: &str, sequence: u64) -> HeldRecord {
+    HeldRecord {
+        routing_key: name().as_str().to_owned(),
+        record_bytes: IpnsRecord::create_v2(
+            &kdf::bin_index_ipns_keypair(&SECRET),
+            format!("/ipfs/{head}").as_bytes(),
+            sequence,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal(),
+        signer: kdf::bin_index_ipns_keypair(&SECRET),
+        value: HeldValue::Head(head.to_owned()),
+        content_cids: Vec::new(),
+    }
 }

@@ -4863,6 +4863,11 @@ where {
         if holds_a_bin_index_mark(&self.seams.floor_store, &keys).await {
             return;
         }
+        let observed = self
+            .bin_index_record
+            .borrow()
+            .as_ref()
+            .map(|held| held.record_bytes.clone());
         let load = load_bin_index(
             &self.seams.record_transport,
             &self.gateway,
@@ -4874,7 +4879,7 @@ where {
             &keys,
         )
         .await
-        .enrol(&self.bin_index_record);
+        .enrol(&self.bin_index_record, observed);
         if !matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun)) {
             return;
         }
@@ -9549,6 +9554,11 @@ where {
             .borrow()
             .clone()
             .ok_or(EngineError::NotStarted)?;
+        let observed = self
+            .bin_index_record
+            .borrow()
+            .as_ref()
+            .map(|held| held.record_bytes.clone());
         let load = load_bin_index(
             &self.seams.record_transport,
             &self.gateway,
@@ -9560,7 +9570,7 @@ where {
             &keys,
         )
         .await
-        .enrol(&self.bin_index_record);
+        .enrol(&self.bin_index_record, observed);
         let reason = match load {
             BinIndexLoad::Resolved(_) => return Ok(load),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,

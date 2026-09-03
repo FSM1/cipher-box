@@ -193,11 +193,15 @@ fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
 /// is availability and waits uncharged — but it waits as a *reported* hold, so
 /// a party who withholds one record does not stall the queue in silence
 /// ([`BinIndexHold`]).
+///
+/// A stranded mint is neither. The hold's only exit is the record resolving,
+/// and on a single-device account nothing is left to publish it — so the op
+/// dead-letters with the state named rather than waiting for ever.
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
-    if bin_load_is_a_verdict(reason) {
-        Halt::Attempt
-    } else {
-        Halt::HeldByBinIndex(reason)
+    match reason {
+        DefaultsReason::StrandedMint => Halt::Permanent(DeadLetterReason::BinIndexStrandedMint),
+        _ if bin_load_is_a_verdict(reason) => Halt::Attempt,
+        _ => Halt::HeldByBinIndex(reason),
     }
 }
 
@@ -211,6 +215,7 @@ pub(crate) fn bin_load_is_a_verdict(reason: DefaultsReason) -> bool {
         | DefaultsReason::Unreadable => true,
         DefaultsReason::UnprovenFirstRun
         | DefaultsReason::Suppressed
+        | DefaultsReason::StrandedMint
         | DefaultsReason::Expired
         | DefaultsReason::TimedOut
         | DefaultsReason::FloorUnreadable => false,
@@ -3222,6 +3227,11 @@ where
         if let Some(index) = cached_bin_index(self.snapshot_cache, self.bin_keys).await {
             return Some(index);
         }
+        let observed = self
+            .bin_index_record
+            .borrow()
+            .as_ref()
+            .map(|held| held.record_bytes.clone());
         match load_bin_index(
             self.transport,
             self.gateway,
@@ -3233,7 +3243,7 @@ where
             self.bin_keys,
         )
         .await
-        .enrol(self.bin_index_record)
+        .enrol(self.bin_index_record, observed)
         {
             BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => Some(index),
             BinIndexLoad::Empty(_) => None,
@@ -3295,6 +3305,11 @@ where
     /// entries. [`Self::carried_bin_index`] is the one caller that may build on
     /// what the pass already established.
     async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
+        let observed = self
+            .bin_index_record
+            .borrow()
+            .as_ref()
+            .map(|held| held.record_bytes.clone());
         let index = load_bin_index(
             self.transport,
             self.gateway,
@@ -3306,7 +3321,7 @@ where
             self.bin_keys,
         )
         .await
-        .enrol(self.bin_index_record)
+        .enrol(self.bin_index_record, observed)
         .writable()
         .map_err(|reason| {
             let halt = halt_for_bin_load(reason);
@@ -6504,6 +6519,11 @@ mod tests {
                 "{reason:?}: a hold keeps the op rather than reporting a failed attempt",
             );
         }
+        assert_eq!(
+            halt_for_bin_load(DefaultsReason::StrandedMint),
+            Halt::Permanent(DeadLetterReason::BinIndexStrandedMint),
+            "a hold no device of a single-device account can lift is a dead letter",
+        );
     }
 
     /// A bin the top rung no longer admits is the member's own state, not a
