@@ -404,8 +404,9 @@ pub enum DeadLetterReason {
     /// The owner's bin index holds every entry one record can carry, so the
     /// soft delete could not be recorded.
     BinIndexFull,
-    /// A relocation whose two ends now sit in two different shared folders, a
-    /// crossing no pass can author.
+    /// An op that would move a node into a scope no pass can seal it into: a
+    /// move between two shared folders, or a restore into a folder in a
+    /// different shared folder than the one the node was deleted from.
     CrossingUnauthorable,
 }
 

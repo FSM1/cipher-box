@@ -24,7 +24,7 @@ const REASONS: Record<DeadLetterReason, string> = {
   binIndexFull:
     'your bin is full, so this item could not be moved to it; empty the bin, or delete this item permanently',
   crossingUnauthorable:
-    'this item was moved between two shared folders, which CipherBox cannot do in one step; move it out to a folder you do not share first, then into the one you want',
+    'this item would end up in a different shared folder than the one it came from, which CipherBox cannot do in one step; move it to a folder you do not share first, then into the one you want',
 };
 
 /**

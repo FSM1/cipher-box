@@ -2220,11 +2220,8 @@ impl EngineView {
 /// created it granted somebody, and a set of recipients that has since gone
 /// empty costs a rotation nobody needed rather than leaving a live seed out.
 ///
-/// This set answers "which boundaries exist", not "which scopes can this pass
-/// publish under" — the drain's own question, which
-/// [`DrainScope::sealable_scope_roots`] answers over the ends that carry a seed
-/// pair. The known set is never narrower than the sealable one, so a crossing
-/// the drain can author is a crossing this classifier already saw.
+/// The known set, never the set a pass can seal under
+/// ([`ReplayScopes`](crate::sync::rebase::ReplayScopes)).
 fn classify_crossing(
     rendered: &Snapshot,
     from_parent: NodeId,
@@ -2286,8 +2283,7 @@ fn scope_of(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> NodeId
 /// charges it.
 ///
 /// The decode rides the session's own queue memo: it is an HPKE open per owned
-/// record, and the drain reads the same queue moments later. A vault that
-/// granted nothing has no boundary to cross and costs no read at all.
+/// record.
 async fn queued_crossing_scope<St: StagingStore>(
     staging: &St,
     enc_secret: &X25519Secret,
@@ -2310,7 +2306,10 @@ async fn queued_crossing_scope<St: StagingStore>(
             let (from_parent, new_parent, _) = op.relocation()?;
             let source = enclosing_scope_root(&base, from_parent, listed);
             let destination = enclosing_scope_root(&base, new_parent, listed);
-            (source != destination).then(|| source.or(destination))?
+            if source == destination {
+                return None;
+            }
+            source.or(destination)
         })?;
     let proved = boundaries.material.get(&scope)?;
     Some(SecondEnd {
@@ -2336,9 +2335,7 @@ async fn queued_crossing_scope<St: StagingStore>(
 struct Boundaries<'a> {
     /// The gate-passing base a boundary's place is read off.
     base: &'a RefCell<Snapshot>,
-    /// Every scope root this session knows of: the **classification** set
-    /// ([`Engine::relocation_scope_roots`]), which answers where a boundary is,
-    /// never which scopes a pass can seal under.
+    /// The known set ([`Engine::relocation_scope_roots`]).
     scope_roots: Vec<NodeId>,
     /// What each **walked** boundary seals under, assembled from the read epoch
     /// this tick's walk proved and the two seed caches
@@ -2506,7 +2503,6 @@ where
         },
         ancestry: RotationAncestry::default()
             .under_parent_node_seed(scope_root.0, ascent.as_deref()),
-        // The cut publishes the scope root itself; nothing here re-points it.
         pointer_consult: PointerConsultArm::Refused,
         payload_version: POINTER_PAYLOAD_VERSION,
         gated: GatedRoots::default(),
@@ -2518,15 +2514,7 @@ where
     // material a later pass would seal under.
     arm.walked_epochs.borrow_mut().remove(&scope_root);
     flat_root_cut(
-        arm.entropy,
-        arm.floors,
-        arm.scheduler,
         &net,
-        &OwnerRotationKeys {
-            enc_secret: &keys.enc_secret,
-            identity: &keys.owner_identity,
-            scope_keys: &keys.scope_keys,
-        },
         FlatCut {
             scope: &scope,
             ascent: ascent.as_deref(),
@@ -2545,11 +2533,7 @@ where
 /// "Triggers": both re-seal an unchanged committed set, so neither is the
 /// revocation cascade). Only which scope, whose seams and which sweep differ.
 async fn flat_root_cut<T, H, C, F, Sch, E>(
-    entropy: &RefCell<E>,
-    floors: &F,
-    scheduler: &Sch,
     net: &OwnerRotationNet<'_, T, H, C, F, Sch, E>,
-    keys: &OwnerRotationKeys<'_>,
     cut: FlatCut<'_, impl Fn() -> BoxedTask>,
 ) -> Result<RotationOutcome, RotateError>
 where
@@ -2570,9 +2554,9 @@ where
         .await
         .map_err(RotateError::Resolve)?;
     rotate_scope(
-        &mut SharedEntropy(entropy),
-        floors,
-        scheduler,
+        &mut SharedEntropy(net.entropy),
+        net.floors,
+        net.scheduler,
         net,
         &RotateScopePlan {
             identity: ScopeRootIdentity {
@@ -2580,7 +2564,7 @@ where
                 scope_id: scope.scope_id,
                 ipns_name: &scope.ipns_name,
                 owner_enc_pub: &current.owner_enc_pub,
-                owner_enc_secret: Some(keys.enc_secret),
+                owner_enc_secret: Some(net.keys.enc_secret),
                 ascent: ascent.map(AscentAuthority::ParentSeed),
                 owes_ascent_link: current.carried_ascent_link,
                 pseudonym_signer: &current.pseudonym_signer,
@@ -3481,11 +3465,15 @@ async fn refresh_seed_floors<F: FloorStore>(
 }
 
 /// What each boundary the last walk proved seals under: the read epoch that walk
-/// recorded, paired with the two seeds the per-scope caches hold.
+/// recorded, paired with the two seeds the per-scope caches hold. A boundary
+/// missing either seed is left out.
 ///
-/// A boundary missing either seed is left out. Those caches run the eviction a
-/// floor rise demands, so a seed that has gone is one no pass may seal under.
-fn walked_scope_material(
+/// The copy is not eviction-tracked — [`cached_seed`] runs no floor pass — so it
+/// is not the authority on whether a seed is still current. Every consumer
+/// re-proves the epoch against a gate-passing scope root record before it
+/// authors anything ([`crate::sync::drain::Drain::open_scope_root`]), and a
+/// below-floor seed opens no root body at all.
+fn walked_boundary_material(
     walked: &RefCell<WalkedReadEpochs>,
     read_seeds: &RefCell<ScopeSeeds>,
     write_seeds: &RefCell<ScopeSeeds>,
@@ -5565,7 +5553,7 @@ where {
                             .union(&proved_scope_ids)
                             .copied()
                             .collect(),
-                        material: walked_scope_material(
+                        material: walked_boundary_material(
                             &walked_read_epochs,
                             &scope_read_seeds,
                             &scope_write_seeds,
@@ -6440,11 +6428,7 @@ where {
                 PointerConsultArm::Refused,
             );
             flat_root_cut(
-                &self.entropy,
-                &self.seams.floor_store,
-                &self.seams.scheduler,
                 &net,
-                &owner_keys(),
                 FlatCut {
                     scope: &target.scope,
                     ascent: target.parent_node_seed.as_deref(),

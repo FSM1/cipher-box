@@ -186,11 +186,13 @@ pub enum DeadLetterReason {
     /// Distinct from [`Self::AttemptsExhausted`] because no retry shrinks the
     /// body, and the member's remedy is to empty the bin or to hard-delete.
     BinIndexFull,
-    /// A relocation whose two ends now sit in two different interior scopes. A
-    /// pass anchors on one scope and carries one interior end beside it, so no
-    /// pass can author the three-scope re-seal this crossing owes. The command
-    /// refuses the same shape at journal time; a grant minted after the op was
-    /// queued is what moves a boundary under one already journaled.
+    /// An op that would move a node into a scope no pass can seal it into: a
+    /// relocation whose two ends now sit in two different interior scopes, or a
+    /// restore into a scope other than the one that binned the node. A pass
+    /// anchors on one scope and carries one interior end beside it, so neither
+    /// re-seal has a pass to author it. The command refuses the relocation shape
+    /// at journal time; a grant minted after the op was queued is what moves a
+    /// boundary under one already journaled.
     CrossingUnauthorable,
 }
 
