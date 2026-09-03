@@ -417,14 +417,6 @@ impl RelayedAnswerRefused {
     }
 }
 
-impl fmt::Display for RelayedAnswerRefused {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.check())
-    }
-}
-
-impl std::error::Error for RelayedAnswerRefused {}
-
 /// Whether a relayed answer still carries the approving device's own signature
 /// over every field it answered with (D4). The requester-side mirror of
 /// [`request_binding_holds`]. One boolean, no reason: a caller must not learn
