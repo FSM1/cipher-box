@@ -1,22 +1,48 @@
-# DORMANT: v1 mints no further releases, so the cipherbox-desktop-v* tag
-# trigger can never fire again. Per blueprint/deploy.md this becomes
-# desktop-release.yml (trigger v*, mark-latest deleted) when the v2 desktop
-# shell lands.
-name: Desktop Staging Release
+# The desktop leg of the one product release train (blueprint/deploy.md,
+# "Desktop release artifacts"): each v* tag carries one GitHub Release, and
+# this attaches the three signed installer sets and latest.json to it.
+name: Desktop Release
 
 on:
   push:
     tags:
-      - 'cipherbox-desktop-v*'
+      - 'v*'
 
 permissions: {}
 
-env:
-  DESKTOP_TAG: ${{ github.ref_name }}
-
 jobs:
+  resolve-release:
+    name: Resolve the release for the tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      # tauri-action rewrites the name and body of a release it looks up by
+      # tag, which drops the changelog release-please wrote. By release id it
+      # only uploads, and a v* tag that carries no release fails closed.
+      - name: Read the release id
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id' 2>/dev/null); then
+              echo "release_id=${id}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "no release for ${RELEASE_TAG} yet (attempt ${attempt}/6)"
+            sleep 10
+          done
+          echo "::error::No GitHub Release for ${RELEASE_TAG}. release-please mints the tag through the release, so a tag without one was pushed by hand."
+          exit 1
+
   build-desktop-macos:
     name: Build Desktop (macOS)
+    needs: resolve-release
     runs-on: macos-latest
     environment: staging
     permissions:
@@ -24,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.ref_name }}
+          persist-credentials: false
 
       - uses: ./.github/actions/setup-fuse-t
 
@@ -34,7 +60,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          key: macos-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: macos-cargo-
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -71,15 +97,12 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
-          tagName: ${{ env.DESKTOP_TAG }}
-          releaseName: 'CipherBox Desktop ${{ env.DESKTOP_TAG }}'
-          releaseBody: 'Desktop release ${{ env.DESKTOP_TAG }}.'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
+          releaseId: ${{ needs.resolve-release.outputs.release_id }}
+          uploadUpdaterJson: true
 
   build-desktop-windows:
     name: Build Desktop (Windows)
+    needs: resolve-release
     runs-on: windows-latest
     environment: staging
     permissions:
@@ -87,33 +110,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.ref_name }}
+          persist-credentials: false
 
-      - name: Install WinFsp
-        shell: powershell
-        run: |
-          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          $resourceDir = Join-Path "${{ github.workspace }}" "apps\desktop\src-tauri\resources"
-          $out = Join-Path $resourceDir "winfsp-2.1.25156.msi"
-          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-          New-Item -ItemType Directory -Force -Path $resourceDir
-          Invoke-WebRequest -Uri $url -OutFile $out
-          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
-          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
-          $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$out`"","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow -PassThru
-          if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
-          $installDir = "C:\Program Files (x86)\WinFsp"
-          if (!(Test-Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp")) {
-            New-Item -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Force | Out-Null
-          }
-          New-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -Value $installDir -PropertyType String -Force | Out-Null
-          $regVal = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -ErrorAction Stop
-          if (-not $regVal.InstallDir -or $regVal.InstallDir -ne $installDir) {
-            throw "WinFsp InstallDir registry mismatch: expected '$installDir', got '$($regVal.InstallDir)'"
-          }
-          Write-Host "WinFsp InstallDir registry: $($regVal.InstallDir)"
-          if (!(Test-Path "$installDir\lib")) { throw "WinFsp lib directory not found at $installDir\lib" }
-          if (!(Test-Path "$installDir\inc")) { throw "WinFsp inc directory not found at $installDir\inc" }
+      - uses: ./.github/actions/setup-winfsp
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -121,7 +120,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: windows-cargo-
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -158,16 +157,13 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
-          tagName: ${{ env.DESKTOP_TAG }}
-          releaseName: 'CipherBox Desktop ${{ env.DESKTOP_TAG }}'
-          releaseBody: 'Desktop release ${{ env.DESKTOP_TAG }}.'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
+          releaseId: ${{ needs.resolve-release.outputs.release_id }}
+          uploadUpdaterJson: true
           args: -- --no-default-features --features winfsp
 
   build-desktop-linux:
     name: Build Desktop (Linux)
+    needs: resolve-release
     runs-on: ubuntu-22.04
     environment: staging
     permissions:
@@ -175,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.ref_name }}
+          persist-credentials: false
 
       - name: Install system dependencies
         run: |
@@ -196,7 +192,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: linux-cargo-
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -233,23 +229,6 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
-          tagName: ${{ env.DESKTOP_TAG }}
-          releaseName: 'CipherBox Desktop ${{ env.DESKTOP_TAG }}'
-          releaseBody: 'Desktop release ${{ env.DESKTOP_TAG }}.'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
+          releaseId: ${{ needs.resolve-release.outputs.release_id }}
+          uploadUpdaterJson: true
           args: -- --no-default-features --features fuse
-
-  mark-latest:
-    name: Mark Desktop Release as Latest
-    needs: [build-desktop-macos, build-desktop-windows, build-desktop-linux]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Mark as latest release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DESKTOP_TAG: ${{ github.ref_name }}
-        run: gh release edit "$DESKTOP_TAG" --repo "${{ github.repository }}" --latest
