@@ -5115,41 +5115,41 @@ mod tests {
         );
     }
 
-    /// One walk that meets both failures reports the trust verdict, so a party
-    /// who can also darken a record cannot mask a forged one behind it.
+    /// One walk that meets both failures reports the trust verdict whichever it
+    /// met first, so a party who can also darken a record cannot mask a forged
+    /// one behind it. The walk descends in `scope_id` order, so the two ids
+    /// order the two failures.
     #[test]
-    fn a_rejection_outranks_an_unavailability_on_one_walk() {
-        let dark = [0x01; 16];
-        let planted = vault_root(CHILD_SCOPE, Vec::new());
-        let root = vault_root(
-            SCOPE,
-            vec![
-                ChildScopeRef {
-                    scope_id: dark,
-                    ipns_name: derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &dark)
-                        .as_str()
-                        .as_bytes()
-                        .to_vec(),
-                    unknown: PreservedFields::new(),
-                },
-                child_ref(CHILD_SCOPE, &planted),
-            ],
-        );
-        let harness = Harness::plain();
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage(CHILD_SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
+    fn a_rejection_outranks_an_unavailability_whichever_the_walk_meets_first() {
+        for (dark, rejected) in [([0x01; 16], [0xc1; 16]), ([0xc1; 16], [0x01; 16])] {
+            let planted = vault_root(rejected, Vec::new());
+            let root = vault_root(
+                SCOPE,
+                vec![
+                    ChildScopeRef {
+                        scope_id: dark,
+                        ipns_name: derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &dark)
+                            .as_str()
+                            .as_bytes()
+                            .to_vec(),
+                        unknown: PreservedFields::new(),
+                    },
+                    child_ref(rejected, &planted),
+                ],
+            );
+            let harness = Harness::plain();
+            harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+            harness.stage(rejected, &planted, Some(OWNER_ROOT_EPOCH));
 
-        let walked = harness
-            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
-            .expect("the vault root gates");
+            let walked = harness
+                .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+                .expect("the vault root gates");
 
-        assert_eq!(
-            walked.failure,
-            Some(WalkFailure::Rejected {
-                scope_id: CHILD_SCOPE
-            }),
-            "the dark entry is met first and the rejection still stands"
-        );
+            assert_eq!(
+                walked.failure,
+                Some(WalkFailure::Rejected { scope_id: rejected })
+            );
+        }
     }
 
     /// A rotation publishes before it raises the floor, so a name below its own
@@ -5262,6 +5262,38 @@ mod tests {
             .expect("the vault root gates");
 
         assert!(walked.unproved.is_empty());
+    }
+
+    /// The admission bound is the other end of the same guard: a walk that
+    /// fills it names the boundaries it admitted and reports the set
+    /// incomplete, rather than claiming a set that stops at the bound.
+    #[test]
+    fn the_admission_bound_reports_the_set_incomplete() {
+        let over_bound = MAX_DESCENDANT_SCOPE_ROOTS + 1;
+        let harness = Harness::plain();
+        // One head fetch per level, past the responses one `serve_plane` holds.
+        serve_plane(&harness.http, &harness.blocks);
+        let mut index = Vec::with_capacity(over_bound);
+        for i in 0..over_bound {
+            let mut scope_id = [0xe0u8; 16];
+            scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            let child = interior(scope_id, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+            index.push(child_ref(scope_id, &child));
+            harness.stage(scope_id, &child, Some(OWNER_ROOT_EPOCH));
+        }
+        let root = vault_root(SCOPE, index);
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let walked = harness
+            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(walked.proved.len(), MAX_DESCENDANT_SCOPE_ROOTS);
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Unavailable),
+            "every level gated, so only the bound left the set incomplete"
+        );
     }
 
     /// Every entry of a writer-authored index costs a fan-out GET whether or
