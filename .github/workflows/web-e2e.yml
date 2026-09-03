@@ -186,62 +186,10 @@ jobs:
         env:
           VITE_E2E_HOOK: 'true'
 
-      # `--with-deps` bundles a browser download with an apt install, so a stall
-      # in either is unattributable. A step-level timeout alone would not help:
-      # it kills the step, not the stalled attempt, so nothing retries.
-      - name: Resolve the Playwright version
-        id: playwright
-        working-directory: tests/web-e2e
-        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: playwright-cache
+      - uses: ./.github/actions/playwright-chromium
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-
-      - name: Install Playwright Chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 10
-        run: |
-          # The marker records the install's own status, so a stall is told
-          # apart from the command exiting 124 on its own. `--kill-after`
-          # matters most: without it `timeout` waits forever on a child that
-          # ignores SIGTERM, which is the stall this step exists to bound.
-          marker="$RUNNER_TEMP/playwright-browser-status"
-          for attempt in 1 2 3; do
-            rm -f "$marker"
-            # shellcheck disable=SC2016  # the inner shell expands $? and $1, not this one
-            timeout --kill-after=30 150 bash -c \
-              'pnpm --filter @cipherbox/web-e2e exec playwright install chromium; echo "$?" > "$1"' _ "$marker" || true
-            if [ -f "$marker" ]; then
-              install_status=$(cat "$marker")
-              if [ "$install_status" -eq 0 ]; then
-                exit 0
-              fi
-              echo "::error::playwright install chromium failed with status $install_status"
-              exit "$install_status"
-            fi
-            echo "::warning::playwright install chromium stalled past 150s (attempt $attempt of 3)"
-          done
-          echo "::error::playwright install chromium stalled on every attempt"
-          exit 1
-
-      # The runner image already carries Chromium's shared libraries, so this
-      # is a no-op on a healthy runner — a passing run installs nothing and
-      # takes seconds. It stays only to cover an image that drops one.
-      #
-      # So a stall here must not gate the suite: apt is bounded, never retried
-      # (Playwright runs it under sudo, and a killed attempt leaves a root-owned
-      # apt-get holding the dpkg lock that the next attempt dies on), and a
-      # failure warns rather than fails. If a library really is missing, the
-      # suite says so in the browser launch error.
-      - name: Install the Playwright system dependencies
-        timeout-minutes: 6
-        run: |
-          timeout --kill-after=30 240 \
-            pnpm --filter @cipherbox/web-e2e exec playwright install-deps chromium \
-            || echo "::warning::playwright install-deps did not complete; the suite shows whether a library is actually missing"
+          package: '@cipherbox/web-e2e'
+          working-directory: tests/web-e2e
 
       # Named `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
       # suite that needs a live stack. The step timeout is the slice's test-time
