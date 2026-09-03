@@ -204,17 +204,24 @@ pub(crate) fn in_own_tree(base: &Snapshot, id: NodeId) -> bool {
 ///
 /// Fail-closed on the unknown arm: the owner plane is this vault's own
 /// namespace, so answering with it for a scope this vault does not own would
-/// measure a foreign record against a floor no sharer ever raised. `own_root`
-/// is decided ahead of the map, so a bookmark that names this vault's anchor
-/// cannot redirect the vault's own leg.
+/// measure a foreign record against a floor no sharer ever raised. The owned
+/// arm is decided ahead of the map, so a bookmark that names one of this
+/// vault's own roots cannot redirect that root's leg.
+///
+/// `own_descendants` are the scope roots below `own_root` that a gated descent
+/// proved this session holds
+/// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+/// A grant cut mints one out of this vault's own interior, so its floors are
+/// this identity's own and no sharer answers for it.
 pub(crate) fn floor_view<'a, F>(
     floors: &'a F,
     sharers: &GraftedSharers,
     contact_label_seed: &SecretBytes,
     own_root: &[u8; 16],
+    own_descendants: &BTreeSet<NodeId>,
     scope_id: &[u8; 16],
 ) -> Option<SharerScopedFloorStore<'a, F>> {
-    if scope_id == own_root {
+    if scope_id == own_root || own_descendants.contains(&NodeId(*scope_id)) {
         return Some(SharerScopedFloorStore::own(floors));
     }
     sharers.get(scope_id).map(|sharer| {
@@ -234,6 +241,7 @@ pub(crate) async fn evict_grafted_read_seeds<F: FloorStore>(
     sharers: &GraftedSharers,
     contact_label_seed: &SecretBytes,
     own_root: &[u8; 16],
+    own_descendants: &BTreeSet<NodeId>,
     read_seeds: &RefCell<ScopeSeeds>,
 ) {
     let held: Vec<[u8; 16]> = read_seeds.borrow().keys().copied().collect();
@@ -241,7 +249,14 @@ pub(crate) async fn evict_grafted_read_seeds<F: FloorStore>(
         if scope_id == *own_root {
             continue;
         }
-        match floor_view(floors, sharers, contact_label_seed, own_root, &scope_id) {
+        match floor_view(
+            floors,
+            sharers,
+            contact_label_seed,
+            own_root,
+            own_descendants,
+            &scope_id,
+        ) {
             Some(view) => {
                 refresh_seed_floor(&view, read_seeds, &scope_id, SeedFloor::Read).await;
             }
@@ -462,8 +477,15 @@ mod tests {
         )
         .expect("the floor raises");
 
-        let view = floor_view(&floors, &grafted(), &label_seed(), &OWN_ROOT, &SCOPE)
-            .expect("one identity granted it");
+        let view = floor_view(
+            &floors,
+            &grafted(),
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::new(),
+            &SCOPE,
+        )
+        .expect("one identity granted it");
         assert_eq!(
             block_on(floor::read_epoch_floor(&view, &SCOPE)),
             Ok(Some(7))
@@ -483,6 +505,7 @@ mod tests {
                 &GraftedSharers::new(),
                 &label_seed(),
                 &OWN_ROOT,
+                &BTreeSet::new(),
                 &SCOPE
             )
             .is_none()
@@ -498,11 +521,54 @@ mod tests {
         block_on(floors.raise_epoch_floor(&OWN_ROOT, 4)).expect("the floor raises");
         let claimed = GraftedSharers::from([(OWN_ROOT, SHARER)]);
 
-        let view = floor_view(&floors, &claimed, &label_seed(), &OWN_ROOT, &OWN_ROOT)
-            .expect("this vault's own");
+        let view = floor_view(
+            &floors,
+            &claimed,
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::new(),
+            &OWN_ROOT,
+        )
+        .expect("this vault's own");
         assert_eq!(
             block_on(floor::read_epoch_floor(&view, &OWN_ROOT)),
             Ok(Some(4))
+        );
+    }
+
+    /// A grant cut mints a scope root out of this vault's own interior. No
+    /// sharer answers for it, so the map arm would refuse it and the leg below
+    /// it would never run; its floors are this identity's own.
+    #[test]
+    fn a_proved_descendant_of_the_vaults_own_root_reads_the_owner_plane() {
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_epoch_floor(&SCOPE, 5)).expect("the floor raises");
+
+        assert!(
+            floor_view(
+                &floors,
+                &GraftedSharers::new(),
+                &label_seed(),
+                &OWN_ROOT,
+                &BTreeSet::new(),
+                &SCOPE,
+            )
+            .is_none(),
+            "a scope no descent proved and no sharer granted reaches no floor",
+        );
+
+        let view = floor_view(
+            &floors,
+            &GraftedSharers::new(),
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::from([NodeId(SCOPE)]),
+            &SCOPE,
+        )
+        .expect("a gated descent proved it below this vault's own root");
+        assert_eq!(
+            block_on(floor::read_epoch_floor(&view, &SCOPE)),
+            Ok(Some(5))
         );
     }
 
@@ -518,6 +584,7 @@ mod tests {
             &grafted(),
             &label_seed(),
             &OWN_ROOT,
+            &BTreeSet::new(),
             &seeds,
         ));
         assert!(
@@ -535,6 +602,7 @@ mod tests {
             &grafted(),
             &label_seed(),
             &OWN_ROOT,
+            &BTreeSet::new(),
             &seeds,
         ));
 
@@ -554,6 +622,7 @@ mod tests {
             &grafted(),
             &label_seed(),
             &OWN_ROOT,
+            &BTreeSet::new(),
             &seeds,
         ));
 
@@ -573,6 +642,7 @@ mod tests {
             &GraftedSharers::new(),
             &label_seed(),
             &OWN_ROOT,
+            &BTreeSet::new(),
             &seeds,
         ));
 
@@ -592,6 +662,7 @@ mod tests {
             &GraftedSharers::new(),
             &label_seed(),
             &OWN_ROOT,
+            &BTreeSet::new(),
             &seeds,
         ));
 

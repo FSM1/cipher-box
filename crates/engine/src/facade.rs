@@ -4872,11 +4872,13 @@ where {
                     )
                     .await;
                     let grafted = grafted_sharers.borrow().clone();
+                    let proved_before = descendant_roots.borrow().clone();
                     evict_grafted_read_seeds(
                         &floors,
                         &grafted,
                         &contact_label_seed,
                         &root_id,
+                        &proved_before,
                         &scope_read_seeds,
                     )
                     .await;
@@ -5009,8 +5011,9 @@ where {
                     // files stay queued for the pass that can.
                     let mut folder_verdict = RefreshVerdict::Reconciled;
                     let mut attempted_files: Vec<NodeId> = Vec::new();
+                    let proved_scope_ids = descendant_roots.borrow().clone();
                     let by_scope =
-                        focus_by_scope(&base.borrow(), &focus.borrow(), &descendant_roots.borrow());
+                        focus_by_scope(&base.borrow(), &focus.borrow(), &proved_scope_ids);
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
@@ -5022,6 +5025,7 @@ where {
                             &grafted,
                             &contact_label_seed,
                             &root_id,
+                            &proved_scope_ids,
                             &scope_root.0,
                         ) else {
                             continue;
@@ -5037,7 +5041,13 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
-                            plane: (scope_root.0 != root_id).then_some(GraftedLeg {
+                            // A scope root a gated descent proved below the
+                            // vault root is this vault's own plane: a grant cut
+                            // minted it out of this vault's own interior, so
+                            // every child of a body it names is this vault's.
+                            plane: (scope_root.0 != root_id
+                                && !proved_scope_ids.contains(&scope_root))
+                            .then_some(GraftedLeg {
                                 scope_roots: &scope_roots,
                                 named_nodes: &grafted_named_nodes,
                             }),
@@ -7194,11 +7204,13 @@ where {
             self.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
+        let descendants = self.descendant_scope_roots.borrow().clone();
         let Some(floors) = floor_view(
             &self.seams.floor_store,
             &sharers,
             session.contact_label_seed(),
             &own_root,
+            &descendants,
             scope_id,
         ) else {
             self.scope_read_seeds.borrow_mut().remove(scope_id);
