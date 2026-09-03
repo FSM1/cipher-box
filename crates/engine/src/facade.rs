@@ -3919,10 +3919,10 @@ pub struct Engine<T: SeamTypes> {
     unproved_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Whether the last boundary walk to reach a verdict met a trust rejection.
     /// While it stands the session refuses every relocation, because a walk
-    /// that could not gate a descendant scope root names no boundary below it
-    /// and every move out of that scope would read intra-scope (#1663 D1). Only
-    /// a later walk that proves its whole boundary set lifts it; an
-    /// availability failure neither raises nor lifts it.
+    /// that could not gate a descendant scope root names no boundary below it,
+    /// and every move out of that scope would read intra-scope. Only a later
+    /// walk that proves its whole boundary set lifts it; an availability
+    /// failure neither raises nor lifts it.
     boundary_walk_rejected: Rc<Cell<bool>>,
     /// The read epoch the same walk proved each of them at, which no seed cache
     /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
@@ -5435,7 +5435,7 @@ where {
                         // The boundary set a rejection leaves is incomplete, and
                         // what is missing from it reads as its parent's scope,
                         // so the session refuses to classify a move at all until
-                        // a walk names the whole set again (#1663 D1).
+                        // a walk names the whole set again.
                         match failure {
                             None => boundary_walk_rejected.set(false),
                             Some(rejected @ WalkFailure::Rejected { .. }) => {

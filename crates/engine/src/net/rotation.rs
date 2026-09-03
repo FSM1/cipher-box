@@ -636,7 +636,7 @@ pub(crate) enum WritePlaneDark {
 
 /// Which failure one boundary walk met. The tick tells the two apart: a trust
 /// rejection refuses every relocation and raises an attributable abuse event,
-/// an availability failure keeps the retry it has (#1663 D1).
+/// an availability failure keeps the retry it has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WalkFailure {
     /// A scope root on the walk failed the adoption gate, or a parent index
@@ -1009,10 +1009,9 @@ where
         parent_read_scope_seed: &[u8; SECRET_LEN],
         child: &ChildScopeRef,
     ) -> Result<(DescendantScopeRoot, Vec<ChildScopeRef>), WalkFailure> {
-        let rejected = WalkFailure::Rejected {
+        let name = scope_name(&child.ipns_name).map_err(|_| WalkFailure::Rejected {
             scope_id: child.scope_id,
-        };
-        let name = scope_name(&child.ipns_name).map_err(|_| rejected)?;
+        })?;
         let parent_node_seed =
             Zeroizing::new(*kdf::node_seed(parent_read_scope_seed, &child.scope_id).as_bytes());
         let adopter = RootAdopter::new(
