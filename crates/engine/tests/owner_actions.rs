@@ -20,6 +20,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::secret::ct_eq;
 
 use zeroize::Zeroizing;
 
@@ -678,6 +679,48 @@ impl GrantScenario {
             .heal_put_for(write_name(ROOT).as_str());
         published_grant_section(&self.world, &self.blocks, self.folder)
             .expect("the grantee scope root is live at its derived name")
+    }
+
+    /// Grant `name`, a folder inside the already-granted one, and report it.
+    /// A grant refuses a subtree still sealed at the epoch it held before the
+    /// enclosing mint, so the folder converges onto the enclosing scope first.
+    fn grant_nested_folder(&mut self, name: &str) -> NodeId {
+        let inner = create_published_folder(
+            &self.world,
+            &mut self.engine,
+            &mut self._tasks,
+            self.folder,
+            name,
+        );
+        assert_eq!(self.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+        let enclosing = published_grant_section(&self.world, &self.blocks, self.folder)
+            .expect("the granted folder is a scope root");
+        let enclosing_seed = published_override_seed(
+            &kdf::enc_subkey(&SECRET),
+            ENVELOPE_V,
+            self.folder.0,
+            1,
+            &enclosing,
+        )
+        .expect("the owner blob yields the enclosing scope's override seed");
+        reseal_interior_node(
+            &self.world,
+            &self.blocks,
+            inner,
+            self.folder.0,
+            &enclosing_seed,
+            1,
+        );
+        assert_eq!(
+            block_on(self.engine.command(Command::Grant {
+                node: inner,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+            })),
+            Ok(CommandOutcome::Done),
+        );
+        inner
     }
 
     fn granted_scope_repoint(&self) -> RepointObject {
@@ -1413,6 +1456,126 @@ fn a_relocation_of_the_vault_root_is_an_unsupported_target() {
         queued_relocations(&fx.owner_device),
         0,
         "and nothing was journaled, so no pass can link the root under a folder"
+    );
+}
+
+/// The tick's descendant walk gates every interior scope root. Both its seeds
+/// already reach the seed caches; the read epoch its envelope carries now
+/// reaches the session too, which is what a cross-scope re-seal publishes at.
+#[test]
+fn the_tick_resolves_the_material_of_an_owner_minted_interior_scope() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    // The read plane cuts and the write plane does not, so the two epochs part
+    // and only the read one satisfies the assertion below.
+    assert_eq!(
+        block_on(fx.engine.command(Command::RotateNow { node: fx.folder })),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let material = block_on(fx.engine.walked_scope_material(fx.folder))
+        .expect("the walk resolved the scope the grant minted");
+    let epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    assert_eq!(
+        epoch, 2,
+        "the cut moved the read epoch off the write plane's"
+    );
+    assert_eq!(
+        material.read_epoch, epoch,
+        "the epoch is the one the scope root envelope carries"
+    );
+    let floor = block_on(floor::read_epoch_floor(
+        &fx.owner_device.floors(&SECRET),
+        &fx.folder.0,
+    ))
+    .expect("the floor reads")
+    .expect("the cut raised the scope's read-epoch floor");
+    assert_eq!(
+        material.read_epoch, floor,
+        "and the cut left the floor at the epoch it published"
+    );
+    let section = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder answers as a scope root");
+    let published = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        epoch,
+        &section,
+    )
+    .expect("the owner blob yields the scope's override seed");
+    assert!(
+        ct_eq(&material.read_scope_seed, &published),
+        "the read seed is the one this scope's own owner blob carries"
+    );
+    assert_eq!(
+        derive_write_name(&material.write_scope_seed, &fx.folder.0),
+        write_name(fx.folder),
+        "and the write seed derives the name the scope root publishes under"
+    );
+}
+
+/// The minting session is the only one that ever held this material without a
+/// walk. A second session over the same vault must reach the same seeds and the
+/// same epoch, or the destination end of a crossing depends on which session
+/// happens to publish it.
+#[test]
+fn a_session_that_minted_no_grant_resolves_the_same_interior_material() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let minted = block_on(fx.engine.walked_scope_material(fx.folder))
+        .expect("the minting session walked the scope it minted");
+
+    let (fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+
+    let walked = block_on(fresh.walked_scope_material(fx.folder))
+        .expect("a session that minted nothing still walks the durable index");
+    assert!(
+        ct_eq(&walked.read_scope_seed, &minted.read_scope_seed)
+            && ct_eq(&walked.write_scope_seed, &minted.write_scope_seed),
+        "both sessions seal under the same scope material"
+    );
+    assert_eq!(walked.read_epoch, minted.read_epoch, "at the same epoch");
+}
+
+/// The read-epoch floor is the revocation boundary. A level below it supplies
+/// no material at all, and its own subtree is what that costs: the level above
+/// keeps what its own gated record proved.
+#[test]
+fn a_level_below_its_read_epoch_floor_supplies_no_material() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("in");
+
+    // The control and the assertion both run on a session that minted nothing,
+    // so only the floor differs between them.
+    let (before, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &before, &mut tasks);
+    assert!(
+        block_on(before.walked_scope_material(fx.folder)).is_some()
+            && block_on(before.walked_scope_material(inner)).is_some(),
+        "a cold session reaches both levels while each record sits at its floor"
+    );
+
+    let epoch = published_read_epoch(&fx.world, &fx.blocks, inner);
+    block_on(
+        fx.owner_device
+            .floors(&SECRET)
+            .raise_epoch_floor(&inner.0, epoch + 1),
+    )
+    .expect("the floor raises");
+
+    let (after, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &after, &mut tasks);
+    assert!(
+        block_on(after.walked_scope_material(inner)).is_none(),
+        "a record below the revocation boundary supplies no material"
+    );
+    assert!(
+        block_on(after.walked_scope_material(fx.folder)).is_some(),
+        "and the level above it keeps the material its own record proved"
     );
 }
 

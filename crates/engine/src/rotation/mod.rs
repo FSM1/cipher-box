@@ -4,6 +4,8 @@
 //!
 //! - [`eager_set`] — the transitive-closure walk that names every descendant
 //!   scope root a revocation rotation must touch.
+//! - [`scope_material`] — the read epoch each descendant scope root the tick's
+//!   walk proved sits at.
 //! - [`reseal`] — the shared per-scope-root re-seal helper: assemble one scope
 //!   root's signed grant section at a given epoch/seed, re-wrapping grant blobs
 //!   for exactly the committed set. Consumed by `rotate_scope` (the root cut), by
@@ -43,6 +45,7 @@ pub mod reseal;
 pub mod retry;
 pub mod rotate;
 pub mod rotate_write;
+pub mod scope_material;
 pub mod sweep;
 pub mod trigger;
 
@@ -69,6 +72,7 @@ pub use rotate_write::{
     WriteSubtreeResolver, WriteWavePublisher, build_repoint_object, derive_write_name,
     rotate_scope_write,
 };
+pub(crate) use scope_material::{WalkedReadEpochs, install_walked_read_epochs};
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
     SweepResolver, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep, run_sweep_job,

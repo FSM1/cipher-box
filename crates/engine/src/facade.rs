@@ -95,9 +95,10 @@ use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
     RevokeError, RevokedCommittedSet, RotateError, RotateScopePlan, ScopeRootIdentity,
-    ScopeRootPublisher, SweepResolveFailure, WriteHistory, WriteRevokeKind, bounded,
-    cut_for_write_grant, derive_write_name, record_grant_floor, reseal_scope_root,
-    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
+    ScopeRootPublisher, SweepResolveFailure, WalkedReadEpochs, WriteHistory, WriteRevokeKind,
+    bounded, cut_for_write_grant, derive_write_name, install_walked_read_epochs,
+    record_grant_floor, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
+    rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
@@ -3560,6 +3561,10 @@ pub struct Engine<T: SeamTypes> {
     /// grow-only within a session ([`install_descendant_scopes`]); the read legs
     /// group focus targets against it ([`scope_root_of`]).
     descendant_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// The read epoch the same walk proved each of them at, which no seed cache
+    /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
+    /// the set above.
+    walked_read_epochs: Rc<RefCell<WalkedReadEpochs>>,
     /// The `ipnsName` the vault root scope currently publishes under: adopted at
     /// cold start, minted by a first run, moved by a write wave this session
     /// drove, and re-read from the vault pointer on every consult. `None` until
@@ -3778,6 +3783,7 @@ impl<T: SeamTypes> Engine<T> {
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+                walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
                 current_root_name: Rc::new(RefCell::new(None)),
                 vault_pointer_index: Cell::new(None),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
@@ -4139,6 +4145,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut roots) = self.descendant_scope_roots.try_borrow_mut() {
             roots.clear();
+        }
+        if let Ok(mut epochs) = self.walked_read_epochs.try_borrow_mut() {
+            epochs.clear();
         }
         // Session-scoped, and a failed start would otherwise leave the prior
         // account's index resident.
@@ -4772,6 +4781,7 @@ where {
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
         let descendant_roots = self.descendant_scope_roots.clone();
+        let walked_read_epochs = self.walked_read_epochs.clone();
         let current_root_name = self.current_root_name.clone();
         let focus = self.focus.clone();
         let focus_touched = self.focus_touched.clone();
@@ -5038,6 +5048,7 @@ where {
                             &events,
                             &proved,
                         );
+                        install_walked_read_epochs(&walked_read_epochs, &proved);
                         descendants = proved;
                     }
                     // A host that derives focus from an operation stream cannot
@@ -9298,6 +9309,29 @@ where {
     /// The measured storage split this engine runs under.
     pub fn storage_policy(&self) -> &StoragePolicy {
         &self.storage_policy
+    }
+
+    /// What the tick's last descendant walk proved one interior scope root
+    /// seals under, or `None` where any of the three parts is gone.
+    ///
+    /// The read seed comes through [`Self::scope_read_seed`], which drops a seed
+    /// the durable read-epoch floor has risen past. That seed's stamp is the
+    /// epoch held here ([`install_descendant_scopes`]), so a seed that survives
+    /// the eviction proves the epoch beside it is not retired.
+    ///
+    /// All three parts are read below the one await, so a walk that lands while
+    /// it is pending cannot pair one pass's seed with another pass's epoch.
+    #[cfg(feature = "test-kit")]
+    pub async fn walked_scope_material(
+        &self,
+        scope: NodeId,
+    ) -> Option<crate::rotation::scope_material::ScopeMaterial> {
+        let read_scope_seed = self.scope_read_seed(&scope.0).await?;
+        Some(crate::rotation::scope_material::ScopeMaterial {
+            read_scope_seed,
+            write_scope_seed: cached_seed(&self.scope_write_seeds, &scope.0)?,
+            read_epoch: *self.walked_read_epochs.borrow().get(&scope)?,
+        })
     }
 }
 
