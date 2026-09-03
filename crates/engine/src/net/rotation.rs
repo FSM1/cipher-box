@@ -58,7 +58,7 @@ use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::NodeId;
+use crate::facade::{NodeId, seed_names};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{Adopted, GateError, RejectionReason, floor};
 use crate::grants::child_index::canonicalize;
@@ -692,13 +692,11 @@ where
     /// names, both empty where this device holds the root keyless: the index is
     /// a write-plane read.
     ///
-    /// The seed must derive `name`, the very name this root publishes under. A
-    /// write-capable grantee can commit an owner-write-blob wrapping a seed of
-    /// its choosing, and a drain pass mints every new node's `ipnsName` and its
-    /// narrow signer from this seed, so a seed that cannot name our own root is
-    /// not our scope's — held keyless, never a trust verdict. This is
-    /// `deposit_write_seed`'s deposit-time proof, at the point the material is
-    /// minted rather than at each consumer.
+    /// The seed is held to [`seed_names`] here, where the material is minted,
+    /// rather than at each consumer: a drain pass takes a descendant's seed
+    /// straight off this value and mints every new node's `ipnsName` and its
+    /// narrow signer from it. A seed that cannot name our own root leaves the
+    /// root keyless, never a trust verdict.
     async fn write_plane(
         &self,
         gated: &GatedScopeRoot,
@@ -708,7 +706,7 @@ where
         let Some(seed) = gated.write_scope_seed.clone() else {
             return (None, Vec::new());
         };
-        if derive_write_name(&seed, &scope_id) != *name {
+        if !seed_names(&seed, &scope_id, Some(name)) {
             return (None, Vec::new());
         }
         let Ok((write_body, epoch)) = write_plane_of(

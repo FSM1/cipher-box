@@ -2954,11 +2954,16 @@ fn surface_drain_report(
 /// [`Engine::vault_root_scope`]'s refusal name.
 const HELD_SEED_NOT_AT_CURRENT_ROOT: &str = "held-write-seed-does-not-name-the-current-root";
 
-/// Whether `seed` derives the scope root's own `ipnsName` — the one proof both
-/// the deposit ([`deposit_write_seed`]) and the read
-/// ([`Engine::vault_root_scope`]) hold a write scope seed to, stated once so
-/// the two cannot drift apart.
-fn seed_names(seed: &[u8; 32], scope_id: &[u8; 16], root_name: Option<&IpnsName>) -> bool {
+/// Whether `seed` derives the scope root's own `ipnsName` — the one proof every
+/// holder of a write scope seed is held to, stated once so they cannot drift
+/// apart: the deposit ([`deposit_write_seed`]), the read
+/// ([`Engine::vault_root_scope`]), and the mint of a descendant scope's own
+/// write plane ([`ScopeWalk::descendant_scope_roots`]).
+pub(crate) fn seed_names(
+    seed: &[u8; 32],
+    scope_id: &[u8; 16],
+    root_name: Option<&IpnsName>,
+) -> bool {
     root_name.is_some_and(|name| derive_write_name(seed, scope_id) == *name)
 }
 
@@ -5119,16 +5124,6 @@ where {
                         .collect();
                     // Index 0 is the vault root's own pass whenever this holds.
                     let root_scope_held = read_seed.is_some() && write_seed.is_some();
-                    let drained_roots: Vec<NodeId> = root_scope_held
-                        .then_some(NodeId(root_id))
-                        .into_iter()
-                        .chain(
-                            descendants
-                                .iter()
-                                .filter(|scope| scope.write.is_some())
-                                .map(|scope| NodeId(scope.scope_id)),
-                        )
-                        .collect();
                     let mut scopes: Vec<DrainScope<'_>> = Vec::new();
                     if let (Some(read_seed), Some(write_seed)) = (&read_seed, &write_seed) {
                         scopes.push(DrainScope {
@@ -5136,7 +5131,6 @@ where {
                             root_name: &root_name,
                             parent_node_seed: None,
                             scope_roots: &proved_roots,
-                            drained_roots: &drained_roots,
                             read_scope_seed: read_seed,
                             write_scope_seed: write_seed,
                             enc_secret: &enc_subkey,
@@ -5150,7 +5144,6 @@ where {
                             root_name: &scope.name,
                             parent_node_seed: Some(&scope.parent_node_seed),
                             scope_roots: &proved_roots,
-                            drained_roots: &drained_roots,
                             read_scope_seed: &scope.read_scope_seed,
                             write_scope_seed: &write.seed,
                             enc_secret: &enc_subkey,

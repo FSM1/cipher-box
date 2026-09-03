@@ -223,7 +223,6 @@ pub(crate) fn is_own_scope(
 /// measure a foreign record against a floor no sharer ever raised. The owned
 /// arm is decided ahead of the map, so a bookmark that names one of this
 /// vault's own roots cannot redirect that root's leg.
-///
 pub(crate) fn floor_view<'a, F>(
     floors: &'a F,
     sharers: &GraftedSharers,
