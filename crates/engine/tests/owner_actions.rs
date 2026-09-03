@@ -12,10 +12,10 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, BinEntry, GrantSection, GrantSetCommitment,
-    Permission as CorePermission, PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_GRANT_BLOB, decode_envelope, decode_grant_section, grant_section_bytes,
-    open_ascent_link, open_grant_blob, open_read_body, sign_grant_set,
+    AadContext, AscentLink, BinEntry, ChildRef, GrantSection, GrantSetCommitment,
+    NodeKind as CoreNodeKind, Permission as CorePermission, PreservedFields, ReadBody,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, decode_envelope, decode_grant_section,
+    grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body, sign_grant_set,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -55,7 +55,7 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, CommittedSet, ContentProfile,
-    DeadLetterReason, Engine, EngineError, EventStream, GatewayConfig, LoginSecret, NodeId,
+    DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, LoginSecret, NodeId,
     NodeKind, Permission, RecordReader, ResealSeeds, ScopeRootIdentity, SessionBearer,
     SharePointer, SharingInviteLinks, StoragePolicy, SyncTimingProfile, WriteHistory, decode_queue,
     load_bin_index, poll_verified, post_sealed, reseal_scope_root,
@@ -76,6 +76,10 @@ const ROOT_SEAL_ENTROPY_SEED: u64 = 1;
 /// The seeded root body's seal nonce and the share pointer's HPKE ephemeral,
 /// held apart for the same reason.
 const ROOT_BODY_NONCE: [u8; 24] = [0x31; 24];
+/// Two folders of a seeded vault root: one a boundary walk must name a scope
+/// root, one an ordinary folder of the vault's own scope.
+const SHARED: NodeId = NodeId([0xa1; 16]);
+const PHOTOS: NodeId = NodeId([0xa2; 16]);
 const SHARE_POINTER_EPHEMERAL: [u8; 32] = [0x42; 32];
 
 // ---------------------------------------------------------------------------
@@ -130,6 +134,17 @@ fn owner_pointer_read_key() -> [u8; 32] {
 /// Publish the account's initial state: an owner root at sequence 1 carrying
 /// `grants` as its committed set, and the vault pointer naming it.
 fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> IpnsName {
+    seed_vault_naming(world, blocks, grants, Vec::new())
+}
+
+/// [`seed_vault`] over a root whose read body already names `children` — the
+/// state a session boots into, rather than one it authored.
+fn seed_vault_naming(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    grants: Vec<GrantRow>,
+    children: Vec<ChildRef>,
+) -> IpnsName {
     let owner_identity = owner_identity();
     let pseudonym = owner_pseudonym();
     let owner_enc = kdf::enc_subkey(&SECRET);
@@ -193,7 +208,7 @@ fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> Ipns
             body: &ReadBody::Folder {
                 created_at: 0,
                 modified_at: 0,
-                children: Vec::new(),
+                children,
                 unknown: PreservedFields::new(),
             },
             carried_unknown: PreservedFields::new(),
@@ -1578,6 +1593,290 @@ fn a_level_below_its_read_epoch_floor_supplies_no_material() {
         block_on(after.walked_scope_material(fx.folder)).is_some(),
         "and the level above it keeps the material its own record proved"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The tick's boundary walk: which failure it met, and what the session does
+// ---------------------------------------------------------------------------
+
+/// Everything the stream holds now.
+fn events_so_far(events: &mut EventStream) -> Vec<Event> {
+    let mut out = Vec::new();
+    while let Some(event) = events.try_next() {
+        out.push(event);
+    }
+    out
+}
+
+/// How many abuse events the stream holds.
+fn abuse_events(events: &mut EventStream) -> usize {
+    events_so_far(events)
+        .into_iter()
+        .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+        .count()
+}
+
+/// The value the record published at `name` carries.
+fn published_value(world: &FakeWorld, name: &IpnsName) -> Vec<u8> {
+    let bytes = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], name.as_str())
+        .expect("a published record");
+    IpnsRecord::unmarshal(&bytes)
+        .and_then(|record| record.verify(name))
+        .expect("the published record verifies under its own name")
+        .value
+        .to_vec()
+}
+
+/// Publish `value` at `node`'s write-plane name, one sequence past what stands.
+/// Every committed writer of a scope holds this name's key, so this is the
+/// record such a writer can always land.
+fn publish_value_at(world: &FakeWorld, node: NodeId, value: &[u8]) {
+    let name = write_name(node);
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        value,
+        sequence_at(world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// Two folders of the vault's own scope, for a relocation that crosses nothing
+/// while the session names every boundary below the root.
+fn two_root_folders(fx: &mut GrantScenario) -> (NodeId, NodeId) {
+    let photos = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "photos");
+    let albums = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "albums");
+    (photos, albums)
+}
+
+/// A trust rejection anywhere on the walk leaves the session naming no boundary
+/// below the rejected root, so a move out of that scope would read intra-scope
+/// and the drain would publish the moved subtree still sealed where its
+/// grantees read it. The session refuses every relocation instead, and says so
+/// once. Only a later walk that names the whole set lifts the refusal.
+#[test]
+fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() {
+    let mut fx = GrantScenario::new();
+    let (photos, albums) = two_root_folders(&mut fx);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let gate_passing = published_value(&fx.world, &write_name(fx.folder));
+
+    let (mut fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    // The vault root's own record at the granted scope's name: owner-signed,
+    // and refused by every gate because its commitment names another name.
+    publish_value_at(
+        &fx.world,
+        fx.folder,
+        &published_value(&fx.world, &write_name(ROOT)),
+    );
+    let _ = events_so_far(&mut events);
+    tick(&fx.world, &fresh, &mut tasks);
+
+    assert_eq!(
+        abuse_events(&mut events),
+        1,
+        "a fail-closed rejection is attributable abuse, never a silent retry"
+    );
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Relink {
+                node: photos,
+                new_parent: albums,
+            })),
+            Err(EngineError::TrustViolation { .. })
+        ),
+        "and every relocation is refused while the session cannot name its boundaries"
+    );
+    assert_eq!(
+        queued_crossings(&fx.owner_device).len(),
+        0,
+        "so no drain pass can publish one"
+    );
+
+    publish_value_at(&fx.world, fx.folder, &gate_passing);
+    tick(&fx.world, &fresh, &mut tasks);
+
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Relink {
+                node: photos,
+                new_parent: albums,
+            })),
+            Ok(CommandOutcome::Queued { .. })
+        ),
+        "a walk that names the whole boundary set again lifts the refusal"
+    );
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra]
+    );
+}
+
+/// A descendant no endpoint serves is availability. The session keeps the retry
+/// it has, refuses nothing, and accuses nobody — a refusal on every dark record
+/// would be a denial of service on the owner's own moves.
+#[test]
+fn an_unavailable_descendant_keeps_the_retry_and_refuses_nothing() {
+    let mut fx = GrantScenario::new();
+    let (photos, albums) = two_root_folders(&mut fx);
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (mut fresh, mut events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    fx.world
+        .record_store
+        .fail_get_for(write_name(fx.folder).as_str());
+    let _ = events_so_far(&mut events);
+    tick(&fx.world, &fresh, &mut tasks);
+
+    assert_eq!(
+        abuse_events(&mut events),
+        0,
+        "a record the network did not serve names no party"
+    );
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Relink {
+                node: photos,
+                new_parent: albums,
+            })),
+            Ok(CommandOutcome::Queued { .. })
+        ),
+        "and the relocation the session can classify still queues"
+    );
+}
+
+/// The proved-descent half of the boundary set, end to end: a session that
+/// minted no grant walks two levels through the production wiring, renders into
+/// the deeper scope, and refuses a move between two shared folders — the
+/// refusal the minted half alone cannot reach, because this session minted
+/// nothing.
+#[test]
+fn a_session_that_minted_nothing_refuses_a_move_between_two_walked_scopes() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let inner = fx.grant_nested_folder("in");
+    let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "deep");
+    let beside =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inner, "beside");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+    assert!(
+        block_on(fresh.walked_scope_material(inner)).is_some(),
+        "the walk proved the depth-2 scope root through the production wiring"
+    );
+    block_on(fresh.command(Command::SetFocus { node: Some(inner) })).expect("the window opens");
+    tick(&fx.world, &fresh, &mut tasks);
+    assert!(
+        block_on(fresh.view())
+            .expect("a rendered view")
+            .children(inner)
+            .iter()
+            .any(|child| child.id == deep),
+        "and its read leg placed the subtree this session did not author"
+    );
+
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Relink {
+                node: deep,
+                new_parent: beside,
+            })),
+            Ok(CommandOutcome::Queued { .. })
+        ),
+        "a move that stays inside the walked scope crosses nothing"
+    );
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Relink {
+                node: deep,
+                new_parent: holiday,
+            })),
+            Err(EngineError::ScopeExitRefused { .. })
+        ),
+        "and a move into the scope above it needs a re-seal no pass can author"
+    );
+}
+
+/// The child-scope index rides a body every committed writer of the scope
+/// authors, so an entry one of them removes erases a boundary. The name law
+/// states it independently: a folder publishing under a name this scope's write
+/// seed does not derive is a scope root, and a move into it is a crossing.
+#[test]
+fn a_child_the_scopes_write_seed_does_not_name_is_a_boundary_no_index_states() {
+    for (label, shared_name, expected) in [
+        (
+            "a name this scope's write seed does not derive",
+            derive_write_name(&[0x5A; 32], &SHARED.0),
+            ScopeCrossing::Cross,
+        ),
+        (
+            "the name this scope's write seed derives",
+            write_name(SHARED),
+            ScopeCrossing::Intra,
+        ),
+    ] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault_naming(
+            &world,
+            &blocks,
+            Vec::new(),
+            vec![
+                named_child(SHARED, "shared", &shared_name),
+                named_child(PHOTOS, "photos", &write_name(PHOTOS)),
+            ],
+        );
+        let device = world.device(&owner_identity().verifying_key().to_sec1());
+        let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &device);
+        tick(&world, &engine, &mut tasks);
+
+        assert!(
+            matches!(
+                block_on(engine.command(Command::Relink {
+                    node: PHOTOS,
+                    new_parent: SHARED,
+                })),
+                Ok(CommandOutcome::Queued { .. })
+            ),
+            "{label}: the relocation queues"
+        );
+        assert_eq!(
+            queued_crossings(&device),
+            vec![expected],
+            "{label}: and carries the crossing the boundary set names"
+        );
+    }
+}
+
+/// A folder of the vault root's own scope, published at `name`.
+fn named_child(node: NodeId, name: &str, ipns_name: &IpnsName) -> ChildRef {
+    ChildRef {
+        id: node.0,
+        name: name.to_owned(),
+        ipns_name: ipns_name.as_str().as_bytes().to_vec(),
+        kind: CoreNodeKind::Folder,
+        link_counter: 1,
+        unknown: PreservedFields::new(),
+    }
 }
 
 /// The override seed the owner's own blob at `node`'s scope root conveys, with
