@@ -66,7 +66,6 @@ export async function grantOneFolder(context: ScenarioContext): Promise<Granted>
   return { mount, owner, grantee, scope };
 }
 
-/** Waits for a pass at `host` to list `name` inside the shared scope `scope`. */
 export function listsInScope(
   context: ScenarioContext,
   host: WebHost,
@@ -78,10 +77,6 @@ export function listsInScope(
   );
 }
 
-/**
- * Waits for a pass at `host` to stop listing `name` inside the shared scope,
- * while it still lists `survivor`.
- */
 export function dropsFromScope(
   context: ScenarioContext,
   host: WebHost,
@@ -94,7 +89,6 @@ export function dropsFromScope(
   );
 }
 
-/** Reads how many rows one fresh pass lists for `name` inside the shared scope. */
 async function scopeRows(
   host: WebHost,
   scope: string,
