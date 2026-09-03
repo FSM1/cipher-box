@@ -1147,6 +1147,16 @@ impl Pass {
             .ok_or(Halt::Unclassified)
     }
 
+    /// Refuse a folder this pass holds whose chain now re-roots onto another
+    /// plane: its scope moved under the pass, and the name check cannot catch
+    /// it, because the held name was derived under the same stale plane.
+    fn keeps_its_plane(&self, folder: NodeId, plane: &SealPlane<'_>) -> Result<(), Halt> {
+        if self.folder(folder)?.plane_root == plane.end.root {
+            return Ok(());
+        }
+        Err(Halt::UploadAttempt)
+    }
+
     fn folder_mut(&mut self, folder: NodeId) -> Result<&mut FolderState, Halt> {
         self.folders
             .iter_mut()
@@ -1848,13 +1858,7 @@ where
         chain.drain(..nearest);
         for node in chain {
             if pass.holds(node) {
-                // A held folder keeps the plane its own load proved. One the
-                // chain now re-roots is a node whose scope moved under this
-                // pass, and republishing it under either plane seals bytes one
-                // of the two ends refuses.
-                if pass.folder(node)?.plane_root != plane.end.root {
-                    return Err(Halt::UploadAttempt);
-                }
+                pass.keeps_its_plane(node, &plane)?;
                 continue;
             }
             let state = self.load_child_folder(&plane, pass.anchor(), node).await?;
@@ -5631,6 +5635,37 @@ mod tests {
             ),
             Ok(()),
             "which the plane's own root does"
+        );
+        assert_eq!(
+            plane_seals(
+                &destination_plane,
+                DESTINATION_ROOT,
+                destination_plane.end.root_name,
+                false
+            ),
+            Err(Halt::UploadAttempt),
+            "and an interior envelope never publishes over a scope root record"
+        );
+    }
+
+    /// A folder the pass already holds keeps the plane its own load proved. One
+    /// the chain re-roots is a node whose scope moved under the pass, and the
+    /// name check cannot catch it: the held name came from the same stale plane.
+    #[test]
+    fn a_held_folder_the_chain_re_roots_refuses() {
+        let (source, destination) = ends();
+        let folder = NodeId([9; 16]);
+        let pass = pass_holding(folder, SOURCE_ROOT);
+
+        assert_eq!(
+            pass.keeps_its_plane(folder, &source.end().at(SOURCE_EPOCH)),
+            Ok(()),
+            "the plane that loaded it republishes it"
+        );
+        assert_eq!(
+            pass.keeps_its_plane(folder, &destination.end().at(DESTINATION_EPOCH)),
+            Err(Halt::UploadAttempt),
+            "and the other end publishes nothing for it"
         );
     }
 
