@@ -51,7 +51,7 @@ export async function projects(
     () => mountNames(path),
     (names) => names.includes(name),
     {
-      what: `the mount to project ${name}`,
+      what: `the mount to project ${name} in ${path}`,
       timeoutMs: context.deadlines.refreshMs,
       intervalMs: context.deadlines.intervalMs,
     }

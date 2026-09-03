@@ -12,11 +12,11 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
-  ControlRefusal,
   quit,
   readEndpoint,
   refresh as sendRefresh,
   status as readStatus,
+  statusOrPending,
   type ControlEndpoint,
   type MountStatus,
   type VaultStatus,
@@ -169,13 +169,8 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
     const opened = await poll(
       async (): Promise<MountStatus> => {
         await refuseIfDead(shell, name);
-        // The shell publishes its control file before it starts the session, so
-        // a status read can land while there is no session to read. That is the
-        // cold start rather than a failure.
-        const status = await readStatus(endpoint, budget.refreshMs).catch((error: unknown) => {
-          if (error instanceof ControlRefusal) return null;
-          throw error;
-        });
+        const status = await statusOrPending(endpoint, budget.refreshMs);
+        // No session yet is the cold start, not a failure: keep waiting.
         if (!status) return { state: 'opening' };
         if (status.mount.state === 'refused') {
           throw new Error(`${name} refused to mount: ${status.mount.reason}`);
@@ -184,7 +179,7 @@ export async function startInstance(options: InstanceOptions): Promise<Instance>
       },
       (mount): mount is { state: 'mounted'; path: string } => mount.state === 'mounted',
       {
-        what: `${name}: the mount to open`,
+        what: `${name}: the session to start and the mount to open`,
         timeoutMs: budget.mountMs,
         intervalMs: budget.intervalMs,
       }

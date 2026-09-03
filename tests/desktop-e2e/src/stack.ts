@@ -49,7 +49,7 @@ export class Stack {
     return stack;
   }
 
-  /** Starts the API and returns once it answers its health probe. */
+  /** Starts the API and returns once it serves a login, which every host needs. */
   async startApi(): Promise<void> {
     if (this.child) return;
     this.generation += 1;
@@ -70,10 +70,10 @@ export class Stack {
 
     try {
       await poll(
-        () => answers(this.options.apiUrl),
+        () => serves(this.options.apiUrl),
         (up) => up,
         {
-          what: `the API to answer ${this.options.apiUrl}; its log is ${logPath}`,
+          what: `the API to serve a login at ${this.options.apiUrl}; its log is ${logPath}`,
           timeoutMs: this.options.deadlines.apiReadyMs,
           intervalMs: this.options.deadlines.intervalMs,
         }
@@ -113,12 +113,38 @@ export class Stack {
   }
 }
 
+const PROBE_TIMEOUT_MS = 2_000;
+
+/** Liveness: a process holds the port. `/health` is static and answers nothing else. */
 async function answers(apiUrl: string): Promise<boolean> {
   try {
     const response = await fetch(new URL('/health', apiUrl), {
-      signal: AbortSignal.timeout(2_000),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Readiness: the login surface is mapped.
+ *
+ * A host logs in as its first act, and `/health` carries no route of the auth
+ * controller, so a scenario that starts on liveness alone can meet a 404 on the
+ * route it needs. The empty body draws a validation refusal, which leaves no
+ * state behind.
+ */
+export async function serves(apiUrl: string): Promise<boolean> {
+  if (!(await answers(apiUrl))) return false;
+  try {
+    const response = await fetch(new URL('/auth/challenge', apiUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    return response.status !== 404 && response.status < 500;
   } catch {
     return false;
   }

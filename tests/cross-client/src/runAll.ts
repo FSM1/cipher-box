@@ -20,11 +20,17 @@ import { Preview } from './preview';
 import { USAGE, webPort } from './options';
 import { isLoginSecret, type Scenario, type ScenarioContext } from './scenario';
 import { leaderFailover } from './scenarios/leaderFailover';
+import { nestedScopeUnderMount } from './scenarios/nestedScopeUnderMount';
 import { offlineConvergence } from './scenarios/offlineConvergence';
 import { shareGrantCut } from './scenarios/shareGrantCut';
 import { WebHost } from './web';
 
-const SCENARIOS: Scenario[] = [shareGrantCut, offlineConvergence, leaderFailover];
+const SCENARIOS: Scenario[] = [
+  shareGrantCut,
+  nestedScopeUnderMount,
+  offlineConvergence,
+  leaderFailover,
+];
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 

@@ -67,6 +67,36 @@ export async function grantOneFolder(context: ScenarioContext): Promise<Granted>
 }
 
 /**
+ * Waits for a pass at `host` to list `name` inside the shared scope `scope`.
+ *
+ * Each read is a fresh pass, on the same grounds as [`standing`].
+ */
+export async function listsInScope(
+  context: ScenarioContext,
+  host: WebHost,
+  scope: string,
+  name: string
+): Promise<void> {
+  await poll(
+    async () => {
+      // The pass runs with the shared scope focused, because the focus window
+      // is what the sync tick walks.
+      await host.shared.open();
+      await host.shared.readAgain();
+      await host.shared.openShare(scope);
+      await host.refresh();
+      return host.files.row(name).count();
+    },
+    (count) => count === 1,
+    {
+      what: `a pass at ${host.name} to list ${name} in the shared scope`,
+      timeoutMs: context.deadlines.refreshMs,
+      intervalMs: context.deadlines.intervalMs,
+    }
+  );
+}
+
+/**
  * The standing the grantee's own passes reach for one scope.
  *
  * The recipient's mailbox leg rides the nocache pass, so a refresh both accepts
