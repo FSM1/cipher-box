@@ -265,6 +265,11 @@ pub trait SweepPublisher {
 /// exactly one bucket — the fail-closed guarantee made observable.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SweepOutcome {
+    /// The read epoch this pass gated the scope root at — the epoch every
+    /// interior node below was measured against. A consumer that re-asserts
+    /// convergence later measures against this value, so the proof and the
+    /// re-assertion read the same number.
+    pub scope_read_epoch: u64,
     /// Interior nodes that lagged and were re-sealed to the scope's epoch.
     pub converged: Vec<[u8; 16]>,
     /// Interior nodes already at the scope's epoch — no re-seal, a no-op.
@@ -542,7 +547,10 @@ where
         .map(|child| child.scope_id)
         .collect();
 
-    let mut outcome = SweepOutcome::default();
+    let mut outcome = SweepOutcome {
+        scope_read_epoch: swept.current_read_epoch,
+        ..SweepOutcome::default()
+    };
     // Keyed by node id: the walk resolves each node once, so a diamond or a
     // corrupt back-edge terminates rather than looping.
     let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
@@ -724,6 +732,9 @@ impl Cumulative {
             .collect();
         converged.retain(|node| !final_verdicts.contains(node));
         SweepOutcome {
+            // The final pass's, like every re-derived bucket: an earlier pass
+            // gated the scope root at an epoch a rotation may since have raised.
+            scope_read_epoch: last.scope_read_epoch,
             // A node an early pass re-sealed reads as already-at-epoch later;
             // counting it in both buckets would claim it never needed work.
             already_converged: last

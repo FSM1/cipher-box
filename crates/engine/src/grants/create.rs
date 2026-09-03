@@ -235,6 +235,21 @@ pub enum CreateGrantError {
         /// race, or unreadable at the epoch their record claims.
         unconverged: Vec<[u8; 16]>,
     },
+    /// The convergence pass and the grant plan disagree about which descendant
+    /// scope roots the granted folder holds. The pass reads the live tree and
+    /// the plan filters a cached snapshot, so a committed writer of the scope
+    /// the folder is leaving moves a descendant scope root across the folder
+    /// boundary to drive them apart. Either direction is refused before the
+    /// promotion publishes: a plan entry the pass did not meet re-keys a
+    /// descendant the folder no longer holds under the grantee's derivation,
+    /// and a scope root the pass met that the plan omits leaves the grantee a
+    /// child ref no derivation of theirs follows.
+    SubtreeBoundaryDiverged {
+        /// Scope roots the plan names that the pass did not meet in the folder.
+        planned_not_met: Vec<[u8; 16]>,
+        /// Scope roots the pass met in the folder that the plan does not name.
+        met_not_planned: Vec<[u8; 16]>,
+    },
     /// The recipient encryption key is non-contributory (degenerate ECDH).
     UnusableRecipientKey,
     /// The recipient's encryption subkey is the vault owner's own: the owner
@@ -291,6 +306,15 @@ pub enum CreateGrantError {
         /// The node the walk met.
         node_id: [u8; 16],
     },
+    /// The walk met an interior node whose record no longer carries the read
+    /// epoch the convergence pass proved its scope at: the record regressed
+    /// after the proof. The proof is what convergence rests on, so the walk
+    /// refuses rather than seal a record it no longer covers into the grantee's
+    /// scope.
+    InteriorEpochRegressed {
+        /// The node whose record left the proved epoch.
+        node_id: [u8; 16],
+    },
     /// Re-sealing an interior node of the granted folder under the fresh
     /// derivation failed, or its CAS publish lost the race. Post-publish: same
     /// partial-commit surface as `InteriorResolve`, re-drivable the same way,
@@ -345,6 +369,7 @@ impl CreateGrantError {
         match self {
             Self::Converge(_) => "converge-failed",
             Self::SubtreeNotConverged { .. } => "subtree-not-converged",
+            Self::SubtreeBoundaryDiverged { .. } => "subtree-boundary-diverged",
             Self::UnusableRecipientKey => "unusable-recipient-key",
             Self::RecipientIsTheOwner => "recipient-is-the-owner",
             Self::CommitmentEncode(_) => "commitment-encode-failed",
@@ -355,6 +380,7 @@ impl CreateGrantError {
             Self::ResumeNotThisGrant => "resume-not-this-grant",
             Self::InteriorResolve { .. } => "interior-resolve-failed",
             Self::InteriorNotConverged { .. } => "interior-not-converged",
+            Self::InteriorEpochRegressed { .. } => "interior-epoch-regressed",
             Self::InteriorPublish { .. } => "interior-publish-failed",
             Self::DescendantResolve { .. } => "descendant-resolve-failed",
             Self::DescendantMint { .. } => "descendant-mint-failed",
@@ -486,6 +512,14 @@ struct GrantedRoot {
     override_seed: Zeroizing<[u8; SECRET_LEN]>,
     /// The children of the root's own body — the walk's first level.
     frontier: Vec<NodeRef>,
+    bounds: InteriorBounds,
+}
+
+/// What the interior walk may move, and at what epoch.
+struct InteriorBounds {
+    /// The read epoch the scope the folder is leaving was gated at. A record
+    /// below it lagged again after the proof, so the walk refuses it.
+    source_read_epoch: u64,
     /// The descendant scope roots the walk stops at.
     stop_at: BTreeSet<[u8; 16]>,
     /// The interior the convergence pass measured, which bounds what the walk
@@ -659,6 +693,11 @@ where
 pub struct ConvergedSubtree<'a> {
     grantee: &'a GranteeScopePlan<'a>,
     parent: &'a ParentScopePlan<'a>,
+    /// The read epoch this pass gated the scope the folder is leaving at. The
+    /// mint's interior walk re-asserts it on every node it seals, so the one
+    /// resolve that proved the scope current is also the one the walk measures
+    /// against.
+    source_read_epoch: u64,
     root: SubtreeRoot,
 }
 
@@ -725,7 +764,7 @@ where
     // pass so a stalled move stays re-drivable: the pass would meet the promoted
     // folder as a scope root the parent's index omits and repair the index for
     // it, which is the mint's own last step to take.
-    let (parent_ref, _) = resolve_scope_current(
+    let (parent_ref, parent_scope) = resolve_scope_current(
         resolver,
         &ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec()),
     )
@@ -744,6 +783,7 @@ where
         return Ok(ConvergedSubtree {
             grantee,
             parent,
+            source_read_epoch: parent_scope.current_read_epoch,
             root: SubtreeRoot::Promoted(Box::new(promoted)),
         });
     }
@@ -765,10 +805,26 @@ where
         .chain(swept.already_converged.iter())
         .copied()
         .collect();
-    let boundaries = swept.skipped_scope_roots.iter().copied().collect();
+    let boundaries: BTreeSet<[u8; 16]> = swept.skipped_scope_roots.iter().copied().collect();
+    // One source of truth for the granted folder's descendant scope roots. The
+    // pass reads the live tree; the plan's index filters a cached snapshot, and
+    // the two are derived at different times. A divergence either way is a
+    // fail-closed refusal, ahead of every publish the mint makes.
+    let planned: BTreeSet<[u8; 16]> = grantee
+        .subtree_child_index
+        .iter()
+        .map(|child| child.scope_id)
+        .collect();
+    if boundaries != planned {
+        return Err(CreateGrantError::SubtreeBoundaryDiverged {
+            planned_not_met: planned.difference(&boundaries).copied().collect(),
+            met_not_planned: boundaries.difference(&planned).copied().collect(),
+        });
+    }
     Ok(ConvergedSubtree {
         grantee,
         parent,
+        source_read_epoch: swept.scope_read_epoch,
         root: SubtreeRoot::Measured {
             interior,
             boundaries,
@@ -809,6 +865,7 @@ where
     let ConvergedSubtree {
         grantee,
         parent,
+        source_read_epoch,
         root: subtree_root,
     } = converged;
     // 1) The scope root's ipnsName, derived from the folder's write material.
@@ -856,12 +913,15 @@ where
                 record: promoted.record,
                 override_seed: promoted.override_seed,
                 frontier: promoted.children,
-                stop_at: promoted
-                    .boundaries
-                    .into_iter()
-                    .map(|child| child.scope_id)
-                    .collect(),
-                measured: None,
+                bounds: InteriorBounds {
+                    source_read_epoch,
+                    stop_at: promoted
+                        .boundaries
+                        .into_iter()
+                        .map(|child| child.scope_id)
+                        .collect(),
+                    measured: None,
+                },
             }
         }
         SubtreeRoot::Measured {
@@ -968,8 +1028,11 @@ where
                 record: grantee_record,
                 override_seed,
                 frontier: promoted_children,
-                stop_at: boundaries,
-                measured: Some(interior),
+                bounds: InteriorBounds {
+                    source_read_epoch,
+                    stop_at: boundaries,
+                    measured: Some(interior),
+                },
             }
         }
     };
@@ -982,8 +1045,7 @@ where
         record: grantee_record,
         override_seed,
         frontier,
-        stop_at,
-        measured,
+        bounds,
     } = root;
     reseal_granted_interior(
         resolver,
@@ -991,8 +1053,7 @@ where
         &parent_ref,
         &grantee_record,
         frontier,
-        measured.as_ref(),
-        &stop_at,
+        &bounds,
     )
     .await?;
 
@@ -1137,10 +1198,14 @@ fn committed_as(published: &GrantSetEntry, minted: &GrantSetEntry) -> bool {
 /// stalled attempt already moved there. Admitting either scope id for the
 /// duration of the move is what makes the leg re-drivable ([`GrantResumeResolver`]).
 ///
-/// `stop_at` is skipped, because a scope root is re-keyed as one and its own
-/// interior stays in the scope it already belongs to. A node outside `measured`
-/// is refused, so a body re-authored between the convergence pass and the mint
-/// cannot move a record the gate never proved into the grantee's scope.
+/// [`InteriorBounds::stop_at`] is skipped, because a scope root is re-keyed as
+/// one and its own interior stays in the scope it already belongs to. A node
+/// outside [`InteriorBounds::measured`] is refused, so a body re-authored
+/// between the convergence pass and the mint cannot move a record the gate
+/// never proved into the grantee's scope. The walk also re-asserts the
+/// convergence proof itself at every level it seals: the pass is stale by the
+/// time the walk consumes it, and only the epoch each record carries now says
+/// whether it still holds.
 ///
 /// Runs after the promotion, so each re-sealed node points back at a root that
 /// exists. Each level goes through [`canonicalize_frontier`] and each node is
@@ -1151,8 +1216,7 @@ async fn reseal_granted_interior<R, P>(
     source: &ChildScopeRef,
     root: &ResealedScopeRoot,
     frontier: Vec<NodeRef>,
-    measured: Option<&BTreeSet<[u8; 16]>>,
-    stop_at: &BTreeSet<[u8; 16]>,
+    bounds: &InteriorBounds,
 ) -> Result<(), CreateGrantError>
 where
     R: SweepResolver + GrantResumeResolver,
@@ -1163,16 +1227,30 @@ where
     while !frontier.is_empty() {
         let mut next = Vec::new();
         for child in &frontier {
-            if !visited.insert(child.node_id) || stop_at.contains(&child.node_id) {
+            if !visited.insert(child.node_id) || bounds.stop_at.contains(&child.node_id) {
                 continue;
             }
-            if measured.is_some_and(|measured| !measured.contains(&child.node_id)) {
+            if bounds
+                .measured
+                .as_ref()
+                .is_some_and(|measured| !measured.contains(&child.node_id))
+            {
                 return Err(CreateGrantError::InteriorNotConverged {
                     node_id: child.node_id,
                 });
             }
             match resolver.resolve_child(source, child).await {
                 Ok(SweptChild::Interior(node)) => {
+                    // Release-active (security rule 8), and the same rule
+                    // `SweepPublisher::publish_node` applies inside the scope:
+                    // the read admits any record at or below the scope's epoch,
+                    // so a record that regressed since the pass would travel
+                    // into the grantee's scope with no proof behind it.
+                    if node.current_read_epoch < bounds.source_read_epoch {
+                        return Err(CreateGrantError::InteriorEpochRegressed {
+                            node_id: child.node_id,
+                        });
+                    }
                     next.extend(body_children(&node.read_body));
                     publisher
                         .reseal_interior_node(
@@ -1302,6 +1380,12 @@ mod tests {
     /// An interior node of the parent scope, inside the granted folder.
     const INTERIOR_NODE: [u8; 16] = [0xa1; 16];
 
+    /// The descendant scope root inside the granted folder, as both the plan
+    /// and the live tree name it.
+    fn descendant_ref() -> ChildScopeRef {
+        ChildScopeRef::new(DESCENDANT_SCOPE, DESCENDANT_NAME.to_vec())
+    }
+
     /// One interior node's simulated name inside the parent scope.
     fn interior_name(node_id: [u8; 16]) -> Vec<u8> {
         format!("interior-{:02x}", node_id[0]).into_bytes()
@@ -1413,9 +1497,16 @@ mod tests {
         /// Interior nodes deeper than the folder's own children: parent id, node
         /// id, published epoch.
         nested: Rc<RefCell<Vec<NestedNodeState>>>,
+        /// The descendant scope roots the granted folder holds: named by the
+        /// folder's body and by the parent scope's committed index, which is
+        /// what a plan built off a fresh snapshot names too.
+        descendants: Vec<ChildScopeRef>,
         /// A child of the granted folder that answers as a descendant scope
         /// root — a boundary the interior walk must stop at.
         boundary: Option<[u8; 16]>,
+        /// A node that answers at an older epoch once the promotion stands: a
+        /// record re-authored back down the ratchet after the pass proved it.
+        regresses_after_promotion: Option<([u8; 16], u64)>,
         /// A node the promoted body names that the convergence pass never saw:
         /// a body re-authored between the pass and the mint.
         promoted_extra: Option<[u8; 16]>,
@@ -1457,7 +1548,9 @@ mod tests {
                 resealed: Rc::new(RefCell::new(Vec::new())),
                 reseal_result: Ok(()),
                 nested: Rc::new(RefCell::new(Vec::new())),
+                descendants: Vec::new(),
                 boundary: None,
+                regresses_after_promotion: None,
                 promoted_extra: None,
                 turns_scope_root: None,
                 stalls_after_promotion: None,
@@ -1494,6 +1587,10 @@ mod tests {
                     node_id,
                     ipns_name: interior_name(node_id),
                 })
+                .chain(self.descendants.iter().map(|child| NodeRef {
+                    node_id: child.scope_id,
+                    ipns_name: child.ipns_name.clone(),
+                }))
                 .collect()
         }
 
@@ -1533,9 +1630,23 @@ mod tests {
         }
 
         /// Make `node_id` — a child of the granted folder — answer as a
-        /// descendant scope root.
+        /// descendant scope root the parent scope's index does not name.
         fn with_boundary(mut self, node_id: [u8; 16]) -> Self {
             self.boundary = Some(node_id);
+            self
+        }
+
+        /// Put a descendant scope root inside the granted folder, named by both
+        /// the folder's body and the parent scope's committed index.
+        fn with_descendant_scope(mut self, child: ChildScopeRef) -> Self {
+            self.descendants.push(child);
+            self
+        }
+
+        /// Have `node_id` answer at `epoch` once the promotion stands, as a
+        /// record re-authored at an older epoch after the pass would.
+        fn regressing_after_promotion(mut self, node_id: [u8; 16], epoch: u64) -> Self {
+            self.regresses_after_promotion = Some((node_id, epoch));
             self
         }
 
@@ -1612,7 +1723,7 @@ mod tests {
             Ok(SweptScope {
                 current_read_epoch: PARENT_EPOCH,
                 children,
-                direct_child_scope_index: Vec::new(),
+                direct_child_scope_index: self.descendants.clone(),
             })
         }
 
@@ -1655,10 +1766,17 @@ mod tests {
             // until the mint publishes its scope root; its body names the nodes
             // the convergence gate must reach.
             let (epoch, children) = if child.node_id == GRANTEE_SCOPE {
-                (
-                    PARENT_EPOCH,
-                    child_refs(self.interior.borrow().iter().map(|(node_id, _)| *node_id)),
-                )
+                let mut children =
+                    child_refs(self.interior.borrow().iter().map(|(node_id, _)| *node_id));
+                children.extend(self.descendants.iter().map(|descendant| ChildRef {
+                    id: descendant.scope_id,
+                    name: "n".into(),
+                    ipns_name: descendant.ipns_name.clone(),
+                    kind: NodeKind::Folder,
+                    link_counter: 1,
+                    unknown: PreservedFields::new(),
+                }));
+                (PARENT_EPOCH, children)
             } else {
                 let epoch = self
                     .interior
@@ -1683,6 +1801,10 @@ mod tests {
                         .map(|(_, node_id, _)| *node_id),
                 );
                 (epoch, children)
+            };
+            let epoch = match self.regresses_after_promotion {
+                Some((node_id, regressed)) if promoted && node_id == child.node_id => regressed,
+                _ => epoch,
             };
             Ok(SweptChild::Interior(SweptNode {
                 current_read_epoch: epoch,
@@ -2638,12 +2760,14 @@ mod tests {
         // The index is read off a write body any committed writer of the
         // leaving scope authors, so the comparison is over the canonical form
         // rather than the bytes it happened to land in.
-        let first = ChildScopeRef::new(DESCENDANT_SCOPE, DESCENDANT_NAME.to_vec());
+        let first = descendant_ref();
         let second =
             ChildScopeRef::new(SECOND_DESCENDANT_SCOPE, b"second-descendant-name".to_vec());
         let subtree = vec![first.clone(), second.clone()];
         let net = FakeNet::new(Ok(()))
             .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .with_descendant_scope(first.clone())
+            .with_descendant_scope(second.clone())
             .stalling_reseal_at(INTERIOR_NODE)
             .reparenting(vec![second, first]);
         let (stalled, _published, _hub) = run(7, &subtree, net.clone(), &[]);
@@ -2666,10 +2790,7 @@ mod tests {
         let net = FakeNet::new(Ok(()))
             .with_interior(INTERIOR_NODE, PARENT_EPOCH)
             .stalling_reseal_at(INTERIOR_NODE)
-            .reparenting(vec![ChildScopeRef::new(
-                DESCENDANT_SCOPE,
-                DESCENDANT_NAME.to_vec(),
-            )]);
+            .reparenting(vec![descendant_ref()]);
         stall_grant(&net);
 
         let (refused, _published, _hub) = run(8, &[], net, &[]);
@@ -2685,13 +2806,110 @@ mod tests {
     fn the_interior_re_seal_stops_at_a_descendant_scope_root() {
         // A descendant scope root is re-keyed as a scope root, and its own
         // interior stays in the scope it already belongs to.
+        let net = FakeNet::new(Ok(())).with_descendant_scope(descendant_ref());
+        let resealed = Rc::clone(&net.resealed);
+        let (outcome, _published, _hub) = run(7, &[descendant_ref()], net, &[]);
+        outcome.expect("grant creation succeeds");
+        assert!(resealed.borrow().is_empty());
+    }
+
+    /// The plan's index filters a cached snapshot. A committed writer of the
+    /// scope the folder is leaving moves a descendant scope root out of the
+    /// folder after that snapshot, and the re-key would seal the descendant's
+    /// ascent link under the grantee's derivation — a scope the live tree no
+    /// longer places inside the granted folder.
+    #[test]
+    fn a_planned_child_scope_the_pass_did_not_meet_refuses_the_grant() {
+        let net = FakeNet::new(Ok(()));
+        let (outcome, published, hub) = run(7, &[descendant_ref()], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::SubtreeBoundaryDiverged {
+                planned_not_met,
+                met_not_planned,
+            }) => {
+                assert_eq!(planned_not_met, vec![DESCENDANT_SCOPE]);
+                assert!(met_not_planned.is_empty());
+            }
+            other => panic!("expected SubtreeBoundaryDiverged, got {other:?}"),
+        }
+        assert!(published.is_empty(), "refused before the promotion publish");
+        assert_nothing_delivered(&hub);
+    }
+
+    /// The other direction costs availability rather than exposure: the walk
+    /// stops at the observed scope root and the re-key never reparents it, so
+    /// the grantee holds a child ref no derivation of theirs follows.
+    #[test]
+    fn a_scope_root_the_pass_met_that_the_plan_omits_refuses_the_grant() {
         let net = FakeNet::new(Ok(()))
             .with_interior(INTERIOR_NODE, PARENT_EPOCH)
             .with_boundary(INTERIOR_NODE);
+        let (outcome, published, hub) = run(7, &[], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::SubtreeBoundaryDiverged {
+                planned_not_met,
+                met_not_planned,
+            }) => {
+                assert!(planned_not_met.is_empty());
+                assert_eq!(met_not_planned, vec![INTERIOR_NODE]);
+            }
+            other => panic!("expected SubtreeBoundaryDiverged, got {other:?}"),
+        }
+        assert!(published.is_empty(), "refused before the promotion publish");
+        assert_nothing_delivered(&hub);
+    }
+
+    /// The convergence proof is stale by the time the walk consumes it. A
+    /// record re-authored back down the ratchet after the pass would travel
+    /// into the grantee's scope at read epoch 1 with nothing behind it.
+    #[test]
+    fn an_interior_node_that_regressed_after_the_pass_refuses_the_grant() {
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .regressing_after_promotion(INTERIOR_NODE, PARENT_EPOCH - 1);
         let resealed = Rc::clone(&net.resealed);
-        let (outcome, _published, _hub) = run(7, &[], net, &[]);
-        outcome.expect("grant creation succeeds");
-        assert!(resealed.borrow().is_empty());
+        let (outcome, _published, hub) = run(7, &[], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::InteriorEpochRegressed { node_id }) => {
+                assert_eq!(node_id, INTERIOR_NODE);
+            }
+            other => panic!("expected InteriorEpochRegressed, got {other:?}"),
+        }
+        assert!(
+            resealed.borrow().is_empty(),
+            "no partial seal: the refusal lands before the node moves scope",
+        );
+        assert_nothing_delivered(&hub);
+    }
+
+    /// The walk re-asserts the proof at every level it seals, not only at the
+    /// folder's own children.
+    #[test]
+    fn a_regression_below_the_folders_own_children_refuses_the_grant() {
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .with_nested(INTERIOR_NODE, DEEP_NODE, PARENT_EPOCH)
+            .regressing_after_promotion(DEEP_NODE, PARENT_EPOCH - 1);
+        let resealed = Rc::clone(&net.resealed);
+        let (outcome, _published, hub) = run(7, &[], net, &[]);
+
+        match outcome {
+            Err(CreateGrantError::InteriorEpochRegressed { node_id }) => {
+                assert_eq!(node_id, DEEP_NODE);
+            }
+            other => panic!("expected InteriorEpochRegressed, got {other:?}"),
+        }
+        assert!(
+            !resealed
+                .borrow()
+                .iter()
+                .any(|record| record.node_id == DEEP_NODE),
+            "the regressed node never reaches the grantee's scope",
+        );
+        assert_nothing_delivered(&hub);
     }
 
     /// A node the pass measured as interior can answer as a scope root by the
@@ -2832,14 +3050,12 @@ mod tests {
         // (call 1) loses the CAS race. Fail-safe under-share — the grantee root is
         // committed but NO share pointer is posted, so the recipient never learns
         // where to look and sees zero exposure.
-        let subtree = vec![ChildScopeRef::new(
-            DESCENDANT_SCOPE,
-            DESCENDANT_NAME.to_vec(),
-        )];
+        let subtree = vec![descendant_ref()];
         let (outcome, published, hub) = run(
             7,
             &subtree,
-            FakeNet::new_fail_after(1, RotationPublishError::LostRace),
+            FakeNet::new_fail_after(1, RotationPublishError::LostRace)
+                .with_descendant_scope(descendant_ref()),
             &[],
         );
 
@@ -2867,12 +3083,10 @@ mod tests {
         // A non-empty subtree drives the re-key's entropy draws (HPKE ephemerals,
         // seal nonces in the descendant re-key), proving they too are byte-identical
         // under a fixed seed.
-        let subtree = vec![ChildScopeRef::new(
-            DESCENDANT_SCOPE,
-            DESCENDANT_NAME.to_vec(),
-        )];
-        let (a_outcome, a_pub, _) = run(42, &subtree, FakeNet::new(Ok(())), &[]);
-        let (b_outcome, b_pub, _) = run(42, &subtree, FakeNet::new(Ok(())), &[]);
+        let subtree = vec![descendant_ref()];
+        let net = || FakeNet::new(Ok(())).with_descendant_scope(descendant_ref());
+        let (a_outcome, a_pub, _) = run(42, &subtree, net(), &[]);
+        let (b_outcome, b_pub, _) = run(42, &subtree, net(), &[]);
         assert_eq!(a_outcome.unwrap(), b_outcome.unwrap());
         assert_eq!(a_pub, b_pub, "same seed → byte-identical published records");
     }
@@ -2942,11 +3156,13 @@ mod tests {
         // the pre-mint sweep publishes nothing (the descendant is already
         // converged); the descendant record below is published solely by the re-key
         // step, and the lookup finds nothing without it.
-        let subtree = vec![ChildScopeRef::new(
-            DESCENDANT_SCOPE,
-            DESCENDANT_NAME.to_vec(),
-        )];
-        let (outcome, published, _hub) = run(7, &subtree, FakeNet::new(Ok(())), &[]);
+        let subtree = vec![descendant_ref()];
+        let (outcome, published, _hub) = run(
+            7,
+            &subtree,
+            FakeNet::new(Ok(())).with_descendant_scope(descendant_ref()),
+            &[],
+        );
         outcome.expect("grant creation succeeds over a converged subtree");
 
         // The grantee opens its grant blob to recover the fresh override seed.
@@ -3024,11 +3240,13 @@ mod tests {
         // not the resolved target's — the scope-root publication binding enforced
         // in sweep.rs. A regression to any other name (e.g. the parent's) is
         // caught here.
-        let subtree = vec![ChildScopeRef::new(
-            DESCENDANT_SCOPE,
-            DESCENDANT_NAME.to_vec(),
-        )];
-        let (outcome, published, _hub) = run(7, &subtree, FakeNet::new(Ok(())), &[]);
+        let subtree = vec![descendant_ref()];
+        let (outcome, published, _hub) = run(
+            7,
+            &subtree,
+            FakeNet::new(Ok(())).with_descendant_scope(descendant_ref()),
+            &[],
+        );
         outcome.expect("grant creation succeeds over a converged subtree");
 
         let descendant_record = published
