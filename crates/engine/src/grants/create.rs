@@ -517,8 +517,7 @@ struct GrantedRoot {
 
 /// What the interior walk may move, and at what epoch.
 struct InteriorBounds {
-    /// The read epoch the scope the folder is leaving was gated at. A record
-    /// below it lagged again after the proof, so the walk refuses it.
+    /// The read epoch the scope the folder is leaving was gated at.
     source_read_epoch: u64,
     /// The descendant scope roots the walk stops at.
     stop_at: BTreeSet<[u8; 16]>,
@@ -1241,11 +1240,10 @@ where
             }
             match resolver.resolve_child(source, child).await {
                 Ok(SweptChild::Interior(node)) => {
-                    // Release-active (security rule 8), and the same rule
-                    // `SweepPublisher::publish_node` applies inside the scope:
-                    // the read admits any record at or below the scope's epoch,
-                    // so a record that regressed since the pass would travel
-                    // into the grantee's scope with no proof behind it.
+                    // Release-active (security rule 8). The read admits any
+                    // record at or below the scope's epoch, so a record that
+                    // regressed since the pass would travel into the grantee's
+                    // scope with no proof behind it.
                     if node.current_read_epoch < bounds.source_read_epoch {
                         return Err(CreateGrantError::InteriorEpochRegressed {
                             node_id: child.node_id,
