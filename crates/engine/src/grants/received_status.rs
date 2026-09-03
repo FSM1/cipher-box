@@ -28,7 +28,7 @@ use crate::facade::{Event, NodeId, NodeKind, ScopeSeeds, deposit_seed};
 use crate::gate::floor;
 use crate::gate::{
     Candidate, ReaderContext, RejectionReason, SeedBlob, adopt, read_cut_epoch_floor,
-    verify_commitment_in_force,
+    record_cut_epoch_floor, verify_commitment_in_force,
 };
 use crate::name::validate_name;
 use crate::net::rotation::scope_name;
@@ -333,18 +333,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             // One resolve serves both legs: the verdict this row renders, and
             // the subtree a browse of it opens.
-            let resolved = self.resolved(share).await;
-            let class = match &resolved {
-                Some((candidate, floors)) => classify(&facts_from(
-                    candidate,
-                    share,
-                    self.enc_secret,
-                    &contact.identity_pk(),
-                    &contact.enc_subkey(),
-                    *floors,
-                )),
-                None => ResolutionClass::Unresolvable,
-            };
+            let (class, resolved) = self.classified(share, contact).await;
             if class == ResolutionClass::Granted && renderable.contains(&share.scope_id) {
                 if let Some((candidate, floors)) = &resolved {
                     if let Some(open) = self
@@ -378,6 +367,55 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             self.floors,
             ContactLabel::of(self.contact_label_seed, &share.sharer_identity_pk),
         )
+    }
+
+    /// The verdict `share`'s row renders this pass, with the record a browse of
+    /// the row opens.
+    ///
+    /// A commitment that clears the whole of the gate's stage 2 — which is what
+    /// [`facts_from`] reports as `owner_signed_record`, at the bookmarked scope
+    /// — raises this device's cut-epoch floor here. It is the one floor advance
+    /// the record plane makes with no unseal, and the cut epoch is the only
+    /// field that makes it
+    /// ([ADR 0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)).
+    /// It is also the only raise a recipient the owner cut can reach: holding no
+    /// blob in the post-cut set, that device adopts no post-cut record, so a
+    /// replayed pre-cut set would re-grant its row for as long as it is served.
+    ///
+    /// `contact` must be the one `share.sharer_identity_pk` names, because that
+    /// field is what keys the floor the commitment raises: a raise the two
+    /// disagree on would restrict a scope this identity never granted.
+    async fn classified(
+        &self,
+        share: &ReceivedShare,
+        contact: &Contact,
+    ) -> (ResolutionClass, Option<(Candidate, SharedScopeFloors)>) {
+        let Some((candidate, floors)) = self.resolved(share).await else {
+            return (ResolutionClass::Unresolvable, None);
+        };
+        let facts = facts_from(
+            &candidate,
+            share,
+            self.enc_secret,
+            &contact.identity_pk(),
+            &contact.enc_subkey(),
+            floors,
+        );
+        let cut_epoch = candidate.grant_section.commitment.cut_epoch;
+        // Only a cut this device has not recorded is written, so a scope in its
+        // steady state costs the store nothing. A cut this pass could not record
+        // is not a bar this device holds, and the next pass would measure a
+        // replayed pre-cut set against the floor this one failed to raise — so
+        // the failure reaches no verdict, as an unreadable floor does above.
+        if facts.owner_signed_record
+            && cut_epoch > floors.cut_epoch
+            && record_cut_epoch_floor(&self.sharer_floors(share), &share.scope_id, cut_epoch)
+                .await
+                .is_err()
+        {
+            return (ResolutionClass::Unresolvable, None);
+        }
+        (classify(&facts), Some((candidate, floors)))
     }
 
     /// The record `share`'s scope root answers with now, and the durable bars
@@ -595,6 +633,7 @@ mod tests {
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED,
         OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
+        with_cut_epoch,
     };
 
     use crate::grants::grafted::record_body;
@@ -608,8 +647,20 @@ mod tests {
     /// This vault's own root, which the shared scope is grafted in beside.
     const VAULT_ROOT: [u8; 16] = [0u8; 16];
     const SHARER_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0x02; IDENTITY_PUBLIC_LEN];
+    /// A second granting identity, for the scopes one sharer's cut must leave
+    /// alone.
+    const OTHER_SHARER_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0x07; IDENTITY_PUBLIC_LEN];
     fn sharer_signer() -> EcdsaSigner {
         EcdsaSigner::from_scalar(&[0x31; 32]).expect("valid scalar")
+    }
+
+    fn other_sharer_signer() -> EcdsaSigner {
+        EcdsaSigner::from_scalar(&[0x71; 32]).expect("valid scalar")
+    }
+
+    /// A recipient that is not this device.
+    fn someone_else() -> X25519Public {
+        X25519Secret::from_scalar([0x55; 32]).public()
     }
 
     /// The sharer's encryption subkey — the blinded tag's owner-side half.
@@ -662,6 +713,16 @@ mod tests {
             owner_write_blob_epoch: None,
             write_history_link: Vec::new(),
         })
+    }
+
+    /// The scope root the owner publishes at a cut: the same set re-signed at
+    /// `cut_epoch`, committing `recipients` alone.
+    fn cut_at(
+        sharer: &EcdsaSigner,
+        cut_epoch: u64,
+        recipients: &[&X25519Public],
+    ) -> OwnerRootFixture {
+        with_cut_epoch(published(sharer, recipients), sharer, cut_epoch)
     }
 
     /// That same root as the candidate a resolve would assemble.
@@ -756,6 +817,32 @@ mod tests {
         }
     }
 
+    /// A floor store that answers every read "never raised" and fails every
+    /// write — the host that can still serve its durable state but can no longer
+    /// extend it.
+    struct UnwritableFloors;
+
+    impl FloorStore for UnwritableFloors {
+        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            Ok(None)
+        }
+        async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store is full"))
+        }
+        async fn sequence_floor(&self, _name: &[u8]) -> SeamResult<Option<u64>> {
+            Ok(None)
+        }
+        async fn raise_sequence_floor(&self, _name: &[u8], _seq: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store is full"))
+        }
+        async fn commit_floors(&self, _raises: &[FloorRaise]) -> SeamResult<()> {
+            Err(SeamError::new("floor store is full"))
+        }
+        async fn clear(&self) -> SeamResult<()> {
+            Err(SeamError::new("floor store is full"))
+        }
+    }
+
     /// A floor store holding `cut_epoch` for `sharer`'s [`SCOPE`], with the
     /// read-epoch and sequence bars at the highest value the served root still
     /// passes — so a refusal can only be the cut bar's.
@@ -783,48 +870,76 @@ mod tests {
     /// resolve needs except the floor store under test.
     struct ServedScopeRoot {
         fixture: OwnerRootFixture,
+        endpoint: EndpointId,
         records: InMemoryRecordStore,
         http: ScriptedHttp,
         gateway: Gateway,
     }
 
     impl ServedScopeRoot {
+        /// The pre-cut set, committing this device.
         fn new(sharer: &EcdsaSigner) -> ServedScopeRoot {
-            let fixture = published(sharer, &[&my_enc().public()]);
+            ServedScopeRoot::serving(published(sharer, &[&my_enc().public()]), SERVED_SEQUENCE)
+        }
+
+        fn serving(fixture: OwnerRootFixture, sequence: u64) -> ServedScopeRoot {
             let endpoint = EndpointId::new("e0");
             let records = InMemoryRecordStore::new(vec![endpoint.clone()]);
-            records.seed_record(
-                &endpoint,
-                fixture.name.as_str(),
-                IpnsRecord::create_v2(
-                    &kdf::ipns_keypair(
-                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
-                    ),
-                    format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-                    SERVED_SEQUENCE,
-                    2_000_000_000,
-                    "2099-01-01T00:00:00Z",
-                )
-                .marshal(),
-            );
-            ServedScopeRoot {
+            let served = ServedScopeRoot {
                 fixture,
+                endpoint,
                 records,
                 http: ScriptedHttp::default(),
                 gateway: Gateway {
                     accelerator: None,
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
                 },
-            }
+            };
+            served.seed(sequence);
+            served
+        }
+
+        /// Answer the same name with `fixture` at `sequence` from now on — the
+        /// republish a surviving write grantee makes.
+        fn serve(&mut self, fixture: OwnerRootFixture, sequence: u64) {
+            self.fixture = fixture;
+            self.seed(sequence);
+        }
+
+        fn seed(&self, sequence: u64) {
+            self.records.seed_record(
+                &self.endpoint,
+                self.fixture.name.as_str(),
+                IpnsRecord::create_v2(
+                    &kdf::ipns_keypair(
+                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
+                    ),
+                    format!("/ipfs/{}", self.fixture.head_cid_str).as_bytes(),
+                    sequence,
+                    2_000_000_000,
+                    "2099-01-01T00:00:00Z",
+                )
+                .marshal(),
+            );
         }
 
         fn resolve<F: FloorStore>(&self, floors: &F, sharer: &EcdsaSigner) -> ResolutionClass {
+            self.resolve_as(floors, &bookmark(), sharer)
+        }
+
+        /// The verdict `share`'s row renders, floor raises and all.
+        fn resolve_as<F: FloorStore>(
+            &self,
+            floors: &F,
+            share: &ReceivedShare,
+            sharer: &EcdsaSigner,
+        ) -> ResolutionClass {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
                 body: self.fixture.head_block.clone(),
             });
-            let resolved = block_on(
+            block_on(
                 ReceivedShareStatus {
                     transport: &self.records,
                     gateway: &self.gateway,
@@ -833,19 +948,12 @@ mod tests {
                     enc_secret: &my_enc(),
                     contact_label_seed: &label_seed(),
                 }
-                .resolved(&bookmark()),
-            );
-            match resolved {
-                Some((candidate, floors)) => classify(&facts_from(
-                    &candidate,
-                    &bookmark(),
-                    &my_enc(),
-                    &sharer.verifying_key(),
-                    &sharer_enc().public(),
-                    floors,
-                )),
-                None => ResolutionClass::Unresolvable,
-            }
+                .classified(
+                    share,
+                    &Contact::from(&ContactCode::create(sharer, sharer_enc().public())),
+                ),
+            )
+            .0
         }
     }
 
@@ -924,7 +1032,7 @@ mod tests {
     fn a_cut_under_one_sharer_leaves_another_sharers_scope_of_that_id_granted() {
         let sharer = sharer_signer();
         let served = ServedScopeRoot::new(&sharer);
-        let floors = seeded_floors([0x07; IDENTITY_PUBLIC_LEN], 1);
+        let floors = seeded_floors(OTHER_SHARER_IDENTITY_PK, 1);
 
         assert_eq!(
             served.resolve(&floors, &sharer),
@@ -943,6 +1051,173 @@ mod tests {
             ServedScopeRoot::new(&sharer).resolve(&FailingFloorRead(Unreadable::CutEpoch), &sharer),
             ResolutionClass::Unresolvable,
             "an unread cut bar is availability, never a verdict"
+        );
+    }
+
+    /// A recipient the owner cut holds no blob in the post-cut set, so it adopts
+    /// no post-cut record and the adoption commit never raises its cut-epoch
+    /// floor. The classification path is the only place that floor can rise on
+    /// that device, and once it has, a surviving write grantee cannot re-grant
+    /// the row by republishing the pre-cut root — however new the record it
+    /// serves that root in.
+    #[test]
+    fn a_classified_cut_refuses_the_replayed_pre_cut_set() {
+        let sharer = sharer_signer();
+        let floors = InMemoryFloorStore::default();
+        let mut served =
+            ServedScopeRoot::serving(cut_at(&sharer, 1, &[&someone_else()]), SERVED_SEQUENCE);
+
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::RevocationSignal,
+            "the post-cut set commits this device nowhere"
+        );
+
+        served.serve(
+            published(&sharer, &[&my_enc().public()]),
+            SERVED_SEQUENCE + 1,
+        );
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable,
+            "the row does not return to granted"
+        );
+        assert_eq!(
+            served.resolve(&InMemoryFloorStore::default(), &sharer),
+            ResolutionClass::Granted,
+            "a device that saw no cut still grants that same replay, so only the
+             raised floor refuses it above"
+        );
+    }
+
+    /// A cut this pass could not record is not a bar this device holds. Rendering
+    /// the verdict anyway would leave the next pass measuring a replayed pre-cut
+    /// set against a floor that never rose, so the failed raise reaches no
+    /// verdict — the treatment an unreadable floor already gets.
+    #[test]
+    fn a_cut_epoch_floor_this_pass_cannot_raise_reaches_no_verdict() {
+        let sharer = sharer_signer();
+        let served =
+            ServedScopeRoot::serving(cut_at(&sharer, 1, &[&my_enc().public()]), SERVED_SEQUENCE);
+
+        assert_eq!(
+            served.resolve(&UnwritableFloors, &sharer),
+            ResolutionClass::Unresolvable,
+            "an unrecorded cut is availability, never a verdict"
+        );
+        assert_eq!(
+            served.resolve(&InMemoryFloorStore::default(), &sharer),
+            ResolutionClass::Granted,
+            "a store that records the cut grants that same record, so only the
+             failed raise refuses it above"
+        );
+    }
+
+    /// The pre-condition on the raise is the whole of gate stage 2, and nothing
+    /// less. A commitment an unrelated identity signed states nothing about this
+    /// scope root, so the cut epoch it claims may not bar the set the owner
+    /// really did sign — otherwise any party that can answer the name locks the
+    /// row out for good.
+    #[test]
+    fn a_commitment_stage_2_refuses_raises_no_floor() {
+        let sharer = sharer_signer();
+        let impostor = other_sharer_signer();
+        let floors = InMemoryFloorStore::default();
+
+        let mut served = ServedScopeRoot::serving(
+            cut_at(&impostor, u64::MAX, &[&my_enc().public()]),
+            SERVED_SEQUENCE,
+        );
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable,
+            "the bookmarked identity did not sign this commitment"
+        );
+
+        served.serve(
+            published(&sharer, &[&my_enc().public()]),
+            SERVED_SEQUENCE + 1,
+        );
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Granted,
+            "the refused commitment barred nothing"
+        );
+    }
+
+    /// A cut is one sharer's act at one scope, and each sharer authors its own
+    /// scope id. The floor this raise files is keyed by the granting identity,
+    /// so a cut under one sharer cannot refuse another sharer's scope of the
+    /// same id.
+    #[test]
+    fn a_classified_cut_leaves_another_sharers_scope_of_that_id_granted() {
+        let cutting = sharer_signer();
+        let other = other_sharer_signer();
+        let floors = InMemoryFloorStore::default();
+
+        let cut =
+            ServedScopeRoot::serving(cut_at(&cutting, 1, &[&someone_else()]), SERVED_SEQUENCE);
+        assert_eq!(
+            cut.resolve(&floors, &cutting),
+            ResolutionClass::RevocationSignal
+        );
+
+        let elsewhere = ServedScopeRoot::new(&other);
+        assert_eq!(
+            elsewhere.resolve_as(
+                &floors,
+                &ReceivedShare {
+                    sharer_identity_pk: OTHER_SHARER_IDENTITY_PK,
+                    ..bookmark()
+                },
+                &other,
+            ),
+            ResolutionClass::Granted,
+            "the cut belongs to an identity this bookmark was not granted by"
+        );
+    }
+
+    /// The cut-epoch floor is read against commitments alone — never against a
+    /// body, a sequence, or a read epoch — so a raise from a record a later gate
+    /// stage refuses costs this device nothing it could read. Here the
+    /// read-epoch rung refuses the record, and the row keeps rendering the
+    /// staleness it rendered before rather than a trust rejection.
+    #[test]
+    fn a_raise_from_a_record_a_later_stage_refuses_leaves_the_plane_readable() {
+        let sharer = sharer_signer();
+        let floors = InMemoryFloorStore::default();
+        block_on(
+            SharerScopedFloorStore::granted_by(
+                &floors,
+                ContactLabel::of(&label_seed(), &SHARER_IDENTITY_PK),
+            )
+            .raise_epoch_floor(&SCOPE, OWNER_ROOT_EPOCH + 1),
+        )
+        .expect("the floor store answers");
+
+        // The owner cut another recipient: the commitment carries the cut, and
+        // this device's blob survives in the set.
+        let mut served =
+            ServedScopeRoot::serving(cut_at(&sharer, 1, &[&my_enc().public()]), SERVED_SEQUENCE);
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::EpochLag,
+            "stage 2 passes and the read-epoch rung below it refuses the record"
+        );
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::EpochLag,
+            "the floor a record raised never refuses that record"
+        );
+
+        served.serve(
+            published(&sharer, &[&my_enc().public()]),
+            SERVED_SEQUENCE + 1,
+        );
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable,
+            "the raise the refused record made still stands"
         );
     }
 
@@ -1001,8 +1276,7 @@ mod tests {
     #[test]
     fn a_fresh_owner_signed_record_without_your_blob_is_a_revocation_signal() {
         let sharer = sharer_signer();
-        let someone_else = X25519Secret::from_scalar([0x55; 32]).public();
-        let candidate = resolved(&sharer, &[&someone_else]);
+        let candidate = resolved(&sharer, &[&someone_else()]);
         assert_eq!(
             classify_at(&candidate, &sharer, OWNER_ROOT_EPOCH),
             ResolutionClass::RevocationSignal

@@ -187,7 +187,11 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    against the contact-code-anchored owner identity (FSM1/cipher-box-next#34 D6, FSM1/cipher-box-next#39 D1),
    then its `cutEpoch` against the newest cut epoch this scope already adopted.
    The set carries no read epoch, so an owner-signed pre-cut set verifies for
-   ever; the cut-epoch floor is what refuses the replay of one.
+   ever; the cut-epoch floor is what refuses the replay of one. A commitment
+   that clears this stage whole raises that floor to its `cutEpoch`. The
+   `/shared` classification path holds a record to this same stage and makes the
+   same raise, so a device the owner cut — which adopts no post-cut record, and
+   therefore never reaches the raise below — learns the cut too.
 3. **Grant-section authentication** (scope roots) — every seed-bearing
    structure (grant blobs, owner blob, the optional owner-write-blob, ascent
    link, history links, write-body) verifies under **one** committed
@@ -236,7 +240,17 @@ reject at decode in core (FSM1/cipher-box-next#39 D7); the gate surfaces them as
 The **floor law** (FSM1/cipher-box-next#39 D4, superseding FSM1/cipher-box-next#26 D4's blob-seeded floors): floors
 advance only on an AAD-confirmed unseal and cold-seed from the re-point
 object's owner-vouched epochs (`writeEpoch`, `minReadEpoch`); a grant blob's
-epoch field is an advisory routing hint. Additionally, a pointer `writeEpoch`
+epoch field is an advisory routing hint. One exception, and the list of them is
+closed: the `cutEpoch` of a grant-set commitment that passed stage 2 whole
+raises that scope's cut-epoch floor with no unseal, under the sharer-scoped key
+([ADR 0014](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0014-a-verified-commitments-cut-epoch-raises-the-floor-without-an-unseal.md)
+D1–D5). The owner signs that field and the signed preimage names the scope root
+it is presented under, so it is not a claim the network authored; no other field
+of the commitment, of the envelope, or of a grant blob gains such a path. The
+raise is a maximum, like every other advance. A rejection of the same record at
+a later stage does not undo it, and it can make no plane unreadable: the
+cut-epoch floor is read against commitments alone, never against a body, a
+sequence, or a read epoch (D6). Additionally, a pointer `writeEpoch`
 above the durable floor advances it the moment it is seen (FSM1/cipher-box-next#38 D4) — from that
 instant every old-epoch record at the old name fails the gate. `FloorStore` is
 a required constructor argument, fail-closed on regression.

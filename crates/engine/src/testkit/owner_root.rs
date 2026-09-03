@@ -106,6 +106,36 @@ pub struct OwnerRootFixture {
     pub head_cid_str: String,
 }
 
+/// The same root with its grant set re-signed at `cut_epoch` — the commitment a
+/// cut of this scope publishes. Nothing else moves, so a test that serves both
+/// tells the cut apart from every other difference.
+pub fn with_cut_epoch(
+    fixture: OwnerRootFixture,
+    owner_identity: &EcdsaSigner,
+    cut_epoch: u64,
+) -> OwnerRootFixture {
+    let OwnerRootFixture {
+        name,
+        mut grant_section,
+        mut envelope,
+        ..
+    } = fixture;
+    grant_section.commitment.cut_epoch = cut_epoch;
+    grant_section.commitment_sig = sign_grant_set(owner_identity, &grant_section.commitment)
+        .unwrap()
+        .to_compact();
+    set_grant_section(&mut envelope, encode_grant_section(&grant_section).unwrap());
+    let head_block = encode_envelope(&envelope).unwrap();
+    let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+    OwnerRootFixture {
+        name,
+        grant_section,
+        envelope,
+        head_block,
+        head_cid_str,
+    }
+}
+
 /// Author an owner-root head block from `spec`.
 pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
     let OwnerRootSpec {
