@@ -5457,14 +5457,8 @@ where {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
-                refuse_outside_vault(&rendered, node)?;
-                let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                let crossing = classify_crossing(
-                    &rendered,
-                    from_parent,
-                    new_parent,
-                    &self.relocation_scope_roots(),
-                )?;
+                let (from_parent, base_sequence, crossing) =
+                    self.relocation_anchors(&rendered, node, new_parent)?;
                 refuse_full_parent(&rendered, new_parent, Some(node), None)?;
                 let op = Op::relink(
                     node,
@@ -5484,14 +5478,8 @@ where {
             } => {
                 refuse_unlawful_name(&new_name)?;
                 let rendered = self.render().await?;
-                refuse_outside_vault(&rendered, node)?;
-                let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                let crossing = classify_crossing(
-                    &rendered,
-                    from_parent,
-                    new_parent,
-                    &self.relocation_scope_roots(),
-                )?;
+                let (from_parent, base_sequence, crossing) =
+                    self.relocation_anchors(&rendered, node, new_parent)?;
                 refuse_full_parent(&rendered, new_parent, Some(node), replacing)?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
@@ -8843,13 +8831,43 @@ where {
             .collect()
     }
 
-    /// What a relocation op anchors on: the parent the move was formed against
-    /// (the scope root for an unlinked node) and the target's base sequence.
-    fn relocation_anchors(&self, rendered: &Snapshot, node: NodeId) -> (NodeId, u64) {
-        let from_parent = rendered
-            .parent_of(node)
-            .unwrap_or(self.snapshot.borrow().root);
-        (from_parent, rendered.record_sequence(node).unwrap_or(1))
+    /// What a relocation op anchors on: the source parent, the target's base
+    /// sequence, and the crossing ([`classify_crossing`]).
+    ///
+    /// A target with no source parent is refused rather than anchored on the
+    /// vault root. A relocation is the one op whose meaning depends on where
+    /// its target already sits: anchored on the root, both ends resolve there
+    /// and every such move reads intra-scope, so the drain halts an op the
+    /// caller was already told succeeded.
+    fn relocation_anchors(
+        &self,
+        rendered: &Snapshot,
+        node: NodeId,
+        new_parent: NodeId,
+    ) -> Result<(NodeId, u64, ScopeCrossing), EngineError> {
+        refuse_outside_vault(rendered, node)?;
+        let Some(from_parent) = rendered.parent_of(node) else {
+            // The guard above owns every other unplaced target, so the vault
+            // root and a node this render lost are what is left.
+            return Err(if node == rendered.root {
+                EngineError::UnsupportedTarget {
+                    check: "relocate-vault-root",
+                }
+            } else {
+                EngineError::UnknownNode
+            });
+        };
+        let crossing = classify_crossing(
+            rendered,
+            from_parent,
+            new_parent,
+            &self.relocation_scope_roots(),
+        )?;
+        Ok((
+            from_parent,
+            rendered.record_sequence(node).unwrap_or(1),
+            crossing,
+        ))
     }
 
     /// The version a new write of `node` follows — the conditional-edit anchor
