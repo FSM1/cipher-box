@@ -189,7 +189,7 @@ pub trait ChildIndexResolver {
 /// the [`canonicalize`] self-heal repairs first-seen (#38 D6) — only a
 /// **cross-parent** disagreement, where neither parent is authoritative over the
 /// other's label, is the revocation-hole conflict this abort exists to catch.
-pub(super) fn bind_child_labels<'a>(
+pub(crate) fn bind_child_labels<'a>(
     labels: &mut BTreeMap<[u8; 16], Vec<u8>>,
     refs: impl Iterator<Item = &'a ChildScopeRef>,
     root_scope_id: [u8; 16],

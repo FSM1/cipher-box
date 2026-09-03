@@ -54,6 +54,7 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
     BookmarkedScopeRoots, GraftedSharers, NamedNodes, evict_grafted_read_seeds, floor_view,
+    is_own_scope,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{
@@ -80,13 +81,13 @@ use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
-    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, GraftedLeg, HeldKey,
-    HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys, OwnerRotationNet,
-    PointerConsult, PointerConsultArm, PointerConsultError, PublishError, PublishOutcome,
-    RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    ScopePointerEnrolment, VaultProvisionNet, enrol_owned_scope_pointers, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child,
-    run_liveness_loop,
+    Adopter, ChildAdopter, ChildResolveError, DescendantScopeRoot, EolRenewResult, FolderRefresh,
+    GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
+    OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
+    PublishOutcome, RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    ScopePointerEnrolment, ScopeWalk, VaultProvisionNet, enrol_owned_scope_pointers,
+    eol_renew_pass, fanout_get_verify, keyless_re_put, refresh_base_from_resolved,
+    resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -120,7 +121,7 @@ use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rende
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
-use crate::sync::project::{UnlinkedChild, map_kind, project_child_version};
+use crate::sync::project::{UnlinkedChild, map_kind, project_child_version, project_root};
 use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
     VaultPointerProbe, provision_vault,
@@ -2953,11 +2954,16 @@ fn surface_drain_report(
 /// [`Engine::vault_root_scope`]'s refusal name.
 const HELD_SEED_NOT_AT_CURRENT_ROOT: &str = "held-write-seed-does-not-name-the-current-root";
 
-/// Whether `seed` derives the scope root's own `ipnsName` — the one proof both
-/// the deposit ([`deposit_write_seed`]) and the read
-/// ([`Engine::vault_root_scope`]) hold a write scope seed to, stated once so
-/// the two cannot drift apart.
-fn seed_names(seed: &[u8; 32], scope_id: &[u8; 16], root_name: Option<&IpnsName>) -> bool {
+/// Whether `seed` derives the scope root's own `ipnsName` — the one proof every
+/// holder of a write scope seed is held to, stated once so they cannot drift
+/// apart: the deposit ([`deposit_write_seed`]), the read
+/// ([`Engine::vault_root_scope`]), and the mint of a descendant scope's own
+/// write plane ([`ScopeWalk::descendant_scope_roots`]).
+pub(crate) fn seed_names(
+    seed: &[u8; 32],
+    scope_id: &[u8; 16],
+    root_name: Option<&IpnsName>,
+) -> bool {
     root_name.is_some_and(|name| derive_write_name(seed, scope_id) == *name)
 }
 
@@ -3119,6 +3125,60 @@ fn cached_seed(cell: &RefCell<ScopeSeeds>, scope_id: &[u8; 16]) -> Option<Zeroiz
     cell.borrow()
         .get(scope_id)
         .map(|cached| cached.seed.clone())
+}
+
+/// Install what one walk proved: drop the seeds of every promotion it could not
+/// re-prove, then deposit and project the ones it did.
+///
+/// The promotion set only grows. A promotion a pass cannot prove is an outage on
+/// that scope's own leg, and forgetting it would regroup its whole subtree onto
+/// the enclosing scope's seed, where every record fails its unseal and is
+/// reported as abuse — availability laundered into a trust verdict (security
+/// rule 6).
+///
+/// Each seed is stamped with the epoch its own recovery names: the read seed
+/// with the record's, the write seed with the write-epoch floor its
+/// owner-write-blob opened at (`deposit_seed`).
+fn install_descendant_scopes(
+    known: &RefCell<BTreeSet<NodeId>>,
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
+    base: &RefCell<Snapshot>,
+    events: &mpsc::UnboundedSender<Event>,
+    proved: &[DescendantScopeRoot],
+) {
+    let reached: BTreeSet<NodeId> = proved.iter().map(|s| NodeId(s.scope_id)).collect();
+    let unproved: Vec<NodeId> = known.borrow().difference(&reached).copied().collect();
+    for scope in unproved {
+        for cell in [read_seeds, write_seeds] {
+            cell.borrow_mut().remove(&scope.0);
+        }
+    }
+    known.borrow_mut().extend(reached);
+    for scope in proved {
+        deposit_seed(
+            read_seeds,
+            scope.scope_id,
+            scope.read_scope_seed.clone(),
+            Some(scope.adopted.epoch),
+        );
+        if let Some(write) = &scope.write {
+            deposit_write_seed(
+                write_seeds,
+                scope.scope_id,
+                write.seed.clone(),
+                Some(&scope.name),
+                Some(write.epoch),
+            );
+        }
+        if project_root(
+            &mut base.borrow_mut(),
+            NodeId(scope.scope_id),
+            &scope.adopted,
+        ) {
+            let _ = events.unbounded_send(Event::SnapshotUpdated);
+        }
+    }
 }
 
 /// Retained dead letters: op id → its target node when known (`None` for an
@@ -3467,6 +3527,11 @@ pub struct Engine<T: SeamTypes> {
     /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
     /// node's `ipnsName` and its narrow per-name signer from them.
     scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
+    /// The scope roots below the vault root that a gated descent proved this
+    /// session holds ([`ScopeWalk::descendant_scope_roots`]). In-memory only,
+    /// grow-only within a session ([`install_descendant_scopes`]); the read legs
+    /// group focus targets against it ([`scope_root_of`]).
+    descendant_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// The `ipnsName` the vault root scope currently publishes under: adopted at
     /// cold start, minted by a first run, moved by a write wave this session
     /// drove, and re-read from the vault pointer on every consult. `None` until
@@ -3679,6 +3744,7 @@ impl<T: SeamTypes> Engine<T> {
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+                descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 current_root_name: Rc::new(RefCell::new(None)),
                 vault_pointer_index: Cell::new(None),
                 focus: Rc::new(RefCell::new(FocusWindow::default())),
@@ -4036,6 +4102,9 @@ impl<T: SeamTypes> Engine<T> {
             if let Ok(mut seeds) = seeds.try_borrow_mut() {
                 seeds.clear();
             }
+        }
+        if let Ok(mut roots) = self.descendant_scope_roots.try_borrow_mut() {
+            roots.clear();
         }
         // Session-scoped, and a failed start would otherwise leave the prior
         // account's index resident.
@@ -4665,6 +4734,7 @@ where {
         let alive = self.alive.clone();
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
+        let descendant_roots = self.descendant_scope_roots.clone();
         let current_root_name = self.current_root_name.clone();
         let focus = self.focus.clone();
         let focus_touched = self.focus_touched.clone();
@@ -4808,11 +4878,13 @@ where {
                     )
                     .await;
                     let grafted = grafted_sharers.borrow().clone();
+                    let proved_before = descendant_roots.borrow().clone();
                     evict_grafted_read_seeds(
                         &floors,
                         &grafted,
                         &contact_label_seed,
                         &root_id,
+                        &proved_before,
                         &scope_read_seeds,
                     )
                     .await;
@@ -4893,6 +4965,38 @@ where {
                         );
                     }
                     let read_seed = cached_seed(&scope_read_seeds, &root_id);
+                    // The held record is the root this pass reconciled, so the
+                    // walk needs no second read of either plane to start.
+                    let held_root = held
+                        .borrow()
+                        .get(&HeldKey::node(root_id))
+                        .map(|record| (record.routing_key.clone(), record.record_bytes.clone()));
+                    let walk = ScopeWalk {
+                        transport: &transport,
+                        snapshot_cache: &snapshot_cache,
+                        gateway: &gateway,
+                        http: &http,
+                        floors: &floors,
+                        enc_secret: &enc_subkey,
+                        identity: &owner_identity,
+                    };
+                    let mut descendants = Vec::new();
+                    if let Some((name, root_bytes)) = held_root
+                        && let Ok(name) = IpnsName::parse(&name)
+                        && let Some(proved) = walk
+                            .descendant_scope_roots(root_id, &name, &root_bytes)
+                            .await
+                    {
+                        install_descendant_scopes(
+                            &descendant_roots,
+                            &scope_read_seeds,
+                            &scope_write_seeds,
+                            &base,
+                            &events,
+                            &proved,
+                        );
+                        descendants = proved;
+                    }
                     // A host that derives focus from an operation stream cannot
                     // close its own window: a stream that stops arriving produces
                     // no call to close it with. The tick has the timer, so the
@@ -4913,7 +5017,9 @@ where {
                     // files stay queued for the pass that can.
                     let mut folder_verdict = RefreshVerdict::Reconciled;
                     let mut attempted_files: Vec<NodeId> = Vec::new();
-                    let by_scope = focus_by_scope(&base.borrow(), &focus.borrow());
+                    let proved_scope_ids = descendant_roots.borrow().clone();
+                    let by_scope =
+                        focus_by_scope(&base.borrow(), &focus.borrow(), &proved_scope_ids);
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
                     for (scope_root, targets) in by_scope {
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
@@ -4925,6 +5031,7 @@ where {
                             &grafted,
                             &contact_label_seed,
                             &root_id,
+                            &proved_scope_ids,
                             &scope_root.0,
                         ) else {
                             continue;
@@ -4940,10 +5047,11 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
-                            plane: (scope_root.0 != root_id).then_some(GraftedLeg {
-                                scope_roots: &scope_roots,
-                                named_nodes: &grafted_named_nodes,
-                            }),
+                            plane: (!is_own_scope(&root_id, &proved_scope_ids, &scope_root.0))
+                                .then_some(GraftedLeg {
+                                    scope_roots: &scope_roots,
+                                    named_nodes: &grafted_named_nodes,
+                                }),
                             mode,
                             observed_at: now.0,
                         };
@@ -5003,8 +5111,47 @@ where {
                     // are required — without them there is no name to publish under
                     // and no key to seal with, so the queue simply waits.
                     let write_seed = cached_seed(&scope_write_seeds, &root_id);
-                    if let (Some(read_seed), Some(write_seed)) = (read_seed, write_seed) {
-                        let report = Drain {
+                    // One pass per scope: a pass seals every record it publishes
+                    // at one scope root's epoch under that root's seeds.
+                    //
+                    // The boundary set is the session's, not this walk's. A
+                    // promotion a pass could not re-prove keeps its entry, so
+                    // the vault root's pass still stops at it rather than
+                    // claiming the whole suffix below it
+                    // ([`install_descendant_scopes`]).
+                    let proved_roots: Vec<NodeId> = core::iter::once(NodeId(root_id))
+                        .chain(proved_scope_ids.iter().copied())
+                        .collect();
+                    // Index 0 is the vault root's own pass whenever this holds.
+                    let root_scope_held = read_seed.is_some() && write_seed.is_some();
+                    let mut scopes: Vec<DrainScope<'_>> = Vec::new();
+                    if let (Some(read_seed), Some(write_seed)) = (&read_seed, &write_seed) {
+                        scopes.push(DrainScope {
+                            root: NodeId(root_id),
+                            root_name: &root_name,
+                            parent_node_seed: None,
+                            scope_roots: &proved_roots,
+                            read_scope_seed: read_seed,
+                            write_scope_seed: write_seed,
+                            enc_secret: &enc_subkey,
+                            owner_identity: &owner_identity,
+                        });
+                    }
+                    scopes.extend(descendants.iter().filter_map(|scope| {
+                        let write = scope.write.as_ref()?;
+                        Some(DrainScope {
+                            root: NodeId(scope.scope_id),
+                            root_name: &scope.name,
+                            parent_node_seed: Some(&scope.parent_node_seed),
+                            scope_roots: &proved_roots,
+                            read_scope_seed: &scope.read_scope_seed,
+                            write_scope_seed: &write.seed,
+                            enc_secret: &enc_subkey,
+                            owner_identity: &owner_identity,
+                        })
+                    }));
+                    if !scopes.is_empty() {
+                        let drain = Drain {
                             transport: &transport,
                             api: &api,
                             floors: &floors,
@@ -5036,18 +5183,23 @@ where {
                             bin_index_hold: &bin_index_hold,
                             established_bin_index: RefCell::new(None),
                             observed_unlinks: &observed_unlinks,
+                        };
+                        let mut journalled = Vec::new();
+                        for scope in &scopes {
+                            let mut report = drain.run_queue(scope).await;
+                            journalled.append(&mut report.journalled_deletes);
+                            surface_drain_report(&events, &dead_letters, &report);
                         }
-                        .run(&DrainScope {
-                            root: NodeId(root_id),
-                            root_name: &root_name,
-                            read_scope_seed: &read_seed,
-                            write_scope_seed: &write_seed,
-                            enc_secret: &enc_subkey,
-                            owner_identity: &owner_identity,
-                        })
-                        .await;
-                        surface_drain_report(&events, &dead_letters, &report);
-                    } else {
+                        // Once per tick, under the vault root's material: the
+                        // retire ledger and the reclamation journal are the
+                        // identity's, not one scope's. Every name in that ledger
+                        // derives from the vault root's own write seed, so a
+                        // tick that did not hold it owes none of this pass.
+                        if root_scope_held && let Some(root_scope) = scopes.first() {
+                            drain.settle(root_scope, &journalled).await;
+                        }
+                    }
+                    if !root_scope_held {
                         // The drain sweeps staging on the listing it already
                         // took; without one, an abandoned write handle's residue
                         // still has to be reclaimed at the poll cadence.
@@ -7064,6 +7216,7 @@ where {
             &sharers,
             session.contact_label_seed(),
             &own_root,
+            &self.descendant_scope_roots.borrow(),
             scope_id,
         ) else {
             self.scope_read_seeds.borrow_mut().remove(scope_id);
@@ -7180,9 +7333,10 @@ where {
         // never here under the vault's seed.
         let (scope_id, due) = {
             let base = self.snapshot.borrow();
+            let descendants = self.descendant_scope_roots.borrow();
             let mine = due
                 .into_iter()
-                .filter(|node| scope_root_of(&base, *node) == base.root)
+                .filter(|node| scope_root_of(&base, *node, &descendants) == base.root)
                 .collect::<Vec<_>>();
             (base.root.0, mine)
         };

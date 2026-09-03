@@ -58,9 +58,10 @@ use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::NodeId;
+use crate::facade::{NodeId, seed_names};
 use crate::gate::floor::PointerPlane;
-use crate::gate::{GateError, RejectionReason, floor};
+use crate::gate::{Adopted, GateError, RejectionReason, floor};
+use crate::grants::child_index::canonicalize;
 use crate::grants::{
     GrantResumeResolver, InteriorRecord, InteriorResealer, PromotedScopeRoot, ScopeRootPromoter,
     UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row, recipient_self_location,
@@ -69,6 +70,7 @@ use crate::grants::{
 use crate::net::fanout_get_verify;
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
+use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet,
@@ -81,7 +83,7 @@ use crate::rotation::{
 };
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
-    SharerScopedFloorStore,
+    SharerScopedFloorStore, SnapshotCache,
 };
 use crate::session::SessionIdentity;
 use crate::sync::pointer::{
@@ -363,6 +365,8 @@ struct GatedScopeRoot {
     envelope: Envelope,
     section: GrantSection,
     read_body: ReadBody,
+    /// The record's own IPNS sequence, as the gate authenticated it.
+    sequence: u64,
     /// The override seed recovered from this root's own owner blob — the
     /// ancestor seed its descendants' ascent links are derived from.
     read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
@@ -507,10 +511,10 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     record_bytes: &[u8],
     reason: &RejectionReason,
 ) -> Result<GatedScopeRoot, RootGateVerdict> {
-    if !matches!(
-        reason,
-        RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor
-    ) {
+    let RejectionReason::SequenceNotNewer { floor, sequence } = reason else {
+        return Err(RootGateVerdict::Rejected);
+    };
+    if sequence != floor {
         return Err(RootGateVerdict::Rejected);
     }
     let recovered = adopter
@@ -523,6 +527,7 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         envelope: recovered.envelope,
         section: recovered.grant_section,
         read_body: recovered.read_body,
+        sequence: *sequence,
         read_scope_seed: recovered.read_scope_seed,
         write_scope_seed: recovered.write_scope_seed,
     })
@@ -540,6 +545,7 @@ async fn gated_scope_root<H: Http, F: FloorStore>(
         Ok((candidate, outcome)) => Ok(GatedScopeRoot {
             envelope: candidate.envelope,
             section: candidate.grant_section,
+            sequence: outcome.adopted.sequence,
             read_body: outcome.adopted.read_body,
             read_scope_seed: outcome
                 .read_scope_seed
@@ -578,6 +584,216 @@ async fn gated_child_root<H: Http, F: FloorStore>(
         return Err(RootGateVerdict::Rejected);
     }
     Ok(gated)
+}
+
+/// The write material a descendant scope root's own write plane runs under.
+pub(crate) struct ScopeWritePlane {
+    pub(crate) seed: Zeroizing<[u8; SECRET_LEN]>,
+    /// The durable write-epoch floor the seed's owner-write-blob opened at.
+    pub(crate) epoch: u64,
+}
+
+/// One descendant scope root as one pass gated it: the material a read leg
+/// renders it with and a drain pass publishes under. Terminal owner of the seeds
+/// it carries.
+pub(crate) struct DescendantScopeRoot {
+    /// The scope id, which is also the promoted folder's node id.
+    pub(crate) scope_id: [u8; 16],
+    /// The name the parent's index vouches for, which the descent gated at.
+    pub(crate) name: IpnsName,
+    /// The ancestor node seed the gate re-derives this root's expected ascent
+    /// keypair from (`gate::adoption` stage 3). Every read of this record needs
+    /// it, the drain's own self-adopt included.
+    pub(crate) parent_node_seed: Zeroizing<[u8; SECRET_LEN]>,
+    /// The root's own gate-passing body, for the projection leg.
+    pub(crate) adopted: Adopted,
+    pub(crate) read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    /// `None` when this device holds the root keyless — no owner-write-blob, or
+    /// no durable write-epoch floor for the scope yet. Such a scope still reads
+    /// and renders; only its write plane waits.
+    pub(crate) write: Option<ScopeWritePlane>,
+}
+
+/// How many descendant scope roots one walk admits.
+const MAX_DESCENDANT_SCOPE_ROOTS: usize = 256;
+
+/// How many descents one walk pays for. Charged per attempt, not per pass: a
+/// `directChildScopeIndex` is writer-authored and every entry costs a fan-out
+/// GET whether or not it gates, so counting only the entries that gate would let
+/// a committed writer set this device's per-tick record traffic.
+const MAX_SCOPE_DESCENT_ATTEMPTS: usize = 512;
+
+/// The seams and owner keys one walk reads under.
+pub(crate) struct ScopeWalk<'a, T, S, H, F> {
+    pub(crate) transport: &'a T,
+    pub(crate) snapshot_cache: &'a S,
+    pub(crate) gateway: &'a Gateway,
+    pub(crate) http: &'a H,
+    pub(crate) floors: &'a F,
+    pub(crate) enc_secret: &'a X25519Secret,
+    pub(crate) identity: &'a EcdsaVerifier,
+}
+
+impl<T, S, H, F> ScopeWalk<'_, T, S, H, F>
+where
+    T: RecordTransport,
+    S: SnapshotCache,
+    H: Http,
+    F: FloorStore,
+{
+    /// Descend into one claimed child scope root and read the index of its own
+    /// children out of its write body. `None` on any verdict short of a gate
+    /// pass: a level this reader cannot prove costs that level's subtree alone.
+    async fn descend(
+        &self,
+        parent_read_scope_seed: &[u8; SECRET_LEN],
+        child: &ChildScopeRef,
+    ) -> Option<(DescendantScopeRoot, Vec<ChildScopeRef>)> {
+        let name = scope_name(&child.ipns_name).ok()?;
+        let parent_node_seed =
+            Zeroizing::new(*kdf::node_seed(parent_read_scope_seed, &child.scope_id).as_bytes());
+        let adopter = RootAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            self.enc_secret,
+            self.identity,
+            child.scope_id,
+        )
+        .under_parent_node_seed(parent_node_seed.clone());
+        let (_, record_bytes) = fanout_get_verify(self.transport, &name).await?;
+        let gated = gated_child_root(&adopter, &name, &record_bytes, child.scope_id)
+            .await
+            .ok()?;
+        // Only a gate pass writes the record cache.
+        let _ = self
+            .snapshot_cache
+            .put(name.as_str().as_bytes(), &record_bytes)
+            .await;
+        let (write, grandchildren) = self.write_plane(&gated, &name, child.scope_id).await;
+        Some((
+            DescendantScopeRoot {
+                scope_id: child.scope_id,
+                name,
+                parent_node_seed,
+                adopted: Adopted {
+                    read_body: gated.read_body,
+                    sequence: gated.sequence,
+                    epoch: gated.envelope.epoch,
+                },
+                read_scope_seed: gated.read_scope_seed,
+                write,
+            },
+            grandchildren,
+        ))
+    }
+
+    /// A gated scope root's own write plane and the `directChildScopeIndex` it
+    /// names, both empty where this device holds the root keyless: the index is
+    /// a write-plane read.
+    ///
+    /// The seed is held to [`seed_names`] here, where the material is minted,
+    /// rather than at each consumer: a drain pass takes a descendant's seed
+    /// straight off this value and mints every new node's `ipnsName` and its
+    /// narrow signer from it. A seed that cannot name our own root leaves the
+    /// root keyless, never a trust verdict.
+    async fn write_plane(
+        &self,
+        gated: &GatedScopeRoot,
+        name: &IpnsName,
+        scope_id: [u8; 16],
+    ) -> (Option<ScopeWritePlane>, Vec<ChildScopeRef>) {
+        let Some(seed) = gated.write_scope_seed.clone() else {
+            return (None, Vec::new());
+        };
+        if !seed_names(&seed, &scope_id, Some(name)) {
+            return (None, Vec::new());
+        }
+        let Ok((write_body, epoch)) = write_plane_of(
+            self.floors,
+            &gated.envelope,
+            &gated.section,
+            &seed,
+            scope_id,
+        )
+        .await
+        else {
+            return (None, Vec::new());
+        };
+        (
+            Some(ScopeWritePlane { seed, epoch }),
+            write_body.direct_child_scope_index,
+        )
+    }
+
+    /// Every scope root this owner holds below the vault root, breadth-first
+    /// over each level's `directChildScopeIndex`.
+    ///
+    /// A grant cut promotes an interior folder into a scope root of its own, and
+    /// the child gate refuses such a record on every read path. This walk is the
+    /// one descent that opens it: [`Self::descend`] runs [`gated_child_root`],
+    /// whose ascent-link requirement is release-active, so a root planted at a
+    /// derived name by a committed writer is refused.
+    ///
+    /// `root_record_bytes` are the vault root's own record, which the caller
+    /// already holds. `None` where the vault root itself did not gate: a caller
+    /// must tell that apart from a vault that holds no descendant scope.
+    ///
+    /// Each level is canonicalized and its labels bound before the descent, so
+    /// the walk is permutation-independent and a `scopeId` two parents name at
+    /// different `ipnsName`s costs that level rather than binding either
+    /// ([`bind_child_labels`]).
+    pub(crate) async fn descendant_scope_roots(
+        &self,
+        root_scope_id: [u8; 16],
+        root_name: &IpnsName,
+        root_record_bytes: &[u8],
+    ) -> Option<Vec<DescendantScopeRoot>> {
+        let adopter = RootAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            self.enc_secret,
+            self.identity,
+            root_scope_id,
+        );
+        let gated = gated_scope_root(&adopter, root_name, root_record_bytes)
+            .await
+            .ok()?;
+        let (_, index) = self.write_plane(&gated, root_name, root_scope_id).await;
+        let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
+        let mut descendants: Vec<DescendantScopeRoot> = Vec::new();
+        let mut visited = BTreeSet::from([root_scope_id]);
+        let mut attempts = 0usize;
+        let mut frontier = vec![(gated.read_scope_seed, index)];
+        while !frontier.is_empty() && descendants.len() < MAX_DESCENDANT_SCOPE_ROOTS {
+            let mut next = Vec::new();
+            for (parent_read_scope_seed, index) in frontier {
+                let index = canonicalize(&index);
+                if bind_child_labels(&mut labels, index.iter(), root_scope_id).is_err() {
+                    continue;
+                }
+                for child in index {
+                    if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS
+                        || attempts >= MAX_SCOPE_DESCENT_ATTEMPTS
+                        || !visited.insert(child.scope_id)
+                    {
+                        continue;
+                    }
+                    attempts += 1;
+                    let Some((descendant, grandchildren)) =
+                        self.descend(&parent_read_scope_seed, &child).await
+                    else {
+                        continue;
+                    };
+                    next.push((descendant.read_scope_seed.clone(), grandchildren));
+                    descendants.push(descendant);
+                }
+            }
+            frontier = next;
+        }
+        Some(descendants)
+    }
 }
 
 /// Unseal a gated scope root's write-body under the write scope seed the reader
@@ -753,6 +969,7 @@ where
             envelope,
             section,
             read_body,
+            sequence: _,
             read_scope_seed,
             write_scope_seed,
         } = root;
@@ -1295,6 +1512,7 @@ where
             envelope,
             section,
             read_body,
+            sequence: _,
             read_scope_seed,
             write_scope_seed,
         } = gated;
@@ -1756,6 +1974,7 @@ where
             envelope,
             section,
             read_body,
+            sequence: _,
             read_scope_seed,
             write_scope_seed,
         } = root;
@@ -3774,8 +3993,8 @@ mod tests {
     use crate::sync::pointer::{SessionRole, open_repoint, seal_repoint, vault_pointer_name};
     use crate::sync::provision::GENESIS_VAULT_POINTER_INDEX;
     use crate::testkit::fakes::{
-        InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, ScriptedHttp,
-        VirtualScheduler,
+        InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
+        ScriptedHttp, VirtualScheduler,
     };
     use crate::testkit::{
         FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_PSEUDONYM_SEED,
@@ -4174,6 +4393,181 @@ mod tests {
         );
         let child_ref = child_ref(CHILD_SCOPE, &child);
         (child, child_ref, grandchild)
+    }
+
+    // -----------------------------------------------------------------------
+    // The descendant-scope-root walk the read and write legs share
+    // -----------------------------------------------------------------------
+
+    impl Harness<InMemoryRecordStore> {
+        /// Run the walk from a staged vault root.
+        fn walk(
+            &self,
+            cache: &InMemorySnapshotCache,
+            root: &OwnerRootFixture,
+        ) -> Option<Vec<DescendantScopeRoot>> {
+            block_on(
+                ScopeWalk {
+                    transport: &self.transport,
+                    snapshot_cache: cache,
+                    gateway: &self.gateway,
+                    http: &self.http,
+                    floors: &self.floors,
+                    enc_secret: &self.enc_secret,
+                    identity: &self.identity,
+                }
+                .descendant_scope_roots(
+                    SCOPE,
+                    &root.name,
+                    &record_for(&SCOPE, &root.head_cid_str, 1),
+                ),
+            )
+        }
+
+        /// The scope ids a walk from `root` proved.
+        fn walked(&self, cache: &InMemorySnapshotCache, root: &OwnerRootFixture) -> Vec<[u8; 16]> {
+            self.walk(cache, root)
+                .expect("the vault root gates")
+                .iter()
+                .map(|scope| scope.scope_id)
+                .collect()
+        }
+    }
+
+    /// The walk admits a scope root its parent's index names and whose ascent
+    /// link proves the descent, and hands back that scope's own material.
+    #[test]
+    fn the_walk_admits_an_indexed_scope_root_and_yields_its_material() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let cache = InMemorySnapshotCache::default();
+
+        let proved = harness.walk(&cache, &root).expect("the vault root gates");
+
+        assert_eq!(
+            proved
+                .iter()
+                .map(|scope| scope.scope_id)
+                .collect::<Vec<_>>(),
+            vec![CHILD_SCOPE],
+            "the walk descends one level into the index"
+        );
+        let descendant = &proved[0];
+        assert_eq!(descendant.name, child.name);
+        let write = descendant
+            .write
+            .as_ref()
+            .expect("a root the owner holds write material for is not keyless");
+        assert_eq!(
+            derive_write_name(&write.seed, &CHILD_SCOPE),
+            descendant.name,
+            "a drain pass mints every node's name and signer from this seed, so the \
+             walk yields only a seed that derives the root's own name"
+        );
+        assert!(
+            ct_eq(
+                &descendant.parent_node_seed,
+                kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes()
+            ),
+            "the ancestor seed the gate verified the ascent link under travels with it"
+        );
+        assert_eq!(
+            block_on(cache.get(child.name.as_str().as_bytes())).expect("cache read"),
+            Some(record_for(&CHILD_SCOPE, &child.head_cid_str, 1)),
+            "only a gate pass writes the record cache"
+        );
+    }
+
+    /// The release-active ascent-link requirement: an owner-signed root with no
+    /// ascent link gates cleanly as a root of its own, so without that check any
+    /// record a committed writer plants at an indexed name would be admitted as
+    /// this scope's descendant.
+    #[test]
+    fn the_walk_refuses_a_root_carrying_no_ascent_link() {
+        let planted = vault_root(CHILD_SCOPE, Vec::new());
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &planted)]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &planted, Some(OWNER_ROOT_EPOCH));
+        let cache = InMemorySnapshotCache::default();
+
+        assert!(
+            harness.walked(&cache, &root).is_empty(),
+            "a root that proves no descent from this scope is not this scope's"
+        );
+        assert_eq!(
+            block_on(cache.get(planted.name.as_str().as_bytes())).expect("cache read"),
+            None,
+            "and a refused record never reaches the cache"
+        );
+    }
+
+    /// A vault root this pass cannot gate is not a vault that holds no
+    /// descendant scope: the caller must keep serving the promotions it already
+    /// proved rather than fold their subtrees back onto this scope's seed.
+    #[test]
+    fn a_vault_root_that_does_not_gate_yields_no_answer_at_all() {
+        let (_, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+
+        assert!(
+            harness
+                .walk(&InMemorySnapshotCache::default(), &root)
+                .is_none()
+        );
+    }
+
+    /// An index is writer-authored: an entry naming a scope the walk has already
+    /// visited must terminate it rather than loop.
+    #[test]
+    fn the_walk_terminates_on_an_index_that_names_a_visited_scope() {
+        let harness = Harness::plain();
+        let placeholder = vault_root(SCOPE, Vec::new());
+        let child = interior(
+            CHILD_SCOPE,
+            &OWNER_ROOT_SCOPE_SEED,
+            vec![child_ref(SCOPE, &placeholder)],
+        );
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &child)]);
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+
+        assert_eq!(
+            harness.walked(&InMemorySnapshotCache::default(), &root),
+            vec![CHILD_SCOPE],
+            "the visited set ends the cycle at the scope it started from"
+        );
+    }
+
+    /// A root this device holds keyless is still admitted: the scope renders on
+    /// the read leg, and only its write plane waits.
+    #[test]
+    fn a_keyless_scope_root_is_still_admitted() {
+        let (child, child_ref, _) = one_level();
+        let root = vault_root(SCOPE, vec![child_ref]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, None);
+
+        let proved = harness
+            .walk(&InMemorySnapshotCache::default(), &root)
+            .expect("the vault root gates");
+
+        assert_eq!(
+            proved
+                .iter()
+                .map(|scope| scope.scope_id)
+                .collect::<Vec<_>>(),
+            vec![CHILD_SCOPE],
+        );
+        assert!(
+            proved[0].write.is_none(),
+            "no durable write-epoch floor means the owner-write-blob never opens"
+        );
     }
 
     /// A pass that runs no sweep has no pointer plane to read, and refuses the
