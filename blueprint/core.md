@@ -72,14 +72,15 @@ Functional decomposition, not final file layout:
 
 ## Crypto suite
 
-| Role                       | Algorithm                                               | Used for                                                                                                                                                                                         |
-| -------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Symmetric sealing          | XChaCha20-Poly1305 (24-byte nonce)                      | All sealed bodies and structures, content bytes                                                                                                                                                  |
-| Key derivation             | BLAKE3 `derive_key` / `keyed_hash`                      | The whole edge catalog                                                                                                                                                                           |
-| Sealing to a person        | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305) | Base mode: grant blobs, owner blob, owner-write-blob, ascent links, mailbox payloads; auth mode (owner to owner): op record, settings record, content key, owner-local, write-plane history link |
-| Pairwise secrets           | X25519 ECDH                                             | Blinded tags, grantee pseudonym derivation                                                                                                                                                       |
-| Identity signing           | secp256k1 ECDSA (RFC 6979) over det-CBOR                | Grant-set commitment, subkey binding, re-point object, mailbox sender signature                                                                                                                  |
-| Pseudonym + record signing | Ed25519                                                 | Structure signatures; IPNS records                                                                                                                                                               |
+| Role                        | Algorithm                                                                    | Used for                                                                                                                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Symmetric sealing           | XChaCha20-Poly1305 (24-byte nonce)                                           | All sealed bodies and structures, content bytes                                                                                                                                                  |
+| Key derivation              | BLAKE3 `derive_key` / `keyed_hash`                                           | The whole edge catalog; a primitive-internal key schedule is not an edge                                                                                                                         |
+| Sealing to a person         | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305)                      | Base mode: grant blobs, owner blob, owner-write-blob, ascent links, mailbox payloads; auth mode (owner to owner): op record, settings record, content key, owner-local, write-plane history link |
+| Sealing to a rendezvous key | In-repo ECIES on secp256k1 (ECDH + BLAKE3 key schedule + XChaCha20-Poly1305) | The device-approval factor seal, and nothing else; full-envelope KAT under a fixed ephemeral scalar (FSM1/cipher-box-next ADR 0015)                                                              |
+| Pairwise secrets            | X25519 ECDH                                                                  | Blinded tags, grantee pseudonym derivation                                                                                                                                                       |
+| Identity signing            | secp256k1 ECDSA (RFC 6979) over det-CBOR                                     | Grant-set commitment, subkey binding, re-point object, mailbox sender signature                                                                                                                  |
+| Pseudonym + record signing  | Ed25519                                                                      | Structure signatures; IPNS records                                                                                                                                                               |
 
 - Every user derives an **X25519 encryption subkey** from their login secret;
   the identity key only signs, the subkey only seals. The **subkey binding**
@@ -98,10 +99,14 @@ Functional decomposition, not final file layout:
   ignored bit and the mod-`p` wraparound both survive into `to_bytes`.
 - Writer pseudonyms sign with **Ed25519** (deterministic derivation from the
   pairwise secret, or from `ownerPseudonymSeed` for the owner; secp256k1 stays
-  confined to identity signing per FSM1/cipher-box-next#27 D3).
+  confined to identity signing and the device-approval rendezvous seal —
+  FSM1/cipher-box-next#27 D3, narrowed by ADR 0015 D1, because the API fixes
+  the rendezvous key field to secp256k1 and HPKE's KEM is DHKEM(X25519)).
 - HPKE envelopes are spec-defined with a full-envelope KAT under a fixed
   ephemeral key — the eciesjs lesson (a library major bump must never be able
-  to silently orphan stored ciphertexts).
+  to silently orphan stored ciphertexts). The ECIES envelope is defined in this
+  repository and takes the same KAT, which is what separates it from the
+  library-defined envelope the "Gone" table retires.
 
 ## Envelope and structures
 
@@ -579,6 +584,13 @@ Frozen per FSM1/cipher-box-next#39 D8 (F-9). Per-node material takes the shape
 are fixed-length message input, **never** variable context. Context strings
 follow `cipherbox/v2/<edge>`; the exact string table and input layouts freeze
 in the KAT manifest.
+
+A key schedule internal to one primitive is **not** a catalog edge (ADR 0015
+D2): an edge derives material other code holds, names, and passes on, and a
+primitive-internal output never leaves its primitive. The two cases are HPKE's
+HKDF schedule and the ECIES `aead-key`/`aead-nonce` schedule. Their context
+strings keep their own form, stay out of the table above, and freeze beside
+their suite entry in the KAT manifest (ADR 0015 D3).
 
 | Edge                     | Inputs                                                          | Output                                          |
 | ------------------------ | --------------------------------------------------------------- | ----------------------------------------------- |

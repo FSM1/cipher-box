@@ -59,7 +59,8 @@ use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
 use cipherbox_core::suite::contact::{import_contact_code, subkey_binding_preimage};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ecies::{
-    ENC_LEN as ECIES_ENC_LEN, ecies_open, ecies_public_key, ecies_seal,
+    ENC_LEN as ECIES_ENC_LEN, KEY_CONTEXT as ECIES_KEY_CONTEXT,
+    NONCE_CONTEXT as ECIES_NONCE_CONTEXT, ecies_open, ecies_public_key, ecies_seal,
 };
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
 use cipherbox_core::suite::hash::hash;
@@ -103,6 +104,10 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/ecies/open_reject.json",
         include_str!("../kat/vectors/ecies/open_reject.json"),
+    ),
+    (
+        "vectors/ecies/seal_reject.json",
+        include_str!("../kat/vectors/ecies/seal_reject.json"),
     ),
     (
         "vectors/contact/accept.json",
@@ -1022,10 +1027,20 @@ struct HpkeMeta {
 struct EciesMeta {
     curve: String,
     enc_len: usize,
+    contexts: EciesContexts,
     seal_file: String,
     seal_count: usize,
     open_reject_file: String,
     open_reject_count: usize,
+    seal_reject_file: String,
+    seal_reject_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EciesContexts {
+    aead_key: String,
+    aead_nonce: String,
 }
 
 #[derive(Deserialize)]
@@ -1241,6 +1256,17 @@ struct EciesOpenRejectVector {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EciesSealRejectVector {
+    name: String,
+    recipient: String,
+    ephemeral_scalar: String,
+    aad: String,
+    plaintext: String,
+    refusal: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ContactAcceptVector {
     name: String,
     hex: String,
@@ -1298,6 +1324,11 @@ fn ecies_seal_vectors(m: &Manifest) -> Vec<EciesSealVector> {
 fn ecies_open_reject_vectors(m: &Manifest) -> Vec<EciesOpenRejectVector> {
     serde_json::from_str(fixture(&m.suite.ecies.open_reject_file))
         .expect("ecies open_reject.json shape")
+}
+
+fn ecies_seal_reject_vectors(m: &Manifest) -> Vec<EciesSealRejectVector> {
+    serde_json::from_str(fixture(&m.suite.ecies.seal_reject_file))
+        .expect("ecies seal_reject.json shape")
 }
 
 fn contact_accept_vectors(m: &Manifest) -> Vec<ContactAcceptVector> {
@@ -1563,6 +1594,7 @@ fn fixture_table_matches_manifest_files() {
         m.suite.hpke.open_reject_file.as_str(),
         m.suite.ecies.seal_file.as_str(),
         m.suite.ecies.open_reject_file.as_str(),
+        m.suite.ecies.seal_reject_file.as_str(),
         m.suite.contact.accept.file.as_str(),
         m.suite.contact.reject.file.as_str(),
         m.seal.seal.file.as_str(),
@@ -1687,6 +1719,7 @@ fn vector_names_are_unique_within_each_file() {
 const EPHEMERAL_SCALAR_FAMILIES: &[(&str, usize)] = &[
     ("vectors/content_key/content_key_accept.json", 2),
     ("vectors/ecies/seal.json", 3),
+    ("vectors/ecies/seal_reject.json", 2),
     ("vectors/grant/ascent_link_accept.json", 1),
     ("vectors/grant/grant_blob_accept.json", 2),
     ("vectors/grant/owner_blob_accept.json", 1),
@@ -2986,6 +3019,17 @@ const ECIES_REQUIRED_REJECTS: &[&str] = &[
     // a name.
     "enc-x-not-on-the-curve",
     "enc-x-at-the-field-prime",
+    // The recipient scalar and the ciphertext length: the two inputs the enc
+    // cases never exercise.
+    "recipient-scalar-at-the-group-order",
+    "ciphertext-shorter-than-the-tag",
+];
+
+/// The produce-side cases the family must carry, fixed HERE for the same reason
+/// as the open list: one refusal string covers every shape.
+const ECIES_REQUIRED_SEAL_REJECTS: &[&str] = &[
+    "recipient-off-the-curve",
+    "ephemeral-scalar-at-the-group-order",
 ];
 
 #[test]
@@ -2996,6 +3040,25 @@ fn ecies_envelope_shape_is_frozen() {
         m.suite.ecies.enc_len, ECIES_ENC_LEN,
         "enc is one compressed SEC1 point"
     );
+    // A primitive-internal schedule, so these strings freeze here rather than
+    // in the KDF edge table (FSM1/cipher-box-next ADR 0015 D3). A drift orphans
+    // every stored envelope.
+    assert_eq!(m.suite.ecies.contexts.aead_key, ECIES_KEY_CONTEXT);
+    assert_eq!(m.suite.ecies.contexts.aead_nonce, ECIES_NONCE_CONTEXT);
+    assert_ne!(
+        m.suite.ecies.contexts.aead_key, m.suite.ecies.contexts.aead_nonce,
+        "the key and the nonce must not share one context"
+    );
+    let catalog: BTreeSet<&str> = m.kdf.edges.iter().map(|e| e.context.as_str()).collect();
+    for context in [
+        &m.suite.ecies.contexts.aead_key,
+        &m.suite.ecies.contexts.aead_nonce,
+    ] {
+        assert!(
+            !catalog.contains(context.as_str()),
+            "a primitive-internal context must stay out of the edge catalog: {context}"
+        );
+    }
 }
 
 #[test]
@@ -3098,6 +3161,51 @@ fn ecies_open_reject_vectors_fail_closed() {
         assert!(
             names.contains(*required),
             "ecies open-reject family lost {required}"
+        );
+    }
+}
+
+/// The produce side of the same law. `#[test]` runs under `--release` too, so
+/// this is the release-active cover AGENTS.md rule 8 asks for: no build can
+/// emit an envelope the open path always refuses.
+#[test]
+fn ecies_seal_reject_vectors_refuse_to_produce() {
+    let m = manifest();
+    let vectors = ecies_seal_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.suite.ecies.seal_reject_count,
+        "ecies seal-reject count drift"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate ecies seal-reject {}",
+            v.name
+        );
+        assert_eq!(
+            v.refusal, "ecies-seal-refused",
+            "seal-reject {}: refusal",
+            v.name
+        );
+        assert_eq!(
+            ecies_seal(
+                &unhex_n::<ECIES_ENC_LEN>(&v.name, &v.recipient),
+                &unhex32(&v.name, &v.ephemeral_scalar),
+                &unhex(&v.name, &v.aad),
+                &unhex(&v.name, &v.plaintext),
+            ),
+            None,
+            "seal-reject {}: seal produced an envelope",
+            v.name
+        );
+    }
+    for required in ECIES_REQUIRED_SEAL_REJECTS {
+        assert!(
+            names.contains(*required),
+            "ecies seal-reject family lost {required}"
         );
     }
 }

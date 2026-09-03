@@ -1,9 +1,12 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these twenty-four edges. Every
-//! edge is domain-separated by a fixed `cipherbox/v2/<edge>` context string
-//! fed to
-//! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
+//! Nothing in CipherBox derives a key outside these twenty-four edges. A key
+//! schedule internal to one primitive is not an edge, because its output never
+//! leaves the primitive for other code to hold and name — HPKE's schedule and
+//! the ECIES device-factor seal's are the two (FSM1/cipher-box-next ADR 0015
+//! D2). Every edge is domain-separated by a fixed `cipherbox/v2/<edge>`
+//! context string fed to BLAKE3 `derive_key`; per-node/per-id material takes
+//! the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
 //! **fixed-length message input**, never variable context, which would admit
 //! cross-edge collisions. Composite-material edges hash a fixed-prefix
