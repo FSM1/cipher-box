@@ -61,6 +61,31 @@ export class VaultPage {
     }, accountId);
   }
 
+  /** The nocache manual refresh, the barrier `EngineIntrospection.refresh` documents. */
+  async refresh(): Promise<void> {
+    await this.page.evaluate(() => window.__CIPHERBOX_ENGINE__!.refresh());
+  }
+
+  /**
+   * The same refresh, with the refusal as a value rather than a throw. A tab
+   * taking the leader lock replaces its transport, and a command issued across
+   * that swap is refused; a wait that reads the refusal can try again, and
+   * still name it when the deadline runs out.
+   */
+  async refreshed(): Promise<{ landed: boolean; refusal: string | null }> {
+    return this.page.evaluate(async () => {
+      try {
+        await window.__CIPHERBOX_ENGINE__!.refresh();
+        return { landed: true, refusal: null };
+      } catch (error) {
+        return {
+          landed: false,
+          refusal: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+  }
+
   /** How many times this tab re-exported its secret for a promotion. */
   reExports(): Promise<number> {
     return this.page.evaluate(() => window.__CIPHERBOX_ENGINE__!.reExports());

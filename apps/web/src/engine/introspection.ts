@@ -50,6 +50,13 @@ export interface EngineIntrospection {
   snapshot(): Promise<IntrospectedView>;
   /** One node's plaintext as the engine reads it back, hex like every other tap. */
   download(nodeHex: string): Promise<string>;
+  /**
+   * The nocache manual refresh, resolving once the pass has landed — the
+   * deterministic sync barrier between clients (blueprint/testing.md "The DX
+   * hook"). The status indicator starts the same pass and awaits nothing, so a
+   * cross-client wait takes this one.
+   */
+  refresh(): Promise<void>;
   /** Every engine event this tab has seen, in emission order. */
   events(): Plain<EventDescriptor>[];
   /**
@@ -155,6 +162,9 @@ export function installIntrospection(client: EngineClient, secrets?: SecretRearm
     },
     async download(nodeHex) {
       return toHex(new Uint8Array(await client.facade.download(fromHex(nodeHex))));
+    },
+    async refresh() {
+      await client.facade.manualRefresh();
     },
     events: () => seen,
     reExports: () => reExports,

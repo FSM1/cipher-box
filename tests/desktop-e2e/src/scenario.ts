@@ -5,6 +5,7 @@
 import { strict as assert } from 'node:assert';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { withDeadline } from './cli';
 import type { VaultStatus } from './control';
 import type { Instance } from './instance';
 import { poll } from './poll';
@@ -53,32 +54,12 @@ export async function withInstances<T>(
   try {
     // In order: two cold starts of one secret must not race to mint one vault.
     for (const name of names) started.push(await context.start(name));
-    return await withDeadline(body(started), context.deadlines.scenarioMs, started);
+    return await withDeadline(body(started), context.deadlines.scenarioMs, 'the scenario', () =>
+      Promise.allSettled(started.map((instance) => instance.abandon()))
+    );
   } finally {
     for (const instance of started.reverse()) await instance.stop();
   }
-}
-
-/**
- * Fails the scenario when its whole body outlasts the budget, and takes its
- * mounts away when it does.
- *
- * A kernel call on a mount has no timeout of its own. Rejecting the race leaves
- * every blocked call holding one of the few filesystem threads Node has, and
- * the teardown that follows needs those threads — so the mounts go first and
- * the rejection waits for them, which is what returns the calls.
- */
-function withDeadline<T>(body: Promise<T>, timeoutMs: number, started: Instance[]): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const expiry = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      void Promise.allSettled(started.map((instance) => instance.abandon())).then(() =>
-        reject(new Error(`the scenario did not finish within ${timeoutMs}ms`))
-      );
-    }, timeoutMs);
-    timer.unref();
-  });
-  return Promise.race([body, expiry]).finally(() => clearTimeout(timer));
 }
 
 /**

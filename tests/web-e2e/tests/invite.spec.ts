@@ -1,62 +1,16 @@
 /**
  * The invite link across two accounts: one vault mints, another claims, and the
  * minter converts that claim into a read grant.
- *
- * The claimant runs in its own browser context. A second page of the owner's
- * context would share the origin's `BroadcastChannel` and `navigator.locks`,
- * which is what makes two tabs one session — and a claim has to come from a
- * second account, not a second tab.
  */
 
-import type { Browser, Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { InvitePage } from '../page-objects/invite.page';
 import { SharePage } from '../page-objects/share.page';
 import { SharedPage } from '../page-objects/shared.page';
 import { VaultPage } from '../page-objects/vault.page';
-import { coldStart } from '../vault';
+import { claim, mint } from '../sharing';
 
 const FOLDER = 'granted-folder';
-
-async function mint(page: Page): Promise<URL> {
-  const { files, vault } = await coldStart(page);
-  await files.createFolder(FOLDER);
-  await vault.settled();
-  const share = new SharePage(page);
-  await share.open(FOLDER);
-  const link = await share.mintLink();
-  await share.close();
-  return link;
-}
-
-/**
- * The claim route must survive a tab that holds no session: the fragment is the
- * capability, so it has to outlive the sign-in.
- */
-async function claim(browser: Browser, link: URL): Promise<Page> {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  const invite = new InvitePage(page);
-  const vault = new VaultPage(page);
-
-  await invite.open(link);
-  await invite.expectState('waiting');
-  await expect(invite.recheck).toBeVisible();
-  await expect(invite.confirm).toHaveCount(0);
-
-  await vault.ready();
-  const account = `claimant-${crypto.randomUUID()}`;
-  await vault.signInHere(account);
-
-  await invite.expectState('ready');
-  await expect(invite.account).toContainText(account);
-  await invite.claim();
-  await invite.expectState('claimed');
-  // The claim takes the capability out of the address, so a reload cannot spend
-  // it a second time.
-  expect(new URL(page.url()).hash).toBe('');
-  return page;
-}
 
 test('@full a bare claim address carries no link and offers no claim', async ({ page }) => {
   const invite = new InvitePage(page);
@@ -75,7 +29,7 @@ test('@full a link minted by one vault is claimed by another and converts to a g
   page,
   browser,
 }) => {
-  const link = await mint(page);
+  const link = await mint(page, FOLDER);
   const share = new SharePage(page);
 
   const claimant = await claim(browser, link);
@@ -96,7 +50,7 @@ test('@full a claim on its own grants nothing, and leaves the claimant on its ow
   page,
   browser,
 }) => {
-  const link = await mint(page);
+  const link = await mint(page, FOLDER);
   const claimant = await claim(browser, link);
 
   await claimant.getByRole('link', { name: 'go to your files' }).click();

@@ -61,6 +61,8 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'tests/vectors/**'
+              - 'tests/desktop-e2e/**'
+              - 'tests/cross-client/**'
               - 'packages/crypto/src/**'
               - 'packages/crypto/tsconfig*'
               - '.github/workflows/desktop-e2e.yml'

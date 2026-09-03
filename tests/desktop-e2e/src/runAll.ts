@@ -11,6 +11,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { describe, names, parseArguments, select } from './cli';
 import { startInstance } from './instance';
 import { deadlines } from './profile';
 import type { Scenario, ScenarioContext } from './scenario';
@@ -54,47 +55,6 @@ Environment:
                              Default: a temporary directory the suite removes.
 `;
 
-interface Options {
-  help: boolean;
-  list: boolean;
-  only: string[];
-}
-
-export function parseArguments(argv: string[]): Options {
-  const options: Options = { help: false, list: false, only: [] };
-  for (let i = 0; i < argv.length; i += 1) {
-    const argument = argv[i];
-    if (argument === '--help' || argument === '-h') options.help = true;
-    else if (argument === '--list') options.list = true;
-    else if (argument === '--scenario') {
-      const value = argv[i + 1];
-      if (!value || value.startsWith('--')) {
-        throw new Error('--scenario needs a scenario name. Run --list for the names.');
-      }
-      options.only.push(value);
-      i += 1;
-    } else {
-      throw new Error(`unknown argument ${argument}. Run --help for the options.`);
-    }
-  }
-  return options;
-}
-
-function select(options: Options): Scenario[] {
-  if (options.only.length === 0) return SCENARIOS;
-  return options.only.map((name) => {
-    const found = SCENARIOS.find((scenario) => scenario.name === name);
-    if (!found) {
-      throw new Error(`no scenario is named ${name}. The names are: ${names().join(', ')}`);
-    }
-    return found;
-  });
-}
-
-function names(): string[] {
-  return SCENARIOS.map((scenario) => scenario.name);
-}
-
 async function main(): Promise<number> {
   const options = parseArguments(process.argv.slice(2));
   if (options.help) {
@@ -102,11 +62,11 @@ async function main(): Promise<number> {
     return 0;
   }
   if (options.list) {
-    process.stdout.write(`${names().join('\n')}\n`);
+    process.stdout.write(`${names(SCENARIOS).join('\n')}\n`);
     return 0;
   }
 
-  const chosen = select(options);
+  const chosen = select(SCENARIOS, options);
 
   const named = process.env.CIPHERBOX_DESKTOP_BINARY;
   if (!named) {
@@ -191,10 +151,6 @@ async function main(): Promise<number> {
     await rm(workdir, { recursive: true, force: true });
   }
   return 0;
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 
 // An explicit exit, because a killed shell can leave a handle open and Node
