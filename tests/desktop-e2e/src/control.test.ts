@@ -1,7 +1,6 @@
 import { createServer, type AddressInfo, type Server } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  NO_SESSION,
   formatRequest,
   parseControlFile,
   parseResponse,
@@ -195,8 +194,13 @@ describe('the answer a socket delivers', () => {
     return serving(answer, answer.length);
   }
 
+  // The literal, not `NO_SESSION`: the shell states it at
+  // `apps/desktop/src-tauri/src/engine/mod.rs`, so a copy on each side of the
+  // comparison would let the two drift together unseen.
   it('reads the cold start as pending rather than as a failure', async () => {
-    const port = await answering(JSON.stringify({ ok: false, error: NO_SESSION }));
+    const port = await answering(
+      JSON.stringify({ ok: false, error: 'no session is live on this device' })
+    );
 
     expect(await statusOrPending({ port, token: TOKEN }, 5_000)).toBeNull();
   });

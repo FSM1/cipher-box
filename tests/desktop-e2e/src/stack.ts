@@ -49,7 +49,7 @@ export class Stack {
     return stack;
   }
 
-  /** Starts the API and returns once it answers its health probe. */
+  /** Starts the API and returns once it serves a login, which every host needs. */
   async startApi(): Promise<void> {
     if (this.child) return;
     this.generation += 1;
@@ -130,12 +130,10 @@ async function answers(apiUrl: string): Promise<boolean> {
 /**
  * Readiness: the login surface is mapped.
  *
- * A host logs in as its first act, so liveness is the wrong barrier: `/health`
- * carries no guard, no pipe and no route of the auth controller, and a scenario
- * that starts on it alone can meet a 404 on the route it needs. A refusal the
- * route itself made proves it is mapped, so any answer below 404 or between 405
- * and 499 counts; the empty body draws a validation refusal that leaves no
- * state behind, and a 5xx is an API still on its way.
+ * A host logs in as its first act, and `/health` carries no route of the auth
+ * controller, so a scenario that starts on liveness alone can meet a 404 on the
+ * route it needs. The empty body draws a validation refusal, which leaves no
+ * state behind.
  */
 export async function serves(apiUrl: string): Promise<boolean> {
   if (!(await answers(apiUrl))) return false;

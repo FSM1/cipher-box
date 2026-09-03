@@ -117,7 +117,7 @@ describe('the readiness gate', () => {
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  /** An API stand-in that answers each path with the status this map names. */
+  // Per path, because the gate reads `/health` and the login route separately.
   async function serving(routes: Record<string, number>): Promise<string> {
     const server = createServer((request, response) => {
       const path = (request.url ?? '/').split('?')[0];
