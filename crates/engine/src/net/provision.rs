@@ -84,11 +84,9 @@ where
         // so a pass proves an owner-readable root stands here — not that it is the
         // one this run derived. The read rotation that re-keys a scope republishes
         // at this same name, so the two must be compared.
-        match self.adopter.adopt(name, &bytes).await {
-            Ok(outcome) => match outcome.read_scope_seed {
-                Some(recovered) if ct_eq(&recovered, read_scope_seed) => GenesisRoot::Adopted,
-                _ => GenesisRoot::Foreign,
-            },
+        match self.adopter.probe_read_scope_seed(name, &bytes).await {
+            Ok(Some(recovered)) if ct_eq(&recovered, read_scope_seed) => GenesisRoot::Adopted,
+            Ok(_) => GenesisRoot::Foreign,
             Err(_) => GenesisRoot::Unclaimed,
         }
     }
@@ -214,7 +212,6 @@ mod tests {
     use super::*;
 
     use cipherbox_core::kdf;
-    use cipherbox_core::seal::{PreservedFields, ReadBody};
 
     use zeroize::Zeroizing;
 
@@ -243,11 +240,21 @@ mod tests {
     }
 
     impl Adopter for StubAdopter {
+        /// Unreachable by contract: the genesis probe must not commit a
+        /// sighting, so an arm that reaches the adopt is the bug under test.
         async fn adopt(
             &self,
             _name: &IpnsName,
             _record_bytes: &[u8],
         ) -> Result<AdoptOutcome, GateError> {
+            unreachable!("the genesis probe must not advance a sequence floor")
+        }
+
+        async fn probe_read_scope_seed(
+            &self,
+            _name: &IpnsName,
+            _record_bytes: &[u8],
+        ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
             if !self.admits {
                 return Err(GateError::Rejected(GateRejection {
                     stage: GateStage::Sequence,
@@ -257,21 +264,7 @@ mod tests {
                     },
                 }));
             }
-            Ok(AdoptOutcome {
-                adopted: crate::gate::Adopted {
-                    read_body: ReadBody::Folder {
-                        created_at: 0,
-                        modified_at: 0,
-                        children: Vec::new(),
-                        unknown: PreservedFields::new(),
-                    },
-                    sequence: 1,
-                    epoch: 1,
-                },
-                write_scope_seed: None,
-                node_id: [0u8; 16],
-                read_scope_seed: self.recovered.map(Zeroizing::new),
-            })
+            Ok(self.recovered.map(Zeroizing::new))
         }
     }
 

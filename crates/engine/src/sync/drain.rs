@@ -31,8 +31,8 @@ use cipherbox_core::content::{
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinEntry, BinIndex, ChildRef, NodeKind, PreservedFields, ReadBody, Version, open_content_key,
-    open_read_body,
+    BinEntry, BinIndex, ChildRef, Envelope, NodeKind, PreservedFields, ReadBody, SignedSealed,
+    Version, decode_grant_section, grant_section_bytes, open_content_key, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -56,7 +56,7 @@ use crate::facade::{
     emit_trust_violation,
 };
 use crate::gate::GateStage;
-use crate::gate::floor;
+use crate::gate::{Adopted, GateError, RejectionReason, floor};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
     AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
@@ -75,7 +75,7 @@ use crate::net::{
     RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
-use crate::rotation::derive_write_name;
+use crate::rotation::{derive_write_name, seed_at_epoch};
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore, UnixMillis,
@@ -343,6 +343,11 @@ enum Halt {
     /// record plane, a load this pass could not do. Charged nothing and retried
     /// on the next tick, so an outage never abandons an op.
     Unclassified,
+    /// A node this pass must re-author is still behind the scope's epoch, and
+    /// this pass holds no backward ratchet to open it at its own epoch
+    /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
+    /// reaches the node ([`halt_for_unreachable_epoch`]).
+    EpochLagged,
     /// The op's record reached the record plane and did not confirm. Charged
     /// against the attempt budget, because a retry re-signs at the same
     /// sequence and a jammed name would otherwise retry forever. The PUT was
@@ -389,6 +394,52 @@ enum Halt {
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass.
     Cancelled,
+}
+
+/// The scope read seed a node the lazy wave has not reached must be opened
+/// under: the one its own epoch was sealed at, walked back over the scope root's
+/// carried history links (CONTEXT.md "Lazy wave"), or the halt this pass takes
+/// instead of opening it.
+fn seed_for_lagging(
+    scope_id: [u8; 16],
+    current_seed: &[u8; 32],
+    anchor: Anchor<'_>,
+    record_epoch: u64,
+) -> Result<Zeroizing<[u8; 32]>, Halt> {
+    // A record above this pass's epoch is not lagging, and the ratchet only
+    // walks backward: no seed here opens it. An honest race with a fresher root,
+    // which the next pass anchors on.
+    if record_epoch > anchor.epoch {
+        return Err(Halt::Unclassified);
+    }
+    seed_at_epoch(
+        ENVELOPE_V,
+        scope_id,
+        current_seed,
+        anchor.epoch,
+        anchor.history_links,
+        record_epoch,
+    )
+    .ok_or_else(|| halt_for_unreachable_epoch(anchor.history_links))
+}
+
+/// The halt a lagging node earns when this pass's backward ratchet cannot reach
+/// the epoch its record was sealed at.
+///
+/// A walk this pass cannot complete is not proof the epoch is gone: the adoption
+/// gate authenticates each link's signature and nothing about the chain's order
+/// or walkability, and the anchor is a cached root a fresher one may supersede.
+/// So a held link set that will not walk is charged against the attempt budget —
+/// bounded, and its dead letter keeps the staged version — rather than made
+/// permanent, which would let one publish destroy another device's queued write.
+/// A pass holding no links at all holds no ratchet, so it takes the uncharged
+/// hold that the pass reading those links still clears.
+fn halt_for_unreachable_epoch(history_links: &[SignedSealed]) -> Halt {
+    if history_links.is_empty() {
+        Halt::EpochLagged
+    } else {
+        Halt::UploadAttempt
+    }
 }
 
 /// A failed publish, and whether its record nonetheless confirmed at its name.
@@ -541,13 +592,14 @@ fn bin_expiry_cutoff(now: UnixMillis, retention_days: Option<u32>) -> Option<u64
 ///
 /// A binned subtree takes no ordinary write and joins no eager set, so a scope
 /// rotation can leave it sealed at an epoch the gate refuses for good
-/// (FSM1/cipher-box-next ADR 0011). Unclassified, such a read would hold the
-/// strict-FIFO head for every pass thereafter, and the expiry sweep queues these
-/// ops without an owner command. Charged, the op spends its attempt budget and
-/// dead-letters, which keeps the entry and its content — a leak, never a loss.
+/// (FSM1/cipher-box-next ADR 0011) and no wave ever lifts it. Left uncharged —
+/// unclassified, or held for that wave — such a read would hold the strict-FIFO
+/// head for every pass thereafter, and the expiry sweep queues these ops without
+/// an owner command. Charged, the op spends its attempt budget and dead-letters,
+/// which keeps the entry and its content — a leak, never a loss.
 fn charge_bin_read(halt: Halt) -> Halt {
     match halt {
-        Halt::Unclassified => Halt::UploadAttempt,
+        Halt::Unclassified | Halt::EpochLagged => Halt::UploadAttempt,
         other => other,
     }
 }
@@ -767,6 +819,32 @@ struct Doomed {
     versions: Vec<ContentVersion>,
 }
 
+/// What a record read is anchored to: the scope epoch the reader is at, and the
+/// backward key-regression ratchet that reaches the epochs below it.
+#[derive(Clone, Copy)]
+struct Anchor<'a> {
+    epoch: u64,
+    history_links: &'a [SignedSealed],
+}
+
+/// The scope root a pass anchors on.
+struct LoadedRoot {
+    state: FolderState,
+    /// The epoch every record this pass seals is bound to.
+    epoch: u64,
+    /// The root's carried read-plane history links ([`Pass::history_links`]).
+    history_links: Vec<SignedSealed>,
+}
+
+impl LoadedRoot {
+    fn anchor(&self) -> Anchor<'_> {
+        Anchor {
+            epoch: self.epoch,
+            history_links: &self.history_links,
+        }
+    }
+}
+
 /// One node's record as loaded for re-authoring: the envelope fields a
 /// republish must carry forward byte-stable (#27 D10) plus the opened body.
 struct LoadedNode {
@@ -850,12 +928,22 @@ struct Published {
 /// the order the base repaint depends on.
 struct Pass {
     epoch: u64,
+    /// The scope root's carried read-plane history links: the backward ratchet
+    /// a node the lazy wave has not reached is opened through.
+    history_links: Vec<SignedSealed>,
     folders: Vec<(NodeId, FolderState)>,
     /// Delete targets this pass wrote a doomed-name journal entry for.
     journalled: Vec<NodeId>,
 }
 
 impl Pass {
+    fn anchor(&self) -> Anchor<'_> {
+        Anchor {
+            epoch: self.epoch,
+            history_links: &self.history_links,
+        }
+    }
+
     fn holds(&self, folder: NodeId) -> bool {
         self.folders.iter().any(|(id, _)| *id == folder)
     }
@@ -1068,7 +1156,7 @@ where
             self.clear_bin_index_hold();
         }
         match halt {
-            Halt::Unclassified => {}
+            Halt::Unclassified | Halt::EpochLagged => {}
             // The facade undid the op against the blocks it could see when the
             // cancel landed. One more can confirm inside that window — the
             // upload the drain was already awaiting — and it would be charged
@@ -1298,20 +1386,27 @@ where
     /// Open a pass anchored on the scope root, whose epoch every record this
     /// pass seals is bound to.
     async fn open_pass(&self, scope: &DrainScope<'_>) -> Result<Pass, Halt> {
-        let (root, epoch) = self.load_scope_root(scope).await?;
+        let root = self.load_scope_root(scope).await?;
         let mut pass = Pass {
-            epoch,
+            epoch: root.epoch,
+            history_links: root.history_links,
             folders: Vec::new(),
             journalled: Vec::new(),
         };
-        self.repaint_folder(scope.root, &root.children, root.sequence, root.modified_at);
-        pass.insert(scope.root, root);
+        let state = root.state;
+        self.repaint_folder(
+            scope.root,
+            &state.children,
+            state.sequence,
+            state.modified_at,
+        );
+        pass.insert(scope.root, state);
         Ok(pass)
     }
 
     /// The scope root as currently published: its envelope's carried fields and
     /// its unsealed folder body, plus the scope epoch.
-    async fn load_scope_root(&self, scope: &DrainScope<'_>) -> Result<(FolderState, u64), Halt> {
+    async fn load_scope_root(&self, scope: &DrainScope<'_>) -> Result<LoadedRoot, Halt> {
         let record_bytes = self
             .snapshot_cache
             .get(scope.root_name.as_str().as_bytes())
@@ -1362,8 +1457,14 @@ where
             return Err(Halt::Unclassified);
         };
         let epoch = envelope.epoch;
-        Ok((
-            FolderState {
+        // A scope root the root gate passed carries a decodable section; bytes
+        // that do not are not a root this pass may anchor a ratchet on.
+        let history_links = grant_section_bytes(&envelope)
+            .and_then(|bytes| decode_grant_section(bytes).ok())
+            .ok_or(Halt::Unclassified)?
+            .history_links;
+        Ok(LoadedRoot {
+            state: FolderState {
                 name: scope.root_name.clone(),
                 is_scope_root: true,
                 envelope_unknown: envelope.unknown,
@@ -1375,7 +1476,8 @@ where
                 sequence,
             },
             epoch,
-        ))
+            history_links,
+        })
     }
 
     /// Resolve the scope root through its own gate so the snapshot cache holds
@@ -1414,7 +1516,7 @@ where
     async fn load_child_node(
         &self,
         scope: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         node: NodeId,
         mode: ResolveMode,
     ) -> Result<LoadedNode, Halt> {
@@ -1430,27 +1532,44 @@ where
         let resolved = resolve(self.transport, self.snapshot_cache, &adopter, &name, mode)
             .await
             .map_err(seam)?;
-        let record_bytes = match resolved.outcome {
+        // A drain publish is an ordinary write, so it carries the lazy wave
+        // rather than refusing what a cut left behind: a record the epoch floor
+        // rejects is re-read at the epoch it was sealed at, and the publish path
+        // re-seals it at this pass's.
+        let (record_bytes, lagging) = match resolved.outcome {
             // An adopt caches its own gate-passing bytes; the other two arms
             // carry theirs.
-            ResolveOutcome::Adopted(_) => self
-                .snapshot_cache
-                .get(name.as_str().as_bytes())
-                .await
-                .map_err(seam)?
-                .ok_or(Halt::Unclassified)?,
-            ResolveOutcome::Current { record_bytes } => record_bytes,
-            ResolveOutcome::NoUpdate => resolved.last_known_good.ok_or(Halt::Unclassified)?,
-            ResolveOutcome::TrustViolation(_) => return Err(Halt::Unclassified),
+            ResolveOutcome::Adopted(_) => (
+                self.snapshot_cache
+                    .get(name.as_str().as_bytes())
+                    .await
+                    .map_err(seam)?
+                    .ok_or(Halt::Unclassified)?,
+                None,
+            ),
+            ResolveOutcome::Current { record_bytes } => (record_bytes, None),
+            ResolveOutcome::NoUpdate => (resolved.last_known_good.ok_or(Halt::Unclassified)?, None),
+            ResolveOutcome::TrustViolation(rejection) => match rejection.reason {
+                RejectionReason::EpochBelowFloor { epoch, .. } => (
+                    adopter
+                        .assembled_record_bytes(&name)
+                        .ok_or(Halt::EpochLagged)?,
+                    Some(epoch),
+                ),
+                // A trust violation or a rollback stays fail-closed.
+                _ => return Err(Halt::Unclassified),
+            },
         };
-        let (adopted, envelope) = adopter
-            .open_carried_at_floor(&name, &record_bytes)
-            .await
-            .map_err(|_| Halt::UploadAttempt)?;
+        let (adopted, envelope) = self
+            .open_for_reauthor(scope, anchor, &adopter, &name, &record_bytes, lagging)
+            .await?;
         // The same two rollback guards the root load makes: this build authors
-        // exactly `ENVELOPE_V`, and re-sealing a node at another epoch than the
+        // exactly `ENVELOPE_V`, and re-sealing a node at an epoch above the
         // scope's would cross the AAD epoch binding.
-        if envelope.v != ENVELOPE_V || adopted.epoch != epoch {
+        if envelope.v != ENVELOPE_V {
+            return Err(Halt::Unclassified);
+        }
+        if adopted.epoch > anchor.epoch {
             return Err(Halt::Unclassified);
         }
         Ok(LoadedNode {
@@ -1460,6 +1579,38 @@ where
             epoch_tag_unknown: envelope.epoch_tag_unknown,
             body: adopted.read_body,
         })
+    }
+
+    /// Open one node's record for re-authoring: at the durable floor, or — for a
+    /// node the lazy wave has not reached — at the epoch it was sealed at, under
+    /// the seed this scope's backward key-regression ratchet recovers for that
+    /// epoch (CONTEXT.md "Lazy wave"). The publish path re-seals whatever comes
+    /// back at the anchor's epoch, which carries the wave one node further.
+    async fn open_for_reauthor(
+        &self,
+        scope: &DrainScope<'_>,
+        anchor: Anchor<'_>,
+        adopter: &ChildAdopter<'_, H, F>,
+        name: &IpnsName,
+        record_bytes: &[u8],
+        lagging: Option<u64>,
+    ) -> Result<(Adopted, Envelope), Halt> {
+        let lagging = match lagging {
+            Some(epoch) => epoch,
+            None => match adopter.open_carried_at_floor(name, record_bytes).await {
+                Ok(carried) => return Ok(carried),
+                Err(GateError::Rejected(rejection)) => match rejection.reason {
+                    RejectionReason::EpochBelowFloor { epoch, .. } => epoch,
+                    _ => return Err(Halt::UploadAttempt),
+                },
+                Err(GateError::Seam(_)) => return Err(Halt::UploadAttempt),
+            },
+        };
+        let seed = seed_for_lagging(scope.root.0, scope.read_scope_seed, anchor, lagging)?;
+        adopter
+            .open_interior_under(name, record_bytes, &seed)
+            .await
+            .map_err(|_| Halt::UploadAttempt)
     }
 
     /// Make `folder` and every ancestor between it and the scope root available
@@ -1490,7 +1641,7 @@ where
             if pass.holds(node) {
                 continue;
             }
-            let state = self.load_child_folder(scope, pass.epoch, node).await?;
+            let state = self.load_child_folder(scope, pass.anchor(), node).await?;
             self.repaint_folder(node, &state.children, state.sequence, state.modified_at);
             pass.insert(node, state);
         }
@@ -1502,11 +1653,11 @@ where
     async fn load_child_folder(
         &self,
         scope: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         folder: NodeId,
     ) -> Result<FolderState, Halt> {
         let loaded = self
-            .load_child_node(scope, epoch, folder, ResolveMode::CacheFirst)
+            .load_child_node(scope, anchor, folder, ResolveMode::CacheFirst)
             .await?;
         let ReadBody::Folder {
             created_at,
@@ -1813,14 +1964,14 @@ where
             let deleted_at = self
                 .record_bin_entry(&unlinked, applied.op.authored_at.0)
                 .await?;
-            self.rekey_into_bin(scope, pass.epoch, target, deleted_at)
+            self.rekey_into_bin(scope, pass.anchor(), target, deleted_at)
                 .await?;
             None
         } else {
             Some(
                 self.enumerate_doomed(
                     scope,
-                    pass.epoch,
+                    pass.anchor(),
                     origin,
                     target,
                     child.kind,
@@ -1914,7 +2065,7 @@ where
             read_scope_seed: &held,
             ..*scope
         };
-        self.rekey_subtree(&binned, scope, pass.epoch, target)
+        self.rekey_subtree(&binned, scope, pass.anchor(), target)
             .await
             .map_err(charge_bin_read)?;
         let child = ChildRef {
@@ -1990,7 +2141,7 @@ where
         let doomed = self
             .enumerate_doomed(
                 &binned,
-                pass.epoch,
+                pass.anchor(),
                 NodeId(entry.origin_parent),
                 target,
                 entry.kind,
@@ -2058,7 +2209,7 @@ where
                 .iter()
                 .any(|child| child.id == target.0)
         } else {
-            self.load_child_folder(scope, pass.epoch, origin)
+            self.load_child_folder(scope, pass.anchor(), origin)
                 .await
                 .map_err(charge_bin_read)?
                 .children
@@ -2234,7 +2385,7 @@ where
     async fn enumerate_doomed(
         &self,
         scope: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         parent: NodeId,
         target: NodeId,
         kind: NodeKind,
@@ -2252,7 +2403,7 @@ where
             }
             seen.insert(node.0);
             let (name, versions) = match self
-                .load_child_node(scope, epoch, node, ResolveMode::CacheFirst)
+                .load_child_node(scope, anchor, node, ResolveMode::CacheFirst)
                 .await
             {
                 Ok(loaded) => {
@@ -2368,7 +2519,7 @@ where
         if taken.is_empty() {
             return;
         }
-        let Ok((_, epoch)) = self.load_scope_root(scope).await else {
+        let Ok(root) = self.load_scope_root(scope).await else {
             self.return_captures(taken);
             return;
         };
@@ -2384,7 +2535,7 @@ where
                 .iter()
                 .any(|entry| entry.node_id == unlinked.node.0);
             if self
-                .rekey_into_bin(scope, epoch, unlinked.node, unlinked.deleted_at)
+                .rekey_into_bin(scope, root.anchor(), unlinked.node, unlinked.deleted_at)
                 .await
                 .is_err()
             {
@@ -2636,7 +2787,7 @@ where
     async fn rekey_into_bin(
         &self,
         scope: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         root: NodeId,
         deleted_at: u64,
     ) -> Result<(), Halt> {
@@ -2645,7 +2796,7 @@ where
             read_scope_seed: &held,
             ..*scope
         };
-        self.rekey_subtree(scope, &binned, epoch, root).await
+        self.rekey_subtree(scope, &binned, anchor, root).await
     }
 
     /// Re-seal every node of the subtree at `root` from the key `from` derives
@@ -2665,7 +2816,7 @@ where
         &self,
         from: &DrainScope<'_>,
         to: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         root: NodeId,
     ) -> Result<(), Halt> {
         let mut seen = BTreeSet::new();
@@ -2676,7 +2827,7 @@ where
             if !seen.insert(node.0) {
                 continue;
             }
-            let (loaded, already_moved) = self.load_doomed(from, to, epoch, node).await?;
+            let (loaded, already_moved) = self.load_doomed(from, to, anchor, node).await?;
             let LoadedNode {
                 name,
                 envelope_unknown,
@@ -2709,7 +2860,7 @@ where
             let published = self
                 .publish_node(
                     to,
-                    epoch,
+                    anchor.epoch,
                     node,
                     &name,
                     false,
@@ -2733,16 +2884,16 @@ where
         &self,
         from: &DrainScope<'_>,
         to: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         node: NodeId,
     ) -> Result<(LoadedNode, bool), Halt> {
         match self
-            .load_child_node(from, epoch, node, ResolveMode::CacheFirst)
+            .load_child_node(from, anchor, node, ResolveMode::CacheFirst)
             .await
         {
             Ok(loaded) => Ok((loaded, false)),
             Err(halt) => self
-                .load_child_node(to, epoch, node, ResolveMode::CacheFirst)
+                .load_child_node(to, anchor, node, ResolveMode::CacheFirst)
                 .await
                 .map(|loaded| (loaded, true))
                 .map_err(|_| halt),
@@ -2930,7 +3081,7 @@ where
         // than settling against an epoch this pass never read. The root is the
         // scope's own record whatever the entry holds, so it is read under the
         // scope key even for a purge.
-        let Ok((_, epoch)) = self.load_scope_root(scope).await else {
+        let Ok(root) = self.load_scope_root(scope).await else {
             return (Vec::new(), quarantined.to_vec());
         };
         // A purge's descendants left the scope's derivation at the delete that
@@ -2959,7 +3110,7 @@ where
                 continue;
             } else {
                 *budget -= 1;
-                self.decide_quarantined(scope, epoch, entry).await
+                self.decide_quarantined(scope, root.anchor(), entry).await
             };
             match verdict {
                 Verdict::Release => proven.push(entry.clone()),
@@ -2987,10 +3138,10 @@ where
     async fn decide_quarantined(
         &self,
         scope: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         entry: &Quarantined,
     ) -> Verdict {
-        let resolved = self.resolved_version_roots(scope, epoch, entry.node).await;
+        let resolved = self.resolved_version_roots(scope, anchor, entry.node).await;
         if record_matches_manifest(&entry.manifest_roots(), resolved.as_ref()) {
             return Verdict::Release;
         }
@@ -3012,11 +3163,11 @@ where
     async fn resolved_version_roots(
         &self,
         scope: &DrainScope<'_>,
-        epoch: u64,
+        anchor: Anchor<'_>,
         node: NodeId,
     ) -> Option<BTreeSet<String>> {
         let loaded = self
-            .load_child_node(scope, epoch, node, ResolveMode::NoCache)
+            .load_child_node(scope, anchor, node, ResolveMode::NoCache)
             .await
             .ok()?;
         let ReadBody::File { versions, .. } = loaded.body else {
@@ -3268,18 +3419,18 @@ where
     ) -> Result<(), Halt> {
         let state = if folder == scope.root {
             self.refresh_scope_root_cache(scope).await?;
-            let (state, epoch) = self.load_scope_root(scope).await?;
+            let root = self.load_scope_root(scope).await?;
             // A rotation landing mid-pass moves the root's epoch while this pass
             // still seals at the one it opened on, and its grant section signs
             // the new one — bytes this build's own authoring refuses. The next
             // pass opens on one consistent epoch, so this stops rather than
             // spending the op's budget on a skew that heals itself.
-            if epoch != pass.epoch {
+            if root.epoch != pass.epoch {
                 return Err(Halt::Unclassified);
             }
-            state
+            root.state
         } else {
-            self.load_child_folder(scope, pass.epoch, folder).await?
+            self.load_child_folder(scope, pass.anchor(), folder).await?
         };
         self.repaint_folder(folder, &state.children, state.sequence, state.modified_at);
         *pass.folder_mut(folder)? = state;
@@ -3316,14 +3467,14 @@ where
         // edit that cannot land, then again with the upload behind us, because
         // the transfer is the widest window a version can land in unseen.
         let seen = self
-            .load_child_node(scope, pass.epoch, target, ResolveMode::CacheFirst)
+            .load_child_node(scope, pass.anchor(), target, ResolveMode::CacheFirst)
             .await?;
         if head_version_cid(&seen.body) != base_version_cid {
             return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
         }
         let uploaded = self.upload_version(scope, applied, staged).await?;
         let loaded = self
-            .load_child_node(scope, pass.epoch, target, ResolveMode::CacheFirst)
+            .load_child_node(scope, pass.anchor(), target, ResolveMode::CacheFirst)
             .await?;
         let ReadBody::File {
             created_at,
@@ -3439,7 +3590,7 @@ where
         self.ensure_folder(scope, pass, self.published_parent(target)?)
             .await?;
         let loaded = self
-            .load_child_node(scope, pass.epoch, target, ResolveMode::CacheFirst)
+            .load_child_node(scope, pass.anchor(), target, ResolveMode::CacheFirst)
             .await?;
         let ReadBody::File {
             created_at,
@@ -3617,12 +3768,12 @@ where
         if owing == OwingRecord::Retired {
             return reaching(BTreeSet::new());
         }
-        let (_, epoch) = self.load_scope_root(scope).await.ok()?;
+        let root = self.load_scope_root(scope).await.ok()?;
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
         // concurrent writer has already moved past.
         let loaded = self
-            .load_child_node(scope, epoch, NodeId(node), ResolveMode::NoCache)
+            .load_child_node(scope, root.anchor(), NodeId(node), ResolveMode::NoCache)
             .await
             .ok()?;
         // A record carrying no version list reaches no content.
@@ -4863,6 +5014,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::HeldByBinIndex(_)
         | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
+        Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
         }
@@ -5433,5 +5585,104 @@ mod tests {
         let no_room = upload_failure(Halt::ScopeRootNotResealable).expect("a reported verdict");
         let oversized = upload_failure(Halt::HeadOversized).expect("a reported verdict");
         assert_ne!(no_room, oversized);
+    }
+
+    /// A cut raises a scope's read-epoch floor at once and the lazy wave lifts
+    /// the interior behind it, so a node the wave has not reached is below that
+    /// floor by construction. The drain carries the wave itself, so the only
+    /// lagging node it still holds is one this pass has no ratchet for — held,
+    /// never charged, because the pass that reads the root's history links
+    /// clears it without the op spending anything.
+    #[test]
+    fn a_pass_with_no_ratchet_holds_a_lagging_node_rather_than_charging_it() {
+        assert_eq!(halt_for_unreachable_epoch(&[]), Halt::EpochLagged);
+        assert!(
+            upload_failure(Halt::EpochLagged).is_some(),
+            "the member is told the write is waiting, never left with silence",
+        );
+    }
+
+    /// The wave that clears an epoch-lag hold never reaches a binned subtree, so
+    /// uncharged it would hold the strict-FIFO head for ever — the silent
+    /// permanent stall this class exists to remove.
+    #[test]
+    fn a_bin_paths_epoch_lag_is_charged_because_no_wave_reaches_a_binned_subtree() {
+        assert_eq!(charge_bin_read(Halt::EpochLagged), Halt::UploadAttempt);
+        assert_eq!(charge_bin_read(Halt::Unclassified), Halt::UploadAttempt);
+        assert_eq!(
+            charge_bin_read(Halt::Permanent(DeadLetterReason::TargetGone)),
+            Halt::Permanent(DeadLetterReason::TargetGone),
+            "an attributable verdict keeps the one its own leg gave it",
+        );
+    }
+
+    /// A record the retained window does not cover takes the charged verdict —
+    /// the one [`ATTEMPT_BUDGET`] bounds and whose dead letter keeps the staged
+    /// version — however far back it sits, and the member is told rather than
+    /// left with silence.
+    #[test]
+    fn a_lagging_node_outside_the_retained_window_is_charged_and_bounded() {
+        let links = [history_link()];
+        let anchor = Anchor {
+            epoch: 4,
+            history_links: &links,
+        };
+        assert!(matches!(
+            seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 0),
+            Err(Halt::UploadAttempt),
+        ));
+        assert!(upload_failure(Halt::UploadAttempt).is_some());
+    }
+
+    fn history_link() -> SignedSealed {
+        SignedSealed {
+            sealed: vec![0xAB; 40],
+            signature: [0x11; 64],
+            unknown: PreservedFields::new(),
+        }
+    }
+
+    /// A record tagged above the pass's own epoch is not behind the wave at all,
+    /// so it must not be read as an epoch the ratchet failed to reach: that
+    /// would abandon a queued write over an honest race with a root this pass
+    /// has not opened on yet.
+    #[test]
+    fn a_record_above_the_pass_epoch_is_raced_not_abandoned() {
+        let links = [history_link()];
+        let anchor = Anchor {
+            epoch: 4,
+            history_links: &links,
+        };
+        assert!(matches!(
+            seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 5),
+            Err(Halt::Unclassified),
+        ));
+    }
+
+    /// The pass's own epoch needs no ratchet step: the session's current seed is
+    /// already the one that epoch was sealed at.
+    #[test]
+    fn a_record_at_the_pass_epoch_opens_without_walking_the_ratchet() {
+        let anchor = Anchor {
+            epoch: 4,
+            history_links: &[],
+        };
+        assert!(seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 4).is_ok());
+    }
+
+    /// A link that will not open is a walk this pass cannot complete, never a
+    /// seed the caller then unseals under — charged and bounded, for the same
+    /// reason a window too short to cover the epoch is.
+    #[test]
+    fn a_lagging_record_behind_a_link_that_will_not_open_is_charged_not_abandoned() {
+        let links = [history_link()];
+        let anchor = Anchor {
+            epoch: 4,
+            history_links: &links,
+        };
+        assert!(matches!(
+            seed_for_lagging([0x44; 16], &[0x66; 32], anchor, 3),
+            Err(Halt::UploadAttempt),
+        ));
     }
 }

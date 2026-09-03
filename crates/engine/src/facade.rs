@@ -3820,8 +3820,22 @@ impl<T: SeamTypes> Engine<T> {
             if outcome.vault_pointer.is_none() && self.api_base_url.configured().is_some() {
                 match self.provision_first_run_vault(&api, root_scope_id).await {
                     Ok(ProvisionOutcome::Minted(vault)) => Some(*vault),
-                    Ok(ProvisionOutcome::MovedOn) => {
+                    // The account already holds a vault — another device
+                    // published it, before this pass or during it. Its root is
+                    // the one to adopt, never a second mint over it. A re-run
+                    // that still resolves no pointer is this pass's fan-out
+                    // missing a record that exists: availability, so the session
+                    // stays retryable rather than going dark and silent.
+                    Ok(ProvisionOutcome::MovedOn)
+                    | Err(ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished)) => {
                         outcome = self.cold_start_or_clear(root).await?;
+                        if outcome.vault_pointer.is_none() {
+                            let _ = self.events.unbounded_send(Event::VaultUnprovisioned {
+                                retryable: true,
+                                detail: "the account's vault pointer resolved on no endpoint"
+                                    .to_owned(),
+                            });
+                        }
                         None
                     }
                     // Non-fatal, on the same terms as the empty chain this ran
@@ -11966,6 +11980,14 @@ mod tests {
                     node_id: [0u8; 16],
                     read_scope_seed: None,
                 })
+            }
+
+            async fn probe_read_scope_seed(
+                &self,
+                _name: &IpnsName,
+                _record_bytes: &[u8],
+            ) -> Result<Option<Zeroizing<[u8; 32]>>, crate::gate::GateError> {
+                Ok(None)
             }
         }
 

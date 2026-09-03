@@ -47,10 +47,9 @@ pub struct ChildAdopter<'a, H, F> {
     /// The node id the resolved envelope must carry — the rendered-view child
     /// this read was issued for. A different id is a transplant, fail-closed.
     expected_node: [u8; 16],
-    /// The envelope a floor-rejected [`Adopter::adopt`] assembled, kept so the
-    /// equal-floor re-open ([`Self::open_at_floor`]) reuses it instead of
-    /// re-fetching the same head block (mirrors
-    /// [`RootAdopter`](super::RootAdopter)).
+    /// The envelope a floor-rejected [`Adopter::adopt`] assembled, kept so every
+    /// re-open of those same bytes reuses it instead of re-fetching the same
+    /// head block (mirrors [`RootAdopter`](super::RootAdopter)).
     assembled: RefCell<Option<AssembledChild>>,
     /// A head block the caller already holds ([`Self::hold_local_head`]).
     local_head: RefCell<Option<LocalHead>>,
@@ -154,6 +153,26 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
             .map(|(adopted, _)| adopted)
     }
 
+    /// The decoded head for these exact bytes: the one an earlier assembly for
+    /// the same record left behind, or a fresh assembly. Assembling again
+    /// re-fetches the head block, so every re-open path comes through here.
+    async fn assembled_head(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<(u64, Envelope), GateError> {
+        let cached = self
+            .assembled
+            .borrow()
+            .as_ref()
+            .filter(|c| c.name == *name && c.record_bytes == record_bytes)
+            .map(|c| (c.sequence, c.envelope.clone()));
+        match cached {
+            Some(head) => Ok(head),
+            None => self.assemble_envelope(name, record_bytes).await,
+        }
+    }
+
     /// [`open_at_floor`](Self::open_at_floor) keeping the decoded envelope, so a
     /// re-author can carry its unknown fields forward byte-stable (#27 D10).
     pub(crate) async fn open_carried_at_floor(
@@ -161,17 +180,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<(Adopted, Envelope), GateError> {
-        // Reuse the envelope the floor-rejected adopt assembled for these same
-        // bytes; assembling again re-fetches the head block.
-        let cached = self
-            .assembled
-            .borrow_mut()
-            .take()
-            .filter(|c| c.name == *name && c.record_bytes == record_bytes);
-        let (sequence, envelope) = match cached {
-            Some(cached) => (cached.sequence, cached.envelope),
-            None => self.assemble_envelope(name, record_bytes).await?,
-        };
+        let (sequence, envelope) = self.assembled_head(name, record_bytes).await?;
         floor::check(
             self.floors,
             name.as_str().as_bytes(),
@@ -182,6 +191,61 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         )
         .await?;
         let read_body = self.unseal(&envelope)?;
+        Ok((
+            Adopted {
+                read_body,
+                sequence,
+                epoch: envelope.epoch,
+            },
+            envelope,
+        ))
+    }
+
+    /// The record bytes an earlier [`Adopter::adopt`] assembled under `name`. A
+    /// resolve that ends in a rejection drops the bytes it verified, so a caller
+    /// that must re-read that same record reads them back here.
+    pub(crate) fn assembled_record_bytes(&self, name: &IpnsName) -> Option<Vec<u8>> {
+        self.assembled
+            .borrow()
+            .as_ref()
+            .filter(|c| c.name == *name)
+            .map(|c| c.record_bytes.clone())
+    }
+
+    /// Open an **interior** node's record under `epoch_seed`, the scope read
+    /// seed of the epoch the record's own envelope is tagged with, so a caller
+    /// carrying the lazy wave can re-seal the body forward at the scope's
+    /// current epoch (CONTEXT.md "Lazy wave").
+    ///
+    /// Skips the scope's read-epoch floor, on the argument the sweep's own
+    /// interior read is documented under
+    /// ([`OwnerRotationNet::interior_node`](crate::net::OwnerRotationNet)).
+    /// Two conditions of that argument are this path's to hold:
+    /// [`assemble_envelope`](Self::assemble_envelope) refuses a record carrying
+    /// a grant section, so nothing gated as a scope root arrives here, and this
+    /// path moves no floor, like the other re-open paths.
+    pub(crate) async fn open_interior_under(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+        epoch_seed: &[u8; 32],
+    ) -> Result<(Adopted, Envelope), GateError> {
+        let (sequence, envelope) = self.assembled_head(name, record_bytes).await?;
+        // The replay bar alone, relaxed with the epoch stage: the lazy wave is
+        // exactly what puts a good record below both.
+        floor::check_sequence(
+            self.floors,
+            name.as_str().as_bytes(),
+            sequence,
+            floor::Strictness::AtOrAboveFloor,
+        )
+        .await?;
+        // The AAD binds the envelope's own epoch, so a relabelled record does
+        // not open under the seed the caller ratcheted to.
+        let node_seed = kdf::node_seed(epoch_seed, &envelope.id);
+        let read_key = kdf::read_key(node_seed.as_bytes());
+        let read_body = open_read_body(&envelope, read_key.as_bytes())
+            .map_err(|e| reject(GateStage::Unseal, e))?;
         Ok((
             Adopted {
                 read_body,
@@ -279,5 +343,335 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             node_id: envelope.id,
             read_scope_seed: None,
         })
+    }
+
+    /// A child record carries no owner blob, so no arm of this adopter ever
+    /// recovers a scope seed.
+    async fn probe_read_scope_seed(
+        &self,
+        _name: &IpnsName,
+        _record_bytes: &[u8],
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::seal::{
+        PreservedFields, encode_envelope, seal_read_body, set_grant_section,
+    };
+
+    use crate::content::{DAG_ROOT_CODEC, GatewaySource};
+    use crate::gate::{GateRejection, RejectionReason};
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
+
+    const SCOPE: [u8; 16] = [0x44; 16];
+    const NODE: [u8; 16] = [0x55; 16];
+    const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
+    const V: u64 = 1;
+    const TTL_NANOS: u64 = 2_000_000_000;
+    const EOL: &str = "2099-01-01T00:00:00Z";
+    /// The epoch a cut moved the scope to, and the older one the interior node
+    /// this session reads is still sealed at.
+    const CURRENT_EPOCH: u64 = 4;
+    const LAGGING_EPOCH: u64 = 1;
+    const SEQUENCE: u64 = 3;
+
+    /// One scope read seed per epoch — a cut leaves a distinct seed behind, so
+    /// no test can pass by opening the wrong epoch under the right key.
+    fn scope_seed(epoch: u64) -> [u8; 32] {
+        [0xA0 ^ u8::try_from(epoch).expect("a small test epoch"); 32]
+    }
+
+    /// One interior node's published record, and the head block it anchors.
+    struct Published {
+        name: IpnsName,
+        record_bytes: Vec<u8>,
+        head: LocalHead,
+    }
+
+    struct Spec {
+        node_id: [u8; 16],
+        scope_id: [u8; 16],
+        sequence: u64,
+        /// Attach a grant section, the marker that makes a record a scope root.
+        scope_root: bool,
+    }
+
+    impl Default for Spec {
+        fn default() -> Self {
+            Self {
+                node_id: NODE,
+                scope_id: SCOPE,
+                sequence: SEQUENCE,
+                scope_root: false,
+            }
+        }
+    }
+
+    /// A nonce derived from the whole spec. The scope UUID is no KDF input, so
+    /// two specs differing only in scope seal under one read key: a fixed nonce
+    /// would put two AAD/ciphertext pairs under one one-time Poly1305 key, the
+    /// reuse blueprint/core.md forbids the corpus to model.
+    fn fixture_nonce(spec: &Spec) -> [u8; 24] {
+        let mut nonce = [0u8; 24];
+        nonce[..8].copy_from_slice(&spec.sequence.to_be_bytes());
+        nonce[8] = u8::from(spec.scope_root);
+        for (i, byte) in spec.node_id.iter().chain(&spec.scope_id).enumerate() {
+            nonce[9 + i % 15] ^= byte.rotate_left(u32::try_from(i % 8).expect("under 8"));
+        }
+        nonce
+    }
+
+    /// Publish `spec` at [`LAGGING_EPOCH`], under that epoch's scope read seed.
+    fn publish(spec: Spec) -> Published {
+        let nonce = fixture_nonce(&spec);
+        let seed = scope_seed(LAGGING_EPOCH);
+        let node_seed = kdf::node_seed(&seed, &spec.node_id);
+        let read_key = kdf::read_key(node_seed.as_bytes());
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let mut envelope = seal_read_body(
+            read_key.as_bytes(),
+            &nonce,
+            V,
+            spec.node_id,
+            spec.scope_id,
+            LAGGING_EPOCH,
+            &body,
+        )
+        .expect("the fixture body seals");
+        if spec.scope_root {
+            set_grant_section(&mut envelope, vec![0xEE; 8]);
+        }
+        let block = encode_envelope(&envelope).expect("the fixture envelope encodes");
+        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+
+        let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &spec.node_id);
+        let signer = kdf::ipns_keypair(write_seed.as_bytes());
+        let record_bytes = IpnsRecord::create_v2(
+            &signer,
+            format!("/ipfs/{cid}").as_bytes(),
+            spec.sequence,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+        Published {
+            name: IpnsName::from_public_key(&signer.verifying_key()),
+            record_bytes,
+            head: LocalHead { cid, block },
+        }
+    }
+
+    fn gateway() -> Gateway {
+        Gateway {
+            accelerator: Some(GatewaySource::public("https://gw.test")),
+            public_fallbacks: Vec::new(),
+        }
+    }
+
+    /// The floors a cut leaves: the scope's read-epoch floor at the new epoch.
+    fn floors_after_a_cut() -> InMemoryFloorStore {
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_epoch_floor(&SCOPE, CURRENT_EPOCH)).expect("the cut raises");
+        floors
+    }
+
+    /// The session's adopter: it holds the seed of the epoch the cut moved to,
+    /// which is exactly why the lagging record does not open under it. The head
+    /// block is held locally, so no test needs a scripted fetch.
+    fn adopter<'a>(
+        gateway: &'a Gateway,
+        http: &'a ScriptedHttp,
+        floors: &'a InMemoryFloorStore,
+        published: &Published,
+        node_id: [u8; 16],
+    ) -> ChildAdopter<'a, ScriptedHttp, InMemoryFloorStore> {
+        let adopter = ChildAdopter::new(
+            gateway,
+            http,
+            floors,
+            SCOPE,
+            Zeroizing::new(scope_seed(CURRENT_EPOCH)),
+            node_id,
+        );
+        adopter.hold_local_head(published.head.clone());
+        adopter
+    }
+
+    /// The fail-closed rejection `result` carries. `context` names what a read
+    /// that succeeded would have admitted.
+    fn refusal<T>(result: Result<T, GateError>, context: &str) -> GateRejection {
+        match result {
+            Ok(_) => panic!("{context}"),
+            Err(GateError::Rejected(rejection)) => rejection,
+            Err(GateError::Seam(e)) => panic!("expected a fail-closed rejection, got seam {e}"),
+        }
+    }
+
+    /// The lazy wave's read: a cut raises the read-epoch floor at once, so an
+    /// interior node the wave has not re-sealed is below that floor by
+    /// construction. The adopt path refuses it, and this read opens it under the
+    /// seed of the epoch it was actually sealed at.
+    #[test]
+    fn a_node_the_wave_has_not_reached_opens_under_the_seed_of_its_own_epoch() {
+        let published = publish(Spec::default());
+        let http = ScriptedHttp::default();
+        let floors = floors_after_a_cut();
+        let gw = gateway();
+        let adopter = adopter(&gw, &http, &floors, &published, NODE);
+
+        let refused = refusal(
+            block_on(adopter.adopt(&published.name, &published.record_bytes)),
+            "the adopt path must refuse a record below the scope's epoch floor",
+        );
+        assert_eq!(
+            refused.reason,
+            RejectionReason::EpochBelowFloor {
+                floor: CURRENT_EPOCH,
+                epoch: LAGGING_EPOCH,
+            },
+        );
+
+        let (adopted, envelope) = block_on(adopter.open_interior_under(
+            &published.name,
+            &published.record_bytes,
+            &scope_seed(LAGGING_EPOCH),
+        ))
+        .expect("the wave's read opens the node at its own epoch");
+        assert_eq!(adopted.epoch, LAGGING_EPOCH, "opened where it was sealed");
+        assert_eq!(adopted.sequence, SEQUENCE);
+        assert_eq!(
+            envelope.id, NODE,
+            "and the caller can re-author these bytes"
+        );
+        assert!(matches!(adopted.read_body, ReadBody::Folder { .. }));
+        assert_eq!(
+            block_on(floors.sequence_floor(published.name.as_str().as_bytes()))
+                .expect("the floor store answers"),
+            None,
+            "a re-open moves no floor: only a gate-passing adopt does",
+        );
+    }
+
+    /// The relaxation is the epoch stage alone. A seed from any other epoch
+    /// derives another read key, and the AAD binds the record's own epoch — so a
+    /// caller that ratchets to the wrong epoch opens nothing.
+    #[test]
+    fn a_seed_from_another_epoch_opens_no_lagging_record() {
+        let published = publish(Spec::default());
+        let http = ScriptedHttp::default();
+        let floors = floors_after_a_cut();
+        let gw = gateway();
+        let adopter = adopter(&gw, &http, &floors, &published, NODE);
+
+        for wrong in [CURRENT_EPOCH, LAGGING_EPOCH + 1] {
+            let refused = refusal(
+                block_on(adopter.open_interior_under(
+                    &published.name,
+                    &published.record_bytes,
+                    &scope_seed(wrong),
+                )),
+                "a seed the record was not sealed under must open nothing",
+            );
+            assert_eq!(refused.stage, GateStage::Unseal, "epoch {wrong}");
+        }
+    }
+
+    /// A scope root below its own read-epoch floor is never a wave target: it
+    /// carries seeds, a grant blob and a commitment, so admitting one hands a
+    /// revoked reader material the cut took away. The grant section marks it,
+    /// and this read refuses on that marker alone.
+    #[test]
+    fn a_record_carrying_a_grant_section_is_refused_however_it_is_opened() {
+        let published = publish(Spec {
+            scope_root: true,
+            ..Spec::default()
+        });
+        let http = ScriptedHttp::default();
+        let floors = floors_after_a_cut();
+        let gw = gateway();
+        let adopter = adopter(&gw, &http, &floors, &published, NODE);
+
+        let refused = refusal(
+            block_on(adopter.open_interior_under(
+                &published.name,
+                &published.record_bytes,
+                &scope_seed(LAGGING_EPOCH),
+            )),
+            "a scope root must be refused even under the seed of its own epoch",
+        );
+        assert_eq!(refused.stage, GateStage::GrantSection);
+    }
+
+    /// The per-name replay bar is untouched by the wave: a record below the
+    /// durable sequence floor is a rollback whatever epoch it claims.
+    #[test]
+    fn a_rolled_back_record_stays_refused_below_the_sequence_floor() {
+        let published = publish(Spec::default());
+        let http = ScriptedHttp::default();
+        let floors = floors_after_a_cut();
+        let raised = SEQUENCE + 1;
+        block_on(floors.raise_sequence_floor(published.name.as_str().as_bytes(), raised))
+            .expect("the floor raises");
+        let gw = gateway();
+        let adopter = adopter(&gw, &http, &floors, &published, NODE);
+
+        let refused = refusal(
+            block_on(adopter.open_interior_under(
+                &published.name,
+                &published.record_bytes,
+                &scope_seed(LAGGING_EPOCH),
+            )),
+            "a record below the sequence floor is a replay",
+        );
+        assert_eq!(
+            refused.reason,
+            RejectionReason::SequenceNotNewer {
+                floor: raised,
+                sequence: SEQUENCE,
+            },
+        );
+    }
+
+    /// The transplant bindings hold on this read too: the envelope must be the
+    /// node the read was issued for, in the scope the caller already gated.
+    #[test]
+    fn a_transplanted_envelope_is_refused_however_it_is_opened() {
+        let foreign_scope = publish(Spec {
+            scope_id: [0x99; 16],
+            ..Spec::default()
+        });
+        let other_node = publish(Spec {
+            node_id: [0x66; 16],
+            ..Spec::default()
+        });
+        let gw = gateway();
+        let floors = floors_after_a_cut();
+
+        for published in [&foreign_scope, &other_node] {
+            let http = ScriptedHttp::default();
+            let adopter = adopter(&gw, &http, &floors, published, NODE);
+            let refused = refusal(
+                block_on(adopter.open_interior_under(
+                    &published.name,
+                    &published.record_bytes,
+                    &scope_seed(LAGGING_EPOCH),
+                )),
+                "a transplant must be refused",
+            );
+            assert_eq!(refused.stage, GateStage::Unseal);
+        }
     }
 }

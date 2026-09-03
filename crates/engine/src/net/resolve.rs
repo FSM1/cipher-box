@@ -55,6 +55,20 @@ pub trait Adopter {
     ) -> Result<Option<OwnScopeMaterial>, SeamError> {
         Ok(None)
     }
+
+    /// Gate the record fetched under `name` **without** committing the gate
+    /// pass, and hand back the read scope seed the gate recovered from its owner
+    /// blob (`None` when the reader's arm recovers none). Same fail-closed
+    /// verdicts as [`adopt`](Self::adopt).
+    ///
+    /// A discarded sighting spends nothing: the name's sequence floor, the
+    /// scope's read-epoch floor and the scope's cut-epoch floor all stay where
+    /// the probe found them.
+    async fn probe_read_scope_seed(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError>;
 }
 
 /// The owner's own-scope seeds, recovered from a record already at the durable
@@ -565,6 +579,14 @@ mod tests {
                     },
                 })),
             }
+        }
+
+        async fn probe_read_scope_seed(
+            &self,
+            _name: &IpnsName,
+            _record_bytes: &[u8],
+        ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+            Ok(None)
         }
 
         async fn recover_own_scope_material(

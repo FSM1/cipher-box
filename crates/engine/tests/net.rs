@@ -38,6 +38,7 @@ use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp,
 };
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
+use zeroize::Zeroizing;
 
 // Deterministic fixture constants (KAT-style injected values; core reads no clock).
 const TTL_NANOS: u64 = 2_000_000_000;
@@ -209,6 +210,14 @@ impl Adopter for StubAdopter {
                 },
             })),
         }
+    }
+
+    async fn probe_read_scope_seed(
+        &self,
+        _name: &IpnsName,
+        _record_bytes: &[u8],
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        Ok(None)
     }
 }
 

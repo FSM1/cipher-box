@@ -12972,3 +12972,195 @@ fn a_reclaim_stall_names_the_node_whose_record_the_pass_could_not_read() {
         "the debt settles on the pass that could read the record again"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Cold-starting onto a vault another device of the same account already
+// published: the two legs of `start` that leave the session dark.
+// ---------------------------------------------------------------------------
+
+/// [`serve_http`], with the record-recovery route answering `record` for `name`
+/// — the API cache that still knows a vault this device's own fan-out cannot
+/// resolve yet.
+fn serve_http_with_cached_record(
+    device: &FakeDevice,
+    blocks: &Blocks,
+    calls: usize,
+    name: &IpnsName,
+    record: Vec<u8>,
+) {
+    let route = format!("/recovery/{}", name.as_str());
+    for _ in 0..calls {
+        let blocks = blocks.clone();
+        let route = route.clone();
+        let record = record.clone();
+        device.http.enqueue_derived(move |request| {
+            if request.url.ends_with(&route) {
+                return Ok(HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: record,
+                });
+            }
+            blocks.reply(request)
+        });
+    }
+}
+
+/// Provision a vault on `world` from one device and write `photos` into it — a
+/// mounted desktop that has been running for a while. Returns the root name and
+/// the record it published there.
+fn a_mounted_device_publishes_a_vault(world: &FakeWorld, blocks: &Blocks) -> (IpnsName, Vec<u8>) {
+    let mount = world.device(b"alice");
+    serve_http(&mount, blocks, 64);
+    let (mut engine, _events) = engine_on_api(&mount, 42);
+    block_on(engine.start(secret())).expect("the mount provisions the first-run vault");
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(world, &engine, &mut tasks);
+
+    let root_name = vault_root_name(world);
+    let published = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root_name.as_str())
+        .expect("the mount published its root");
+    (root_name, published)
+}
+
+/// A tab whose routing view already serves the mount's root record but not yet
+/// the vault pointer naming it. The mint sights that root and confirms by adopt
+/// — a sighting it discards — so the probe must leave the name's sequence floor
+/// where it found it. A probe that burned it would make the session's first
+/// resolve an equal-floor `Current`, which projects nothing and caches nothing,
+/// and the tab would render an empty tree with no way back.
+#[test]
+fn a_tab_that_adopts_a_published_genesis_root_converges_on_that_devices_tree() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (root_name, published_root) = a_mounted_device_publishes_a_vault(&world, &blocks);
+
+    // The tab's own routing view: the root record has propagated, the pointer
+    // has not.
+    let tab_world = FakeWorld::new();
+    for endpoint in tab_world.record_store.endpoints() {
+        tab_world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), published_root.clone());
+    }
+    let tab = tab_world.device(b"alice-tab");
+    serve_http(&tab, &blocks, 64);
+    let (mut engine, _events) = engine_on_api(&tab, 43);
+
+    block_on(engine.start(secret())).expect("the tab settles on the published root");
+    assert!(
+        engine.is_provisioned(),
+        "the tab holds the write seed of the vault it adopted"
+    );
+    assert_eq!(
+        sequence_at(&tab_world, &root_name),
+        2,
+        "the tab published no second genesis over the live root",
+    );
+    assert_eq!(
+        block_on(
+            tab.floors(&SECRET)
+                .sequence_floor(root_name.as_str().as_bytes())
+        )
+        .expect("the floor store answers"),
+        None,
+        "the mint's discarded sighting left the root name's sequence floor unspent",
+    );
+
+    let mut tasks = tab_world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&tab_world, &engine, &mut tasks);
+
+    let children = block_on(engine.view()).unwrap().children(ROOT);
+    assert_eq!(children.len(), 1, "the tab converged on the mount's tree");
+    assert_eq!(children[0].name, "photos");
+    assert!(
+        block_on(tab.snapshot_cache.get(root_name.as_str().as_bytes()))
+            .unwrap()
+            .is_some(),
+        "the first resolve was the adopt that caches, not an equal-floor Current",
+    );
+    assert_eq!(
+        block_on(
+            tab.floors(&SECRET)
+                .sequence_floor(root_name.as_str().as_bytes())
+        )
+        .expect("the floor store answers"),
+        Some(2),
+        "and that adopt is what spends the floor",
+    );
+}
+
+/// The other leg: the tab's fan-out sees nothing at all, while the API's record
+/// cache still knows the account's vault. The vacancy probe refuses the mint on
+/// that answer — a verdict about the account, not about this device — so the
+/// session must stay retryable and converge on the refresh a host already
+/// drives, rather than render an empty tree forever.
+#[test]
+fn a_vault_only_the_api_cache_can_see_leaves_a_retryable_session_that_converges() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let (root_name, published_root) = a_mounted_device_publishes_a_vault(&world, &blocks);
+    let pointer_name = vault_pointer_name(&SECRET, 0);
+    let published_pointer = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], pointer_name.as_str())
+        .expect("the mount published its vault pointer");
+
+    let tab_world = FakeWorld::new();
+    let tab = tab_world.device(b"alice-tab");
+    serve_http_with_cached_record(&tab, &blocks, 64, &pointer_name, published_pointer.clone());
+    let (mut engine, mut events) = engine_on_api(&tab, 43);
+
+    block_on(engine.start(secret()))
+        .expect("a vault this pass cannot resolve is not a failed start");
+    assert!(
+        !engine.is_provisioned(),
+        "nothing resolved, so nothing was deposited"
+    );
+    assert!(
+        core::iter::from_fn(|| events.try_next()).any(|event| matches!(
+            event,
+            Event::VaultUnprovisioned {
+                retryable: true,
+                ..
+            }
+        )),
+        "an account that has a vault this device cannot see is a stall, never a refusal",
+    );
+
+    // The routing tables catch up, and the refresh the host drives converges.
+    for endpoint in tab_world.record_store.endpoints() {
+        tab_world.record_store.seed_record(
+            &endpoint,
+            pointer_name.as_str(),
+            published_pointer.clone(),
+        );
+        tab_world
+            .record_store
+            .seed_record(&endpoint, root_name.as_str(), published_root.clone());
+    }
+    block_on(engine.command(Command::ManualRefresh)).expect("the retry settles on that vault");
+
+    assert!(
+        engine.is_provisioned(),
+        "the write path opened on the vault the account already had"
+    );
+    assert_eq!(
+        sequence_at(&tab_world, &root_name),
+        2,
+        "the retry published no second genesis over the live root",
+    );
+    let children = block_on(engine.view()).unwrap().children(ROOT);
+    assert_eq!(children.len(), 1, "the tab converged on the mount's tree");
+    assert_eq!(children[0].name, "photos");
+}
