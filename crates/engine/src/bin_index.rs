@@ -404,14 +404,12 @@ impl BinIndexRead {
     /// Every caller enrols: a load that reads and does not enrol is what lets
     /// the record's EOL lapse under a session that publishes nothing.
     ///
-    /// `observed` is the record bytes the slot held when the load began, and the
-    /// write happens only while the slot still holds them. A command load and
-    /// the drain interleave on one executor, so a publish that landed across
-    /// this load has already put its own confirmed record here; the renewal
-    /// re-signs at `floor + 1`, so re-signing this pass's older read would win
-    /// record selection and bring back the entries that publish removed. The
-    /// bar [`SettingsRead::enrol`](crate::settings::SettingsRead::enrol) holds
-    /// its own slot to.
+    /// `observed` is the record bytes the slot held when the load began, on the
+    /// compare-before-write bar
+    /// [`SettingsRead::enrol`](crate::settings::SettingsRead::enrol) states. The
+    /// other writer here is the drain: a command load and the drain interleave
+    /// on one executor, so re-signing this pass's older read would bring back
+    /// the entries the drain's publish removed.
     pub fn enrol(
         self,
         slot: &RefCell<Option<HeldRecord>>,
