@@ -536,20 +536,29 @@ impl Op {
     /// source scope — the node the full-depth scope-root walk starts from
     /// ([`crate::sync::rebase`]). `None` for every other op.
     pub fn scope_exit_source(&self) -> Option<NodeId> {
-        let (from_parent, crossing) = match &self.kind {
+        self.relocation()
+            .filter(|(_, _, crossing)| matches!(crossing, ScopeCrossing::ExitsGrantedSource))
+            .map(|(from_parent, _, _)| from_parent)
+    }
+
+    /// The two parents and the crossing a relocation names — the one shape
+    /// [`OpKind::Relink`] and [`OpKind::Move`] share. `None` for every other
+    /// kind.
+    pub fn relocation(&self) -> Option<(NodeId, NodeId, ScopeCrossing)> {
+        match &self.kind {
             OpKind::Relink {
                 from_parent,
+                new_parent,
                 crossing,
-                ..
             }
             | OpKind::Move {
                 from_parent,
+                new_parent,
                 crossing,
                 ..
-            } => (from_parent, crossing),
-            _ => return None,
-        };
-        matches!(crossing, ScopeCrossing::ExitsGrantedSource).then_some(*from_parent)
+            } => Some((*from_parent, *new_parent, *crossing)),
+            _ => None,
+        }
     }
 
     /// The pending class this op puts its target in — a staged content write
@@ -591,7 +600,24 @@ impl Op {
 
     /// Decode an intent body opened from a durable record.
     pub fn decode_body(bytes: &[u8]) -> Result<Self, OpDecodeError> {
-        serde_json::from_slice(bytes).map_err(|_| OpDecodeError)
+        let op: Self = serde_json::from_slice(bytes).map_err(|_| OpDecodeError)?;
+        op.crossing_is_coherent().then_some(op).ok_or(OpDecodeError)
+    }
+
+    /// Whether a relocation's journaled [`ScopeCrossing`] agrees with the
+    /// parents it names: a relocation that does not leave its source parent
+    /// cannot leave its source scope, so a non-[`ScopeCrossing::Intra`] crossing
+    /// over one parent is a plan no publisher can author. Every other op kind is
+    /// coherent by construction.
+    ///
+    /// Enforced release-active on both sides: [`Self::decode_body`] rejects such
+    /// a body, and [`stage_op`](crate::sync::stage_op) — the one seal point every
+    /// producer goes through — refuses to author one.
+    pub(crate) fn crossing_is_coherent(&self) -> bool {
+        self.relocation()
+            .is_none_or(|(from_parent, new_parent, crossing)| {
+                matches!(crossing, ScopeCrossing::Intra) || from_parent != new_parent
+            })
     }
 }
 
@@ -849,5 +875,29 @@ mod tests {
     #[test]
     fn corrupt_bytes_decode_to_a_typed_error_not_a_panic() {
         assert!(Op::decode_body(b"not json").is_err());
+    }
+
+    /// The grammar check runs in a release build, on both sides: a body whose
+    /// crossing its own parents contradict never decodes, and the producer that
+    /// would have sealed it refuses first.
+    #[test]
+    fn a_relocation_that_leaves_no_parent_cannot_claim_to_leave_a_scope() {
+        for crossing in [ScopeCrossing::Cross, ScopeCrossing::ExitsGrantedSource] {
+            for op in [
+                Op::relink(id(1), id(0), id(0), 1, at(1), crossing),
+                Op::move_node(id(1), id(0), id(0), "a", None, 1, at(1), crossing),
+            ] {
+                assert!(!op.crossing_is_coherent());
+                assert_eq!(Op::decode_body(&op.encode_body()), Err(OpDecodeError));
+            }
+        }
+        for op in [
+            Op::relink(id(1), id(0), id(0), 1, at(1), ScopeCrossing::Intra),
+            Op::relink(id(1), id(0), id(2), 1, at(1), ScopeCrossing::Cross),
+            Op::rename(id(1), "a", 1, at(1)),
+        ] {
+            assert!(op.crossing_is_coherent());
+            assert_eq!(Op::decode_body(&op.encode_body()), Ok(op));
+        }
     }
 }

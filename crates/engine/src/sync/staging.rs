@@ -76,6 +76,11 @@ pub async fn stage_op<S: StagingStore>(
     seal: RecordSeal<'_>,
     op: &Op,
 ) -> SeamResult<OpId> {
+    if !op.crossing_is_coherent() {
+        return Err(SeamError::new(
+            "stage_op: a relocation that keeps its parent cannot claim to leave its scope",
+        ));
+    }
     let record = encode_op_record(seal, op).map_err(|e| SeamError::new(e.to_string()))?;
     if let Some(cid) = op.content_root_cid() {
         let root = store.staged_bytes(cid).await?.ok_or_else(|| {

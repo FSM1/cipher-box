@@ -52,7 +52,7 @@ pub enum OpResolution {
         /// The add/add auto-suffix fired.
         suffixed: bool,
         /// The granted source scope root this op exited, resolved full-depth
-        /// ([`source_scope_root`]) — the root a
+        /// ([`enclosing_scope_root`]) — the root a
         /// [`ScopeExit`](crate::rotation::RotationTrigger::ScopeExit) rotation
         /// must cut.
         scope_exit_trigger: Option<crate::facade::NodeId>,
@@ -337,7 +337,7 @@ impl QueueScanMemo {
 /// overlay view) supplies node metadata for the edit-resurrects-a-delete case
 /// — the only rule that must re-materialize a node the gate-passing base no
 /// longer carries. `scope_roots` is the scope-root policy the full-depth
-/// scope-exit walk resolves against ([`source_scope_root`]).
+/// scope-exit walk resolves against ([`enclosing_scope_root`]).
 pub fn replay(
     gate_passing: &Snapshot,
     local: &Snapshot,
@@ -548,7 +548,7 @@ fn queue_trigger(
 struct ScopeExit {
     /// What an **applied** exit cuts: the full-depth walk, falling back to the
     /// snapshot root, because an exit this op performed must rotate something
-    /// ([`source_scope_root`]).
+    /// ([`enclosing_scope_root`]).
     applied: Option<crate::facade::NodeId>,
     /// What a **dropped** exit cuts: the walk's own answer alone. A drop is no
     /// evidence this op performed the exit, so a source folder a concurrent
@@ -561,7 +561,7 @@ impl ScopeExit {
         let Some(from_parent) = op.scope_exit_source() else {
             return Self::default();
         };
-        let found = granted_source_root(base, from_parent, scope_roots);
+        let found = enclosing_scope_root(base, from_parent, scope_roots);
         Self {
             applied: Some(found.unwrap_or(base.root)),
             dropped: found,
@@ -569,21 +569,23 @@ impl ScopeExit {
     }
 }
 
-/// The granted scope root a move exited, walking `from_parent` and then its
-/// ancestors nearest-first — **full-depth** detection, so a move out of depth N
-/// names the same root as a move out of depth 1 (blueprint/engine.md "Rotation
-/// primitives: Triggers"; the one-level check is the v1 coverage hole).
+/// The listed scope root at or above `node`, walking it and then its ancestors
+/// nearest-first — **full-depth** detection, so a node at depth N resolves the
+/// same root a node at depth 1 does (blueprint/engine.md "Rotation primitives:
+/// Triggers"; the one-level check is the v1 coverage hole).
 ///
-/// `None` when the chain reaches no listed root; [`ScopeExit`] decides what that
-/// absence means on each path.
-fn granted_source_root(
+/// `None` when the chain reaches no listed root. Each caller decides both
+/// whether to list the vault root and what the absence means: the drain lists it
+/// so every in-tree node resolves, while [`crate::facade`] leaves it off and
+/// falls back to it when it classifies a relocation's crossing.
+pub(crate) fn enclosing_scope_root(
     working: &Snapshot,
-    from_parent: crate::facade::NodeId,
+    node: crate::facade::NodeId,
     scope_roots: &[crate::facade::NodeId],
 ) -> Option<crate::facade::NodeId> {
-    core::iter::once(from_parent)
-        .chain(working.ancestors(from_parent))
-        .find(|node| scope_roots.contains(node))
+    core::iter::once(node)
+        .chain(working.ancestors(node))
+        .find(|candidate| scope_roots.contains(candidate))
 }
 
 /// Add vs add: always visible; the rebasing loser auto-suffixes.

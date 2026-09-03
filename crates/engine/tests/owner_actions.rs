@@ -36,7 +36,7 @@ use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, UnixMillis,
+    BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{
@@ -53,9 +53,9 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, Engine, EngineError,
-    EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission, ResealSeeds,
-    ScopeRootIdentity, SharePointer, SharingInviteLinks, StoragePolicy, SyncTimingProfile,
-    WriteHistory, poll_verified, post_sealed, reseal_scope_root,
+    EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission, RecordReader,
+    ResealSeeds, ScopeRootIdentity, SharePointer, SharingInviteLinks, StoragePolicy,
+    SyncTimingProfile, WriteHistory, decode_queue, poll_verified, post_sealed, reseal_scope_root,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -1301,6 +1301,65 @@ fn a_grant_promotes_the_folder_to_a_scope_root_the_grantee_can_open() {
         1,
         "the share pointer reached the recipient"
     );
+}
+
+/// The boundary reads the crossing from both ends. A move out of the folder a
+/// grant just promoted leaves that scope, and the engine refuses it where the
+/// caller is still there to be told, rather than queueing an op whose subtree
+/// the drain would publish still sealed at the source epoch. A move that stays
+/// inside that folder crosses nothing and still queues.
+#[test]
+fn a_move_out_of_a_granted_folder_is_refused_while_one_inside_it_still_queues() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    let album = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "album",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    assert!(
+        matches!(
+            block_on(fx.engine.command(Command::Relink {
+                node: holiday,
+                new_parent: ROOT,
+            })),
+            Err(EngineError::ScopeExitRefused { .. })
+        ),
+        "the source end names the granted scope the move would leave"
+    );
+    assert_eq!(
+        queued_relocations(&fx.owner_device),
+        0,
+        "and nothing was journaled, so no drain pass can publish it"
+    );
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a relocation between two folders of the granted scope queues");
+    assert_eq!(queued_relocations(&fx.owner_device), 1);
+}
+
+/// How many relocations sit on this device's durable queue.
+fn queued_relocations(device: &FakeDevice) -> usize {
+    let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    decode_queue(&RecordReader::new(&enc_subkey), &raw)
+        .mine
+        .iter()
+        .filter(|(_, op)| op.relocation().is_some())
+        .count()
 }
 
 /// The parent's index is written last, so a mint that published the grantee
