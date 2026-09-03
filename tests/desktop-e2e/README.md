@@ -23,9 +23,7 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - `offline-replay` — a write taken while the API is down reads back at once on
   the instance that took it, and reaches a second instance once the API returns
 
-The macOS and Linux legs both run every scenario. Windows is out of the matrix
-— its shell links the WinFsp adapter and the mount never lands, so the
-projection stays `opening`.
+The macOS, Linux, and Windows legs each run every scenario.
 
 ## How the suite logs in
 

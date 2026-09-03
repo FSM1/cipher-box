@@ -13,6 +13,8 @@
 //! custody at rest — the slots are sealed under a keyring-held key
 //! ([`SealedCoreKitStore`]), which the webview never sees.
 
+use std::path::PathBuf;
+
 use cipherbox_desktop_seams::{KeyringCredentialStore, SealedCoreKitStore, core_kit_store_dir};
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -46,10 +48,20 @@ pub fn open_key_custody(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn local_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+fn local_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .local_data_dir()
         .map_err(|error| format!("this device has no local data directory: {error}"))
+}
+
+/// The member's home directory, which the mount point is composed under.
+///
+/// Read from the environment rather than through Tauri's resolver: unix already
+/// answers from `HOME`, but on Windows that resolver is the known-folder lookup,
+/// which ignores `USERPROFILE`, so a process handed a home of its own would
+/// mount under the real profile.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    std::env::home_dir()
 }
 
 /// The login secret an invoke body carries, or why it is not one.
@@ -85,7 +97,7 @@ pub(crate) fn session_env(app: &AppHandle) -> Result<SessionEnv, String> {
     Ok(SessionEnv {
         config: EngineConfig::compiled()?,
         data_local_dir: local_data_dir(app)?,
-        home_dir: app.path().home_dir().ok(),
+        home_dir: home_dir(),
         credentials: session_credentials(app),
         shell: Shell {
             changed: Box::new(move || {

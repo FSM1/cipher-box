@@ -78,9 +78,11 @@ pub fn arm(app: &AppHandle, headless: Headless) -> Result<(), String> {
 /// point hang off what the shell resolves from it. A failure that reports only
 /// a path the suite asked for cannot show that the shell used another one.
 fn announce_paths(app: &AppHandle) {
-    let path = app.path();
-    let home = path.home_dir().map(|dir| dir.display().to_string());
-    let data = path.local_data_dir().map(|dir| dir.display().to_string());
+    let home = crate::session::home_dir().map(|dir| dir.display().to_string());
+    let data = app
+        .path()
+        .local_data_dir()
+        .map(|dir| dir.display().to_string());
     eprintln!(
         "e2e: home={} data_local={}",
         home.as_deref().unwrap_or("<none>"),

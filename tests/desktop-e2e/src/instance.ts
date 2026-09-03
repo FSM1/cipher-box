@@ -121,7 +121,11 @@ export class Instance {
 export async function startInstance(options: InstanceOptions): Promise<Instance> {
   const { name, home, binary, devKey, logDir, deadlines: budget } = options;
 
-  await mkdir(home, { recursive: true });
+  // Windows resolves the local data directory as `%USERPROFILE%\AppData\Local`
+  // and reports none until that directory exists, so the home is given the
+  // shape of a profile before the shell reads it.
+  const profile = process.platform === 'win32' ? join(home, 'AppData', 'Local') : home;
+  await mkdir(profile, { recursive: true });
   await mkdir(logDir, { recursive: true });
   // `prepare()` refuses a mount point that already holds anything, and no
   // status reports a path yet, so the sweep uses the shell's own default.

@@ -403,8 +403,6 @@ fn staging_store_clones_share_one_id_counter() {
 /// strong as the handles agreeing on it).
 #[test]
 fn floor_store_clones_share_the_durable_floors() {
-    use cipherbox_engine::seams::FloorStore;
-
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("floors");
     block_on(async {

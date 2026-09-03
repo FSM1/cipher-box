@@ -3,7 +3,7 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat, statfs } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { withDeadline } from './cli';
 import type { VaultStatus } from './control';
@@ -30,12 +30,16 @@ export interface Scenario {
  * Whether `path` is the root of a mounted filesystem.
  *
  * A mount root and the directory that holds it sit on different devices, and an
- * empty directory alone does not tell a live mount from a released one.
+ * empty directory alone does not tell a live mount from a released one. Node
+ * reports no device number on Windows, so there the volumes are told apart by
+ * their size: the mount advertises a capacity of its own.
  */
 export async function isMounted(path: string): Promise<boolean> {
+  const deviceOf = async (at: string): Promise<number> =>
+    process.platform === 'win32' ? (await statfs(at)).blocks : (await stat(at)).dev;
   try {
-    const [root, parent] = await Promise.all([stat(path), stat(dirname(path))]);
-    return root.dev !== parent.dev;
+    const [root, parent] = await Promise.all([deviceOf(path), deviceOf(dirname(path))]);
+    return root !== parent;
   } catch {
     return false;
   }
