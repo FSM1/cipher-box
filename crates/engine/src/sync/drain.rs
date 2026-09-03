@@ -5078,19 +5078,14 @@ where
     /// ends, so a folder in the second end's scope is this pass's to unlink and
     /// republishes under its own plane.
     ///
-    /// A link neither end roots is never dropped. Which halt it takes turns on
-    /// whether this pass authors any of the others:
-    ///
-    /// - none of them, so every link sits under one other scope root: that
-    ///   scope's own pass takes the op, and this one leaves it where
-    ///   [`halt_below_another_scope_root`] leaves every op below a root that is
-    ///   not its own.
-    /// - some of them: no pass reaches further than this one, and dropping the
-    ///   rest would publish the dangling link the whole rule exists to prevent.
-    ///   Charged, so the strict-FIFO head reports rather than stalls. The
-    ///   replay dead-letters the spans no pass will ever pair
-    ///   ([`delete_spans_unpairable_scopes`](crate::sync::rebase)), so what
-    ///   reaches here is a boundary this tick proved no material for.
+    /// A link neither end roots is never dropped: dropping it would publish the
+    /// dangling link the rule exists to prevent. Where this pass authors none of
+    /// the others, every link sits under one other scope root and that scope's
+    /// own pass takes the op ([`halt_below_another_scope_root`]). Where it
+    /// authors some, no pass reaches further, so the op is charged and reports
+    /// rather than stalling the strict-FIFO head. The replay refuses the spans
+    /// no pass will ever pair, so what reaches here is a boundary this tick
+    /// proved no material for.
     fn published_parents(
         &self,
         scope: &DrainScope<'_>,

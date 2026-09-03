@@ -653,25 +653,25 @@ pub(crate) async fn read_dead_letter_notices<S: StagingStore>(
     }
     let mut notices = Vec::with_capacity(rows.len() / NOTICE_ROW_BYTES);
     for row in rows.chunks_exact(NOTICE_ROW_BYTES) {
-        let Some((op_id, tail)) = row.split_first_chunk::<{ size_of::<u64>() }>() else {
+        let Some(notice) = decode_notice(row) else {
             return Ok(None);
         };
-        let Some((tag, stamp)) = tail.split_first() else {
-            return Ok(None);
-        };
-        let Some(reason) = reason_of_tag(*tag) else {
-            return Ok(None);
-        };
-        let Some((stamp, _)) = stamp.split_first_chunk::<{ size_of::<u64>() }>() else {
-            return Ok(None);
-        };
-        notices.push(DeadLetterNotice {
-            op_id: OpId(u64::from_be_bytes(*op_id)),
-            reason,
-            noted_at: UnixMillis(u64::from_be_bytes(*stamp)),
-        });
+        notices.push(notice);
     }
     Ok(Some(notices))
+}
+
+/// One [`NOTICE_ROW_BYTES`] row, or `None` for a reason tag this build does not
+/// know.
+fn decode_notice(row: &[u8]) -> Option<DeadLetterNotice> {
+    let (op_id, tail) = row.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let (tag, stamp) = tail.split_first()?;
+    let (stamp, _) = stamp.split_first_chunk::<{ size_of::<u64>() }>()?;
+    Some(DeadLetterNotice {
+        op_id: OpId(u64::from_be_bytes(*op_id)),
+        reason: reason_of_tag(*tag)?,
+        noted_at: UnixMillis(u64::from_be_bytes(*stamp)),
+    })
 }
 
 /// Note one dead letter that parked no version, oldest-first over
@@ -2181,7 +2181,7 @@ mod tests {
     /// comes back under another reason's words.
     #[test]
     fn every_parked_reason_round_trips_its_tag() {
-        for reason in [
+        let reasons = [
             DeadLetterReason::TargetGone,
             DeadLetterReason::DestinationGone,
             DeadLetterReason::DestinationInsideTarget,
@@ -2197,13 +2197,27 @@ mod tests {
             DeadLetterReason::TargetStillLinked,
             DeadLetterReason::ScopeRootNotResealable,
             DeadLetterReason::BinIndexFull,
-        ] {
+            DeadLetterReason::CrossingUnauthorable,
+            DeadLetterReason::TargetLinkedAcrossScopes,
+        ];
+        for reason in reasons {
             assert_eq!(
                 reason_of_tag(reason_tag(reason)),
                 Some(reason),
                 "{reason:?} does not round trip"
             );
         }
+        // The tags run 1..=len with nothing past them, so a reason added to the
+        // table and not to this list fails here rather than going untested.
+        assert!(
+            (1..=u8::try_from(reasons.len()).unwrap()).all(|tag| reason_of_tag(tag).is_some()),
+            "the tags are contiguous from 1"
+        );
+        assert_eq!(
+            reason_of_tag(u8::try_from(reasons.len()).unwrap() + 1),
+            None,
+            "and this list covers every one of them"
+        );
     }
 
     /// Discard names one entry and leaves the rest, and an id the set never held
