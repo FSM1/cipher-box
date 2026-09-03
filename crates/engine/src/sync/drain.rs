@@ -16,8 +16,9 @@
 //! What the pass does when a publish will not succeed is the failure valve
 //! ([`Halt`]).
 //!
-//! A cross-scope relocation halts rather than publishing: its destination-epoch
-//! re-seal is not a plan this driver authors. Its scope-exit trigger reaches
+//! A cross-scope relocation halts rather than publishing: the arm that authors
+//! the destination-epoch re-seal is not landed. [`DrainScope`] carries the
+//! second end that re-seal needs. Its scope-exit trigger reaches
 //! [`ReplayReport::scope_exit_triggers`](crate::sync::ReplayReport) all the
 //! same, off the same [`replay`] this pass runs.
 
@@ -180,11 +181,8 @@ fn admissible_staged_block(key: &[u8], block: Vec<u8>) -> Result<Vec<u8>, Halt> 
 /// the delete path derives the child's name the same way and never reads this
 /// field, so a child the comparison rejects is one this scope's write plane
 /// does not name either.
-fn names_this_scope(scope: &DrainScope<'_>, child: &ChildRef) -> bool {
-    derive_write_name(scope.write_scope_seed, &child.id)
-        .as_str()
-        .as_bytes()
-        == child.ipns_name
+fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
+    end.write_name(&child.id).as_str().as_bytes() == child.ipns_name
 }
 
 /// A bin index load that did not establish the current index.
@@ -641,39 +639,182 @@ pub(crate) fn hold_captures(set: &RefCell<Vec<UnlinkedChild>>, observed: Vec<Unl
     set.extend(observed.into_iter().take(room));
 }
 
-/// The owner-scope material one drain pass publishes under. Every field is
-/// borrowed from the live session; the drain zeroizes none of it.
+/// One scope's material: the root it is anchored on and the two seeds every
+/// record of that scope is sealed and named under. Every field is borrowed from
+/// the live session; the drain zeroizes none of it.
 ///
 /// Copied to swap one field: a re-key into the bin publishes the doomed subtree
 /// under the bin's held key, while the name plane and the scope id the AAD binds
 /// stay the source scope's ([`Drain::rekey_into_bin`]).
 #[derive(Clone, Copy)]
-pub(crate) struct DrainScope<'a> {
-    /// The scope root node this pass publishes below — also the scope id.
+pub(crate) struct ScopeEnd<'a> {
+    /// The scope root node — also the scope id every record of this end binds.
     pub(crate) root: NodeId,
     /// The root's write-plane IPNS name.
     pub(crate) root_name: &'a IpnsName,
-    /// The ancestor node seed the gate re-derives this root's expected ascent
-    /// keypair from, for a root a grant cut promoted below the vault root.
-    /// `None` for the vault root, which carries no ascent link.
+    /// The scope read seed per-node read keys derive from.
+    pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
+    /// The scope write seed per-node IPNS names and signers derive from.
+    pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
+}
+
+impl<'a> ScopeEnd<'a> {
+    /// This end bound to the read epoch its records carry — everything one
+    /// record's seal needs.
+    fn at(self, epoch: u64) -> SealPlane<'a> {
+        SealPlane { end: self, epoch }
+    }
+
+    /// The per-node read key (`node-seed` → `read-key`) this scope's records are
+    /// sealed under, owned by the caller — it is the terminal owner and
+    /// zeroizes on drop.
+    fn read_key(&self, node_id: &[u8; 16]) -> Zeroizing<[u8; 32]> {
+        let node_seed = kdf::node_seed(self.read_scope_seed, node_id);
+        Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes())
+    }
+
+    /// The write-plane name this scope publishes one node under.
+    fn write_name(&self, node_id: &[u8; 16]) -> IpnsName {
+        derive_write_name(self.write_scope_seed, node_id)
+    }
+}
+
+/// A [`ScopeEnd`] bound to a read epoch: the unit every publish helper takes, so
+/// the scope id, the epoch, the read key and the write name of one record can
+/// only come from one scope. Mixing two scopes' parts authors a record that
+/// scope's own adoption gate rejects.
+///
+/// The seal side of a pass. The read side is [`Anchor`], which names the epoch a
+/// record is *opened* at and the backward ratchet that reaches the epochs below
+/// it; a lagging record is opened at its own epoch and re-sealed at the plane's.
+#[derive(Clone, Copy)]
+pub(crate) struct SealPlane<'a> {
+    pub(crate) end: ScopeEnd<'a>,
+    /// The read epoch every record sealed under this plane binds.
+    pub(crate) epoch: u64,
+}
+
+impl SealPlane<'_> {
+    /// The head binding one node's record carries under this plane.
+    fn head_binding(&self, node_id: &[u8; 16]) -> HeadBinding {
+        HeadBinding {
+            node_id: *node_id,
+            scope_id: self.end.root.0,
+            epoch: self.epoch,
+        }
+    }
+}
+
+/// The two ends one drain pass publishes under, plus what the pass proves them
+/// against. Every field is borrowed from the live session; the drain zeroizes
+/// none of it.
+#[derive(Clone, Copy)]
+pub(crate) struct DrainScope<'a> {
+    /// The scope the pass anchors on, and the one every intra-scope record seals
+    /// under.
+    pub(crate) source: ScopeEnd<'a>,
+    /// The scope a crossing re-seals a moved subtree into, at the read epoch the
+    /// tick's boundary walk proved for it
+    /// ([`crate::rotation::scope_material`]). `None` on an intra-scope pass,
+    /// where every node resolves onto `source`.
+    pub(crate) destination: Option<SealPlane<'a>>,
+    /// The ancestor node seed the gate re-derives the source root's expected
+    /// ascent keypair from, for a root a grant cut promoted below the vault
+    /// root. `None` for the vault root, which carries no ascent link.
     pub(crate) parent_node_seed: Option<&'a Zeroizing<[u8; 32]>>,
-    /// Every scope root this session proved, [`root`](Self::root) included, so a
-    /// walk over link ancestry can tell which scope owns a node
+    /// Every scope root this session proved, the source root included, so a walk
+    /// over link ancestry can tell which scope owns a node
     /// ([`crate::sync::tick::scope_root_of`]).
     pub(crate) scope_roots: &'a [NodeId],
     /// The proved scope roots whose own records carry no write plane this
     /// device opens. No pass will ever take an op below one, so the valve
     /// charges rather than stalls ([`halt_below_another_scope_root`]).
     pub(crate) keyless_roots: &'a [NodeId],
-    /// The scope read seed per-node read keys derive from.
-    pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
-    /// The scope write seed per-node IPNS names and signers derive from.
-    pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// The owner's encryption secret (the root's own seed source, and the op
     /// queue's HPKE-to-self reader).
     pub(crate) enc_secret: &'a X25519Secret,
     /// The contact-anchored owner identity the gate verifies against.
     pub(crate) owner_identity: &'a EcdsaVerifier,
+}
+
+impl<'a> DrainScope<'a> {
+    /// The destination end, or a refusal when this pass was built with two ends
+    /// rooted at one node.
+    ///
+    /// Two such ends name one scope under two sets of material, whose seeds and
+    /// epochs need not agree. The pass would seal live records under whichever
+    /// the resolver reached first, which a rotation on that scope makes a
+    /// revoked seed. Neither end is the safe pick, so the pass publishes
+    /// nothing. Charged: this build assembled the pair, and no later read
+    /// changes it.
+    fn second_end(&self) -> Result<Option<SealPlane<'a>>, Halt> {
+        match self.destination {
+            Some(destination) if destination.end.root == self.source.root => {
+                Err(Halt::UploadAttempt)
+            }
+            destination => Ok(destination),
+        }
+    }
+
+    /// The end rooted at `root`, at the read epoch its records bind: `epoch` for
+    /// the source end, which the pass proves from its own scope root record, and
+    /// a destination end's own for that one. `None` names neither end.
+    ///
+    /// A scope root's subtree seals under that scope's own material and never
+    /// its parent scope's (CONTEXT.md "Scope"), so this is what makes a chain
+    /// that crosses into the destination scope seal there.
+    fn plane_rooted_at(&self, epoch: u64, root: NodeId) -> Result<Option<SealPlane<'a>>, Halt> {
+        Ok(match self.second_end()? {
+            Some(destination) if destination.end.root == root => Some(destination),
+            _ => (self.source.root == root).then(|| self.source.at(epoch)),
+        })
+    }
+
+    /// The plane a folder this pass already loaded seals under, and so the plane
+    /// of every node that folder parents: a node joins the scope of the parent
+    /// that names it.
+    ///
+    /// A recorded plane root that names neither end is charged. The pass proved
+    /// it against a gate-passing record of that very end, so no later read
+    /// restores an end this scope no longer holds.
+    fn folder_plane(&self, pass: &Pass, folder: NodeId) -> Result<SealPlane<'a>, Halt> {
+        let plane_root = pass.folder(folder)?.plane_root;
+        self.plane_rooted_at(pass.epoch, plane_root)?
+            .ok_or(Halt::UploadAttempt)
+    }
+}
+
+/// Refuse to author a record whose name or kind belongs to a scope other than
+/// the one the plane binds into its AAD.
+///
+/// The encode-side half of the gate's own rejects: a name derived under another
+/// scope's write seed publishes bytes this plane's reader never looks for, and
+/// the other plane's reader refuses for the scope id. Release-active, never a
+/// `debug_assert!` — a stripped check ships a build that publishes records no
+/// reader can adopt (AGENTS.md rule 8).
+///
+/// A scope root's name and the seed its signer comes from have independent
+/// sources — the vault pointer's `currentRoot` and the owner-write-blob — so a
+/// disagreement there is a write rotation landing between the two reads, and the
+/// next tick's session material heals it. A child's name has one source, so a
+/// disagreement there is this pass mixing two ends and no retry changes it.
+fn plane_seals(
+    plane: &SealPlane<'_>,
+    node: NodeId,
+    name: &IpnsName,
+    is_scope_root: bool,
+) -> Result<(), Halt> {
+    if is_scope_root != (node == plane.end.root) {
+        return Err(Halt::UploadAttempt);
+    }
+    if plane.end.write_name(&node.0) == *name {
+        return Ok(());
+    }
+    Err(if node == plane.end.root {
+        Halt::Unclassified
+    } else {
+        Halt::UploadAttempt
+    })
 }
 
 /// One drain pass over the durable queue, holding every seam it needs by
@@ -765,6 +906,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
 /// One folder's current published state, carried across the ops of one pass so
 /// each publish authors onto the previous one.
 struct FolderState {
+    /// The root of the plane this folder was loaded under, and so the only plane
+    /// it may be republished under.
+    plane_root: NodeId,
     /// The write-plane name this folder publishes under.
     name: IpnsName,
     /// The scope root carries the grant section and authors through a different
@@ -844,10 +988,10 @@ enum Boundary {
 }
 
 impl Boundary {
-    fn admits(self, scope: &DrainScope<'_>, child: &ChildRef) -> bool {
+    fn admits(self, end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
         match self {
             Self::None => true,
-            Self::ScopeRoots => names_this_scope(scope, child),
+            Self::ScopeRoots => names_this_scope(end, child),
         }
     }
 }
@@ -964,10 +1108,12 @@ struct Published {
     held: HeldRecord,
 }
 
-/// The scope state one pass mutates: the epoch every record is sealed at, and
-/// the folders loaded so far in **ancestor-first load order**, which is also
+/// The scope state one pass mutates: the source end's anchor epoch, and the
+/// folders loaded so far in **ancestor-first load order**, which is also
 /// the order the base repaint depends on.
 struct Pass {
+    /// The read epoch the source end's records bind this pass, proved from the
+    /// scope root record the pass opened on. A destination end brings its own.
     epoch: u64,
     /// The scope root's carried read-plane history links: the backward ratchet
     /// a node the lazy wave has not reached is opened through.
@@ -1440,7 +1586,7 @@ where
     /// Open a pass anchored on the scope root, whose epoch every record this
     /// pass seals is bound to.
     async fn open_pass(&self, scope: &DrainScope<'_>) -> Result<Pass, Halt> {
-        let root = self.load_scope_root(scope).await?;
+        let root = self.load_scope_root(&scope.source).await?;
         let mut pass = Pass {
             epoch: root.epoch,
             history_links: root.history_links,
@@ -1449,28 +1595,28 @@ where
         };
         let state = root.state;
         self.repaint_folder(
-            scope.root,
+            scope.source.root,
             &state.children,
             state.sequence,
             state.modified_at,
         );
-        pass.insert(scope.root, state);
+        pass.insert(scope.source.root, state);
         Ok(pass)
     }
 
     /// The scope root as currently published: its envelope's carried fields and
     /// its unsealed folder body, plus the scope epoch.
-    async fn load_scope_root(&self, scope: &DrainScope<'_>) -> Result<LoadedRoot, Halt> {
+    async fn load_scope_root(&self, source: &ScopeEnd<'_>) -> Result<LoadedRoot, Halt> {
         let record_bytes = self
             .snapshot_cache
-            .get(scope.root_name.as_str().as_bytes())
+            .get(source.root_name.as_str().as_bytes())
             .await
             .map_err(seam)?
             .ok_or(Halt::Unclassified)?;
         let (sequence, envelope, _) = assemble_head_envelope(
             self.gateway,
             self.http,
-            scope.root_name,
+            source.root_name,
             &record_bytes,
             None,
         )
@@ -1485,8 +1631,8 @@ where
         // stage-5 reject; security rule 8).
         floor::check(
             self.floors,
-            scope.root_name.as_str().as_bytes(),
-            &scope.root.0,
+            source.root_name.as_str().as_bytes(),
+            &source.root.0,
             sequence,
             envelope.epoch,
             floor::Strictness::AtFloor,
@@ -1499,7 +1645,7 @@ where
         if envelope.v != ENVELOPE_V {
             return Err(Halt::Unclassified);
         }
-        let read_key = self.node_read_key(scope, &scope.root.0);
+        let read_key = source.read_key(&source.root.0);
         let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::UploadAttempt)?;
         let ReadBody::Folder {
             created_at,
@@ -1519,7 +1665,8 @@ where
             .history_links;
         Ok(LoadedRoot {
             state: FolderState {
-                name: scope.root_name.clone(),
+                plane_root: source.root,
+                name: source.root_name.clone(),
                 is_scope_root: true,
                 envelope_unknown: envelope.unknown,
                 epoch_tag_unknown: envelope.epoch_tag_unknown,
@@ -1543,7 +1690,7 @@ where
             self.transport,
             self.snapshot_cache,
             &adopter,
-            scope.root_name,
+            scope.source.root_name,
             ResolveMode::CacheFirst,
         )
         .await
@@ -1562,18 +1709,18 @@ where
     /// the child bindings, the floors, and the AAD-bound unseal is authorable.
     async fn load_child_node(
         &self,
-        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         node: NodeId,
         mode: ResolveMode,
     ) -> Result<LoadedNode, Halt> {
-        let name = derive_write_name(scope.write_scope_seed, &node.0);
+        let name = plane.end.write_name(&node.0);
         let adopter = ChildAdopter::new(
             self.gateway,
             self.http,
             self.floors,
-            scope.root.0,
-            scope.read_scope_seed.clone(),
+            plane.end.root.0,
+            plane.end.read_scope_seed.clone(),
             node.0,
         );
         let resolved = resolve(self.transport, self.snapshot_cache, &adopter, &name, mode)
@@ -1608,7 +1755,7 @@ where
             },
         };
         let (adopted, envelope) = self
-            .open_for_reauthor(scope, anchor, &adopter, &name, &record_bytes, lagging)
+            .open_for_reauthor(plane, anchor, &adopter, &name, &record_bytes, lagging)
             .await?;
         // The same two rollback guards the root load makes: this build authors
         // exactly `ENVELOPE_V`, and re-sealing a node at an epoch above the
@@ -1635,7 +1782,7 @@ where
     /// back at the anchor's epoch, which carries the wave one node further.
     async fn open_for_reauthor(
         &self,
-        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         adopter: &ChildAdopter<'_, H, F>,
         name: &IpnsName,
@@ -1653,24 +1800,26 @@ where
                 Err(GateError::Seam(_)) => return Err(Halt::UploadAttempt),
             },
         };
-        let seed = seed_for_lagging(scope.root.0, scope.read_scope_seed, anchor, lagging)?;
+        let seed = seed_for_lagging(plane.end.root.0, plane.end.read_scope_seed, anchor, lagging)?;
         adopter
             .open_interior_under(name, record_bytes, &seed)
             .await
             .map_err(|_| Halt::UploadAttempt)
     }
 
-    /// Make `folder` and every ancestor between it and the scope root available
-    /// in `pass`, loading ancestor-first so the base repaint always has a parent
-    /// to hang a projection off.
-    async fn ensure_folder(
+    /// Make `folder` and every ancestor between it and the root of the plane it
+    /// resolves for available in `pass`, loading ancestor-first so the base
+    /// repaint always has a parent to hang a projection off. Answers the plane
+    /// `folder` itself seals under, which is also the plane of every node it
+    /// parents.
+    async fn ensure_folder<'s>(
         &self,
-        scope: &DrainScope<'_>,
+        scope: &DrainScope<'s>,
         pass: &mut Pass,
         folder: NodeId,
-    ) -> Result<(), Halt> {
+    ) -> Result<SealPlane<'s>, Halt> {
         if pass.holds(folder) {
-            return Ok(());
+            return scope.folder_plane(pass, folder);
         }
         let mut chain = {
             let base = self.base.borrow();
@@ -1680,42 +1829,51 @@ where
             chain
         };
         // A folder the nearest proved scope root above it does not put in this
-        // pass is not a folder this scope's write plane may author.
+        // pass is not a folder either of this pass's write planes may author.
         let Some(nearest) = chain
             .iter()
             .rposition(|node| scope.scope_roots.contains(node))
         else {
             return Err(Halt::Unclassified);
         };
-        if chain[nearest] != scope.root {
-            return Err(halt_below_another_scope_root(
-                scope.keyless_roots,
-                scope.parent_node_seed.is_none(),
-                chain[nearest],
-            ));
-        }
+        let plane = scope
+            .plane_rooted_at(pass.epoch, chain[nearest])?
+            .ok_or_else(|| {
+                halt_below_another_scope_root(
+                    scope.keyless_roots,
+                    scope.parent_node_seed.is_none(),
+                    chain[nearest],
+                )
+            })?;
         chain.drain(..nearest);
         for node in chain {
             if pass.holds(node) {
+                // A held folder keeps the plane its own load proved. One the
+                // chain now re-roots is a node whose scope moved under this
+                // pass, and republishing it under either plane seals bytes one
+                // of the two ends refuses.
+                if pass.folder(node)?.plane_root != plane.end.root {
+                    return Err(Halt::UploadAttempt);
+                }
                 continue;
             }
-            let state = self.load_child_folder(scope, pass.anchor(), node).await?;
+            let state = self.load_child_folder(&plane, pass.anchor(), node).await?;
             self.repaint_folder(node, &state.children, state.sequence, state.modified_at);
             pass.insert(node, state);
         }
-        Ok(())
+        Ok(plane)
     }
 
     /// Load one non-root folder's state, refusing a node whose sealed body is
     /// not a folder (a kind transplant).
     async fn load_child_folder(
         &self,
-        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         folder: NodeId,
     ) -> Result<FolderState, Halt> {
         let loaded = self
-            .load_child_node(scope, anchor, folder, ResolveMode::CacheFirst)
+            .load_child_node(plane, anchor, folder, ResolveMode::CacheFirst)
             .await?;
         let ReadBody::Folder {
             created_at,
@@ -1727,6 +1885,7 @@ where
             return Err(Halt::Unclassified);
         };
         Ok(FolderState {
+            plane_root: plane.end.root,
             name: loaded.name,
             is_scope_root: false,
             envelope_unknown: loaded.envelope_unknown,
@@ -1854,7 +2013,7 @@ where
         node: &NewNode,
     ) -> Result<(), Halt> {
         let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
-        self.ensure_folder(scope, pass, parent).await?;
+        let plane = self.ensure_folder(scope, pass, parent).await?;
         // After the parent loads, so the scope-chain refusal precedes the
         // probe's own network read.
         if self
@@ -1887,7 +2046,7 @@ where
             }
         };
         let child_id = applied.op.target;
-        let child_name = derive_write_name(scope.write_scope_seed, &child_id.0);
+        let child_name = plane.end.write_name(&child_id.0);
         let child = new_child(
             child_id.0,
             name.to_string(),
@@ -1899,7 +2058,7 @@ where
         let published = self
             .publish_node(
                 scope,
-                pass.epoch,
+                &plane,
                 child_id,
                 &child_name,
                 false,
@@ -2008,9 +2167,9 @@ where
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
         // republish every parent, which is where the op completes.
-        let doomed = if to_bin && names_this_scope(scope, &child) {
+        let doomed = if to_bin && names_this_scope(&scope.source, &child) {
             let unlinked = UnlinkedChild {
-                scope_id: scope.root.0,
+                scope_id: scope.source.root.0,
                 // The highest-ranked link still standing: the folder a reader
                 // resolves the node under, and so the one a restore returns it
                 // to.
@@ -2030,7 +2189,7 @@ where
         } else {
             Some(
                 self.enumerate_doomed(
-                    scope,
+                    &scope.source.at(pass.epoch),
                     pass.anchor(),
                     origin,
                     target,
@@ -2119,13 +2278,16 @@ where
             return self.drop_bin_entry(target).await;
         }
         let name = Zeroizing::new(applied.effective_name.clone().ok_or(Halt::Unclassified)?);
-        self.ensure_folder(scope, pass, into).await?;
+        let plane = self.ensure_folder(scope, pass, into).await?;
         let held = self.bin_keys.held_key(&target.0, entry.deleted_at);
-        let binned = DrainScope {
-            read_scope_seed: &held,
-            ..*scope
+        let binned = SealPlane {
+            end: ScopeEnd {
+                read_scope_seed: &held,
+                ..plane.end
+            },
+            ..plane
         };
-        self.rekey_subtree(&binned, scope, pass.anchor(), target)
+        self.rekey_subtree(scope, &binned, &plane, pass.anchor(), target)
             .await
             .map_err(charge_bin_read)?;
         let child = ChildRef {
@@ -2191,9 +2353,12 @@ where
             return Err(Halt::Permanent(DeadLetterReason::TargetStillLinked));
         }
         let held = self.bin_keys.held_key(&target.0, deleted_at);
-        let binned = DrainScope {
-            read_scope_seed: &held,
-            ..*scope
+        let binned = SealPlane {
+            end: ScopeEnd {
+                read_scope_seed: &held,
+                ..scope.source
+            },
+            epoch: pass.epoch,
         };
         // The walk runs under the held key because that is what seals the whole
         // doomed subtree, and it stops at a scope root, which the bin never
@@ -2263,13 +2428,13 @@ where
         }
         // The scope root is the record the pass opened on, and it publishes
         // under the scope's own name rather than a derived child name.
-        let named = if origin == scope.root {
-            pass.folder(scope.root)?
+        let named = if origin == scope.source.root {
+            pass.folder(scope.source.root)?
                 .children
                 .iter()
                 .any(|child| child.id == target.0)
         } else {
-            self.load_child_folder(scope, pass.anchor(), origin)
+            self.load_child_folder(&scope.source.at(pass.epoch), pass.anchor(), origin)
                 .await
                 .map_err(charge_bin_read)?
                 .children
@@ -2297,11 +2462,8 @@ where
         let Some(entry) = BinnedNode::of(&index, &node.0) else {
             return Ok(None);
         };
-        if entry.scope_id != scope.root.0
-            || derive_write_name(scope.write_scope_seed, &node.0)
-                .as_str()
-                .as_bytes()
-                != entry.ipns_name
+        if entry.scope_id != scope.source.root.0
+            || scope.source.write_name(&node.0).as_str().as_bytes() != entry.ipns_name
         {
             return Err(Halt::Permanent(DeadLetterReason::TargetGone));
         }
@@ -2444,7 +2606,7 @@ where
     /// every descendant for the proof ([`Quarantined`]).
     async fn enumerate_doomed(
         &self,
-        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         parent: NodeId,
         target: NodeId,
@@ -2463,7 +2625,7 @@ where
             }
             seen.insert(node.0);
             let (name, versions) = match self
-                .load_child_node(scope, anchor, node, ResolveMode::CacheFirst)
+                .load_child_node(plane, anchor, node, ResolveMode::CacheFirst)
                 .await
             {
                 Ok(loaded) => {
@@ -2472,7 +2634,7 @@ where
                             pending.extend(
                                 children
                                     .iter()
-                                    .filter(|child| boundary.admits(scope, child))
+                                    .filter(|child| boundary.admits(&plane.end, child))
                                     .map(|child| (NodeId(child.id), child.kind)),
                             );
                             Vec::new()
@@ -2504,10 +2666,7 @@ where
                 {
                     return Err(halt);
                 }
-                Err(_) => (
-                    derive_write_name(scope.write_scope_seed, &node.0),
-                    Vec::new(),
-                ),
+                Err(_) => (plane.end.write_name(&node.0), Vec::new()),
             };
             doomed.push(Doomed {
                 node,
@@ -2579,7 +2738,7 @@ where
         if taken.is_empty() {
             return;
         }
-        let Ok(root) = self.load_scope_root(scope).await else {
+        let Ok(root) = self.load_scope_root(&scope.source).await else {
             self.return_captures(taken);
             return;
         };
@@ -2662,11 +2821,9 @@ where
                 // ([`Self::bin_entry`], `rebase_purge`).
                 .filter(|entry| {
                     let node = NodeId(entry.node_id);
-                    entry.scope_id == scope.root.0
+                    entry.scope_id == scope.source.root.0
                         && !base.contains(node)
-                        && derive_write_name(scope.write_scope_seed, &entry.node_id)
-                            .as_str()
-                            .as_bytes()
+                        && scope.source.write_name(&entry.node_id).as_str().as_bytes()
                             == entry.ipns_name()
                         && !terminal.values().any(|(target, _)| *target == Some(node))
                 })
@@ -2741,12 +2898,14 @@ where
             // will ever adopt, and holding it starves the bounded set. A proved
             // scope this tick could not drain keeps its captures for the tick
             // that can, at the cost of a share of that bound.
-            if unlinked.scope_id != scope.root.0 {
+            if unlinked.scope_id != scope.source.root.0 {
                 return scope.scope_roots.contains(&NodeId(unlinked.scope_id));
             }
             if base.contains(unlinked.node)
                 || unlinked.name.len() > MAX_NODE_NAME_BYTES
-                || derive_write_name(scope.write_scope_seed, &unlinked.node.0)
+                || scope
+                    .source
+                    .write_name(&unlinked.node.0)
                     .as_str()
                     .as_bytes()
                     != unlinked.ipns_name
@@ -2859,12 +3018,17 @@ where
         root: NodeId,
         deleted_at: u64,
     ) -> Result<(), Halt> {
+        let source = scope.source.at(anchor.epoch);
         let held = self.bin_keys.held_key(&root.0, deleted_at);
-        let binned = DrainScope {
-            read_scope_seed: &held,
-            ..*scope
+        let binned = SealPlane {
+            end: ScopeEnd {
+                read_scope_seed: &held,
+                ..scope.source
+            },
+            ..source
         };
-        self.rekey_subtree(scope, &binned, anchor, root).await
+        self.rekey_subtree(scope, &source, &binned, anchor, root)
+            .await
     }
 
     /// Re-seal every node of the subtree at `root` from the key `from` derives
@@ -2882,8 +3046,9 @@ where
     /// to move, so a subtree this pass could not re-key stays as it was.
     async fn rekey_subtree(
         &self,
-        from: &DrainScope<'_>,
-        to: &DrainScope<'_>,
+        scope: &DrainScope<'_>,
+        from: &SealPlane<'_>,
+        to: &SealPlane<'_>,
         anchor: Anchor<'_>,
         root: NodeId,
     ) -> Result<(), Halt> {
@@ -2908,7 +3073,7 @@ where
                     pending.extend(
                         children
                             .iter()
-                            .filter(|child| names_this_scope(from, child))
+                            .filter(|child| names_this_scope(&from.end, child))
                             .map(|child| NodeId(child.id)),
                     );
                     Vec::new()
@@ -2927,8 +3092,8 @@ where
             }
             let published = self
                 .publish_node(
+                    scope,
                     to,
-                    anchor.epoch,
                     node,
                     &name,
                     false,
@@ -2950,8 +3115,8 @@ where
     /// part-way leaves a subtree holding both, and the retry has to read both.
     async fn load_doomed(
         &self,
-        from: &DrainScope<'_>,
-        to: &DrainScope<'_>,
+        from: &SealPlane<'_>,
+        to: &SealPlane<'_>,
         anchor: Anchor<'_>,
         node: NodeId,
     ) -> Result<(LoadedNode, bool), Halt> {
@@ -3149,7 +3314,7 @@ where
         // than settling against an epoch this pass never read. The root is the
         // scope's own record whatever the entry holds, so it is read under the
         // scope key even for a purge.
-        let Ok(root) = self.load_scope_root(scope).await else {
+        let Ok(root) = self.load_scope_root(&scope.source).await else {
             return (Vec::new(), quarantined.to_vec());
         };
         // A purge's descendants left the scope's derivation at the delete that
@@ -3158,11 +3323,14 @@ where
             .binned_at
             .zip(reclamation.doomed.first())
             .map(|(deleted_at, (target, _))| self.bin_keys.held_key(&target.0, deleted_at));
-        let sealed_under = held.as_ref().map_or(*scope, |held| DrainScope {
-            read_scope_seed: held,
-            ..*scope
+        let plane = scope.source.at(root.epoch);
+        let sealed_under = held.as_ref().map_or(plane, |held| SealPlane {
+            end: ScopeEnd {
+                read_scope_seed: held,
+                ..scope.source
+            },
+            ..plane
         });
-        let scope = &sealed_under;
         let mut proven = Vec::new();
         let mut held_over = Vec::new();
         for entry in quarantined {
@@ -3178,7 +3346,8 @@ where
                 continue;
             } else {
                 *budget -= 1;
-                self.decide_quarantined(scope, root.anchor(), entry).await
+                self.decide_quarantined(&sealed_under, root.anchor(), entry)
+                    .await
             };
             match verdict {
                 Verdict::Release => proven.push(entry.clone()),
@@ -3205,11 +3374,11 @@ where
     /// costs is a name retire, never an unpin.
     async fn decide_quarantined(
         &self,
-        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         entry: &Quarantined,
     ) -> Verdict {
-        let resolved = self.resolved_version_roots(scope, anchor, entry.node).await;
+        let resolved = self.resolved_version_roots(plane, anchor, entry.node).await;
         if record_matches_manifest(&entry.manifest_roots(), resolved.as_ref()) {
             return Verdict::Release;
         }
@@ -3230,12 +3399,12 @@ where
     /// framing, this pass could not establish, and it refuses the proof.
     async fn resolved_version_roots(
         &self,
-        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
         node: NodeId,
     ) -> Option<BTreeSet<String>> {
         let loaded = self
-            .load_child_node(scope, anchor, node, ResolveMode::NoCache)
+            .load_child_node(plane, anchor, node, ResolveMode::NoCache)
             .await
             .ok()?;
         let ReadBody::File { versions, .. } = loaded.body else {
@@ -3485,9 +3654,9 @@ where
         pass: &mut Pass,
         folder: NodeId,
     ) -> Result<(), Halt> {
-        let state = if folder == scope.root {
+        let state = if folder == scope.source.root {
             self.refresh_scope_root_cache(scope).await?;
-            let root = self.load_scope_root(scope).await?;
+            let root = self.load_scope_root(&scope.source).await?;
             // A rotation landing mid-pass moves the root's epoch while this pass
             // still seals at the one it opened on, and its grant section signs
             // the new one — bytes this build's own authoring refuses. The next
@@ -3498,7 +3667,9 @@ where
             }
             root.state
         } else {
-            self.load_child_folder(scope, pass.anchor(), folder).await?
+            let plane = scope.folder_plane(pass, folder)?;
+            self.load_child_folder(&plane, pass.anchor(), folder)
+                .await?
         };
         self.repaint_folder(folder, &state.children, state.sequence, state.modified_at);
         *pass.folder_mut(folder)? = state;
@@ -3528,21 +3699,22 @@ where
         }
         // Same reachability rule every other plan gets from `ensure_folder`: a
         // node no parent links is not one this scope's write plane may author.
-        self.ensure_folder(scope, pass, self.published_parent(target)?)
+        let plane = self
+            .ensure_folder(scope, pass, self.published_parent(target)?)
             .await?;
         // The conditional-edit rule against the live record, which the rebase's
         // snapshot can be stale about — first before spending an upload on an
         // edit that cannot land, then again with the upload behind us, because
         // the transfer is the widest window a version can land in unseen.
         let seen = self
-            .load_child_node(scope, pass.anchor(), target, ResolveMode::CacheFirst)
+            .load_child_node(&plane, pass.anchor(), target, ResolveMode::CacheFirst)
             .await?;
         if head_version_cid(&seen.body) != base_version_cid {
             return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
         }
         let uploaded = self.upload_version(scope, applied, staged).await?;
         let loaded = self
-            .load_child_node(scope, pass.anchor(), target, ResolveMode::CacheFirst)
+            .load_child_node(&plane, pass.anchor(), target, ResolveMode::CacheFirst)
             .await?;
         let ReadBody::File {
             created_at,
@@ -3580,7 +3752,7 @@ where
         let published = self
             .publish_node(
                 scope,
-                pass.epoch,
+                &plane,
                 target,
                 &loaded.name,
                 false,
@@ -3655,10 +3827,11 @@ where
         if applied.effective_name.is_some() {
             return Err(Halt::Unclassified);
         }
-        self.ensure_folder(scope, pass, self.published_parent(target)?)
+        let plane = self
+            .ensure_folder(scope, pass, self.published_parent(target)?)
             .await?;
         let loaded = self
-            .load_child_node(scope, pass.anchor(), target, ResolveMode::CacheFirst)
+            .load_child_node(&plane, pass.anchor(), target, ResolveMode::CacheFirst)
             .await?;
         let ReadBody::File {
             created_at,
@@ -3719,7 +3892,7 @@ where
         let published = self
             .publish_node(
                 scope,
-                pass.epoch,
+                &plane,
                 target,
                 &loaded.name,
                 false,
@@ -3829,19 +4002,22 @@ where
         node: [u8; 16],
         owing: OwingRecord,
     ) -> Option<LiveRecord> {
-        let name = derive_write_name(scope.write_scope_seed, &node)
-            .as_str()
-            .to_owned();
+        let name = scope.source.write_name(&node).as_str().to_owned();
         let reaching = |cids| Some(LiveRecord { name, cids });
         if owing == OwingRecord::Retired {
             return reaching(BTreeSet::new());
         }
-        let root = self.load_scope_root(scope).await.ok()?;
+        let root = self.load_scope_root(&scope.source).await.ok()?;
         // Nocache: the retire unpins, so what may be named is decided against
         // the freshest record the gate will pass, never a cached one a
         // concurrent writer has already moved past.
         let loaded = self
-            .load_child_node(scope, root.anchor(), NodeId(node), ResolveMode::NoCache)
+            .load_child_node(
+                &scope.source.at(root.epoch),
+                root.anchor(),
+                NodeId(node),
+                ResolveMode::NoCache,
+            )
             .await
             .ok()?;
         // A record carrying no version list reaches no content.
@@ -3994,7 +4170,7 @@ where
         // itself follows. Only a genuine crypto failure is unrecoverable.
         let key = open_content_key(
             scope.enc_secret,
-            &scope.root.0,
+            &scope.source.root.0,
             staged.epoch,
             &staged.root_cid,
             &staged.sealed_content_key,
@@ -4261,7 +4437,7 @@ where
         let parents: Vec<NodeId> = self
             .base
             .borrow()
-            .links_ranked_under(node, scope.root)
+            .links_ranked_under(node, scope.source.root)
             .into_iter()
             .map(|link| link.parent)
             .collect();
@@ -4300,10 +4476,13 @@ where
                 state.epoch_tag_unknown.clone(),
             )
         };
+        let plane = scope
+            .folder_plane(pass, folder)
+            .map_err(PublishHalt::before_the_put)?;
         let published = self
             .publish_node(
                 scope,
-                pass.epoch,
+                &plane,
                 folder,
                 &name,
                 is_scope_root,
@@ -4335,7 +4514,7 @@ where
     async fn publish_node(
         &self,
         scope: &DrainScope<'_>,
-        epoch: u64,
+        plane: &SealPlane<'_>,
         node: NodeId,
         name: &IpnsName,
         is_scope_root: bool,
@@ -4345,13 +4524,14 @@ where
         carried_epoch_tag_unknown: PreservedFields,
         completes: Option<OpId>,
     ) -> Result<Published, PublishHalt> {
-        let read_key = self.node_read_key(scope, &node.0);
+        plane_seals(plane, node, name, is_scope_root).map_err(PublishHalt::before_the_put)?;
+        let read_key = plane.end.read_key(&node.0);
         let nonce = fresh_nonce(&mut *self.entropy.borrow_mut())
             .map_err(|_| PublishHalt::before_the_put(Halt::UploadAttempt))?;
         let authoring = EnvelopeAuthoring {
             node_id: node.0,
-            scope_id: scope.root.0,
-            epoch,
+            scope_id: plane.end.root.0,
+            epoch: plane.epoch,
             read_key: &read_key,
             nonce: &nonce,
             body,
@@ -4367,7 +4547,7 @@ where
         self.report_carried_cut(name, &head.cut);
 
         let record_bytes = self
-            .publish_head(scope, name, &node.0, epoch, &head, content_cids.clone())
+            .publish_head(plane, name, &node.0, &head, content_cids.clone())
             .await
             .map_err(PublishHalt::before_the_put)?;
         if let Some(op_id) = completes {
@@ -4387,8 +4567,8 @@ where
                 self.gateway,
                 self.http,
                 self.floors,
-                scope.root.0,
-                scope.read_scope_seed.clone(),
+                plane.end.root.0,
+                plane.end.read_scope_seed.clone(),
                 node.0,
             );
             adopter.hold_local_head(local);
@@ -4410,7 +4590,7 @@ where
             held: HeldRecord {
                 routing_key: name.as_str().to_owned(),
                 record_bytes,
-                signer: SessionIdentity::write_name_signer(scope.write_scope_seed, &node.0),
+                signer: SessionIdentity::write_name_signer(plane.end.write_scope_seed, &node.0),
                 value: HeldValue::Head(head.cid),
                 // The same list the publish registered, so a sub-EOL renewal
                 // re-pins exactly the content this record points at.
@@ -4424,28 +4604,16 @@ where
     /// because its bytes may never have landed.
     async fn publish_head(
         &self,
-        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
         name: &IpnsName,
         node_id: &[u8; 16],
-        epoch: u64,
         head: &AuthoredHead,
         content_cids: Vec<String>,
     ) -> Result<Vec<u8>, Halt> {
-        let binding = HeadBinding {
-            node_id: *node_id,
-            scope_id: scope.root.0,
-            epoch,
-        };
-        let preflighted = preflight(&binding, &self.node_read_key(scope, node_id), head)
+        let binding = plane.head_binding(node_id);
+        let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
             .map_err(|_| Halt::UploadAttempt)?;
-        // The name and the seed the signer comes from have independent sources
-        // for the scope root — the vault pointer's `currentRoot` and the
-        // owner-write-blob. Publishing under a name this signer cannot sign for
-        // would burn a CAS sequence on a record nothing can verify.
-        let signer = SessionIdentity::write_name_signer(scope.write_scope_seed, node_id);
-        if IpnsName::from_public_key(&signer.verifying_key()) != *name {
-            return Err(Halt::Unclassified);
-        }
+        let signer = SessionIdentity::write_name_signer(plane.end.write_scope_seed, node_id);
         let PublishReceipt {
             outcome,
             record_bytes,
@@ -4654,7 +4822,7 @@ where
         if attempts.charged_to(op_id) > 0 {
             return Ok(false);
         }
-        let name = derive_write_name(scope.write_scope_seed, &target.0);
+        let name = scope.source.write_name(&target.0);
         if floor::sequence_floor(self.floors, name.as_str().as_bytes())
             .await
             .map_err(seam)?
@@ -4666,8 +4834,8 @@ where
             self.gateway,
             self.http,
             self.floors,
-            scope.root.0,
-            scope.read_scope_seed.clone(),
+            scope.source.root.0,
+            scope.source.read_scope_seed.clone(),
             target.0,
         );
         let resolved = resolve(
@@ -4696,11 +4864,8 @@ where
     /// created node reaches it only once a parent record naming it published.
     fn unreferenced_create_name(&self, scope: &DrainScope<'_>, op: &Op) -> Option<String> {
         let target_published = self.base.borrow().contains(op.target);
-        (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
-            derive_write_name(scope.write_scope_seed, &op.target.0)
-                .as_str()
-                .to_owned()
-        })
+        (!target_published && matches!(op.kind, OpKind::Create { .. }))
+            .then(|| scope.source.write_name(&op.target.0).as_str().to_owned())
     }
 
     /// The registry rows one op's publish registered, mirroring what the publish
@@ -4840,19 +5005,12 @@ where
             self.floors,
             scope.enc_secret,
             scope.owner_identity,
-            scope.root.0,
+            scope.source.root.0,
         );
         match scope.parent_node_seed {
             Some(seed) => adopter.under_parent_node_seed(seed.clone()),
             None => adopter,
         }
-    }
-
-    /// The per-node read key (`node-seed` → `read-key`), owned by the caller of
-    /// this fn — it is the terminal owner and zeroizes on drop.
-    fn node_read_key(&self, scope: &DrainScope<'_>, node_id: &[u8; 16]) -> Zeroizing<[u8; 32]> {
-        let node_seed = kdf::node_seed(scope.read_scope_seed, node_id);
-        Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes())
     }
 }
 
@@ -5170,9 +5328,332 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
 mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
+    use crate::net::record_publish::PreflightError;
     use crate::seams::SeamError;
     use crate::settings::PlacementRefusal;
+
+    const SOURCE_ROOT: NodeId = NodeId([1; 16]);
+    const DESTINATION_ROOT: NodeId = NodeId([2; 16]);
+    const SOURCE_EPOCH: u64 = 7;
+    const DESTINATION_EPOCH: u64 = 11;
+
+    /// One end's session values, owned so a test can borrow them into a
+    /// [`ScopeEnd`]. Each end takes unrelated seeds, as a real scope's are.
+    struct End {
+        root: NodeId,
+        name: IpnsName,
+        read_scope_seed: Zeroizing<[u8; 32]>,
+        write_scope_seed: Zeroizing<[u8; 32]>,
+    }
+
+    impl End {
+        fn new(root: NodeId, read: u8, write: u8) -> Self {
+            let write_scope_seed = Zeroizing::new([write; 32]);
+            Self {
+                root,
+                name: derive_write_name(&write_scope_seed, &root.0),
+                read_scope_seed: Zeroizing::new([read; 32]),
+                write_scope_seed,
+            }
+        }
+
+        fn end(&self) -> ScopeEnd<'_> {
+            ScopeEnd {
+                root: self.root,
+                root_name: &self.name,
+                read_scope_seed: &self.read_scope_seed,
+                write_scope_seed: &self.write_scope_seed,
+            }
+        }
+    }
+
+    /// The two owner seams a `DrainScope` holds and plane resolution never
+    /// reads.
+    struct OwnerSeams {
+        enc_secret: X25519Secret,
+        identity: EcdsaVerifier,
+    }
+
+    impl OwnerSeams {
+        fn new() -> Self {
+            Self {
+                enc_secret: X25519Secret::from_scalar([5; 32]),
+                identity: EcdsaSigner::from_scalar(&[6; 32])
+                    .expect("a signing scalar below the group order")
+                    .verifying_key(),
+            }
+        }
+    }
+
+    /// A source end and a destination end, each with its own seeds.
+    fn ends() -> (End, End) {
+        (
+            End::new(SOURCE_ROOT, 3, 4),
+            End::new(DESTINATION_ROOT, 13, 14),
+        )
+    }
+
+    fn two_ended<'a>(
+        seams: &'a OwnerSeams,
+        source: &'a End,
+        destination: &'a End,
+        roots: &'a [NodeId],
+    ) -> DrainScope<'a> {
+        DrainScope {
+            source: source.end(),
+            destination: Some(destination.end().at(DESTINATION_EPOCH)),
+            parent_node_seed: None,
+            scope_roots: roots,
+            keyless_roots: &[],
+            enc_secret: &seams.enc_secret,
+            owner_identity: &seams.identity,
+        }
+    }
+
+    /// The root and epoch one node resolves onto, which is what the pass seals
+    /// and names every record of that node's subtree under.
+    fn resolved(scope: &DrainScope<'_>, root: NodeId) -> Result<Option<(NodeId, u64)>, Halt> {
+        Ok(scope
+            .plane_rooted_at(SOURCE_EPOCH, root)?
+            .map(|plane| (plane.end.root, plane.epoch)))
+    }
+
+    /// One folder as a pass holds it, loaded under the plane rooted at
+    /// `plane_root`.
+    fn pass_holding(folder: NodeId, plane_root: NodeId) -> Pass {
+        Pass {
+            epoch: SOURCE_EPOCH,
+            history_links: Vec::new(),
+            folders: vec![(
+                folder,
+                FolderState {
+                    plane_root,
+                    name: derive_write_name(&Zeroizing::new([4; 32]), &folder.0),
+                    is_scope_root: false,
+                    envelope_unknown: PreservedFields::new(),
+                    epoch_tag_unknown: PreservedFields::new(),
+                    created_at: 1,
+                    modified_at: 1,
+                    children: Vec::new(),
+                    body_unknown: PreservedFields::new(),
+                    sequence: 1,
+                },
+            )],
+            journalled: Vec::new(),
+        }
+    }
+
+    /// A granted scope's subtree seals under that scope's own material and never
+    /// its parent scope's, so the node a chain is rooted at is what decides the
+    /// plane, and each end answers at its own epoch.
+    #[test]
+    fn each_end_answers_for_the_root_it_is_anchored_on() {
+        let (source, destination) = ends();
+        let seams = OwnerSeams::new();
+        let roots = [SOURCE_ROOT, DESTINATION_ROOT];
+        let scope = two_ended(&seams, &source, &destination, &roots);
+
+        assert_eq!(
+            resolved(&scope, SOURCE_ROOT),
+            Ok(Some((SOURCE_ROOT, SOURCE_EPOCH))),
+            "the source end seals at the epoch the pass proved from its own root"
+        );
+        assert_eq!(
+            resolved(&scope, DESTINATION_ROOT),
+            Ok(Some((DESTINATION_ROOT, DESTINATION_EPOCH))),
+            "and the destination end at the epoch the boundary walk proved"
+        );
+        assert_eq!(
+            resolved(&scope, NodeId([200; 16])),
+            Ok(None),
+            "a root neither end is anchored on resolves to no plane"
+        );
+    }
+
+    /// Two ends rooted at one node name one scope under two sets of material.
+    /// The pass would seal live records under whichever the resolver reached
+    /// first, and a rotation on that scope makes one of the two a revoked seed.
+    #[test]
+    fn two_ends_rooted_at_the_same_node_resolve_no_plane() {
+        let (source, destination) = (End::new(SOURCE_ROOT, 3, 4), End::new(SOURCE_ROOT, 13, 14));
+        let seams = OwnerSeams::new();
+        let roots = [SOURCE_ROOT];
+        let scope = two_ended(&seams, &source, &destination, &roots);
+
+        assert_eq!(
+            resolved(&scope, SOURCE_ROOT),
+            Err(Halt::UploadAttempt),
+            "an overlapping pair publishes nothing under either end"
+        );
+        assert_eq!(
+            scope
+                .folder_plane(&pass_holding(SOURCE_ROOT, SOURCE_ROOT), SOURCE_ROOT)
+                .err(),
+            Some(Halt::UploadAttempt),
+            "including for a folder the pass already holds"
+        );
+    }
+
+    /// A folder carries the root of the plane its own load proved. A recorded
+    /// plane root that names neither end is charged: the pass proved it against
+    /// a gate-passing record of that very end, so no later read restores it.
+    #[test]
+    fn a_held_folder_whose_plane_root_names_neither_end_is_charged() {
+        let (source, destination) = ends();
+        let seams = OwnerSeams::new();
+        let roots = [SOURCE_ROOT, DESTINATION_ROOT];
+        let scope = two_ended(&seams, &source, &destination, &roots);
+        let folder = NodeId([9; 16]);
+
+        assert_eq!(
+            scope
+                .folder_plane(&pass_holding(folder, DESTINATION_ROOT), folder)
+                .map(|plane| (plane.end.root, plane.epoch)),
+            Ok((DESTINATION_ROOT, DESTINATION_EPOCH)),
+            "a folder loaded under the destination end republishes there"
+        );
+        assert_eq!(
+            scope
+                .folder_plane(&pass_holding(folder, NodeId([200; 16])), folder)
+                .err(),
+            Some(Halt::UploadAttempt),
+            "and one recording a root neither end holds publishes nothing"
+        );
+    }
+
+    /// A record the drain seals under a resolved destination plane binds that
+    /// scope's id and epoch, and opens under that end's read key alone. Sealing
+    /// a crossing under the source end would leave the moved subtree readable by
+    /// the source scope's grantees.
+    #[test]
+    fn a_record_sealed_under_the_destination_plane_opens_under_no_other_end() {
+        let (source, destination) = ends();
+        let (source_plane, destination_plane) = (
+            source.end().at(SOURCE_EPOCH),
+            destination.end().at(DESTINATION_EPOCH),
+        );
+        let node = NodeId([9; 16]);
+        let body = ReadBody::Folder {
+            created_at: 1,
+            modified_at: 1,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let read_key = destination_plane.end.read_key(&node.0);
+        let head = author_child_envelope(EnvelopeAuthoring {
+            node_id: node.0,
+            scope_id: destination_plane.end.root.0,
+            epoch: destination_plane.epoch,
+            read_key: &read_key,
+            nonce: &[7; 24],
+            body: &body,
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
+        })
+        .expect("a child envelope over the destination plane");
+
+        assert!(
+            preflight(&destination_plane.head_binding(&node.0), &read_key, &head).is_ok(),
+            "the plane that sealed it is the plane that opens it"
+        );
+        assert_eq!(
+            preflight(
+                &source_plane.head_binding(&node.0),
+                &source_plane.end.read_key(&node.0),
+                &head
+            ),
+            Err(PreflightError::BindingMismatch),
+            "the source scope id and epoch are not what this record binds"
+        );
+        assert!(
+            matches!(
+                preflight(
+                    &destination_plane.head_binding(&node.0),
+                    &source_plane.end.read_key(&node.0),
+                    &head
+                ),
+                Err(PreflightError::Unseal(_))
+            ),
+            "and the source end's read key does not open the body"
+        );
+    }
+
+    /// The encode-side half of the gate's rejects, and release-active by rule 8:
+    /// a name or a kind from another end authors a record no reader adopts, so
+    /// the seal path refuses it before the record is built.
+    #[test]
+    fn the_seal_path_refuses_a_name_or_a_kind_from_another_end() {
+        let (source, destination) = ends();
+        let (source_plane, destination_plane) = (
+            source.end().at(SOURCE_EPOCH),
+            destination.end().at(DESTINATION_EPOCH),
+        );
+        let node = NodeId([9; 16]);
+
+        assert_eq!(
+            plane_seals(
+                &destination_plane,
+                node,
+                &destination_plane.end.write_name(&node.0),
+                false
+            ),
+            Ok(()),
+            "the name this end's write seed derives is the one it publishes under"
+        );
+        assert_eq!(
+            plane_seals(
+                &destination_plane,
+                node,
+                &source_plane.end.write_name(&node.0),
+                false
+            ),
+            Err(Halt::UploadAttempt),
+            "a child name from the source end has one source, so no retry heals it"
+        );
+        assert_eq!(
+            plane_seals(
+                &destination_plane,
+                node,
+                &destination_plane.end.write_name(&node.0),
+                true
+            ),
+            Err(Halt::UploadAttempt),
+            "and only a plane's own root authors a scope root envelope"
+        );
+        assert_eq!(
+            plane_seals(
+                &destination_plane,
+                DESTINATION_ROOT,
+                destination_plane.end.root_name,
+                true
+            ),
+            Ok(()),
+            "which the plane's own root does"
+        );
+    }
+
+    /// A scope root's name and its signer seed have independent sources, so a
+    /// disagreement is a write rotation landing between the two reads. The next
+    /// tick's session material heals it, and charging it would spend the op's
+    /// budget on a skew the op did not cause.
+    #[test]
+    fn a_scope_root_name_skew_waits_rather_than_charging() {
+        let (source, destination) = ends();
+        let source_plane = source.end().at(SOURCE_EPOCH);
+
+        assert_eq!(
+            plane_seals(
+                &source_plane,
+                SOURCE_ROOT,
+                destination.end().root_name,
+                true
+            ),
+            Err(Halt::Unclassified),
+            "the root's two name sources disagree, which a refresh repairs"
+        );
+    }
 
     /// Retention decides an irreversible purge, so the boundary is stated once
     /// and read off the injected clock. Only a retention the owner chose expires
