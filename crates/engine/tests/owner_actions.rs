@@ -1351,6 +1351,71 @@ fn a_move_out_of_a_granted_folder_is_refused_while_one_inside_it_still_queues() 
     assert_eq!(queued_relocations(&fx.owner_device), 1);
 }
 
+/// A session that does not hold the target cannot name the scope the move would
+/// leave, so it reports the target gone rather than anchoring on the vault root.
+/// Anchored there, both ends resolve to the root and the move reads intra-scope,
+/// whatever scope the target really sits in.
+#[test]
+fn a_relocation_whose_source_the_view_does_not_hold_reports_it_gone() {
+    let mut fx = GrantScenario::new();
+    let holiday = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (mut fresh, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    assert!(
+        block_on(fresh.view())
+            .expect("a rendered view")
+            .children(fx.folder)
+            .is_empty(),
+        "this session has not read into the granted scope"
+    );
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Relink {
+                node: holiday,
+                new_parent: ROOT,
+            })),
+            Err(EngineError::UnknownNode)
+        ),
+        "the same verdict every other read gives a node it does not hold"
+    );
+    assert_eq!(
+        queued_relocations(&fx.owner_device),
+        0,
+        "and nothing was journaled, so no drain pass can act on it"
+    );
+}
+
+/// The vault root has no parent to move it out of. It is the one target
+/// `refuse_outside_vault` exempts, so the relocation path owns the refusal.
+#[test]
+fn a_relocation_of_the_vault_root_is_an_unsupported_target() {
+    let mut fx = GrantScenario::new();
+
+    assert!(
+        matches!(
+            block_on(fx.engine.command(Command::Relink {
+                node: ROOT,
+                new_parent: fx.folder,
+            })),
+            Err(EngineError::UnsupportedTarget { .. })
+        ),
+        "the root is refused as a target, not classified as a crossing"
+    );
+    assert_eq!(
+        queued_relocations(&fx.owner_device),
+        0,
+        "and nothing was journaled, so no pass can link the root under a folder"
+    );
+}
+
 /// How many relocations sit on this device's durable queue.
 fn queued_relocations(device: &FakeDevice) -> usize {
     let raw = block_on(device.staging_store.queued_ops()).expect("the queue reads");
