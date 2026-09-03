@@ -751,6 +751,8 @@ describe('broadcast transport ↔ leader relay', () => {
       sealedFactor: 'c2VhbA==',
       requestId: 'req-1',
       requesterDevicePublicKey: 'reqhex',
+      responderDevicePublicKey: 'apprhex',
+      responseSignature: 'sighex',
       scalar: new Uint8Array(32).fill(5),
     });
 

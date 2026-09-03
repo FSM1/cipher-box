@@ -6,6 +6,7 @@ import {
   authWrapper,
   FAKE_DEVICE_PUBLIC_KEY,
   FAKE_EPHEMERAL_PUBLIC_KEY,
+  FAKE_REGISTERED_DEVICE,
   FAKE_REQUEST_PAYLOAD,
   FAKE_SEALED_FACTOR,
   fakeComparisonValue,
@@ -25,10 +26,16 @@ const EXPIRES_AT = new Date(Date.now() + 4 * 60_000).toISOString();
 type RelayState = Record<string, unknown>;
 
 const PENDING: RelayState = { status: 'pending', expiresAt: EXPIRES_AT };
+/** The approving device's key and its signature, as the poll serves them. */
+const RESPONDER = 'ee'.repeat(32);
+const RESPONSE_SIGNATURE = 'ff'.repeat(64);
+
 const APPROVED: RelayState = {
   status: 'approved',
   expiresAt: EXPIRES_AT,
   sealedFactor: FAKE_SEALED_FACTOR,
+  responderDevicePublicKey: RESPONDER,
+  responseSignature: RESPONSE_SIGNATURE,
 };
 
 interface Relay {
@@ -136,8 +143,11 @@ describe('the device approval wait', () => {
       createdAt: '2026-08-31T09:00:00.000Z',
       expiresAt: EXPIRES_AT,
     };
-    const approver = fakeEngineClient({ pendingApprovals: () => Promise.resolve([relayed]) });
-    authStore.recoveryEnrollment(true);
+    const approver = fakeEngineClient({
+      pendingApprovals: () => Promise.resolve([relayed]),
+      devices: () => Promise.resolve([FAKE_REGISTERED_DEVICE]),
+    });
+    authStore.factorPolicy(true);
     render(<ApprovalPrompt />, {
       wrapper: authWrapper(approver.client, fakeCoreKitSession({ loggedIn: true }).session),
     });
@@ -168,8 +178,11 @@ describe('the device approval wait', () => {
       createdAt: '2026-08-31T09:00:00.000Z',
       expiresAt: EXPIRES_AT,
     };
-    const approver = fakeEngineClient({ pendingApprovals: () => Promise.resolve([relayed]) });
-    authStore.recoveryEnrollment(true);
+    const approver = fakeEngineClient({
+      pendingApprovals: () => Promise.resolve([relayed]),
+      devices: () => Promise.resolve([FAKE_REGISTERED_DEVICE]),
+    });
+    authStore.factorPolicy(true);
     render(<ApprovalPrompt />, {
       wrapper: authWrapper(approver.client, fakeCoreKitSession({ loggedIn: true }).session),
     });
@@ -240,8 +253,26 @@ describe('the device approval wait', () => {
     if (factor?.kind !== 'openFactor') throw new Error('the factor step was not dispatched');
     expect(factor.sealedFactor).toBe(FAKE_SEALED_FACTOR);
     expect(factor.requesterDevicePublicKey).toBe(FAKE_DEVICE_PUBLIC_KEY);
+    // The engine verifies the answer's signature before it opens the envelope,
+    // so the pair the relay served travels with the step (ADR 0009 D4).
+    expect(factor.responderDevicePublicKey).toBe(RESPONDER);
+    expect(factor.responseSignature).toBe(RESPONSE_SIGNATURE);
     // The engine was handed something to open, not a blank scalar.
     expect(holdsNoSecret(coreKit.adoptedBytes[0])).toBe(false);
+  });
+
+  /**
+   * An answer with no signature is refused where it arrives: with nothing to
+   * hold it to, the engine is never asked to open it.
+   */
+  it('never opens an approval the relay served without its signature', async () => {
+    const { engine, coreKit } = await waiting([
+      { status: 'approved', expiresAt: EXPIRES_AT, sealedFactor: FAKE_SEALED_FACTOR },
+    ]);
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('no signature'));
+    expect(engine.rendezvous.some((step) => step.kind === 'openFactor')).toBe(false);
+    expect(coreKit.adopted).toHaveLength(0);
   });
 
   it('leaves neither the scalar nor the adopted factor in this realm once the login is finished', async () => {

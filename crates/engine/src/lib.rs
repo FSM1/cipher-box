@@ -64,8 +64,9 @@ pub use content::{
     seal_one_chunk, test_connection, validate_byo_config,
 };
 pub use devices::{
-    ApprovalDecision, MalformedDeviceField, PendingApprovalView, approval_request_payload,
-    approval_response_payload, comparison_value, open_factor, rendezvous_public_key, seal_factor,
+    ApprovalDecision, MalformedDeviceField, PendingApprovalView, RelayedAnswerRefused,
+    adopt_factor, approval_request_payload, approval_response_payload, comparison_value,
+    rendezvous_public_key, seal_factor,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{

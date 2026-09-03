@@ -42,7 +42,7 @@ describe('the settings route', () => {
     expect(screen.getByTestId('settings-email').textContent).toBe('[an0n]');
   });
 
-  it('offers the recovery phrase while the account carries no factor policy', async () => {
+  it('offers the recovery phrase while this member holds none', async () => {
     renderSettings();
 
     await open('settings-recovery-setup');
@@ -50,13 +50,25 @@ describe('the settings route', () => {
     expect(screen.getByTestId('recovery-setup-explain')).toBeTruthy();
   });
 
-  it('stops offering it once the account carries one', () => {
-    authStore.recoveryEnrollment(true);
+  it('stops offering it once this member holds one', () => {
+    authStore.recoveryPhrase(true);
     renderSettings();
 
     // Offering it again would enroll a second time over a live policy.
     expect(screen.queryByTestId('settings-recovery-setup')).toBeNull();
     expect(screen.getByTestId('settings-recovery-on')).toBeTruthy();
+  });
+
+  /**
+   * A device that joined by approval holds no phrase, and the phrase is the
+   * path such a member still needs (ADR 0009 D2).
+   */
+  it('keeps offering it to a device that joined by approval', () => {
+    authStore.factorPolicy(true);
+    renderSettings();
+
+    expect(screen.getByTestId('settings-recovery-setup')).toBeTruthy();
+    expect(screen.queryByTestId('settings-recovery-on')).toBeNull();
   });
 
   it('hosts the vault settings form once the storage read lands', async () => {

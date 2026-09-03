@@ -185,6 +185,8 @@ export function DeviceApprovalWait({ onUseRecoveryPhrase, onCancel }: DeviceAppr
         sealedFactor: state.sealedFactor,
         requestId: rendezvous.requestId,
         requesterDevicePublicKey: rendezvous.devicePublicKey,
+        responderDevicePublicKey: state.responderDevicePublicKey,
+        responseSignature: state.responseSignature,
         scalar: cut,
       });
       wipe();

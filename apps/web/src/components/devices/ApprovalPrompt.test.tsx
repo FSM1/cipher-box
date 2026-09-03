@@ -8,6 +8,7 @@ import {
   FAKE_DENY_PAYLOAD,
   FAKE_DEVICE_PUBLIC_KEY,
   FAKE_EPHEMERAL_PUBLIC_KEY,
+  FAKE_REGISTERED_DEVICE,
   FAKE_SEALED_FACTOR,
   fakeComparisonValue,
   fakeCoreKitSession,
@@ -38,11 +39,17 @@ interface Mounted {
   coreKit: CoreKitCalls;
 }
 
-/** Mounts the prompt over an account that carries a factor policy and one row. */
+/**
+ * Mounts the prompt over an account that carries a factor policy, on a device
+ * the registry carries, with one row waiting.
+ */
 async function prompt(pending: PendingApprovalDescriptor[] = [PENDING]): Promise<Mounted> {
-  const engine = fakeEngineClient({ pendingApprovals: () => Promise.resolve(pending) });
+  const engine = fakeEngineClient({
+    pendingApprovals: () => Promise.resolve(pending),
+    devices: () => Promise.resolve([FAKE_REGISTERED_DEVICE]),
+  });
   const coreKit = fakeCoreKitSession({ loggedIn: true });
-  authStore.recoveryEnrollment(true);
+  authStore.factorPolicy(true);
   render(<ApprovalPrompt />, { wrapper: authWrapper(engine.client, coreKit.session) });
   await act(async () => undefined);
   return { engine: engine.calls, coreKit: coreKit.calls };
@@ -70,7 +77,10 @@ describe('the device approval prompt', () => {
   });
 
   it('raises nothing while the account carries no factor policy', async () => {
-    const engine = fakeEngineClient({ pendingApprovals: () => Promise.resolve([PENDING]) });
+    const engine = fakeEngineClient({
+      pendingApprovals: () => Promise.resolve([PENDING]),
+      devices: () => Promise.resolve([FAKE_REGISTERED_DEVICE]),
+    });
     render(<ApprovalPrompt />, {
       wrapper: authWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session),
     });
@@ -78,6 +88,29 @@ describe('the device approval prompt', () => {
 
     expect(screen.queryByTestId('approval-prompt')).toBeNull();
     expect(engine.calls.rendezvous).toEqual([]);
+  });
+
+  /**
+   * The pending list is account-scoped, so a device the registry does not carry
+   * would raise a prompt whose answer the API refuses.
+   */
+  it('raises nothing on a device the account registry does not carry', async () => {
+    let asked = 0;
+    const engine = fakeEngineClient({
+      pendingApprovals: () => {
+        asked += 1;
+        return Promise.resolve([PENDING]);
+      },
+      devices: () => Promise.resolve([{ ...FAKE_REGISTERED_DEVICE, publicKey: REQUESTER }]),
+    });
+    authStore.factorPolicy(true);
+    render(<ApprovalPrompt />, {
+      wrapper: authWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session),
+    });
+    await act(async () => undefined);
+
+    expect(screen.queryByTestId('approval-prompt')).toBeNull();
+    expect(asked).toBe(0);
   });
 
   it('holds the approve control shut until the member confirms the value matches', async () => {

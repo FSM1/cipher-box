@@ -63,8 +63,8 @@ export interface Auth {
   completeDeviceApproval(factorKey: Uint8Array): Promise<void>;
   /** Abandons it instead, ending the partial session on this device. */
   cancelRecovery(): Promise<void>;
-  /** Whether the signed-in account already carries a factor policy. */
-  recoveryEnrolled: boolean;
+  /** Whether this member holds a recovery phrase, which gates enrollment. */
+  recoveryPhraseHeld: boolean;
   /** Turns the policy on; the phrase it returns is shown exactly once. */
   enrollRecoveryPhrase(): Promise<RecoveryEnrollment>;
 }
@@ -75,7 +75,7 @@ export function useAuth(): Auth {
   const rebuildEngine = useRebuildEngine();
   const { session, status, error: coreKitError } = useCoreKit();
   const { exchange, collector } = useIdentity();
-  const { recoveryRequired, recoveryEnrolled } = useAuthState();
+  const { recoveryRequired, recoveryPhraseHeld } = useAuthState();
   // The engine's word, not this tab's: a logout in another tab zeroizes the one
   // engine the origin has, and a UI reading its own store would keep rendering
   // a vault over it.
@@ -166,8 +166,10 @@ export function useAuth(): Auth {
   const loginWithRecoveryPhrase = useCallback(
     async (phrase: string): Promise<void> => {
       await flow.recoverWithPhrase(phrase);
-      // A phrase that opened the account is proof of the policy it answered.
-      authStore.recoveryEnrollment(true);
+      // A phrase that opened the account is proof of the policy it answered,
+      // and proof that this member holds the phrase.
+      authStore.factorPolicy(true);
+      authStore.recoveryPhrase(true);
     },
     [flow]
   );
@@ -175,8 +177,9 @@ export function useAuth(): Auth {
   const completeDeviceApproval = useCallback(
     async (factorKey: Uint8Array): Promise<void> => {
       await flow.completeDeviceApproval(factorKey);
-      // An approval answers the same factor policy a phrase would.
-      authStore.recoveryEnrollment(true);
+      // An approval answers the same factor policy a phrase would, and it hands
+      // this device no phrase: the enrollment control stays on offer (D2).
+      authStore.factorPolicy(true);
     },
     [flow]
   );
@@ -192,7 +195,8 @@ export function useAuth(): Auth {
     setError(null);
     try {
       const enrolled = await session.enrollRecoveryPhrase();
-      authStore.recoveryEnrollment(true);
+      authStore.factorPolicy(true);
+      authStore.recoveryPhrase(true);
       return enrolled;
     } catch (failure) {
       setError(errorMessage(failure));
@@ -202,10 +206,13 @@ export function useAuth(): Auth {
     }
   }, [session]);
 
-  // The policy is read once a session settles, not per render: the SDK answers
-  // it by decompressing the account's public key.
+  // The factors are read once a session settles, not per render: the SDK
+  // answers by decompressing the account's public key. `hasRecoveryPhrase`
+  // reads what each factor says it is, so it answers for the phrase alone.
   useEffect(() => {
-    authStore.recoveryEnrollment(isAuthenticated && (session?.hasRecoveryPhrase() ?? false));
+    const holdsPhrase = isAuthenticated && (session?.hasRecoveryPhrase() ?? false);
+    authStore.recoveryPhrase(holdsPhrase);
+    authStore.factorPolicy(holdsPhrase);
   }, [isAuthenticated, session]);
 
   // A Core Kit session that survived the reload still has to hand the engine its
@@ -239,7 +246,7 @@ export function useAuth(): Auth {
     loginWithRecoveryPhrase,
     completeDeviceApproval,
     cancelRecovery,
-    recoveryEnrolled,
+    recoveryPhraseHeld,
     enrollRecoveryPhrase,
   };
 }

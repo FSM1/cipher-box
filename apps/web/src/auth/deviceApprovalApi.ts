@@ -33,7 +33,16 @@ export interface OpenedRendezvous {
 /** Where a rendezvous stands. `gone` covers expiry and an answer already read. */
 export type RendezvousState =
   | { status: 'pending'; expiresAt: string }
-  | { status: 'approved'; sealedFactor: string }
+  /**
+   * The approving device and its signature travel with the sealed bytes: the
+   * engine verifies that signature before it opens them (D4).
+   */
+  | {
+      status: 'approved';
+      sealedFactor: string;
+      responderDevicePublicKey: string;
+      responseSignature: string;
+    }
   | { status: 'denied' }
   | { status: 'gone' };
 
@@ -41,6 +50,8 @@ interface StatusBody {
   status: string;
   expiresAt: string;
   sealedFactor?: string;
+  responderDevicePublicKey?: string;
+  responseSignature?: string;
 }
 
 /**
@@ -136,7 +147,20 @@ function readState(body: StatusBody): RendezvousState {
       return { status: 'denied' };
     case 'approved':
       if (typeof body.sealedFactor !== 'string') throw new Error('the approval carried no factor');
-      return { status: 'approved', sealedFactor: body.sealedFactor };
+      // Refused rather than opened unverified: without the pair the engine has
+      // nothing to hold this answer to.
+      if (
+        typeof body.responderDevicePublicKey !== 'string' ||
+        typeof body.responseSignature !== 'string'
+      ) {
+        throw new Error('the approval carried no signature');
+      }
+      return {
+        status: 'approved',
+        sealedFactor: body.sealedFactor,
+        responderDevicePublicKey: body.responderDevicePublicKey,
+        responseSignature: body.responseSignature,
+      };
     default:
       throw new Error('the rendezvous answered with a state this build does not know');
   }

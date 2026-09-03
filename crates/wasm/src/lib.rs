@@ -2297,8 +2297,9 @@ mod rendezvous {
         })
     }
 
-    /// Open the factor an approver sealed, with the scalar that opened the
-    /// rendezvous.
+    /// Adopt the factor an approver sealed, with the scalar that opened the
+    /// rendezvous. The approver's signature over the answer is verified first,
+    /// so a relayed envelope nobody signed for is never opened (D4).
     ///
     /// The plaintext crosses into JS from the borrowed slice while its zeroizing
     /// owner is still alive: a `Vec` return would hand wasm-bindgen a buffer it
@@ -2309,15 +2310,19 @@ mod rendezvous {
         sealed_factor: &str,
         request_id: &str,
         requester_device_public_key: &str,
+        responder_device_public_key: &str,
+        response_signature: &str,
         rendezvous_scalar: Vec<u8>,
     ) -> Result<js_sys::Uint8Array, JsError> {
-        let opened = cipherbox_engine::open_factor(
+        let opened = cipherbox_engine::adopt_factor(
             sealed_factor,
             request_id,
             requester_device_public_key,
+            responder_device_public_key,
+            response_signature,
             &*scalar32(rendezvous_scalar)?,
         )
-        .map_err(|violation| JsError::new(violation.check()))?;
+        .map_err(|refusal| JsError::new(refusal.check()))?;
         Ok(js_sys::Uint8Array::from(opened.as_slice()))
     }
 

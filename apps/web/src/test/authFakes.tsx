@@ -55,6 +55,15 @@ export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
 /** This browser's own device identity key, in the hex the registry takes. */
 export const FAKE_DEVICE_PUBLIC_KEY = 'aa'.repeat(32);
 
+/** This browser as the account's device registry carries it. */
+export const FAKE_REGISTERED_DEVICE: RegisteredDeviceDescriptor = {
+  id: 'device-01',
+  publicKey: FAKE_DEVICE_PUBLIC_KEY,
+  label: 'this browser',
+  createdAt: '2026-08-31T09:00:00.000Z',
+  lastSeenAt: '2026-08-31T09:00:00.000Z',
+};
+
 /**
  * The secp256k1 key the engine cuts for one rendezvous, in the compressed SEC1
  * hex the field takes: a `02`/`03` prefix and 32 bytes of x, so 66 characters.

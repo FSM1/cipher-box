@@ -296,6 +296,8 @@ describe('LocalTransport', () => {
       sealedFactor: 'c2VhbA==',
       requestId: 'req-1',
       requesterDevicePublicKey: 'reqhex',
+      responderDevicePublicKey: 'apprhex',
+      responseSignature: 'sighex',
       scalar: factorScalar,
     });
     await tick();

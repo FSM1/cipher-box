@@ -32,8 +32,8 @@ const DIGITS = /^\d{6} \d{6} \d{6}$/;
 /** A factor is named by its SHA-256, so no assertion here holds one. */
 const NAMED = /^[0-9a-f]{64}$/;
 
-/** What the engine calls a seal it cannot open. */
-const SEAL_REFUSED = 'ecies-open-failed';
+/** What the engine calls an answer the approving device did not sign for. */
+const BINDING_REFUSED = 'device-response-binding-refused';
 
 /** One account, one identity subject, and the devices that share it. */
 interface Account {
@@ -114,12 +114,49 @@ test('an approval hands the requester the factor the approver minted', async ({ 
   const answered = await relay.poll(requestId);
   expect(answered.status).toBe('approved');
   if (answered.status !== 'approved') return;
-  expect(await requester.adopt(answered.sealedFactor, requestId, cut.ephemeralPublicKey)).toBe(
-    minted
-  );
+  expect(
+    await requester.adopt(
+      answered.sealedFactor,
+      requestId,
+      cut.ephemeralPublicKey,
+      answered.responderDevicePublicKey,
+      answered.responseSignature
+    )
+  ).toBe(minted);
 
   // A settled rendezvous is served once, so a second poll finds nothing.
   expect((await relay.poll(requestId)).status).toBe('gone');
+});
+
+test('an answer the approver did not sign is refused before its seal is opened', async ({
+  account,
+}) => {
+  const { approver, requester, relay } = account;
+
+  const cut = await requester.cut();
+  const { requestId } = await carry(relay, cut);
+  await approver.answer(await asked(approver, requestId), 'approve');
+  const answered = await relay.poll(requestId);
+  expect(answered.status).toBe('approved');
+  if (answered.status !== 'approved') return;
+
+  // The relay keeps the sealed bytes, which open under this device's own
+  // scalar, and swaps only the signature. The refusal names the binding rather
+  // than the seal (ADR 0009 D4).
+  const refused = await requester
+    .adopt(
+      answered.sealedFactor,
+      requestId,
+      cut.ephemeralPublicKey,
+      answered.responderDevicePublicKey,
+      '00'.repeat(64)
+    )
+    .then(
+      () => null,
+      (failure: Error) => failure
+    );
+  expect(refused?.message).toContain(BINDING_REFUSED);
+  await requester.forget(cut.ephemeralPublicKey);
 });
 
 test('a denial ends the rendezvous', async ({ account }) => {
@@ -194,18 +231,31 @@ test('a substituted ephemeral key shows other digits and its factor does not ope
   expect(answered.status).toBe('approved');
   if (answered.status !== 'approved') return;
 
-  // The device the member meant to let in cannot open it, and the refusal comes
-  // from the seal itself...
+  // The device the member meant to let in cannot adopt it: the answer is signed
+  // over the key that was substituted, and the honest device derives the key
+  // that signature must cover from its own scalar...
   const refused = await requester
-    .adopt(answered.sealedFactor, requestId, honest.ephemeralPublicKey)
+    .adopt(
+      answered.sealedFactor,
+      requestId,
+      honest.ephemeralPublicKey,
+      answered.responderDevicePublicKey,
+      answered.responseSignature
+    )
     .then(
       () => null,
       (failure: Error) => failure
     );
-  expect(refused?.message).toContain(SEAL_REFUSED);
+  expect(refused?.message).toContain(BINDING_REFUSED);
   // ...while the device that substituted the key does open it, which is the
   // whole loss the digits on the two screens are there to stop.
-  expect(await hostile.adopt(answered.sealedFactor, requestId, substitute.ephemeralPublicKey)).toBe(
-    minted
-  );
+  expect(
+    await hostile.adopt(
+      answered.sealedFactor,
+      requestId,
+      substitute.ephemeralPublicKey,
+      answered.responderDevicePublicKey,
+      answered.responseSignature
+    )
+  ).toBe(minted);
 });

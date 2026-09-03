@@ -303,6 +303,8 @@ describe('serveEngine read requests', () => {
       sealedFactor: 'c2VhbA==',
       requestId: 'req-1',
       requesterDevicePublicKey: 'reqhex',
+      responderDevicePublicKey: 'apprhex',
+      responseSignature: 'sighex',
       scalar,
     };
 

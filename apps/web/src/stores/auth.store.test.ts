@@ -9,13 +9,15 @@ describe('auth.store', () => {
       email: null,
       method: null,
       recoveryRequired: false,
-      recoveryEnrolled: false,
+      factorPolicy: false,
+      recoveryPhraseHeld: false,
     });
   });
 
   it('records the method and email a login carries, and nothing the last session left', () => {
     authStore.recoveryRequired();
-    authStore.recoveryEnrollment(true);
+    authStore.factorPolicy(true);
+    authStore.recoveryPhrase(true);
 
     authStore.signedIn('google', 'user@example.com');
 
@@ -25,19 +27,42 @@ describe('auth.store', () => {
       email: 'user@example.com',
       method: 'google',
       recoveryRequired: false,
-      recoveryEnrolled: false,
+      factorPolicy: false,
+      recoveryPhraseHeld: false,
     });
   });
 
-  it('holds the enrollment answer on once it is known, against a stale re-read', () => {
+  it('holds the factor policy on once it is known, against a stale re-read', () => {
     authStore.signedIn('google', 'user@example.com');
-    authStore.recoveryEnrollment(true);
+    authStore.factorPolicy(true);
 
     // Web3Auth's factor list can still answer "none" for a while after an
-    // enrollment lands; taking that would offer enrollment a second time.
-    authStore.recoveryEnrollment(false);
+    // enrollment lands; taking that would stop the approver poll.
+    authStore.factorPolicy(false);
 
-    expect(authStore.getState().recoveryEnrolled).toBe(true);
+    expect(authStore.getState().factorPolicy).toBe(true);
+  });
+
+  it('lets the phrase answer be cleared, because it reads one factor kind', () => {
+    authStore.signedIn('google', 'user@example.com');
+    authStore.recoveryPhrase(true);
+
+    authStore.recoveryPhrase(false);
+
+    expect(authStore.getState().recoveryPhraseHeld).toBe(false);
+  });
+
+  it('carries a factor policy without claiming this member holds a phrase', () => {
+    authStore.signedIn('google', 'user@example.com');
+
+    // What a device-approval join reaches: the account has a policy, and this
+    // device was handed no phrase (ADR 0009 D2).
+    authStore.factorPolicy(true);
+
+    expect(authStore.getState()).toMatchObject({
+      factorPolicy: true,
+      recoveryPhraseHeld: false,
+    });
   });
 
   it('accepts a wallet login with no email', () => {
@@ -59,7 +84,8 @@ describe('auth.store', () => {
   it('clears the session on sign-out', () => {
     authStore.signedIn('email', 'user@example.com');
     authStore.recoveryRequired();
-    authStore.recoveryEnrollment(true);
+    authStore.factorPolicy(true);
+    authStore.recoveryPhrase(true);
 
     authStore.signedOut();
 
@@ -67,7 +93,8 @@ describe('auth.store', () => {
       email: null,
       method: null,
       recoveryRequired: false,
-      recoveryEnrolled: false,
+      factorPolicy: false,
+      recoveryPhraseHeld: false,
     });
   });
 
