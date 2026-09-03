@@ -7,10 +7,9 @@
  * (blueprint/engine.md "Eager set and scope roots").
  */
 
-import { strict as assert } from 'node:assert';
 import { join } from 'node:path';
 import { FOLDER, grantOneFolder, listsInScope } from '../share';
-import { projects } from '../scenario';
+import { mountHeld, projects } from '../scenario';
 import type { Scenario, ScenarioContext } from '../scenario';
 
 const INSIDE = 'published-by-the-tab';
@@ -31,10 +30,7 @@ export const nestedScopeUnderMount: Scenario = {
     await mount.refresh();
     await projects(context, join(mount.mountRoot, FOLDER), INSIDE);
 
-    const read = await mount.status();
-    assert.equal(read.deadLetters, 0, 'the nested scope read dead-letters nothing at the mount');
-    assert.deepEqual(read.warnings, [], 'the nested scope read raises no warning at the mount');
-    assert.equal(read.mount.state, 'mounted', 'the nested scope read keeps the mount');
+    mountHeld(await mount.status(), 'the nested scope read');
 
     // The grantee holds the same scope root under its own grant, so the owner's
     // write below it reaches the grantee on the grantee's own next pass.

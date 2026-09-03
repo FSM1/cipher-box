@@ -20,6 +20,7 @@ import { Preview } from './preview';
 import { USAGE, webPort } from './options';
 import { isLoginSecret, type Scenario, type ScenarioContext } from './scenario';
 import { leaderFailover } from './scenarios/leaderFailover';
+import { mountWriteInPromotedScope } from './scenarios/mountWriteInPromotedScope';
 import { nestedScopeUnderMount } from './scenarios/nestedScopeUnderMount';
 import { offlineConvergence } from './scenarios/offlineConvergence';
 import { shareGrantCut } from './scenarios/shareGrantCut';
@@ -28,6 +29,7 @@ import { WebHost } from './web';
 const SCENARIOS: Scenario[] = [
   shareGrantCut,
   nestedScopeUnderMount,
+  mountWriteInPromotedScope,
   offlineConvergence,
   leaderFailover,
 ];

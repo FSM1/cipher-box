@@ -2,8 +2,10 @@
  * What every cross-client scenario gets, and the reads they share.
  */
 
+import { strict as assert } from 'node:assert';
 import { readdir } from 'node:fs/promises';
 import type { Instance } from '../../desktop-e2e/src/instance';
+import type { VaultStatus } from '../../desktop-e2e/src/control';
 import { poll } from '../../desktop-e2e/src/poll';
 import type { Deadlines } from '../../desktop-e2e/src/profile';
 import type { Stack } from '../../desktop-e2e/src/stack';
@@ -56,4 +58,88 @@ export async function projects(
       intervalMs: context.deadlines.intervalMs,
     }
   );
+}
+
+export function mountHeld(read: VaultStatus, what: string): void {
+  assert.equal(read.deadLetters, 0, `${what} dead-letters nothing at the mount`);
+  assert.deepEqual(read.warnings, [], `${what} raises no warning at the mount`);
+  assert.equal(read.mount.state, 'mounted', `${what} keeps the mount`);
+}
+
+export function listsAtRoot(context: ScenarioContext, host: WebHost, name: string): Promise<void> {
+  return passUntil(context, `${host.name} to list ${name} at the vault root`, 1, () =>
+    vaultRows(host, null, name, null)
+  );
+}
+
+export function listsInFolder(
+  context: ScenarioContext,
+  host: WebHost,
+  folder: string,
+  name: string
+): Promise<void> {
+  return passUntil(context, `${host.name} to list ${name} in ${folder}`, 1, () =>
+    vaultRows(host, folder, name, null)
+  );
+}
+
+export function dropsFromFolder(
+  context: ScenarioContext,
+  host: WebHost,
+  folder: string,
+  name: string,
+  survivor: string
+): Promise<void> {
+  return passUntil(context, `${host.name} to drop ${name} from ${folder}`, 0, () =>
+    vaultRows(host, folder, name, survivor)
+  );
+}
+
+async function vaultRows(
+  host: WebHost,
+  folder: string | null,
+  name: string,
+  survivor: string | null
+): Promise<number> {
+  await host.openFiles();
+  if (folder !== null) await host.files.open(folder);
+  await host.refresh();
+  return rowsListed(host, name, survivor);
+}
+
+/**
+ * The rows a landed listing holds for `name`, or `-1` when it did not land.
+ *
+ * A wait for zero rows takes a `survivor` the listing must also hold. A
+ * navigation click awaits nothing and `Locator.count` resolves at once, so a
+ * count read off a listing that never landed answers zero for a row that is
+ * still published. An absent anchor is therefore a pass to read again, not a
+ * result, so it reports a count no wait accepts.
+ */
+export async function rowsListed(
+  host: WebHost,
+  name: string,
+  survivor: string | null
+): Promise<number> {
+  if (survivor !== null && (await host.files.row(survivor).count()) !== 1) return -1;
+  return host.files.row(name).count();
+}
+
+/**
+ * Polls `rows` until one fresh pass counts exactly `want` of them.
+ *
+ * Each read is a whole pass rather than a retry of one: a record the network
+ * has not served yet is discovered, never delivered.
+ */
+export async function passUntil(
+  context: ScenarioContext,
+  what: string,
+  want: number,
+  rows: () => Promise<number>
+): Promise<void> {
+  await poll(rows, (count) => count === want, {
+    what: `a pass at ${what}`,
+    timeoutMs: context.deadlines.refreshMs,
+    intervalMs: context.deadlines.intervalMs,
+  });
 }
