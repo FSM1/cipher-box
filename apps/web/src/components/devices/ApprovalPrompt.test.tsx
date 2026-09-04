@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PendingApprovalDescriptor } from '@cipherbox/client';
 import { authStore } from '../../stores/auth.store';
 import {
@@ -111,6 +111,31 @@ describe('the device approval prompt', () => {
 
     expect(screen.queryByTestId('approval-prompt')).toBeNull();
     expect(asked).toBe(0);
+  });
+
+  /** Revoking a device elsewhere leaves this session signed in and polling. */
+  it('takes the prompt down once the registry stops carrying this device', async () => {
+    let registry = [FAKE_REGISTERED_DEVICE];
+    const engine = fakeEngineClient({
+      pendingApprovals: () => Promise.resolve([PENDING]),
+      devices: () => Promise.resolve(registry),
+    });
+    authStore.factorPolicy(true);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<ApprovalPrompt />, {
+        wrapper: authWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session),
+      });
+      await waitFor(() => expect(screen.getByTestId('approval-prompt')).toBeTruthy());
+
+      registry = [];
+      // One poll interval, as the component sets it.
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+
+      await waitFor(() => expect(screen.queryByTestId('approval-prompt')).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('holds the approve control shut until the member confirms the value matches', async () => {

@@ -136,6 +136,21 @@ describe('useAuth recovery phrase', () => {
     expect(authStore.getState().factorPolicy).toBe(true);
   });
 
+  /**
+   * A fresh tab starts with both answers off, so the policy has to come back
+   * from the account's own factor list rather than from the phrase reading.
+   */
+  it('restores the policy on a reload for a member who holds no phrase', async () => {
+    const engine = fakeEngineClient();
+    const { result } = mount(engine, fakeCoreKitSession({ factorPolicy: true, enrolled: false }));
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+    await waitFor(() => expect(result.current.auth.isAuthenticated).toBe(true));
+
+    await waitFor(() => expect(authStore.getState().factorPolicy).toBe(true));
+    expect(result.current.auth.recoveryPhraseHeld).toBe(false);
+  });
+
   it('ends the partial session when the member abandons the prompt', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession({ needsRecovery: true });

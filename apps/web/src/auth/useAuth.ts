@@ -138,15 +138,33 @@ export function useAuth(): Auth {
   const resuming = isReady && resumedFlow !== flow && (session?.isLoggedIn() ?? false);
   const isSignedOut = !isAuthenticated && !resuming && (isReady || status === 'unavailable');
 
+  /**
+   * The account's own factor list, which the SDK answers from the factors the
+   * account carries. The two readings are separate on purpose: a member who
+   * joined by device approval carries a policy and holds no phrase.
+   *
+   * Read after each sign-in as well as on a session change, because a landed
+   * sign-in clears the chrome's answers (`authStore.signedIn`) and would
+   * otherwise take a reading made moments before it with them.
+   */
+  const readFactors = useCallback(() => {
+    authStore.recoveryPhrase(session?.hasRecoveryPhrase() ?? false);
+    authStore.factorPolicy(session?.hasFactorPolicy() ?? false);
+  }, [session]);
+
   /** The recovery prompt is a transition, not a failure the host renders. */
-  const attempt = useCallback(async (login: Promise<void>): Promise<void> => {
-    try {
-      await login;
-    } catch (failure) {
-      if (!(failure instanceof RecoveryRequiredError)) throw failure;
-      authStore.recoveryRequired();
-    }
-  }, []);
+  const attempt = useCallback(
+    async (login: Promise<void>): Promise<void> => {
+      try {
+        await login;
+        readFactors();
+      } catch (failure) {
+        if (!(failure instanceof RecoveryRequiredError)) throw failure;
+        authStore.recoveryRequired();
+      }
+    },
+    [readFactors]
+  );
 
   const loginWithGoogle = useCallback(
     (idToken: string) => attempt(flow.loginWithGoogle(idToken)),
@@ -206,14 +224,11 @@ export function useAuth(): Auth {
     }
   }, [session]);
 
-  // The factors are read once a session settles, not per render: the SDK
-  // answers by decompressing the account's public key. `hasRecoveryPhrase`
-  // reads what each factor says it is, so it answers for the phrase alone.
+  // Once a session settles, not per render: the SDK answers by reading the
+  // account's factor list.
   useEffect(() => {
-    const holdsPhrase = isAuthenticated && (session?.hasRecoveryPhrase() ?? false);
-    authStore.recoveryPhrase(holdsPhrase);
-    authStore.factorPolicy(holdsPhrase);
-  }, [isAuthenticated, session]);
+    if (isAuthenticated) readFactors();
+  }, [isAuthenticated, readFactors]);
 
   // A Core Kit session that survived the reload still has to hand the engine its
   // secret; without this the tab renders logged-out over a live login.
@@ -221,12 +236,14 @@ export function useAuth(): Auth {
     if (!isReady || isAuthenticated) return;
     let live = true;
     void flow.resume().finally(() => {
-      if (live) setResumedFlow(flow);
+      if (!live) return;
+      readFactors();
+      setResumedFlow(flow);
     });
     return () => {
       live = false;
     };
-  }, [flow, isAuthenticated, isReady]);
+  }, [flow, isAuthenticated, isReady, readFactors]);
 
   return {
     isAuthenticated,

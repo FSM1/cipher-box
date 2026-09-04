@@ -536,6 +536,33 @@ describe('recovery phrase enrollment', () => {
     sdk.keyDetailsError = new Error('the key details are unreadable');
     expect(created.hasRecoveryPhrase()).toBe(false);
   });
+
+  /**
+   * The account-wide reading the approver poll runs on: a device-approval
+   * factor is a policy even though it is not a phrase.
+   */
+  it('reads the policy off the factor count, which any factor kind moves', () => {
+    const created = session();
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'deviceShare' })],
+      cd: [JSON.stringify({ module: 'deviceShare' })],
+    };
+    expect(created.hasFactorPolicy()).toBe(false);
+
+    sdk.shareDescriptions = {
+      ab: [JSON.stringify({ module: 'deviceShare' })],
+      cd: [JSON.stringify({ module: 'deviceShare' })],
+      ef: [JSON.stringify({ module: 'deviceShare' })],
+    };
+    expect(created.hasFactorPolicy()).toBe(true);
+    expect(created.hasRecoveryPhrase()).toBe(false);
+  });
+
+  it('reports no policy when the SDK will not hand over the factor list at all', () => {
+    const created = session();
+    sdk.keyDetailsError = new Error('the key details are unreadable');
+    expect(created.hasFactorPolicy()).toBe(false);
+  });
 });
 
 describe('a Core Kit login', () => {

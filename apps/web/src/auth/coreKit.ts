@@ -41,6 +41,12 @@ export interface WebCoreKitSession extends CoreKitSession {
   recoverWithPhrase(phrase: string): Promise<void>;
   /** Whether this account already carries a recovery phrase. */
   hasRecoveryPhrase(): boolean;
+  /**
+   * Whether the account carries a factor policy at all, of whatever kind. The
+   * account-wide reading, which a per-kind one cannot give: a member who joined
+   * by device approval answers `false` to `hasRecoveryPhrase` and `true` here.
+   */
+  hasFactorPolicy(): boolean;
   /** Turns the factor policy on; the phrase it returns is shown exactly once. */
   enrollRecoveryPhrase(): Promise<RecoveryEnrollment>;
   /**
@@ -82,6 +88,12 @@ export interface RecoveryEnrollment {
 
 /** What the Core Kit's own serializer emits, and so what a field must collect. */
 export const RECOVERY_PHRASE_WORDS = 24;
+
+/**
+ * How many factors an account with no policy carries. Past that count one has
+ * been enrolled, whatever kind it is.
+ */
+const UNENROLLED_FACTORS = 2;
 
 /**
  * Whether one of the SDK's flattened factor descriptions is the recovery
@@ -173,6 +185,16 @@ class Web3AuthSession implements WebCoreKitSession {
     // factor would take the count past its unenrolled two and report a phrase
     // nobody was ever shown.
     return described.some((entries) => entries.some(isRecoveryFactor));
+  }
+
+  hasFactorPolicy(): boolean {
+    try {
+      return (
+        Object.keys(this.coreKit.getKeyDetails().shareDescriptions).length > UNENROLLED_FACTORS
+      );
+    } catch {
+      return false;
+    }
   }
 
   async recoverWithPhrase(phrase: string): Promise<void> {

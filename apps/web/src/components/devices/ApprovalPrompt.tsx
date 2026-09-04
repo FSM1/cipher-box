@@ -63,22 +63,28 @@ export function ApprovalPrompt() {
   useEffect(() => {
     if (!polling) return;
     let live = true;
+    const facade = client.facade;
     // The pending list is account-scoped, so the policy alone would have every
     // signed-in browser raise prompts the API then refuses. Only a device the
-    // registry carries may answer one. Re-read each tick until it holds, so a
-    // registration made in this session needs no reload.
+    // registry carries may answer one, and a revocation elsewhere leaves this
+    // session signed in.
+    let mine: string | null = null;
+    const carriesThisDevice = async (): Promise<boolean> => {
+      mine ??= (await session?.deviceIdentity()?.publicKeyHex()) ?? null;
+      if (mine === null) return false;
+      return (await facade.devices()).some((row) => row.publicKey === mine);
+    };
+    // Read until it holds, so a registration made in this session needs no
+    // reload, and again whenever a row would be raised.
     let registered = false;
-    const facade = client.facade;
     const poll = async (): Promise<void> => {
       if (!registered) {
-        const identity = session?.deviceIdentity();
-        if (!identity) return;
-        const mine = await identity.publicKeyHex();
-        registered = (await facade.devices()).some((row) => row.publicKey === mine);
+        registered = await carriesThisDevice();
         if (!registered) return;
       }
       const rows = await facade.pendingApprovals();
-      if (live) setPending(rows);
+      if (rows.length > 0) registered = await carriesThisDevice();
+      if (live) setPending(registered ? rows : []);
     };
     // A failed poll is the ordinary offline case; the next one answers.
     const run = () => void poll().catch(() => undefined);
