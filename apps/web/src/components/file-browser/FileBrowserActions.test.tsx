@@ -1314,7 +1314,9 @@ describe('the queue overlay', () => {
       })
     );
 
-    expect(screen.getByTestId('queue-hold-notice').textContent).toContain('"notes.txt" is waiting');
+    expect(screen.getByTestId('queue-hold-notice').textContent).toContain(
+      '"notes.txt" waits on your bin'
+    );
 
     await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt')] }));
 

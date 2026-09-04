@@ -27,7 +27,7 @@ describe('the queue hold notice', () => {
     );
 
     const notice = screen.getByTestId('queue-hold-notice');
-    expect(notice.textContent).toContain('"child-0" is waiting');
+    expect(notice.textContent).toContain('"child-0" waits on your settings');
     expect(notice.textContent).toContain('your settings send bytes to your own storage provider');
   });
 
@@ -55,7 +55,7 @@ describe('the queue hold notice', () => {
     );
 
     const notice = screen.getByTestId('queue-hold-notice');
-    expect(notice.textContent).toContain('a change is waiting');
+    expect(notice.textContent).toContain('a change waits on your bin');
     expect(notice.textContent).not.toContain('child-0');
   });
 

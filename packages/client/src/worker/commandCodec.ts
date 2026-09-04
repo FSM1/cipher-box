@@ -7,13 +7,11 @@
  * No interpretation, no crypto — the engine below the facade owns all of that.
  */
 
-import { MAX_FRAGMENT_CHARS } from './protocol.js';
+import { BIN_INDEX_HOLD_CHECKS, MAX_FRAGMENT_CHARS, SETTINGS_HOLD_CHECKS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
   BinDescriptor,
-  BinIndexHoldCheck,
-  BinIndexHoldDescriptor,
   BinOriginDescriptor,
   BlockedOpDescriptor,
   ByoKind,
@@ -30,8 +28,6 @@ import type {
   ReceivedShareResolution,
   ReclaimStallReason,
   RegisteredDeviceDescriptor,
-  SettingsHoldCheck,
-  SettingsHoldDescriptor,
   SettingsOrigin,
   SharingDescriptor,
   SnapshotDescriptor,
@@ -500,23 +496,6 @@ function blockedHold(blocked: WasmBlockedOp | undefined): BlockedOpDescriptor | 
   };
 }
 
-const SETTINGS_HOLD_CHECKS: readonly SettingsHoldCheck[] = [
-  'byo-endpoint-invalid',
-  'byo-endpoint-insecure',
-  'byo-endpoint-blocked',
-  'byo-credential-invalid',
-  'byo-provider-missing',
-  'byo-no-external-ingress',
-];
-
-const BIN_INDEX_HOLD_CHECKS: readonly BinIndexHoldCheck[] = [
-  'unproven-first-run',
-  'suppressed',
-  'expired',
-  'timed-out',
-  'floor-unreadable',
-];
-
 /**
  * Reads a held queue head, refusing a check name this build does not know. A
  * hold whose cause cannot be named would render as an unexplained stall, which
@@ -533,14 +512,6 @@ function queueHold<TCheck extends string>(
     throw new Error(`unknown WASM ${held} hold check: ${hold.check}`);
   }
   return { opId: hold.opId, node: hold.node, check };
-}
-
-function settingsHold(hold: WasmQueueHold | undefined): SettingsHoldDescriptor | null {
-  return queueHold(hold, SETTINGS_HOLD_CHECKS, 'settings');
-}
-
-function binIndexHold(hold: WasmQueueHold | undefined): BinIndexHoldDescriptor | null {
-  return queueHold(hold, BIN_INDEX_HOLD_CHECKS, 'bin index');
 }
 
 function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
@@ -630,8 +601,8 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       reason: deadLetterReason(wasm, dead.reason),
     })),
     blocked: blockedHold(view.blocked),
-    settingsHold: settingsHold(view.settingsHold),
-    binIndexHold: binIndexHold(view.binIndexHold),
+    settingsHold: queueHold(view.settingsHold, SETTINGS_HOLD_CHECKS, 'settings'),
+    binIndexHold: queueHold(view.binIndexHold, BIN_INDEX_HOLD_CHECKS, 'bin index'),
     retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
   };

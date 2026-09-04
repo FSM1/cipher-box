@@ -100,25 +100,31 @@ export interface BlockedOpDescriptor {
  * names. Only the verdicts a settings hold can carry: a hold waits on the member
  * changing something, so a provider's own answer is retried rather than held.
  */
-export type SettingsHoldCheck =
-  | 'byo-endpoint-invalid'
-  | 'byo-endpoint-insecure'
-  | 'byo-endpoint-blocked'
-  | 'byo-credential-invalid'
-  | 'byo-provider-missing'
-  | 'byo-no-external-ingress';
+export const SETTINGS_HOLD_CHECKS = [
+  'byo-endpoint-invalid',
+  'byo-endpoint-insecure',
+  'byo-endpoint-blocked',
+  'byo-credential-invalid',
+  'byo-provider-missing',
+  'byo-no-external-ingress',
+] as const;
+
+export type SettingsHoldCheck = (typeof SETTINGS_HOLD_CHECKS)[number];
 
 /**
  * What a bin index load produced, as the engine's stable check names. Only the
  * outcomes a bin index hold can carry: a refusal of bytes the plane served is
  * charged as an attempt, and a stranded mint dead-letters.
  */
-export type BinIndexHoldCheck =
-  | 'unproven-first-run'
-  | 'suppressed'
-  | 'expired'
-  | 'timed-out'
-  | 'floor-unreadable';
+export const BIN_INDEX_HOLD_CHECKS = [
+  'unproven-first-run',
+  'suppressed',
+  'expired',
+  'timed-out',
+  'floor-unreadable',
+] as const;
+
+export type BinIndexHoldCheck = (typeof BIN_INDEX_HOLD_CHECKS)[number];
 
 /**
  * The queue head held over the member's own settings, as data (mirrors the

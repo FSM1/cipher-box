@@ -30,18 +30,19 @@ const BIN_INDEX_CAUSES: Record<BinIndexHoldCheck, string> = {
  * the hold does.
  */
 export function QueueHoldNotice({ view }: { view: SnapshotDescriptor | null }) {
-  if (view === null) return null;
   const holds: { key: string; text: string }[] = [];
-  if (view.settingsHold !== null) {
+  if (view?.settingsHold != null) {
+    const { node, check } = view.settingsHold;
     holds.push({
       key: 'settings',
-      text: `${held(view, view.settingsHold.node)} until you change your settings: ${SETTINGS_CAUSES[view.settingsHold.check]}.`,
+      text: `${held(view, node)} waits on your settings: ${SETTINGS_CAUSES[check]}.`,
     });
   }
-  if (view.binIndexHold !== null) {
+  if (view?.binIndexHold != null) {
+    const { node, check } = view.binIndexHold;
     holds.push({
       key: 'bin-index',
-      text: `${held(view, view.binIndexHold.node)} until your bin can be read: ${BIN_INDEX_CAUSES[view.binIndexHold.check]}.`,
+      text: `${held(view, node)} waits on your bin: ${BIN_INDEX_CAUSES[check]}.`,
     });
   }
   if (holds.length === 0) return null;
@@ -60,8 +61,8 @@ export function QueueHoldNotice({ view }: { view: SnapshotDescriptor | null }) {
   );
 }
 
-/** The held op's own node, named from the listing when this folder holds it. */
+/** The held op's own node, named from the listing when this folder lists it. */
 function held(view: SnapshotDescriptor, node: Uint8Array): string {
   const child = view.children.find((row) => sameNode(row.id, node));
-  return child === undefined ? 'a change is waiting' : `"${displayName(child.name)}" is waiting`;
+  return child === undefined ? 'a change' : `"${displayName(child.name)}"`;
 }
