@@ -22,7 +22,7 @@ use super::fanout::fanout_get_verify;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::head_cid_from_value;
 use crate::facade::NodeId;
-use crate::gate::{Adopted, GateError, GateRejection, RejectionReason};
+use crate::gate::{Adopted, GateError, GateRejection, PendingAdoption, RejectionReason};
 use crate::seams::{RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
 use crate::sync::model::Snapshot;
@@ -41,6 +41,18 @@ pub trait Adopter {
     /// `Err(GateError::Rejected)` is a fail-closed trust violation;
     /// `Err(GateError::Seam)` is host I/O.
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError>;
+
+    /// Commit the floor-law advance a [`GatePass::Deferred`] pass left
+    /// uncommitted, now that its record is durable last-known-good in the
+    /// snapshot cache ([`PendingAdoption`]).
+    ///
+    /// The default discards the advance, which is what an adopter that only ever
+    /// yields [`GatePass::Advanced`] owes — the floors it raises already moved
+    /// inside [`adopt`](Self::adopt). Discarding is fail-safe either way: a floor
+    /// that does not rise costs a re-adopt of the same record, never a lost bar.
+    async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Adopted, SeamError> {
+        Ok(pending.into_adopted())
+    }
 
     /// Recover the OWNER's own scope material for an equal-floor `Current` own
     /// record: the read seed the child pipeline and the drain seal under, and
@@ -88,11 +100,27 @@ pub struct OwnScopeMaterial {
     pub at_floor: Adopted,
 }
 
+/// A gate pass, and where its floor-law advance stands.
+///
+/// The advance is deferred wherever the accepted record has a durability step
+/// after the gate: the resolve driver writes the bytes to the snapshot cache and
+/// only then commits, so a failure between the two leaves the floors where the
+/// pass found them and the retry is a fresh adopt rather than an equal-floor
+/// `Current` that projects and caches nothing ([`PendingAdoption`]).
+pub enum GatePass {
+    /// The floor-law advance is still to be made:
+    /// [`Adopter::commit_adoption`] makes it once the record is durable.
+    Deferred(PendingAdoption),
+    /// The floors this record moves already moved inside the pass.
+    Advanced(Adopted),
+}
+
 /// A gate pass plus the transient write material a write-capable holder needs to
 /// keep its scope alive (blueprint/engine.md "Liveness").
 pub struct AdoptOutcome {
-    /// The authenticated read-body and floors.
-    pub adopted: Adopted,
+    /// The authenticated read-body and floors, and whether the floor-law advance
+    /// is still owed.
+    pub pass: GatePass,
     /// The scope write seed, `Some` only for a write-capable holder (a write
     /// grant). `None` for a read-only holder and the owner arm → the record is
     /// held keyless. Transient: [`resolve_and_hold`] derives the narrow per-name
@@ -251,7 +279,7 @@ where
         None => (ResolveOutcome::NoUpdate, GatedParts::default()),
         Some((verified, bytes)) => match adopter.adopt(name, &bytes).await {
             Ok(AdoptOutcome {
-                adopted,
+                pass,
                 write_scope_seed,
                 node_id,
                 read_scope_seed,
@@ -259,6 +287,12 @@ where
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
                 snapshot_cache.put(cache_key, &bytes).await?;
+                // Durable-first: the floors move on the pass that also left the
+                // bytes as last-known-good, never ahead of it.
+                let adopted = match pass {
+                    GatePass::Deferred(pending) => adopter.commit_adoption(pending).await?,
+                    GatePass::Advanced(adopted) => adopted,
+                };
                 (
                     ResolveOutcome::Adopted(adopted),
                     GatedParts {
@@ -473,7 +507,7 @@ pub(crate) fn refresh_base_from_resolved(
 #[cfg(test)]
 mod tests {
     use super::{
-        HeldMaterial, OwnScopeMaterial, ResolveMode, ResolveOutcome, head_cid_from_value,
+        GatePass, HeldMaterial, OwnScopeMaterial, ResolveMode, ResolveOutcome, head_cid_from_value,
         resolve_and_hold,
     };
 
@@ -553,7 +587,7 @@ mod tests {
                 .sequence;
             match self.verdict {
                 Verdict::Accept => Ok(super::AdoptOutcome {
-                    adopted: Adopted {
+                    pass: GatePass::Advanced(Adopted {
                         read_body: ReadBody::Folder {
                             created_at: 0,
                             modified_at: 0,
@@ -562,7 +596,7 @@ mod tests {
                         },
                         sequence,
                         epoch: 1,
-                    },
+                    }),
                     write_scope_seed: self.grant.map(|(seed, _)| Zeroizing::new(seed)),
                     node_id: self.grant.map(|(_, id)| id).unwrap_or([0u8; 16]),
                     read_scope_seed: None,

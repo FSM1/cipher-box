@@ -974,7 +974,10 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     }
 
     // The bookmark is durable — now commit the deferred floor advance, then ack.
-    let adopted = pending.commit(floors).await.map_err(AcceptError::Gate)?;
+    let adopted = pending
+        .commit(floors)
+        .await
+        .map_err(|e| AcceptError::Gate(GateError::Seam(e)))?;
     mailbox.ack(&item.item_id).await.map_err(AcceptError::Ack)?;
 
     Ok(AcceptOutcome {

@@ -21,7 +21,7 @@ use cipherbox_core::seal::{Envelope, ReadBody, has_grant_section, open_read_body
 use zeroize::Zeroizing;
 
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
-use super::resolve::{AdoptOutcome, Adopter, ResolveOutcome, resolve};
+use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, floor};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
@@ -334,11 +334,11 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             .await
             .map_err(GateError::Seam)?;
         Ok(AdoptOutcome {
-            adopted: Adopted {
+            pass: GatePass::Advanced(Adopted {
                 read_body,
                 sequence,
                 epoch: envelope.epoch,
-            },
+            }),
             write_scope_seed: None,
             node_id: envelope.id,
             read_scope_seed: None,

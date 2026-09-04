@@ -71,8 +71,8 @@ use crate::net::retire::{
     retire,
 };
 use crate::net::{
-    Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
-    Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
+    Adopter, ChildAdopter, GatePass, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead,
+    ResolveOutcome, Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -5226,7 +5226,7 @@ where
         }
         // The record is live from here: everything below is a local step.
         let local = local_head(&head);
-        let sequence = if is_scope_root {
+        let pass = if is_scope_root {
             let adopter = self.root_adopter(scope, &plane.end);
             adopter.hold_local_head(local);
             adopter
@@ -5248,14 +5248,25 @@ where
                 .await
                 .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?
         }
-        .adopted
-        .sequence;
+        .pass;
 
         // Cached implies gate-passing: these bytes just cleared the gate.
         self.snapshot_cache
             .put(name.as_str().as_bytes(), &record_bytes)
             .await
             .map_err(|e| PublishHalt::past_the_put(seam(e)))?;
+        // Durable-first: the floor moves on the self-adopt that also left these
+        // bytes as last-known-good.
+        let sequence = match pass {
+            GatePass::Advanced(adopted) => adopted.sequence,
+            GatePass::Deferred(pending) => {
+                pending
+                    .commit(self.floors)
+                    .await
+                    .map_err(|e| PublishHalt::past_the_put(seam(e)))?
+                    .sequence
+            }
+        };
         Ok(Published {
             sequence,
             held: HeldRecord {

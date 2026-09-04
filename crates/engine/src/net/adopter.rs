@@ -34,7 +34,7 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
 use super::publish::head_cid_from_value;
-use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
+use super::resolve::{AdoptOutcome, Adopter, GatePass, OwnScopeMaterial};
 use crate::content::limits::{resealable_root_rest_bytes, scope_root_rest_bytes};
 use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
@@ -265,9 +265,12 @@ pub(crate) async fn assemble_candidate<H: Http>(
 
 impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
-        self.adopt_root(name, record_bytes)
-            .await
-            .map(|(_, outcome)| outcome)
+        let (_, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
+        Ok(seeds.outcome(GatePass::Deferred(pending)))
+    }
+
+    async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Adopted, SeamError> {
+        pending.commit(self.floors).await
     }
 
     async fn recover_own_scope_material(
@@ -417,21 +420,20 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 }
 
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
-    /// The gate pass **plus** the candidate it authenticated, for the callers
-    /// that need the record's own grant section (the rotation seams' gated
-    /// scope-root read) rather than only the read-body outcome.
-    pub(crate) async fn adopt_root(
+    /// Stages 1-7 plus this reader's own write-seed recovery, with the floor-law
+    /// advance still deferred — that recovery can fail, and a floor spent on a
+    /// record the pass then discards strands the device below its own floor.
+    async fn gate_and_recover(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
-    ) -> Result<(Candidate, AdoptOutcome), GateError> {
+    ) -> Result<(Candidate, PendingAdoption, RecoveredSeeds), GateError> {
         let GatedRoot {
             candidate,
             pending,
             read_scope_seed,
             grant_write_scope_seed,
         } = self.gate_root(name, record_bytes).await?;
-        let adopted = pending.commit(self.floors).await?;
 
         let env = &candidate.envelope;
         let write_scope_seed = self
@@ -440,13 +442,27 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         let node_id = env.id;
         Ok((
             candidate,
-            AdoptOutcome {
-                adopted,
+            pending,
+            RecoveredSeeds {
+                read_scope_seed,
                 write_scope_seed,
                 node_id,
-                read_scope_seed: Some(read_scope_seed),
             },
         ))
+    }
+
+    /// The gate pass **plus** the candidate it authenticated, for the callers
+    /// that need the record's own grant section (the rotation seams' gated
+    /// scope-root read) rather than only the read-body outcome. A rotation arm
+    /// keeps no last-known-good of its own, so the advance commits here.
+    pub(crate) async fn adopt_root(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<(Candidate, Adopted, RecoveredSeeds), GateError> {
+        let (candidate, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
+        let adopted = pending.commit(self.floors).await.map_err(GateError::Seam)?;
+        Ok((candidate, adopted, seeds))
     }
 
     /// Stages 1-7 with the floor advance still deferred, so a caller that
@@ -517,6 +533,30 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             read_scope_seed,
             grant_write_scope_seed,
         })
+    }
+}
+
+/// The seeds one root gate pass recovered for this reader, plus the node id the
+/// held set and the drain key on. Terminal owner of both seeds.
+pub(crate) struct RecoveredSeeds {
+    /// The scope read seed the child read pipeline derives per-node read keys
+    /// from.
+    pub(crate) read_scope_seed: Zeroizing<[u8; 32]>,
+    /// The scope write seed, `Some` only for a write-capable holder.
+    pub(crate) write_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The scope-root node id (`id16`, the authenticated envelope id).
+    pub(crate) node_id: [u8; 16],
+}
+
+impl RecoveredSeeds {
+    /// This pass as the resolve driver reads it.
+    fn outcome(self, pass: GatePass) -> AdoptOutcome {
+        AdoptOutcome {
+            pass,
+            write_scope_seed: self.write_scope_seed,
+            node_id: self.node_id,
+            read_scope_seed: Some(self.read_scope_seed),
+        }
     }
 }
 
@@ -798,9 +838,13 @@ mod tests {
     use crate::content::root_block_cid;
 
     use crate::content::GatewaySource;
-    use crate::seams::HttpResponse;
+    use crate::net::resolve::{ResolveOutcome, resolve_gated};
+    use crate::seams::{EndpointId, HttpResponse};
     use crate::session::SessionIdentity;
-    use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
+    use crate::sync::tick::ResolveMode;
+    use crate::testkit::fakes::{
+        InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, ScriptedHttp,
+    };
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
         OwnerRootSpec, block_on, owner_root_fixture, padding,
@@ -1111,8 +1155,9 @@ mod tests {
 
         let outcome =
             block_on(adopter.adopt(&fx.name, &fx.record(1))).expect("the owner root adopts");
-        assert_eq!(outcome.adopted.sequence, 1);
-        assert_eq!(outcome.adopted.epoch, 1);
+        let adopted = committed(outcome.pass, &floors);
+        assert_eq!(adopted.sequence, 1);
+        assert_eq!(adopted.epoch, 1);
         assert_eq!(
             outcome.node_id, fx.root_id,
             "the scope-root id rides the outcome"
@@ -1149,6 +1194,18 @@ mod tests {
                 assert_eq!(r.check(), "commitment-invalid");
             }
             Err(GateError::Seam(e)) => panic!("expected a gate rejection, got seam {e}"),
+        }
+    }
+
+    /// The adopted record with the pass's deferred advance made — the step
+    /// [`resolve_gated`](crate::net::resolve_gated) takes once the bytes are
+    /// durable, for a test that keeps no snapshot cache.
+    fn committed(pass: GatePass, floors: &InMemoryFloorStore) -> Adopted {
+        match pass {
+            GatePass::Deferred(pending) => {
+                block_on(pending.commit(floors)).expect("the floors advance")
+            }
+            GatePass::Advanced(adopted) => adopted,
         }
     }
 
@@ -1296,12 +1353,15 @@ mod tests {
         http.enqueue_response(ok_response(fx.head_block.clone()));
         let floors = InMemoryFloorStore::default();
         seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
-        let adopted = block_on(
-            fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
-                .adopt(&fx.name, &fx.record(1)),
+        let adopted = committed(
+            block_on(
+                fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+                    .adopt(&fx.name, &fx.record(1)),
+            )
+            .expect("a record above the floor adopts")
+            .pass,
+            &floors,
         )
-        .expect("a record above the floor adopts")
-        .adopted
         .read_body;
 
         let http = ScriptedHttp::default();
@@ -1528,5 +1588,114 @@ mod tests {
                 .is_none(),
             "a transplanted owner-write-blob recovers no write seed"
         );
+    }
+
+    /// The key the write-seed recovery reads its bar under — the one leg of the
+    /// pass a test fails while every other floor read still answers.
+    fn write_epoch_floor_key(scope_id: &[u8; 16]) -> Vec<u8> {
+        [scope_id.as_slice(), b"/write-epoch"].concat()
+    }
+
+    /// The durable sequence floor at `name`, zero where none was ever raised.
+    fn sequence_floor(floors: &InMemoryFloorStore, name: &IpnsName) -> u64 {
+        block_on(floor::sequence_floor(floors, name.as_str().as_bytes()))
+            .expect("floor read")
+            .unwrap_or(0)
+    }
+
+    /// The write-seed recovery runs after the gate and can fail on its own. A
+    /// floor spent before it would leave the device holding a sequence floor for
+    /// a record it never rendered: every later resolve is then an equal-floor
+    /// `Current` that caches nothing, and no retry clears it.
+    #[test]
+    fn a_failed_write_seed_recovery_leaves_the_sequence_floor_unspent() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        floors.fail_epoch_floor_reads_for(&write_epoch_floor_key(&fx.scope_id));
+        let gw = gateway();
+        let record = fx.record(1);
+
+        assert!(
+            matches!(
+                block_on(
+                    fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+                        .adopt(&fx.name, &record)
+                ),
+                Err(GateError::Seam(_))
+            ),
+            "an unreadable write-epoch floor is availability, never a verdict"
+        );
+        assert_eq!(
+            sequence_floor(&floors, &fx.name),
+            0,
+            "the pass that discarded the record spent no floor"
+        );
+
+        floors.heal_floors();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let outcome = block_on(
+            fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+                .adopt(&fx.name, &record),
+        )
+        .expect("the retry adopts the same record");
+        assert_eq!(committed(outcome.pass, &floors).sequence, 1);
+        assert_eq!(sequence_floor(&floors, &fx.name), 1);
+    }
+
+    /// The same rule one step further out: the floor moves only once the
+    /// accepted record is durable last-known-good.
+    #[test]
+    fn a_failed_snapshot_write_leaves_the_sequence_floor_unspent_and_the_retry_caches() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let endpoint = EndpointId::new("e0");
+        let transport = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        transport.seed_record(&endpoint, fx.name.as_str(), fx.record(1));
+        let cache = InMemorySnapshotCache::default();
+        cache.fail_puts();
+        let gw = gateway();
+        let cache_key = fx.name.as_str().as_bytes().to_vec();
+
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        assert!(
+            block_on(resolve_gated(
+                &transport,
+                &cache,
+                &fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw),
+                &fx.name,
+                ResolveMode::CacheFirst,
+            ))
+            .is_err(),
+            "an unwritable snapshot cache aborts the resolve"
+        );
+        assert_eq!(
+            sequence_floor(&floors, &fx.name),
+            0,
+            "and leaves the floor where the pass found it"
+        );
+
+        cache.heal_puts();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let resolved = block_on(resolve_gated(
+            &transport,
+            &cache,
+            &fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw),
+            &fx.name,
+            ResolveMode::CacheFirst,
+        ))
+        .expect("the retry resolves");
+        assert!(
+            matches!(resolved.resolved.outcome, ResolveOutcome::Adopted(_)),
+            "the retry is a fresh adopt, not an equal-floor Current"
+        );
+        assert_eq!(cache.peek(&cache_key).as_deref(), Some(&fx.record(1)[..]));
+        assert_eq!(sequence_floor(&floors, &fx.name), 1);
     }
 }

@@ -25,7 +25,7 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    AdoptOutcome, Adopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl,
+    AdoptOutcome, Adopter, GatePass, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl,
     PublishError, PublishOutcome, PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError,
     ReviveRequest, eol_republish, keyless_re_put, publish, resolve, revive, run_liveness_loop,
 };
@@ -184,7 +184,7 @@ impl Adopter for StubAdopter {
         self.seen.lock().unwrap().push(sequence);
         match self.verdict {
             Verdict::Accept => Ok(AdoptOutcome {
-                adopted: Adopted {
+                pass: GatePass::Advanced(Adopted {
                     read_body: ReadBody::Folder {
                         created_at: 0,
                         modified_at: 0,
@@ -193,7 +193,7 @@ impl Adopter for StubAdopter {
                     },
                     sequence,
                     epoch: 1,
-                },
+                }),
                 write_scope_seed: None,
                 node_id: [0u8; 16],
                 read_scope_seed: None,

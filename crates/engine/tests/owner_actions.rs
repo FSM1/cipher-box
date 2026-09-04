@@ -3067,6 +3067,77 @@ fn a_stalled_grant_re_drives_into_the_scope_the_first_attempt_promoted() {
     }
 }
 
+/// The re-drive's own resume probe gates the promoted root, and that adoption
+/// raises a read-epoch floor at the folder's own scope id. Measured ahead of the
+/// probe, that floor reads as "a scope already stands here" and refuses every
+/// further drive, so a grant that stalls twice is stranded half moved with no
+/// command that can finish it.
+#[test]
+fn a_grant_that_stalls_twice_is_still_re_drivable() {
+    let mut fx = GrantScenario::new();
+    let one = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "one");
+    let two = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, "two");
+    let stalled = if one.0 < two.0 { two } else { one };
+
+    fx.world
+        .record_store
+        .fail_put_for(write_name(stalled).as_str());
+    for drive in 1..=2 {
+        assert!(
+            fx.grant_folder_to_recipient().is_err(),
+            "drive {drive} stalls in the interior move"
+        );
+    }
+    let promoted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the folder answers as a scope root both stalls left standing");
+    let first_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &promoted,
+    )
+    .expect("the owner blob yields the scope's override seed");
+    assert!(
+        block_on(floor::read_epoch_floor(
+            &fx.owner_device.floors(&SECRET),
+            &fx.folder.0
+        ))
+        .expect("floor read")
+        .is_some(),
+        "the second drive's resume probe adopted the promoted root and floored its scope id"
+    );
+
+    fx.world
+        .record_store
+        .heal_put_for(write_name(stalled).as_str());
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let resumed = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the folder still answers as a scope root");
+    let second_seed = published_override_seed(
+        &kdf::enc_subkey(&SECRET),
+        ENVELOPE_V,
+        fx.folder.0,
+        1,
+        &resumed,
+    )
+    .expect("the owner blob yields the scope's override seed");
+    assert!(
+        first_seed == second_seed,
+        "the third drive resumed against the root the first attempt promoted",
+    );
+    for node in [one, two] {
+        let head = published_head(&fx.world, &fx.blocks, &write_name(node))
+            .expect("the interior node is published");
+        assert_eq!(
+            decode_envelope(&head).expect("the head decodes").scope,
+            fx.folder.0,
+            "the move finished: every node of the subtree belongs to the granted scope",
+        );
+    }
+}
+
 /// A stalled interior publish leaves the grantee a scope root whose interior
 /// they cannot open, so the share pointer that names it is never posted.
 #[test]
