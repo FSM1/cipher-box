@@ -13542,7 +13542,8 @@ mod tests {
         use crate::testkit::{
             FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_POINTER_READ_KEY,
             OWNER_ROOT_SCOPE_SEED as SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-            OwnerRootFixture, OwnerRootSpec, owner_root_fixture, poll_tasks_once, with_cut_epoch,
+            OwnerRootFixture, OwnerRootSpec, owner_root_fixture, owner_root_fixture_at,
+            poll_tasks_once,
         };
 
         const CAP_SECRET: [u8; 32] = [7u8; 32];
@@ -14406,9 +14407,9 @@ mod tests {
             EcdsaSigner::from_scalar(&SHARER_SECRET).expect("valid scalar")
         }
 
-        /// The sharer's scope root, committing one read grant to this vault,
-        /// with its grant set signed at `cut_epoch`.
-        fn shared_root(cut_epoch: u64) -> OwnerRootFixture {
+        /// The sharer's scope root at `read_epoch`, committing one read grant to
+        /// this vault.
+        fn shared_root(read_epoch: u64) -> OwnerRootFixture {
             let name = derive_write_name(&WRITE_SCOPE_SEED, &SHARED_SCOPE_ROOT);
             let sharer_enc = kdf::enc_subkey(&SHARER_SECRET);
             let row = mint_grant_row(
@@ -14422,19 +14423,21 @@ mod tests {
                 CorePermission::Read,
             )
             .expect("a contributory recipient key");
-            let fixture = owner_root_fixture(OwnerRootSpec {
-                owner_identity: &sharer_identity(),
-                owner_enc: &sharer_enc.public(),
-                scope_id: SHARED_SCOPE_ROOT,
-                root_id: SHARED_SCOPE_ROOT,
-                children: Vec::new(),
-                child_scope_index: Vec::new(),
-                grants: vec![row],
-                parent_node_seed: None,
-                owner_write_blob_epoch: None,
-                write_history_link: Vec::new(),
-            });
-            with_cut_epoch(fixture, &sharer_identity(), cut_epoch)
+            owner_root_fixture_at(
+                OwnerRootSpec {
+                    owner_identity: &sharer_identity(),
+                    owner_enc: &sharer_enc.public(),
+                    scope_id: SHARED_SCOPE_ROOT,
+                    root_id: SHARED_SCOPE_ROOT,
+                    children: Vec::new(),
+                    child_scope_index: Vec::new(),
+                    grants: vec![row],
+                    parent_node_seed: None,
+                    owner_write_blob_epoch: None,
+                    write_history_link: Vec::new(),
+                },
+                read_epoch,
+            )
         }
 
         /// Serve `fixture` at the shared scope root's name at `sequence`, on
@@ -14457,16 +14460,17 @@ mod tests {
         }
 
         /// The accept leg and the `/shared` leg of one tick key their durable
-        /// floors under `ContactLabel::of(contact_label_seed, sharer)`. Only one
-        /// seed reaches both today; a seed one leg does not share with the other
-        /// reads an absent floor as a genuine zero, and the replayed pre-cut set
-        /// below would re-grant the row instead of refusing it.
+        /// floors under `ContactLabel::of(contact_label_seed, sharer)`. One seed
+        /// reaches both, and nothing else fails if a later edit hands one leg
+        /// another: a floor read under the wrong label finds no key, an absent
+        /// floor reads as a genuine zero, and the superseded record below reads
+        /// as granted.
         #[test]
         fn the_accept_and_the_shared_read_hold_one_scope_to_one_contact_label_seed() {
             let world = FakeWorld::new();
             let device = world.device(&owner_identity().verifying_key().to_sec1());
-            let post_cut = shared_root(1);
-            let pre_cut = shared_root(0);
+            let current = shared_root(EPOCH + 1);
+            let superseded = shared_root(EPOCH);
             let (head_block, head_cid, root_name) = owner_root();
             seed_vault_pointer(&device, &root_name);
             for endpoint in device.record_store.endpoints() {
@@ -14474,8 +14478,8 @@ mod tests {
             }
             let blocks = Blocks::default();
             blocks.put(head_block);
-            blocks.put(post_cut.head_block.clone());
-            blocks.put(pre_cut.head_block.clone());
+            blocks.put(current.head_block.clone());
+            blocks.put(superseded.head_block.clone());
             serve_http(&device, &blocks, 600);
             let (mut engine, _events) = engine_with_api(
                 &device,
@@ -14497,7 +14501,7 @@ mod tests {
             )
             .expect("the sharer's code imports");
 
-            seed_shared_record(&device, &post_cut, 2);
+            seed_shared_record(&device, &current, 2);
             block_on(post_sealed(
                 &world.mailbox_hub.mailbox_for(b"sharer"),
                 &kdf::enc_subkey(&CAP_SECRET).public(),
@@ -14506,7 +14510,7 @@ mod tests {
                 ENVELOPE_V,
                 &sharer_identity(),
                 &SharePointer {
-                    scope_root_name: post_cut.name.as_str().as_bytes().to_vec(),
+                    scope_root_name: current.name.as_str().as_bytes().to_vec(),
                     sharer_identity_pk: sharer_identity().verifying_key().to_sec1(),
                     display_name: "shared-folder".to_owned(),
                     permission: CorePermission::Read,
@@ -14524,10 +14528,11 @@ mod tests {
                 "the accepted share resolves under the set that commits it"
             );
 
-            // The set the owner already cut, replayed at a higher sequence. Only
-            // the cut-epoch floor the accept raised tells it from the one in
-            // force, and that floor is filed under the sharer's contact label.
-            seed_shared_record(&device, &pre_cut, 3);
+            // The record the sharer's own read rotation superseded, replayed at a
+            // higher sequence. The read-epoch floor the accept raised is the only
+            // bar that tells it from the one in force, and no other leg of the
+            // pass raises that floor.
+            seed_shared_record(&device, &superseded, 3);
             // The `/shared` refresh is damped, so the pass that re-resolves the
             // replay is not the next one.
             for _ in 0..4 {
@@ -14536,8 +14541,8 @@ mod tests {
             }
             assert_eq!(
                 shared_row_verdict(&engine),
-                Some(ResolutionClass::Unresolvable),
-                "a set the cut superseded is no owner-signed record, so the row leaves granted"
+                Some(ResolutionClass::EpochLag),
+                "a record behind the floor the accept raised must leave the row granted"
             );
         }
 
