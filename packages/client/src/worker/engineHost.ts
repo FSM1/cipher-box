@@ -226,6 +226,8 @@ function dispatchRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): Devic
           text(step.sealedFactor, 'sealedFactor'),
           text(step.requestId, 'requestId'),
           text(step.requesterDevicePublicKey, 'requesterDevicePublicKey'),
+          text(step.responderDevicePublicKey, 'responderDevicePublicKey'),
+          text(step.responseSignature, 'responseSignature'),
           bytes(step.scalar, 'scalar')
         ),
       };

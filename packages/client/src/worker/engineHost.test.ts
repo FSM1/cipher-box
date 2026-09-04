@@ -621,6 +621,8 @@ describe('EngineHost device rendezvous', () => {
       sealedFactor: 'c2VhbA==',
       requestId: 'req-1',
       requesterDevicePublicKey: 'reqhex',
+      responderDevicePublicKey: 'apprhex',
+      responseSignature: 'sighex',
       scalar: factorScalar,
     });
 
@@ -682,9 +684,11 @@ describe('EngineHost device rendezvous', () => {
         sealedFactor: 'c2VhbA==',
         requestId: 'req-1',
         requesterDevicePublicKey: 'reqhex',
+        responderDevicePublicKey: 'apprhex',
+        responseSignature: 'sighex',
         scalar: scalarBytes(),
       },
-      ['openDeviceFactor', 'c2VhbA==', 'req-1', 'reqhex', scalarBytes()],
+      ['openDeviceFactor', 'c2VhbA==', 'req-1', 'reqhex', 'apprhex', 'sighex', scalarBytes()],
       { kind: 'factor', factorKey: Uint8Array.of(7, 7) },
     ],
   ] as const)(

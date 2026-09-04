@@ -32,7 +32,7 @@ type Answering = 'approve' | 'deny';
 export function ApprovalPrompt() {
   const client = useEngine();
   const { session } = useCoreKit();
-  const { recoveryEnrolled } = useAuthState();
+  const { factorPolicy } = useAuthState();
   const online = useOnlineStatus();
   const visible = useVisibility();
   const [pending, setPending] = useState<PendingApprovalDescriptor[]>([]);
@@ -58,27 +58,43 @@ export function ApprovalPrompt() {
 
   // A rendezvous expires, so a backgrounded or offline tab has nothing to poll
   // for; an account with no factor policy can hold no approvable request.
-  const polling = client !== null && recoveryEnrolled && online && visible;
+  const polling = client !== null && factorPolicy && online && visible;
 
   useEffect(() => {
     if (!polling) return;
     let live = true;
     const facade = client.facade;
-    const poll = () =>
-      void facade.pendingApprovals().then(
-        (rows) => {
-          if (live) setPending(rows);
-        },
-        // A failed poll is the ordinary offline case; the next one answers.
-        () => undefined
-      );
-    poll();
-    const tick = setInterval(poll, POLL_MS);
+    // The pending list is account-scoped, so the policy alone would have every
+    // signed-in browser raise prompts the API then refuses. Only a device the
+    // registry carries may answer one, and a revocation elsewhere leaves this
+    // session signed in.
+    let mine: string | null = null;
+    const carriesThisDevice = async (): Promise<boolean> => {
+      mine ??= (await session?.deviceIdentity()?.publicKeyHex()) ?? null;
+      if (mine === null) return false;
+      return (await facade.devices()).some((row) => row.publicKey === mine);
+    };
+    // Read until it holds, so a registration made in this session needs no
+    // reload, and again whenever a row would be raised.
+    let registered = false;
+    const poll = async (): Promise<void> => {
+      if (!registered) {
+        registered = await carriesThisDevice();
+        if (!registered) return;
+      }
+      const rows = await facade.pendingApprovals();
+      if (rows.length > 0) registered = await carriesThisDevice();
+      if (live) setPending(registered ? rows : []);
+    };
+    // A failed poll is the ordinary offline case; the next one answers.
+    const run = () => void poll().catch(() => undefined);
+    run();
+    const tick = setInterval(run, POLL_MS);
     return () => {
       live = false;
       clearInterval(tick);
     };
-  }, [client, polling]);
+  }, [client, polling, session]);
 
   const request = pending.find((row) => !retired.includes(row.requestId)) ?? null;
   const requestId = request?.requestId ?? null;

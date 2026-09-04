@@ -55,6 +55,15 @@ export const FAKE_PHRASE = `${'word '.repeat(23)}last`;
 /** This browser's own device identity key, in the hex the registry takes. */
 export const FAKE_DEVICE_PUBLIC_KEY = 'aa'.repeat(32);
 
+/** This browser as the account's device registry carries it. */
+export const FAKE_REGISTERED_DEVICE: RegisteredDeviceDescriptor = {
+  id: 'device-01',
+  publicKey: FAKE_DEVICE_PUBLIC_KEY,
+  label: 'this browser',
+  createdAt: '2026-08-31T09:00:00.000Z',
+  lastSeenAt: '2026-08-31T09:00:00.000Z',
+};
+
 /**
  * The secp256k1 key the engine cuts for one rendezvous, in the compressed SEC1
  * hex the field takes: a `02`/`03` prefix and 32 bytes of x, so 66 characters.
@@ -455,8 +464,10 @@ export function fakeCoreKitSession(
     restore?: () => Promise<void>;
     /** Turns every login into one that stops at the factor policy. */
     needsRecovery?: boolean;
-    /** Whether this account already carries a factor policy. */
+    /** Whether this member already holds a recovery phrase. */
     enrolled?: boolean;
+    /** Whether the account carries a policy of any factor kind; `enrolled` implies one. */
+    factorPolicy?: boolean;
     /** What an enrollment could not confirm after the policy was cut. */
     enrollWarning?: string;
     /** What `identityToken` reports before a login named one; `null` for a restore. */
@@ -498,6 +509,9 @@ export function fakeCoreKitSession(
       return Promise.resolve();
     },
     hasRecoveryPhrase: () => options.enrolled ?? false,
+    // A phrase is one factor, so an account that carries one carries a policy;
+    // `factorPolicy` says so on its own for a device-approval-only member.
+    hasFactorPolicy: () => options.factorPolicy ?? options.enrolled ?? false,
     recoverWithPhrase(phrase) {
       calls.phrases.push(phrase);
       if (phrase !== FAKE_PHRASE) {

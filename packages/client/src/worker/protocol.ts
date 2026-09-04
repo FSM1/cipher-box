@@ -410,6 +410,9 @@ export type DeviceRendezvousStep =
       sealedFactor: string;
       requestId: string;
       requesterDevicePublicKey: string;
+      /** The approving device and its signature over the whole answer (D4). */
+      responderDevicePublicKey: string;
+      responseSignature: string;
       scalar: Uint8Array;
     };
 

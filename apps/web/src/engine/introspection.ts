@@ -108,10 +108,17 @@ export interface ApprovalTaps {
   ): Promise<string | null>;
   /**
    * Opens a factor an approver sealed back to a rendezvous this tab cut, and
-   * reports its digest. Rejects when the seal does not open, which is what a
-   * substituted ephemeral key leaves the honest requester holding.
+   * reports its digest. Rejects when the answer's signature does not hold or
+   * the seal does not open, which is what a substituted ephemeral key leaves
+   * the honest requester holding.
    */
-  adopt(sealedFactor: string, requestId: string, ephemeralPublicKey: string): Promise<string>;
+  adopt(
+    sealedFactor: string,
+    requestId: string,
+    ephemeralPublicKey: string,
+    responderDevicePublicKey: string,
+    responseSignature: string
+  ): Promise<string>;
   /** Erases the scalar of a rendezvous that ended without a factor. */
   forget(ephemeralPublicKey: string): void;
 }
@@ -266,7 +273,13 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
       return minted;
     },
 
-    async adopt(sealedFactor, requestId, ephemeralPublicKey) {
+    async adopt(
+      sealedFactor,
+      requestId,
+      ephemeralPublicKey,
+      responderDevicePublicKey,
+      responseSignature
+    ) {
       const cut = cuts.get(ephemeralPublicKey);
       if (cut === undefined) throw new Error('this tab cut no rendezvous at that key');
       let opened;
@@ -276,6 +289,8 @@ function approvalTaps(facade: EngineFacade): ApprovalTaps {
           sealedFactor,
           requestId,
           requesterDevicePublicKey: cut.devicePublicKey,
+          responderDevicePublicKey,
+          responseSignature,
           scalar: cut.scalar,
         });
       } finally {

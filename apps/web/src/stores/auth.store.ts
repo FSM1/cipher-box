@@ -23,18 +23,24 @@ export interface AuthState {
    */
   readonly recoveryRequired: boolean;
   /**
-   * This account carries a factor policy. Shared for the same reason, and one
-   * more: the menu that offers enrollment and the dialog that performs it are
-   * separate consumers, and a menu still offering it would enroll twice.
+   * This account carries a factor policy — account-wide, whatever kind of
+   * factor answered it. What the approver poll runs on.
    */
-  readonly recoveryEnrolled: boolean;
+  readonly factorPolicy: boolean;
+  /**
+   * This member holds a recovery phrase, which is one factor kind and not the
+   * policy itself: a device that joined by approval holds none (ADR 0009 D2).
+   * What the enrollment control runs on, so the two cannot disagree.
+   */
+  readonly recoveryPhraseHeld: boolean;
 }
 
 const SIGNED_OUT: AuthState = Object.freeze({
   email: null,
   method: null,
   recoveryRequired: false,
-  recoveryEnrolled: false,
+  factorPolicy: false,
+  recoveryPhraseHeld: false,
 });
 
 let state: AuthState = SIGNED_OUT;
@@ -47,7 +53,8 @@ function set(next: AuthState): void {
     next.email === state.email &&
     next.method === state.method &&
     next.recoveryRequired === state.recoveryRequired &&
-    next.recoveryEnrolled === state.recoveryEnrolled
+    next.factorPolicy === state.factorPolicy &&
+    next.recoveryPhraseHeld === state.recoveryPhraseHeld
   ) {
     return;
   }
@@ -71,7 +78,8 @@ export const authStore = {
       email: method === 'wallet' ? null : email,
       method,
       recoveryRequired: false,
-      recoveryEnrolled: false,
+      factorPolicy: false,
+      recoveryPhraseHeld: false,
     });
   },
   signedOut(): void {
@@ -88,12 +96,20 @@ export const authStore = {
   /**
    * What the account's factor policy reads as. Latches on for the session:
    * Web3Auth's own factor list can still answer "none" for a while after an
-   * enrollment lands, and taking that answer would offer enrollment again on an
-   * account that is already enrolled. A sign-in or sign-out clears it, so the
-   * next session reads the policy afresh.
+   * enrollment lands, and an approver poll that stopped on that answer would
+   * leave a member's other device waiting. A sign-in or sign-out clears it, so
+   * the next session reads the policy afresh.
    */
-  recoveryEnrollment(enrolled: boolean): void {
-    set({ ...state, recoveryEnrolled: state.recoveryEnrolled || enrolled });
+  factorPolicy(carries: boolean): void {
+    set({ ...state, factorPolicy: state.factorPolicy || carries });
+  },
+  /**
+   * Whether this member holds a recovery phrase. Assigned, not latched: it
+   * answers for one factor kind, and only a reading of the account's own
+   * factors may set it.
+   */
+  recoveryPhrase(held: boolean): void {
+    set({ ...state, recoveryPhraseHeld: held });
   },
 };
 

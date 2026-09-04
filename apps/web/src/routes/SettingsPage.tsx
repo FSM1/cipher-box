@@ -21,7 +21,7 @@ type Raised = 'recovery' | 'forget' | null;
  */
 export function SettingsPage() {
   const account = useEngineAccount();
-  const { email, method, recoveryEnrolled } = useAuthState();
+  const { email, method, recoveryPhraseHeld } = useAuthState();
   const [raised, setRaised] = useState<Raised>(null);
   const { storage, error: storageError, reload } = useVaultStorage();
 
@@ -49,7 +49,7 @@ export function SettingsPage() {
             the one export that opens this account without any device it is enrolled on. shown once,
             at enrollment.
           </p>
-          {recoveryEnrolled ? (
+          {recoveryPhraseHeld ? (
             <p className="settings-ok" data-testid="settings-recovery-on">
               {'// recovery phrase on'}
             </p>

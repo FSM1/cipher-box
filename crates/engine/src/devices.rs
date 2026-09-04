@@ -378,7 +378,10 @@ pub fn seal_factor(
 /// Every failure answers with the one [`TrustViolation::EciesOpenFailed`]: the
 /// envelope came off a relay, so a tag mismatch is tampering rather than a
 /// mistyped field, and no caller may learn which part was wrong.
-pub fn open_factor(
+///
+/// Private: [`adopt_factor`] is the one door, so no host can open an envelope
+/// the approving device never signed for.
+fn open_factor(
     sealed_factor: &str,
     request_id: &str,
     requester_device_public_key_hex: &str,
@@ -393,6 +396,93 @@ pub fn open_factor(
     let mut enc = [0u8; ENC_LEN];
     enc.copy_from_slice(&envelope[..ENC_LEN]);
     ecies_open(rendezvous_scalar, &enc, &aad, &envelope[ENC_LEN..])
+}
+
+/// Why a requester refused the answer a relay carried back to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RelayedAnswerRefused {
+    /// The approving device's signature did not cover this answer (D4).
+    Unsigned,
+    /// The envelope itself did not open ([`open_factor`]).
+    Sealed(TrustViolation),
+}
+
+impl RelayedAnswerRefused {
+    /// The stable name of the check that fired; safe to surface and to log.
+    pub fn check(&self) -> &'static str {
+        match self {
+            Self::Unsigned => "device-response-binding-refused",
+            Self::Sealed(violation) => violation.check(),
+        }
+    }
+}
+
+/// Whether a relayed answer still carries the approving device's own signature
+/// over every field it answered with (D4). The requester-side mirror of
+/// [`request_binding_holds`]. One boolean, no reason: a caller must not learn
+/// which part failed.
+fn response_binding_holds(
+    device_public_key_hex: &str,
+    request_id: &str,
+    decision: ApprovalDecision,
+    ephemeral_public_key_hex: &str,
+    sealed_factor: &str,
+    signature_hex: &str,
+) -> bool {
+    let Ok(payload) = approval_response_payload(
+        device_public_key_hex,
+        request_id,
+        decision,
+        ephemeral_public_key_hex,
+        sealed_factor,
+    ) else {
+        return false;
+    };
+    let (Some(verifier), Some(signature)) = (
+        ed25519_verifier(device_public_key_hex),
+        ed25519_signature(signature_hex),
+    ) else {
+        return false;
+    };
+    verifier.verify(&payload, &signature)
+}
+
+/// Adopt the factor a relayed approval carries, while the approving device's
+/// signature still covers the whole of that answer (D4).
+///
+/// The signature is checked before the envelope, so bytes a relay sealed to
+/// this rendezvous key itself are refused rather than opened. The ephemeral key
+/// the signature binds is re-derived from this device's own scalar, never taken
+/// from the relayed echo.
+pub fn adopt_factor(
+    sealed_factor: &str,
+    request_id: &str,
+    requester_device_public_key_hex: &str,
+    responder_device_public_key_hex: &str,
+    response_signature_hex: &str,
+    rendezvous_scalar: &[u8; SECRET_LEN],
+) -> Result<Zeroizing<Vec<u8>>, RelayedAnswerRefused> {
+    // A scalar outside the group opens nothing, which is the verdict
+    // `open_factor` answers the same call with.
+    let ephemeral_public_key = rendezvous_public_key(rendezvous_scalar)
+        .map_err(|_| RelayedAnswerRefused::Sealed(TrustViolation::EciesOpenFailed))?;
+    if !response_binding_holds(
+        responder_device_public_key_hex,
+        request_id,
+        ApprovalDecision::Approve,
+        &ephemeral_public_key,
+        sealed_factor,
+        response_signature_hex,
+    ) {
+        return Err(RelayedAnswerRefused::Unsigned);
+    }
+    open_factor(
+        sealed_factor,
+        request_id,
+        requester_device_public_key_hex,
+        rendezvous_scalar,
+    )
+    .map_err(RelayedAnswerRefused::Sealed)
 }
 
 /// The compressed public key a requester offers, in the lowercase hex the
@@ -666,6 +756,161 @@ mod tests {
         );
         let other_device = format!("ab{}", &DEVICE[2..]);
         assert!(open_factor(&sealed, REQUEST, &other_device, &requester).is_err());
+    }
+
+    /// One approver, one sealed factor, and the answer that approver signed
+    /// over it.
+    fn answered(
+        approver_seed: [u8; SECRET_LEN],
+        requester_scalar: &[u8; SECRET_LEN],
+    ) -> (String, String, String) {
+        let signer = Ed25519Signer::from_seed(approver_seed);
+        let approver = hex_lower(&signer.verifying_key().to_bytes());
+        let eph = ephemeral(requester_scalar);
+        let sealed = seal_factor(&eph, REQUEST, DEVICE, &[9u8; SECRET_LEN], b"a fresh factor")
+            .expect("seal");
+        let payload =
+            approval_response_payload(&approver, REQUEST, ApprovalDecision::Approve, &eph, &sealed)
+                .expect("payload");
+        let signature = hex_lower(&signer.sign(&payload).to_bytes());
+        (approver, sealed, signature)
+    }
+
+    #[test]
+    fn an_answer_the_approver_signed_hands_over_its_factor() {
+        let scalar = [4u8; SECRET_LEN];
+        let (approver, sealed, signature) = answered([21u8; SECRET_LEN], &scalar);
+        assert_eq!(
+            adopt_factor(&sealed, REQUEST, DEVICE, &approver, &signature, &scalar)
+                .expect("adopt")
+                .as_slice(),
+            b"a fresh factor"
+        );
+    }
+
+    /// The envelope here opens under this scalar, so the signature check is all
+    /// that stands between a relay's own bytes and the factor the requester
+    /// adopts. Every field the answer binds is varied one at a time.
+    #[test]
+    fn an_answer_the_approver_did_not_sign_never_reaches_the_envelope() {
+        let scalar = [4u8; SECRET_LEN];
+        let (approver, sealed, signature) = answered([21u8; SECRET_LEN], &scalar);
+        let other = hex_lower(
+            &Ed25519Signer::from_seed([22u8; SECRET_LEN])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let refused = |responder: &str, sig: &str| {
+            adopt_factor(&sealed, REQUEST, DEVICE, responder, sig, &scalar).unwrap_err()
+        };
+        // A relay that answers under a key of its own, and a signature that
+        // covers nothing this answer says.
+        assert_eq!(refused(&other, &signature), RelayedAnswerRefused::Unsigned);
+        assert_eq!(
+            refused(&approver, &"00".repeat(ED25519_SIGNATURE_LEN)),
+            RelayedAnswerRefused::Unsigned
+        );
+        assert_eq!(
+            refused(&approver, "not hex"),
+            RelayedAnswerRefused::Unsigned
+        );
+        assert_eq!(refused(&approver, ""), RelayedAnswerRefused::Unsigned);
+        assert_eq!(
+            refused(&"ff".repeat(ED25519_PUBLIC_LEN), &signature),
+            RelayedAnswerRefused::Unsigned
+        );
+        // The refusal names its own check rather than the envelope's.
+        assert_eq!(
+            refused(&other, &signature).check(),
+            "device-response-binding-refused"
+        );
+    }
+
+    /// The answer is bound to the request it answers, to the bytes it carries,
+    /// and to the rendezvous key this device itself cut.
+    #[test]
+    fn an_answer_lifted_off_its_own_transcript_is_refused() {
+        let scalar = [4u8; SECRET_LEN];
+        let (approver, sealed, signature) = answered([21u8; SECRET_LEN], &scalar);
+        for lifted in [
+            adopt_factor(
+                &sealed,
+                "1b3d4c1a-0000-4000-8000-000000000002",
+                DEVICE,
+                &approver,
+                &signature,
+                &scalar,
+            ),
+            // Another envelope, which the same signature does not cover.
+            adopt_factor(
+                &seal_factor(
+                    &ephemeral(&scalar),
+                    REQUEST,
+                    DEVICE,
+                    &[10u8; SECRET_LEN],
+                    b"a fresh factor",
+                )
+                .expect("seal"),
+                REQUEST,
+                DEVICE,
+                &approver,
+                &signature,
+                &scalar,
+            ),
+            // Another rendezvous scalar: the signed ephemeral key is derived
+            // here, so it moves with the scalar rather than with the relay.
+            adopt_factor(
+                &sealed,
+                REQUEST,
+                DEVICE,
+                &approver,
+                &signature,
+                &[5u8; SECRET_LEN],
+            ),
+        ] {
+            assert_eq!(lifted.unwrap_err(), RelayedAnswerRefused::Unsigned);
+        }
+    }
+
+    /// A signed answer whose envelope was swapped still refuses, and that
+    /// refusal keeps the envelope's own verdict.
+    #[test]
+    fn a_signed_answer_over_an_envelope_for_another_device_keeps_the_seal_verdict() {
+        let scalar = [4u8; SECRET_LEN];
+        let signer = Ed25519Signer::from_seed([21u8; SECRET_LEN]);
+        let approver = hex_lower(&signer.verifying_key().to_bytes());
+        let eph = ephemeral(&scalar);
+        let other_device = format!("ab{}", &DEVICE[2..]);
+        let sealed = seal_factor(
+            &eph,
+            REQUEST,
+            &other_device,
+            &[9u8; SECRET_LEN],
+            b"a fresh factor",
+        )
+        .expect("seal");
+        let payload =
+            approval_response_payload(&approver, REQUEST, ApprovalDecision::Approve, &eph, &sealed)
+                .expect("payload");
+        let signature = hex_lower(&signer.sign(&payload).to_bytes());
+        assert_eq!(
+            adopt_factor(&sealed, REQUEST, DEVICE, &approver, &signature, &scalar)
+                .unwrap_err()
+                .check(),
+            TrustViolation::EciesOpenFailed.check()
+        );
+    }
+
+    #[test]
+    fn a_rendezvous_scalar_outside_the_group_opens_nothing() {
+        let outside = [0xffu8; SECRET_LEN];
+        assert!(rendezvous_public_key(&outside).is_err());
+        assert_eq!(
+            adopt_factor("", REQUEST, DEVICE, DEVICE, &"00".repeat(64), &outside)
+                .unwrap_err()
+                .check(),
+            TrustViolation::EciesOpenFailed.check()
+        );
     }
 
     #[test]

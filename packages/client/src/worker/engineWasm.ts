@@ -374,6 +374,8 @@ export interface EngineWasm {
     sealedFactor: string,
     requestId: string,
     requesterDevicePublicKey: string,
+    responderDevicePublicKey: string,
+    responseSignature: string,
     rendezvousScalar: Uint8Array
   ): Uint8Array;
   ByoIpfsConfig: new (

@@ -107,7 +107,7 @@ describe('useAuth recovery phrase', () => {
     const menu = mount(engine, coreKit);
     await waitFor(() => expect(result.current.auth.isReady).toBe(true));
     await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
-    expect(menu.result.current.auth.recoveryEnrolled).toBe(false);
+    expect(menu.result.current.auth.recoveryPhraseHeld).toBe(false);
 
     await act(async () => {
       await result.current.auth.enrollRecoveryPhrase();
@@ -115,7 +115,40 @@ describe('useAuth recovery phrase', () => {
 
     // The menu that offers enrollment is a different consumer from the dialog
     // that performs it; one still offering it would enroll a second time.
-    expect(menu.result.current.auth.recoveryEnrolled).toBe(true);
+    expect(menu.result.current.auth.recoveryPhraseHeld).toBe(true);
+  });
+
+  /**
+   * The phrase is every account's guaranteed path (ADR 0009 D2), so a device
+   * that joined by approval must still be offered enrollment.
+   */
+  it('tells a device-approval join it holds no phrase, while the policy stands', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({ needsRecovery: true });
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await act(async () => {
+      await result.current.auth.completeDeviceApproval(new Uint8Array(32).fill(3));
+    });
+
+    expect(result.current.auth.recoveryPhraseHeld).toBe(false);
+    expect(authStore.getState().factorPolicy).toBe(true);
+  });
+
+  /**
+   * A fresh tab starts with both answers off, so the policy has to come back
+   * from the account's own factor list rather than from the phrase reading.
+   */
+  it('restores the policy on a reload for a member who holds no phrase', async () => {
+    const engine = fakeEngineClient();
+    const { result } = mount(engine, fakeCoreKitSession({ factorPolicy: true, enrolled: false }));
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    await act(() => result.current.auth.loginWithGoogle(GOOGLE_ID_TOKEN));
+    await waitFor(() => expect(result.current.auth.isAuthenticated).toBe(true));
+
+    await waitFor(() => expect(authStore.getState().factorPolicy).toBe(true));
+    expect(result.current.auth.recoveryPhraseHeld).toBe(false);
   });
 
   it('ends the partial session when the member abandons the prompt', async () => {

@@ -45,11 +45,23 @@ export class ApprovalDevice {
     );
   }
 
-  adopt(sealedFactor: string, requestId: string, ephemeralPublicKey: string): Promise<string> {
+  adopt(
+    sealedFactor: string,
+    requestId: string,
+    ephemeralPublicKey: string,
+    responderDevicePublicKey: string,
+    responseSignature: string
+  ): Promise<string> {
     return this.page.evaluate(
-      ({ sealed, id, ephemeral }) =>
-        window.__CIPHERBOX_ENGINE__!.approval.adopt(sealed, id, ephemeral),
-      { sealed: sealedFactor, id: requestId, ephemeral: ephemeralPublicKey }
+      ({ sealed, id, ephemeral, responder, signature }) =>
+        window.__CIPHERBOX_ENGINE__!.approval.adopt(sealed, id, ephemeral, responder, signature),
+      {
+        sealed: sealedFactor,
+        id: requestId,
+        ephemeral: ephemeralPublicKey,
+        responder: responderDevicePublicKey,
+        signature: responseSignature,
+      }
     );
   }
 
