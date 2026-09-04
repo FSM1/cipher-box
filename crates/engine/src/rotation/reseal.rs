@@ -350,15 +350,10 @@ pub enum ResealError {
     },
     /// A carried write-plane history link is past
     /// [`MAX_WRITE_HISTORY_LINK_BYTES`]. Emitting an empty link in its place
-    /// would publish, above write epoch 1, the very value the
-    /// [`WriteHistory::Genesis`] arm refuses: the write plane advertises a
-    /// predecessor epoch it holds no link to, and an orphaned-name walk stops
-    /// there reporting nothing. The bound is the codec's own, so a link this
-    /// long never came out of [`decode_write_body`] and no committed writer can
-    /// reach the refusal from a record the gate passed. Release-active
-    /// (AGENTS.md rule 8).
-    ///
-    /// [`decode_write_body`]: cipherbox_core::seal::decode_write_body
+    /// publishes, above write epoch 1, the very value the
+    /// [`WriteHistory::Genesis`] arm refuses. The bound is the decoder's own,
+    /// so no gate-passed record reaches this refusal. Release-active (AGENTS.md
+    /// rule 8).
     CarriedWriteHistoryLinkTooLarge {
         /// The carried link's sealed length.
         size: usize,

@@ -69,8 +69,7 @@ use crate::grants::{
     UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row, recipient_self_location,
     row_is_owner_attested, self_locate_signed,
 };
-use crate::net::fanout::{FanoutRecord, fanout_get_classified};
-use crate::net::fanout_get_verify;
+use crate::net::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify};
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
