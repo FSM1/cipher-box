@@ -368,8 +368,8 @@ mod tests {
         entropy: &RefCell<SeededEntropy>,
         mine: &X25519Secret,
     ) -> Option<BTreeSet<NodeId>> {
-        let blob =
-            block_on(staging.staged_bytes(&scope_exit_debt_key(mine))).expect("the store answers")?;
+        let blob = block_on(staging.staged_bytes(&scope_exit_debt_key(mine)))
+            .expect("the store answers")?;
         open_owed_cuts(BookkeepingSeal::new(mine, entropy), &blob)
     }
 

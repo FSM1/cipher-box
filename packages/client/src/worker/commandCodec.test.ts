@@ -918,6 +918,20 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps scopeExitCutOwed so an uncut scope reaches the host', () => {
+    const scopeRoot = new Uint8Array(16).fill(0x9e);
+    const event: WasmEvent = {
+      kind: 'scopeExitCutOwed',
+      scopeRoot,
+      detail: 'publish-failed',
+    };
+    expect(readEvent(fakeWasm, event)).toEqual({
+      kind: 'scopeExitCutOwed',
+      scopeRoot,
+      detail: 'publish-failed',
+    });
+  });
+
   it('maps the payload-free parked-writes refusal', () => {
     expect(readEvent(fakeWasm, { kind: 'parkedWritesUnreadable' })).toEqual({
       kind: 'parkedWritesUnreadable',

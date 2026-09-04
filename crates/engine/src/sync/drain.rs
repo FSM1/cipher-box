@@ -75,9 +75,7 @@ use crate::net::{
     ResolveOutcome, Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
-use crate::rotation::{
-    ScopeExitRotator, derive_write_name, seed_at_epoch,
-};
+use crate::rotation::{ScopeExitRotator, derive_write_name, seed_at_epoch};
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore, UnixMillis,
