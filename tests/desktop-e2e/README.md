@@ -50,6 +50,13 @@ wait that runs out reports the last value it saw. The deadlines derive from the
 CI sync timing profile in `src/profile.ts`, which mirrors
 `crates/engine/src/profile.rs`.
 
+The deadline bounds the read itself, not only the gap between two reads. A
+kernel call on a mount carries no timeout of its own, so a mount that stops
+answering would otherwise hold the read, and with it the whole run, to the job
+cap. The wait names that read, the platform and the last value it saw, and a
+wait that reads a mount takes the instance away before it reports: only the
+shell going away returns a call the kernel holds.
+
 ## The two scripts
 
 - `pnpm --filter @cipherbox/desktop-e2e run test` — the vitest unit suite over

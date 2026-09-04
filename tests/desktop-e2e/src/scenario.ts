@@ -159,6 +159,7 @@ async function serves(
       what: `${instance.name}: ${what}`,
       timeoutMs: how.timeoutMs,
       intervalMs: context.deadlines.readIntervalMs,
+      release: () => instance.abandon(),
     }
   );
 }

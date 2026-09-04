@@ -28,6 +28,7 @@ export const mountLifecycle: Scenario = {
           what: 'the mount root to carry a filesystem of its own',
           timeoutMs: context.deadlines.mountMs,
           intervalMs: context.deadlines.intervalMs,
+          release: () => a.abandon(),
         }
       );
 
@@ -55,6 +56,7 @@ export const mountLifecycle: Scenario = {
           what: 'the mount root to give its filesystem back',
           timeoutMs: context.deadlines.shutdownMs,
           intervalMs: context.deadlines.intervalMs,
+          release: () => a.abandon(),
         }
       );
       const left = await readdir(a.mountRoot).catch(() => []);

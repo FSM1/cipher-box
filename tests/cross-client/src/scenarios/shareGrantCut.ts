@@ -37,7 +37,7 @@ export const shareGrantCut: Scenario = {
     // A revocation rotates the scope. The owner's own mount reads across that
     // rotation in one pass, and still holds the folder it granted.
     await mount.refresh();
-    await projects(context, mount.mountRoot, FOLDER);
+    await projects(context, mount, FOLDER);
     mountHeld(await mount.status(), 'the revocation rotation');
   },
 };

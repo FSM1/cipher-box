@@ -37,7 +37,7 @@ export async function grantOneFolder(context: ScenarioContext): Promise<Granted>
   context.log(`the owner published ${FOLDER}`);
 
   await mount.refresh();
-  await projects(context, mount.mountRoot, FOLDER);
+  await projects(context, mount, FOLDER);
 
   await owner.share.open(FOLDER);
   const link = await owner.share.mintLink();
@@ -61,7 +61,7 @@ export async function grantOneFolder(context: ScenarioContext): Promise<Granted>
   // The grant cut a scope out of the owner's tree, which moves the folder's
   // record. The mount reads it back across that cut.
   await mount.refresh();
-  await projects(context, mount.mountRoot, FOLDER);
+  await projects(context, mount, FOLDER);
 
   return { mount, owner, grantee, scope };
 }
