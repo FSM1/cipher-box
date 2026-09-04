@@ -266,7 +266,12 @@ pub(crate) async fn assemble_candidate<H: Http>(
 impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
         let (_, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
-        Ok(seeds.outcome(GatePass::Deferred(pending)))
+        Ok(AdoptOutcome {
+            pass: GatePass::Deferred(pending),
+            write_scope_seed: seeds.write_scope_seed,
+            node_id: seeds.node_id,
+            read_scope_seed: Some(seeds.read_scope_seed),
+        })
     }
 
     async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Adopted, SeamError> {
@@ -546,18 +551,6 @@ pub(crate) struct RecoveredSeeds {
     pub(crate) write_scope_seed: Option<Zeroizing<[u8; 32]>>,
     /// The scope-root node id (`id16`, the authenticated envelope id).
     pub(crate) node_id: [u8; 16],
-}
-
-impl RecoveredSeeds {
-    /// This pass as the resolve driver reads it.
-    fn outcome(self, pass: GatePass) -> AdoptOutcome {
-        AdoptOutcome {
-            pass,
-            write_scope_seed: self.write_scope_seed,
-            node_id: self.node_id,
-            read_scope_seed: Some(self.read_scope_seed),
-        }
-    }
 }
 
 /// A gate pass whose floor advance has not been committed yet, plus the seeds
