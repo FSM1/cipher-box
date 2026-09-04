@@ -16,6 +16,7 @@
 //! scope roots a share of theirs was granted at, and an entry that will not
 //! open is refused rather than cut.
 
+use core::cell::RefCell;
 use std::collections::BTreeSet;
 
 use cipherbox_core::seal::OwnerLocalKind;
@@ -23,9 +24,10 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::facade::NodeId;
-use crate::seams::SeamResult;
+use crate::rotation::{RotateError, ScopeExitRotator, consume_scope_exit_triggers};
+use crate::seams::{SeamResult, StagingStore};
 use crate::sync::BookkeepingSeal;
-use crate::sync::drain::owner_scoped_key;
+use crate::sync::drain::{owed_cuts, owner_scoped_key};
 
 /// The staging-key prefix the owed cuts are journaled under.
 /// [`orphan_staging_keys`](crate::sync::orphan_staging_keys) treats the whole
@@ -41,6 +43,96 @@ const FORMAT_V1: u8 = 1;
 
 /// The engine's location-independent node id.
 const NODE_ID_LEN: usize = 16;
+
+/// Drive every cut this device owes and answer with the roots still owed after
+/// the pass, each with a key-material-free classification of what stopped it.
+///
+/// The durable record is folded into `session` first and written back after, so
+/// a root leaves the store only once its cut is durable, and a root a restart
+/// inherited is driven by the session that finds it. The vault root drops: a
+/// trigger escalates to it because no share reaches it, so it names no grantee
+/// to cut out ([`owed_cuts`]).
+pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
+    staging: &St,
+    seal: BookkeepingSeal<'_>,
+    enc_secret: &X25519Secret,
+    exits: &R,
+    session: &RefCell<BTreeSet<NodeId>>,
+    vault_root: NodeId,
+) -> Vec<(NodeId, &'static str)> {
+    adopt_owed_cuts(staging, seal, enc_secret, session).await;
+    let owed = owed_cuts(&session.borrow(), vault_root);
+    if owed.is_empty() && !session.borrow().contains(&vault_root) {
+        return Vec::new();
+    }
+    let cut = consume_scope_exit_triggers(exits, &owed).await;
+    let held = {
+        let mut held = session.borrow_mut();
+        held.remove(&vault_root);
+        for (root, _) in &cut.rotated {
+            held.remove(root);
+        }
+        // A floor raise that failed leaves the cut itself published
+        // ([`rotate_scope`](crate::rotation::rotate_scope)), so re-driving it
+        // would mint a second epoch nothing asked for.
+        for (root, error) in &cut.failed {
+            if matches!(error, RotateError::Floor(_)) {
+                held.remove(root);
+            }
+        }
+        held.clone()
+    };
+    record_owed_cuts(staging, seal, enc_secret, &held).await;
+    cut.failed
+        .iter()
+        .filter(|(root, _)| held.contains(root))
+        .map(|(root, error)| (*root, error.check()))
+        .collect()
+}
+
+/// Fold the durable debt into this session's owed set.
+///
+/// The restart path: an op that has already published has left the queue, so no
+/// replay re-supplies its trigger and this record is the only thing that still
+/// names the scope the move left.
+async fn adopt_owed_cuts<St: StagingStore>(
+    staging: &St,
+    seal: BookkeepingSeal<'_>,
+    enc_secret: &X25519Secret,
+    session: &RefCell<BTreeSet<NodeId>>,
+) {
+    let Ok(Some(blob)) = staging.staged_bytes(&scope_exit_debt_key(enc_secret)).await else {
+        return;
+    };
+    let Some(owed) = open_owed_cuts(seal, &blob) else {
+        return;
+    };
+    session.borrow_mut().extend(owed);
+}
+
+/// Write `owed` through to the staging store, removing the record once nothing
+/// is owed.
+///
+/// Best effort, and deliberately: the session's own set drives every cut this
+/// pass whatever the store answers, and a debt held in memory alone is the
+/// state this record improves on rather than a reason to fail the op that owed
+/// it.
+pub(crate) async fn record_owed_cuts<St: StagingStore>(
+    staging: &St,
+    seal: BookkeepingSeal<'_>,
+    enc_secret: &X25519Secret,
+    owed: &BTreeSet<NodeId>,
+) {
+    let key = scope_exit_debt_key(enc_secret);
+    if owed.is_empty() {
+        let _ = staging.remove_staged_bytes(&key).await;
+        return;
+    }
+    let Ok(blob) = seal_owed_cuts(seal, owed) else {
+        return;
+    };
+    let _ = staging.put_staged_bytes(&key, &blob).await;
+}
 
 /// This identity's one scope-exit debt key.
 #[must_use]
@@ -97,9 +189,13 @@ fn decode_owed(bytes: &[u8]) -> Option<BTreeSet<NodeId>> {
 mod tests {
     use super::*;
 
-    use core::cell::RefCell;
+    use crate::rotation::{RotationOutcome, RotationPublishError};
+    use crate::seams::SeamError;
+    use crate::testkit::fakes::InMemoryStagingStore;
+    use crate::testkit::{SeededEntropy, block_on};
 
-    use crate::testkit::SeededEntropy;
+    /// The publish failure a refused cut answers with.
+    const NOT_PUBLISHED: RotationPublishError = RotationPublishError::NotPublished;
 
     fn secret(byte: u8) -> X25519Secret {
         X25519Secret::from_scalar([byte; 32])
@@ -173,7 +269,234 @@ mod tests {
     /// one device holds two accounts' debts without either driving the other's.
     #[test]
     fn two_identities_hold_their_debts_at_different_keys() {
-        assert_ne!(scope_exit_debt_key(&secret(9)), scope_exit_debt_key(&secret(10)));
+        assert_ne!(
+            scope_exit_debt_key(&secret(9)),
+            scope_exit_debt_key(&secret(10))
+        );
         assert!(scope_exit_debt_key(&secret(9)).starts_with(SCOPE_EXIT_DEBT_PREFIX));
+    }
+
+    // -----------------------------------------------------------------------
+    // Driving the debt.
+    // -----------------------------------------------------------------------
+
+    /// The vault root, which a trigger escalates to and no share reaches.
+    const VAULT_ROOT: NodeId = NodeId([0; 16]);
+
+    /// Cuts every root but the one it is told to refuse, and records the order
+    /// it was asked in.
+    struct Rotator {
+        seen: RefCell<Vec<NodeId>>,
+        refuse: Option<(NodeId, RotateError)>,
+    }
+
+    impl Rotator {
+        fn cutting_everything() -> Self {
+            Self {
+                seen: RefCell::new(Vec::new()),
+                refuse: None,
+            }
+        }
+
+        fn refusing(root: NodeId, error: RotateError) -> Self {
+            Self {
+                seen: RefCell::new(Vec::new()),
+                refuse: Some((root, error)),
+            }
+        }
+    }
+
+    impl ScopeExitRotator for Rotator {
+        async fn rotate_on_scope_exit(
+            &self,
+            scope_root: NodeId,
+        ) -> Result<RotationOutcome, RotateError> {
+            self.seen.borrow_mut().push(scope_root);
+            match &self.refuse {
+                Some((root, error)) if *root == scope_root => Err(error.clone()),
+                _ => Ok(RotationOutcome {
+                    new_read_epoch: 2,
+                    epoch_floor: 2,
+                }),
+            }
+        }
+    }
+
+    /// One pass over `session`, against the store every session of a test
+    /// shares.
+    fn pass(
+        staging: &InMemoryStagingStore,
+        entropy: &RefCell<SeededEntropy>,
+        mine: &X25519Secret,
+        exits: &Rotator,
+        session: &RefCell<BTreeSet<NodeId>>,
+    ) -> Vec<(NodeId, &'static str)> {
+        block_on(settle_owed_cuts(
+            staging,
+            BookkeepingSeal::new(mine, entropy),
+            mine,
+            exits,
+            session,
+            VAULT_ROOT,
+        ))
+    }
+
+    /// The roots the store holds for this identity.
+    fn stored(
+        staging: &InMemoryStagingStore,
+        entropy: &RefCell<SeededEntropy>,
+        mine: &X25519Secret,
+    ) -> Option<BTreeSet<NodeId>> {
+        let blob =
+            block_on(staging.staged_bytes(&scope_exit_debt_key(mine))).expect("the store answers")?;
+        open_owed_cuts(BookkeepingSeal::new(mine, entropy), &blob)
+    }
+
+    /// The failure the durable record exists to close: the op that owed the cut
+    /// has left the queue, so a session that starts with nothing in memory must
+    /// still cut the scope the move left.
+    #[test]
+    fn a_restarted_session_drives_a_cut_the_last_one_could_not_land() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(11));
+        let mine = secret(9);
+        let refused = Rotator::refusing(node(3), RotateError::Publish(NOT_PUBLISHED));
+
+        pass(
+            &staging,
+            &entropy,
+            &mine,
+            &refused,
+            &RefCell::new(BTreeSet::from([node(3)])),
+        );
+        assert_eq!(
+            stored(&staging, &entropy, &mine),
+            Some(BTreeSet::from([node(3)]))
+        );
+
+        let restarted = RefCell::new(BTreeSet::new());
+        let cutting = Rotator::cutting_everything();
+        pass(&staging, &entropy, &mine, &cutting, &restarted);
+
+        assert_eq!(*cutting.seen.borrow(), vec![node(3)]);
+        assert_eq!(stored(&staging, &entropy, &mine), None);
+    }
+
+    /// The entry is the obligation, so it stands until the cut is durable — and
+    /// goes the moment it is.
+    #[test]
+    fn an_entry_leaves_the_store_only_once_its_cut_lands() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(12));
+        let mine = secret(9);
+        let session = RefCell::new(BTreeSet::from([node(3), node(4)]));
+
+        pass(
+            &staging,
+            &entropy,
+            &mine,
+            &Rotator::refusing(node(4), RotateError::Publish(NOT_PUBLISHED)),
+            &session,
+        );
+
+        assert_eq!(
+            stored(&staging, &entropy, &mine),
+            Some(BTreeSet::from([node(4)])),
+            "the cut that landed goes, the one that did not stays"
+        );
+
+        pass(
+            &staging,
+            &entropy,
+            &mine,
+            &Rotator::cutting_everything(),
+            &session,
+        );
+
+        assert_eq!(stored(&staging, &entropy, &mine), None);
+    }
+
+    /// A cut this session cannot land is answered for, so the host says which
+    /// scope still owes one rather than retrying in silence.
+    #[test]
+    fn the_pass_answers_with_the_scopes_that_still_owe_a_cut() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(13));
+        let mine = secret(9);
+
+        let owed = pass(
+            &staging,
+            &entropy,
+            &mine,
+            &Rotator::refusing(node(4), RotateError::Publish(NOT_PUBLISHED)),
+            &RefCell::new(BTreeSet::from([node(3), node(4)])),
+        );
+
+        assert_eq!(owed, vec![(node(4), "publish-failed")]);
+    }
+
+    /// A floor raise that failed leaves the cut published, so the debt settles
+    /// rather than minting a second epoch — and nothing is reported as still
+    /// owed.
+    #[test]
+    fn a_failed_floor_raise_settles_the_debt_and_reports_nothing() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(14));
+        let mine = secret(9);
+
+        let owed = pass(
+            &staging,
+            &entropy,
+            &mine,
+            &Rotator::refusing(node(3), RotateError::Floor(SeamError::new("no store"))),
+            &RefCell::new(BTreeSet::from([node(3)])),
+        );
+
+        assert!(owed.is_empty());
+        assert_eq!(stored(&staging, &entropy, &mine), None);
+    }
+
+    /// The escalation to the vault root names no grantee, so it is cut by
+    /// nobody and left in no record.
+    #[test]
+    fn the_vault_root_is_cut_by_nobody_and_leaves_no_record() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(15));
+        let mine = secret(9);
+        let session = RefCell::new(BTreeSet::from([VAULT_ROOT]));
+        let exits = Rotator::cutting_everything();
+
+        let owed = pass(&staging, &entropy, &mine, &exits, &session);
+
+        assert!(owed.is_empty());
+        assert!(exits.seen.borrow().is_empty());
+        assert!(session.borrow().is_empty());
+        assert_eq!(stored(&staging, &entropy, &mine), None);
+    }
+
+    /// A pass with nothing owed and nothing stored costs no rotation and no
+    /// store write.
+    #[test]
+    fn a_pass_with_no_debt_drives_nothing() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(16));
+        let mine = secret(9);
+        let exits = Rotator::cutting_everything();
+
+        let owed = pass(
+            &staging,
+            &entropy,
+            &mine,
+            &exits,
+            &RefCell::new(BTreeSet::new()),
+        );
+
+        assert!(owed.is_empty());
+        assert!(exits.seen.borrow().is_empty());
+        assert!(
+            block_on(staging.staged_keys())
+                .expect("the store answers")
+                .is_empty()
+        );
     }
 }

@@ -2028,6 +2028,7 @@ impl Event {
             facade::Event::RenewalFailed { .. } => "renewalFailed",
             facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",
             facade::Event::VaultSettingsChanged => "vaultSettingsChanged",
+            facade::Event::ScopeExitCutOwed { .. } => "scopeExitCutOwed",
             facade::Event::OpProgress { .. } => "opProgress",
         }
         .to_string()
@@ -2140,13 +2141,24 @@ impl Event {
         }
     }
 
-    /// `renewalFailed` / `vaultUnprovisioned`: the key-free failure
-    /// classification; otherwise `undefined`.
+    /// `renewalFailed` / `vaultUnprovisioned` / `scopeExitCutOwed`: the
+    /// key-free failure classification; otherwise `undefined`.
     #[wasm_bindgen(getter)]
     pub fn detail(&self) -> Option<String> {
         match &self.inner {
             facade::Event::RenewalFailed { detail, .. }
-            | facade::Event::VaultUnprovisioned { detail, .. } => Some(detail.clone()),
+            | facade::Event::VaultUnprovisioned { detail, .. }
+            | facade::Event::ScopeExitCutOwed { detail, .. } => Some(detail.clone()),
+            _ => None,
+        }
+    }
+
+    /// `scopeExitCutOwed`: the 16 raw bytes of the scope root that still owes
+    /// the cut; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = scopeRoot)]
+    pub fn scope_root(&self) -> Option<Vec<u8>> {
+        match self.inner {
+            facade::Event::ScopeExitCutOwed { scope_root, .. } => Some(scope_root.0.to_vec()),
             _ => None,
         }
     }

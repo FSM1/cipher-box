@@ -36,6 +36,7 @@ use crate::sync::drain::{DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_M
 use crate::sync::op::Op;
 use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
+use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use crate::sync::tick::elapsed_at_least;
 use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 
@@ -44,7 +45,8 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)), a retire-ledger entry, a
 /// doomed-name journal entry, a
 /// received-shares list, a contact book, the owner's invite records, or the
-/// notices of its versionless dead letters. All are per-owner, so their whole prefixes are
+/// notices of its versionless dead letters, or the scope roots that still owe a
+/// scope-exit cut. All are per-owner, so their whole prefixes are
 /// referenced — an entry this session cannot read belongs to the identity that
 /// still needs it.
 ///
@@ -59,6 +61,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(CONTACTS_PREFIX)
         || key.starts_with(INVITE_RECORDS_PREFIX)
         || key.starts_with(DEAD_LETTER_NOTICES_PREFIX)
+        || key.starts_with(SCOPE_EXIT_DEBT_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.

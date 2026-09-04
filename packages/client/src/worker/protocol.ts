@@ -661,6 +661,8 @@ export type EventDescriptor =
   | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }
   /** The engine adopted vault settings other than the ones it held; read them again. */
   | { kind: 'vaultSettingsChanged' }
+  /** A scope-exit cut this device owes did not land, so the scope is uncut. */
+  | { kind: 'scopeExitCutOwed'; scopeRoot: Uint8Array; detail: string }
   | {
       kind: 'opProgress';
       opId: bigint | null;

@@ -1339,6 +1339,16 @@ pub enum Event {
     /// Carries no payload: a host reads the settings again on it, so the one
     /// place the values are stated stays [`Engine::vault_storage`].
     VaultSettingsChanged,
+    /// A scope-exit cut this device owes did not land, so the grantee the move
+    /// left still reads under the old seed. Held durably and re-driven on every
+    /// later pass; surfaced, never silent (blueprint/engine.md "never a silent
+    /// failure").
+    ScopeExitCutOwed {
+        /// The scope root that still owes the cut.
+        scope_root: NodeId,
+        /// Key-material-free classification of what stopped the rotation.
+        detail: String,
+    },
     /// Progress of a content-plane transfer for one node: the driving op (if
     /// any), the phase reached, how far the transfer has got, and the failure
     /// classification on a failed phase.
@@ -1392,6 +1402,11 @@ impl fmt::Debug for Event {
             Self::VaultUnprovisioned { retryable, detail } => f
                 .debug_struct("VaultUnprovisioned")
                 .field("retryable", retryable)
+                .field("detail", detail)
+                .finish(),
+            Self::ScopeExitCutOwed { scope_root, detail } => f
+                .debug_struct("ScopeExitCutOwed")
+                .field("scope_root", scope_root)
                 .field("detail", detail)
                 .finish(),
             Self::OpProgress {
