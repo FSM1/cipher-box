@@ -1,3 +1,5 @@
+# The staging chain of blueprint/deploy.md "Release-tag gating". The e2e re-run
+# gates the exact bits the tag names; the main gate already ran at merge time.
 name: Tag Staging Release
 
 on:
@@ -27,15 +29,21 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - id: main
         run: |
+          set -euo pipefail
           SHA=$(git rev-parse HEAD)
-          if ! git tag --points-at "$SHA" | grep -qE '^(cipher-box-v|cipherbox-.*-v|@cipherbox/)'; then
-            echo "::error::No release tag found on main HEAD (${SHA:0:7}). Wait for release-please to merge before tagging staging."
+          # One product tag, `vX.Y.Z` (blueprint/deploy.md). The assertion is
+          # anchored semver rather than a bare `v` prefix because the repo also
+          # carries `v1-freeze`, which ships nothing.
+          if ! git tag --points-at "$SHA" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::No vX.Y.Z release tag on main HEAD (${SHA:0:7}). Wait for release-please to merge before tagging staging."
             exit 1
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
+  # The whole suite, not the PR smoke slice `web-e2e.yml` defaults to.
   web-e2e:
     needs: resolve-main
     name: Web E2E
@@ -44,16 +52,18 @@ jobs:
     uses: ./.github/workflows/web-e2e.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}
+      suite: full
 
+  # The mounted matrix and the cross-client suite are legs of one matrix, so one
+  # call gates on both.
   desktop-e2e:
     needs: resolve-main
-    name: Desktop E2E
+    name: Desktop and Cross-Client E2E
     permissions:
       contents: read
     uses: ./.github/workflows/desktop-e2e.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}
-    secrets: inherit
 
   tag-staging:
     name: Create Staging Tag
