@@ -115,6 +115,8 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
     ancestors: [],
     deadLetters: [],
     blocked: null,
+    settingsHold: null,
+    binIndexHold: null,
     retainedRecords: 0,
     staleness: 'fresh',
   };

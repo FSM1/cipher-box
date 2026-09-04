@@ -924,6 +924,12 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps the payload-free settings change', () => {
+    expect(readEvent(fakeWasm, { kind: 'vaultSettingsChanged' })).toEqual({
+      kind: 'vaultSettingsChanged',
+    });
+  });
+
   it('maps a full opProgress payload to string-literal phase', () => {
     const node = new Uint8Array(16).fill(3);
     const event: WasmEvent = {
@@ -1084,6 +1090,16 @@ describe('readSnapshot', () => {
         node: new Uint8Array(16).fill(6),
         neededBytes: 9_007_199_254_740_993n,
       },
+      settingsHold: {
+        opId: 13n,
+        node: new Uint8Array(16).fill(7),
+        check: 'byo-provider-missing',
+      },
+      binIndexHold: {
+        opId: 14n,
+        node: new Uint8Array(16).fill(8),
+        check: 'suppressed',
+      },
       retainedRecords: 2,
       staleness: 1,
     };
@@ -1137,6 +1153,16 @@ describe('readSnapshot', () => {
         node: new Uint8Array(16).fill(6),
         neededBytes: 9_007_199_254_740_993n,
       },
+      settingsHold: {
+        opId: 13n,
+        node: new Uint8Array(16).fill(7),
+        check: 'byo-provider-missing',
+      },
+      binIndexHold: {
+        opId: 14n,
+        node: new Uint8Array(16).fill(8),
+        check: 'suppressed',
+      },
       retainedRecords: 2,
       staleness: 'reconciling',
     });
@@ -1144,6 +1170,38 @@ describe('readSnapshot', () => {
 
   it('maps an absent over-budget hold to null', () => {
     expect(readSnapshot(fakeWasm, baseView()).blocked).toBeNull();
+  });
+
+  it('maps an absent settings hold and bin index hold to null', () => {
+    const view = readSnapshot(fakeWasm, baseView());
+    expect(view.settingsHold).toBeNull();
+    expect(view.binIndexHold).toBeNull();
+  });
+
+  it('fails closed on a hold check this build cannot name', () => {
+    const settings = {
+      ...baseView(),
+      settingsHold: { opId: 1n, node: new Uint8Array(16), check: 'byo-unreachable' },
+    };
+    expect(() => readSnapshot(fakeWasm, settings)).toThrow(
+      'unknown WASM settings hold check: byo-unreachable'
+    );
+
+    const bin = {
+      ...baseView(),
+      binIndexHold: { opId: 1n, node: new Uint8Array(16), check: 'stranded-mint' },
+    };
+    expect(() => readSnapshot(fakeWasm, bin)).toThrow(
+      'unknown WASM bin index hold check: stranded-mint'
+    );
+  });
+
+  it('holds each check vocabulary apart', () => {
+    const crossed = {
+      ...baseView(),
+      settingsHold: { opId: 1n, node: new Uint8Array(16), check: 'suppressed' },
+    };
+    expect(() => readSnapshot(fakeWasm, crossed)).toThrow('unknown WASM settings hold check');
   });
 
   it('fails closed on an unknown dead letter reason', () => {

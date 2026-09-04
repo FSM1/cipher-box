@@ -277,12 +277,9 @@ describe('the buffered fallback', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('revokes each blob url on its own timer rather than at unmount', async () => {
-    let minted = 0;
-    const revoked: string[] = [];
-    URL.createObjectURL = vi.fn(() => `blob:fake/${++minted}`);
-    URL.revokeObjectURL = vi.fn((url: string) => revoked.push(url));
-    const { result, unmount } = mount(fakeEngine(() => Promise.resolve(new ArrayBuffer(4))));
+  it('revokes each blob url on its own timer, not at the end of the batch', async () => {
+    const { revoked } = stubObjectUrls();
+    const { result } = mount(fakeEngine(() => Promise.resolve(new ArrayBuffer(4))));
 
     vi.useFakeTimers();
     try {
@@ -293,12 +290,10 @@ describe('the buffered fallback', () => {
       expect(saves.clicked.map((link) => link.href)).toEqual(['blob:fake/1', 'blob:fake/2']);
       expect(revoked).toEqual([]);
 
+      // Revoking inside the click's own task cancels the save in some browsers.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(999);
       });
-      expect(revoked).toEqual([]);
-
-      unmount();
       expect(revoked).toEqual([]);
 
       await act(async () => {
@@ -309,6 +304,76 @@ describe('the buffered fallback', () => {
       vi.useRealTimers();
     }
   });
+
+  /**
+   * A deferred revoke reads `URL.revokeObjectURL` when it fires, so one left
+   * running past the hook holds the plaintext blob and calls whatever is
+   * installed a second later.
+   */
+  it('leaves no revoke running once the tab drops the hook', async () => {
+    const { revoked } = stubObjectUrls();
+    const { result, unmount } = mount(fakeEngine(() => Promise.resolve(new ArrayBuffer(4))));
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        await result.current.save({ node: NODE, name: 'a.bin', size: null });
+      });
+      expect(revoked).toEqual([]);
+
+      unmount();
+      expect(revoked).toEqual(['blob:fake/1']);
+      expect(vi.getTimerCount()).toBe(0);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(revoked).toEqual(['blob:fake/1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** A save whose bytes land after the unmount has no cleanup left to run. */
+  it('leaves no revoke running for a save that landed after the unmount', async () => {
+    const { revoked } = stubObjectUrls();
+    let landed: (bytes: ArrayBuffer) => void = () => undefined;
+    const { result, unmount } = mount(
+      fakeEngine(() => new Promise<ArrayBuffer>((resolve) => (landed = resolve)))
+    );
+
+    vi.useFakeTimers();
+    try {
+      let saved: SaveOutcome | null = null;
+      await act(async () => {
+        void result.current.save({ node: NODE, name: 'a.bin', size: null }).then((outcome) => {
+          saved = outcome;
+        });
+        await Promise.resolve();
+      });
+
+      unmount();
+      await act(async () => {
+        landed(new ArrayBuffer(4));
+        await Promise.resolve();
+      });
+
+      expect(saved).toBe('saved');
+      expect(revoked).toEqual(['blob:fake/1']);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** Object URLs the running test minted, so nothing else can be read for them. */
+  function stubObjectUrls() {
+    let minted = 0;
+    const revoked: string[] = [];
+    URL.createObjectURL = vi.fn(() => `blob:fake/${++minted}`);
+    URL.revokeObjectURL = vi.fn((url: string) => revoked.push(url));
+    return { revoked };
+  }
 });
 
 describe('how a ticket save reaches the Service Worker', () => {

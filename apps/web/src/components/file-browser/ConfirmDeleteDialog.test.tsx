@@ -65,6 +65,37 @@ describe('the delete confirmation', () => {
     expect(message).not.toContain('cannot be undone');
   });
 
+  it('follows a settings change the engine adopted while the tab stayed open', async () => {
+    let held = storageWith(30);
+    const engine = fakeEngineClient({ vaultStorage: () => Promise.resolve(held) });
+    const Providers = pageWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session);
+    await act(async () => {
+      render(
+        <Providers>
+          <ConfirmDeleteDialog
+            rows={[ROW]}
+            onClose={() => undefined}
+            onConfirm={() => undefined}
+            busy={false}
+            error={null}
+          />
+        </Providers>
+      );
+    });
+    expect(screen.getByTestId('delete-dialog').textContent).toContain(
+      'keeps it in the bin for 30 days'
+    );
+
+    // Turned off on another device: the prompt must state the hard delete the
+    // engine now takes, not the bin this tab read when it opened.
+    held = storageWith(0);
+    await act(async () => {
+      engine.emit({ kind: 'vaultSettingsChanged' });
+    });
+
+    expect(screen.getByTestId('delete-dialog').textContent).toContain('cannot be undone');
+  });
+
   it('claims nothing at all while the settings read has not landed', async () => {
     // The prompt must never block on a read, so an unread vault promises no bin
     // and warns of no hard delete either.

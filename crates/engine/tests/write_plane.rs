@@ -11332,6 +11332,60 @@ fn a_running_session_re_decides_its_placement_from_the_live_settings_record() {
     );
 }
 
+/// A host holds the settings it read for as long as its surface is open, and it
+/// states what a delete does from them. The tick must therefore report the
+/// re-decide, or a tab keeps promising a bin the engine no longer keeps.
+#[test]
+fn a_settings_change_the_tick_adopts_is_reported_to_the_host() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_bin_retention(&world, &alice, &blocks, 30);
+
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    assert!(
+        !reports_a_settings_change(&mut events),
+        "the settings the start loaded are not a change",
+    );
+
+    // The member turns the bin off from another device.
+    seed_bin_retention(&world, &alice, &blocks, 0);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    assert!(
+        reports_a_settings_change(&mut events),
+        "the adopted change reached the host",
+    );
+
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+    assert!(
+        !reports_a_settings_change(&mut events),
+        "and a re-decide that adopted the same settings costs the host no read",
+    );
+}
+
+/// Publishes settings that differ only in the owner's bin retention.
+fn seed_bin_retention(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, days: u32) {
+    seed_vault_settings(
+        world,
+        device,
+        blocks,
+        &VaultSettings {
+            pin_mode: PinMode::Hosted,
+            byo: Some(member_node(ByoKind::Kubo)),
+            retention: RetentionPolicy::KeepAll,
+            bin_retention_days: days,
+        },
+    );
+}
+
+fn reports_a_settings_change(events: &mut EventStream) -> bool {
+    events_so_far(events)
+        .iter()
+        .any(|event| matches!(event, Event::VaultSettingsChanged))
+}
+
 /// The once-a-session guard latches on the reconcile *landing*, not on the
 /// attempt. The hosted ingress rejects a BYO account, so a flag left disagreeing
 /// by one transient PATCH failure would fail every hosted upload the session

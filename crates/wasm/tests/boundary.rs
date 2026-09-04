@@ -114,6 +114,10 @@ fn event_getters_map_variants() {
         ipns_name: vec![9, 8, 7],
     });
     assert_eq!(withheld.ipns_name(), Some(vec![9, 8, 7]));
+
+    let settings = Event::from_facade(facade::Event::VaultSettingsChanged);
+    assert_eq!(settings.kind(), "vaultSettingsChanged");
+    assert!(settings.op_id().is_none());
 }
 
 /// `opProgress` payload getters cross with boundary-correct JS shapes — op id

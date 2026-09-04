@@ -1334,6 +1334,11 @@ pub enum Event {
         /// Key-material-free classification of what stopped the mint.
         detail: String,
     },
+    /// The session adopted vault settings that differ from the ones it held —
+    /// this device's own save, or another device's change the tick picked up.
+    /// Carries no payload: a host reads the settings again on it, so the one
+    /// place the values are stated stays [`Engine::vault_storage`].
+    VaultSettingsChanged,
     /// Progress of a content-plane transfer for one node: the driving op (if
     /// any), the phase reached, how far the transfer has got, and the failure
     /// classification on a failed phase.
@@ -1371,6 +1376,7 @@ impl fmt::Debug for Event {
                 .field("reason", reason)
                 .finish(),
             Self::ParkedWritesUnreadable => f.write_str("ParkedWritesUnreadable"),
+            Self::VaultSettingsChanged => f.write_str("VaultSettingsChanged"),
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
                 .field("description", description)
@@ -3160,6 +3166,21 @@ pub(crate) fn emit_trust_violation(
     let _ = events.unbounded_send(Event::AttributableAbuse {
         description: format!("{:?}: {detail}", RedactedText::of(routing_key)),
     });
+}
+
+/// Hold the host-visible settings summary, and report the adoption when it is
+/// not the summary the session already held. A host reads its own settings
+/// again on the event, so a re-decide that changed nothing must not cost it one.
+fn adopt_settings_summary(
+    summary: VaultSettingsSummary,
+    held: &RefCell<Option<VaultSettingsSummary>>,
+    events: &mpsc::UnboundedSender<Event>,
+) {
+    let changed = held.borrow().as_ref() != Some(&summary);
+    *held.borrow_mut() = Some(summary);
+    if changed {
+        let _ = events.unbounded_send(Event::VaultSettingsChanged);
+    }
 }
 
 /// What [`Engine::sharing`] calls a node the vault root's committed child-scope
@@ -5310,7 +5331,11 @@ where {
                         let load = read.enrol(&settings_record, observed);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
-                            *settings_summary.borrow_mut() = Some(summarize_settings(&load));
+                            adopt_settings_summary(
+                                summarize_settings(&load),
+                                &settings_summary,
+                                &events,
+                            );
                             byo_reconciled.set(false);
                         }
                     }
@@ -7765,7 +7790,11 @@ where {
         // adopted what it published: the session's byte destinations follow, or
         // an `External` save keeps feeding the hosted leg until the next start.
         *self.placement.borrow_mut() = Some(SessionPlacement::member(placement_of(settings)));
-        *self.settings_summary.borrow_mut() = Some(settings.summary(SettingsOrigin::Resolved));
+        adopt_settings_summary(
+            settings.summary(SettingsOrigin::Resolved),
+            &self.settings_summary,
+            &self.events,
+        );
         self.byo_reconciled.set(false);
         Ok(())
     }

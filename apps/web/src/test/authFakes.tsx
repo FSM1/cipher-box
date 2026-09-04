@@ -13,6 +13,7 @@ import type {
   DeviceRendezvousResult,
   DeviceRendezvousStep,
   EngineClient,
+  EventDescriptor,
   ReceivedShareDescriptor,
   PendingApprovalDescriptor,
   RegisteredDeviceDescriptor,
@@ -267,6 +268,7 @@ export function fakeEngineClient(
   };
   const sessionListeners = new Set<() => void>();
   const sessionEndListeners = new Set<() => void>();
+  const eventListeners = new Set<(event: EventDescriptor) => void>();
   let account: string | null = null;
   const holds = (next: string | null): void => {
     if (account === next) return;
@@ -399,7 +401,10 @@ export function fakeEngineClient(
         calls.vaultSettings.push(settings);
         return overrides.saveVaultSettings?.() ?? Promise.resolve();
       },
-      subscribe: () => () => undefined,
+      subscribe(listener: (event: EventDescriptor) => void) {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
       snapshot: () => overrides.snapshot?.() ?? new Promise(() => undefined),
       setFocus: () => Promise.resolve(),
     },
@@ -414,7 +419,11 @@ export function fakeEngineClient(
     holds(null);
     for (const listener of [...sessionEndListeners]) listener();
   };
-  return { client, calls, endSessionElsewhere };
+  /** Replays one engine event to every subscriber of this client. */
+  const emit = (event: EventDescriptor): void => {
+    for (const listener of [...eventListeners]) listener(event);
+  };
+  return { client, calls, endSessionElsewhere, emit };
 }
 
 export interface CoreKitCalls {
