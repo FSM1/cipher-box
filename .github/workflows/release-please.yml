@@ -1,16 +1,25 @@
 # v2 release management (blueprint/deploy.md in FSM1/cipher-box-next): one
 # product version vX.Y.Z, single-component release-please, no per-package
-# versioning. DORMANT during the v2 build — dispatch-only so no release PRs
-# accumulate over the demolition. Re-engage by restoring the push->main
-# trigger when the first v2.0.0 release candidate is ready.
+# versioning. Every push to main updates one release PR; merging it mints the
+# `vX.Y.Z` tag that desktop-release.yml and tag-staging.yml key on.
 name: Release Please
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
+# One release PR. Two merges close together would otherwise race the action
+# into two states of the same PR.
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+# The App token carries the write scopes, and it also makes the release PR
+# push trigger CI, which a job-token push does not. No step reads the job
+# token, so it gets nothing.
+permissions: {}
 
 jobs:
   release-please:
@@ -36,7 +45,9 @@ jobs:
         env:
           RELEASES_OUTPUT: ${{ toJSON(steps.release.outputs) }}
         run: |
-          echo "## Releases Created" >> "$GITHUB_STEP_SUMMARY"
-          echo '```json' >> "$GITHUB_STEP_SUMMARY"
-          echo "$RELEASES_OUTPUT" | jq '{releases_created, paths_released}' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Releases Created"
+            echo '```json'
+            echo "$RELEASES_OUTPUT" | jq '{releases_created, paths_released}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
