@@ -3139,6 +3139,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::RecordTooLarge { size, limit }) => {
                 format!("record of {size} bytes over the {limit}-byte cap (never published)")
             }
+            Err(PublishError::EpochBelowFloor { floor, epoch }) => {
+                format!("read epoch {epoch} below the durable floor {floor} (never published)")
+            }
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
             Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,
