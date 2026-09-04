@@ -61,9 +61,7 @@ pub use record::{
     OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
     record_content_root_cid,
 };
-pub use scope_exit_debt::{
-    SCOPE_EXIT_DEBT_PREFIX, open_owed_cuts, scope_exit_debt_key, seal_owed_cuts,
-};
+pub use scope_exit_debt::{scope_exit_debt_key, seal_owed_cuts};
 pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{

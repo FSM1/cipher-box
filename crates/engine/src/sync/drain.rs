@@ -1590,10 +1590,6 @@ where
     /// the vault root is read off the base rather than from the pass's own
     /// anchor: a pass anchored on a granted scope root would otherwise drop that
     /// scope's own owed cut as if it were the escalation.
-    ///
-    /// The durable record is folded in first and written back after, so a root
-    /// leaves the store only once its cut is durable, and a root a restart
-    /// inherited is driven by the session that finds it.
     async fn cut_exited_scopes<R: ScopeExitRotator>(&self, scope: &DrainScope<'_>, exits: &R) {
         let vault_root = self.base.borrow().root;
         let still_owed = settle_owed_cuts(
@@ -4044,8 +4040,7 @@ where
         }
     }
 
-    /// Queue one scope root for the cut a move out of it owes
-    /// ([`Self::cut_exited_scopes`]).
+    /// Take on the cut a move out of `scope_root` owes ([`owe_cut`]).
     async fn owe_scope_exit(&self, scope: &DrainScope<'_>, scope_root: NodeId) {
         owe_cut(
             self.staging,

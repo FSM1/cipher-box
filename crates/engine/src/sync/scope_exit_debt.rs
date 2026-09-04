@@ -14,7 +14,10 @@
 //! [`OwnerLocalKind::ScopeExitDebt`] as the tier rule requires
 //! ([`crate::sync::bookkeeping`]): the value associates this owner with the
 //! scope roots a share of theirs was granted at, and an entry that will not
-//! open is refused rather than cut.
+//! open is refused rather than cut. The structure counts no freshness
+//! ([`seal_owner_local`](cipherbox_core::seal::seal_owner_local)), which this
+//! kind can carry: a replayed entry only ever re-owes a cut, and over-rotating
+//! revokes more than the owner asked rather than less.
 
 use core::cell::RefCell;
 use std::collections::BTreeSet;
@@ -49,9 +52,8 @@ const NODE_ID_LEN: usize = 16;
 ///
 /// The durable record is folded into `session` first and written back after, so
 /// a root leaves the store only once its cut is durable, and a root a restart
-/// inherited is driven by the session that finds it. The vault root drops: a
-/// trigger escalates to it because no share reaches it, so it names no grantee
-/// to cut out ([`owed_cuts`]).
+/// inherited is driven by the session that finds it. Which roots are owed at all
+/// is [`owed_cuts`]'s rule.
 pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
     staging: &St,
     seal: BookkeepingSeal<'_>,
@@ -61,10 +63,10 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
     vault_root: NodeId,
 ) -> Vec<(NodeId, &'static str)> {
     adopt_owed_cuts(staging, seal, enc_secret, session).await;
-    let owed = owed_cuts(&session.borrow(), vault_root);
-    if owed.is_empty() && !session.borrow().contains(&vault_root) {
+    if session.borrow().is_empty() {
         return Vec::new();
     }
+    let owed = owed_cuts(&session.borrow(), vault_root);
     let cut = consume_scope_exit_triggers(exits, &owed).await;
     let held = {
         let mut held = session.borrow_mut();
@@ -177,9 +179,9 @@ pub fn open_owed_cuts(seal: BookkeepingSeal<'_>, blob: &[u8]) -> Option<BTreeSet
 /// The record's own encoding, inside the seal: the format tag, then each root's
 /// id at its fixed width, ascending.
 ///
-/// Every shape [`decode_owed`] refuses is one this encoding cannot produce —
-/// the tag is written here and a `BTreeSet<NodeId>` is whole ids in order — so
-/// the pair needs no further encode-side refusal (AGENTS.md rule 8).
+/// The tag is written here and a `BTreeSet<NodeId>` is whole ids in order, so
+/// this encoding cannot produce a shape [`decode_owed`] refuses (AGENTS.md
+/// rule 8).
 ///
 /// Zeroizing because the plaintext side of a sealed value is what the tier
 /// exists to keep off the host ([`crate::sync::bookkeeping`]).

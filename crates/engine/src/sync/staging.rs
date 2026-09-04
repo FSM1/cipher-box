@@ -1282,6 +1282,7 @@ mod tests {
                 RECEIVED_SHARES_PREFIX,
                 CONTACTS_PREFIX,
                 INVITE_RECORDS_PREFIX,
+                SCOPE_EXIT_DEBT_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())
