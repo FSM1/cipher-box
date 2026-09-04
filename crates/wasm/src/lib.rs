@@ -447,6 +447,7 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             }
             facade::DeadLetterReason::BinIndexStrandedMint => {
                 DeadLetterReason::BinIndexStrandedMint
+            }
             facade::DeadLetterReason::TargetLinkedAcrossScopes => {
                 DeadLetterReason::TargetLinkedAcrossScopes
             }

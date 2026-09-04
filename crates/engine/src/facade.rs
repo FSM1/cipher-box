@@ -117,7 +117,8 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{
-    Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict, charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
+    Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict,
+    charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};

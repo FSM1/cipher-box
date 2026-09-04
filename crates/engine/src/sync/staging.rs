@@ -2198,6 +2198,7 @@ mod tests {
             DeadLetterReason::ScopeRootNotResealable,
             DeadLetterReason::BinIndexFull,
             DeadLetterReason::CrossingUnauthorable,
+            DeadLetterReason::BinIndexStrandedMint,
             DeadLetterReason::TargetLinkedAcrossScopes,
         ];
         for reason in reasons {
