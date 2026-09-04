@@ -102,21 +102,50 @@ impl ClaimRecord {
         Ok(())
     }
 
-    /// Drop every entry no live body answers for: a scope outside `renderable`,
-    /// and a folder body the render tree no longer holds. A departed body names
-    /// nothing, so keeping its entry would hold a contest open for good.
+    /// Keep only the entries a renderable scope's own record still reaches: its
+    /// scope root's body, and below that each body a body already kept names. A
+    /// scope root's own entry is kept while its scope is renderable, so a scope
+    /// this pass could not open does not lose its claim to one it did.
     ///
-    /// A scope root's own entry is kept while its scope is renderable, so a
-    /// scope this pass could not open does not lose its claim to one it did.
-    pub(crate) fn retain_live_bodies(&mut self, renderable: &BTreeSet<[u8; 16]>, base: &Snapshot) {
+    /// The scope that authored a body is the one authority on whether that body
+    /// is still there, so what the render tree holds decides nothing here. It is
+    /// wrong in both directions: a folder the scope's own fresh body stops
+    /// naming is dropped from the tree only after this prune, and a folder the
+    /// **contest** departed still belongs to the scope that names it — freeing
+    /// the ids that folder's body claimed would hand them to the scope that
+    /// raised the contest, and a departed folder is one the focus window can no
+    /// longer re-read.
+    ///
+    /// The reach also bounds the record: two bodies that name each other reach
+    /// no scope root, so they cannot hold their own entries alive.
+    pub(crate) fn retain_live_bodies(&mut self, renderable: &BTreeSet<[u8; 16]>) {
+        let mut reached: BTreeSet<BodyKey> = BTreeSet::new();
+        let mut frontier: Vec<BodyKey> = self
+            .named
+            .keys()
+            .copied()
+            .filter(|(scope_id, node_id)| scope_id == node_id && renderable.contains(scope_id))
+            .collect();
+        while let Some(key) = frontier.pop() {
+            if !reached.insert(key) {
+                continue;
+            }
+            let Some(ids) = self.named.get(&key) else {
+                continue;
+            };
+            // A claim is only ever the authoring scope's, so a body of one scope
+            // never reaches another scope's entry.
+            frontier.extend(
+                ids.iter()
+                    .map(|id| (key.0, *id))
+                    .filter(|child| self.named.contains_key(child)),
+            );
+        }
         let departed: Vec<BodyKey> = self
             .named
             .keys()
             .copied()
-            .filter(|(scope_id, node_id)| {
-                !renderable.contains(scope_id)
-                    || (node_id != scope_id && !base.contains(NodeId(*node_id)))
-            })
+            .filter(|key| !reached.contains(key))
             .collect();
         for key in departed {
             self.forget(key);
@@ -578,30 +607,65 @@ mod tests {
         assert!(claims.contested().is_empty());
     }
 
-    /// A departed body names nothing. Its entry goes with it, or the contest it
-    /// raised would stand for good — while a scope root keeps its entry through
-    /// a pass that could not open it.
+    /// A body the scope's own record no longer reaches names nothing. Its entry
+    /// goes with it, or the contest it raised would stand for good — while a
+    /// scope root keeps its entry through a pass that could not open it.
     #[test]
-    fn the_record_keeps_only_a_live_bodys_entry() {
+    fn the_record_keeps_only_a_body_the_scope_still_names() {
         let mut claims = ClaimRecord::default();
         record(&mut claims, SCOPE, SCOPE, &[UNCLAIMED]);
-        record(&mut claims, SCOPE, UNDER_OTHER, &[UNCLAIMED]);
         record(&mut claims, SCOPE, UNCLAIMED, &[OWN_CHILD]);
+        record(&mut claims, SCOPE, UNDER_OTHER, &[UNCLAIMED]);
         record(&mut claims, OTHER_SCOPE, OTHER_SCOPE, &[UNDER_OTHER]);
         record(&mut claims, UNGRAFTED_SCOPE, UNGRAFTED_SCOPE, &[OWN_CHILD]);
 
-        claims.retain_live_bodies(&BTreeSet::from([SCOPE, UNGRAFTED_SCOPE]), &tree());
+        claims.retain_live_bodies(&BTreeSet::from([SCOPE, UNGRAFTED_SCOPE]));
 
         assert_eq!(
             claims.named().keys().copied().collect::<Vec<_>>(),
             vec![
                 (UNGRAFTED_SCOPE, UNGRAFTED_SCOPE),
                 (SCOPE, SCOPE),
-                (SCOPE, UNDER_OTHER),
+                (SCOPE, UNCLAIMED),
             ],
-            "an unrenderable scope and a body the tree dropped both go, while a \
-             renderable scope root keeps its claim through a pass that could not open it"
+            "an unrenderable scope and a body the root no longer reaches both go, while \
+             a renderable scope root keeps its claim through a pass that could not open it"
         );
+    }
+
+    /// The reach runs down one scope's own entries. A second scope naming an id
+    /// is a contest, never a claim that keeps that id's body alive.
+    #[test]
+    fn one_scopes_body_does_not_reach_another_scopes_entry() {
+        let mut claims = ClaimRecord::default();
+        record(&mut claims, SCOPE, SCOPE, &[UNCLAIMED]);
+        record(&mut claims, OTHER_SCOPE, OTHER_SCOPE, &[UNCLAIMED]);
+        record(&mut claims, SCOPE, UNCLAIMED, &[OWN_CHILD]);
+
+        claims.retain_live_bodies(&BTreeSet::from([OTHER_SCOPE]));
+
+        assert!(
+            claims
+                .named()
+                .keys()
+                .copied()
+                .eq([(OTHER_SCOPE, OTHER_SCOPE)]),
+            "the renderable scope names the id, but the body under it is another scope's"
+        );
+    }
+
+    /// Two bodies that name each other reach no scope root, so the pair cannot
+    /// hold its own entries alive.
+    #[test]
+    fn a_pair_of_bodies_that_name_each_other_is_still_pruned() {
+        let mut claims = ClaimRecord::default();
+        record(&mut claims, SCOPE, SCOPE, &[]);
+        record(&mut claims, SCOPE, UNCLAIMED, &[UNDER_OTHER]);
+        record(&mut claims, SCOPE, UNDER_OTHER, &[UNCLAIMED]);
+
+        claims.retain_live_bodies(&BTreeSet::from([SCOPE]));
+
+        assert!(claims.named().keys().copied().eq([(SCOPE, SCOPE)]));
     }
 
     /// A departed body's claim leaves the contest with it, or the id the
@@ -613,7 +677,7 @@ mod tests {
         record(&mut claims, OTHER_SCOPE, OTHER_SCOPE, &[UNCLAIMED]);
         assert_eq!(*claims.contested(), ContestedNodes::from([UNCLAIMED]));
 
-        claims.retain_live_bodies(&BTreeSet::from([SCOPE]), &tree());
+        claims.retain_live_bodies(&BTreeSet::from([SCOPE]));
 
         assert!(claims.contested().is_empty());
         assert_eq!(*claims.contested(), rebuilt_contest(claims.named()));
@@ -718,7 +782,7 @@ mod tests {
             ContestedNodes::from([UNCLAIMED, OWN_CHILD]),
         );
 
-        claims.retain_live_bodies(&BTreeSet::from([SCOPE]), &tree());
+        claims.retain_live_bodies(&BTreeSet::from([SCOPE]));
 
         assert_eq!(*claims.contested(), rebuilt_contest(claims.named()));
         assert!(
