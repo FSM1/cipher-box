@@ -102,7 +102,7 @@ use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, ReplayScopes, decode_queue, enclosing_scope_root, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
-use crate::sync::scope_exit_debt::{record_owed_cuts, settle_owed_cuts};
+use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter,
     reconcile_staging_over, release_version_blocks, stage_op, version_leaf_cids,
@@ -4049,12 +4049,12 @@ where
     /// Queue one scope root for the cut a move out of it owes
     /// ([`Self::cut_exited_scopes`]).
     async fn owe_scope_exit(&self, scope: &DrainScope<'_>, scope_root: NodeId) {
-        self.pending_scope_exits.borrow_mut().insert(scope_root);
-        record_owed_cuts(
+        owe_cut(
             self.staging,
             self.bookkeeping_seal(scope),
             scope.enc_secret,
-            &self.pending_scope_exits.borrow().clone(),
+            self.pending_scope_exits,
+            scope_root,
         )
         .await;
     }

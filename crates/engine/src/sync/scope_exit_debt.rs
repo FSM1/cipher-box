@@ -90,6 +90,27 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
         .collect()
 }
 
+/// Take on one more owed cut, durably, the moment the crossing that owes it is
+/// committed.
+///
+/// Written here rather than only at the settle: everything from the crossing's
+/// ack onwards is a window a crash leaves the scope uncut, and the op that owed
+/// the cut is out of the queue by then.
+pub(crate) async fn owe_cut<St: StagingStore>(
+    staging: &St,
+    seal: BookkeepingSeal<'_>,
+    enc_secret: &X25519Secret,
+    session: &RefCell<BTreeSet<NodeId>>,
+    scope_root: NodeId,
+) {
+    let owed = {
+        let mut session = session.borrow_mut();
+        session.insert(scope_root);
+        session.clone()
+    };
+    record_owed_cuts(staging, seal, enc_secret, &owed).await;
+}
+
 /// Fold the durable debt into this session's owed set.
 ///
 /// The restart path: an op that has already published has left the queue, so no
@@ -472,6 +493,30 @@ mod tests {
         assert!(exits.seen.borrow().is_empty());
         assert!(session.borrow().is_empty());
         assert_eq!(stored(&staging, &entropy, &mine), None);
+    }
+
+    /// A crossing's ack is where the window opens, so the debt is durable from
+    /// the moment it is owed rather than from the end of the pass that owes it.
+    #[test]
+    fn a_newly_owed_cut_is_durable_before_any_pass_drives_it() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(17));
+        let mine = secret(9);
+        let session = RefCell::new(BTreeSet::new());
+
+        block_on(owe_cut(
+            &staging,
+            BookkeepingSeal::new(&mine, &entropy),
+            &mine,
+            &session,
+            node(3),
+        ));
+
+        assert_eq!(*session.borrow(), BTreeSet::from([node(3)]));
+        assert_eq!(
+            stored(&staging, &entropy, &mine),
+            Some(BTreeSet::from([node(3)])),
+        );
     }
 
     /// A pass with nothing owed and nothing stored costs no rotation and no
