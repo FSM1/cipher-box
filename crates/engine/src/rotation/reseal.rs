@@ -147,8 +147,8 @@ pub enum WriteHistory<'a> {
     /// The write plane is untouched (a read rotation or a sweep): the root's
     /// existing opaque link stays byte-for-byte, still openable by the owner at
     /// the write epoch that minted it. A blob past
-    /// [`MAX_WRITE_HISTORY_LINK_BYTES`] is dropped rather than refused, so the
-    /// re-seal can never emit a write-body its own encoder rejects.
+    /// [`MAX_WRITE_HISTORY_LINK_BYTES`] is refused
+    /// ([`ResealError::CarriedWriteHistoryLinkTooLarge`]).
     ///
     /// A committed writer authors the value, so an empty one is that record's
     /// own state and rides through. Refusing it here would hand a write grantee
@@ -348,6 +348,23 @@ pub enum ResealError {
         /// The bound it must stay under.
         limit: usize,
     },
+    /// A carried write-plane history link is past
+    /// [`MAX_WRITE_HISTORY_LINK_BYTES`]. Emitting an empty link in its place
+    /// would publish, above write epoch 1, the very value the
+    /// [`WriteHistory::Genesis`] arm refuses: the write plane advertises a
+    /// predecessor epoch it holds no link to, and an orphaned-name walk stops
+    /// there reporting nothing. The bound is the codec's own, so a link this
+    /// long never came out of [`decode_write_body`] and no committed writer can
+    /// reach the refusal from a record the gate passed. Release-active
+    /// (AGENTS.md rule 8).
+    ///
+    /// [`decode_write_body`]: cipherbox_core::seal::decode_write_body
+    CarriedWriteHistoryLinkTooLarge {
+        /// The carried link's sealed length.
+        size: usize,
+        /// The bound it must stay under.
+        limit: usize,
+    },
     /// The freshly minted section is past
     /// [`resealable_section_bytes`](crate::content::limits::resealable_section_bytes)
     /// at this root's committed grant count — the budget the scope root's own
@@ -382,6 +399,12 @@ impl core::fmt::Display for ResealError {
                 write!(
                     f,
                     "minted history link {size} bytes over the {limit}-byte bound"
+                )
+            }
+            ResealError::CarriedWriteHistoryLinkTooLarge { size, limit } => {
+                write!(
+                    f,
+                    "carried write history link {size} bytes over the {limit}-byte bound"
                 )
             }
             ResealError::SectionNotResealable { size, limit } => {
@@ -451,6 +474,9 @@ impl ResealError {
             ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
             ResealError::WriteBodyTooLarge => "write-body-too-large",
             ResealError::HistoryLinkTooLarge { .. } => "history-link-too-large",
+            ResealError::CarriedWriteHistoryLinkTooLarge { .. } => {
+                "carried-write-history-link-too-large"
+            }
             ResealError::SectionNotResealable { .. } => "section-not-resealable",
             ResealError::Encode(_) => "structure-encode-failed",
         }
@@ -695,6 +721,14 @@ pub fn reseal_scope_root<E: Entropy>(
     {
         return Err(ResealError::TooManyCommittedGrants);
     }
+    if let WriteHistory::Carried(sealed) = &seeds.write_history
+        && sealed.len() > MAX_WRITE_HISTORY_LINK_BYTES
+    {
+        return Err(ResealError::CarriedWriteHistoryLinkTooLarge {
+            size: sealed.len(),
+            limit: MAX_WRITE_HISTORY_LINK_BYTES,
+        });
+    }
 
     // Fail-closed BEFORE any seal (see `ResealError::HistoryLinkNotDescending`
     // and `ResealError::OwnerKeyRequiredForWriteCut`).
@@ -895,10 +929,7 @@ pub fn reseal_scope_root<E: Entropy>(
     // --- The write-plane history link: carried, or minted by the cut itself. ---
     let write_history_link = match &seeds.write_history {
         WriteHistory::Genesis => Vec::new(),
-        WriteHistory::Carried(sealed) if sealed.len() <= MAX_WRITE_HISTORY_LINK_BYTES => {
-            sealed.to_vec()
-        }
-        WriteHistory::Carried(_) => Vec::new(),
+        WriteHistory::Carried(sealed) => sealed.to_vec(),
         WriteHistory::Cut(prev) => mint_owner_history_link(
             entropy,
             identity.v,
@@ -2829,22 +2860,20 @@ mod tests {
         );
     }
 
+    /// `UndrawnEntropy` is the release-active proof: the refusal returns before
+    /// any seal draws a byte, in a build that strips `debug_assert!`. Dropping
+    /// the blob instead would publish an empty link above write epoch 1, which
+    /// truncates the write-plane regression chain from that epoch onward.
     #[test]
-    fn a_carried_write_history_link_past_the_codec_bound_is_dropped_not_refused() {
-        // Dropped, not refused: the rotation carrying a writer's bytes may be the
-        // one revoking that writer.
+    fn a_carried_write_history_link_past_the_codec_bound_is_refused_before_any_seal() {
         let fx = Fixture::new();
         let (commitment, sig, ledger) = fx.committed(MINTED_NAME);
         let owner_pub = fx.owner_enc.public();
         let id = identity(&fx, &owner_pub, MINTED_NAME, None);
         let override_seed = [0x0e; 32];
         let cs = committed_set(&commitment, &sig, &ledger);
-        let bloated = vec![0x7c; MAX_WRITE_HISTORY_LINK_BYTES + 1];
-        let s = ResealSeeds {
-            write_history: WriteHistory::Carried(&bloated),
-            // Above write epoch 1, so the degrade is also pinned against
-            // [`ResealError::EmptyWriteHistoryAboveFirstEpoch`], which reads the
-            // caller's input rather than the bytes this drop emits.
+        let at_len = |link: &'static [u8]| ResealSeeds {
+            write_history: WriteHistory::Carried(link),
             write_epoch: 3,
             ..seeds(
                 &override_seed,
@@ -2854,14 +2883,24 @@ mod tests {
                 &fx.pointer_read_key,
             )
         };
-        let mut e = SeededEntropy::new(71);
-        let section = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect("the re-seal completes");
+        const BLOATED: &[u8] = &[0x7c; MAX_WRITE_HISTORY_LINK_BYTES + 1];
+        const AT_BOUND: &[u8] = &[0x7c; MAX_WRITE_HISTORY_LINK_BYTES];
 
-        assert!(
-            opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 3)
-                .write_history_link
-                .is_empty(),
-            "the over-length blob is dropped, not carried"
+        assert_eq!(
+            reseal_scope_root(&mut UndrawnEntropy, &id, &at_len(BLOATED), &cs, &[])
+                .expect_err("an over-length carried link seals nothing")
+                .check(),
+            "carried-write-history-link-too-large"
+        );
+
+        // The bound itself still carries, so the refusal is the codec's own and
+        // not one byte narrower.
+        let mut e = SeededEntropy::new(71);
+        let section = reseal_scope_root(&mut e, &id, &at_len(AT_BOUND), &cs, &[])
+            .expect("a link at the bound re-seals");
+        assert_eq!(
+            opened_write_body(&section, &FRESH_WRITE_SCOPE_SEED, 3).write_history_link,
+            AT_BOUND,
         );
     }
 
