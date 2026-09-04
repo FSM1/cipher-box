@@ -69,7 +69,7 @@ use crate::grants::{
     UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row, recipient_self_location,
     row_is_owner_attested, self_locate_signed,
 };
-use crate::net::fanout_get_verify;
+use crate::net::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify};
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
@@ -812,23 +812,33 @@ where
         }
         let name = self.keys.pointer_name(&repoint.scope_id);
         let signer = self.keys.pointer_signer(&repoint.scope_id);
-        if let Some((standing, _)) = fanout_get_verify(self.transport, &name).await
-            && let Ok(prior) = open_repoint(
-                &read_key,
-                self.payload_version,
-                &repoint.scope_id,
-                self.identity,
-                &standing.value,
-            )
-            && prior.write_epoch >= repoint.write_epoch
-            // A standing re-point identical to this one is this mint's own
-            // landed vouch: the publish leads the promotion, so an attempt that
-            // vouched and then failed to promote leaves exactly this record. The
-            // retry must re-publish it and re-enrol it for renewal, not be
-            // refused by what its own first attempt signed.
-            && &prior != repoint
-        {
-            return Err(RotationPublishError::Rejected);
+        // Classified, never collapsed: a plane that answers nothing would read
+        // as a vacant one and switch the rollback bar off, which is the whole
+        // authority a device holding no floor for this scope has
+        // ([`FanoutRecord`]).
+        match fanout_get_classified(self.transport, &name).await {
+            FanoutRecord::Unavailable => return Err(RotationPublishError::NotPublished),
+            FanoutRecord::Found(standing, _) => {
+                // A standing block this build cannot open is a bar it cannot
+                // read, not a bar it may skip.
+                let prior = open_repoint(
+                    &read_key,
+                    self.payload_version,
+                    &repoint.scope_id,
+                    self.identity,
+                    &standing.value,
+                )
+                .map_err(|_| RotationPublishError::Rejected)?;
+                // A standing re-point identical to this one is this mint's own
+                // landed vouch: the publish leads the promotion, so an attempt
+                // that vouched and then failed to promote leaves exactly this
+                // record. The retry must re-publish it and re-enrol it for
+                // renewal, not be refused by what its own first attempt signed.
+                if prior.write_epoch >= repoint.write_epoch && &prior != repoint {
+                    return Err(RotationPublishError::Rejected);
+                }
+            }
+            FanoutRecord::Absent => {}
         }
         // The same name-to-signer bind every held pointer clears: a key arm
         // whose read and signing edges disagree would publish at a routing key
@@ -907,9 +917,14 @@ where
         scheduler,
         profile,
     } = pipeline;
-    let observed = fanout_get_verify(transport, name)
-        .await
-        .map_or(0, |(record, _)| record.sequence);
+    // A bar of zero on silence is no bar at all: the publish would beat nothing
+    // and overwrite the record it could not read, so an unreadable plane ends
+    // the publish instead ([`FanoutRecord`]).
+    let observed = match fanout_get_classified(transport, name).await {
+        FanoutRecord::Found(record, _) => record.sequence,
+        FanoutRecord::Absent => 0,
+        FanoutRecord::Unavailable => return Err(PointerPublishFailure::NotLanded),
+    };
     let receipt = publish_inline(
         transport,
         api,
@@ -3282,6 +3297,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         // ([`ResealError::SectionNotResealable`]).
         ResealError::SectionNotResealable { .. } => WritePublishError::NotLanded,
         ResealError::HistoryLinkTooLarge { .. }
+        | ResealError::CarriedWriteHistoryLinkTooLarge { .. }
         | ResealError::LedgerDivergesFromCommitment
         | ResealError::SignerNotCommitted
         | ResealError::UnusableRecipientKey
@@ -4833,6 +4849,63 @@ mod tests {
         }
     }
 
+    impl Harness<DarkFirstFanout> {
+        fn dark_first_fanout(key: &str) -> Self {
+            let key = key.to_owned();
+            Self::build(move |store, _| {
+                let dark = store.endpoints().len();
+                DarkFirstFanout {
+                    inner: store,
+                    key,
+                    dark: Arc::new(Mutex::new(dark)),
+                }
+            })
+        }
+    }
+
+    /// A transport whose first fan-out over one key answers nothing and whose
+    /// later ones serve it: the withhold a hostile accelerator holds for
+    /// exactly as long as the bar it wants switched off is read.
+    #[derive(Clone)]
+    struct DarkFirstFanout {
+        inner: InMemoryRecordStore,
+        key: String,
+        dark: Arc<Mutex<usize>>,
+    }
+
+    impl RecordTransport for DarkFirstFanout {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            self.inner.endpoints()
+        }
+
+        async fn get_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            max_bytes: usize,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            if routing_key == self.key {
+                let mut dark = self.dark.lock().expect("lock");
+                if *dark > 0 {
+                    *dark -= 1;
+                    return Err(SeamError::new("endpoint withholding"));
+                }
+            }
+            self.inner
+                .get_record(endpoint, routing_key, max_bytes)
+                .await
+        }
+
+        async fn put_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            record: &[u8],
+        ) -> SeamResult<()> {
+            self.inner.put_record(endpoint, routing_key, record).await
+        }
+    }
+
     /// The concurrent writer's record, keyed by the name it lands at.
     type Winner = Arc<Mutex<Option<(String, Vec<u8>)>>>;
 
@@ -5533,6 +5606,118 @@ mod tests {
         assert_eq!(again, Ok(()), "the retry re-publishes its own landed vouch");
     }
 
+    /// Silence is a statement about the endpoints, never about the name. Read
+    /// as a vacant plane it switches the rollback bar off, and the plane that
+    /// answers the publish a moment later hands the mint a CAS bar it clears —
+    /// so the rollback the bar exists to refuse lands.
+    #[test]
+    fn a_mint_refuses_to_vouch_on_a_pointer_plane_it_cannot_read() {
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let harness = Harness::dark_first_fanout(pointer.as_str());
+        let root_name = vault_root([0xc0; 16], Vec::new()).name;
+        // Above the epoch this mint asks for, so the bar refuses whenever it is
+        // read at all.
+        vouch(&harness, MINT_EPOCH + 2, &root_name);
+        let standing = standing_pointer(&harness, &pointer);
+
+        let signer = owner_identity();
+        let refused = block_on(harness.pointer_mint(&signer).vouch_scope(&RepointObject {
+            scope_id: CHILD_SCOPE,
+            current_root: root_name,
+            write_epoch: MINT_EPOCH + 1,
+            min_read_epoch: MINT_EPOCH,
+            prev_root: None,
+        }));
+
+        assert_eq!(refused, Err(RotationPublishError::NotPublished));
+        assert_eq!(
+            standing_pointer(&harness, &pointer),
+            standing,
+            "and the re-point it could not read is still the one standing",
+        );
+    }
+
+    /// The record every endpoint of `harness` serves at `name`.
+    fn standing_pointer<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        name: &IpnsName,
+    ) -> Vec<Option<Vec<u8>>> {
+        harness
+            .store
+            .endpoints()
+            .iter()
+            .map(|endpoint| harness.store.record_at(endpoint, name.as_str()))
+            .collect()
+    }
+
+    /// A standing block this build cannot open is a bar it cannot read, not a
+    /// bar it may skip: the payload version moved, or the bytes are corrupt.
+    #[test]
+    fn a_mint_refuses_to_vouch_over_a_standing_record_it_cannot_open() {
+        let harness = Harness::plain();
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let pointer_signer = scope_pointer_signer(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let record =
+            IpnsRecord::create_v2(&pointer_signer, b"opens under no key", 1, TTL_NANOS, EOL)
+                .marshal();
+        for endpoint in harness.store.endpoints() {
+            harness
+                .store
+                .seed_record(&endpoint, pointer.as_str(), record.clone());
+        }
+
+        let signer = owner_identity();
+        let refused = block_on(harness.pointer_mint(&signer).vouch_scope(&RepointObject {
+            scope_id: CHILD_SCOPE,
+            current_root: vault_root([0xc0; 16], Vec::new()).name,
+            write_epoch: MINT_EPOCH + 1,
+            min_read_epoch: MINT_EPOCH,
+            prev_root: None,
+        }));
+
+        assert_eq!(refused, Err(RotationPublishError::Rejected));
+    }
+
+    /// The CAS bar is the whole of what stops a pointer publish overwriting a
+    /// record it never saw, so an unreadable plane ends the publish rather than
+    /// lowering the bar to zero. Both producers of this plane ride this path.
+    #[test]
+    fn a_pointer_publish_refuses_when_it_cannot_read_the_sequence_it_must_beat() {
+        let name = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        let harness = Harness::dark_first_fanout(name.as_str());
+        let signer = scope_pointer_signer(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        // Well past the sequence a bar of zero signs at, so a publish off
+        // silence reads as a lost race rather than the availability stall it is.
+        let record =
+            IpnsRecord::create_v2(&signer, b"the standing block", 5, TTL_NANOS, EOL).marshal();
+        for endpoint in harness.store.endpoints() {
+            harness
+                .store
+                .seed_record(&endpoint, name.as_str(), record.clone());
+        }
+        let standing = standing_pointer(&harness, &name);
+
+        let refused = block_on(publish_pointer_inline(
+            PointerPipeline {
+                transport: &harness.transport,
+                api: &harness.api,
+                floors: &harness.floors,
+                scheduler: &harness.world.scheduler,
+                profile: &harness.profile,
+            },
+            &name,
+            &signer,
+            b"a pointer block",
+        ));
+
+        assert_eq!(refused, Err(PointerPublishFailure::NotLanded));
+        assert_eq!(
+            standing_pointer(&harness, &name),
+            standing,
+            "and the record it could not read is still the one standing",
+        );
+    }
+
     /// A section carrying no owner-write-blob settles the question whatever
     /// floor stands: the walk consults a pointer for every promoted scope, and
     /// the first sighting raises that floor, so a keyless verdict gated behind
@@ -5667,13 +5852,13 @@ mod tests {
         );
     }
 
-    impl Harness<InMemoryRecordStore> {
+    impl<T: RecordTransport + Clone> Harness<T> {
         fn pointer_mint<'a>(
             &'a self,
             identity_signer: &'a EcdsaSigner,
         ) -> ScopePointerMint<
             'a,
-            InMemoryRecordStore,
+            T,
             ScriptedHttp,
             InMemoryCredentialStore,
             InMemoryFloorStore,
@@ -9792,6 +9977,7 @@ mod tests {
             ResealError::WriteBodyTooLarge,
             ResealError::SectionNotResealable { size: 2, limit: 1 },
             ResealError::HistoryLinkTooLarge { size: 2, limit: 1 },
+            ResealError::CarriedWriteHistoryLinkTooLarge { size: 2, limit: 1 },
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
@@ -9806,6 +9992,7 @@ mod tests {
                     "a permanent size verdict would let whoever grew the root block the cascade",
                 ),
                 ResealError::HistoryLinkTooLarge { .. }
+                | ResealError::CarriedWriteHistoryLinkTooLarge { .. }
                 | ResealError::LedgerDivergesFromCommitment
                 | ResealError::SignerNotCommitted
                 | ResealError::UnusableRecipientKey

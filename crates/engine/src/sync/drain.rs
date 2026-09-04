@@ -415,8 +415,10 @@ enum Halt {
 /// leaves the op where it is with no charge.
 ///
 /// The charge is the identity's rather than one scope's, so exactly one pass a
-/// tick makes it — the vault root's, which is also the pass that owns the
-/// identity-wide bookkeeping ([`Drain::settle`]).
+/// tick makes it ([`charge_the_identity_to_one_pass`]). Dividing it across
+/// passes would make the divisor the number of write planes that happened to
+/// open, and the dead-letter tick would then differ between replays of the same
+/// op sequence.
 fn halt_below_another_scope_root(
     keyless_roots: &[NodeId],
     charges_the_identity: bool,
@@ -426,6 +428,18 @@ fn halt_below_another_scope_root(
         Halt::UnwritableScope
     } else {
         Halt::Unclassified
+    }
+}
+
+/// Give the tick's identity-wide charge to its first pass.
+///
+/// Held apart from the vault root's own seeds: an owner holding neither vault
+/// seed runs no vault-root pass, and an op below a keyless scope root would
+/// then take [`Halt::Unclassified`] from every pass, spend no attempt budget,
+/// and hold the strict-FIFO head for ever with no dead letter (ADR 0012 D6).
+pub(crate) fn charge_the_identity_to_one_pass(scopes: &mut [DrainScope<'_>]) {
+    if let Some(first) = scopes.first_mut() {
+        first.charges_the_identity = true;
     }
 }
 
@@ -738,6 +752,10 @@ pub(crate) struct DrainScope<'a> {
     /// device opens. No pass will ever take an op below one, so the valve
     /// charges rather than stalls ([`halt_below_another_scope_root`]).
     pub(crate) keyless_roots: &'a [NodeId],
+    /// Whether this pass owns the tick's identity-wide charge for an op below a
+    /// keyless scope root. Set on exactly one pass a tick
+    /// ([`charge_the_identity_to_one_pass`]).
+    pub(crate) charges_the_identity: bool,
     /// The owner's encryption secret (the root's own seed source, and the op
     /// queue's HPKE-to-self reader).
     ///
@@ -2148,7 +2166,7 @@ where
             .ok_or_else(|| {
                 halt_below_another_scope_root(
                     scope.keyless_roots,
-                    scope.source.ascent_node_seed.is_none(),
+                    scope.charges_the_identity,
                     chain[nearest],
                 )
             })?;
@@ -6032,6 +6050,7 @@ mod tests {
             destination: Some(destination.end().at(DESTINATION_EPOCH)),
             scope_roots: roots,
             keyless_roots: &[],
+            charges_the_identity: true,
             enc_secret: &seams.enc_secret,
             owner_identity: &seams.identity,
         }
@@ -7064,12 +7083,44 @@ mod tests {
     /// same op, so charging in each would divide the budget by however many
     /// scope write planes happened to open.
     #[test]
-    fn only_the_vault_root_pass_charges_an_op_below_a_keyless_scope_root() {
+    fn only_the_charging_pass_of_a_tick_charges_an_op_below_a_keyless_scope_root() {
         let keyless = [NodeId([0x99; 16])];
         assert_eq!(
             halt_below_another_scope_root(&keyless, false, NodeId([0x99; 16])),
             Halt::Unclassified,
         );
+    }
+
+    /// The charge rides the first pass of the tick rather than the vault root's
+    /// seeds: an owner holding neither vault seed runs no vault-root pass, and
+    /// the op below a keyless scope root would then hold the strict-FIFO head
+    /// for ever with no dead letter.
+    #[test]
+    fn exactly_one_pass_a_tick_takes_the_identity_charge() {
+        let seams = OwnerSeams::new();
+        let (source, destination) = ends();
+        let roots = [SOURCE_ROOT, DESTINATION_ROOT];
+        let uncharged = DrainScope {
+            charges_the_identity: false,
+            ..two_ended(&seams, &source, &destination, &roots)
+        };
+
+        for count in 1..=3 {
+            let mut passes = vec![uncharged; count];
+            charge_the_identity_to_one_pass(&mut passes);
+            assert_eq!(
+                passes
+                    .iter()
+                    .filter(|pass| pass.charges_the_identity)
+                    .count(),
+                1,
+                "a tick of {count} passes charges once",
+            );
+            assert!(
+                passes[0].charges_the_identity,
+                "and it is the first pass that takes it",
+            );
+        }
     }
 
     /// A link that will not open is a walk this pass cannot complete, never a
