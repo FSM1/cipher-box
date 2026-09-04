@@ -208,9 +208,9 @@
       "sealFile": "vectors/ecies/seal.json",
       "sealCount": 3,
       "openRejectFile": "vectors/ecies/open_reject.json",
-      "openRejectCount": 9,
+      "openRejectCount": 10,
       "sealRejectFile": "vectors/ecies/seal_reject.json",
-      "sealRejectCount": 2
+      "sealRejectCount": 3
     },
     "contact": {
       "accept": {

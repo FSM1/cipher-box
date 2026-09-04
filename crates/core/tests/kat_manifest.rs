@@ -1718,7 +1718,7 @@ fn vector_names_are_unique_within_each_file() {
 const EPHEMERAL_SCALAR_FAMILIES: &[(&str, usize)] = &[
     ("vectors/content_key/content_key_accept.json", 2),
     ("vectors/ecies/seal.json", 3),
-    ("vectors/ecies/seal_reject.json", 2),
+    ("vectors/ecies/seal_reject.json", 3),
     ("vectors/grant/ascent_link_accept.json", 1),
     ("vectors/grant/grant_blob_accept.json", 2),
     ("vectors/grant/owner_blob_accept.json", 1),
@@ -1781,6 +1781,38 @@ fn ephemeral_scalars_are_fresh_within_each_vector_file() {
     }
     let expected: BTreeMap<&str, usize> = EPHEMERAL_SCALAR_FAMILIES.iter().copied().collect();
     assert_eq!(pinned, expected, "ephemeral family coverage drift");
+}
+
+/// The ECIES families are the one group that shares a recipient across files:
+/// every vector seals to the same key, and the key schedule derives the AEAD
+/// key *and* the nonce from the transcript alone, so one repeated scalar
+/// anywhere in `vectors/ecies/` is a real reuse that per-file freshness misses
+/// (ADR 0015 E4).
+#[test]
+fn ecies_ephemeral_scalars_are_fresh_across_the_family() {
+    let mut seen = BTreeSet::new();
+    let mut counted = 0usize;
+    for (path, body) in FIXTURES {
+        if !path.starts_with("vectors/ecies/") {
+            continue;
+        }
+        for (name, scalar) in ephemeral_scalars(body, path) {
+            counted += 1;
+            assert!(
+                seen.insert(scalar),
+                "{path}: vector {name} repeats an ephemeral scalar of another ecies file"
+            );
+        }
+    }
+    assert_eq!(
+        counted,
+        EPHEMERAL_SCALAR_FAMILIES
+            .iter()
+            .filter(|(path, _)| path.starts_with("vectors/ecies/"))
+            .map(|(_, count)| count)
+            .sum::<usize>(),
+        "the ecies files stopped pinning their ephemeral scalars"
+    );
 }
 
 /// The codec's decode-reachable checks, fixed HERE as the anti-vacuity anchor
@@ -3019,8 +3051,10 @@ const ECIES_REQUIRED_REJECTS: &[&str] = &[
     "enc-x-not-on-the-curve",
     "enc-x-at-the-field-prime",
     // The recipient scalar and the ciphertext length: the two inputs the enc
-    // cases never exercise.
+    // cases never exercise. Both scalar bounds are pinned, since a test of
+    // `x < n` alone accepts zero.
     "recipient-scalar-at-the-group-order",
+    "recipient-scalar-zero",
     "ciphertext-shorter-than-the-tag",
 ];
 
@@ -3029,6 +3063,7 @@ const ECIES_REQUIRED_REJECTS: &[&str] = &[
 const ECIES_REQUIRED_SEAL_REJECTS: &[&str] = &[
     "recipient-off-the-curve",
     "ephemeral-scalar-at-the-group-order",
+    "ephemeral-scalar-zero",
 ];
 
 #[test]
@@ -3039,9 +3074,19 @@ fn ecies_envelope_shape_is_frozen() {
         m.suite.ecies.enc_len, ECIES_ENC_LEN,
         "enc is one compressed SEC1 point"
     );
-    // A drift in either string orphans every stored envelope.
+    // A drift in either string orphans every stored envelope. The manifest is
+    // regenerated from these two constants, so the literals are pinned here as
+    // well — a rename alone would otherwise pass both sides (ADR 0015 D3).
     assert_eq!(m.suite.ecies.contexts.aead_key, ECIES_KEY_CONTEXT);
     assert_eq!(m.suite.ecies.contexts.aead_nonce, ECIES_NONCE_CONTEXT);
+    assert_eq!(
+        ECIES_KEY_CONTEXT, "cipherbox/device-factor-seal/v1 aead-key",
+        "the ECIES AEAD-key context is frozen"
+    );
+    assert_eq!(
+        ECIES_NONCE_CONTEXT, "cipherbox/device-factor-seal/v1 aead-nonce",
+        "the ECIES AEAD-nonce context is frozen"
+    );
     assert_ne!(
         m.suite.ecies.contexts.aead_key, m.suite.ecies.contexts.aead_nonce,
         "the key and the nonce must not share one context"

@@ -79,5 +79,14 @@
     "ciphertext": "5d457eb0b2435066996f53f9548103",
     "check": "ecies-open-failed",
     "class": "trust"
+  },
+  {
+    "name": "recipient-scalar-zero",
+    "recipientSecret": "0000000000000000000000000000000000000000000000000000000000000000",
+    "enc": "02a36b48691898f4c058cd18442495b9202f859f28c9400190be3b04f5f0655c94",
+    "aad": "636970686572626f782f6465766963652d617070726f76616c2f726571756573742f7631",
+    "ciphertext": "5d457eb0b2435066996f53f954810382316de42887b21c8df2abc63b1c3451405e20",
+    "check": "ecies-open-failed",
+    "class": "trust"
   }
 ]

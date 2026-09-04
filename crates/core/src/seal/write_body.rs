@@ -43,7 +43,7 @@ use super::section::MAX_GRANT_BLOBS;
 /// One authoritative grant-ledger row. The identity key is the 33-byte
 /// compressed secp256k1 SEC1 form; the encryption subkey is a 32-byte X25519
 /// public key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct GrantLedgerEntry {
     /// The recipient's compressed secp256k1 identity public key (SEC1).
     pub recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
@@ -86,6 +86,31 @@ pub struct GrantLedgerEntry {
     pub expires_at: Option<NonZeroU64>,
     /// Preserved unknown fields (never any of the known keys).
     pub unknown: PreservedFields,
+}
+
+/// Each recipient field names one grantee, and the subkey names that party at
+/// every scope granted to them, so a rendered row links the grantees a sealed
+/// ledger keeps apart — the law [`GrantSetEntry`](super::grant::GrantSetEntry)
+/// renders under. `owner_sig` redacts with them: secp256k1 admits public-key
+/// recovery, so a compact signature names its signer.
+impl fmt::Debug for GrantLedgerEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantLedgerEntry")
+            .field(
+                "recipient_identity_pk",
+                &RedactedBytes::of(&self.recipient_identity_pk),
+            )
+            .field(
+                "recipient_enc_pk",
+                &RedactedBytes::of(&self.recipient_enc_pk),
+            )
+            .field("permission", &self.permission)
+            .field("tag", &RedactedBytes::of(&self.tag))
+            .field("owner_sig", &RedactedBytes::of(&self.owner_sig))
+            .field("expires_at", &self.expires_at)
+            .field("unknown", &self.unknown)
+            .finish()
+    }
 }
 
 const LEDGER_ENTRY_KNOWN: &[&str] = &[
@@ -599,6 +624,48 @@ mod tests {
             rendered.contains("Read") && rendered.contains("Write"),
             "the ledger's public fields stay legible: {rendered}"
         );
+    }
+
+    /// A ledger row renders as an exact redacted shape, and a whole body's
+    /// rendering spells no byte of one. Pinned as a golden string, not a search
+    /// for a spelling: any added field breaks this test and forces a redaction
+    /// decision. The composed half is the disclosure itself — one `{:?}` of a
+    /// body would otherwise print the whole grantee list of a scope.
+    #[test]
+    fn ledger_row_debug_names_no_grantee() {
+        let identity: [u8; 33] =
+            core::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(101));
+        let enc: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(103));
+        let tag: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(13).wrapping_add(107));
+        let owner_sig: [u8; ECDSA_SIG_LEN] =
+            core::array::from_fn(|i| (i as u8).wrapping_mul(17).wrapping_add(109));
+
+        let mut row = GrantLedgerEntry::new(identity, enc, Permission::Read, tag, owner_sig);
+        row.expires_at = NonZeroU64::new(7);
+        assert_eq!(
+            format!("{row:?}"),
+            "GrantLedgerEntry { recipient_identity_pk: <33 bytes redacted>, \
+             recipient_enc_pk: <32 bytes redacted>, permission: Read, \
+             tag: <32 bytes redacted>, owner_sig: <64 bytes redacted>, \
+             expires_at: Some(7), unknown: {} }"
+        );
+
+        let body = WriteBody {
+            grant_ledger: vec![row],
+            write_history_link: Vec::new(),
+            direct_child_scope_index: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let rendered = format!("{body:?}");
+        for field in [&identity[..], &enc[..], &tag[..], &owner_sig[..]] {
+            for run in field.windows(4) {
+                let spelled = run.iter().map(u8::to_string).collect::<Vec<_>>().join(", ");
+                assert!(
+                    !rendered.contains(&spelled),
+                    "a rendered body spells a recipient field: {rendered}"
+                );
+            }
+        }
     }
 
     #[test]
