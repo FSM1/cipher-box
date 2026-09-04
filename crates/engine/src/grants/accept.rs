@@ -322,8 +322,8 @@ pub const MAX_RECEIVED_SHARES: usize = 1024;
 pub(crate) const MAX_SCOPE_ROOT_NAME_BYTES: usize = 128;
 
 /// A collection or field past its frozen bound. Shared by the grants layer's
-/// stored-body codecs, which all enforce their bounds in both directions
-/// (AGENTS.md rule 8).
+/// bounded collections: the stored-body codecs, which all enforce their bounds
+/// in both directions (AGENTS.md rule 8), and the grafted claim record.
 #[derive(Debug)]
 pub struct TooLong {
     /// Which bounded field breached.
