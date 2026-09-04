@@ -186,6 +186,13 @@ pub enum DeadLetterReason {
     /// Distinct from [`Self::AttemptsExhausted`] because no retry shrinks the
     /// body, and the member's remedy is to empty the bin or to hard-delete.
     BinIndexFull,
+    /// This device minted a bin index revision that never became a record it can
+    /// resolve, so it may neither publish over the name nor establish what
+    /// stands there. Distinct from [`Self::AttemptsExhausted`] because no retry
+    /// on this device changes it: the state clears when another device of the
+    /// account publishes the record, and the member's remedy until then is a
+    /// hard delete.
+    BinIndexStrandedMint,
     /// An op that would move a node into a scope no pass can seal it into: a
     /// relocation whose two ends now sit in two different interior scopes, or a
     /// restore into a scope other than the one that binned the node. A pass

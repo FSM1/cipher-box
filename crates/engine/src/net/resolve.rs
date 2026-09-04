@@ -1182,6 +1182,167 @@ mod tests {
         assert!(!expected_head.is_empty());
     }
 
+    /// The head arm of the renewal carries no live-value comparison, unlike the
+    /// inline arm, because two mechanisms already stand between it and a record
+    /// a co-writer superseded — and this pins both. A renewal publishes at this
+    /// device's durable floor plus one: while the device has not loaded the
+    /// newer record, the network holds a sequence above that and the publish
+    /// loses; once it has, the adoption re-held the newer record under the same
+    /// node id, so the renewal re-signs the newer version.
+    #[test]
+    fn the_renewal_loses_to_a_newer_record_it_never_loaded_and_re_signs_one_it_adopted() {
+        use core::time::Duration;
+
+        use crate::api::ApiClient;
+        use crate::net::eol_renew_pass;
+        use crate::net::publish::PublishOutcome;
+        use crate::profile::SyncTimingProfile;
+        use crate::seams::{FloorStore, HttpResponse};
+
+        /// Past the sub-EOL renewal threshold of a record minted at time zero.
+        const INSIDE_THE_WINDOW: Duration = Duration::from_secs(65 * 24 * 60 * 60);
+        const CO_WRITER_VALUE: &[u8] = b"/ipfs/bafyacowriterhead";
+
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone(); // manual clock, now = 0
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let write_scope_seed = [4u8; 32];
+        let node_id = [5u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let raise = |sequence| {
+            block_on(
+                device
+                    .floor_store
+                    .raise_sequence_floor(name.as_str().as_bytes(), sequence),
+            )
+            .expect("the floor raises");
+        };
+        let live_value = || {
+            let endpoint = device.record_store.endpoints()[0].clone();
+            IpnsRecord::unmarshal(
+                &device
+                    .record_store
+                    .record_at(&endpoint, name.as_str())
+                    .expect("a record stands at the name"),
+            )
+            .unwrap()
+            .verify(&name)
+            .unwrap()
+            .value
+        };
+        let register_ok = || {
+            device.http.enqueue_response(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Vec::new(),
+            });
+        };
+
+        // What this device adopted at sequence 1, and the floor that left.
+        let ours = HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes: record(&signer, 1),
+            signer: SessionIdentity::write_name_signer(&write_scope_seed, &node_id),
+            value: HeldValue::Head(head_cid_from_value(VALUE).expect("fixture head cid")),
+            content_cids: Vec::new(),
+        };
+        raise(1);
+        // A co-writer's newer record, standing above that floor. Minted at time
+        // zero like ours, so the renewal threshold is what the pass tests.
+        for endpoint in device.record_store.endpoints() {
+            device.record_store.seed_record(
+                &endpoint,
+                name.as_str(),
+                IpnsRecord::create_v2(
+                    &signer,
+                    CO_WRITER_VALUE,
+                    3,
+                    TTL_NANOS,
+                    &eol::eol_from(UnixMillis(0)),
+                )
+                .marshal(),
+            );
+        }
+
+        scheduler.advance(INSIDE_THE_WINDOW);
+        register_ok();
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            core::slice::from_ref(&ours),
+        ));
+        assert_eq!(
+            results[0].outcome.as_ref().unwrap(),
+            &Some(PublishOutcome::LostRace {
+                published_sequence: 2,
+                observed_sequence: 3,
+            }),
+            "a renewal at the unmoved floor plus one cannot reach the newer record",
+        );
+        assert_eq!(
+            live_value(),
+            CO_WRITER_VALUE,
+            "and the co-writer's record still stands",
+        );
+
+        // The same device now loads it. The adopt re-holds the newer record
+        // under the same node id, and the gate raises the floor behind it.
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        held.borrow_mut().insert(HeldKey::node(node_id), ours);
+        block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::Accept),
+            &name,
+            &held,
+            &HeldMaterial {
+                node_id,
+                write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
+            },
+            ResolveMode::CacheFirst,
+        ))
+        .expect("resolve_and_hold");
+        raise(3);
+        let re_held = held
+            .borrow()
+            .get(&HeldKey::node(node_id))
+            .cloned()
+            .expect("held under its node id");
+        assert_eq!(
+            re_held.head_cid(),
+            head_cid_from_value(CO_WRITER_VALUE).as_deref(),
+            "the adoption re-held the record the plane served",
+        );
+
+        register_ok();
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &[re_held],
+        ));
+        assert_eq!(
+            results[0].outcome.as_ref().unwrap(),
+            &Some(PublishOutcome::Published { sequence: 4 }),
+        );
+        assert_eq!(
+            live_value(),
+            CO_WRITER_VALUE,
+            "the renewal re-signed the newer version, never the one it replaced",
+        );
+    }
+
     mod refresh_base {
         use super::super::{Resolved, refresh_base_from_resolved};
 

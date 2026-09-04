@@ -2313,7 +2313,7 @@ fn published_bin_entries(fx: &GrantScenario) -> Vec<BinEntry> {
         fx.engine.profile(),
         &keys,
     ))
-    .enrol(&RefCell::new(None));
+    .enrol(&RefCell::new(None), None);
     let (BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. }) = load else {
         panic!("the account's bin index reads");
     };

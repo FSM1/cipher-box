@@ -12123,7 +12123,7 @@ fn a_settings_save_that_never_landed_refuses_the_write_instead_of_widening_it() 
         matches!(
             refused,
             EngineError::NoPlacement {
-                refusal: PlacementRefusal::SettingsUnavailable(DefaultsReason::Suppressed),
+                refusal: PlacementRefusal::SettingsUnavailable(DefaultsReason::StrandedMint),
             }
         ),
         "an attempted save is a durable mark of a choice: {refused:?}"

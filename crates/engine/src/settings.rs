@@ -539,9 +539,16 @@ pub enum DefaultsReason {
     /// cache write.
     UnprovenFirstRun,
     /// No usable record, but a durable mark proves this device already adopted
-    /// a settings record, or already tried to publish one: the record is being
-    /// withheld or its head block is unreachable.
+    /// one: the record is being withheld or its head block is unreachable.
     Suppressed,
+    /// No usable record, and the publish mint counter is this device's only
+    /// mark: a publish minted a revision and then failed, or landed and lost
+    /// its floor write before the store could record it. Refused like
+    /// [`Self::Suppressed`], because the second case is a record this device
+    /// must not publish over — and reported apart from it, because no other
+    /// device is needed to reach it and none may be needed to leave it
+    /// (blueprint/engine.md "Bin index record").
+    StrandedMint,
     /// A record below the durable sequence floor — a replay, not staleness.
     RolledBack {
         /// The durable floor the record failed.
@@ -580,6 +587,7 @@ impl DefaultsReason {
         match self {
             Self::UnprovenFirstRun => "unproven-first-run",
             Self::Suppressed => "suppressed",
+            Self::StrandedMint => "stranded-mint",
             Self::RolledBack { .. } => "rolled-back",
             Self::RevisionRolledBack { .. } => "revision-rolled-back",
             Self::Expired => "expired",
@@ -674,6 +682,26 @@ fn revision_adopted_key(name: &IpnsName) -> Vec<u8> {
 
 fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"settings-revision-mint/", name)
+}
+
+/// The verdict a load reaches when no endpoint served a record, from the three
+/// durable marks a publish leaves. Stated once, because both record planes read
+/// it and the drain must not learn a rule of its own.
+///
+/// The two adoption marks answer first: either one proves a record this device
+/// already took, so an absent one is withheld. The mint counter alone is an
+/// attempt this device made, and the residual case where it is also a landed
+/// publish whose floor write was lost is why it refuses too.
+pub(crate) fn unresolved_reason(
+    durable: Option<u64>,
+    minted: Option<u64>,
+    adopted: Option<u64>,
+) -> DefaultsReason {
+    match (durable.or(adopted), minted) {
+        (Some(_), _) => DefaultsReason::Suppressed,
+        (None, Some(_)) => DefaultsReason::StrandedMint,
+        (None, None) => DefaultsReason::UnprovenFirstRun,
+    }
 }
 
 pub(crate) fn prefixed_key(prefix: &[u8], name: &IpnsName) -> Vec<u8> {
@@ -987,10 +1015,7 @@ where
         ) else {
             return Err(DefaultsReason::FloorUnreadable);
         };
-        return Err(match durable.or(minted).or(adopted) {
-            Some(_) => DefaultsReason::Suppressed,
-            None => DefaultsReason::UnprovenFirstRun,
-        });
+        return Err(unresolved_reason(durable, minted, adopted));
     };
     // The reader of this record is always its signer, so a lapsed EOL is a
     // refusal here rather than the availability event it is plane-wide
@@ -1748,9 +1773,9 @@ mod tests {
 
     /// The three marks a settings record leaves are raised by separate,
     /// non-atomic store writes, and the adopt path discards each raise's error.
-    /// So a device can hold any one of them alone, and each alone is proof it
-    /// adopted or attempted a record: a withheld one is suppression, never the
-    /// first run that would widen placement onto the hosted store.
+    /// So a device can hold any one of them alone, and each alone refuses the
+    /// first run that would widen placement onto the hosted store: an adoption
+    /// mark reports suppression, and the mint counter its own stranded mint.
     ///
     /// Reached with no record served and no cached copy, so only the marks can
     /// answer.
@@ -1766,11 +1791,14 @@ mod tests {
         .into_gateway(SessionBearer::default());
 
         let marks = [
-            name.as_str().as_bytes().to_vec(),
-            revision_adopted_key(&name),
-            revision_mint_key(&name),
+            (
+                name.as_str().as_bytes().to_vec(),
+                DefaultsReason::Suppressed,
+            ),
+            (revision_adopted_key(&name), DefaultsReason::Suppressed),
+            (revision_mint_key(&name), DefaultsReason::StrandedMint),
         ];
-        for mark in &marks {
+        for (mark, expected) in &marks {
             let device = world.device(b"cold");
             block_on(device.floor_store.raise_sequence_floor(mark, 3)).expect("the mark raises");
             let load = block_on(load_settings(
@@ -1786,12 +1814,12 @@ mod tests {
             .load;
             assert_eq!(
                 load,
-                SettingsLoad::Defaults(DefaultsReason::Suppressed),
+                SettingsLoad::Defaults(*expected),
                 "one mark alone must not read as a first run",
             );
             assert_eq!(
                 decide_placement(&load).decision.unwrap_err(),
-                PlacementRefusal::SettingsUnavailable(DefaultsReason::Suppressed),
+                PlacementRefusal::SettingsUnavailable(*expected),
             );
         }
 

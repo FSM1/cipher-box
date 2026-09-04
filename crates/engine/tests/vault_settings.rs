@@ -445,8 +445,9 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
 }
 
 /// The mint counter is the only mark a save that never confirmed leaves, and it
-/// is enough: withholding the record from that device is suppression, not a
-/// first run.
+/// is enough: withholding the record from that device is a stranded mint, not a
+/// first run. This plane's own exit is the member saving again, which the bin
+/// index's whole-rewrite gate has no room for.
 #[test]
 fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
     let world = FakeWorld::new();
@@ -471,7 +472,7 @@ fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
     // on the mint counter alone.
     assert_eq!(
         load(&world, &device, &blocks, &SECRET),
-        SettingsLoad::Defaults(DefaultsReason::Suppressed),
+        SettingsLoad::Defaults(DefaultsReason::StrandedMint),
         "the mint counter outlives the attempt, so absence is no longer credible",
     );
 
