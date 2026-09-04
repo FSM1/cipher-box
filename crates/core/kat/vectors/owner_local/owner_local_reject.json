@@ -112,6 +112,14 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-received-shares-as-scope-exit-debt",
+    "kind": "scope-exit-debt",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820489cebba7a166c619835fe12eedc581dbfc1b36de10c830e4f0bc1c48734864b6a636970686572746578745820cebf53425a59fd8767eb12dc7c1757aef7ac5c72af6af41af6985c0a45430b95",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-contact-book-as-received-shares",
     "kind": "received-shares",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
@@ -138,6 +146,14 @@
   {
     "name": "cross-kind-contact-book-as-doomed-journal",
     "kind": "doomed-journal",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820b35b171377289075f029289a7d6f11df0a8f5b2442c665d7005b38182d47e5486a636970686572746578745820af65e299193b68dc8e855c0fbc09ee312a826b2f7ffc3a682019e8c0a8c99648",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-contact-book-as-scope-exit-debt",
+    "kind": "scope-exit-debt",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
     "blob": "a361760163656e635820b35b171377289075f029289a7d6f11df0a8f5b2442c665d7005b38182d47e5486a636970686572746578745820af65e299193b68dc8e855c0fbc09ee312a826b2f7ffc3a682019e8c0a8c99648",
     "check": "hpke-open-failed",
@@ -176,6 +192,14 @@
     "class": "trust"
   },
   {
+    "name": "cross-kind-invite-records-as-scope-exit-debt",
+    "kind": "scope-exit-debt",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582035fdea9e30d3a32c8c366dd18e1eee4c13266995fd5c1c04ea694206cea3087c6a636970686572746578745820de50f215ae17b4f22cc1cf164eecc3a3e6946abff6d3c70115c9a9efaf1dd283",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
     "name": "cross-kind-retire-ledger-as-received-shares",
     "kind": "received-shares",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
@@ -202,6 +226,14 @@
   {
     "name": "cross-kind-retire-ledger-as-doomed-journal",
     "kind": "doomed-journal",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820c368ef4ab487895486ec35b49171fed92fefb21dbbd1146aef59f5ee9a71440f6a63697068657274657874582075621018377af7e9fad3bcb9c0a4d5c14b66719f1f4ba98be58bc9aa6ea625c7",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-retire-ledger-as-scope-exit-debt",
+    "kind": "scope-exit-debt",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
     "blob": "a361760163656e635820c368ef4ab487895486ec35b49171fed92fefb21dbbd1146aef59f5ee9a71440f6a63697068657274657874582075621018377af7e9fad3bcb9c0a4d5c14b66719f1f4ba98be58bc9aa6ea625c7",
     "check": "hpke-open-failed",
@@ -236,6 +268,54 @@
     "kind": "retire-ledger",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
     "blob": "a361760163656e63582007a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c6a6369706865727465787458208c53e3e0222ca3c1cade1581d789ba11f6664d7669e78d7798d7d4223fe6ade7",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-doomed-journal-as-scope-exit-debt",
+    "kind": "scope-exit-debt",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e63582007a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c6a6369706865727465787458208c53e3e0222ca3c1cade1581d789ba11f6664d7669e78d7798d7d4223fe6ade7",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-scope-exit-debt-as-received-shares",
+    "kind": "received-shares",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820808be2169ea81b45e407e79ce4e092add24a9fc6ec23843317cac34215f118226a636970686572746578745820584bbee6ffb1e2120ac077580ae511e5d933fe95b6aaae6c609f9a5db0ac96ac",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-scope-exit-debt-as-contact-book",
+    "kind": "contact-book",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820808be2169ea81b45e407e79ce4e092add24a9fc6ec23843317cac34215f118226a636970686572746578745820584bbee6ffb1e2120ac077580ae511e5d933fe95b6aaae6c609f9a5db0ac96ac",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-scope-exit-debt-as-invite-records",
+    "kind": "invite-records",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820808be2169ea81b45e407e79ce4e092add24a9fc6ec23843317cac34215f118226a636970686572746578745820584bbee6ffb1e2120ac077580ae511e5d933fe95b6aaae6c609f9a5db0ac96ac",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-scope-exit-debt-as-retire-ledger",
+    "kind": "retire-ledger",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820808be2169ea81b45e407e79ce4e092add24a9fc6ec23843317cac34215f118226a636970686572746578745820584bbee6ffb1e2120ac077580ae511e5d933fe95b6aaae6c609f9a5db0ac96ac",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-kind-scope-exit-debt-as-doomed-journal",
+    "kind": "doomed-journal",
+    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
+    "blob": "a361760163656e635820808be2169ea81b45e407e79ce4e092add24a9fc6ec23843317cac34215f118226a636970686572746578745820584bbee6ffb1e2120ac077580ae511e5d933fe95b6aaae6c609f9a5db0ac96ac",
     "check": "hpke-open-failed",
     "class": "trust"
   }

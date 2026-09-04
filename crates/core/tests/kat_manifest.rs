@@ -1725,7 +1725,7 @@ const EPHEMERAL_SCALAR_FAMILIES: &[(&str, usize)] = &[
     ("vectors/grant/owner_write_blob_accept.json", 1),
     ("vectors/hpke/seal.json", 3),
     ("vectors/op_record/op_record_accept.json", 2),
-    ("vectors/owner_local/owner_local_accept.json", 6),
+    ("vectors/owner_local/owner_local_accept.json", 7),
     ("vectors/payload/mailbox_accept.json", 2),
     ("vectors/settings_record/settings_record_accept.json", 2),
     ("vectors/grant/write_history_link_accept.json", 1),
