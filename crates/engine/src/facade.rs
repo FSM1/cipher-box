@@ -2790,8 +2790,8 @@ fn refuse_unemittable_name(name: &str) -> Result<(), EngineError> {
 /// the node being placed, so a relink inside its own parent is not refused for a
 /// child the folder already holds, and `replacing` names the child a move frees.
 ///
-/// The count arm is the cheap half and does not vary: a listing a scope root's
-/// tighter budget refuses is refused on its bytes.
+/// The count arm does not vary with the budget: what a scope root's tighter
+/// reservation refuses, it refuses on the listing's bytes.
 fn refuse_full_parent(
     rendered: &Snapshot,
     parent: NodeId,
@@ -2823,8 +2823,7 @@ fn refuse_full_parent(
 
 /// Whether `node`'s own record is authored as a scope root, and so is held to
 /// the re-seal reservation: the vault root always is, and the interior roots
-/// are the boundaries this session knows
-/// ([`Engine::relocation_scope_roots`]).
+/// are the ones this session knows ([`Engine::authored_scope_roots`]).
 fn answers_as_a_scope_root(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> bool {
     node == rendered.root || scope_roots.contains(&node)
 }
