@@ -14403,7 +14403,7 @@ mod tests {
             // a retryable `Seam`.
             let world = FakeWorld::new();
             let device = world.device(b"alice-pk");
-            device.staging_store.fail_queued_ops();
+            device.staging_store.inner().fail_queued_ops();
             let (engine, _events) = Engine::new(
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),

@@ -58,7 +58,7 @@ impl FakeWorld {
         let mailbox = self.mailbox_hub.mailbox_for(recipient_public_key);
         FakeDevice {
             floor_store: InMemoryFloorStore::default(),
-            staging_store: InMemoryStagingStore::default(),
+            staging_store: QueueGenerationStore::new(InMemoryStagingStore::default()),
             snapshot_cache: InMemorySnapshotCache::default(),
             credential_store: InMemoryCredentialStore::default(),
             http: ScriptedHttp::with_route(mailbox.http_route()),
@@ -82,8 +82,11 @@ impl Default for FakeWorld {
 pub struct FakeDevice {
     /// Device-local durable floors.
     pub floor_store: InMemoryFloorStore,
-    /// Device-local op queue + staged bytes.
-    pub staging_store: InMemoryStagingStore,
+    /// Device-local op queue + staged bytes. Counted, and handed to the engine
+    /// as a clone of this one handle: a host has exactly one, so a scenario that
+    /// queues an op behind the engine's back ends its render the way the
+    /// engine's own path does ([`QueueGenerationStore`]).
+    pub staging_store: QueueGenerationStore<InMemoryStagingStore>,
     /// Device-local ciphertext cache.
     pub snapshot_cache: InMemorySnapshotCache,
     /// Device-local refresh-token store.
@@ -120,7 +123,7 @@ impl FakeDevice {
             record_transport: self.record_store.clone(),
             http: self.http.clone(),
             scheduler: self.scheduler.clone(),
-            staging_store: QueueGenerationStore::new(self.staging_store.clone()),
+            staging_store: self.staging_store.clone(),
             snapshot_cache: self.snapshot_cache.clone(),
             credential_store: self.credential_store.clone(),
         }

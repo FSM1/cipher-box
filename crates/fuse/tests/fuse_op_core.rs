@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
 
-use cipherbox_engine::seams::StagingStore;
+use cipherbox_engine::seams::{QueueGenerationStore, StagingStore};
 use cipherbox_engine::testkit::fakes::{InMemoryStagingStore, VirtualScheduler};
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
@@ -112,7 +112,11 @@ fn started_engine() -> (Engine<FakeSeamTypes>, NodeId) {
 
 /// A started engine plus a handle on its durable op queue, for tests that
 /// inject a staging outage.
-fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
+fn started_engine_with_staging() -> (
+    Engine<FakeSeamTypes>,
+    NodeId,
+    QueueGenerationStore<InMemoryStagingStore>,
+) {
     let started = started_engine_over_queue(&[]);
     (started.engine, started.root, started.staging)
 }
@@ -122,7 +126,7 @@ fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStag
 struct Started {
     engine: Engine<FakeSeamTypes>,
     root: NodeId,
-    staging: InMemoryStagingStore,
+    staging: QueueGenerationStore<InMemoryStagingStore>,
     clock: VirtualScheduler,
     events: EventStream,
 }
@@ -556,7 +560,7 @@ fn a_durable_queue_outage_never_destroys_the_destination_a_rename_did_not_replac
         let source = seed_child(&mut engine, root, "new.txt", NodeKind::File);
         let victim = seed_child(&mut engine, root, "target.txt", NodeKind::File);
         let mut core = mount_over(engine);
-        staging.fail_enqueue_after(budget);
+        staging.inner().fail_enqueue_after(budget);
 
         let outcome = block_on(core.rename(ROOT_INO, "new.txt", ROOT_INO, "target.txt"));
 
@@ -582,7 +586,7 @@ fn renaming_a_node_onto_itself_journals_nothing() {
     let (mut engine, root, staging) = started_engine_with_staging();
     seed_child(&mut engine, root, "f.txt", NodeKind::File);
     let mut core = mount_over(engine);
-    staging.fail_enqueue_after(0);
+    staging.inner().fail_enqueue_after(0);
 
     block_on(core.rename(ROOT_INO, "f.txt", ROOT_INO, "f.txt")).expect("a no-op rename succeeds");
     assert_eq!(names(&mut core, ROOT_INO), vec!["f.txt".to_owned()]);
@@ -599,7 +603,7 @@ fn replacing_a_junk_holding_folder_keeps_the_destination_entry_when_the_queue_fa
     seed_child(&mut engine, victim, ".DS_Store", NodeKind::File);
     let mut core = mount_over(engine);
     // The junk delete lands; the move that would unlink the folder does not.
-    staging.fail_enqueue_after(1);
+    staging.inner().fail_enqueue_after(1);
 
     block_on(core.rename(ROOT_INO, "dir", ROOT_INO, "target")).expect_err("the move is refused");
 
@@ -1768,7 +1772,7 @@ fn a_read_through_a_write_only_handle_is_refused() {
 
 /// A mount spilling into `dir`, plus the durable queue behind it. The dir is
 /// the caller's, so a test can look at the ciphertext a write leaves there.
-fn mount_spilling_into(dir: &Path) -> (Core, InMemoryStagingStore) {
+fn mount_spilling_into(dir: &Path) -> (Core, QueueGenerationStore<InMemoryStagingStore>) {
     let (engine, _root, staging) = started_engine_with_staging();
     let core = OperationCore::new(
         engine,
@@ -1780,7 +1784,7 @@ fn mount_spilling_into(dir: &Path) -> (Core, InMemoryStagingStore) {
 }
 
 /// How many ops the durable queue holds.
-fn queued(staging: &InMemoryStagingStore) -> usize {
+fn queued(staging: &QueueGenerationStore<InMemoryStagingStore>) -> usize {
     block_on(staging.queued_ops())
         .expect("the queue reads")
         .len()
@@ -1970,7 +1974,7 @@ fn a_write_is_refused_rather_than_acked_when_the_queue_cannot_journal_it() {
     let handle = writing_handle(&mut core);
     let after_create = queued(&staging);
     // Every further durable write fails: the op can never reach the platter.
-    staging.fail_enqueue_after(0);
+    staging.inner().fail_enqueue_after(0);
 
     block_on(core.write(handle, 0, b"unacked bytes")).expect("the write lands in the spill");
     block_on(core.flush(handle)).expect_err("a flush that cannot journal must not ack");
