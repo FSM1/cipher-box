@@ -3344,7 +3344,8 @@ where
     ///
     /// The adopt advances the per-name sequence floor, so a wave that already
     /// gated these bytes lands on the at-floor re-open instead — which is also
-    /// the only child path that keeps the envelope's preserved fields.
+    /// the only child path that keeps the envelope's preserved fields. The
+    /// wave keeps no snapshot, so it commits the pass's deferred raise itself.
     async fn interior_source(
         &self,
         node_id: [u8; 16],
@@ -3360,7 +3361,13 @@ where
             node_id,
         );
         match adopter.adopt(name, record_bytes).await {
-            Ok(_) => {}
+            Ok(outcome) => {
+                outcome
+                    .pass
+                    .commit(self.floors)
+                    .await
+                    .map_err(|e| wave_verdict(GateError::Seam(e)))?;
+            }
             // Our own current record at exactly the floor — the at-floor re-open
             // below is the path for it. A strictly older sequence is a replay and
             // stays a fail-closed violation (`net/resolve.rs` splits it the same
