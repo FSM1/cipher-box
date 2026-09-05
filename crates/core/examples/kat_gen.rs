@@ -4219,6 +4219,15 @@ fn build_ecies_open_reject() -> Vec<EciesOpenRejectVector> {
             short_ciphertext,
             aad,
         ),
+        // Zero is the other bound of the scalar range, and the one an
+        // `x < n` test alone accepts.
+        (
+            "recipient-scalar-zero",
+            [0u8; SECRET_LEN],
+            sealed.enc,
+            sealed.ciphertext.clone(),
+            aad,
+        ),
     ];
 
     let mut names = BTreeSet::new();
@@ -4261,6 +4270,7 @@ fn build_ecies_seal_reject() -> Vec<EciesSealRejectVector> {
             recipient_public,
             SECP256K1_GROUP_ORDER,
         ),
+        ("ephemeral-scalar-zero", recipient_public, [0u8; SECRET_LEN]),
     ];
 
     let mut names = BTreeSet::new();

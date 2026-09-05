@@ -23,18 +23,18 @@ exports the pure checks the gate composes.
 
 What dies relative to v1 — with the design that killed it:
 
-| Gone                                                                      | Killed by                                                                      |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| TS/Rust twin implementations, lockstep KATs, the 8-row divergence table   | FSM1/cipher-box-next#27 D2 — one Rust core, TS keeps no codec or crypto        |
-| JSON fixed-field-order determinism, base64 fields, decimal-string bigints | FSM1/cipher-box-next#27 D1 — deterministic CBOR everywhere                     |
-| AES-256-GCM/CTR suite, 45-byte AAD, role bytes                            | FSM1/cipher-box-next#27 D3/D4 — XChaCha20-Poly1305, structured AAD             |
-| eciesjs-default ECIES envelope (library-defined layout)                   | FSM1/cipher-box-next#27 D3 — RFC 9180 HPKE, spec-defined, full-envelope KATs   |
-| Per-node `ipnsPrivateKey` storage + `reconstruct_write_body` recovery     | FSM1/cipher-box-next#26/FSM1/cipher-box-next#27 D6 — write plane fully derived |
-| `readKeySealed` child wraps, kind-blind child refs                        | FSM1/cipher-box-next#27 D7 — derivation + immutable `kind` in the ref          |
-| VaultKeyBlob v3, vault-init/export endpoints                              | FSM1/cipher-box-next#27 D9 — derived vault pointer + owner blob                |
-| `deny_unknown_fields` vs tolerant-decode contradiction                    | FSM1/cipher-box-next#27 D10 — tolerate + round-trip, one policy                |
-| Three validity parsers at two strictness levels across five packages      | FSM1/cipher-box-next#28 D2/D3 — one strict codec, exported from core           |
-| Content self-seal role `0x03` (built, vector-locked, dormant)             | not carried — no v2 analog                                                     |
+| Gone                                                                      | Killed by                                                                                                                                               |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TS/Rust twin implementations, lockstep KATs, the 8-row divergence table   | FSM1/cipher-box-next#27 D2 — one Rust core, TS keeps no codec or crypto                                                                                 |
+| JSON fixed-field-order determinism, base64 fields, decimal-string bigints | FSM1/cipher-box-next#27 D1 — deterministic CBOR everywhere                                                                                              |
+| AES-256-GCM/CTR suite, 45-byte AAD, role bytes                            | FSM1/cipher-box-next#27 D3/D4 — XChaCha20-Poly1305, structured AAD                                                                                      |
+| eciesjs-default ECIES envelope (library-defined layout)                   | FSM1/cipher-box-next#27 D3 — RFC 9180 HPKE, spec-defined, full-envelope KATs; the in-repo ECIES of ADR 0015 is a different envelope and is not this row |
+| Per-node `ipnsPrivateKey` storage + `reconstruct_write_body` recovery     | FSM1/cipher-box-next#26/FSM1/cipher-box-next#27 D6 — write plane fully derived                                                                          |
+| `readKeySealed` child wraps, kind-blind child refs                        | FSM1/cipher-box-next#27 D7 — derivation + immutable `kind` in the ref                                                                                   |
+| VaultKeyBlob v3, vault-init/export endpoints                              | FSM1/cipher-box-next#27 D9 — derived vault pointer + owner blob                                                                                         |
+| `deny_unknown_fields` vs tolerant-decode contradiction                    | FSM1/cipher-box-next#27 D10 — tolerate + round-trip, one policy                                                                                         |
+| Three validity parsers at two strictness levels across five packages      | FSM1/cipher-box-next#28 D2/D3 — one strict codec, exported from core                                                                                    |
+| Content self-seal role `0x03` (built, vector-locked, dormant)             | not carried — no v2 analog                                                                                                                              |
 
 ## Module map
 
