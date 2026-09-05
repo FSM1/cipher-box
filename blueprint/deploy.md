@@ -258,7 +258,10 @@ URL and Web3Auth config decisions carry per FSM1/cipher-box-next#6 (free to keep
 merit). One accepted consequence, stated: existing v1 desktop installs
 auto-update into v2 via `/releases/latest` and their local vaults become
 orphans — consistent with the clean break; the v2 first-run treats them as
-new devices.
+new devices. The durable floor-store key shape changes with the cutover and
+migrates nothing, on the terms the owner-tag and epoch prefixes already took: a
+device that holds pre-cutover floors reads none of them back and re-seeds from
+the record plane, so it must be forgotten rather than upgraded.
 
 ## CI infrastructure
 

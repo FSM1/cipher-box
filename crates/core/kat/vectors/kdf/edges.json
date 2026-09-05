@@ -147,6 +147,12 @@
       "output": "2f573dbf0c992c7538d4601f599c21ceafa1490ad509438b425f78f979ab642c"
     },
     {
+      "name": "name-label",
+      "context": "cipherbox/v2/name-label",
+      "inputLayout": "keyed_hash(derive_key(ctx, contactLabelSeed[32]), sequenceKey[var])",
+      "output": "a7e7ea3150c842b1c5c35b35920df38a0e229b1c19fd531f7d768f6f62877c65"
+    },
+    {
       "name": "committed-recipient-mask",
       "context": "cipherbox/v2/committed-recipient-mask",
       "inputLayout": "keyed_hash(derive_key(ctx, pointerReadKey[32]), tag[32])",

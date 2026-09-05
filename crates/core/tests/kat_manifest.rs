@@ -2585,6 +2585,7 @@ const ALL_EDGE_NAMES: &[&str] = &[
     "genesis-write-scope-seed",
     "contact-label-seed",
     "contact-label",
+    "name-label",
     "committed-recipient-mask",
 ];
 

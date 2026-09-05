@@ -1,6 +1,6 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these twenty-four edges, save the
+//! Nothing in CipherBox derives a key outside these twenty-five edges, save the
 //! primitive-internal schedules named below. Every edge is domain-separated by
 //! a fixed `cipherbox/v2/<edge>` context string fed to
 //! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
@@ -58,6 +58,7 @@ const CTX_GENESIS_READ_SCOPE_SEED: &str = "cipherbox/v2/genesis-read-scope-seed"
 const CTX_GENESIS_WRITE_SCOPE_SEED: &str = "cipherbox/v2/genesis-write-scope-seed";
 const CTX_CONTACT_LABEL_SEED: &str = "cipherbox/v2/contact-label-seed";
 const CTX_CONTACT_LABEL: &str = "cipherbox/v2/contact-label";
+const CTX_NAME_LABEL: &str = "cipherbox/v2/name-label";
 const CTX_COMMITTED_RECIPIENT_MASK: &str = "cipherbox/v2/committed-recipient-mask";
 
 /// One catalog edge's frozen, machine-checkable metadata: its stable name, its
@@ -70,7 +71,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The twenty-four edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The twenty-five edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -187,6 +188,11 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "contact-label",
         context: CTX_CONTACT_LABEL,
         input_layout: "keyed_hash(derive_key(ctx, contactLabelSeed[32]), identityPk[33])",
+    },
+    EdgeSpec {
+        name: "name-label",
+        context: CTX_NAME_LABEL,
+        input_layout: "keyed_hash(derive_key(ctx, contactLabelSeed[32]), sequenceKey[var])",
     },
     EdgeSpec {
         name: "committed-recipient-mask",
@@ -345,6 +351,13 @@ fn contact_label_bytes(
     keyed_hash(
         derive_key(CTX_CONTACT_LABEL, contact_label_seed).as_bytes(),
         identity_pk,
+    )
+}
+
+fn name_label_bytes(contact_label_seed: &[u8; SECRET_LEN], key: &[u8]) -> SecretBytes {
+    keyed_hash(
+        derive_key(CTX_NAME_LABEL, contact_label_seed).as_bytes(),
+        key,
     )
 }
 
@@ -560,6 +573,23 @@ pub fn contact_label(
     *contact_label_bytes(contact_label_seed, identity_pk).as_bytes()
 }
 
+/// `name-label`: a fixed-width local label for a durable sequence-namespace
+/// floor key, so a floor store that a reader of local storage can open names no
+/// record it bars replay on (FSM1/cipher-box-next ADR 0016).
+///
+/// The message is the whole store key, not only an `ipnsName`, so two keys that
+/// share a name but not a purpose label to unrelated bytes. It is the catalog's
+/// one variable-length message: the context stays fixed, and `keyed_hash` is a
+/// pseudorandom function over a message of any length.
+///
+/// The seed is the account's alone, so an observer who collects published names
+/// inverts nothing, and every reader in the account labels one name the same
+/// way — one name keeps one sequence ratchet. Local state only, on the same
+/// terms as [`contact_label`]: a published label is a cross-scope correlator.
+pub fn name_label(contact_label_seed: &[u8; SECRET_LEN], key: &[u8]) -> [u8; SECRET_LEN] {
+    *name_label_bytes(contact_label_seed, key).as_bytes()
+}
+
 // ---------------------------------------------------------------------------
 // Separation surface: the whole edge table under one set of probe inputs.
 // ---------------------------------------------------------------------------
@@ -581,7 +611,7 @@ pub struct EdgeProbe<'a> {
     pub struct_tag: u8,
     /// The index for `vault-pointer-index`.
     pub index: u64,
-    /// The scope-root `ipnsName` for `blinded-tag`.
+    /// The variable-length message of `blinded-tag` and `name-label`.
     pub ipns_name: &'a [u8],
     /// The 33-byte compressed SEC1 identity key for `contact-label`.
     pub identity_pk: &'a [u8; IDENTITY_PUBLIC_LEN],
@@ -732,6 +762,10 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
             output: b(contact_label_bytes(probe.seed, probe.identity_pk)),
         },
         EdgeProbeOutput {
+            name: "name-label",
+            output: b(name_label_bytes(probe.seed, probe.ipns_name)),
+        },
+        EdgeProbeOutput {
             name: "committed-recipient-mask",
             output: b(committed_recipient_mask_bytes(probe.seed, probe.seed)),
         },
@@ -852,6 +886,7 @@ mod tests {
             contact_label(&seed, &PROBE_IDENTITY_PK),
             by("contact-label")
         );
+        assert_eq!(name_label(&seed, b"n"), by("name-label"));
     }
 
     /// The label must separate two contacts on one device and one contact
@@ -878,6 +913,45 @@ mod tests {
             contact_label(other_seed.as_bytes(), &a),
             "and no other account can recompute it from the identity key alone",
         );
+    }
+
+    /// The label must separate two names under one account and one name across
+    /// two accounts, and it must carry no run of the name it labels — the whole
+    /// of what it buys the durable floor store (ADR 0016).
+    #[test]
+    fn a_name_label_separates_names_and_accounts_and_hides_the_name() {
+        let seed = contact_label_seed(b"login-secret");
+        let other_seed = contact_label_seed(b"another-secret");
+        let name = b"k51qzi5uqu5-scope-root".as_slice();
+
+        assert_eq!(
+            name_label(seed.as_bytes(), name),
+            name_label(contact_label_seed(b"login-secret").as_bytes(), name),
+            "one account labels one name the same way on every session",
+        );
+        assert_ne!(
+            name_label(seed.as_bytes(), name),
+            name_label(seed.as_bytes(), b"k51qzi5uqu5-other-root"),
+        );
+        assert_ne!(
+            name_label(seed.as_bytes(), name),
+            name_label(other_seed.as_bytes(), name),
+            "and no other account can recompute it from the public name alone",
+        );
+        // A variable-length message: a name and a prefix of it must not label
+        // alike, which a length-blind construction would allow.
+        assert_ne!(
+            name_label(seed.as_bytes(), name),
+            name_label(seed.as_bytes(), &name[..name.len() - 1]),
+        );
+        for run in name.windows(8) {
+            assert!(
+                !name_label(seed.as_bytes(), name)
+                    .windows(run.len())
+                    .any(|w| w == run),
+                "a label carries part of the name it hides",
+            );
+        }
     }
 
     /// The bin edges are the owner's alone, and the held key is per-delete: the

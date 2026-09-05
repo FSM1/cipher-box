@@ -4404,7 +4404,9 @@ impl<T: SeamTypes> Engine<T> {
         // Pure derivation from the injected secret — no clock, no RNG.
         let session = SessionIdentity::derive(&secret)?;
         // Before the first floor read: an unbound view refuses every one.
-        self.seams.floor_store.bind(session.enc_subkey());
+        self.seams
+            .floor_store
+            .bind(session.enc_subkey(), session.contact_label_seed());
 
         // The one shared client for login, publish, and renewal. Login is
         // fail-closed: a rejected login returns before the session is committed
