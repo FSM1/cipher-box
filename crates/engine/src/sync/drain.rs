@@ -3923,12 +3923,11 @@ where
 
         // A crossing this pass carries no second end for is one it cannot
         // author, and the chain walk below would stall uncharged on the scope
-        // root it cannot load. Charged on the pass that holds the tick's
-        // identity-wide charge, which is the vault root's own whenever it runs:
-        // a member watching a move that will never publish has to read a dead
-        // letter, not a fresh vault. Every other pass leaves the op where it
-        // is, because the pass that can carry a second end is not this one
-        // ([`halt_below_another_scope_root`]).
+        // root it cannot load. Charged by the pass holding the tick's
+        // identity-wide charge, so a member watching a move that will never
+        // publish reads a dead letter rather than a fresh vault; every other
+        // pass leaves the op where it is, as it does for an op below another
+        // pass's scope root (halt_below_another_scope_root).
         if !matches!(crossing, ScopeCrossing::Intra) && scope.second_end()?.is_none() {
             return Err(if scope.charges_the_identity {
                 Halt::UploadAttempt
