@@ -11836,6 +11836,86 @@ fn the_on_access_file_queue_stops_admitting_past_its_ceiling() {
     );
 }
 
+/// Opening a folder is the whole trigger: a device that downloaded nothing
+/// paints its listed rows off each child's own record on the next tick, and a
+/// row whose record fails the gate paints nothing and is reported.
+#[test]
+fn a_folder_open_paints_the_rows_it_lists_and_refuses_a_bent_one() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    let served: Vec<u8> = (0..120u8).collect();
+    for name in ["good.bin", "bent.bin"] {
+        write_file(
+            &mut engine_a,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.to_owned(),
+            },
+            &served,
+        )
+        .expect("the write commits");
+    }
+    tick(&world, &engine_a, &mut tasks_a);
+    let good = child_id(&engine_a, ROOT, "good.bin");
+    let bent = child_id(&engine_a, ROOT, "bent.bin");
+
+    let bob = world.device(b"alice-second-device");
+    let (engine_b, mut events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+    for node in [good, bent] {
+        assert_eq!(
+            block_on(engine_b.view()).unwrap().attrs(node).unwrap().size,
+            None,
+            "a ChildRef mirrors no size, so the listing alone paints none"
+        );
+    }
+
+    // A record sealed for another node, published over the one the listing names.
+    plant_record(
+        &world.record_store,
+        &blocks,
+        bent,
+        Planted {
+            node_id: good.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(good),
+            body: &planted_body(),
+        },
+    );
+
+    engine_b.note_focus_access(Some(ROOT));
+    let mut expected = vec![good, bent];
+    expected.sort();
+    assert_eq!(
+        engine_b.queued_focus_files(),
+        expected,
+        "the open folder puts every unprojected row on the file leg"
+    );
+    let _ = events_so_far(&mut events_b);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    let painted = block_on(engine_b.view()).unwrap().attrs(good).unwrap();
+    assert_eq!(painted.size, Some(served.len() as u64));
+    assert!(painted.mtime.is_some(), "the mtime rides the same head");
+    assert_eq!(painted.content_version, Some(1));
+    assert_eq!(
+        block_on(engine_b.view()).unwrap().attrs(bent).unwrap().size,
+        None,
+        "a refused record paints nothing; the row stays last-known-good"
+    );
+    assert_eq!(
+        events_so_far(&mut events_b)
+            .into_iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count(),
+        1,
+        "fail-closed is not silent"
+    );
+}
+
 /// A version another device published between the commit and the drain is not
 /// superseded: the queued edit dead-letters with its own bytes preserved, and
 /// the concurrent version stays the head every reader sees.

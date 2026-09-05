@@ -3283,8 +3283,8 @@ mod published {
     /// A host that decides a read from the attributes a lookup carries never
     /// opens a file the reply reports as empty. A child ref mirrors no size, so
     /// the lookup has to put an unprojected file on the engine's on-access file
-    /// leg — and only that file, because queueing every named one would put a
-    /// whole listing on the record plane.
+    /// leg — and only that file, since a file whose length already arrived asks
+    /// for no resolve.
     #[test]
     fn a_lookup_queues_only_the_file_whose_length_is_still_to_arrive() {
         let mut mount = mount_published(&clip_bytes(), CacheBudget::CI);

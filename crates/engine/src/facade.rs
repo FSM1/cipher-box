@@ -6531,7 +6531,13 @@ where {
                 // refresh the newly-focused chain now rather than waiting out a
                 // poll cadence, and only past the staleness threshold — a repeat
                 // visit renders the state already held.
-                if self.refresh_focus_on_access(authored_at).await {
+                let changed = self.refresh_focus_on_access(authored_at).await;
+                // After the folder leg, so a child this pass has just listed
+                // joins the queue with the ones the base already held.
+                if let Some(folder) = node {
+                    self.queue_focus_file_children(folder);
+                }
+                if changed {
                     let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 }
                 Ok(CommandOutcome::Done)
@@ -10480,11 +10486,12 @@ where {
     /// **FUSE-op TTL check** (blueprint/desktop.md "Freshness"). `None` is an
     /// operation with no node in view.
     ///
-    /// A folder becomes the focus window; a file joins
-    /// [`FocusWindow::open_files`], the queue the tick's file leg drains. Only a
-    /// node this device's own gate-passing state calls a file takes the file
-    /// path, so a node it has not resolved yet keeps the window behaviour it had
-    /// before it was projected.
+    /// A folder becomes the focus window and puts its unprojected file children
+    /// on the file queue ([`queue_focus_file_children`](Self::queue_focus_file_children));
+    /// a file joins [`FocusWindow::open_files`] itself, the queue the tick's
+    /// file leg drains. Only a node this device's own gate-passing state calls a
+    /// file takes the file path, so a node it has not resolved yet keeps the
+    /// window behaviour it had before it was projected.
     ///
     /// Nothing resolves here: a kernel callback never waits on the record plane
     /// (blueprint/desktop.md "the never-block law"). A `true` answer is the
@@ -10523,9 +10530,35 @@ where {
             self.focus_hinted.set(Some((node, now)));
             if is_file {
                 self.note_focus_file(node);
+            } else {
+                self.queue_focus_file_children(node);
             }
         }
         stale
+    }
+
+    /// Queue every direct file child of `folder` the base projects no size for,
+    /// in child order.
+    ///
+    /// A `ChildRef` mirrors no size or mtime, so a listing paints those rows off
+    /// nothing until each child's own record is resolved. Putting them on the
+    /// file leg here serves every host from the focus window, so a host that
+    /// stats no row of its own — the web — is not left with a blank listing
+    /// until a download fills it in.
+    ///
+    /// The bound and the staleness damping are [`note_focus_file`](Self::note_focus_file)'s.
+    fn queue_focus_file_children(&self, folder: NodeId) {
+        let unprojected: Vec<NodeId> = self
+            .snapshot
+            .borrow()
+            .children(folder)
+            .into_iter()
+            .filter(|child| child.kind == NodeKind::File && child.size.is_none())
+            .map(|child| child.id)
+            .collect();
+        for child in unprojected {
+            self.note_focus_file(child);
+        }
     }
 
     /// Put `node` on the on-access file queue, newest last and bounded by
@@ -16852,11 +16885,41 @@ mod tests {
 #[cfg(test)]
 mod focus_access_tests {
     use super::*;
+    use crate::sync::model::NodeMeta;
     use crate::testkit::fakes::VirtualScheduler;
     use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy};
 
     const FOLDER: NodeId = NodeId([3; 16]);
     const OTHER: NodeId = NodeId([4; 16]);
+
+    /// The `i`th file child's id, ordered by `i` under [`NodeId`]'s byte order.
+    fn file_id(i: usize) -> NodeId {
+        let mut id = [0u8; 16];
+        id[0] = 0x10;
+        id[1..3].copy_from_slice(&(i as u16).to_be_bytes());
+        NodeId(id)
+    }
+
+    /// [`FOLDER`] under the root with `count` file children, every third one
+    /// carrying a projected size. Returns the ids in child order.
+    fn folder_with_files(engine: &Engine<FakeSeamTypes>, count: usize) -> Vec<NodeId> {
+        let mut base = engine.snapshot.borrow_mut();
+        let root = base.root;
+        base.upsert_node(NodeMeta::new(FOLDER, "photos", NodeKind::Folder));
+        base.link(root, FOLDER, 1);
+        (0..count)
+            .map(|i| {
+                let id = file_id(i);
+                let mut meta = NodeMeta::new(id, format!("f{i}.bin"), NodeKind::File);
+                if i % 3 == 0 {
+                    meta.size = Some(11);
+                }
+                base.upsert_node(meta);
+                base.link(FOLDER, id, 1);
+                id
+            })
+            .collect()
+    }
 
     fn engine() -> (Engine<FakeSeamTypes>, VirtualScheduler) {
         let world = FakeWorld::new();
@@ -16935,6 +16998,78 @@ mod focus_access_tests {
         assert!(
             engine.focus_refreshed.borrow().is_empty(),
             "a hint is a request for a pass, never the record of one"
+        );
+    }
+
+    /// The listing itself is what puts a row with no size on the file leg, so a
+    /// host that never stats an entry of its own still paints a length.
+    #[test]
+    fn opening_a_folder_queues_the_children_it_projects_no_size_for() {
+        let (engine, _clock) = engine();
+        let children = folder_with_files(&engine, 9);
+
+        engine.note_focus_access(Some(FOLDER));
+
+        let unprojected: Vec<NodeId> = children
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| i % 3 != 0)
+            .map(|(_, id)| id)
+            .collect();
+        assert_eq!(
+            engine.queued_focus_files(),
+            unprojected,
+            "the rows a resolve would move, in child order, and nothing else"
+        );
+    }
+
+    /// A listing is not a licence to resolve it whole: the queue admits a
+    /// window's worth however many rows the folder holds.
+    #[test]
+    fn a_listing_past_the_ceiling_queues_only_a_windows_worth() {
+        let (engine, _clock) = engine();
+        let children = folder_with_files(&engine, MAX_FOCUS_FILES * 2 + 5);
+
+        engine.note_focus_access(Some(FOLDER));
+
+        let queued = engine.queued_focus_files();
+        assert_eq!(queued.len(), MAX_FOCUS_FILES);
+        let unprojected: Vec<NodeId> = children
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| i % 3 != 0)
+            .map(|(_, id)| id)
+            .collect();
+        assert_eq!(
+            queued,
+            unprojected[unprojected.len() - MAX_FOCUS_FILES..],
+            "the newest rows win the window, oldest first"
+        );
+    }
+
+    /// Re-opening a folder inside the staleness threshold is the same view, so
+    /// it costs the next pass nothing.
+    #[test]
+    fn a_second_open_inside_the_threshold_queues_nothing() {
+        let (engine, clock) = engine();
+        folder_with_files(&engine, 6);
+        engine.note_focus_access(Some(FOLDER));
+        assert!(!engine.queued_focus_files().is_empty());
+        // What the tick does with the queue it served.
+        engine.focus.borrow_mut().open_files.clear();
+
+        clock.advance(SyncTimingProfile::CI.stale_after / 2);
+        engine.note_focus_access(Some(FOLDER));
+        assert!(
+            engine.queued_focus_files().is_empty(),
+            "the view has not moved and no pass is owed one"
+        );
+
+        clock.advance(SyncTimingProfile::CI.stale_after);
+        engine.note_focus_access(Some(FOLDER));
+        assert!(
+            !engine.queued_focus_files().is_empty(),
+            "past the threshold the rows are due again"
         );
     }
 }
