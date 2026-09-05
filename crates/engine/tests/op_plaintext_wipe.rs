@@ -11,8 +11,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::seams::{OpId, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::{
-    NewNode, Op, RecordClass, RecordReader, RecordSeal, ReplayScopes, Snapshot, encode_op_record,
-    replay,
+    NewNode, Op, RecordClass, RecordReader, RecordSeal, Snapshot, encode_op_record, replay,
 };
 use cipherbox_engine::{NodeId, NodeKind};
 use zeroize::Zeroizing;
@@ -151,15 +150,7 @@ fn a_replay_wipes_the_collation_keys_and_suffix_candidates_it_folds() {
         base.upsert_node(NodeMeta::new(id(2), name.as_str(), NodeKind::File));
         base.link(id(0), id(2), 1);
         let scan = cipherbox_engine::sync::decode_queue(&RecordReader::new(&owner), &raw);
-        let report = replay(
-            &base,
-            &base.clone(),
-            &scan.mine,
-            ReplayScopes {
-                roots: &[id(0)],
-                anchor: id(0),
-            },
-        );
+        let report = replay(&base, &base.clone(), &scan.mine, &[id(0)]);
         drop(report);
         drop(base);
     });
