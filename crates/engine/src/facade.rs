@@ -106,8 +106,8 @@ use crate::rotation::{
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
-    RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes, SnapshotCache,
-    StagingStore, UnixMillis,
+    QueueGenerationStore, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes,
+    SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -135,6 +135,7 @@ use crate::sync::provision::{
 };
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
 use crate::sync::record::{RecordClass, record_content_root_cid};
+use crate::sync::render::{BaseSnapshot, RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
 
@@ -2246,9 +2247,11 @@ impl EventSink {
 /// the pending-op overlay applied (state law, blueprint/engine.md "Sync core:
 /// State law"). Reads project off this — never off raw or ungated records.
 /// One render backs a whole FUSE readdir+getattr batch, so the view is
-/// internally consistent.
+/// internally consistent. The render is shared rather than copied: the reads
+/// between two mutations are all answered off the one
+/// ([`RenderMemo`](crate::sync::render::RenderMemo)).
 pub struct EngineView {
-    rendered: Snapshot,
+    rendered: Rc<Snapshot>,
 }
 
 impl EngineView {
@@ -2576,7 +2579,7 @@ async fn queued_second_end<St: StagingStore>(
 /// what both the second-end lookup and the scope-exit cut read.
 struct Boundaries<'a> {
     /// The gate-passing base a boundary's place is read off.
-    base: &'a RefCell<Snapshot>,
+    base: &'a BaseSnapshot,
     /// The known set ([`Engine::relocation_scope_roots`]).
     scope_roots: Vec<NodeId>,
     /// What each **walked** boundary seals under, assembled from the read epoch
@@ -3898,7 +3901,7 @@ fn install_descendant_scopes(
     known: &RefCell<BTreeSet<NodeId>>,
     read_seeds: &RefCell<ScopeSeeds>,
     write_seeds: &RefCell<ScopeSeeds>,
-    base: &RefCell<Snapshot>,
+    base: &BaseSnapshot,
     events: &mpsc::UnboundedSender<Event>,
     proved: &[DescendantScopeRoot],
 ) {
@@ -4245,9 +4248,15 @@ pub struct Engine<T: SeamTypes> {
     /// operand). Seeded at the anchored root; cold-start/resolve replace it
     /// with the resolved remote state. Reads render this ⊕ the pending-op
     /// overlay; commands never mutate it — only the op queue diverges locally.
-    /// Behind an [`Rc`]`<`[`RefCell`]`>` so the resolve-tick loop shares the one
-    /// cell and repaints it in place from a gate-passing live resolve.
-    snapshot: Rc<RefCell<Snapshot>>,
+    /// Behind an [`Rc`] so the resolve-tick loop shares the one cell and
+    /// repaints it in place from a gate-passing live resolve. Every repaint
+    /// bumps the cell's generation, which is half of what
+    /// [`render_memo`](Self::render_memo) is keyed on.
+    snapshot: Rc<BaseSnapshot>,
+    /// The one render the reads between two mutations share. Not shared with
+    /// the tick loop: a pass reads the base itself, and the two generations the
+    /// memo keys on already carry whatever it repaints.
+    render_memo: RefCell<RenderMemo>,
     /// The session's live held-record set, keyed by node id: the resolve path
     /// ([`resolve_and_hold`](crate::net::resolve_and_hold)) inserts each
     /// gate-passing record here, and the cold-start liveness loop keyless
@@ -4522,7 +4531,8 @@ impl<T: SeamTypes> Engine<T> {
                 // Shared by every account on purpose: a well-known anchor, never
                 // an account discriminator — separation lives in the KDFs and in
                 // the per-identity seam views that consume it.
-                snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
+                snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId([0u8; 16])))),
+                render_memo: RefCell::new(RenderMemo::default()),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 settings_record: Rc::new(RefCell::new(None)),
                 bin_index_record: Rc::new(RefCell::new(None)),
@@ -4985,6 +4995,7 @@ impl<T: SeamTypes> Engine<T> {
         self.session = None;
         let root = self.snapshot.borrow().root;
         *self.snapshot.borrow_mut() = Snapshot::new(root);
+        self.render_memo.borrow_mut().clear();
 
         self.seams.credential_store.clear_refresh_token().await
     }
@@ -6928,7 +6939,7 @@ where {
     fn contact_store<'a>(
         &'a self,
         session: &'a SessionIdentity,
-    ) -> StagingContactStore<'a, T::StagingStore, Box<dyn Entropy>> {
+    ) -> StagingContactStore<'a, QueueGenerationStore<T::StagingStore>, Box<dyn Entropy>> {
         StagingContactStore::new(
             &self.seams.staging_store,
             session.enc_subkey(),
@@ -8009,7 +8020,8 @@ where {
         if items.is_empty() {
             return Ok(());
         }
-        let display_name = share_display_name(&self.render().await?, node)?;
+        let rendered = self.render().await?;
+        let display_name = share_display_name(&rendered, node)?;
 
         let owner_identity = session.owner_identity();
         let scope_keys = OwnerSessionKeys::new(session);
@@ -8315,7 +8327,8 @@ where {
     fn received_share_store<'a>(
         &'a self,
         session: &'a SessionIdentity,
-    ) -> StagingReceivedShareStore<'a, T::StagingStore, Box<dyn Entropy>> {
+    ) -> StagingReceivedShareStore<'a, QueueGenerationStore<T::StagingStore>, Box<dyn Entropy>>
+    {
         StagingReceivedShareStore::new(
             &self.seams.staging_store,
             session.enc_subkey(),
@@ -8327,7 +8340,7 @@ where {
     fn invite_store<'a>(
         &'a self,
         session: &'a SessionIdentity,
-    ) -> StagingInviteStore<'a, T::StagingStore, Box<dyn Entropy>> {
+    ) -> StagingInviteStore<'a, QueueGenerationStore<T::StagingStore>, Box<dyn Entropy>> {
         StagingInviteStore::new(
             &self.seams.staging_store,
             session.enc_subkey(),
@@ -8857,13 +8870,8 @@ where {
         // place in the folder until it commits, so handles opened together all
         // see the same free one.
         if let WriteTarget::NewFile { parent, .. } = &target {
-            refuse_full_parent(
-                &self.render().await?,
-                *parent,
-                None,
-                None,
-                &self.authored_scope_roots(),
-            )?;
+            let rendered = self.render().await?;
+            refuse_full_parent(&rendered, *parent, None, None, &self.authored_scope_roots())?;
         }
         let finished = writer
             .finish(&mut *self.entropy.borrow_mut())
@@ -9615,7 +9623,7 @@ where {
     /// `contentCid` — a local hit is byte-identical to what a gateway would
     /// serve for that address, so a half-uploaded version reads across the two
     /// legs (blueprint/engine.md "Content plane").
-    fn staged_blocks(&self) -> StagedBlocks<'_, T::StagingStore> {
+    fn staged_blocks(&self) -> StagedBlocks<'_, QueueGenerationStore<T::StagingStore>> {
         StagedBlocks(&self.seams.staging_store)
     }
 
@@ -9900,12 +9908,27 @@ where {
     }
 
     /// Render the base snapshot with the pending-op overlay applied.
-    async fn render(&self) -> Result<Snapshot, EngineError> {
+    ///
+    /// Memoized on the two operands' generations, so a batch of reads between
+    /// two mutations pays for one overlay and one durable-queue read rather
+    /// than one of each per read. The key is taken **before** the operands, so
+    /// a mutation that lands mid-render files that render under a generation
+    /// pair no later read can ask for ([`RenderMemo::fill`]).
+    async fn render(&self) -> Result<Rc<Snapshot>, EngineError> {
+        let key = RenderKey {
+            base: self.snapshot.generation(),
+            queue: self.seams.staging_store.generation(),
+        };
+        let hit = self.render_memo.borrow().hit(key);
+        if let Some(rendered) = hit {
+            return Ok(rendered);
+        }
         // Take the base borrow only after the await, and drop it at the end of
         // this sync call — a `RefCell` borrow must never span an `.await`.
         let ops = self.pending_ops().await?;
-        let base = self.snapshot.borrow();
-        Ok(apply_overlay(&base, &ops))
+        let rendered = Rc::new(apply_overlay(&self.snapshot.borrow(), &ops));
+        self.render_memo.borrow_mut().fill(key, rendered.clone());
+        Ok(rendered)
     }
 
     /// Every retained dead-lettered op, with its reason.
@@ -10803,7 +10826,9 @@ mod tests {
         rendered.link(root, twin, 1);
         rendered.upsert_node(NodeMeta::new(owned, "file.txt", NodeKind::File));
         rendered.link(root, owned, 2);
-        let view = EngineView { rendered };
+        let view = EngineView {
+            rendered: Rc::new(rendered),
+        };
 
         assert_eq!(
             view.lookup(root, "file.txt").expect("resolves").id,
@@ -10831,7 +10856,9 @@ mod tests {
         rendered.link(root, planted, 1);
         rendered.upsert_node(NodeMeta::new(owned, "q3.pdf", NodeKind::File));
         rendered.link(root, owned, 2);
-        let view = EngineView { rendered };
+        let view = EngineView {
+            rendered: Rc::new(rendered),
+        };
 
         let names: Vec<String> = view.children(root).into_iter().map(|c| c.name).collect();
         assert_eq!(
@@ -10860,7 +10887,9 @@ mod tests {
         let junk = NodeId([1; 16]);
         rendered.upsert_node(NodeMeta::new(junk, ".Ds_StOrE", NodeKind::File));
         rendered.link(root, junk, 1);
-        let view = EngineView { rendered };
+        let view = EngineView {
+            rendered: Rc::new(rendered),
+        };
 
         assert_eq!(view.lookup(root, ".DS_Store").expect("folds").id, junk);
         assert!(view.lookup_exact(root, ".DS_Store").is_none());
@@ -13937,6 +13966,119 @@ mod tests {
                 Err(EngineError::NotStarted)
             );
         }
+
+        /// The render memo: the reads between two mutations share one render,
+        /// and every path that moves either operand of the state law ends it.
+        mod render_memo {
+            use super::*;
+
+            /// Names the memo cannot serve without re-rendering.
+            fn names(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> Vec<String> {
+                block_on(engine.view())
+                    .unwrap()
+                    .children(folder)
+                    .into_iter()
+                    .map(|child| child.name)
+                    .collect()
+            }
+
+            /// How many whole-queue reads the durable store has served.
+            fn queue_reads(engine: &Engine<FakeSeamTypes>) -> u64 {
+                engine.seams.staging_store.inner().queue_listings()
+            }
+
+            #[test]
+            fn the_reads_between_two_mutations_cost_one_render() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "notes.txt", NodeKind::File);
+
+                let before = queue_reads(&engine);
+                let first = block_on(engine.view()).unwrap();
+                for _ in 0..8 {
+                    assert_eq!(names(&engine, root), vec!["notes.txt"]);
+                }
+                let again = block_on(engine.view()).unwrap();
+
+                assert_eq!(
+                    queue_reads(&engine) - before,
+                    1,
+                    "ten reads read the durable queue once"
+                );
+                assert!(
+                    Rc::ptr_eq(&first.rendered, &again.rendered),
+                    "and applied the overlay once"
+                );
+            }
+
+            #[test]
+            fn a_command_commit_ends_the_render_it_changed() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                assert!(names(&engine, root).is_empty());
+
+                create(&mut engine, root, "notes.txt", NodeKind::File);
+
+                assert_eq!(names(&engine, root), vec!["notes.txt"]);
+            }
+
+            #[test]
+            fn a_pull_that_adopts_ends_the_render_it_changed() {
+                let (engine, _events) = started();
+                let root = engine.root();
+                assert!(names(&engine, root).is_empty());
+
+                refresh_base_from_resolved(
+                    &engine.snapshot,
+                    root,
+                    &Resolved::just(ResolveOutcome::Adopted(adopted_folder(vec![child_ref(
+                        1,
+                        "adopted",
+                        CoreNodeKind::Folder,
+                    )]))),
+                );
+
+                assert_eq!(names(&engine, root), vec!["adopted"]);
+            }
+
+            /// A drain pass removes through a clone of the engine's own handle,
+            /// which is what makes its removals count.
+            #[test]
+            fn an_op_a_drain_pass_removed_leaves_the_next_read() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "doomed.txt", NodeKind::File);
+                let queued = block_on(engine.seams.staging_store.queued_ops()).unwrap();
+                let (op_id, _) = *queued.first().expect("the create is queued");
+                assert_eq!(names(&engine, root), vec!["doomed.txt"]);
+
+                let drain_handle = engine.seams.staging_store.clone();
+                block_on(drain_handle.remove_op(op_id)).unwrap();
+
+                assert!(names(&engine, root).is_empty());
+            }
+
+            #[test]
+            fn a_logged_out_session_holds_no_render() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "notes.txt", NodeKind::File);
+                assert_eq!(names(&engine, root), vec!["notes.txt"]);
+
+                block_on(engine.command(Command::Logout)).unwrap();
+
+                assert!(
+                    engine
+                        .render_memo
+                        .borrow()
+                        .hit(RenderKey {
+                            base: engine.snapshot.generation(),
+                            queue: engine.seams.staging_store.generation(),
+                        })
+                        .is_none()
+                );
+            }
+        }
     }
 
     // --- cold-start data path composition ---
@@ -14450,7 +14592,7 @@ mod tests {
             // Send lands in the buffer but the durable removal fails: the gated
             // `?` aborts cold-start with `Seam` before the paint, leaving the op
             // queued. The receiver stays alive, so the `DeadLetter` is observable.
-            engine.seams.staging_store.fail_remove_op();
+            engine.seams.staging_store.inner().fail_remove_op();
 
             let first = block_on(engine.cold_start_data_path(
                 &pointers,

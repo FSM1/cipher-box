@@ -3,7 +3,7 @@
 
 use cipherbox_core::kdf;
 
-use crate::seams::{EndpointId, OwnerScopedFloorStore, SeamSet, SeamTypes};
+use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore, SeamSet, SeamTypes};
 use crate::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailbox, InMemoryMailboxHub,
     InMemoryReceivedShareStore, InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore,
@@ -120,7 +120,7 @@ impl FakeDevice {
             record_transport: self.record_store.clone(),
             http: self.http.clone(),
             scheduler: self.scheduler.clone(),
-            staging_store: self.staging_store.clone(),
+            staging_store: QueueGenerationStore::new(self.staging_store.clone()),
             snapshot_cache: self.snapshot_cache.clone(),
             credential_store: self.credential_store.clone(),
         }

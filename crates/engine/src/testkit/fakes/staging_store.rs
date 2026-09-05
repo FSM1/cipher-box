@@ -19,6 +19,7 @@ struct Inner {
     staged_removal_budget: Option<Arm>,
     dropped_removal_budget: Option<Arm>,
     key_listings: u64,
+    queue_listings: u64,
 }
 
 impl Default for Inner {
@@ -36,6 +37,7 @@ impl Default for Inner {
             staged_removal_budget: None,
             dropped_removal_budget: None,
             key_listings: 0,
+            queue_listings: 0,
         }
     }
 }
@@ -110,6 +112,13 @@ impl InMemoryStagingStore {
     /// once is paying for the same answer twice.
     pub fn key_listings(&self) -> u64 {
         self.inner.lock().expect("lock").key_listings
+    }
+
+    /// How many whole-queue enumerations this store has served. A desktop store
+    /// answers one with a directory listing plus a file read per pending op, so
+    /// this counts what a batch of reads costs the disk.
+    pub fn queue_listings(&self) -> u64 {
+        self.inner.lock().expect("lock").queue_listings
     }
 
     /// Reports the next removal at `staging_key` past `budget` as done without
@@ -190,7 +199,8 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
-        let inner = self.inner.lock().expect("lock");
+        let mut inner = self.inner.lock().expect("lock");
+        inner.queue_listings += 1;
         if inner.fail_queued_ops {
             return Err(SeamError::new("queued_ops unavailable"));
         }

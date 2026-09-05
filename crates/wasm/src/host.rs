@@ -21,8 +21,8 @@ use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
     ContentProfile, Entropy, EntropyError, GatewayConfig, OverBudgetCause, OwnerScopedFloorStore,
-    SeamSet, SeamTypes, SiweIntent, StoragePlatform, StoragePolicy, StreamHandle,
-    SyncTimingProfile, WriteHandle, WriteTarget,
+    QueueGenerationStore, SeamSet, SeamTypes, SiweIntent, StoragePlatform, StoragePolicy,
+    StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -149,9 +149,9 @@ impl EngineHandle {
             scheduler: SchedulerAdapter {
                 js: take_seam::<JsSchedulerSeam>(&seams, "scheduler")?,
             },
-            staging_store: StagingStoreAdapter {
+            staging_store: QueueGenerationStore::new(StagingStoreAdapter {
                 js: take_seam::<JsStagingStoreSeam>(&seams, "stagingStore")?,
-            },
+            }),
             snapshot_cache: SnapshotCacheAdapter {
                 js: take_seam::<JsSnapshotCacheSeam>(&seams, "snapshotCache")?,
             },

@@ -9,7 +9,9 @@ use cipherbox_desktop_seams::{
     TokioScheduler,
 };
 use cipherbox_engine::seams::SeamResult;
-use cipherbox_engine::{Entropy, EntropyError, OwnerScopedFloorStore, SeamSet, SeamTypes};
+use cipherbox_engine::{
+    Entropy, EntropyError, OwnerScopedFloorStore, QueueGenerationStore, SeamSet, SeamTypes,
+};
 
 use super::config::EngineConfig;
 
@@ -58,7 +60,9 @@ pub fn seam_set(
         record_transport: ReqwestRecordTransport::new(config.record_endpoints.clone())?,
         http: ReqwestHttp::new()?,
         scheduler: TokioScheduler::new(),
-        staging_store: FileStagingStore::open(account_dir.join("staging"))?,
+        staging_store: QueueGenerationStore::new(FileStagingStore::open(
+            account_dir.join("staging"),
+        )?),
         snapshot_cache: FileSnapshotCache::open(account_dir.join("cache"))?,
         credential_store: credentials,
     })

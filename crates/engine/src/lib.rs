@@ -111,7 +111,8 @@ pub use rotation::{
     revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep_job,
 };
 pub use seams::{
-    OwedRetire, OwnerScopedFloorStore, RetireLedger, SeamError, SeamResult, SeamSet, SeamTypes,
+    OwedRetire, OwnerScopedFloorStore, QueueGenerationStore, RetireLedger, SeamError, SeamResult,
+    SeamSet, SeamTypes,
 };
 pub use settings::{
     DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, MAX_BIN_RETENTION_DAYS, Placement,

@@ -1,5 +1,8 @@
 //! `StagingStore` — durable op queue and staged bytes (blueprint/engine.md).
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use super::SeamResult;
 
 /// Store-assigned identifier of one queued op. Strictly increasing per
@@ -80,4 +83,172 @@ pub trait StagingStore {
     /// this order can only orphan bytes that orphan GC reclaims. Both legs run
     /// even when one refuses, and the first refusal is what the caller sees.
     async fn clear(&self) -> SeamResult<()>;
+}
+
+/// A [`StagingStore`] that counts the durable-queue mutations made through it,
+/// so a reader can tell that a queue it already read still stands without
+/// enumerating it again.
+///
+/// The count is the render memo's queue key
+/// ([`RenderMemo`](crate::sync::render::RenderMemo)): a desktop store answers
+/// [`queued_ops`](StagingStore::queued_ops) with a directory listing plus one
+/// file read per pending op, which a vfs pass would otherwise pay per
+/// operation. Clones share the count, so a spawned drain pass's removals are
+/// counted beside the command path's enqueues; the engine wraps the host's
+/// store once, and every handle it hands out is a clone of that one.
+///
+/// Only the three methods that change which ops are queued count. Staged bytes
+/// are not an operand of the state law, and a live write handle churns them.
+pub struct QueueGenerationStore<S> {
+    seam: S,
+    generation: Rc<Cell<u64>>,
+}
+
+impl<S> QueueGenerationStore<S> {
+    /// Wraps `seam`, starting the count at its first generation.
+    pub fn new(seam: S) -> Self {
+        Self {
+            seam,
+            generation: Rc::new(Cell::new(0)),
+        }
+    }
+
+    /// The queue's generation: what a memoized read of it is keyed on.
+    pub fn generation(&self) -> u64 {
+        self.generation.get()
+    }
+
+    /// The wrapped host store, for a caller that needs the concrete type.
+    pub fn inner(&self) -> &S {
+        &self.seam
+    }
+
+    /// Counts one mutation. Charged before the store is asked, so a refusal
+    /// that changed the queue anyway is still counted — an extra render costs
+    /// time, a missed one serves a view that never existed.
+    fn mutating(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+    }
+}
+
+impl<S: Clone> Clone for QueueGenerationStore<S> {
+    fn clone(&self) -> Self {
+        Self {
+            seam: self.seam.clone(),
+            generation: self.generation.clone(),
+        }
+    }
+}
+
+impl<S: StagingStore> StagingStore for QueueGenerationStore<S> {
+    async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
+        self.mutating();
+        self.seam.enqueue_op(op).await
+    }
+
+    async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
+        self.seam.queued_ops().await
+    }
+
+    async fn remove_op(&self, op_id: OpId) -> SeamResult<()> {
+        self.mutating();
+        self.seam.remove_op(op_id).await
+    }
+
+    async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
+        self.seam.put_staged_bytes(staging_key, bytes).await
+    }
+
+    async fn staged_bytes(&self, staging_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+        self.seam.staged_bytes(staging_key).await
+    }
+
+    async fn remove_staged_bytes(&self, staging_key: &[u8]) -> SeamResult<()> {
+        self.seam.remove_staged_bytes(staging_key).await
+    }
+
+    async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
+        self.seam.staged_keys().await
+    }
+
+    async fn staged_bytes_total(&self) -> SeamResult<u64> {
+        self.seam.staged_bytes_total().await
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.mutating();
+        self.seam.clear().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::block_on;
+    use crate::testkit::fakes::InMemoryStagingStore;
+
+    fn counted() -> QueueGenerationStore<InMemoryStagingStore> {
+        QueueGenerationStore::new(InMemoryStagingStore::default())
+    }
+
+    #[test]
+    fn every_queue_mutation_moves_the_generation_on() {
+        let store = counted();
+        let start = store.generation();
+
+        let op = block_on(store.enqueue_op(b"op")).expect("enqueue");
+        let enqueued = store.generation();
+        block_on(store.remove_op(op)).expect("remove");
+        let removed = store.generation();
+        block_on(store.clear()).expect("clear");
+
+        assert_ne!(enqueued, start);
+        assert_ne!(removed, enqueued);
+        assert_ne!(store.generation(), removed);
+    }
+
+    #[test]
+    fn reading_the_queue_leaves_the_generation_where_it_was() {
+        let store = counted();
+        block_on(store.enqueue_op(b"op")).expect("enqueue");
+        let enqueued = store.generation();
+
+        block_on(store.queued_ops()).expect("read");
+        block_on(store.staged_keys()).expect("keys");
+
+        assert_eq!(store.generation(), enqueued);
+    }
+
+    #[test]
+    fn staged_bytes_are_not_a_queue_mutation() {
+        let store = counted();
+        let start = store.generation();
+
+        block_on(store.put_staged_bytes(b"key", b"bytes")).expect("put");
+        block_on(store.remove_staged_bytes(b"key")).expect("remove");
+
+        assert_eq!(store.generation(), start);
+    }
+
+    #[test]
+    fn a_clone_shares_the_count_with_the_handle_it_came_from() {
+        let store = counted();
+        let spawned = store.clone();
+
+        block_on(spawned.enqueue_op(b"op")).expect("enqueue");
+
+        assert_eq!(store.generation(), spawned.generation());
+        assert_ne!(store.generation(), 0);
+    }
+
+    #[test]
+    fn a_refused_mutation_is_counted_too() {
+        let store = counted();
+        store.inner().fail_remove_op();
+        let before = store.generation();
+
+        block_on(store.remove_op(OpId(1))).expect_err("refused");
+
+        assert_ne!(store.generation(), before);
+    }
 }
