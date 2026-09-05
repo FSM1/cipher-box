@@ -242,6 +242,18 @@
       "rendered": ["q3.pdf", "q3 (1).pdf"]
     },
     {
+      "names": ["invoice‮cod.exe"],
+      "rendered": ["invoicecod.exe"]
+    },
+    {
+      "names": ["report.pdf", "report​.pdf"],
+      "rendered": ["report.pdf", "report (1).pdf"]
+    },
+    {
+      "names": ["می‌رود.txt", "crew 👨‍💻"],
+      "rendered": ["می‌رود.txt", "crew 👨‍💻"]
+    },
+    {
       "names": ["file.txt", "FILE.TXT"],
       "rendered": ["file.txt", "FILE.TXT"]
     },

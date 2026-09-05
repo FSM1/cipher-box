@@ -14,6 +14,8 @@
 //! top. Everything the wider tier refuses stays listable and removable, or a
 //! name another client committed would be stranded in the vault forever.
 
+use zeroize::Zeroizing;
+
 /// The longest node name a command may carry, in bytes.
 ///
 /// The projection advertises this same constant through `statfs`, so what a
@@ -96,6 +98,26 @@ fn is_deceptive(c: char) -> bool {
             | '\u{2066}'..='\u{2069}' // bidi isolates
             | '\u{FEFF}' // zero-width no-break space
     )
+}
+
+/// The name with every character [`is_deceptive`] refuses removed, or `None`
+/// when the name holds none.
+///
+/// [`validate_name`] keeps such a character out of anything this device
+/// authors, but a folder binds a child on id and never on name
+/// (`crates/core/src/seal/body.rs`), so a peer with a modified client commits
+/// whatever text string it likes. A read plane draws what it is given, thus one
+/// override in one child's name reorders the listing drawn around it. The set
+/// has one home here, so what an author cannot write is what a listing cannot
+/// draw.
+pub fn strip_deceptive(name: &str) -> Option<Zeroizing<String>> {
+    name.chars().any(is_deceptive).then(|| {
+        Zeroizing::new(
+            name.chars()
+                .filter(|c| !is_deceptive(*c))
+                .collect::<String>(),
+        )
+    })
 }
 
 /// Whether the name can be handed to a kernel at all: within the advertised

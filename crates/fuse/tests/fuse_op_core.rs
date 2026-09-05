@@ -1542,6 +1542,56 @@ fn a_peer_committed_duplicate_name_is_listable_and_removable() {
     assert_eq!(names(&mut core, ROOT_INO), vec!["q3.pdf".to_owned()]);
 }
 
+/// A peer commits a name the law refuses as deceptive, and a file manager
+/// draws a listing as it is given: an override left in reorders the names
+/// drawn around it. The mount shows the stripped spelling instead, and the
+/// child stays reachable and removable under it.
+#[test]
+fn a_peer_committed_deceptive_name_is_listed_stripped_and_removable() {
+    let mut started = started_engine_over_queue(&[]);
+    plant_child(
+        &mut started.engine,
+        started.root,
+        1,
+        "invoice\u{202E}cod.exe",
+        NodeKind::File,
+    );
+    plant_child(
+        &mut started.engine,
+        started.root,
+        2,
+        "report.pdf",
+        NodeKind::File,
+    );
+    plant_child(
+        &mut started.engine,
+        started.root,
+        3,
+        "report\u{200B}.pdf",
+        NodeKind::File,
+    );
+    let mut core = mount_over(started.engine);
+
+    assert_eq!(
+        names(&mut core, ROOT_INO),
+        vec![
+            "invoicecod.exe".to_owned(),
+            "report.pdf".to_owned(),
+            "report (1).pdf".to_owned()
+        ],
+        "the stripped twin still takes a suffix of its own"
+    );
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "invoice\u{202E}cod.exe")),
+        Err(VfsError::NotFound),
+        "the stored spelling never reaches the kernel"
+    );
+    block_on(core.lookup(ROOT_INO, "invoicecod.exe")).expect("the stripped name resolves");
+    block_on(core.unlink(ROOT_INO, "invoicecod.exe")).expect("and is removable");
+    block_on(core.unlink(ROOT_INO, "report (1).pdf")).expect("so is the stripped twin");
+    assert_eq!(names(&mut core, ROOT_INO), vec!["report.pdf".to_owned()]);
+}
+
 /// The auto-suffix on a name already at the bound used to author 259 bytes,
 /// which the narrow tier drops from every listing and every lookup — the
 /// member's own file, invisible and unremovable through the mount.
