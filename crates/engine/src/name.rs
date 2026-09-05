@@ -37,9 +37,10 @@ pub enum NameError {
     Separator,
     /// The name contained NUL or another control character.
     Control,
-    /// The name contained a bidi-override or zero-width character. These
-    /// render as a different name than they compare as, so a hostile grant
-    /// recipient could dress an executable up as a document.
+    /// The name contained a bidi control or a zero-width character that
+    /// `is_deceptive` refuses. These render as a different name than they
+    /// compare as, so a hostile grant recipient could dress an executable up
+    /// as a document.
     DeceptiveCharacter,
     /// The name contained a character Windows reserves (`< > : " | ? *`).
     ReservedCharacter,
