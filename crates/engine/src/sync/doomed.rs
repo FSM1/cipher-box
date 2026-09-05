@@ -14,7 +14,7 @@
 //! ([`crate::sync::bookkeeping`]). The key still says *that* this node has a
 //! delete pending; what the seal withholds is the write-plane names the
 //! detached subtree published under, which outlive the delete recording them.
-//! The seal wraps this codec rather than replacing it: [`FORMAT_V3`] versions
+//! The seal wraps this codec rather than replacing it: [`FORMAT_V4`] versions
 //! the journal's own grammar, independently of the ledger's.
 
 use cipherbox_core::content::{decode_content_cid_str, is_wellformed_content_cid};
@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use crate::facade::NodeId;
 use zeroize::Zeroizing;
 
-use crate::seams::{OwedRetire, OwingRecord, SeamError, SeamResult};
+use crate::seams::{OwedRetire, SeamError, SeamResult};
 use crate::sync::BookkeepingSeal;
 
 /// The staging-key prefix the doomed-name journal writes under. One key per
@@ -45,7 +45,7 @@ const NODE_ID_LEN: usize = 16;
 
 /// The entry format tag. The staging store is shared with whatever build wrote
 /// it, so bytes that merely happen to parse must not read as a reclamation.
-const FORMAT_V3: u8 = 3;
+const FORMAT_V4: u8 = 4;
 
 /// Journal entries one drain pass replays. Each costs a store read and a
 /// registry batch, and a device that deleted a great deal offline holds one per
@@ -68,12 +68,6 @@ pub const MAX_QUARANTINE_PROOFS: usize = 32;
 /// content pinned — the lawful side, and what the delete path did before the
 /// proof existed.
 pub const MAX_QUARANTINE_ATTEMPTS: u8 = 8;
-
-/// [`OwingRecord::Published`] as an entry stores it.
-const OWING_PUBLISHED: u8 = 0;
-
-/// [`OwingRecord::Retired`] as an entry stores it.
-const OWING_RETIRED: u8 = 1;
 
 /// One descendant the delete detached, held until a later pass proves it.
 ///
@@ -267,7 +261,7 @@ pub fn open_reclamation(seal: BookkeepingSeal<'_>, blob: &[u8]) -> Option<Reclam
 /// Zeroizing because the plaintext side of a sealed value is exactly what the
 /// tier exists to keep off the host ([`crate::sync::bookkeeping`]).
 fn encode_reclamation(reclamation: &Reclamation) -> SeamResult<Zeroizing<Vec<u8>>> {
-    let mut out = Zeroizing::new(vec![FORMAT_V3]);
+    let mut out = Zeroizing::new(vec![FORMAT_V4]);
     push_len(&mut out, reclamation.doomed.len())?;
     for (node, name) in &reclamation.doomed {
         push_doomed(&mut out, *node, name)?;
@@ -311,10 +305,6 @@ fn push_owed(out: &mut Vec<u8>, owed: &[OwedRetire]) -> SeamResult<()> {
         out.extend_from_slice(&entry.node);
         out.extend_from_slice(&entry.owed_bytes.to_be_bytes());
         out.extend_from_slice(&entry.manifest_bytes.to_be_bytes());
-        out.push(match entry.owing {
-            OwingRecord::Published => OWING_PUBLISHED,
-            OwingRecord::Retired => OWING_RETIRED,
-        });
         push_str(out, &entry.target)?;
     }
     Ok(())
@@ -323,7 +313,7 @@ fn push_owed(out: &mut Vec<u8>, owed: &[OwedRetire]) -> SeamResult<()> {
 /// One encoded reclamation, or `None` for bytes this build did not write.
 #[must_use]
 fn decode_reclamation(bytes: &[u8]) -> Option<Reclamation> {
-    let mut rest = bytes.strip_prefix(&[FORMAT_V3][..])?;
+    let mut rest = bytes.strip_prefix(&[FORMAT_V4][..])?;
     let mut doomed = Vec::new();
     for _ in 0..take_len(&mut rest)? {
         doomed.push(take_doomed(&mut rest)?);
@@ -370,18 +360,12 @@ fn take_owed(rest: &mut &[u8]) -> Option<Vec<OwedRetire>> {
         let node = take_array::<NODE_ID_LEN>(rest)?;
         let owed_bytes = u64::from_be_bytes(take_array::<8>(rest)?);
         let manifest_bytes = u64::from_be_bytes(take_array::<8>(rest)?);
-        let owing = match take_array::<1>(rest)?[0] {
-            OWING_PUBLISHED => OwingRecord::Published,
-            OWING_RETIRED => OwingRecord::Retired,
-            _ => return None,
-        };
         let target = take_str(rest)?;
         if !is_cid(&target) {
             return None;
         }
         owed.push(OwedRetire {
             node,
-            owing,
             target,
             owed_bytes,
             manifest_bytes,
@@ -460,11 +444,11 @@ mod tests {
     fn sample() -> Reclamation {
         Reclamation {
             doomed: vec![(node(1), name(1)), (node(2), name(2))],
-            owed: vec![OwedRetire::whole_retired(node(1).0, cid(3), 4_096)],
+            owed: vec![OwedRetire::whole(node(1).0, cid(3), 4_096)],
             quarantined: vec![Quarantined {
                 node: node(4),
                 name: name(4),
-                owed: vec![OwedRetire::whole_retired(node(4).0, cid(5), 512)],
+                owed: vec![OwedRetire::whole(node(4).0, cid(5), 512)],
                 attempts: 3,
             }],
             binned_at: Some(1_700_000_000_000),
@@ -521,13 +505,16 @@ mod tests {
             None,
             "a quarantine planted past its attempts"
         );
-        let mut bad_class = encode_reclamation(&unbinned).expect("encode");
-        // The owing class is the byte before the last length-prefixed target,
-        // which the quarantined descendant's own debt carries; the attempt
-        // count is the one byte after it.
-        let at = bad_class.len() - cid(5).len() - 5;
-        bad_class[at] = 9;
-        assert_eq!(decode_reclamation(&bad_class), None, "an unknown class");
+        let mut bad_target = encode_reclamation(&unbinned).expect("encode");
+        // The last length-prefixed target is the quarantined descendant's own
+        // debt; the attempt count is the one byte after it.
+        let at = bad_target.len() - cid(5).len() - 1;
+        bad_target[at] = b'!';
+        assert_eq!(
+            decode_reclamation(&bad_target),
+            None,
+            "a debt target that is not a content CID"
+        );
     }
 
     /// The bin stamp is what a later pass derives the bin-held key from, so an
@@ -562,7 +549,7 @@ mod tests {
         };
         let bad_target = Reclamation {
             doomed: vec![(node(1), name(1))],
-            owed: vec![OwedRetire::whole_retired(node(1).0, "not-a-cid".into(), 1)],
+            owed: vec![OwedRetire::whole(node(1).0, "not-a-cid".into(), 1)],
             ..Reclamation::default()
         };
         let bad_quarantined_name = Reclamation {
@@ -578,7 +565,7 @@ mod tests {
             quarantined: vec![Quarantined {
                 node: node(4),
                 name: name(4),
-                owed: vec![OwedRetire::whole_retired(node(4).0, "not-a-cid".into(), 1)],
+                owed: vec![OwedRetire::whole(node(4).0, "not-a-cid".into(), 1)],
                 attempts: 0,
             }],
             ..Reclamation::default()
@@ -641,7 +628,7 @@ mod tests {
         );
         let strangers_debt = Reclamation {
             doomed: vec![(node(1), name(1))],
-            owed: vec![OwedRetire::whole_retired(node(9).0, cid(3), 1)],
+            owed: vec![OwedRetire::whole(node(9).0, cid(3), 1)],
             ..Reclamation::default()
         };
         assert!(
@@ -653,7 +640,7 @@ mod tests {
             quarantined: vec![Quarantined {
                 node: node(4),
                 name: name(4),
-                owed: vec![OwedRetire::whole_retired(node(9).0, cid(3), 1)],
+                owed: vec![OwedRetire::whole(node(9).0, cid(3), 1)],
                 attempts: 0,
             }],
             ..Reclamation::default()
@@ -678,7 +665,7 @@ mod tests {
         );
         let unproven_debt = Reclamation {
             doomed: vec![(node(1), name(1))],
-            owed: vec![OwedRetire::whole_retired(node(4).0, cid(3), 1)],
+            owed: vec![OwedRetire::whole(node(4).0, cid(3), 1)],
             quarantined: vec![Quarantined {
                 node: node(4),
                 name: name(4),

@@ -67,8 +67,8 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    LiveRecord, OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head,
-    retire,
+    LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger, drain_owed_retires,
+    orphaned_head, retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
@@ -1466,24 +1466,30 @@ where
         let owner = owner_tag(vault.enc_secret);
         let seal = self.bookkeeping_seal(vault);
         let mut budget = JournalBudget::new(scopes.len());
+        let mut owed_now = BTreeSet::new();
         for scope in scopes {
-            self.settle_journalled_deletes(
-                scope,
-                seal,
-                &owner,
-                &staged,
-                journalled_deletes,
-                &mut budget,
-            )
-            .await;
+            owed_now.extend(
+                self.settle_journalled_deletes(
+                    scope,
+                    seal,
+                    &owner,
+                    &staged,
+                    journalled_deletes,
+                    &mut budget,
+                )
+                .await,
+            );
         }
         if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, seal, &staged),
             &owner,
             self.api,
-            self.gateway,
-            self.http,
-            self.content_profile,
+            &RootSource {
+                gateway: self.gateway,
+                http: self.http,
+                profile: self.content_profile,
+            },
+            &owed_now,
             async |node, owing| self.live_owing_record(vault, node, owing).await,
         )
         .await
@@ -2983,6 +2989,11 @@ where
     /// nothing sweeps this prefix, so charging it one would starve every entry
     /// sorting behind it for good. Settled entries leave, so the rest are
     /// reached on the next pass.
+    ///
+    /// Answers with every node it may have journaled a debt for. Those debts
+    /// land after `staged` was taken, so the reclaim pass reading that listing
+    /// holds their tombstones rather than sweeping them
+    /// ([`drain_owed_retires`]).
     async fn settle_journalled_deletes(
         &self,
         scope: &DrainScope<'_>,
@@ -2991,7 +3002,8 @@ where
         staged: &[Vec<u8>],
         journalled_now: &[NodeId],
         budget: &mut JournalBudget,
-    ) {
+    ) -> BTreeSet<[u8; 16]> {
+        let mut owed_now = BTreeSet::new();
         let mut mine = budget.share();
         for (key, scope_root, target) in journalled_keys(owner, staged) {
             if mine == 0 {
@@ -3023,12 +3035,15 @@ where
                 true => Settle::Decide(&mut budget.proofs),
                 false => Settle::Hold,
             };
+            owed_now.extend(reclamation.owed.iter().map(|entry| entry.node));
+            owed_now.extend(reclamation.quarantined.iter().map(|held| held.node.0));
             let residue = self
                 .settle_reclamation(scope, seal, owner, &reclamation, settle)
                 .await;
             self.update_journal(seal, &key, target, &reclamation, residue)
                 .await;
         }
+        owed_now
     }
 
     /// Every node the delete of `target` detaches, refusing the whole operation
@@ -3618,7 +3633,7 @@ where
                 .iter()
                 .filter(|version| quoted.insert(version.content_cid.as_str()))
                 .map(|version| {
-                    OwedRetire::whole_retired(
+                    OwedRetire::whole(
                         node.node.0,
                         version.content_cid.clone(),
                         version.pinned_bytes,
@@ -3669,12 +3684,7 @@ where
         };
         let mut owed = reclamation.owed.clone();
         owed.extend(proven.iter().flat_map(|entry| entry.owed.iter().cloned()));
-        if !owed.is_empty()
-            && StagingRetireLedger::new(self.staging, seal)
-                .owe(owner, &owed)
-                .await
-                .is_err()
-        {
+        if !owed.is_empty() && !self.journal_debt(seal, owner, &owed).await {
             // Leaving the bytes pinned is the lawful side of this failure: the
             // unlink is already live, and an unpin the ledger never recorded is
             // one nothing can account for. The quarantine goes back whole, so a
@@ -3742,6 +3752,28 @@ where
                 binned_at: reclamation.binned_at,
             }),
         }
+    }
+
+    /// Journal `owed` against the retire ledger, tombstoning every owing node
+    /// first. These nodes are retired by construction — the unlink that detached
+    /// them is already live — and a debt whose node reads as published waits on
+    /// a record the delete retired out from under it. Answers whether both
+    /// halves landed; the tombstone leads, so the pair can only fail toward a
+    /// classification with no debt behind it yet.
+    async fn journal_debt(
+        &self,
+        seal: BookkeepingSeal<'_>,
+        owner: &[u8; 32],
+        owed: &[OwedRetire],
+    ) -> bool {
+        let ledger = StagingRetireLedger::new(self.staging, seal);
+        let nodes: BTreeSet<[u8; 16]> = owed.iter().map(|entry| entry.node).collect();
+        for node in nodes {
+            if ledger.tombstone(owner, node).await.is_err() {
+                return false;
+            }
+        }
+        ledger.owe(owner, owed).await.is_ok()
     }
 
     /// Decide one pass's worth of quarantined descendants: those the proof
@@ -4685,9 +4717,6 @@ where
             let expansion = self.expand_version(version).await?;
             owed.push(OwedRetire {
                 node: node.0,
-                // The prune shortens this node's history and leaves the node
-                // itself published.
-                owing: OwingRecord::Published,
                 target: version.content_cid.clone(),
                 owed_bytes: expansion.minus(&charged).pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,

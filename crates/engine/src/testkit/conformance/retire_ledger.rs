@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 
 use crate::content::DAG_ROOT_CODEC;
-use crate::seams::{OwedRetire, OwingRecord, RetireLedger};
+use crate::seams::{OwedRetire, RetireLedger};
 
 /// A distinct doomed-version root address, spelled as the ledger stores them.
 fn root(seed: u8) -> String {
@@ -144,12 +144,10 @@ where
     assert_eq!(held(&reopened, alice).await.len(), 2);
 
     // The owing node is what the drain re-reads to decide what the retire may
-    // name, its class is whether that read can find anything, and the manifest
-    // total is the bound it holds a hand-framed root to. All are as durable as
-    // the owed figure, and none of the four moves under a replay.
+    // name, and the manifest total is the bound it holds a hand-framed root to.
+    // Both are as durable as the owed figure, and neither moves under a replay.
     let quoted = OwedRetire {
         node: [0x5C; 16],
-        owing: OwingRecord::Retired,
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,
@@ -171,31 +169,60 @@ where
         "every field survives a replay and a reopen"
     );
 
-    // The one field a replay moves, and only toward `Retired`: a delete retires
-    // the record out from under a debt an earlier prune journaled, and a backing
-    // that kept `Published` would leave that debt unsettleable.
-    let advanced = root(4);
-    after_reopen
-        .owe(alice, &[owed(&advanced, 64)])
-        .await
-        .unwrap();
-    after_reopen
-        .owe(
-            alice,
-            &[OwedRetire::whole_retired(NODE, advanced.clone(), 64)],
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        open()
-            .await
-            .owed(alice)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry.target == advanced)
-            .map(|entry| entry.owing),
-        Some(OwingRecord::Retired),
-        "a hard delete must advance a held entry's class, durably"
+    check_tombstones(open).await;
+}
+
+/// The node-keyed half of the contract: which nodes a hard delete retired.
+async fn check_tombstones<L, F>(mut open: F)
+where
+    L: RetireLedger,
+    F: AsyncFnMut() -> L,
+{
+    let ledger = open().await;
+    let alice = b"alice-owner-tag".as_slice();
+    let bob = b"bob-owner-tag".as_slice();
+    let alice_prefix = b"alice".as_slice();
+    let (deleted, live) = ([0x11; 16], [0x22; 16]);
+
+    assert!(
+        !ledger.tombstoned(alice, deleted).await.unwrap(),
+        "a fresh backing tombstones nothing"
     );
+
+    ledger.tombstone(alice, deleted).await.unwrap();
+    assert!(ledger.tombstoned(alice, deleted).await.unwrap());
+    assert!(
+        !ledger.tombstoned(alice, live).await.unwrap(),
+        "a tombstone names one node, never the store"
+    );
+
+    // Owner-scoped on the same terms the entries are: a retired node under one
+    // owner must not settle another owner's debt without a record read.
+    assert!(!ledger.tombstoned(bob, deleted).await.unwrap());
+    assert!(!ledger.tombstoned(alice_prefix, deleted).await.unwrap());
+
+    // Idempotent: the reclamation replay writes the tombstone on every pass it
+    // journals a debt on.
+    ledger.tombstone(alice, deleted).await.unwrap();
+    assert!(ledger.tombstoned(alice, deleted).await.unwrap());
+
+    // Durable: the classification outlives the pass that made it, or the debts
+    // it classifies are unsettleable after a restart.
+    let reopened = open().await;
+    assert!(reopened.tombstoned(alice, deleted).await.unwrap());
+    assert!(!reopened.tombstoned(bob, deleted).await.unwrap());
+
+    // Cleared only where it is named, and an unheld node succeeds.
+    reopened.forget_tombstones(bob, &[deleted]).await.unwrap();
+    assert!(
+        reopened.tombstoned(alice, deleted).await.unwrap(),
+        "forgetting under one owner must not clear another's"
+    );
+    reopened
+        .forget_tombstones(alice, &[deleted, live])
+        .await
+        .unwrap();
+    assert!(!open().await.tombstoned(alice, deleted).await.unwrap());
+
+    reopened.forget_tombstones(alice, &[]).await.unwrap();
 }
