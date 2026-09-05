@@ -5105,7 +5105,7 @@ where
                 None => {
                     beyond = beyond.or(Some(halt_below_another_scope_root(
                         scope.keyless_roots,
-                        scope.source.ascent_node_seed.is_none(),
+                        scope.charges_the_identity,
                         root,
                     )));
                 }

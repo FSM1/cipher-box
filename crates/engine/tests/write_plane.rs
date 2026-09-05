@@ -9529,6 +9529,11 @@ fn a_versionless_dead_letter_is_named_again_after_a_cold_start() {
     let alice = world.device(b"alice");
     let (engine, _tasks, parked) = versionless_dead_letter(&world, &blocks, &alice);
     drop(engine);
+    assert_eq!(
+        block_on(alice.staging_store.staged_bytes(PRESERVED_DEAD_LETTERS)).unwrap(),
+        None,
+        "and it spends none of the set that evicts oldest-first"
+    );
 
     let (restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
 
@@ -9538,6 +9543,11 @@ fn a_versionless_dead_letter_is_named_again_after_a_cold_start() {
             .dead_letters,
         vec![parked],
         "the restart names it by the id its dead letter announced"
+    );
+    assert_eq!(
+        block_on(alice.staging_store.staged_bytes(PRESERVED_DEAD_LETTERS)).unwrap(),
+        None,
+        "and the cold start reads the notice without writing a record for it"
     );
 }
 
