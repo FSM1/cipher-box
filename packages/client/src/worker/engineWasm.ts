@@ -59,6 +59,8 @@ export interface WasmCommandOutcome {
   readonly sequence?: bigint;
   readonly permission?: number;
   readonly newlyAdded?: boolean;
+  readonly unsettledBytes?: bigint;
+  readonly unsettledStalls?: number;
   free(): void;
 }
 

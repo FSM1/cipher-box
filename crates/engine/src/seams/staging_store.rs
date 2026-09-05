@@ -63,6 +63,13 @@ pub trait StagingStore {
     /// Drops every queued op and every staged byte, durably
     /// ("forget this device").
     ///
+    /// This is the store's end of life, the bookkeeping it carries included:
+    /// the retire ledger, the doomed-name journal and the scope-exit debt all
+    /// go with it. The engine settles what it can ahead of this call and
+    /// reports the residual, so the contracts those surfaces state hold up to
+    /// the erase rather than being quietly ended by it
+    /// ([`Command::ForgetDevice`](crate::facade::Command::ForgetDevice)).
+    ///
     /// The id progression is **not** reset: ids stay strictly increasing and
     /// unreused across a clear, exactly as across a drain and reopen — the
     /// engine reads id order as evidence about the queue.

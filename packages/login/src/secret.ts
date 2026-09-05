@@ -43,9 +43,10 @@ export interface LoginFacade {
    * because a host may erase them off this seam entirely; the desktop shell's
    * own path is not landed, so its facade carries none and
    * [`LoginFlow.forgetDevice`] refuses there rather than passing a plain logout
-   * off as an erase.
+   * off as an erase. What it answers with is the engine's to define; the login
+   * flow reads only whether it refused.
    */
-  forgetDevice?(): Promise<void>;
+  forgetDevice?(): Promise<unknown>;
 }
 
 /** The secp256k1 scalar length `crates/engine/src/session.rs` requires. */

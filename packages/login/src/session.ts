@@ -50,7 +50,7 @@ export interface CoreKitSession extends LoginSecretExporter {
    * guarantees its removal is not landed. Absent on a host with no factor of
    * its own.
    */
-  forgetDevice?(): Promise<void>;
+  forgetDevice?(): Promise<unknown>;
 }
 
 /**

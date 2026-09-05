@@ -22,6 +22,7 @@ import type {
   CommandOutcomeDescriptor,
   DeviceRendezvousResult,
   DeviceRendezvousStep,
+  ForgottenResidual,
   NodeKind,
   OpenedStream,
   PendingApprovalDescriptor,
@@ -98,10 +99,17 @@ export class EngineFacade {
    * Leaves the worker standing, so the {@link logout} that follows is still
    * what zeroizes it — and what removes the emptied containers. A refused erase
    * rejects rather than resolving.
+   *
+   * Answers with what the settling pass ahead of the erase could not pay:
+   * pinned bytes that stay charged to the account with no device left owing
+   * them, and `null` when no pass ran, so the ledger was never read.
    */
-  async forgetDevice(): Promise<void> {
-    await this.command({ kind: 'forgetDevice' });
+  async forgetDevice(): Promise<ForgottenResidual> {
+    const outcome = await this.command({ kind: 'forgetDevice' });
     this.forgotten = this.transport.signedInAccount?.() ?? null;
+    return outcome.kind === 'forgotten'
+      ? { unsettledBytes: outcome.unsettledBytes, stalls: outcome.stalls }
+      : { unsettledBytes: null, stalls: 0 };
   }
 
   /**

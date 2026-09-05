@@ -103,7 +103,10 @@ pub struct OwedPage {
 ///   self-clearing or ours, and the byte figure is the only record of what was
 ///   owed. An entry a pass cannot open keeps its key in particular: a downgrade
 ///   and another identity's entry both read that way, and removing either would
-///   turn a bounded read into destructive collection.
+///   turn a bounded read into destructive collection. The one end is the
+///   backing's own: a device being forgotten erases the store under the ledger,
+///   which is why the engine settles first and reports what it could not pay
+///   ([`StagingStore::clear`](crate::seams::StagingStore::clear)).
 /// - **Durable**: entries and tombstones survive reopening the store.
 ///
 /// `owner_tag` is opaque engine-chosen bytes; the store never interprets it.

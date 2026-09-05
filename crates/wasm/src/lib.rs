@@ -519,8 +519,32 @@ impl CommandOutcome {
             facade::CommandOutcome::Queued { .. } => "queued",
             facade::CommandOutcome::ContactImported(_) => "contactImported",
             facade::CommandOutcome::InviteLinkMinted(_) => "inviteLinkMinted",
+            facade::CommandOutcome::Forgotten { .. } => "forgotten",
         }
         .to_owned()
+    }
+
+    /// `forgotten`: pinned bytes that stay charged to the account with no
+    /// device left owing them, as a `bigint`. `undefined` on every other
+    /// outcome, and on a forget whose engine never read the ledger.
+    #[wasm_bindgen(getter, js_name = unsettledBytes)]
+    pub fn unsettled_bytes(&self) -> Option<u64> {
+        match self.inner {
+            facade::CommandOutcome::Forgotten {
+                unsettled_bytes, ..
+            } => unsettled_bytes,
+            _ => None,
+        }
+    }
+
+    /// `forgotten`: how many of those debts the settling pass could name a
+    /// reason for; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = unsettledStalls)]
+    pub fn unsettled_stalls(&self) -> Option<usize> {
+        match self.inner {
+            facade::CommandOutcome::Forgotten { stalls, .. } => Some(stalls),
+            _ => None,
+        }
     }
 
     /// `queued`: the staged op's durable queue id, as the same `bigint` an

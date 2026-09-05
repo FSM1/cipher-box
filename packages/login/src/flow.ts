@@ -119,7 +119,7 @@ export function resetLoginFlowLatches(): void {
  * Runs `leg` and reports its refusal instead of throwing it, so a caller can
  * finish the legs that do not depend on it.
  */
-async function refusalOf(leg: () => Promise<void> | undefined): Promise<unknown> {
+async function refusalOf(leg: () => Promise<unknown> | undefined): Promise<unknown> {
   try {
     await leg();
     return undefined;
@@ -220,7 +220,7 @@ export function createLoginFlow<C extends CollectedMaterial = CollectedMaterial>
   const endSession = (mode: 'keep' | 'erase') => {
     const endHalf = async (
       half: {
-        forgetDevice?(): Promise<void>;
+        forgetDevice?(): Promise<unknown>;
         logout(): Promise<void>;
       } | null
     ): Promise<void> => {
