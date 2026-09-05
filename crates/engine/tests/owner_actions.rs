@@ -71,6 +71,11 @@ const RECIPIENT_SECRET: [u8; 32] = [0x5B; 32];
 /// A second grantee's login secret — committed at the same root, and never the
 /// party a revoke names.
 const BYSTANDER_SECRET: [u8; 32] = [0x7C; 32];
+/// The first byte of the `n`th throwaway claimant's login scalar, and of the
+/// HPKE ephemeral its claim seals under. Two ranges, held apart so no claimant
+/// key doubles as a seal ephemeral.
+const CLAIMANT_SCALAR_BASE: u8 = 0x90;
+const CLAIM_EPHEMERAL_BASE: u8 = 0x10;
 /// The entropy seed the seeded vault pointer's re-point seal draws its nonce
 /// from, and the one the seeded root's grant section draws its HPKE ephemerals
 /// from. Named apart because a single (key, nonce) pair must never cover two
@@ -604,6 +609,16 @@ fn recorded_links(device: &FakeDevice) -> Vec<RecordedInvite> {
         .links
 }
 
+/// The staging key the owner's invite records live under — the write a
+/// conversion makes durable before it acks the claim.
+fn invite_staging_key(device: &FakeDevice) -> Vec<u8> {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(12));
+    StagingInviteStore::new(&device.staging_store, &enc, &entropy)
+        .staging_key()
+        .to_vec()
+}
+
 /// The one share pointer waiting on `device`'s inbox, opened under the
 /// recipient's own encryption subkey.
 fn delivered_share_pointer(device: &FakeDevice) -> SharePointer {
@@ -858,6 +873,50 @@ impl GrantScenario {
             self.engine
                 .command(Command::ConvertInviteClaims { node: self.folder }),
         )
+    }
+
+    /// Post `count` claims on `fragment`, one per throwaway claimant identity —
+    /// what a bearer link looks like when one holder claims from many. Answers
+    /// the claimants' identity keys in the order they were posted.
+    ///
+    /// Straight to the mailbox rather than through a claimant engine each: the
+    /// owner's conversion pass reads the same items either way, and a session
+    /// per claimant would price the pass out of the suite.
+    fn post_claims(&self, fragment: &str, count: usize) -> Vec<Vec<u8>> {
+        let opened = InviteFragment::decode(fragment).expect("the mint's own fragment");
+        let invitee =
+            EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+        let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+        (0..count)
+            .map(|i| {
+                let index = u8::try_from(i).expect("the fixture stays under 256 claimants");
+                let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
+                // Never all-zero, which the conversion refuses outright.
+                let mut claim_id = [1u8; CLAIM_ID_LEN];
+                claim_id[0] = index;
+                block_on(post_invite_claim(
+                    &self.recipient_device.mailbox,
+                    &owner,
+                    &invitee,
+                    // One HPKE ephemeral per post: a (key, nonce) pair must
+                    // never cover two plaintexts (blueprint/core.md).
+                    &[CLAIM_EPHEMERAL_BASE + index; 32],
+                    ENVELOPE_V,
+                    &InviteClaim {
+                        claim_id,
+                        scope_root_name: opened.scope_root_name.clone(),
+                        contact_code: contact_code(&scalar),
+                    },
+                    &format!("claim-{i}"),
+                ))
+                .expect("the claim posts");
+                EcdsaSigner::from_scalar(&scalar)
+                    .expect("valid identity scalar")
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec()
+            })
+            .collect()
     }
 }
 
@@ -4568,6 +4627,145 @@ fn a_redelivered_claim_converts_once() {
         granted_after_first,
         "and files one grant for the claimant, not a second"
     );
+}
+
+/// One conversion pass, one publish. Each claim converts against the set the
+/// pass is accumulating in memory, and the whole set re-seals and publishes
+/// once — so K claimants move the scope root's record forward by one sequence,
+/// not by K.
+#[test]
+fn a_conversion_pass_publishes_the_scope_root_once_for_every_claim_it_converts() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 3);
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        before + 1,
+        "one re-seal and one publish carried every conversion"
+    );
+    let granted = fx.granted_to();
+    for claimant in &claimants {
+        assert!(
+            granted.contains(claimant),
+            "every claim of the pass became a personal grant"
+        );
+    }
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "and every claim is acked, because the one publish landed"
+    );
+}
+
+/// Ack-after-durable, at the batch scale: nothing this pass converted reached
+/// the record plane, so no claim may be acked and no spent record may become
+/// durable. Every item redelivers, and the next press converts them all.
+#[test]
+fn a_conversion_pass_that_cannot_publish_acks_no_claim() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 3);
+    let name = write_name(fx.folder);
+    let committed = fx.granted_to();
+    fx.world.record_store.fail_put_for(name.as_str());
+
+    assert!(
+        fx.convert().is_err(),
+        "a publish nothing accepted is reported, never swallowed"
+    );
+
+    assert_eq!(inbox(&fx.owner_device).len(), 3, "no claim is acked");
+    assert_eq!(
+        fx.granted_to(),
+        committed,
+        "and no grant reached the record plane"
+    );
+
+    fx.world.record_store.heal_put_for(name.as_str());
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let granted = fx.granted_to();
+    for claimant in &claimants {
+        assert!(
+            granted.contains(claimant),
+            "the next press converts every claim the failed one left"
+        );
+    }
+}
+
+/// Ack-after-durable per item, after the one publish: a spent-record write that
+/// fails leaves its claim un-acked, so the next press converts it again. That
+/// re-conversion changes a set the record plane already carries, so it
+/// publishes nothing more.
+#[test]
+fn a_record_write_that_fails_after_the_publish_leaves_its_claim_convertible() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 2);
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+    fx.owner_device
+        .staging_store
+        .interrupt_staged_write_after(&invite_staging_key(&fx.owner_device), 0);
+
+    assert!(
+        fx.convert().is_err(),
+        "the pass reports the record write it could not make durable"
+    );
+
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        before + 1,
+        "the one publish still landed"
+    );
+    assert_eq!(
+        inbox(&fx.owner_device).len(),
+        1,
+        "only the claim whose record failed is left to redeliver"
+    );
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        before + 1,
+        "the re-conversion grants nothing new, so it republishes nothing"
+    );
+    assert!(inbox(&fx.owner_device).is_empty());
+    let granted = fx.granted_to();
+    for claimant in &claimants {
+        assert!(
+            granted.contains(claimant),
+            "both claimants hold their grant"
+        );
+    }
+}
+
+/// A press past the API's per-account content throttle
+/// (`apps/api/src/ops/throttling.ts`): a publish per claim would trip it
+/// mid-pass and strand the rest. One publish for the whole pass cannot.
+#[test]
+fn a_pass_of_more_claims_than_the_content_throttle_admits_makes_one_publish() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 61);
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        before + 1,
+        "one publish, whatever the claim count"
+    );
+    let granted = fx.granted_to();
+    for claimant in &claimants {
+        assert!(granted.contains(claimant));
+    }
+    assert!(inbox(&fx.owner_device).is_empty());
 }
 
 /// Revocation is the immediate-cut control, and `revoke` resolves its recipient
