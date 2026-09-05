@@ -24,6 +24,11 @@ function errorMessage(failure: unknown): string {
   return failure instanceof Error ? failure.message : String(failure);
 }
 
+/** Ends a transition the window has already rendered the failure of. */
+function ignore(): void {
+  return undefined;
+}
+
 function start(root: HTMLElement): void {
   const model: ShellModel = {
     phase: 'starting',
@@ -32,8 +37,6 @@ function start(root: HTMLElement): void {
     methods: [],
     email: null,
     error: null,
-    codeSent: false,
-    address: '',
     vault: null,
     vaultError: null,
   };
@@ -55,8 +58,6 @@ function start(root: HTMLElement): void {
       signedIn: (_method, email) => {
         model.phase = 'signedIn';
         model.email = email;
-        model.codeSent = false;
-        model.address = '';
         engineSession += 1;
         // This engine is not the last one, and neither is what was read off it:
         // a read that failed as the previous session ended would otherwise be
@@ -68,7 +69,6 @@ function start(root: HTMLElement): void {
       signedOut: () => {
         model.phase = 'signedOut';
         model.email = null;
-        model.codeSent = false;
         // The engine behind them is gone, so neither outlives the session.
         engineSession += 1;
         model.vault = null;
@@ -104,14 +104,8 @@ function start(root: HTMLElement): void {
   };
 
   const actions: ShellActions = {
-    google: () => run('google', () => attempt(flow.loginWithGoogle(undefined))),
-    sendEmailCode: (email) => {
-      model.address = email;
-      run('emailCode', async () => {
-        await flow.sendEmailCode(email);
-        model.codeSent = true;
-      });
-    },
+    google: () => void run('google', () => attempt(flow.loginWithGoogle(undefined))).catch(ignore),
+    sendEmailCode: (email) => run('emailCode', () => flow.sendEmailCode(email)),
     submitEmailCode: (email, code) =>
       run('signIn', () => attempt(flow.loginWithEmailCode({ email, code }))),
     submitRecoveryPhrase: (phrase) =>
@@ -125,7 +119,7 @@ function start(root: HTMLElement): void {
           throw failure;
         }
       }),
-    logout: () => run('logout', () => flow.logout()),
+    logout: () => void run('logout', () => flow.logout()).catch(ignore),
   };
 
   const draw = (): void => renderShell(root, model, actions);
@@ -171,15 +165,19 @@ function start(root: HTMLElement): void {
     });
   };
 
-  /** Every transition ends in a redraw, whether or not the flow refused it. */
-  const run = (step: LoginStep, work: () => Promise<void>): void => {
+  /**
+   * Every transition ends in a redraw, whether or not the flow refused it, and
+   * a refusal is passed on: a surface that advanced on a failed step would
+   * collect the next answer for a request CipherBox never took.
+   */
+  const run = async (step: LoginStep, work: () => Promise<void>): Promise<void> => {
     model.step = step;
-    void work()
-      .catch(() => undefined)
-      .finally(() => {
-        model.step = null;
-        draw();
-      });
+    try {
+      await work();
+    } finally {
+      model.step = null;
+      draw();
+    }
   };
 
   model.methods = flow.methods;
@@ -191,7 +189,7 @@ function start(root: HTMLElement): void {
     if (model.phase === 'signedIn') showVault();
   }).catch(() => undefined);
 
-  run('restore', async () => {
+  void run('restore', async () => {
     model.busy = true;
     draw();
     try {
@@ -203,7 +201,7 @@ function start(root: HTMLElement): void {
       model.busy = false;
     }
     await flow.resume();
-  });
+  }).catch(ignore);
 }
 
 const root = document.getElementById('shell');

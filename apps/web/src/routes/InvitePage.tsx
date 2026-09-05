@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { LoginError } from '../components/auth/LoginError';
+import { LoginError } from '@cipherbox/auth-ui';
 import { useAuth } from '../auth/useAuth';
 import { useEngineAccount } from '../engine/useEngineSession';
 import { useCommandRunner } from '../hooks/useCommandRunner';

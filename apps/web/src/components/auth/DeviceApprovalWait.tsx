@@ -11,7 +11,7 @@ import { useVisibility } from '../../hooks/useVisibility';
 import { useEngine } from '../../providers/EngineProvider';
 import { erase } from '../../lib/erase';
 import { errorMessage } from '../../lib/errorMessage';
-import { LoginError } from './LoginError';
+import { LoginError } from '@cipherbox/auth-ui';
 
 /** Short: the member is watching this screen, and the rendezvous is short-lived. */
 const POLL_MS = 3000;

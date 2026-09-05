@@ -1,4 +1,4 @@
-import { LoginError } from './LoginError';
+import { LoginError } from '@cipherbox/auth-ui';
 import { shortAccountId } from '../../utils/format';
 
 /**

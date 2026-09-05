@@ -9,6 +9,7 @@
     "declarationMap": false
   },
   "references": [
+    { "path": "../../packages/auth-ui/tsconfig.build.json" },
     { "path": "../../packages/client/tsconfig.build.json" },
     { "path": "../../packages/login/tsconfig.build.json" }
   ],

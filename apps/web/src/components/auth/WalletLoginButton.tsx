@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LoginError } from './LoginError';
+import { LoginError } from '@cipherbox/auth-ui';
 import { WalletSignature } from './WalletSignature';
 
 interface WalletLoginButtonProps {

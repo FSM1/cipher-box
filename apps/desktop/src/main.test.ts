@@ -133,7 +133,7 @@ describe('the shell bootstrap', () => {
     shell.recoverWithPhrase.mockRejectedValueOnce(new Error('that phrase did not open it'));
     const drawn = shell.redraws.length;
 
-    shell.actions!.submitRecoveryPhrase('a typed recovery phrase');
+    void shell.actions!.submitRecoveryPhrase('a typed recovery phrase').catch(() => undefined);
 
     await vi.waitFor(() => expect(shell.redraws.length).toBeGreaterThan(drawn));
     expect(shell.redraws.at(-1)?.phase).toBe('recovery');
@@ -148,7 +148,7 @@ describe('the shell bootstrap', () => {
     shell.awaitsRecovery.mockReturnValue(false);
     shell.recoverWithPhrase.mockRejectedValueOnce(new Error('the engine refused the secret'));
 
-    shell.actions!.submitRecoveryPhrase('a typed recovery phrase');
+    void shell.actions!.submitRecoveryPhrase('a typed recovery phrase').catch(() => undefined);
 
     await vi.waitFor(() => expect(shell.redraws.at(-1)?.phase).toBe('signedOut'));
   });
