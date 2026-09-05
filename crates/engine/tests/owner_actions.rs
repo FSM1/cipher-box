@@ -38,7 +38,8 @@ use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, StagingStore, UnixMillis,
+    BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, SnapshotCache, StagingStore,
+    UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::MAX_QUARANTINE_ATTEMPTS;
@@ -1717,16 +1718,21 @@ fn a_delete_inside_a_promoted_scope_retires_the_descendants_that_scope_owns() {
     block_on(fx.engine.command(Command::Delete { node: album })).expect("the delete stages");
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     // A whole attempt budget of ticks that cannot reach the promoted root, and
-    // so cannot attribute the entry that scope's delete wrote.
-    fx.world
-        .record_store
-        .fail_get_for(write_name(fx.folder).as_str());
+    // so cannot attribute the entry that scope's delete wrote. The cached
+    // record goes with it: a scope this device can still answer out of its own
+    // cache is one the tick can still prove.
+    let promoted = write_name(fx.folder);
+    fx.world.record_store.fail_get_for(promoted.as_str());
+    block_on(
+        fx.owner_device
+            .snapshot_cache
+            .remove(promoted.as_str().as_bytes()),
+    )
+    .expect("the promoted root leaves the cache");
     for _ in 0..=MAX_QUARANTINE_ATTEMPTS {
         tick(&fx.world, &fx.engine, &mut fx._tasks);
     }
-    fx.world
-        .record_store
-        .heal_get_for(write_name(fx.folder).as_str());
+    fx.world.record_store.heal_get_for(promoted.as_str());
 
     // The tick converges the snapshot, the next proves the descendant, and the
     // one after spends the debt the proof owed.

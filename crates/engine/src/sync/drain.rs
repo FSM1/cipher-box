@@ -1126,12 +1126,18 @@ enum Verdict {
 
 /// What one tick's journal replay may spend across every scope it settles: the
 /// entries it replays and the quarantine proofs those entries decide against.
-/// Shared by the whole tick rather than held per scope, so a vault of many
-/// promoted scopes costs a tick what a vault of one costs.
+/// Held by the whole tick rather than per scope, so a vault of many promoted
+/// scopes costs a tick what a vault of one costs.
+///
+/// Shared out evenly all the same: a scope settled first would otherwise spend
+/// every slot on its own backlog, and the reclamations of the scopes behind it
+/// would wait on a queue they never reach the head of.
 struct JournalBudget {
     /// Entries left to replay ([`MAX_JOURNAL_REPLAYS`]). Each costs a store
     /// read and a registry batch.
     replays: usize,
+    /// The most of them any one scope may take ([`Self::share`]).
+    per_scope: usize,
     /// Quarantine proofs left ([`MAX_QUARANTINE_PROOFS`]). Each costs a fresh
     /// resolve of one descendant's record, so a delete of a large subtree
     /// settles over several ticks rather than holding one open.
@@ -1139,11 +1145,19 @@ struct JournalBudget {
 }
 
 impl JournalBudget {
-    fn new() -> Self {
+    /// The budget for a tick that settles `scopes` scopes.
+    fn new(scopes: usize) -> Self {
         Self {
             replays: MAX_JOURNAL_REPLAYS,
+            per_scope: MAX_JOURNAL_REPLAYS.div_ceil(scopes.max(1)),
             proofs: MAX_QUARANTINE_PROOFS,
         }
+    }
+
+    /// What one scope may replay: its share of the tick's slots, and never more
+    /// than the tick has left.
+    fn share(&self) -> usize {
+        self.per_scope.min(self.replays)
     }
 }
 
@@ -1451,7 +1465,7 @@ where
         // it through every consumer below.
         let owner = owner_tag(vault.enc_secret);
         let seal = self.bookkeeping_seal(vault);
-        let mut budget = JournalBudget::new();
+        let mut budget = JournalBudget::new(scopes.len());
         for scope in scopes {
             self.settle_journalled_deletes(
                 scope,
@@ -2971,11 +2985,11 @@ where
     /// An entry that does not answer to the target its key names is refused
     /// rather than replayed ([`Reclamation::is_for`]).
     ///
-    /// Bounded by the entries it settles, never by the keys it lists, and the
-    /// budget is the tick's rather than this scope's ([`JournalBudget`]). A
-    /// refused or unreadable entry costs a local read and an HPKE open, but no
-    /// slot: nothing sweeps this prefix, so charging it one would starve every
-    /// entry sorting behind it for good. Settled entries leave, so the rest are
+    /// Bounded by the entries it settles, never by the keys it lists, and by
+    /// this scope's share of the tick's slots ([`JournalBudget`]). A refused or
+    /// unreadable entry costs a local read and an HPKE open, but no slot:
+    /// nothing sweeps this prefix, so charging it one would starve every entry
+    /// sorting behind it for good. Settled entries leave, so the rest are
     /// reached on the next pass.
     async fn settle_journalled_deletes(
         &self,
@@ -2986,8 +3000,9 @@ where
         journalled_now: &[NodeId],
         budget: &mut JournalBudget,
     ) {
+        let mut mine = budget.share();
         for (key, scope_root, target) in journalled_keys(owner, staged) {
-            if budget.replays == 0 {
+            if mine == 0 {
                 break;
             }
             // Another scope's entry is that scope's to settle: its names derive
@@ -3011,6 +3026,7 @@ where
                 continue;
             };
             budget.replays -= 1;
+            mine -= 1;
             let settle = match self.converged_tick.get() {
                 true => Settle::Decide(&mut budget.proofs),
                 false => Settle::Hold,
@@ -7053,6 +7069,29 @@ mod tests {
             ),
             Halt::Permanent(DeadLetterReason::PayloadRefused),
             "an address no request could carry is the one client-side certainty"
+        );
+    }
+
+    /// A tick settling many scopes gives each of them a share of its replay
+    /// slots: settled first, one scope's backlog would otherwise take them all
+    /// and leave the reclamations of the scopes behind it pending.
+    #[test]
+    fn a_tick_shares_its_journal_replays_across_the_scopes_it_settles() {
+        assert_eq!(
+            JournalBudget::new(1).share(),
+            MAX_JOURNAL_REPLAYS,
+            "one scope may spend the whole tick's slots"
+        );
+        let mut four = JournalBudget::new(4);
+        assert!(
+            four.share() < MAX_JOURNAL_REPLAYS && four.share() * 4 >= MAX_JOURNAL_REPLAYS,
+            "four scopes divide them, and every slot is reachable"
+        );
+        four.replays = 1;
+        assert_eq!(
+            four.share(),
+            1,
+            "no scope takes more than the tick has left"
         );
     }
 

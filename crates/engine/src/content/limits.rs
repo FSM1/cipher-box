@@ -146,7 +146,8 @@ pub(crate) const fn resealable_root_rest_bytes(committed_grants: usize) -> usize
 /// refuses a create the author would take, and a root over its own tighter
 /// budget still meets [`AuthorError::ScopeRootNotResealable`].
 ///
-/// [`AuthorError::ScopeRootNotResealable`]: crate::net::AuthorError::ScopeRootNotResealable
+/// [`AuthorError::ScopeRootNotResealable`]:
+///     crate::net::author::AuthorError::ScopeRootNotResealable
 pub(crate) const fn folder_listing_budget(is_scope_root: bool) -> usize {
     if is_scope_root {
         MAX_READ_SEALED_BYTES - resealable_section_bytes(0)

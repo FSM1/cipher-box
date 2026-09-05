@@ -3877,34 +3877,6 @@ where
             root,
         } = source;
         rewrite_child_names(&mut read_body, &node.child_names)?;
-        // The carry runs before the record moves: a resume skips a node already
-        // at its new name, so a batch left for after the publish would be one a
-        // restart never sends, and the retire that follows drops the old name's
-        // rows either way. Every batch but the last goes out on its own; the
-        // last rides the record's own registration.
-        let versions = moved_versions(&read_body);
-        let mut content_cids = Vec::new();
-        let mut resume = Some(0usize);
-        while let Some(from) = resume {
-            let (batch, next) = self.moved_content_batch(versions, from).await;
-            match next {
-                Some(_) => {
-                    register(
-                        self.api,
-                        &[NameRegistration {
-                            ipns_name: node.new_name.as_str().to_owned(),
-                            head_cid: None,
-                            content_cids: batch,
-                        }],
-                    )
-                    .await
-                    .map_err(|_| WritePublishError::NotLanded)?;
-                }
-                None => content_cids = batch,
-            }
-            resume = next;
-        }
-
         // `read_epoch` is the enumeration's envelope epoch, carried across the
         // whole subtree since a name wave cuts no read key — so a read rotation
         // adopted mid-wave leaves every record below the live floor. The
@@ -3994,6 +3966,35 @@ where
         // authored: re-authoring the same inputs reaches it again (rule 6).
         let preflighted =
             preflight(&binding, &read_key, &head).map_err(|_| WritePublishError::Rejected)?;
+
+        // The carry runs here: after every check that can still refuse this
+        // move, so a refused one leaves no rows under a name it never
+        // published, and before the record itself, because a resumed wave skips
+        // a node already at its new name. Every batch but the last goes out on
+        // its own; the last rides the record's own registration.
+        let versions = moved_versions(&read_body);
+        let mut content_cids = Vec::new();
+        let mut resume = Some(0usize);
+        while let Some(from) = resume {
+            let (batch, next) = self.moved_content_batch(versions, from).await;
+            match next {
+                Some(_) => {
+                    register(
+                        self.api,
+                        &[NameRegistration {
+                            ipns_name: node.new_name.as_str().to_owned(),
+                            head_cid: None,
+                            content_cids: batch,
+                        }],
+                    )
+                    .await
+                    .map_err(|_| WritePublishError::NotLanded)?;
+                }
+                None => content_cids = batch,
+            }
+            resume = next;
+        }
+
         let receipt = publish_record(
             self.transport,
             self.api,
@@ -8505,6 +8506,48 @@ mod tests {
             .iter()
             .filter(|request| request.url.ends_with("/registry/register"))
             .count()
+    }
+
+    /// A move the read floor refuses is one no name ever publishes, so its
+    /// carry must leave no rows behind: registry rows under a name nothing
+    /// names are rows no retire of this wave ever reaches.
+    #[test]
+    fn a_move_the_floor_refuses_registers_nothing_under_the_name_it_never_takes() {
+        let harness = Harness::plain();
+        let (first, _) = served_version(&harness, 3, MOVED_CONTENT_BATCH_CIDS);
+        let (second, _) = served_version(&harness, 4, 1);
+
+        let node_id = [0x10; 16];
+        let body = ReadBody::File {
+            created_at: 0,
+            modified_at: 0,
+            versions: vec![first, second],
+            unknown: PreservedFields::new(),
+        };
+        let old_name = stage_node(&harness, node_id, &body);
+        block_on(
+            harness
+                .floors
+                .raise_epoch_floor(&SCOPE, OWNER_ROOT_EPOCH + 1),
+        )
+        .expect("the read floor raises above the record the wave carries");
+
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+        let moved = order(node_id, &old_name, BTreeMap::new(), false);
+        assert_eq!(
+            block_on(net.republish(&moved)),
+            Err(WritePublishError::Rejected),
+            "a record below the live read floor is not republished"
+        );
+
+        assert_eq!(
+            registered_content_cids(&harness, &moved.new_name),
+            Vec::<String>::new(),
+            "and its carry left no content edge under the name it never took"
+        );
     }
 
     #[test]
