@@ -2283,7 +2283,30 @@ impl EngineView {
     }
 }
 
-/// Classify a relocation's scope crossing at journal time, from **both** ends.
+/// How one relocation reaches the destination scope: as the single op the
+/// caller asked for, or as the two legs a crossing between two interior scopes
+/// takes through the vault-root scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelocationPlan {
+    /// One op, carrying the crossing it makes.
+    Direct(ScopeCrossing),
+    /// Two ops: park the subtree in the vault-root scope, then bring it into
+    /// the destination scope. One drain pass anchors on the vault root and
+    /// carries one interior end beside it, so a crossing between two interior
+    /// scopes names an end no pass holds — while each of these legs has the
+    /// vault root at one end ([`ScopeCrossing`]).
+    Staged,
+}
+
+impl RelocationPlan {
+    /// Whether the relocation stays inside one scope, and so re-seals nothing
+    /// and cuts nothing.
+    fn is_intra(self) -> bool {
+        self == Self::Direct(ScopeCrossing::Intra)
+    }
+}
+
+/// Plan a relocation's scope crossing at journal time, from **both** ends.
 ///
 /// A destination the render does not hold is [`EngineError::UnknownNode`] — the
 /// same verdict [`Engine::snapshot`] gives it, so a host reads one answer for a
@@ -2310,13 +2333,13 @@ impl EngineView {
 /// empty costs a rotation nobody needed rather than leaving a live seed out.
 ///
 /// The known set, never the set a pass can seal under
-/// ([`ReplayScopes`](crate::sync::rebase::ReplayScopes)).
+/// ([`replay`](crate::sync::rebase::replay)).
 fn classify_crossing(
     rendered: &Snapshot,
     from_parent: NodeId,
     new_parent: NodeId,
     scope_roots: &[NodeId],
-) -> Result<ScopeCrossing, EngineError> {
+) -> Result<RelocationPlan, EngineError> {
     if !rendered.contains(new_parent) {
         return Err(EngineError::UnknownNode);
     }
@@ -2328,24 +2351,16 @@ fn classify_crossing(
     let source = scope_of(rendered, from_parent, scope_roots);
     let destination = scope_of(rendered, new_parent, scope_roots);
     if source == destination {
-        return Ok(ScopeCrossing::Intra);
+        return Ok(RelocationPlan::Direct(ScopeCrossing::Intra));
     }
-    // One drain pass anchors on the vault root and carries one interior end
-    // beside it, so a crossing between two interior scopes has no pass that can
-    // author it. Refused where the caller is still there to be told, rather than
-    // journaled as an op the drain could only stall on.
     if source != rendered.root && destination != rendered.root {
-        return Err(EngineError::ScopeExitRefused {
-            message: "it crosses from one shared folder straight into another, which needs a \
-                      re-seal this session cannot author"
-                .to_owned(),
-        });
+        return Ok(RelocationPlan::Staged);
     }
-    Ok(if source == rendered.root {
+    Ok(RelocationPlan::Direct(if source == rendered.root {
         ScopeCrossing::Cross
     } else {
         ScopeCrossing::ExitsGrantedSource
-    })
+    }))
 }
 
 /// Refuse a crossing whose moved subtree holds a scope root.
@@ -2364,10 +2379,10 @@ fn classify_crossing(
 fn refuse_moving_a_scope_root(
     rendered: &Snapshot,
     node: NodeId,
-    crossing: ScopeCrossing,
+    plan: RelocationPlan,
     scope_roots: &[NodeId],
 ) -> Result<(), EngineError> {
-    if crossing == ScopeCrossing::Intra {
+    if plan.is_intra() {
         return Ok(());
     }
     if scope_roots
@@ -2381,6 +2396,57 @@ fn refuse_moving_a_scope_root(
         });
     }
     Ok(())
+}
+
+/// Refuse a staged relocation the vault root has no room to park.
+///
+/// The parking leg links the subtree into the vault root ([`relocation_legs`]),
+/// so that folder is held to the ceiling the destination is held to, and at the
+/// boundary for the same reason: a queued op no re-author can shrink reports a
+/// failure where the remedy is to split the folder ([`refuse_full_parent`]).
+fn refuse_full_parking_folder(
+    rendered: &Snapshot,
+    node: NodeId,
+    plan: RelocationPlan,
+    scope_roots: &[NodeId],
+) -> Result<(), EngineError> {
+    if plan != RelocationPlan::Staged {
+        return Ok(());
+    }
+    refuse_full_parent(rendered, rendered.root, Some(node), None, scope_roots)
+}
+
+/// The ops one relocation journals: the arriving op alone, or a parking leg
+/// into the vault-root scope ahead of it ([`RelocationPlan::Staged`]).
+///
+/// The parking leg leaves the granted source, so it carries the cut the whole
+/// relocation owes and the arriving leg carries none: the source scope is cut
+/// exactly once, by the leg that took the subtree out of it (blueprint/engine.md
+/// "Sync core: Ops"). `arrive` takes the parent the arriving leg starts from,
+/// because a staged one starts at the parking folder rather than at the source.
+fn relocation_legs(
+    plan: RelocationPlan,
+    node: NodeId,
+    from_parent: NodeId,
+    via: NodeId,
+    base_sequence: u64,
+    authored_at: UnixMillis,
+    arrive: impl FnOnce(NodeId, ScopeCrossing) -> Op,
+) -> (Option<Op>, Op) {
+    match plan {
+        RelocationPlan::Direct(crossing) => (None, arrive(from_parent, crossing)),
+        RelocationPlan::Staged => (
+            Some(Op::relink(
+                node,
+                from_parent,
+                via,
+                base_sequence,
+                authored_at,
+                ScopeCrossing::ExitsGrantedSource,
+            )),
+            arrive(via, ScopeCrossing::Cross),
+        ),
+    }
 }
 
 /// The scope `node` belongs to, named by its root. The render root is the
@@ -6145,7 +6211,7 @@ where {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
-                let (from_parent, base_sequence, crossing) =
+                let (from_parent, base_sequence, plan) =
                     self.relocation_anchors(&rendered, node, new_parent)?;
                 refuse_full_parent(
                     &rendered,
@@ -6154,15 +6220,25 @@ where {
                     None,
                     &self.authored_scope_roots(),
                 )?;
-                let op = Op::relink(
+                let (park, arrive) = relocation_legs(
+                    plan,
                     node,
                     from_parent,
-                    new_parent,
+                    rendered.root,
                     base_sequence,
                     authored_at,
-                    crossing,
+                    |starts_at, crossing| {
+                        Op::relink(
+                            node,
+                            starts_at,
+                            new_parent,
+                            base_sequence,
+                            authored_at,
+                            crossing,
+                        )
+                    },
                 );
-                self.stage_and_notify(&op).await
+                self.stage_relocation(park.as_ref(), &arrive).await
             }
             Command::Move {
                 node,
@@ -6172,7 +6248,7 @@ where {
             } => {
                 refuse_unlawful_name(&new_name)?;
                 let rendered = self.render().await?;
-                let (from_parent, base_sequence, crossing) =
+                let (from_parent, base_sequence, plan) =
                     self.relocation_anchors(&rendered, node, new_parent)?;
                 refuse_full_parent(
                     &rendered,
@@ -6188,17 +6264,27 @@ where {
                     // move auto-suffixes off the name it could not free.
                     sequence: rendered.record_sequence(replaced).unwrap_or(1),
                 });
-                let op = Op::move_node(
+                let (park, arrive) = relocation_legs(
+                    plan,
                     node,
                     from_parent,
-                    new_parent,
-                    new_name,
-                    replacing,
+                    rendered.root,
                     base_sequence,
                     authored_at,
-                    crossing,
+                    |starts_at, crossing| {
+                        Op::move_node(
+                            node,
+                            starts_at,
+                            new_parent,
+                            new_name,
+                            replacing,
+                            base_sequence,
+                            authored_at,
+                            crossing,
+                        )
+                    },
                 );
-                self.stage_and_notify(&op).await
+                self.stage_relocation(park.as_ref(), &arrive).await
             }
             Command::CancelUpload { op_id } => self
                 .cancel_upload(op_id)
@@ -9534,7 +9620,7 @@ where {
     }
 
     /// What a relocation op anchors on: the source parent, the target's base
-    /// sequence, and the crossing ([`classify_crossing`]).
+    /// sequence, and the plan it publishes under ([`classify_crossing`]).
     ///
     /// A target with no source parent is refused rather than anchored on the
     /// vault root. A relocation is the one op whose meaning depends on where
@@ -9546,7 +9632,7 @@ where {
         rendered: &Snapshot,
         node: NodeId,
         new_parent: NodeId,
-    ) -> Result<(NodeId, u64, ScopeCrossing), EngineError> {
+    ) -> Result<(NodeId, u64, RelocationPlan), EngineError> {
         if self.boundary_walk_rejected.get() {
             return Err(EngineError::TrustViolation {
                 message: "a scope root below this vault failed the adoption gate, so this \
@@ -9567,13 +9653,47 @@ where {
             });
         };
         let scope_roots = self.relocation_scope_roots();
-        let crossing = classify_crossing(rendered, from_parent, new_parent, &scope_roots)?;
-        refuse_moving_a_scope_root(rendered, node, crossing, &scope_roots)?;
+        let plan = classify_crossing(rendered, from_parent, new_parent, &scope_roots)?;
+        refuse_moving_a_scope_root(rendered, node, plan, &scope_roots)?;
+        refuse_full_parking_folder(rendered, node, plan, &self.authored_scope_roots())?;
         Ok((
             from_parent,
             rendered.record_sequence(node).unwrap_or(1),
-            crossing,
+            plan,
         ))
+    }
+
+    /// Journal the legs of one relocation, in order, and report the id of the
+    /// last — the op whose publish completes the command.
+    ///
+    /// A leg that will not journal takes the leg before it back off the queue:
+    /// a staged crossing left half-journaled would park the subtree in the
+    /// vault-root scope, which is neither the move the caller asked for nor the
+    /// failure they were told about.
+    async fn stage_relocation(
+        &mut self,
+        park: Option<&Op>,
+        arrive: &Op,
+    ) -> Result<CommandOutcome, EngineError> {
+        let parked = match park {
+            Some(op) => Some(
+                stage_op(&self.seams.staging_store, self.record_seal()?, op)
+                    .await
+                    .map_err(EngineError::from_seam)?,
+            ),
+            None => None,
+        };
+        let staged = stage_op(&self.seams.staging_store, self.record_seal()?, arrive).await;
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        match staged {
+            Ok(op_id) => Ok(CommandOutcome::Queued { op_id }),
+            Err(error) => {
+                if let Some(op_id) = parked {
+                    self.dequeue_op(op_id).await?;
+                }
+                Err(EngineError::from_seam(error))
+            }
+        }
     }
 
     /// The version a new write of `node` follows — the conditional-edit anchor
@@ -10496,11 +10616,11 @@ mod tests {
         let none: [NodeId; 0] = [];
         assert_eq!(
             classify_crossing(&rendered, root, root, &none),
-            Ok(ScopeCrossing::Intra)
+            Ok(RelocationPlan::Direct(ScopeCrossing::Intra))
         );
         assert_eq!(
             classify_crossing(&rendered, root, inside, &none),
-            Ok(ScopeCrossing::Intra)
+            Ok(RelocationPlan::Direct(ScopeCrossing::Intra))
         );
         assert!(matches!(
             classify_crossing(&rendered, root, NodeId([9; 16]), &none),
@@ -10557,7 +10677,7 @@ mod tests {
         ] {
             assert_eq!(
                 classify_crossing(&rendered, from_parent, new_parent, &roots),
-                Ok(crossing),
+                Ok(RelocationPlan::Direct(crossing)),
                 "{why}"
             );
         }
@@ -10571,7 +10691,7 @@ mod tests {
         ] {
             assert_eq!(
                 classify_crossing(&rendered, from_parent, new_parent, &roots),
-                Ok(ScopeCrossing::Intra),
+                Ok(RelocationPlan::Direct(ScopeCrossing::Intra)),
                 "{why}"
             );
         }
@@ -10579,10 +10699,10 @@ mod tests {
 
     /// One drain pass anchors on the vault root and carries one interior end
     /// beside it, so a crossing between two interior scopes has no pass that can
-    /// author it. Refused at the command, where the caller is still there to be
-    /// told, rather than journaled as an op that could only stall.
+    /// author it in one leg. It is planned as two, through the vault-root scope,
+    /// each of which has the vault root at one end.
     #[test]
-    fn a_relocation_between_two_shared_folders_is_refused() {
+    fn a_relocation_between_two_shared_folders_is_staged_through_the_vault_root() {
         let root = NodeId([1; 16]);
         let (first, second) = (NodeId([2; 16]), NodeId([3; 16]));
         let inside_first = NodeId([4; 16]);
@@ -10600,17 +10720,15 @@ mod tests {
             (first, second, "one shared folder straight into another"),
             (inside_first, second, "and the same at depth"),
         ] {
-            assert!(
-                matches!(
-                    classify_crossing(&rendered, from_parent, new_parent, &[first, second]),
-                    Err(EngineError::ScopeExitRefused { .. })
-                ),
+            assert_eq!(
+                classify_crossing(&rendered, from_parent, new_parent, &[first, second]),
+                Ok(RelocationPlan::Staged),
                 "{why}"
             );
         }
         assert_eq!(
             classify_crossing(&rendered, inside_first, root, &[first, second]),
-            Ok(ScopeCrossing::ExitsGrantedSource),
+            Ok(RelocationPlan::Direct(ScopeCrossing::ExitsGrantedSource)),
             "while a crossing one end of which is the vault root is authorable"
         );
     }
@@ -10640,27 +10758,26 @@ mod tests {
             (granted, "the scope root itself"),
             (box_folder, "and a subtree that holds one at depth"),
         ] {
-            assert!(
-                matches!(
-                    refuse_moving_a_scope_root(
-                        &rendered,
-                        node,
-                        ScopeCrossing::ExitsGrantedSource,
-                        &roots
+            for plan in [
+                RelocationPlan::Direct(ScopeCrossing::ExitsGrantedSource),
+                RelocationPlan::Direct(ScopeCrossing::Cross),
+                RelocationPlan::Staged,
+            ] {
+                assert!(
+                    matches!(
+                        refuse_moving_a_scope_root(&rendered, node, plan, &roots),
+                        Err(EngineError::ScopeExitRefused { .. })
                     ),
-                    Err(EngineError::ScopeExitRefused { .. })
-                ),
-                "{why}"
-            );
-            assert!(
-                matches!(
-                    refuse_moving_a_scope_root(&rendered, node, ScopeCrossing::Cross, &roots),
-                    Err(EngineError::ScopeExitRefused { .. })
-                ),
-                "{why}, whichever end of the crossing the vault root is"
-            );
+                    "{why}, whichever ends the crossing has"
+                );
+            }
             assert_eq!(
-                refuse_moving_a_scope_root(&rendered, node, ScopeCrossing::Intra, &roots),
+                refuse_moving_a_scope_root(
+                    &rendered,
+                    node,
+                    RelocationPlan::Direct(ScopeCrossing::Intra),
+                    &roots
+                ),
                 Ok(()),
                 "{why}, but an intra-scope move changes no scope parentage"
             );
@@ -10674,7 +10791,12 @@ mod tests {
             (beside, "a scope root beside the subtree is not carried"),
         ] {
             assert_eq!(
-                refuse_moving_a_scope_root(&rendered, node, ScopeCrossing::Cross, &roots),
+                refuse_moving_a_scope_root(
+                    &rendered,
+                    node,
+                    RelocationPlan::Direct(ScopeCrossing::Cross),
+                    &roots
+                ),
                 Ok(()),
                 "{why}"
             );
@@ -12033,6 +12155,49 @@ mod tests {
             refuse_full_parent(&rendered, root, None, None, &scope_roots),
             full,
             "the vault root is a scope root no set has to name"
+        );
+    }
+
+    /// A staged crossing parks the subtree in the vault root on its way, so a
+    /// vault root with no room refuses the move where the member is still there
+    /// to be told the folder is full.
+    #[test]
+    fn a_staged_crossing_is_refused_when_the_vault_root_cannot_park_it() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let (first, second, moving) = (NodeId([2; 16]), NodeId([3; 16]), NodeId([4; 16]));
+        for (parent, node, name) in [
+            (root, first, "one"),
+            (root, second, "two"),
+            (first, moving, "moving"),
+        ] {
+            rendered.upsert_node(NodeMeta::new(node, name, NodeKind::Folder));
+            rendered.link(parent, node, 1);
+        }
+        let scope_roots = [first, second];
+
+        assert_eq!(
+            refuse_full_parking_folder(&rendered, moving, RelocationPlan::Staged, &scope_roots),
+            Ok(()),
+            "a vault root with room takes the parked subtree"
+        );
+        ballast(&mut rendered, root, 12, folder_listing_budget(true));
+        assert_eq!(
+            refuse_full_parking_folder(&rendered, moving, RelocationPlan::Staged, &scope_roots),
+            Err(EngineError::MalformedInput {
+                check: "folder-child-ceiling",
+            }),
+            "and one with none refuses the whole move"
+        );
+        assert_eq!(
+            refuse_full_parking_folder(
+                &rendered,
+                moving,
+                RelocationPlan::Direct(ScopeCrossing::Cross),
+                &scope_roots
+            ),
+            Ok(()),
+            "while a relocation that parks nothing is not held to it"
         );
     }
 

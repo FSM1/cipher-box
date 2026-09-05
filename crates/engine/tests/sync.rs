@@ -32,8 +32,8 @@ use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{open_repoint, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     self, Connectivity, DeadLetterReason, DropReason, NewNode, Op, OpResolution, PointerFetch,
-    PointerRecord, RecordReader, RecordSeal, ReplayScopes, ScopeCrossing, SessionRole, Snapshot,
-    StagedContent, apply_repairs, classify, decode_queue, observed_repair, rebase_one, replay,
+    PointerRecord, RecordReader, RecordSeal, ScopeCrossing, SessionRole, Snapshot, StagedContent,
+    apply_repairs, classify, decode_queue, observed_repair, rebase_one, replay,
     resolve_vault_pointer, stage_op, withheld_escalation,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryFloorStore, InMemoryStagingStore};
@@ -80,15 +80,6 @@ fn id(b: u8) -> NodeId {
 /// The one scope root these fixtures hang under — the full-depth scope-exit
 /// walk resolves against it.
 const SCOPE_ROOTS: &[NodeId] = &[NodeId([0; 16])];
-
-/// The vault root is the scope every replay in this suite publishes under, and
-/// it heads each root list beside the boundaries the session knows.
-fn replay_scopes(roots: &[NodeId]) -> ReplayScopes<'_> {
-    ReplayScopes {
-        roots,
-        anchor: roots[0],
-    }
-}
 
 fn with_child(snap: &mut Snapshot, parent: NodeId, node: NodeId, name: &str, kind: NodeKind) {
     snap.upsert_node(NodeMeta::new(node, name, kind));
@@ -313,7 +304,7 @@ fn offline_queue_replays_fifo_onto_gate_passing_state() {
         assert_eq!(scan.retained, 0);
 
         let base = Snapshot::new(id(0));
-        let report = replay(&base, &base, &scan.mine, replay_scopes(SCOPE_ROOTS));
+        let report = replay(&base, &base, &scan.mine, SCOPE_ROOTS);
 
         assert_eq!(report.applied.len(), 3, "every op replayed in FIFO order");
         assert_eq!(report.rebased.node(id(1)).unwrap().name(), "notes-v2.txt");
@@ -359,12 +350,7 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         let gate_passing = Snapshot::new(id(0)); // no id(5)
         let raw = store.queued_ops().await.unwrap();
         let scan = decode_queue(&RecordReader::new(&me), &raw);
-        let report = replay(
-            &gate_passing,
-            &gate_passing,
-            &scan.mine,
-            replay_scopes(SCOPE_ROOTS),
-        );
+        let report = replay(&gate_passing, &gate_passing, &scan.mine, SCOPE_ROOTS);
 
         // The op terminally dead-letters — nothing silently dropped.
         assert_eq!(report.applied.len(), 0);
@@ -784,7 +770,7 @@ fn exits_of(
         for (target, parent) in placements {
             with_child(&mut base, *parent, *target, "m.txt", NodeKind::File);
         }
-        let report = replay(&base, &base, &scan.mine, replay_scopes(GRANTED_ROOTS));
+        let report = replay(&base, &base, &scan.mine, GRANTED_ROOTS);
         let triggers = report.scope_exit_triggers.clone();
         let cut = consume_scope_exit_triggers(rotator, &triggers).await;
         (triggers, cut)
@@ -903,7 +889,7 @@ fn create_delete_rename_and_content_edits_rotate_nothing() {
             op.scope_exit_source().is_none(),
             "{label} carries no scope crossing"
         );
-        let report = replay(&base, &base, &[(OpId(1), op)], replay_scopes(GRANTED_ROOTS));
+        let report = replay(&base, &base, &[(OpId(1), op)], GRANTED_ROOTS);
         assert!(
             report.scope_exit_triggers.is_empty(),
             "{label} queues no scope-exit trigger"

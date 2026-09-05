@@ -97,7 +97,7 @@ use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::{UnlinkedChild, project_child_version, project_folder};
 use crate::sync::rebase::{
-    AppliedOp, DeadLetterReason, ReplayScopes, decode_queue, enclosing_scope_root, replay,
+    AppliedOp, DeadLetterReason, decode_queue, enclosing_scope_root, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
@@ -780,8 +780,8 @@ impl<'a> DrainScope<'a> {
     /// A second end that is not a listed boundary is the other half of that: a
     /// node under it resolves onto the enclosing scope for every walk that asks,
     /// so the pass would name it here and seal it there. The two sets answer
-    /// different questions ([`ReplayScopes`](crate::sync::rebase::ReplayScopes))
-    /// and this is the law that ties them.
+    /// different questions ([`replay`](crate::sync::rebase::replay)) and this is
+    /// the law that ties them.
     ///
     /// Charged, both of them: this build assembled the pair, and no later read
     /// changes it.
@@ -1581,15 +1581,7 @@ where
             let base = self.base.borrow();
             let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
             let local = apply_overlay(&base, &ops);
-            replay(
-                &base,
-                &local,
-                queued,
-                ReplayScopes {
-                    roots: scope.scope_roots,
-                    anchor: scope.source.root,
-                },
-            )
+            replay(&base, &local, queued, scope.scope_roots)
         };
         for (op_id, reason) in &rebased.dead_letters {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
@@ -3931,10 +3923,18 @@ where
 
         // A crossing this pass carries no second end for is one it cannot
         // author, and the chain walk below would stall uncharged on the scope
-        // root it cannot load. Charged here instead: a member watching a move
-        // that will never publish has to read a dead letter, not a fresh vault.
+        // root it cannot load. Charged on the pass that holds the tick's
+        // identity-wide charge, which is the vault root's own whenever it runs:
+        // a member watching a move that will never publish has to read a dead
+        // letter, not a fresh vault. Every other pass leaves the op where it
+        // is, because the pass that can carry a second end is not this one
+        // ([`halt_below_another_scope_root`]).
         if !matches!(crossing, ScopeCrossing::Intra) && scope.second_end()?.is_none() {
-            return Err(Halt::UploadAttempt);
+            return Err(if scope.charges_the_identity {
+                Halt::UploadAttempt
+            } else {
+                Halt::Unclassified
+            });
         }
         let source_plane = self.ensure_folder(scope, pass, source).await?;
         let dest_plane = self.ensure_folder(scope, pass, dest).await?;

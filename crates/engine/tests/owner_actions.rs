@@ -2054,11 +2054,11 @@ fn an_unavailable_descendant_keeps_the_retry_and_refuses_nothing() {
 
 /// The proved-descent half of the boundary set, end to end: a session that
 /// minted no grant walks two levels through the production wiring, renders into
-/// the deeper scope, and refuses a move between two shared folders — the
-/// refusal the minted half alone cannot reach, because this session minted
-/// nothing.
+/// the deeper scope, and plans a move between two shared folders off boundaries
+/// it only walked — the classification the minted half alone cannot reach,
+/// because this session minted nothing.
 #[test]
-fn a_session_that_minted_nothing_refuses_a_move_between_two_walked_scopes() {
+fn a_session_that_minted_nothing_plans_a_move_between_two_walked_scopes() {
     let mut fx = GrantScenario::new();
     let holiday = create_published_folder(
         &fx.world,
@@ -2106,9 +2106,19 @@ fn a_session_that_minted_nothing_refuses_a_move_between_two_walked_scopes() {
                 node: deep,
                 new_parent: holiday,
             })),
-            Err(EngineError::ScopeExitRefused { .. })
+            Ok(CommandOutcome::Queued { .. })
         ),
-        "and a move into the scope above it needs a re-seal no pass can author"
+        "and a move into the scope above it journals its legs"
+    );
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![
+            ScopeCrossing::Intra,
+            ScopeCrossing::ExitsGrantedSource,
+            ScopeCrossing::Cross,
+        ],
+        "as the two legs the walked boundaries make it, behind the move that \
+         crossed nothing: out of the deeper scope, then into the one above"
     );
 }
 
@@ -2668,6 +2678,239 @@ fn a_move_into_a_granted_folder_re_seals_and_cuts_nothing() {
         published_read_epoch(&fx.world, &fx.blocks, ROOT),
         before,
         "and the source scope, which grants nobody, was not cut"
+    );
+}
+
+/// Two granted sibling folders and a node inside the first, ready to move. The
+/// mint leaves the node sealed under the scope it left, so it converges onto
+/// the enclosing scope before the move reads it.
+fn two_granted_folders(fx: &mut GrantScenario, name: &str) -> (NodeId, NodeId) {
+    let moving =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, name);
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    converge_into_granted_scope(fx, moving);
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: album,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done),
+        "the second folder is granted too, so both ends are interior scopes"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    (moving, album)
+}
+
+/// A move from one shared folder straight into another, end to end. One drain
+/// pass carries the vault root and one interior end, so the command journals
+/// two legs and the drain publishes one a tick: out of the granted source into
+/// the vault-root scope, then into the destination scope. The subtree lands
+/// bound to the destination scope at that scope's epoch, and the granted source
+/// is cut once — by the leg that left it.
+#[test]
+fn a_move_between_two_granted_folders_re_seals_into_the_destination_scope() {
+    let mut fx = GrantScenario::new();
+    let (holiday, album) = two_granted_folders(&mut fx, "holiday");
+    let source_before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    let destination_before = published_read_epoch(&fx.world, &fx.blocks, album);
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move between two shared folders is no longer refused");
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::ExitsGrantedSource, ScopeCrossing::Cross],
+        "as two legs, the first of which owes the cut the whole move owes"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let (vault_scope, vault_epoch, vault_opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &node_read_key(&READ_SCOPE_SEED, holiday),
+    );
+    assert_eq!(
+        (vault_scope, vault_opened.is_some()),
+        (ROOT.0, true),
+        "the first leg parked the subtree in the vault-root scope"
+    );
+    assert_eq!(
+        vault_epoch,
+        published_read_epoch(&fx.world, &fx.blocks, ROOT),
+        "at that scope's own epoch"
+    );
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "and the second leg published, leaving no leg queued"
+    );
+    let (album_seed, album_epoch) = scope_material_of(&fx.world, &fx.blocks, album);
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &node_read_key(&album_seed, holiday),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (album.0, album_epoch, true),
+        "the subtree binds the destination scope, at that scope's epoch"
+    );
+    assert!(
+        names_child(
+            &published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(album),
+                &node_read_key(&album_seed, album),
+            )
+            .2,
+            holiday,
+        ),
+        "the destination scope root names it"
+    );
+    let (source_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    assert!(
+        !names_child(
+            &published_seal(
+                &fx.world,
+                &fx.blocks,
+                &write_name(fx.folder),
+                &node_read_key(&source_seed, fx.folder),
+            )
+            .2,
+            holiday,
+        ),
+        "and the source scope root no longer does"
+    );
+    assert_eq!(
+        (
+            published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+            published_read_epoch(&fx.world, &fx.blocks, album),
+        ),
+        (source_before + 1, destination_before),
+        "the granted source was cut exactly once, and the destination not at all"
+    );
+    assert_eq!(
+        block_on(floor::read_epoch_floor(
+            &fx.owner_device.floors(&SECRET),
+            &fx.folder.0
+        )),
+        Ok(Some(source_before + 1)),
+        "which raised the durable read-epoch floor of the scope the move left"
+    );
+}
+
+/// The legs are two durable ops, so a restart between them resumes at the one
+/// still queued. The cut belongs to the leg that already published, and the
+/// debt it settled is durable: the resumed leg publishes the arrival and cuts
+/// nothing a second time.
+#[test]
+fn a_restart_between_the_legs_of_a_staged_move_cuts_the_source_once() {
+    let mut fx = GrantScenario::new();
+    let (holiday, album) = two_granted_folders(&mut fx, "holiday");
+    let source_before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("a move between two shared folders is no longer refused");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Cross],
+        "the first leg published, leaving the arriving one queued"
+    );
+
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        source_before + 1,
+        "and cut the scope it left"
+    );
+
+    // What the ended session left spawned dies with it, as it would in a crash.
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let (restarted, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &restarted, &mut tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the restarted session drained the leg the crash left"
+    );
+    let (album_seed, album_epoch) = scope_material_of(&fx.world, &fx.blocks, album);
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &node_read_key(&album_seed, holiday),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (album.0, album_epoch, true),
+        "the subtree binds the destination scope at that scope's epoch"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        source_before + 1,
+        "and the source scope carries the one cut its exit owed, not a second"
+    );
+}
+
+/// Every pass of a tick reads the whole queue, and a pass that carries no
+/// interior end can author no crossing. The arriving leg waits for the tick
+/// whose second end is its destination, so the passes it waits through leave it
+/// where it is: one that spent the attempt budget instead would dead-letter a
+/// move the next tick was about to publish.
+#[test]
+fn the_passes_that_cannot_author_a_staged_move_do_not_spend_it() {
+    let mut fx = GrantScenario::new();
+    let (holiday, album) = two_granted_folders(&mut fx, "holiday");
+    for name in ["one", "two", "three", "four"] {
+        let bystander =
+            create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, name);
+        assert_eq!(
+            block_on(fx.engine.command(Command::Grant {
+                node: bystander,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Read,
+            })),
+            Ok(CommandOutcome::Done),
+            "each bystander is a scope with a pass of its own"
+        );
+    }
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    block_on(fx.engine.command(Command::Relink {
+        node: holiday,
+        new_parent: album,
+    }))
+    .expect("the move journals its legs");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "both legs published"
+    );
+    let (album_seed, album_epoch) = scope_material_of(&fx.world, &fx.blocks, album);
+    let (scope, epoch, opened) = published_seal(
+        &fx.world,
+        &fx.blocks,
+        &write_name(holiday),
+        &node_read_key(&album_seed, holiday),
+    );
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (album.0, album_epoch, true),
+        "and the subtree arrived in the destination scope rather than dead-lettering"
     );
 }
 
