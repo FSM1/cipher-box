@@ -6079,13 +6079,7 @@ where {
                 refuse_unlawful_name(&name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, parent)?;
-                refuse_full_parent(
-                    &rendered,
-                    parent,
-                    None,
-                    None,
-                    &self.relocation_scope_roots(),
-                )?;
+                refuse_full_parent(&rendered, parent, None, None, &self.authored_scope_roots())?;
                 let target = self.mint_node_id()?;
                 let base_sequence = rendered.record_sequence(parent).unwrap_or(1);
                 let node = match kind {
@@ -6112,7 +6106,7 @@ where {
                     return Err(EngineError::RestoreTargetGone);
                 }
                 refuse_outside_vault(&rendered, into)?;
-                refuse_full_parent(&rendered, into, None, None, &self.relocation_scope_roots())?;
+                refuse_full_parent(&rendered, into, None, None, &self.authored_scope_roots())?;
                 let base_sequence = rendered.record_sequence(into).unwrap_or(1);
                 let op = Op::restore(
                     node,
@@ -6144,7 +6138,7 @@ where {
                     &rendered,
                     node,
                     &new_name,
-                    &self.relocation_scope_roots(),
+                    &self.authored_scope_roots(),
                 )?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::rename(node, new_name, seq, authored_at))
@@ -6159,7 +6153,7 @@ where {
                     new_parent,
                     Some(node),
                     None,
-                    &self.relocation_scope_roots(),
+                    &self.authored_scope_roots(),
                 )?;
                 let op = Op::relink(
                     node,
@@ -6186,7 +6180,7 @@ where {
                     new_parent,
                     Some(node),
                     replacing,
-                    &self.relocation_scope_roots(),
+                    &self.authored_scope_roots(),
                 )?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
@@ -8139,13 +8133,7 @@ where {
                 refuse_unlawful_name(name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, *parent)?;
-                refuse_full_parent(
-                    &rendered,
-                    *parent,
-                    None,
-                    None,
-                    &self.relocation_scope_roots(),
-                )?;
+                refuse_full_parent(&rendered, *parent, None, None, &self.authored_scope_roots())?;
                 None
             }
             WriteTarget::Version {
@@ -8445,7 +8433,7 @@ where {
                 *parent,
                 None,
                 None,
-                &self.relocation_scope_roots(),
+                &self.authored_scope_roots(),
             )?;
         }
         let finished = writer
@@ -9529,6 +9517,23 @@ where {
         roots.into_iter().collect()
     }
 
+    /// Every node this session knows publishes its record **as** a scope root:
+    /// the boundaries a relocation names, plus the roots of the shares this
+    /// vault received. Both author through `net::author::encode_scope_root`, so
+    /// both owe the re-seal reservation the boundary charges
+    /// ([`folder_listing_budget`]).
+    fn authored_scope_roots(&self) -> Vec<NodeId> {
+        let mut roots = self.relocation_scope_roots();
+        roots.extend(
+            self.bookmarked_scope_roots
+                .borrow()
+                .iter()
+                .copied()
+                .map(NodeId),
+        );
+        roots
+    }
+
     /// What a relocation op anchors on: the source parent, the target's base
     /// sequence, and the crossing ([`classify_crossing`]).
     ///
@@ -9830,13 +9835,7 @@ where {
                 )
             }
             OpKind::Create { parent, name, node } => {
-                refuse_full_parent(
-                    &rendered,
-                    *parent,
-                    None,
-                    None,
-                    &self.relocation_scope_roots(),
-                )?;
+                refuse_full_parent(&rendered, *parent, None, None, &self.authored_scope_roots())?;
                 Op::create(
                     self.mint_node_id()?,
                     *parent,
