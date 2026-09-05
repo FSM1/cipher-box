@@ -108,7 +108,7 @@ impl FakeDevice {
     /// raw read of the shared store finds none of the engine's own floors.
     pub fn floors(&self, secret: &[u8]) -> OwnerScopedFloorStore<InMemoryFloorStore> {
         let floors = OwnerScopedFloorStore::new(self.floor_store.clone());
-        floors.bind(&kdf::enc_subkey(secret));
+        floors.bind(&kdf::enc_subkey(secret), &kdf::contact_label_seed(secret));
         floors
     }
 

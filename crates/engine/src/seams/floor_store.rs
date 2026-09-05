@@ -1,6 +1,6 @@
 //! `FloorStore` — durable monotonic-max floors (blueprint/engine.md).
 
-use core::cell::Cell;
+use core::cell::RefCell;
 use std::borrow::Cow;
 use std::rc::Rc;
 
@@ -147,10 +147,17 @@ impl FloorRaise {
 /// scope id is the anchored all-zero id16 for **every** account, so the root
 /// scope's floors are exactly where two identities would land on one key.
 ///
-/// The tag is bound once, from the session the engine derives at
-/// [`start`](crate::facade::Engine::start). Every read and every raise before
-/// that refuses — a key read out of the wrong namespace answers "no floor",
-/// which is fail-open on the gate's epoch stage.
+/// Every sequence-namespace key takes the account's [`kdf::name_label`] before
+/// the tag, so the durable key is `ownerTag(32) ‖ nameLabel(32)` and names no
+/// record a reader of local storage could resolve (FSM1/cipher-box-next ADR
+/// 0016). The label is account-wide, not per-contact, so one name still keeps
+/// one sequence ratchet whichever view raises it. The epoch namespace keeps its
+/// plain key: a scope id is sealed body content, not a public name.
+///
+/// The tag and the label seed are bound once, from the session the engine
+/// derives at [`start`](crate::facade::Engine::start). Every read and every
+/// raise before that refuses — a key read out of the wrong namespace answers
+/// "no floor", which is fail-open on the gate's epoch stage.
 ///
 /// The prefix changes the durable key shape with no migration, under the
 /// greenfield rule: a device holding pre-cutover floors reads none of them back
@@ -161,7 +168,15 @@ pub struct OwnerScopedFloorStore<F> {
     inner: F,
     /// Shared across clones so the handles the spawned loops hold see the bind,
     /// whichever side of it they were cloned on.
-    tag: Rc<Cell<Option<[u8; OWNER_TAG_LEN]>>>,
+    bound: Rc<RefCell<Option<BoundIdentity>>>,
+}
+
+/// What one session's bind gives the view: the identity every key hangs under,
+/// and the seed every sequence key labels under. The seed zeroizes on drop, so
+/// a rebind wipes the session it replaces.
+struct BoundIdentity {
+    tag: [u8; OWNER_TAG_LEN],
+    label_seed: SecretBytes,
 }
 
 /// The fixed-width prefix [`OwnerScopedFloorStore`] puts on every key. Exposed
@@ -173,45 +188,62 @@ impl<F> OwnerScopedFloorStore<F> {
     pub fn new(inner: F) -> Self {
         Self {
             inner,
-            tag: Rc::new(Cell::new(None)),
+            bound: Rc::new(RefCell::new(None)),
         }
     }
 
-    /// Binds this view to the identity `enc_secret` belongs to. Called from
+    /// Binds this view to the identity `enc_secret` belongs to, and to the
+    /// account's `contact-label-seed`. Called from
     /// [`Engine::start`](crate::facade::Engine::start) and nowhere else: a
     /// start that bound and then failed its login rebinds on the retry, which
     /// is why this rebinds silently rather than refusing.
-    pub(crate) fn bind(&self, enc_secret: &X25519Secret) {
-        self.tag.set(Some(owner_tag(enc_secret)));
+    pub(crate) fn bind(&self, enc_secret: &X25519Secret, contact_label_seed: &SecretBytes) {
+        *self.bound.borrow_mut() = Some(BoundIdentity {
+            tag: owner_tag(enc_secret),
+            label_seed: contact_label_seed.clone(),
+        });
     }
 
-    /// `key` under the bound identity, or a refusal when none is bound.
-    fn scoped(&self, key: &[u8]) -> SeamResult<Vec<u8>> {
-        let Some(tag) = self.tag.get() else {
+    /// `key` under the bound identity, or a refusal when none is bound. A
+    /// sequence key takes its name label first, so what the store holds is
+    /// fixed-width in both namespaces and opaque in the sequence one.
+    fn scoped(&self, namespace: FloorNamespace, key: &[u8]) -> SeamResult<Vec<u8>> {
+        let bound = self.bound.borrow();
+        let Some(bound) = bound.as_ref() else {
             return Err(SeamError::new("floor_store: no identity is bound"));
         };
-        Ok(prefixed(&tag, key))
+        Ok(match namespace {
+            FloorNamespace::Epoch => prefixed(&bound.tag, key),
+            FloorNamespace::Sequence => prefixed(
+                &bound.tag,
+                &kdf::name_label(bound.label_seed.as_bytes(), key),
+            ),
+        })
     }
 }
 
 impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
     async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        self.inner.epoch_floor(&self.scoped(scope_id)?).await
+        self.inner
+            .epoch_floor(&self.scoped(FloorNamespace::Epoch, scope_id)?)
+            .await
     }
 
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
         self.inner
-            .raise_epoch_floor(&self.scoped(scope_id)?, epoch)
+            .raise_epoch_floor(&self.scoped(FloorNamespace::Epoch, scope_id)?, epoch)
             .await
     }
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        self.inner.sequence_floor(&self.scoped(ipns_name)?).await
+        self.inner
+            .sequence_floor(&self.scoped(FloorNamespace::Sequence, ipns_name)?)
+            .await
     }
 
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
         self.inner
-            .raise_sequence_floor(&self.scoped(ipns_name)?, sequence)
+            .raise_sequence_floor(&self.scoped(FloorNamespace::Sequence, ipns_name)?, sequence)
             .await
     }
 
@@ -223,7 +255,7 @@ impl<F: FloorStore> FloorStore for OwnerScopedFloorStore<F> {
             .map(|raise| {
                 Ok(FloorRaise {
                     namespace: raise.namespace,
-                    key: self.scoped(&raise.key)?,
+                    key: self.scoped(raise.namespace, &raise.key)?,
                     value: raise.value,
                 })
             })
@@ -290,9 +322,9 @@ impl ContactLabel {
 ///
 /// Sequence floors pass through unprefixed. An `ipnsName` is an Ed25519 public
 /// key, so no second authority can raise one it holds no signing key for, and
-/// one name keeps one ratchet whoever reads it. That is an authority argument,
-/// not a disclosure one: the key is unblinded, so the durable store still names
-/// every scope root this device holds a share for.
+/// one name keeps one ratchet whoever reads it. The disclosure that shape once
+/// carried is closed a layer in: [`OwnerScopedFloorStore`] labels every sequence
+/// key, and every sequence call passes that view.
 ///
 /// The prefix changes the durable key shape with no migration, exactly as
 /// [`OwnerScopedFloorStore`]'s does: a device holding pre-cutover floors for an
@@ -401,7 +433,7 @@ mod tests {
         secret: &[u8],
     ) -> OwnerScopedFloorStore<InMemoryFloorStore> {
         let view = OwnerScopedFloorStore::new(shared.clone());
-        view.bind(&kdf::enc_subkey(secret));
+        view.bind(&kdf::enc_subkey(secret), &kdf::contact_label_seed(secret));
         view
     }
 
@@ -504,20 +536,102 @@ mod tests {
         }
     }
 
+    /// The label is the account's, not the contact's, so the ratchet the sharer
+    /// view raises is the one the owner view reads — one name, one durable key.
     #[test]
     fn sequence_floors_stay_shared_across_sharers() {
         let store = InMemoryFloorStore::default();
-        let sharer = SharerScopedFloorStore::granted_by(&store, label([0x02; IDENTITY_PUBLIC_LEN]));
+        let owner = view(&store, &[7u8; 32]);
+        let sharer = SharerScopedFloorStore::granted_by(&owner, label([0x02; IDENTITY_PUBLIC_LEN]));
+        let other = SharerScopedFloorStore::granted_by(&owner, label([0x03; IDENTITY_PUBLIC_LEN]));
 
         block_on(sharer.raise_sequence_floor(NAME, 7)).expect("the floor raises");
         block_on(sharer.commit_floors(&[FloorRaise::sequence(NAME, 9)]))
             .expect("the batch commits");
 
         assert_eq!(
-            block_on(SharerScopedFloorStore::own(&store).sequence_floor(NAME)).expect("floor read"),
+            block_on(SharerScopedFloorStore::own(&owner).sequence_floor(NAME)).expect("floor read"),
             Some(9),
             "one name has one sequence ratchet, whoever reads it"
         );
+        assert_eq!(
+            block_on(other.sequence_floor(NAME)).expect("floor read"),
+            Some(9),
+            "a second granting contact reads that same ratchet"
+        );
+        assert_eq!(
+            block_on(owner.sequence_floor(NAME)).expect("floor read"),
+            Some(9),
+            "and so does the owner path, which raises the same name directly"
+        );
+        assert_eq!(
+            store.sequence_keys().len(),
+            1,
+            "three views of one name must hold one durable key, not three"
+        );
+    }
+
+    /// The at-rest disclosure ADR 0016 closes: no durable sequence key may carry
+    /// any run of the name it bars replay on, on the owner path or the sharer
+    /// path. The witness runs are short, so a key holding a truncated prefix of
+    /// a name fails this too.
+    #[test]
+    fn no_durable_sequence_key_names_the_record() {
+        const SHARED: &[u8] = b"k51-granted-scope-root";
+        const REVISION_MARK: &[u8] = b"bin-index-revision-mint/k51-scope-root-name";
+
+        let store = InMemoryFloorStore::default();
+        let owner = view(&store, &[7u8; 32]);
+        let sharer = SharerScopedFloorStore::granted_by(&owner, label([0x02; IDENTITY_PUBLIC_LEN]));
+
+        block_on(owner.raise_sequence_floor(NAME, 3)).expect("the floor raises");
+        block_on(sharer.raise_sequence_floor(SHARED, 4)).expect("the floor raises");
+        block_on(owner.commit_floors(&[FloorRaise::sequence(REVISION_MARK, 5)]))
+            .expect("the batch commits");
+
+        let keys = store.sequence_keys();
+        assert_eq!(keys.len(), 3, "the raises stored three keys to inspect");
+        for key in keys {
+            assert_eq!(
+                key.len(),
+                OWNER_TAG_LEN + SECRET_LEN,
+                "a durable sequence key is the owner tag and one label"
+            );
+            for name in [NAME, SHARED, REVISION_MARK] {
+                for run in name.windows(8) {
+                    assert!(
+                        !key.windows(run.len()).any(|w| w == run),
+                        "a durable sequence key carries part of the name it bars"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The owner's own settings and bin-index records key their revision marks
+    /// as a fixed prefix over the record name. The label takes the whole store
+    /// key, so a mark and the bare name land on distinct floors — one ratchet
+    /// must not bar the other.
+    #[test]
+    fn a_revision_mark_and_its_name_hold_distinct_floors() {
+        const MARK: &[u8] = b"settings-revision/k51-scope-root-name";
+
+        let store = InMemoryFloorStore::default();
+        let owner = view(&store, &[7u8; 32]);
+
+        block_on(owner.raise_sequence_floor(NAME, 4)).expect("the floor raises");
+        block_on(owner.raise_sequence_floor(MARK, 9)).expect("the floor raises");
+
+        assert_eq!(
+            block_on(owner.sequence_floor(NAME)).expect("floor read"),
+            Some(4),
+            "the mark's raise must not move the name's ratchet"
+        );
+        assert_eq!(
+            block_on(owner.sequence_floor(MARK)).expect("floor read"),
+            Some(9)
+        );
+        assert_eq!(store.sequence_keys().len(), 2);
     }
 
     /// Fail-closed at the consumer, not only at the seam: the gate must refuse,

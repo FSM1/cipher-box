@@ -50,7 +50,7 @@ use cipherbox_engine::sync::pointer::{
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
-    retire_targets, serve_http,
+    retire_targets, sequence_floor_label, serve_http,
 };
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -2580,7 +2580,9 @@ fn a_source_remove_that_confirms_and_then_fails_still_commits_the_crossing() {
     // live when the failure lands.
     fx.owner_device
         .floor_store
-        .fail_floor_raises_for(write_name(fx.folder).as_str().as_bytes());
+        .fail_floor_raises_for(&sequence_floor_label(
+            write_name(fx.folder).as_str().as_bytes(),
+        ));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     fx.owner_device.floor_store.heal_floors();
 

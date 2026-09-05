@@ -64,7 +64,7 @@
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
-    "count": 24,
+    "count": 25,
     "edges": [
       {
         "name": "node-seed",
@@ -180,6 +180,11 @@
         "name": "contact-label",
         "context": "cipherbox/v2/contact-label",
         "inputLayout": "keyed_hash(derive_key(ctx, contactLabelSeed[32]), identityPk[33])"
+      },
+      {
+        "name": "name-label",
+        "context": "cipherbox/v2/name-label",
+        "inputLayout": "keyed_hash(derive_key(ctx, contactLabelSeed[32]), sequenceKey[var])"
       },
       {
         "name": "committed-recipient-mask",

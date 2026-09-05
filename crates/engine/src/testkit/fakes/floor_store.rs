@@ -25,6 +25,8 @@ impl Inner {
     /// [`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore), and an
     /// injector names the floor, not the identity holding it. Exact past that,
     /// so a fault injected for one name cannot fire for another that ends in it.
+    /// A sequence floor is stored under its name label, so an injector names
+    /// that label ([`sequence_floor_label`](crate::testkit::account::sequence_floor_label)).
     fn refuse(&self, key: &[u8]) -> Option<SeamError> {
         let floor = key.get(OWNER_TAG_LEN..)?;
         self.failing
@@ -106,6 +108,20 @@ impl InMemoryFloorStore {
             .lock()
             .expect("lock")
             .epoch
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Every sequence-namespace key this store holds, exactly as it was written
+    /// — [`epoch_keys`](Self::epoch_keys)'s twin for the namespace that would
+    /// otherwise name a record.
+    #[must_use]
+    pub fn sequence_keys(&self) -> Vec<Vec<u8>> {
+        self.inner
+            .lock()
+            .expect("lock")
+            .sequence
             .keys()
             .cloned()
             .collect()
