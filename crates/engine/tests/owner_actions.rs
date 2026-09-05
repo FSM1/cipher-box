@@ -3017,8 +3017,8 @@ fn a_stalled_grant_re_drives_into_the_scope_the_first_attempt_promoted() {
         .fail_put_for(write_name(stalled).as_str());
     assert_eq!(
         fx.grant_folder_to_recipient(),
-        Err(EngineError::Seam {
-            message: "rotation record not published".to_owned(),
+        Err(EngineError::PartialCommit {
+            check: "interior-publish-failed",
         }),
     );
     let promoted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
@@ -3151,11 +3151,12 @@ fn an_interior_node_that_cannot_publish_posts_no_share_pointer() {
         .record_store
         .fail_put_for(write_name(inner).as_str());
 
-    // Retryable, because the move it stalled in is now re-drivable.
+    // The promoted root is already on the network and the move it stalled in is
+    // re-drivable, which is what the partial-commit class reports.
     assert_eq!(
         fx.grant_folder_to_recipient(),
-        Err(EngineError::Seam {
-            message: "rotation record not published".to_owned(),
+        Err(EngineError::PartialCommit {
+            check: "interior-publish-failed",
         }),
     );
     assert!(
