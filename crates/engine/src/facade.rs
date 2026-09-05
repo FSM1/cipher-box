@@ -1932,29 +1932,10 @@ impl EngineError {
             CreateGrantError::Converge(e) if e.is_retryable() => EngineError::Seam {
                 message: e.to_string(),
             },
-            CreateGrantError::Publish(e)
-            | CreateGrantError::DescendantPublish { error: e, .. }
-            | CreateGrantError::InteriorPublish { error: e, .. }
-            | CreateGrantError::ParentPublish(e)
-                if e.is_retryable() =>
-            {
-                EngineError::Seam {
-                    message: e.to_string(),
-                }
-            }
-            CreateGrantError::DescendantResolve { reason, .. }
-            | CreateGrantError::Resume(reason)
-                if reason != ResolveFailure::Rejected =>
-            {
-                EngineError::Seam {
-                    message: reason.to_string(),
-                }
-            }
-            // A stalled interior move is re-drivable, so an availability
-            // failure in it is the one class the host should retry.
-            CreateGrantError::InteriorResolve { reason, .. }
-                if reason != SweepResolveFailure::Rejected =>
-            {
+            CreateGrantError::Publish(e) if e.is_retryable() => EngineError::Seam {
+                message: e.to_string(),
+            },
+            CreateGrantError::Resume(reason) if reason != ResolveFailure::Rejected => {
                 EngineError::Seam {
                     message: reason.to_string(),
                 }
