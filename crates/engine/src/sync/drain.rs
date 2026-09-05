@@ -75,9 +75,7 @@ use crate::net::{
     ResolveOutcome, Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
-use crate::rotation::{
-    RotateError, ScopeExitRotator, consume_scope_exit_triggers, derive_write_name, seed_at_epoch,
-};
+use crate::rotation::{ScopeExitRotator, derive_write_name, seed_at_epoch};
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore, UnixMillis,
@@ -102,6 +100,7 @@ use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, ReplayScopes, decode_queue, enclosing_scope_root, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
+use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter,
     reconcile_staging_over, release_version_blocks, stage_op, version_leaf_cids,
@@ -853,7 +852,7 @@ impl<'a> DrainScope<'a> {
 /// named here rather than taken from a pass's own anchor: a pass anchored on a
 /// granted scope root would otherwise read that scope's own owed cut as the
 /// escalation and drop it.
-fn owed_cuts(pending: &BTreeSet<NodeId>, vault_root: NodeId) -> Vec<NodeId> {
+pub(crate) fn owed_cuts(pending: &BTreeSet<NodeId>, vault_root: NodeId) -> Vec<NodeId> {
     pending
         .iter()
         .copied()
@@ -1454,6 +1453,9 @@ where
             self.clear_block();
             self.clear_settings_hold();
             self.clear_bin_index_hold();
+            // A debt outlives the op that owed it, so an empty queue is still a
+            // pass that drives the cuts this device owes.
+            self.cut_exited_scopes(scope, exits).await;
             return (report, Some(Vec::new()));
         }
         // The hold names one op, so it goes as soon as that op does.
@@ -1491,7 +1493,7 @@ where
         let published = self.publish_queue(scope, queued, report, attempts).await;
         // Whatever the pass did with the queue, the cuts it owes are driven
         // once, on every exit from it.
-        self.cut_exited_scopes(exits).await;
+        self.cut_exited_scopes(scope, exits).await;
         published
     }
 
@@ -1551,7 +1553,7 @@ where
         // publish left to derive the planes from and the replay's own verdict is
         // all there is.
         for root in &rebased.dropped_scope_exits {
-            self.owe_scope_exit(*root);
+            self.owe_scope_exit(scope, *root).await;
         }
 
         for applied in &rebased.applied {
@@ -1588,22 +1590,24 @@ where
     /// the vault root is read off the base rather than from the pass's own
     /// anchor: a pass anchored on a granted scope root would otherwise drop that
     /// scope's own owed cut as if it were the escalation.
-    async fn cut_exited_scopes<R: ScopeExitRotator>(&self, exits: &R) {
+    async fn cut_exited_scopes<R: ScopeExitRotator>(&self, scope: &DrainScope<'_>, exits: &R) {
         let vault_root = self.base.borrow().root;
-        let owed = owed_cuts(&self.pending_scope_exits.borrow(), vault_root);
-        let cut = consume_scope_exit_triggers(exits, &owed).await;
-        let mut pending = self.pending_scope_exits.borrow_mut();
-        pending.remove(&vault_root);
-        for (root, _) in &cut.rotated {
-            pending.remove(root);
-        }
-        // A floor raise that failed leaves the cut itself published
-        // ([`rotate_scope`](crate::rotation::rotate_scope)), so re-driving it
-        // would mint a second epoch nothing asked for.
-        for (root, error) in &cut.failed {
-            if matches!(error, RotateError::Floor(_)) {
-                pending.remove(root);
-            }
+        let still_owed = settle_owed_cuts(
+            self.staging,
+            self.bookkeeping_seal(scope),
+            scope.enc_secret,
+            exits,
+            self.pending_scope_exits,
+            vault_root,
+        )
+        .await;
+        // A scope this session could not cut is a revocation still outstanding,
+        // so the member is told which one rather than left with a silent retry.
+        for (root, detail) in still_owed {
+            let _ = self.events.unbounded_send(Event::ScopeExitCutOwed {
+                scope_root: root,
+                detail: detail.to_owned(),
+            });
         }
     }
 
@@ -3943,7 +3947,7 @@ where
             .await
             .map_err(Halt::from)?;
         if single_record {
-            self.commit_crossing(scope, &source_plane, resealed);
+            self.commit_crossing(scope, &source_plane, resealed).await;
             return Ok(());
         }
 
@@ -3967,7 +3971,7 @@ where
             // so the next pass drops the op: what the re-seal published commits
             // here or never.
             if failure.confirmed {
-                self.commit_crossing(scope, &source_plane, resealed);
+                self.commit_crossing(scope, &source_plane, resealed).await;
                 return Err(failure.halt);
             }
             let undone = self
@@ -3996,7 +4000,7 @@ where
         // Last, and only here: the source-remove is what makes the subtree's
         // old records unreferenced, and retiring a name a live ref still points
         // at would leave that reference outliving its referent.
-        self.commit_crossing(scope, &source_plane, resealed);
+        self.commit_crossing(scope, &source_plane, resealed).await;
         Ok(())
     }
 
@@ -4008,7 +4012,7 @@ where
     /// crossing the command journaled: an interior scope root exists only
     /// because a grant cut one (CONTEXT.md "Scope"), so a move that leaves one
     /// owes it a rotation whatever the op says.
-    fn commit_crossing(
+    async fn commit_crossing(
         &self,
         scope: &DrainScope<'_>,
         source_plane: &SealPlane<'_>,
@@ -4022,7 +4026,7 @@ where
         // publish: a resume whose re-seal an earlier pass already landed
         // publishes nothing and owes the cut all the same.
         if source_plane.end.root != scope.source.root {
-            self.owe_scope_exit(source_plane.end.root);
+            self.owe_scope_exit(scope, source_plane.end.root).await;
         }
     }
 
@@ -4036,11 +4040,16 @@ where
         }
     }
 
-    /// Queue one scope root for the cut a move out of it owes
-    /// ([`Self::cut_exited_scopes`]).
-    fn owe_scope_exit(&self, scope_root: NodeId) {
-        let mut owed = self.pending_scope_exits.borrow_mut();
-        owed.insert(scope_root);
+    /// Take on the cut a move out of `scope_root` owes ([`owe_cut`]).
+    async fn owe_scope_exit(&self, scope: &DrainScope<'_>, scope_root: NodeId) {
+        owe_cut(
+            self.staging,
+            self.bookkeeping_seal(scope),
+            scope.enc_secret,
+            self.pending_scope_exits,
+            scope_root,
+        )
+        .await;
     }
 
     /// Re-seal the subtree at `target` out of `source` and into `dest`.

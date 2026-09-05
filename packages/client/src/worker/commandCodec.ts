@@ -561,6 +561,12 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
         retryable: event.retryable ?? false,
         detail: event.detail ?? '',
       };
+    case 'scopeExitCutOwed':
+      return {
+        kind: 'scopeExitCutOwed',
+        scopeRoot: event.scopeRoot ?? new Uint8Array(),
+        detail: event.detail ?? '',
+      };
     case 'opProgress':
       return {
         kind: 'opProgress',

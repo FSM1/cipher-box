@@ -234,6 +234,7 @@ const WARNING_LABELS: Record<VaultWarningKind, string> = {
   attributableAbuse: 'CipherBox refused an update that failed a trust check',
   withheldUpdateEscalation: 'A shared folder is being kept from its latest update',
   renewalFailed: 'CipherBox could not renew a record, so it may expire',
+  scopeExitCutOwed: 'CipherBox could not rotate a shared folder a move left',
 };
 
 /** Shown until a sign-in mints the vault; nothing publishes before then. */

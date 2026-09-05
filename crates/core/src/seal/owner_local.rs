@@ -60,16 +60,20 @@ pub enum OwnerLocalKind {
     /// What a delete still owes once its unlink is live: the detached subtree's
     /// write-plane names, and the target's own retire debt.
     DoomedJournal,
+    /// The scope roots a move out of a granted scope owes a scope-exit cut for,
+    /// until each cut lands.
+    ScopeExitDebt,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::InviteRecords,
         Self::RetireLedger,
         Self::DoomedJournal,
+        Self::ScopeExitDebt,
     ];
 
     /// The kind's stable name — the `info` suffix and the manifest key.
@@ -80,6 +84,7 @@ impl OwnerLocalKind {
             Self::InviteRecords => "invite-records",
             Self::RetireLedger => "retire-ledger",
             Self::DoomedJournal => "doomed-journal",
+            Self::ScopeExitDebt => "scope-exit-debt",
         }
     }
 
@@ -91,6 +96,7 @@ impl OwnerLocalKind {
             Self::InviteRecords => 0x03,
             Self::RetireLedger => 0x04,
             Self::DoomedJournal => 0x05,
+            Self::ScopeExitDebt => 0x06,
         }
     }
 
@@ -292,6 +298,7 @@ mod tests {
                 OwnerLocalKind::InviteRecords => 2,
                 OwnerLocalKind::RetireLedger => 3,
                 OwnerLocalKind::DoomedJournal => 4,
+                OwnerLocalKind::ScopeExitDebt => 5,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],

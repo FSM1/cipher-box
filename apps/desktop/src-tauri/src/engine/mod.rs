@@ -167,6 +167,10 @@ impl Warnings {
                 kind: "renewalFailed",
                 detail: Some(detail.clone()),
             },
+            Event::ScopeExitCutOwed { detail, .. } => VaultWarning {
+                kind: "scopeExitCutOwed",
+                detail: Some(detail.clone()),
+            },
             _ => return,
         };
         // A condition that keeps firing must not evict the others.

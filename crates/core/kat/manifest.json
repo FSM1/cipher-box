@@ -633,15 +633,20 @@
         "name": "doomed-journal",
         "discriminator": 5,
         "hpkeInfo": "cipherbox/v2/owner-local/doomed-journal"
+      },
+      {
+        "name": "scope-exit-debt",
+        "discriminator": 6,
+        "hpkeInfo": "cipherbox/v2/owner-local/scope-exit-debt"
       }
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 6
+      "count": 7
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 30,
+      "count": 40,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

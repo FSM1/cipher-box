@@ -5,6 +5,7 @@
 //!
 //! Later write-plane slices extend this file rather than starting their own.
 
+use core::cell::RefCell;
 use core::num::NonZeroU64;
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
@@ -53,9 +54,10 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX,
-    ResolveMode, StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key, encode_upload_mark,
-    owner_scoped_key, owner_tag, record_content_root_cid, upload_mark_key,
+    BookkeepingSeal, DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS,
+    PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key,
+    encode_upload_mark, owner_scoped_key, owner_tag, record_content_root_cid, scope_exit_debt_key,
+    seal_owed_cuts, upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -13377,4 +13379,49 @@ fn a_vault_only_the_api_cache_can_see_leaves_a_retryable_session_that_converges(
     let children = block_on(engine.view()).unwrap().children(ROOT);
     assert_eq!(children.len(), 1, "the tab converged on the mount's tree");
     assert_eq!(children[0].name, "photos");
+}
+
+/// The scope root a restart finds a cut owed for. It is no scope this vault
+/// holds, so the rotation refuses and the debt stays owed — which is the state
+/// the assertions read.
+const OWED_SCOPE_ROOT: NodeId = NodeId([0x9e; 16]);
+
+/// The failure the durable debt closes: the op that owed the cut published and
+/// left the queue, so nothing re-derives its trigger. A restarted session must
+/// drive that cut on a pass whose queue is empty, and must say which scope
+/// still owes one when it cannot land it.
+#[test]
+fn a_restart_drives_an_owed_scope_exit_cut_on_an_empty_queue() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+
+    // Written by the session that owed the cut, which is gone.
+    let enc_secret = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(77));
+    let debt = scope_exit_debt_key(&enc_secret);
+    let sealed = seal_owed_cuts(
+        BookkeepingSeal::new(&enc_secret, &entropy),
+        &BTreeSet::from([OWED_SCOPE_ROOT]),
+    )
+    .expect("the debt seals");
+    block_on(alice.staging_store.put_staged_bytes(&debt, &sealed)).expect("the debt persists");
+
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::ScopeExitCutOwed { scope_root, .. } if *scope_root == OWED_SCOPE_ROOT
+        )),
+        "the member is told which scope still owes a cut",
+    );
+    assert!(
+        block_on(alice.staging_store.staged_bytes(&debt))
+            .expect("the store answers")
+            .is_some(),
+        "and the debt stands until the cut lands",
+    );
 }

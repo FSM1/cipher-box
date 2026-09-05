@@ -118,6 +118,15 @@ fn event_getters_map_variants() {
     let settings = Event::from_facade(facade::Event::VaultSettingsChanged);
     assert_eq!(settings.kind(), "vaultSettingsChanged");
     assert!(settings.op_id().is_none());
+
+    let owed = Event::from_facade(facade::Event::ScopeExitCutOwed {
+        scope_root: facade::NodeId([0x9e; 16]),
+        detail: "publish-failed".into(),
+    });
+    assert_eq!(owed.kind(), "scopeExitCutOwed");
+    assert_eq!(owed.scope_root(), Some(vec![0x9e; 16]));
+    assert_eq!(owed.detail(), Some("publish-failed".into()));
+    assert!(staleness.scope_root().is_none());
 }
 
 /// `opProgress` payload getters cross with boundary-correct JS shapes — op id

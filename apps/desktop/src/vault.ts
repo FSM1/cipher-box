@@ -17,7 +17,11 @@ const VAULT_CHANGED = 'vault-changed';
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
 
 /** What the engine raised that no read reports, under the event's own name. */
-export type VaultWarningKind = 'attributableAbuse' | 'withheldUpdateEscalation' | 'renewalFailed';
+export type VaultWarningKind =
+  | 'attributableAbuse'
+  | 'withheldUpdateEscalation'
+  | 'renewalFailed'
+  | 'scopeExitCutOwed';
 
 export interface VaultWarning {
   kind: VaultWarningKind;

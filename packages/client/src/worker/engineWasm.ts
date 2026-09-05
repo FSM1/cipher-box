@@ -41,6 +41,7 @@ export interface WasmEvent {
   readonly detail?: string;
   readonly retryable?: boolean;
   readonly deadLetterReason?: number;
+  readonly scopeRoot?: Uint8Array;
 }
 
 /**

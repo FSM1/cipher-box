@@ -121,13 +121,16 @@ struct Opened<'a> {
 /// a fresh body does not take an id from a scope this pass could not reach. The
 /// folder bodies the focus leg recorded are separate entries, so a root body
 /// replaces the root's claim and nothing else.
+///
+/// The fresh root bodies land **before** the prune, which is what lets
+/// [`ClaimRecord::retain_live_bodies`] answer over what this pass's own bodies
+/// name.
 fn claim_contest(
     opened: &mut Vec<Opened<'_>>,
     renderable: &BTreeSet<[u8; 16]>,
     render: &ScopeRender<'_>,
 ) -> ContestedNodes {
     let mut claims = render.claims.borrow_mut();
-    claims.retain_live_bodies(renderable, &render.base.borrow());
     opened.retain(|open| {
         let share = open.share;
         match claims.record(share.scope_id, share.scope_id, &open.children) {
@@ -142,6 +145,7 @@ fn claim_contest(
             }
         }
     });
+    claims.retain_live_bodies(renderable);
     claims.contested().clone()
 }
 
@@ -2228,11 +2232,12 @@ mod tests {
         assert!(!fx.holds_contested());
     }
 
-    /// A body the render tree no longer holds names nothing, so its entry goes
-    /// with it. Keeping it would hold the contest open against a scope that is
-    /// now alone on the id.
+    /// A body the scope's own fresh root body stops naming loses its claim in
+    /// that pass. The render tree drops the folder in the same pass but after
+    /// the prune, so a prune keyed on the tree would hold the contest against a
+    /// scope that is already alone on the id for one pass more.
     #[test]
-    fn a_folder_the_render_tree_drops_loses_its_claim() {
+    fn a_folder_the_scope_stops_naming_loses_its_claim_in_that_pass() {
         let fx = TwoSharers::new();
         fx.publish(0, vec![shared_child(0xa1, "own")], 1);
         fx.publish(1, vec![shared_child(0xf1, "a-folder")], 1);
@@ -2247,18 +2252,60 @@ mod tests {
             2,
         );
         fx.pass(60_000);
+
         assert!(
             !fx.base.borrow().contains(NodeId(DEEP_FOLDER)),
             "the folder left the tree"
         );
+        assert_eq!(
+            fx.listing(0),
+            vec!["own".to_owned(), "now-free".to_owned()],
+            "the body its own scope dropped contests nothing"
+        );
+    }
 
+    /// A folder the contest departs keeps the claim its body made. Freeing those
+    /// ids would hand them to the scope that raised the contest, and the honest
+    /// scope could not take them back: the focus window re-reads only a folder
+    /// the render tree still holds.
+    #[test]
+    fn a_contested_folder_keeps_the_claim_its_body_made() {
+        let fx = TwoSharers::new();
+        fx.publish(0, vec![shared_child(0xa1, "own")], 1);
+        fx.publish(1, vec![shared_child(0xf1, "a-folder")], 1);
+        fx.pass(0);
+        fx.record_folder_body(1, DEEP_FOLDER, &[shared_child(0xcc, "mine")]);
+
+        // The hostile root names the honest folder itself, which departs it.
+        fx.publish(
+            0,
+            vec![shared_child(0xa1, "own"), shared_child(0xf1, "reach")],
+            2,
+        );
+        fx.pass(60_000);
+        assert!(
+            !fx.base.borrow().contains(NodeId(DEEP_FOLDER)),
+            "the contested folder left the tree"
+        );
+
+        // Now the hostile root reaches for the id that folder's body named.
+        fx.publish(
+            0,
+            vec![
+                shared_child(0xa1, "own"),
+                shared_child(0xf1, "reach"),
+                shared_child(0xcc, "steal"),
+            ],
+            3,
+        );
         fx.pass(120_000);
 
         assert_eq!(
             fx.listing(0),
-            vec!["own".to_owned(), "now-free".to_owned()],
-            "the departed body contests nothing"
+            vec!["own".to_owned()],
+            "the departed folder still claims what its body named"
         );
+        assert!(!fx.holds_contested());
     }
 
     // -----------------------------------------------------------------------

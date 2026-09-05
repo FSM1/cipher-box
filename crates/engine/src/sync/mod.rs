@@ -31,6 +31,7 @@ pub(crate) mod provision;
 pub mod rebase;
 pub mod record;
 pub(crate) mod refresh;
+pub(crate) mod scope_exit_debt;
 pub mod staging;
 pub mod staleness;
 pub mod tick;
@@ -60,6 +61,7 @@ pub use record::{
     OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
     record_content_root_cid,
 };
+pub use scope_exit_debt::{scope_exit_debt_key, seal_owed_cuts};
 pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
