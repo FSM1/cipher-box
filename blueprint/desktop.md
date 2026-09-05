@@ -280,7 +280,9 @@ navigation (FSM1/cipher-box-next#33 D2):
   hosts mount, parameterised over the host's own actions. Each host keeps its
   own theme and its own wiring; neither keeps a second implementation of a
   surface. The shell's window chrome — the vault panel and the licence footer —
-  stays in `apps/desktop`.
+  stays in `apps/desktop`. The webview compiles JSX with Vite's own transform:
+  this window's policy is `default-src 'self'`, and a Fast Refresh plugin serves
+  an inline preamble the policy refuses.
 - **Google collection is native, not in-webview.** Google Identity Services does
   not run in this webview, and the manual OAuth2 flow it falls back to needs a
   `redirect_uri` a packaged Tauri origin cannot satisfy — `tauri://localhost` is

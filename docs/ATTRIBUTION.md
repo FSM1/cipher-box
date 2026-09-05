@@ -22,7 +22,7 @@ that cannot be made under GPLv3.
 
 The notice above is shown to the user as well as stated here — the desktop
 shell carries it and the project address on every screen
-(`apps/desktop/src/frontDoor.ts`).
+(`apps/desktop/src/frontDoor.tsx`).
 
 CipherBox bundles no proprietary software alongside WinFsp.
 

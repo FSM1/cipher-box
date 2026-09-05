@@ -72,13 +72,9 @@ const roots = new WeakMap<HTMLElement, Root>();
  * result in the same turn, so the tree is flushed rather than scheduled.
  */
 export function renderShell(root: HTMLElement, model: ShellModel, actions: ShellActions): void {
-  let mounted = roots.get(root);
-  if (mounted === undefined) {
-    mounted = createRoot(root);
-    roots.set(root, mounted);
-  }
-  const target = mounted;
-  flushSync(() => target.render(<Shell model={model} actions={actions} />));
+  const mounted = roots.get(root) ?? createRoot(root);
+  roots.set(root, mounted);
+  flushSync(() => mounted.render(<Shell model={model} actions={actions} />));
 }
 
 function Shell({ model, actions }: { model: ShellModel; actions: ShellActions }) {
