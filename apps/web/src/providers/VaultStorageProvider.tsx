@@ -10,6 +10,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -36,10 +37,18 @@ export function VaultStorageProvider({ children }: { children: ReactNode }) {
   const account = useEngineAccount();
   const client = useEngine();
 
-  const reload = useCallback(
-    () => run('vaultStorage', async (facade) => setStorage(await facade.vaultStorage())),
-    [run]
-  );
+  // A session change and an adopted settings change each read, so two reads can
+  // be in flight. Only the newest may write: the one that resolves last would
+  // otherwise leave the settings it overtook on the delete prompt.
+  const latest = useRef(0);
+
+  const reload = useCallback(() => {
+    const ticket = (latest.current += 1);
+    return run('vaultStorage', async (facade) => {
+      const read = await facade.vaultStorage();
+      if (ticket === latest.current) setStorage(read);
+    });
+  }, [run]);
 
   // A session change drops what the session before it read, then reads again: a
   // read taken before login refuses, and one vault's retention must never

@@ -94,6 +94,9 @@ describe('the delete confirmation', () => {
     });
 
     expect(screen.getByTestId('delete-dialog').textContent).toContain('cannot be undone');
+    expect(screen.getByTestId('delete-dialog').textContent).not.toContain(
+      'keeps it in the bin for 30 days'
+    );
   });
 
   it('claims nothing at all while the settings read has not landed', async () => {

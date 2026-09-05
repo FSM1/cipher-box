@@ -305,11 +305,6 @@ describe('the buffered fallback', () => {
     }
   });
 
-  /**
-   * A deferred revoke reads `URL.revokeObjectURL` when it fires, so one left
-   * running past the hook holds the plaintext blob and calls whatever is
-   * installed a second later.
-   */
   it('leaves no revoke running once the tab drops the hook', async () => {
     const { revoked } = stubObjectUrls();
     const { result, unmount } = mount(fakeEngine(() => Promise.resolve(new ArrayBuffer(4))));
