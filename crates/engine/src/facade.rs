@@ -7891,7 +7891,6 @@ where {
         // only in the delivery pass, one item at a time.
         let mut spent = records.claims.clone();
         let mut deliveries: Vec<Delivery> = Vec::new();
-        let mut changed = false;
         for item in &items {
             let converted = convert_invite_claim(
                 &authority,
@@ -7937,8 +7936,15 @@ where {
                     | InviteError::LinkNotCommitted
                     | InviteError::LinkExpired,
                 ) => continue,
-                // The set cannot take another grant, or would not publish.
-                Err(e) => return Err(EngineError::from_invite(e)),
+                // A verdict on the set this item proposed. The pass stops
+                // converting but still publishes what it converted, which is
+                // the last set this owner signed: to discard it would strand
+                // those claimants on every later press, where this item refuses
+                // again.
+                Err(e) => {
+                    failure.get_or_insert(EngineError::from_invite(e));
+                    break;
+                }
             };
 
             // Ahead of the publish: `revoke`/`downgrade` resolve their recipient
@@ -7969,7 +7975,6 @@ where {
                 current.commitment_sig = commitment_sig.to_compact();
                 current.commitment = commitment;
                 current.grant_ledger = ledger;
-                changed = true;
             }
             if let Some(record) = record {
                 spent.push(record);
@@ -7983,6 +7988,9 @@ where {
             });
         }
 
+        let changed = deliveries
+            .iter()
+            .any(|delivery| delivery.outcome != ClaimOutcome::Unchanged);
         if changed
             && let Err(e) = self
                 .publish_converted_set(session, &net, &target, &current, &commitment_sig)
