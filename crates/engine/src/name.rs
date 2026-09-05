@@ -100,7 +100,7 @@ fn is_deceptive(c: char) -> bool {
     )
 }
 
-/// The name with every character [`is_deceptive`] refuses removed, or `None`
+/// The name with every character the law refuses as deceptive removed, or `None`
 /// when the name holds none.
 ///
 /// [`validate_name`] keeps such a character out of anything this device
