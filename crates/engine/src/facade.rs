@@ -53,7 +53,7 @@ use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprov
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
-    BookmarkedScopeRoots, GraftedSharers, NamedNodes, evict_grafted_read_seeds, floor_view,
+    BookmarkedScopeRoots, ClaimRecord, GraftedSharers, evict_grafted_read_seeds, floor_view,
     is_own_scope,
 };
 use crate::grants::inbox::ShareInbox;
@@ -4025,9 +4025,9 @@ pub struct Engine<T: SeamTypes> {
     /// leg applies below a grafted root
     /// ([`GraftedPlane`](crate::grants::grafted::GraftedPlane)).
     bookmarked_scope_roots: Rc<RefCell<BookmarkedScopeRoots>>,
-    /// Rebuilt by the same pass: what each renderable grafted scope's body
+    /// Folded by the same pass: what each renderable grafted scope's body
     /// named, which decides the ids no plane may render.
-    grafted_named_nodes: Rc<RefCell<NamedNodes>>,
+    grafted_claims: Rc<RefCell<ClaimRecord>>,
     /// The folders this session's own grants promoted into scope roots. The
     /// mint is the one moment a session proves it promoted a folder, so it is
     /// the only writer; read by
@@ -4214,7 +4214,7 @@ impl<T: SeamTypes> Engine<T> {
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
-                grafted_named_nodes: Rc::new(RefCell::new(NamedNodes::new())),
+                grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
                 minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
@@ -4590,8 +4590,8 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut roots) = self.bookmarked_scope_roots.try_borrow_mut() {
             roots.clear();
         }
-        if let Ok(mut named) = self.grafted_named_nodes.try_borrow_mut() {
-            named.clear();
+        if let Ok(mut claims) = self.grafted_claims.try_borrow_mut() {
+            claims.clear();
         }
         if let Ok(mut roots) = self.minted_scope_roots.try_borrow_mut() {
             roots.clear();
@@ -5246,7 +5246,7 @@ where {
         let received_verdicts = self.received_verdicts.clone();
         let grafted_sharers = self.grafted_sharers.clone();
         let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
-        let grafted_named_nodes = self.grafted_named_nodes.clone();
+        let grafted_claims = self.grafted_claims.clone();
         let consult_keys = self.sweep_keys.clone();
         let minted_roots = self.minted_scope_roots.clone();
         let pending_scope_exits = self.pending_scope_exits.clone();
@@ -5586,7 +5586,7 @@ where {
                             plane: (!is_own_scope(&root_id, &proved_scope_ids, &scope_root.0))
                                 .then_some(GraftedLeg {
                                     scope_roots: &scope_roots,
-                                    named_nodes: &grafted_named_nodes,
+                                    claims: &grafted_claims,
                                 }),
                             mode,
                             observed_at: now.0,
@@ -5859,7 +5859,7 @@ where {
                             read_seeds: &scope_read_seeds,
                             grafted_sharers: &grafted_sharers,
                             scope_roots: &bookmarked_scope_roots,
-                            named_nodes: &grafted_named_nodes,
+                            claims: &grafted_claims,
                             events: &events,
                         },
                         now,

@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::content::Gateway;
 use crate::entropy::Entropy;
-use crate::facade::{Event, NodeId, NodeKind, ScopeSeeds, deposit_seed};
+use crate::facade::{Event, NodeId, NodeKind, ScopeSeeds, deposit_seed, emit_trust_violation};
 use crate::gate::floor;
 use crate::gate::{
     Candidate, ReaderContext, RejectionReason, SeedBlob, adopt, read_cut_epoch_floor,
@@ -47,8 +47,7 @@ use super::accept::{BookmarkKey, ReceivedShare};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::grafted::{
-    BookmarkedScopeRoots, ContestedNodes, GraftedPlane, GraftedSharers, NamedNodes,
-    contested_nodes, in_own_tree, retain_live_bodies,
+    BookmarkedScopeRoots, ClaimRecord, ContestedNodes, GraftedPlane, GraftedSharers, in_own_tree,
 };
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
@@ -99,8 +98,9 @@ pub(crate) struct ScopeRender<'a> {
     /// cross-plane rule against ([`GraftedPlane`]).
     pub scope_roots: &'a RefCell<BookmarkedScopeRoots>,
     /// What each renderable scope's body last named — the per-node claim this
-    /// pass rebuilds and every leg below a grafted root reads.
-    pub named_nodes: &'a RefCell<NamedNodes>,
+    /// pass folds its scope-root bodies into, and every leg below a grafted
+    /// root reads.
+    pub claims: &'a RefCell<ClaimRecord>,
     /// The host event stream.
     pub events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -114,27 +114,35 @@ struct Opened<'a> {
     modified_at: u64,
 }
 
-/// Fold this pass's scope-root bodies into the per-node claim, and answer with
-/// the ids more than one scope names.
+/// Fold this pass's scope-root bodies into the per-node claim, drop every body
+/// the record refuses, and answer with the ids more than one scope names.
 ///
 /// A scope this pass did not open keeps the entry its last opened body wrote, so
 /// a fresh body does not take an id from a scope this pass could not reach. The
 /// folder bodies the focus leg recorded are separate entries, so a root body
 /// replaces the root's claim and nothing else.
 fn claim_contest(
-    opened: &[Opened<'_>],
+    opened: &mut Vec<Opened<'_>>,
     renderable: &BTreeSet<[u8; 16]>,
     render: &ScopeRender<'_>,
 ) -> ContestedNodes {
-    let mut named = render.named_nodes.borrow_mut();
-    retain_live_bodies(&mut named, renderable, &render.base.borrow());
-    for open in opened {
-        named.insert(
-            (open.share.scope_id, open.share.scope_id),
-            open.children.iter().map(|child| child.id).collect(),
-        );
-    }
-    contested_nodes(&named)
+    let mut claims = render.claims.borrow_mut();
+    claims.retain_live_bodies(renderable, &render.base.borrow());
+    opened.retain(|open| {
+        let share = open.share;
+        match claims.record(share.scope_id, share.scope_id, &open.children) {
+            Ok(()) => true,
+            Err(over_full) => {
+                emit_trust_violation(
+                    render.events,
+                    grafted_root_name(&share.display_name, NodeId(share.scope_id)).as_str(),
+                    over_full,
+                );
+                false
+            }
+        }
+    });
+    claims.contested().clone()
 }
 
 /// Depart every contested id the render tree still holds on a grafted plane.
@@ -269,7 +277,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             verdicts.borrow_mut().clear();
             render.grafted_sharers.borrow_mut().clear();
             render.scope_roots.borrow_mut().clear();
-            render.named_nodes.borrow_mut().clear();
+            render.claims.borrow_mut().clear();
             return;
         }
         let Ok(contacts) = StagingContactStore::new(staging, self.enc_secret, entropy)
@@ -348,7 +356,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         }
         *verdicts.borrow_mut() = refreshed;
 
-        let contested = claim_contest(&opened, &renderable, render);
+        let contested = claim_contest(&mut opened, &renderable, render);
         if depart_contested(&contested, render) {
             let _ = render.events.unbounded_send(Event::SnapshotUpdated);
         }
@@ -620,9 +628,11 @@ mod tests {
     use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
     use cipherbox_core::suite::secret::SecretBytes;
 
+    use core::cell::Cell;
     use std::sync::{Arc, Mutex};
 
     use crate::content::GatewaySource;
+    use crate::facade::MAX_FOLDER_CHILDREN;
     use crate::gate::{CUT_EPOCH_SUFFIX, record_cut_epoch_floor};
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, HttpResponse};
@@ -636,7 +646,6 @@ mod tests {
         with_cut_epoch,
     };
 
-    use crate::grants::grafted::record_body;
     use crate::name::{MAX_NODE_NAME_BYTES, is_emittable};
 
     use super::super::accept::{ReceivedShareStoreError, ReceivedSharesList};
@@ -1391,8 +1400,10 @@ mod tests {
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
-        named_nodes: RefCell<NamedNodes>,
+        claims: RefCell<ClaimRecord>,
         verdicts: RefCell<ReceivedVerdicts>,
+        /// Whether the last pass attributed abuse to the sharer.
+        reported: Cell<bool>,
     }
 
     impl RenderedScope {
@@ -1460,8 +1471,9 @@ mod tests {
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
-                named_nodes: RefCell::new(NamedNodes::new()),
+                claims: RefCell::new(ClaimRecord::default()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
+                reported: Cell::new(false),
             };
             block_on(
                 StagingContactStore::new(&fx.staging, &my_enc(), &fx.entropy)
@@ -1553,7 +1565,7 @@ mod tests {
                 headers: Vec::new(),
                 body: self.fixture.head_block.clone(),
             });
-            let (events, _rx) = mpsc::unbounded();
+            let (events, mut rx) = mpsc::unbounded();
             block_on(
                 ReceivedShareStatus {
                     transport: &self.records,
@@ -1572,12 +1584,17 @@ mod tests {
                         read_seeds: &self.read_seeds,
                         grafted_sharers: &self.grafted_sharers,
                         scope_roots: &self.scope_roots,
-                        named_nodes: &self.named_nodes,
+                        claims: &self.claims,
                         events: &events,
                     },
                     UnixMillis(at_millis),
                     &SyncTimingProfile::CI,
                 ),
+            );
+            drop(events);
+            self.reported.set(
+                core::iter::from_fn(|| rx.try_recv().ok())
+                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
             );
             self.verdicts
                 .borrow()
@@ -1953,7 +1970,7 @@ mod tests {
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
-        named_nodes: RefCell<NamedNodes>,
+        claims: RefCell<ClaimRecord>,
         verdicts: RefCell<ReceivedVerdicts>,
     }
 
@@ -2006,7 +2023,7 @@ mod tests {
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
-                named_nodes: RefCell::new(NamedNodes::new()),
+                claims: RefCell::new(ClaimRecord::default()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
             };
             let mine = my_enc();
@@ -2114,7 +2131,7 @@ mod tests {
                         read_seeds: &self.read_seeds,
                         grafted_sharers: &self.grafted_sharers,
                         scope_roots: &self.scope_roots,
-                        named_nodes: &self.named_nodes,
+                        claims: &self.claims,
                         events: &events,
                     },
                     UnixMillis(at_millis),
@@ -2138,9 +2155,12 @@ mod tests {
         }
 
         /// Record what a folder body below `which` sharer's root names, the way
-        /// the focus window's folder leg does ([`record_body`]).
+        /// the focus window's folder leg does ([`ClaimRecord::record`]).
         fn record_folder_body(&self, which: usize, folder: [u8; 16], children: &[ChildRef]) {
-            record_body(&self.named_nodes, self.scopes[which], folder, children);
+            self.claims
+                .borrow_mut()
+                .record(self.scopes[which], folder, children)
+                .expect("the body is within the bound");
         }
     }
 
@@ -2427,7 +2447,7 @@ mod tests {
         let read_seeds = RefCell::new(ScopeSeeds::new());
         let grafted_sharers = RefCell::new(GraftedSharers::new());
         let scope_roots = RefCell::new(BookmarkedScopeRoots::from([SCOPE]));
-        let named_nodes = RefCell::new(NamedNodes::new());
+        let claims = RefCell::new(ClaimRecord::default());
         let (events, _rx) = mpsc::unbounded();
 
         let departed = depart_contested(
@@ -2437,7 +2457,7 @@ mod tests {
                 read_seeds: &read_seeds,
                 grafted_sharers: &grafted_sharers,
                 scope_roots: &scope_roots,
-                named_nodes: &named_nodes,
+                claims: &claims,
                 events: &events,
             },
         );
@@ -2446,6 +2466,39 @@ mod tests {
         assert!(base.borrow().contains(NodeId(SCOPE)));
         assert!(base.borrow().contains(NodeId(OWN_NODE)));
         assert!(!base.borrow().contains(NodeId(GRAFTED_NODE)));
+    }
+
+    /// A scope-root body past the folder ceiling is refused whole: the record
+    /// cannot hold its claim, so nothing it names may reach the render tree.
+    /// The row still resolves, and the pass has already spent one of its
+    /// resolves on it — a body re-authored under the bound grafts next pass.
+    #[test]
+    fn an_over_full_scope_root_body_grafts_nothing_and_still_resolves() {
+        let over_full: Vec<ChildRef> = (0..=MAX_FOLDER_CHILDREN)
+            .map(|i| {
+                let mut id = [0xa1u8; 16];
+                id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                ChildRef {
+                    id,
+                    name: format!("padding-{i}"),
+                    ipns_name: id.to_vec(),
+                    kind: CoreNodeKind::Folder,
+                    link_counter: 1,
+                    unknown: PreservedFields::new(),
+                }
+            })
+            .collect();
+        let fx = RenderedScope::new(over_full);
+        fx.bookmark();
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert!(fx.reported.get(), "an over-full body is attributable");
+        assert!(
+            !fx.base.borrow().contains(NodeId(SCOPE)),
+            "the refused body grafts no scope root",
+        );
+        assert!(fx.claims.borrow().named().is_empty(), "and claims nothing");
     }
 
     /// The steady state: the transport re-serves the record this vault already

@@ -19,9 +19,8 @@ use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
 use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
 use crate::gate::{Adopted, GateError, RejectionReason};
-use crate::grants::grafted::{
-    BookmarkedScopeRoots, GraftedPlane, NamedNodes, PlaneSplit, record_body,
-};
+use crate::grants::TooLong;
+use crate::grants::grafted::{BookmarkedScopeRoots, ClaimRecord, GraftedPlane, PlaneSplit};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::project::{UnlinkedChild, merge_folder, project_child_version};
@@ -72,7 +71,7 @@ fn rejection_verdict(reason: &RejectionReason) -> Option<RefreshVerdict> {
 const NOTHING_WITHHELD: &[[u8; 16]] = &[];
 
 /// What a leg below a grafted root applies the cross-plane rule with: the
-/// bookmarked scope roots, and the claim record ([`NamedNodes`]).
+/// bookmarked scope roots, and the claim record ([`ClaimRecord`]).
 ///
 /// The record rather than a finished contest, because this leg reads the only
 /// bodies that name a node deep in a grafted subtree: it records each one and
@@ -80,7 +79,7 @@ const NOTHING_WITHHELD: &[[u8; 16]] = &[];
 #[derive(Clone, Copy)]
 pub(crate) struct GraftedLeg<'a> {
     pub(crate) scope_roots: &'a BookmarkedScopeRoots,
-    pub(crate) named_nodes: &'a RefCell<NamedNodes>,
+    pub(crate) claims: &'a RefCell<ClaimRecord>,
 }
 
 /// The focus-window folder refresh over one owned scope's read material.
@@ -151,7 +150,14 @@ where
                 report.fold(RefreshVerdict::Rejected);
                 continue;
             };
-            let split = self.split(*folder, children);
+            let split = match self.split(*folder, children) {
+                Ok(split) => split,
+                Err(over_full) => {
+                    emit_trust_violation(self.events, name.as_str(), over_full);
+                    report.fold(RefreshVerdict::Rejected);
+                    continue;
+                }
+            };
             if split.as_ref().is_some_and(|split| split.names_own_tree) {
                 emit_trust_violation(
                     self.events,
@@ -185,18 +191,22 @@ where
     /// ([`GraftedPlane::split`]), or `None` on this vault's own plane.
     ///
     /// `folder`'s own claim is recorded first, so the contest this split reads
-    /// covers what this very body names.
-    fn split(&self, folder: NodeId, children: &[ChildRef]) -> Option<PlaneSplit> {
-        let leg = self.plane?;
-        let contested = record_body(leg.named_nodes, self.scope_id, folder.0, children);
-        Some(
+    /// covers what this very body names — and a body the record refuses is
+    /// refused here as well ([`ClaimRecord::record`]).
+    fn split(&self, folder: NodeId, children: &[ChildRef]) -> Result<Option<PlaneSplit>, TooLong> {
+        let Some(leg) = self.plane else {
+            return Ok(None);
+        };
+        let mut claims = leg.claims.borrow_mut();
+        claims.record(self.scope_id, folder.0, children)?;
+        Ok(Some(
             GraftedPlane {
                 scope_id: self.scope_id,
                 scope_roots: leg.scope_roots,
-                contested: &contested,
+                contested: claims.contested(),
             }
             .split(&self.base.borrow(), children),
-        )
+        ))
     }
 
     /// Fold each file's published head into the base, reporting whether the base
@@ -319,9 +329,11 @@ mod tests {
         NodeKind as CoreNodeKind, PreservedFields, encode_envelope, seal_read_body,
     };
 
+    use core::cell::Cell;
     use std::collections::BTreeSet;
 
     use crate::content::{DAG_ROOT_CODEC, GatewaySource};
+    use crate::facade::MAX_FOLDER_CHILDREN;
     use crate::grants::grafted::BookmarkedScopeRoots;
     use crate::rotation::derive_write_name;
     use crate::seams::{EndpointId, HttpResponse};
@@ -377,6 +389,8 @@ mod tests {
         /// The captures the last pass reported, so a test can hold the
         /// cross-plane rule to the bin path as well as to the render tree.
         captured: RefCell<Vec<NodeId>>,
+        /// What the last pass charged itself.
+        verdict: Cell<RefreshVerdict>,
     }
 
     impl FolderLeg {
@@ -432,6 +446,7 @@ mod tests {
                 read_seed: Zeroizing::new(READ_SCOPE_SEED),
                 head_block,
                 captured: RefCell::new(Vec::new()),
+                verdict: Cell::new(RefreshVerdict::Reconciled),
             }
         }
 
@@ -454,7 +469,7 @@ mod tests {
         /// One folder-leg pass over `FOLDER`, with the head block its resolve
         /// fetches served.
         fn run(&self, scope_id: [u8; 16], plane_roots: Option<&BookmarkedScopeRoots>) -> bool {
-            self.run_recorded(scope_id, plane_roots, &RefCell::new(NamedNodes::new()))
+            self.run_recorded(scope_id, plane_roots, &RefCell::new(ClaimRecord::default()))
         }
 
         /// The same pass, over a claim record a second scope has already
@@ -463,7 +478,7 @@ mod tests {
             &self,
             scope_id: [u8; 16],
             plane_roots: Option<&BookmarkedScopeRoots>,
-            named_nodes: &RefCell<NamedNodes>,
+            claims: &RefCell<ClaimRecord>,
         ) -> bool {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
@@ -484,13 +499,14 @@ mod tests {
                     scope_read_seed: &self.read_seed,
                     plane: plane_roots.map(|scope_roots| GraftedLeg {
                         scope_roots,
-                        named_nodes,
+                        claims,
                     }),
                     mode: ResolveMode::NoCache,
                     observed_at: 0,
                 }
                 .run(&[NodeId(FOLDER)]),
             );
+            self.verdict.set(report.verdict);
             *self.captured.borrow_mut() = report
                 .departed
                 .into_iter()
@@ -531,6 +547,21 @@ mod tests {
 
     fn folder_name() -> IpnsName {
         derive_write_name(&WRITE_SCOPE_SEED, &FOLDER)
+    }
+
+    /// One child of a body that pads its listing: a distinct id, name and
+    /// `ipnsName`, all three of which a sealed body holds to uniqueness.
+    fn padding_child(i: usize) -> ChildRef {
+        let mut id = [0xb0u8; 16];
+        id[..8].copy_from_slice(&(i as u64).to_be_bytes());
+        ChildRef {
+            id,
+            name: format!("padding-{i}"),
+            ipns_name: id.to_vec(),
+            kind: CoreNodeKind::Folder,
+            link_counter: 1,
+            unknown: PreservedFields::new(),
+        }
     }
 
     fn scope_roots() -> BookmarkedScopeRoots {
@@ -610,12 +641,13 @@ mod tests {
         leg.place(SCOPE_A, "from-a", None);
         leg.place(FOLDER, "a-folder", Some(SCOPE_A));
         leg.place(CONTESTED, "still-mine", Some(FOLDER));
-        let named = RefCell::new(NamedNodes::from([(
-            (SCOPE_B, SCOPE_B),
-            BTreeSet::from([CONTESTED]),
-        )]));
+        let claims = RefCell::new(ClaimRecord::default());
+        claims
+            .borrow_mut()
+            .record(SCOPE_B, SCOPE_B, &[child_ref(CONTESTED, "theirs", 1)])
+            .expect("the body is within the bound");
 
-        leg.run_recorded(SCOPE_A, Some(&scope_roots()), &named);
+        leg.run_recorded(SCOPE_A, Some(&scope_roots()), &claims);
 
         assert!(leg.listing(FOLDER).is_empty());
         assert!(!leg.holds(CONTESTED));
@@ -629,14 +661,68 @@ mod tests {
         let leg = FolderLeg::new(SCOPE_A, vec![child_ref(HONEST, "a-photo", 1)]);
         leg.place(SCOPE_A, "from-a", None);
         leg.place(FOLDER, "a-folder", Some(SCOPE_A));
-        let named = RefCell::new(NamedNodes::new());
+        let claims = RefCell::new(ClaimRecord::default());
 
-        leg.run_recorded(SCOPE_A, Some(&scope_roots()), &named);
+        leg.run_recorded(SCOPE_A, Some(&scope_roots()), &claims);
 
         assert_eq!(
-            named.borrow().get(&(SCOPE_A, FOLDER)),
+            claims.borrow().named().get(&(SCOPE_A, FOLDER)),
             Some(&BTreeSet::from([HONEST])),
         );
+    }
+
+    /// A body past the folder ceiling is one no author path emits. The record
+    /// refuses it, so the leg renders none of it: a truncated claim would let
+    /// the padding evade the contest, and an unrecorded merge would render ids
+    /// no contest covers. The refusal charges the pass and departs nothing.
+    #[test]
+    fn an_over_full_grafted_body_charges_the_pass_and_renders_nothing() {
+        let mut over_full: Vec<ChildRef> = (0..MAX_FOLDER_CHILDREN).map(padding_child).collect();
+        over_full.push(child_ref(HONEST, "a-photo", 1));
+        let leg = FolderLeg::new(SCOPE_A, over_full);
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        leg.place(DROPPED, "still-here", Some(FOLDER));
+        let claims = RefCell::new(ClaimRecord::default());
+
+        let reported = leg.run_recorded(SCOPE_A, Some(&scope_roots()), &claims);
+
+        assert!(reported, "an over-full body is attributable");
+        assert_eq!(leg.verdict.get(), RefreshVerdict::Rejected);
+        assert!(claims.borrow().named().is_empty(), "it claims nothing");
+        assert!(!leg.holds(HONEST), "and it links nothing");
+        assert_eq!(
+            leg.listing(FOLDER),
+            vec!["still-here".to_owned()],
+            "a refusal is no departure either",
+        );
+        assert!(leg.captured.borrow().is_empty());
+    }
+
+    /// The bound is the author path's, so a body that fills a folder to the
+    /// ceiling still records and still renders.
+    #[test]
+    fn a_grafted_body_at_the_folder_ceiling_still_renders() {
+        let mut at_ceiling: Vec<ChildRef> =
+            (0..MAX_FOLDER_CHILDREN - 1).map(padding_child).collect();
+        at_ceiling.push(child_ref(HONEST, "a-photo", 1));
+        let leg = FolderLeg::new(SCOPE_A, at_ceiling);
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+        let claims = RefCell::new(ClaimRecord::default());
+
+        leg.run_recorded(SCOPE_A, Some(&scope_roots()), &claims);
+
+        assert_eq!(leg.verdict.get(), RefreshVerdict::Reconciled);
+        assert_eq!(
+            claims
+                .borrow()
+                .named()
+                .get(&(SCOPE_A, FOLDER))
+                .map(BTreeSet::len),
+            Some(MAX_FOLDER_CHILDREN),
+        );
+        assert!(leg.holds(HONEST));
     }
 
     /// The rule is the grafted plane's alone. On this vault's own plane every
