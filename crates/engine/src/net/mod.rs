@@ -58,7 +58,9 @@ pub use publish::{
 };
 pub use record_publish::{PreflightError, RecordPublishError};
 pub use register::register;
-pub use resolve::{AdoptOutcome, Adopter, OwnScopeMaterial, ResolveOutcome, Resolved, resolve};
+pub use resolve::{
+    AdoptOutcome, Adopter, GatePass, OwnScopeMaterial, ResolveOutcome, Resolved, resolve,
+};
 pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_resolved, resolve_and_hold, resolve_gated,
 };

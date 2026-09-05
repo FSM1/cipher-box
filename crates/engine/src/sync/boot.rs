@@ -418,7 +418,7 @@ mod tests {
                 .unwrap()
                 .clone()
                 .map(|adopted| crate::net::AdoptOutcome {
-                    adopted,
+                    pass: crate::net::GatePass::Advanced(adopted),
                     write_scope_seed: None,
                     node_id: [0u8; 16],
                     read_scope_seed: None,

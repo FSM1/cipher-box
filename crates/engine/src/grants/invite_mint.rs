@@ -467,6 +467,10 @@ mod tests {
             }))
         }
 
+        async fn holds_a_scope_root_floor(&self, _node: &NodeRef) -> Result<bool, ResolveFailure> {
+            Ok(false)
+        }
+
         async fn moved_interior_node(
             &self,
             _root: &ResealedScopeRoot,

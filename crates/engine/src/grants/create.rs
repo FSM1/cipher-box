@@ -277,6 +277,11 @@ pub enum CreateGrantError {
     /// descendant scope roots. Refused rather than resumed, so a second
     /// recipient is never grafted onto a scope that commits nothing for them.
     ResumeNotThisGrant,
+    /// The granted folder carries a read-epoch floor this device raised, and the
+    /// resume probe found no promotion of it to resume: a live scope root this
+    /// grant did not publish stands at the name a mint would publish at, and a
+    /// fresh mint there would draw a second override seed over it.
+    TargetAlreadyNamesAScope,
     /// Resolving a reparented descendant for its re-key failed. Post-publish: the
     /// grantee root and any earlier-re-keyed descendants are committed; this one
     /// keeps its old parent derivation (grantee cannot yet descend into it).
@@ -378,6 +383,7 @@ impl CreateGrantError {
             Self::Publish(_) => "publish-failed",
             Self::Resume(_) => "resume-probe-failed",
             Self::ResumeNotThisGrant => "resume-not-this-grant",
+            Self::TargetAlreadyNamesAScope => "target-already-names-a-scope",
             Self::InteriorResolve { .. } => "interior-resolve-failed",
             Self::InteriorNotConverged { .. } => "interior-not-converged",
             Self::InteriorEpochRegressed { .. } => "interior-epoch-regressed",
@@ -485,6 +491,15 @@ pub trait GrantResumeResolver {
         root: &ResealedScopeRoot,
         node: &NodeRef,
     ) -> Result<Option<ReadBody>, SweepResolveFailure>;
+
+    /// Whether this device holds a read-epoch floor at `node`'s own scope id.
+    ///
+    /// Only a scope root adopted at that id raises one, so the floor tells a
+    /// live scope from a name the gate merely rejects at. It is read **after**
+    /// [`promoted_root`](Self::promoted_root) answers `None`: a promotion this
+    /// grant may resume carries the same floor, and refusing ahead of the probe
+    /// makes a grant that stalls twice unshareable for ever.
+    async fn holds_a_scope_root_floor(&self, node: &NodeRef) -> Result<bool, ResolveFailure>;
 }
 
 /// The scope root a stalled grant already published over the granted folder, as
@@ -785,6 +800,13 @@ where
             source_read_epoch: parent_scope.current_read_epoch,
             root: SubtreeRoot::Promoted(Box::new(promoted)),
         });
+    }
+    if resolver
+        .holds_a_scope_root_floor(&folder)
+        .await
+        .map_err(CreateGrantError::Resume)?
+    {
+        return Err(CreateGrantError::TargetAlreadyNamesAScope);
     }
     let swept = converge_subtree(resolver, publisher, &parent_ref, &folder)
         .await
@@ -1529,6 +1551,8 @@ mod tests {
         /// One node whose re-seal publish stalls, so a test can strand the tail
         /// of a subtree and then let it through.
         reseal_stall: Rc<RefCell<Option<[u8; 16]>>>,
+        /// Nodes this device holds a read-epoch floor at.
+        floored: Rc<RefCell<BTreeSet<[u8; 16]>>>,
     }
 
     impl FakeNet {
@@ -1558,6 +1582,7 @@ mod tests {
                 promoted_boundaries: Vec::new(),
                 moved: Rc::new(RefCell::new(BTreeSet::new())),
                 reseal_stall: Rc::new(RefCell::new(None)),
+                floored: Rc::new(RefCell::new(BTreeSet::new())),
             }
         }
 
@@ -1631,6 +1656,12 @@ mod tests {
         /// descendant scope root the parent scope's index does not name.
         fn with_boundary(mut self, node_id: [u8; 16]) -> Self {
             self.boundary = Some(node_id);
+            self
+        }
+
+        /// Have this device hold a read-epoch floor at `node_id`.
+        fn floored_at(self, node_id: [u8; 16]) -> Self {
+            self.floored.borrow_mut().insert(node_id);
             self
         }
 
@@ -1926,6 +1957,10 @@ mod tests {
                 children: self.promoted_children(),
                 boundaries: self.promoted_boundaries.clone(),
             }))
+        }
+
+        async fn holds_a_scope_root_floor(&self, node: &NodeRef) -> Result<bool, ResolveFailure> {
+            Ok(self.floored.borrow().contains(&node.node_id))
         }
 
         async fn moved_interior_node(
@@ -2723,6 +2758,22 @@ mod tests {
                 .check(),
             "resume-not-this-grant",
         );
+    }
+
+    /// A live scope root the resume probe does not claim still stands at the
+    /// name this mint would publish at, and only the floor answers for it.
+    #[test]
+    fn a_floored_target_the_probe_does_not_resume_refuses_the_mint() {
+        let net = FakeNet::new(Ok(())).floored_at(GRANTEE_SCOPE);
+        let (refused, published, hub) = run(7, &[], net, &[]);
+        assert_eq!(
+            refused
+                .expect_err("a mint over a floored target is refused")
+                .check(),
+            "target-already-names-a-scope",
+        );
+        assert!(published.is_empty(), "and nothing is published");
+        assert_nothing_delivered(&hub);
     }
 
     #[test]

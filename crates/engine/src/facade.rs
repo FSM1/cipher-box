@@ -1835,6 +1835,18 @@ impl EngineError {
         }
     }
 
+    /// A scope mint's failure under the names `checks` gives this command: a
+    /// grant and an invite link report the same ground differently, and only the
+    /// caller knows which one it is.
+    fn from_share_mint(err: CreateGrantError, checks: ShareChecks) -> Self {
+        match err {
+            CreateGrantError::TargetAlreadyNamesAScope => EngineError::UnsupportedTarget {
+                check: checks.already_a_scope,
+            },
+            other => EngineError::from_create_grant(other),
+        }
+    }
+
     /// Map a read-grant creation failure on the classes a host acts on:
     /// availability it may retry, an input or a bound it can change, and a
     /// fail-closed refusal it must never retry.
@@ -1883,7 +1895,8 @@ impl EngineError {
             // The promoted root authenticated; it just commits another grant.
             // That is a target this command cannot mint over, not a verdict on
             // the record.
-            e @ CreateGrantError::ResumeNotThisGrant => {
+            e @ (CreateGrantError::ResumeNotThisGrant
+            | CreateGrantError::TargetAlreadyNamesAScope) => {
                 EngineError::UnsupportedTarget { check: e.check() }
             }
             terminal => EngineError::TrustViolation {
@@ -6864,8 +6877,6 @@ where {
             return Err(EngineError::UnsupportedTarget { check });
         }
 
-        self.refuse_a_floored_target(node, checks.already_a_scope)
-            .await?;
         let parent_node_seed = kdf::node_seed(&current.override_seed, &node.0);
 
         let rendered = self.render().await?;
@@ -6966,7 +6977,7 @@ where {
                     &parent_plan,
                 )
                 .await
-                .map_err(EngineError::from_create_grant)?;
+                .map_err(|e| EngineError::from_share_mint(e, checks))?;
                 PendingShare::SharePointer(recipient)
             }
             ScopeShare::InviteLink { expires_at } => PendingShare::Fragment(
@@ -6987,7 +6998,10 @@ where {
                     },
                 )
                 .await
-                .map_err(EngineError::from_invite_mint)?,
+                .map_err(|e| match e {
+                    InviteMintError::Create(create) => EngineError::from_share_mint(create, checks),
+                    other => EngineError::from_invite_mint(other),
+                })?,
             ),
         };
 
@@ -13002,7 +13016,7 @@ mod tests {
                 _record_bytes: &[u8],
             ) -> Result<crate::net::AdoptOutcome, crate::gate::GateError> {
                 Ok(crate::net::AdoptOutcome {
-                    adopted: Adopted {
+                    pass: crate::net::GatePass::Advanced(Adopted {
                         read_body: ReadBody::Folder {
                             created_at: 0,
                             modified_at: 0,
@@ -13011,7 +13025,7 @@ mod tests {
                         },
                         sequence: 1,
                         epoch: 1,
-                    },
+                    }),
                     write_scope_seed: None,
                     node_id: [0u8; 16],
                     read_scope_seed: None,
@@ -13519,9 +13533,16 @@ mod tests {
         use crate::sync::pointer::{
             SessionRole, scope_pointer_name, scope_pointer_signer, seal_repoint, vault_pointer_name,
         };
+        use cipherbox_core::suite::contact::ContactCode;
+
+        use crate::grants::mint_grant_row;
+        use crate::mailbox::post_sealed;
+        use crate::rotation::derive_write_name;
+        use crate::testkit::account::{Blocks, serve_http};
         use crate::testkit::{
-            FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_SCOPE_SEED as SCOPE_SEED,
-            OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, OwnerRootSpec, owner_root_fixture,
+            FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_POINTER_READ_KEY,
+            OWNER_ROOT_SCOPE_SEED as SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
+            OwnerRootFixture, OwnerRootSpec, owner_root_fixture, owner_root_fixture_at,
             poll_tasks_once,
         };
 
@@ -13654,13 +13675,20 @@ mod tests {
         }
 
         fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
+            engine_with_api(device, ApiBaseUrl::offline())
+        }
+
+        fn engine_with_api(
+            device: &FakeDevice,
+            api_base_url: ApiBaseUrl,
+        ) -> (Engine<FakeSeamTypes>, EventStream) {
             Engine::new(
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
                 ContentProfile::CI,
                 StoragePolicy::CI,
-                ApiBaseUrl::offline(),
+                api_base_url,
                 gateway_config(),
             )
         }
@@ -14365,6 +14393,156 @@ mod tests {
                 after[0].resolution,
                 Some(ResolutionClass::Unresolvable),
                 "a scope root nothing answers at is unresolvable, never a revocation",
+            );
+        }
+
+        /// The sharer of the accepted share: a second account, whose contact
+        /// code this vault imports before the pointer is delivered.
+        const SHARER_SECRET: [u8; 32] = [0x31; 32];
+        /// The scope that sharer grants — never `SCOPE`, which is this vault's
+        /// own anchor.
+        const SHARED_SCOPE_ROOT: [u8; 16] = [0x5c; 16];
+
+        fn sharer_identity() -> EcdsaSigner {
+            EcdsaSigner::from_scalar(&SHARER_SECRET).expect("valid scalar")
+        }
+
+        /// The sharer's scope root at `read_epoch`, committing one read grant to
+        /// this vault.
+        fn shared_root(read_epoch: u64) -> OwnerRootFixture {
+            let name = derive_write_name(&WRITE_SCOPE_SEED, &SHARED_SCOPE_ROOT);
+            let sharer_enc = kdf::enc_subkey(&SHARER_SECRET);
+            let row = mint_grant_row(
+                &sharer_identity(),
+                &sharer_enc,
+                &OWNER_ROOT_POINTER_READ_KEY,
+                sharer_identity().verifying_key().to_sec1(),
+                &kdf::enc_subkey(&CAP_SECRET).public(),
+                &SHARED_SCOPE_ROOT,
+                name.as_str().as_bytes(),
+                CorePermission::Read,
+            )
+            .expect("a contributory recipient key");
+            owner_root_fixture_at(
+                OwnerRootSpec {
+                    owner_identity: &sharer_identity(),
+                    owner_enc: &sharer_enc.public(),
+                    scope_id: SHARED_SCOPE_ROOT,
+                    root_id: SHARED_SCOPE_ROOT,
+                    children: Vec::new(),
+                    child_scope_index: Vec::new(),
+                    grants: vec![row],
+                    parent_node_seed: None,
+                    owner_write_blob_epoch: None,
+                    write_history_link: Vec::new(),
+                },
+                read_epoch,
+            )
+        }
+
+        /// Serve `fixture` at the shared scope root's name at `sequence`, on
+        /// every endpoint the fan-out reads.
+        fn seed_shared_record(device: &FakeDevice, fixture: &OwnerRootFixture, sequence: u64) {
+            for endpoint in device.record_store.endpoints() {
+                device.record_store.seed_record(
+                    &endpoint,
+                    fixture.name.as_str(),
+                    root_record_at_node(SHARED_SCOPE_ROOT, &fixture.head_cid_str, sequence),
+                );
+            }
+        }
+
+        /// The verdict this vault's one `/shared` row carries.
+        fn shared_row_verdict(engine: &Engine<FakeSeamTypes>) -> Option<ResolutionClass> {
+            let rows = block_on(engine.received_shares()).expect("the list reads");
+            assert_eq!(rows.len(), 1, "one accepted share");
+            rows[0].resolution
+        }
+
+        /// The accept leg and the `/shared` leg of one tick key their durable
+        /// floors under `ContactLabel::of(contact_label_seed, sharer)`. One seed
+        /// reaches both, and nothing else fails if a later edit hands one leg
+        /// another: a floor read under the wrong label finds no key, an absent
+        /// floor reads as a genuine zero, and the superseded record below reads
+        /// as granted.
+        #[test]
+        fn the_accept_and_the_shared_read_hold_one_scope_to_one_contact_label_seed() {
+            let world = FakeWorld::new();
+            let device = world.device(&owner_identity().verifying_key().to_sec1());
+            let current = shared_root(EPOCH + 1);
+            let superseded = shared_root(EPOCH);
+            let (head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+            let blocks = Blocks::default();
+            blocks.put(head_block);
+            blocks.put(current.head_block.clone());
+            blocks.put(superseded.head_block.clone());
+            serve_http(&device, &blocks, 600);
+            let (mut engine, _events) = engine_with_api(
+                &device,
+                ApiBaseUrl::parse("http://api.test").expect("a base"),
+            );
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+                .expect("cold start adopts the owner root");
+            let mut tasks = world.scheduler.take_spawned_tasks();
+            poll_tasks_once(&mut tasks);
+
+            block_on(
+                engine.command(Command::ImportContact {
+                    contact_code: ContactCode::create(
+                        &sharer_identity(),
+                        kdf::enc_subkey(&SHARER_SECRET).public(),
+                    )
+                    .encode(),
+                }),
+            )
+            .expect("the sharer's code imports");
+
+            seed_shared_record(&device, &current, 2);
+            block_on(post_sealed(
+                &world.mailbox_hub.mailbox_for(b"sharer"),
+                &kdf::enc_subkey(&CAP_SECRET).public(),
+                &owner_identity().verifying_key(),
+                &[0x51; 32],
+                ENVELOPE_V,
+                &sharer_identity(),
+                &SharePointer {
+                    scope_root_name: current.name.as_str().as_bytes().to_vec(),
+                    sharer_identity_pk: sharer_identity().verifying_key().to_sec1(),
+                    display_name: "shared-folder".to_owned(),
+                    permission: CorePermission::Read,
+                }
+                .encode(),
+                "share-1",
+            ))
+            .expect("the sealed pointer posts");
+
+            world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
+            poll_tasks_once(&mut tasks);
+            assert_eq!(
+                shared_row_verdict(&engine),
+                Some(ResolutionClass::Granted),
+                "the accepted share resolves under the set that commits it"
+            );
+
+            // The record the sharer's own read rotation superseded, replayed at a
+            // higher sequence. The read-epoch floor the accept raised is the only
+            // bar that tells it from the one in force, and no other leg of the
+            // pass raises that floor.
+            seed_shared_record(&device, &superseded, 3);
+            // The `/shared` refresh is damped, so the pass that re-resolves the
+            // replay is not the next one.
+            for _ in 0..4 {
+                world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
+                poll_tasks_once(&mut tasks);
+            }
+            assert_eq!(
+                shared_row_verdict(&engine),
+                Some(ResolutionClass::EpochLag),
+                "a record behind the floor the accept raised must leave the row granted"
             );
         }
 

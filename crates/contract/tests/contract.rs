@@ -1394,6 +1394,10 @@ impl GrantResumeResolver for LocalNet {
     ) -> Result<Option<ReadBody>, SweepResolveFailure> {
         Ok(None)
     }
+
+    async fn holds_a_scope_root_floor(&self, _node: &NodeRef) -> Result<bool, ResolveFailure> {
+        Ok(false)
+    }
 }
 
 /// Inert: this suite's subject is the mailbox DTO the grant emits, not the

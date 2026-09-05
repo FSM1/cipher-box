@@ -136,8 +136,14 @@ pub fn with_cut_epoch(
     }
 }
 
-/// Author an owner-root head block from `spec`.
+/// Author an owner-root head block from `spec` at [`OWNER_ROOT_EPOCH`].
 pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
+    owner_root_fixture_at(spec, OWNER_ROOT_EPOCH)
+}
+
+/// The same root authored at `read_epoch`, for a test that must serve two
+/// epochs of one scope at one name — the shape a read rotation leaves behind.
+pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerRootFixture {
     let OwnerRootSpec {
         owner_identity,
         owner_enc,
@@ -160,7 +166,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
 
     let sign_for = |tag: u8, recipient_tag: Option<[u8; 32]>, ct: &[u8]| -> [u8; 64] {
         let input =
-            StructureSigInput::over_ciphertext(scope_id, OWNER_ROOT_EPOCH, tag, recipient_tag, ct);
+            StructureSigInput::over_ciphertext(scope_id, read_epoch, tag, recipient_tag, ct);
         sign_structure(&owner_pseudonym, &input).to_bytes()
     };
     let sign = |tag: u8, ct: &[u8]| -> [u8; 64] { sign_for(tag, None, ct) };
@@ -176,8 +182,8 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
     let sealed_owner = seal_owner_blob(
         owner_enc,
         &EPH_OWNER,
-        &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_OWNER_BLOB),
-        &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_EPOCH),
+        &aad(read_epoch, STRUCT_TAG_OWNER_BLOB),
+        &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, read_epoch),
     )
     .unwrap();
     let owner_blob = SignedOwnerBlob {
@@ -191,7 +197,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
     let write_body_sealed = seal(
         write_key.as_bytes(),
         &NONCE_WRITE_BODY,
-        &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_WRITE_BODY),
+        &aad(read_epoch, STRUCT_TAG_WRITE_BODY),
         &encode_write_body(&WriteBody {
             grant_ledger: grants.iter().map(|g| g.ledger_entry.clone()).collect(),
             write_history_link,
@@ -228,8 +234,8 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         let link = seal_ascent_link(
             &parent_node_seed,
             &EPH_ASCENT,
-            &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_ASCENT_LINK),
-            &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_EPOCH),
+            &aad(read_epoch, STRUCT_TAG_ASCENT_LINK),
+            &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, read_epoch),
         )
         .unwrap();
         SignedAscentLink {
@@ -260,11 +266,11 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
             let sealed = seal_grant_blob(
                 &recipient,
                 &ephemeral,
-                &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_GRANT_BLOB),
+                &aad(read_epoch, STRUCT_TAG_GRANT_BLOB),
                 &GrantBlobPayload::new(
                     OWNER_ROOT_SCOPE_SEED,
                     write_scope_seed,
-                    OWNER_ROOT_EPOCH,
+                    read_epoch,
                     OWNER_ROOT_POINTER_READ_KEY,
                 ),
             )
@@ -314,7 +320,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         V,
         root_id,
         scope_id,
-        OWNER_ROOT_EPOCH,
+        read_epoch,
         &folder,
     )
     .unwrap();

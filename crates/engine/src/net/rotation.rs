@@ -61,7 +61,7 @@ use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{NodeId, seed_names};
 use crate::gate::floor::PointerPlane;
-use crate::gate::{Adopted, GateError, RejectionReason, floor};
+use crate::gate::{Adopted, GateError, RejectionReason, floor, read_cut_epoch_floor};
 use crate::grants::child_index::canonicalize;
 use crate::grants::create::ScopePointerVoucher;
 use crate::grants::{
@@ -546,15 +546,13 @@ async fn gated_scope_root<H: Http, F: FloorStore>(
     record_bytes: &[u8],
 ) -> Result<GatedScopeRoot, RootGateVerdict> {
     match adopter.adopt_root(name, record_bytes).await {
-        Ok((candidate, outcome)) => Ok(GatedScopeRoot {
+        Ok((candidate, adopted, seeds)) => Ok(GatedScopeRoot {
             envelope: candidate.envelope,
             section: candidate.grant_section,
-            sequence: outcome.adopted.sequence,
-            read_body: outcome.adopted.read_body,
-            read_scope_seed: outcome
-                .read_scope_seed
-                .ok_or(RootGateVerdict::Unavailable)?,
-            write_scope_seed: outcome.write_scope_seed,
+            sequence: adopted.sequence,
+            read_body: adopted.read_body,
+            read_scope_seed: seeds.read_scope_seed,
+            write_scope_seed: seeds.write_scope_seed,
         }),
         Err(GateError::Seam(_)) => Err(RootGateVerdict::Unavailable),
         Err(GateError::Rejected(rejection))
@@ -1581,14 +1579,21 @@ where
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
-    /// The two durable-floor mirrors of gate rejects this build would itself make
-    /// on the record about to be signed — release-active, because a signed record
-    /// cannot be unpublished (security rule 8):
+    /// The three durable-floor mirrors of gate rejects this build would itself
+    /// make on the record about to be signed — release-active, because a signed
+    /// record cannot be unpublished (security rule 8):
     ///
     /// - the read epoch must not sit below the durable revocation floor (stage 5);
     /// - the write epoch must not sit below the durable write floor, which the
     ///   owner-write-blob's AAD binds — below it the root publishes write-plane
-    ///   dead, and floors are monotonic, so it can never be rotated back.
+    ///   dead, and floors are monotonic, so it can never be rotated back;
+    /// - the re-sealed grant set's cut epoch must not sit below the durable
+    ///   cut-epoch floor, the bar stage 2 holds every commitment to
+    ///   ([`refuse_stale_cut_epoch`](cipherbox_core::seal::refuse_stale_cut_epoch)).
+    ///   The engine is a single writer, so another leg may raise that floor from
+    ///   the owner's fresh cut while this pass parks its re-seal; signing then
+    ///   would overwrite the post-cut record at a higher sequence with a set
+    ///   this build's own stage 2 refuses for ever.
     ///
     /// Runs **after** this pass's gated read of the scope root, which may itself
     /// advance the read-epoch floor: measured before it, the floor comparison
@@ -1606,7 +1611,13 @@ where
             .await
             .map_err(|_| RotationPublishError::NotPublished)?
             .unwrap_or(0);
-        if record.read_epoch < read_floor || record.write_epoch < write_floor {
+        let cut_floor = read_cut_epoch_floor(self.floors, scope_id)
+            .await
+            .map_err(|_| RotationPublishError::NotPublished)?;
+        if record.read_epoch < read_floor
+            || record.write_epoch < write_floor
+            || record.section.commitment.cut_epoch < cut_floor
+        {
             return Err(RotationPublishError::Rejected);
         }
         Ok(())
@@ -2932,6 +2943,13 @@ where
             children: body_children(&gated.read_body),
             boundaries: write_body.direct_child_scope_index,
         }))
+    }
+
+    async fn holds_a_scope_root_floor(&self, node: &NodeRef) -> Result<bool, ResolveFailure> {
+        Ok(floor::read_epoch_floor(self.floors, &node.node_id)
+            .await
+            .map_err(|_| ResolveFailure::Unavailable)?
+            .is_some())
     }
 
     async fn moved_interior_node(
@@ -9238,6 +9256,10 @@ mod tests {
         countdown: Cell<usize>,
         sighting: Cell<Option<u64>>,
         fired: Cell<bool>,
+        /// The same countdown for a cut-epoch floor raise, which another leg's
+        /// resolve of the owner's fresh cut makes.
+        cut_countdown: Cell<usize>,
+        cut: Cell<Option<u64>>,
     }
 
     impl ConsultingFloors {
@@ -9247,6 +9269,8 @@ mod tests {
                 countdown: Cell::new(0),
                 sighting: Cell::new(None),
                 fired: Cell::new(false),
+                cut_countdown: Cell::new(0),
+                cut: Cell::new(None),
             }
         }
 
@@ -9255,6 +9279,15 @@ mod tests {
         fn sight_on_write_read(&self, nth: usize, write_epoch: u64) {
             self.countdown.set(nth);
             self.sighting.set(Some(write_epoch));
+        }
+
+        /// Raise the cut-epoch floor to `cut_epoch` on the `nth` write-epoch
+        /// floor read from now — `check_publishable` reads the write bar
+        /// immediately before the cut bar, so `nth = 2` lands the raise inside
+        /// its own window.
+        fn cut_on_write_read(&self, nth: usize, cut_epoch: u64) {
+            self.cut_countdown.set(nth);
+            self.cut.set(Some(cut_epoch));
         }
     }
 
@@ -9267,6 +9300,15 @@ mod tests {
                 {
                     self.fired.set(true);
                     floor::advance_write_epoch_on_sight(&self.inner, &SCOPE, write_epoch).await?;
+                }
+            }
+            if key.ends_with(b"/write-epoch") && self.cut_countdown.get() > 0 {
+                self.cut_countdown.set(self.cut_countdown.get() - 1);
+                if self.cut_countdown.get() == 0
+                    && let Some(cut_epoch) = self.cut.take()
+                {
+                    self.fired.set(true);
+                    crate::gate::record_cut_epoch_floor(&self.inner, &SCOPE, cut_epoch).await?;
                 }
             }
             self.inner.epoch_floor(key).await
@@ -9351,6 +9393,41 @@ mod tests {
             block_on(floor::write_epoch_floor(&harness.floors, &SCOPE)).unwrap(),
             Some(OWNER_ROOT_EPOCH),
             "the deferred sighting left the floor the publish was authorized against",
+        );
+    }
+
+    /// The cut arm of the same window. Stage 2 holds every commitment to the
+    /// durable cut-epoch floor, so a cut floor raised between this pass's gated
+    /// read and its signature would leave the signed root refused by this
+    /// build's own gate for ever — and it would overwrite the owner's post-cut
+    /// record at a higher sequence, rolling the revocation back for every reader
+    /// that does not hold the floor.
+    #[test]
+    fn a_cut_floor_rise_inside_the_owner_publish_window_refuses_the_re_seal() {
+        let (harness, root, cut) = staged_cut();
+        let floors = ConsultingFloors::wrapping(&harness.floors);
+        floors.cut_on_write_read(2, 1);
+
+        assert_eq!(
+            block_on(
+                harness
+                    .net_rooted_with_floors(
+                        RotationAncestry::rooted_at(SCOPE, &OWNER_ROOT_SCOPE_SEED, &[]),
+                        &floors,
+                    )
+                    .publish_scope_root(&cut)
+            ),
+            Err(RotationPublishError::Rejected),
+            "a commitment below the live cut floor must never be signed"
+        );
+        assert!(
+            floors.fired.get(),
+            "the raise must reach the guard's window"
+        );
+        assert_eq!(
+            published_head(&harness, &root.name).0.sequence,
+            1,
+            "the staged record still stands at its name"
         );
     }
 

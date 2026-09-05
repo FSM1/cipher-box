@@ -386,7 +386,7 @@ impl PendingAdoption {
     /// pair: the engine is the single writer (blueprint/engine.md "Facade"), and
     /// cross-writer contention is resolved on the publish plane, never on the
     /// local floor read.
-    pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, GateError> {
+    pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
         // The restrictive floor goes first, so an interrupt between the two
         // leaves this device refusing a pre-cut set it would otherwise
         // re-adopt, never the reverse. A scope the owner never cut carries
@@ -394,8 +394,7 @@ impl PendingAdoption {
         if self.cut_epoch > 0 {
             floors
                 .raise_epoch_floor(&cut_epoch_floor_key(&self.scope_id), self.cut_epoch)
-                .await
-                .map_err(GateError::Seam)?;
+                .await?;
         }
         floor::advance_on_unseal(
             floors,
@@ -404,8 +403,7 @@ impl PendingAdoption {
             self.adopted.sequence,
             self.adopted.epoch,
         )
-        .await
-        .map_err(GateError::Seam)?;
+        .await?;
         Ok(self.adopted)
     }
 }
@@ -821,7 +819,7 @@ pub async fn adopt<F: FloorStore>(
     candidate: &Candidate,
 ) -> Result<(Adopted, Option<Zeroizing<[u8; 32]>>), GateError> {
     let (pending, write_scope_seed) = adopt_deferred(floors, reader, candidate).await?;
-    let adopted = pending.commit(floors).await?;
+    let adopted = pending.commit(floors).await.map_err(GateError::Seam)?;
     Ok((adopted, write_scope_seed))
 }
 

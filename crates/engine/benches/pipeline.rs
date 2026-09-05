@@ -21,7 +21,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{PreservedFields, ReadBody};
 
 use cipherbox_engine::gate::{Adopted, Candidate, GateError, ReaderContext, adopt};
-use cipherbox_engine::net::{AdoptOutcome, Adopter, PublishRequest, publish, resolve};
+use cipherbox_engine::net::{AdoptOutcome, Adopter, GatePass, PublishRequest, publish, resolve};
 use cipherbox_engine::seams::{HttpResponse, RecordTransport};
 use cipherbox_engine::sync::ResolveMode;
 use cipherbox_engine::testkit::account::{Blocks, EOL, TTL_NANOS, owner_identity, serve_http};
@@ -239,7 +239,7 @@ impl Adopter for AcceptingAdopter {
         _record_bytes: &[u8],
     ) -> Result<AdoptOutcome, GateError> {
         Ok(AdoptOutcome {
-            adopted: Adopted {
+            pass: GatePass::Advanced(Adopted {
                 read_body: ReadBody::Folder {
                     created_at: 0,
                     modified_at: 0,
@@ -248,7 +248,7 @@ impl Adopter for AcceptingAdopter {
                 },
                 sequence: 1,
                 epoch: 0,
-            },
+            }),
             write_scope_seed: None,
             node_id: ROOT_ID,
             read_scope_seed: None,
