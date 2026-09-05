@@ -57,6 +57,8 @@ function folderView(overrides: Partial<SnapshotDescriptor> = {}): SnapshotDescri
     ancestors: [],
     deadLetters: [],
     blocked: null,
+    settingsHold: null,
+    binIndexHold: null,
     retainedRecords: 0,
     staleness: 'fresh',
     ...overrides,
@@ -1299,5 +1301,25 @@ describe('the queue overlay', () => {
     );
 
     expect(screen.getByTestId('dead-letter-notice')).toBeDefined();
+  });
+
+  it('shows a held queue head beside the listing, and drops it when the hold clears', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({
+        children: [file(NOTE, 'notes.txt')],
+        binIndexHold: { opId: 8n, node: NOTE, check: 'timed-out' },
+      })
+    );
+
+    expect(screen.getByTestId('queue-hold-notice').textContent).toContain(
+      '"notes.txt" waits on your bin'
+    );
+
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt')] }));
+
+    expect(screen.queryByTestId('queue-hold-notice')).toBeNull();
   });
 });

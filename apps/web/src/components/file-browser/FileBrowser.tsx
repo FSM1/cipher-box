@@ -6,6 +6,7 @@ import { Breadcrumbs } from './Breadcrumbs';
 import { DeadLetterNotice } from './DeadLetterNotice';
 import { EmptyState } from './EmptyState';
 import { FileBrowserActions } from './FileBrowserActions';
+import { QueueHoldNotice } from './QueueHoldNotice';
 import { UploadPanel } from './UploadPanel';
 
 /** The vault browser: where you are, what is in it, and how to move. */
@@ -23,6 +24,7 @@ export function FileBrowser() {
     <div className="file-browser" data-testid="file-browser">
       <Breadcrumbs crumbs={breadcrumbs} onNavigate={navigateTo} />
       <DeadLetterNotice deadLetters={view?.deadLetters ?? []} />
+      <QueueHoldNotice view={view} />
       {recoverable !== null && (
         <div className="file-browser-notice" role="status" data-testid="file-browser-notice">
           <span className="file-browser-notice-message">{recoverable.message}</span>

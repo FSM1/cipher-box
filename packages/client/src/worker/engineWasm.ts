@@ -94,6 +94,17 @@ export interface WasmBlockedOp {
 }
 
 /**
+ * wasm-bindgen `SettingsHold` / `BinIndexHold` — a held queue head and the
+ * stable check name of what refused it. The two carry different check
+ * vocabularies, which `protocol.ts` maps apart.
+ */
+export interface WasmQueueHold {
+  readonly opId: bigint;
+  readonly node: Uint8Array;
+  readonly check: string;
+}
+
+/**
  * wasm-bindgen `OpenedStream` — a read stream and the size of its pinned
  * version. Like `WasmCommandOutcome` it is an exported class holding a pointer
  * into WASM memory, so the caller owns it: read the getters, then `free()`.
@@ -113,6 +124,8 @@ export interface WasmSnapshotView {
   readonly ancestors: WasmBreadcrumb[];
   readonly deadLetters: readonly WasmDeadLetter[];
   readonly blocked?: WasmBlockedOp;
+  readonly settingsHold?: WasmQueueHold;
+  readonly binIndexHold?: WasmQueueHold;
   readonly retainedRecords: number;
   readonly staleness: number;
 }

@@ -4,10 +4,10 @@
  * independent writers. It caches the descriptor the engine handed it and never
  * derives, merges, or patches one.
  *
- * It is also the stream's only listener, so the trust warnings that must never
- * read as staleness are projected from here onto their own surface — a second
- * subscription would open a render later than the engine starts, and drop the
- * cold-start escalations that land in the gap.
+ * The trust warnings that must never read as staleness are projected from here
+ * onto their own surface, because this is the subscription the provider opens
+ * with the client: one taken a render later drops the cold-start escalations
+ * that land in the gap.
  */
 
 import { EngineRequestError, toHex } from '@cipherbox/client';

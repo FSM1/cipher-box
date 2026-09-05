@@ -35,6 +35,88 @@ describe('the vault storage provider', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it('reads the settings again when the engine adopts a change', async () => {
+    const read = vi
+      .fn<() => Promise<VaultStorageDescriptor>>()
+      .mockResolvedValueOnce(FAKE_VAULT_STORAGE)
+      .mockResolvedValue({
+        ...FAKE_VAULT_STORAGE,
+        settings: { ...FAKE_VAULT_STORAGE.settings, binRetentionDays: 0 },
+      });
+    const engine = fakeEngineClient({ vaultStorage: read });
+    const Providers = pageWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session);
+    await act(async () => {
+      render(
+        <Providers>
+          <Probe />
+        </Providers>
+      );
+    });
+    expect(screen.getByTestId('probe').textContent).toBe('30');
+
+    // The member turned the bin off on another device, and the focus tick
+    // adopted it: what this tab states about a delete has to follow.
+    await act(async () => {
+      engine.emit({ kind: 'vaultSettingsChanged' });
+    });
+
+    expect(screen.getByTestId('probe').textContent).toBe('0');
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the newest read when an earlier one resolves after it', async () => {
+    const pending: ((storage: VaultStorageDescriptor) => void)[] = [];
+    const read = vi
+      .fn<() => Promise<VaultStorageDescriptor>>()
+      .mockImplementation(() => new Promise((resolve) => pending.push(resolve)));
+    const engine = fakeEngineClient({ vaultStorage: read });
+    const Providers = pageWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session);
+    await act(async () => {
+      render(
+        <Providers>
+          <Probe />
+        </Providers>
+      );
+    });
+
+    await act(async () => {
+      engine.emit({ kind: 'vaultSettingsChanged' });
+    });
+    expect(pending).toHaveLength(2);
+
+    // The settings change resolves first, then the mount read it overtook.
+    await act(async () => {
+      pending[1]({
+        ...FAKE_VAULT_STORAGE,
+        settings: { ...FAKE_VAULT_STORAGE.settings, binRetentionDays: 0 },
+      });
+      pending[0](FAKE_VAULT_STORAGE);
+    });
+
+    expect(screen.getByTestId('probe').textContent).toBe('0');
+  });
+
+  it('leaves the held read alone for an event that is not a settings change', async () => {
+    const read = vi
+      .fn<() => Promise<VaultStorageDescriptor>>()
+      .mockResolvedValue(FAKE_VAULT_STORAGE);
+    const engine = fakeEngineClient({ vaultStorage: read });
+    const Providers = pageWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session);
+    await act(async () => {
+      render(
+        <Providers>
+          <Probe />
+        </Providers>
+      );
+    });
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a consumer mounted outside the provider', () => {
     // A surface that reads no provider would claim the least for ever, and no
     // test would catch the missing wiring.

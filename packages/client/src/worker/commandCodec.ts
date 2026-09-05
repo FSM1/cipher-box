@@ -7,7 +7,7 @@
  * No interpretation, no crypto — the engine below the facade owns all of that.
  */
 
-import { MAX_FRAGMENT_CHARS } from './protocol.js';
+import { BIN_INDEX_HOLD_CHECKS, MAX_FRAGMENT_CHARS, SETTINGS_HOLD_CHECKS } from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
@@ -45,6 +45,7 @@ import type {
   WasmByoIpfsConfig,
   WasmNodeId,
   WasmPendingApproval,
+  WasmQueueHold,
   WasmReceivedShareRow,
   WasmRegisteredDevice,
   WasmSharingView,
@@ -495,6 +496,24 @@ function blockedHold(blocked: WasmBlockedOp | undefined): BlockedOpDescriptor | 
   };
 }
 
+/**
+ * Reads a held queue head, refusing a check name this build does not know. A
+ * hold whose cause cannot be named would render as an unexplained stall, which
+ * is the state the hold exists to remove.
+ */
+function queueHold<TCheck extends string>(
+  hold: WasmQueueHold | undefined,
+  checks: readonly TCheck[],
+  held: string
+): { opId: bigint; node: Uint8Array; check: TCheck } | null {
+  if (hold === undefined) return null;
+  const check = checks.find((known) => known === hold.check);
+  if (check === undefined) {
+    throw new Error(`unknown WASM ${held} hold check: ${hold.check}`);
+  }
+  return { opId: hold.opId, node: hold.node, check };
+}
+
 function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
   switch (kind) {
     case wasm.NodeKind.File:
@@ -526,6 +545,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
       };
     case 'parkedWritesUnreadable':
       return { kind: 'parkedWritesUnreadable' };
+    case 'vaultSettingsChanged':
+      return { kind: 'vaultSettingsChanged' };
     case 'attributableAbuse':
       return { kind: 'attributableAbuse', description: event.description ?? '' };
     case 'renewalFailed':
@@ -580,6 +601,8 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       reason: deadLetterReason(wasm, dead.reason),
     })),
     blocked: blockedHold(view.blocked),
+    settingsHold: queueHold(view.settingsHold, SETTINGS_HOLD_CHECKS, 'settings'),
+    binIndexHold: queueHold(view.binIndexHold, BIN_INDEX_HOLD_CHECKS, 'bin index'),
     retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
   };

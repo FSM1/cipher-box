@@ -57,16 +57,31 @@ export function useFileDownload(): FileDownload {
   const media = useMediaService();
   const [error, setError] = useState<string | null>(null);
   const tickets = useRef(new Set<string>());
+  const revokes = useRef(new Map<ReturnType<typeof setTimeout>, string>());
+  const mounted = useRef(true);
+
+  const releaseBlobUrls = useCallback(() => {
+    for (const [timer, url] of revokes.current) {
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+    }
+    revokes.current.clear();
+  }, []);
 
   // Unmount cuts a transfer that is still running, and its ticket has no timer
-  // of its own to fall back on.
+  // of its own to fall back on. A deferred revoke left behind outlives the hook
+  // that owns it: it holds the plaintext blob alive, and it fires against
+  // whatever `URL.revokeObjectURL` is installed a second later.
   useEffect(() => {
     const held = tickets.current;
+    mounted.current = true;
     return () => {
+      mounted.current = false;
       for (const url of held) media?.revokeStreamUrl(url);
       held.clear();
+      releaseBlobUrls();
     };
-  }, [media]);
+  }, [media, releaseBlobUrls]);
 
   const save = useCallback(
     async ({ node, name, size }: SaveRequest): Promise<SaveOutcome> => {
@@ -106,14 +121,20 @@ export function useFileDownload(): FileDownload {
         const bytes = await client.facade.download(node);
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
         saveBlobToDisk(url, name);
-        setTimeout(() => URL.revokeObjectURL(url), REVOKE_AFTER_MS);
+        const timer = setTimeout(() => {
+          revokes.current.delete(timer);
+          URL.revokeObjectURL(url);
+        }, REVOKE_AFTER_MS);
+        revokes.current.set(timer, url);
+        // The cleanup this timer is owned by has already run.
+        if (!mounted.current) releaseBlobUrls();
         return 'saved';
       } catch (failure: unknown) {
         setError(errorMessage(failure));
         return 'failed';
       }
     },
-    [client, media]
+    [client, media, releaseBlobUrls]
   );
 
   const saveAll = useCallback(

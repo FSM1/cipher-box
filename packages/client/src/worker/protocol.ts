@@ -96,6 +96,58 @@ export interface BlockedOpDescriptor {
 }
 
 /**
+ * The rule that refused the member's own settings, as the engine's stable check
+ * names. Only the verdicts a settings hold can carry: a hold waits on the member
+ * changing something, so a provider's own answer is retried rather than held.
+ */
+export const SETTINGS_HOLD_CHECKS = [
+  'byo-endpoint-invalid',
+  'byo-endpoint-insecure',
+  'byo-endpoint-blocked',
+  'byo-credential-invalid',
+  'byo-provider-missing',
+  'byo-no-external-ingress',
+] as const;
+
+export type SettingsHoldCheck = (typeof SETTINGS_HOLD_CHECKS)[number];
+
+/**
+ * What a bin index load produced, as the engine's stable check names. Only the
+ * outcomes a bin index hold can carry: a refusal of bytes the plane served is
+ * charged as an attempt, and a stranded mint dead-letters.
+ */
+export const BIN_INDEX_HOLD_CHECKS = [
+  'unproven-first-run',
+  'suppressed',
+  'expired',
+  'timed-out',
+  'floor-unreadable',
+] as const;
+
+export type BinIndexHoldCheck = (typeof BIN_INDEX_HOLD_CHECKS)[number];
+
+/**
+ * The queue head held over the member's own settings, as data (mirrors the
+ * facade `SettingsHold`). The check names the rule, never the endpoint or the
+ * bearer those settings carry.
+ */
+export interface SettingsHoldDescriptor {
+  opId: bigint;
+  node: Uint8Array;
+  check: SettingsHoldCheck;
+}
+
+/**
+ * The queue head held over the owner's bin index, as data (mirrors the facade
+ * `BinIndexHold`).
+ */
+export interface BinIndexHoldDescriptor {
+  opId: bigint;
+  node: Uint8Array;
+  check: BinIndexHoldCheck;
+}
+
+/**
  * One direct child in a snapshot, as data. `size`/`mtime`/`contentVersion` are
  * `null` until projected.
  */
@@ -127,6 +179,10 @@ export interface SnapshotDescriptor {
   deadLetters: DeadLetterDescriptor[];
   /** The drain's over-budget hold, or `null` when nothing is held. */
   blocked: BlockedOpDescriptor | null;
+  /** The drain's settings-refused hold, or `null` when nothing is held. */
+  settingsHold: SettingsHoldDescriptor | null;
+  /** The drain's bin-index-refused hold, or `null` when nothing is held. */
+  binIndexHold: BinIndexHoldDescriptor | null;
   /**
    * Durable queue entries this session holds but cannot read — another
    * identity's, or written by a newer build. They occupy staged bytes against
@@ -603,6 +659,8 @@ export type EventDescriptor =
   | { kind: 'attributableAbuse'; description: string }
   | { kind: 'renewalFailed'; routingKey: string; detail: string }
   | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }
+  /** The engine adopted vault settings other than the ones it held; read them again. */
+  | { kind: 'vaultSettingsChanged' }
   | {
       kind: 'opProgress';
       opId: bigint | null;

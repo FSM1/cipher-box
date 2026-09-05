@@ -2027,6 +2027,7 @@ impl Event {
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
             facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",
+            facade::Event::VaultSettingsChanged => "vaultSettingsChanged",
             facade::Event::OpProgress { .. } => "opProgress",
         }
         .to_string()

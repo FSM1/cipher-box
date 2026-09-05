@@ -142,17 +142,19 @@
 }
 
 /* ==========================================================================
-   Dead Letter Notice
+   Dead Letter and Queue Hold Notices
    ========================================================================== */
 
-.dead-letter-notice {
+.dead-letter-notice,
+.queue-hold-notice {
   margin-bottom: var(--spacing-sm);
   padding: var(--spacing-xs) var(--spacing-sm);
   background-color: var(--color-warning-bg);
   border: var(--border-thickness) solid var(--color-warning-dim);
 }
 
-.dead-letter-notice-title {
+.dead-letter-notice-title,
+.queue-hold-notice-title {
   margin: 0;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
@@ -160,7 +162,8 @@
   color: var(--color-warning);
 }
 
-.dead-letter-notice-list {
+.dead-letter-notice-list,
+.queue-hold-notice-list {
   margin: var(--spacing-xs) 0 0;
   padding: 0;
   list-style: none;
