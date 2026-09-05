@@ -5231,7 +5231,12 @@ where
             carried_epoch_tag_unknown,
         };
         let head = if is_scope_root {
-            author_scope_root_envelope(authoring, name, scope.owner_identity)
+            // The duty is read off the material this end publishes under, never
+            // off the section being carried: an end with an ascent authority is
+            // an interior scope root, whose record the child gate refuses
+            // without its link (`net/rotation.rs::gated_child_root`).
+            let owes_ascent_link = plane.end.ascent_node_seed.is_some();
+            author_scope_root_envelope(authoring, name, scope.owner_identity, owes_ascent_link)
         } else {
             author_child_envelope(authoring)
         }
@@ -5762,7 +5767,8 @@ fn classify_author(error: AuthorError) -> Halt {
         | AuthorError::InvalidGrantSection
         | AuthorError::CommitmentNameMismatch
         | AuthorError::CommitmentSignatureInvalid
-        | AuthorError::SectionSignatureInvalid => Halt::UploadAttempt,
+        | AuthorError::SectionSignatureInvalid
+        | AuthorError::MissingAscentLink => Halt::UploadAttempt,
         // Charged on the same terms as an over-length head: re-authoring the
         // same section repeats it verbatim, so an uncharged retry would spin.
         AuthorError::HeadTooLarge { .. } | AuthorError::GrantSectionTooLarge => Halt::HeadOversized,
@@ -7015,6 +7021,7 @@ mod tests {
             (AuthorError::CommitmentNameMismatch, Halt::UploadAttempt),
             (AuthorError::CommitmentSignatureInvalid, Halt::UploadAttempt),
             (AuthorError::SectionSignatureInvalid, Halt::UploadAttempt),
+            (AuthorError::MissingAscentLink, Halt::UploadAttempt),
             (
                 AuthorError::Seal(cipherbox_core::error::TrustViolation::DuplicateId.into()),
                 Halt::Unclassified,

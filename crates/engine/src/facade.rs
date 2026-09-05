@@ -44,6 +44,7 @@ use crate::bin_index::{
     publish_bin_index,
 };
 use crate::content::budget::{Refusal, ReservationId};
+use crate::content::limits::folder_listing_budget;
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
@@ -2779,18 +2780,24 @@ fn refuse_unemittable_name(name: &str) -> Result<(), EngineError> {
     Ok(())
 }
 
-/// A folder gaining a child, held to [`MAX_FOLDER_CHILDREN`].
+/// A folder gaining a child, held to [`MAX_FOLDER_CHILDREN`] and to the byte
+/// budget its own kind of record has for a listing
+/// ([`folder_listing_budget`]).
 ///
 /// Refused before the op is queued: a queued op the drain can only halt on costs
 /// a staging reservation and surfaces as a dead letter, where the ceiling reads
 /// as a failure rather than as a limit the caller can act on. `arriving` names
 /// the node being placed, so a relink inside its own parent is not refused for a
 /// child the folder already holds, and `replacing` names the child a move frees.
+///
+/// The count arm is the cheap half and does not vary: a listing a scope root's
+/// tighter budget refuses is refused on its bytes.
 fn refuse_full_parent(
     rendered: &Snapshot,
     parent: NodeId,
     arriving: Option<NodeId>,
     replacing: Option<NodeId>,
+    scope_roots: &[NodeId],
 ) -> Result<(), EngineError> {
     let children = rendered.children(parent);
     if arriving.is_some_and(|node| children.iter().any(|child| child.id == node)) {
@@ -2803,14 +2810,23 @@ fn refuse_full_parent(
             bytes.saturating_add(child_ref_bytes(child.name(), child.ipns_name.as_deref())),
         )
     });
+    let budget = folder_listing_budget(answers_as_a_scope_root(rendered, parent, scope_roots));
     let admits = count < MAX_FOLDER_CHILDREN
-        && listing.saturating_add(MAX_AUTHORED_CHILD_REF_BYTES) <= MAX_READ_SEALED_BYTES;
+        && listing.saturating_add(MAX_AUTHORED_CHILD_REF_BYTES) <= budget;
     if admits {
         return Ok(());
     }
     Err(EngineError::MalformedInput {
         check: "folder-child-ceiling",
     })
+}
+
+/// Whether `node`'s own record is authored as a scope root, and so is held to
+/// the re-seal reservation: the vault root always is, and the interior roots
+/// are the boundaries this session knows
+/// ([`Engine::relocation_scope_roots`]).
+fn answers_as_a_scope_root(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> bool {
+    node == rendered.root || scope_roots.contains(&node)
 }
 
 /// A rename leaves the child count alone and moves the listing's bytes, so the
@@ -2823,6 +2839,7 @@ fn refuse_over_budget_rename(
     rendered: &Snapshot,
     node: NodeId,
     new_name: &str,
+    scope_roots: &[NodeId],
 ) -> Result<(), EngineError> {
     let Some(parent) = rendered.parent_of(node) else {
         return Ok(());
@@ -2843,7 +2860,8 @@ fn refuse_over_budget_rename(
                     after.saturating_add(child_ref_bytes(renamed, ipns)),
                 )
             });
-    if after > before && after > MAX_READ_SEALED_BYTES {
+    let budget = folder_listing_budget(answers_as_a_scope_root(rendered, parent, scope_roots));
+    if after > before && after > budget {
         return Err(EngineError::MalformedInput {
             check: "folder-child-ceiling",
         });
@@ -6061,7 +6079,13 @@ where {
                 refuse_unlawful_name(&name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, parent)?;
-                refuse_full_parent(&rendered, parent, None, None)?;
+                refuse_full_parent(
+                    &rendered,
+                    parent,
+                    None,
+                    None,
+                    &self.relocation_scope_roots(),
+                )?;
                 let target = self.mint_node_id()?;
                 let base_sequence = rendered.record_sequence(parent).unwrap_or(1);
                 let node = match kind {
@@ -6088,7 +6112,7 @@ where {
                     return Err(EngineError::RestoreTargetGone);
                 }
                 refuse_outside_vault(&rendered, into)?;
-                refuse_full_parent(&rendered, into, None, None)?;
+                refuse_full_parent(&rendered, into, None, None, &self.relocation_scope_roots())?;
                 let base_sequence = rendered.record_sequence(into).unwrap_or(1);
                 let op = Op::restore(
                     node,
@@ -6116,7 +6140,12 @@ where {
                 refuse_unlawful_name(&new_name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, node)?;
-                refuse_over_budget_rename(&rendered, node, &new_name)?;
+                refuse_over_budget_rename(
+                    &rendered,
+                    node,
+                    &new_name,
+                    &self.relocation_scope_roots(),
+                )?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::rename(node, new_name, seq, authored_at))
                     .await
@@ -6125,7 +6154,13 @@ where {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence, crossing) =
                     self.relocation_anchors(&rendered, node, new_parent)?;
-                refuse_full_parent(&rendered, new_parent, Some(node), None)?;
+                refuse_full_parent(
+                    &rendered,
+                    new_parent,
+                    Some(node),
+                    None,
+                    &self.relocation_scope_roots(),
+                )?;
                 let op = Op::relink(
                     node,
                     from_parent,
@@ -6146,7 +6181,13 @@ where {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence, crossing) =
                     self.relocation_anchors(&rendered, node, new_parent)?;
-                refuse_full_parent(&rendered, new_parent, Some(node), replacing)?;
+                refuse_full_parent(
+                    &rendered,
+                    new_parent,
+                    Some(node),
+                    replacing,
+                    &self.relocation_scope_roots(),
+                )?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
                     // The conditional-delete anchor: a concurrent edit that
@@ -8098,7 +8139,13 @@ where {
                 refuse_unlawful_name(name)?;
                 let rendered = self.render().await?;
                 refuse_outside_vault(&rendered, *parent)?;
-                refuse_full_parent(&rendered, *parent, None, None)?;
+                refuse_full_parent(
+                    &rendered,
+                    *parent,
+                    None,
+                    None,
+                    &self.relocation_scope_roots(),
+                )?;
                 None
             }
             WriteTarget::Version {
@@ -8393,7 +8440,13 @@ where {
         // place in the folder until it commits, so handles opened together all
         // see the same free one.
         if let WriteTarget::NewFile { parent, .. } = &target {
-            refuse_full_parent(&self.render().await?, *parent, None, None)?;
+            refuse_full_parent(
+                &self.render().await?,
+                *parent,
+                None,
+                None,
+                &self.relocation_scope_roots(),
+            )?;
         }
         let finished = writer
             .finish(&mut *self.entropy.borrow_mut())
@@ -9777,7 +9830,13 @@ where {
                 )
             }
             OpKind::Create { parent, name, node } => {
-                refuse_full_parent(&rendered, *parent, None, None)?;
+                refuse_full_parent(
+                    &rendered,
+                    *parent,
+                    None,
+                    None,
+                    &self.relocation_scope_roots(),
+                )?;
                 Op::create(
                     self.mint_node_id()?,
                     *parent,
@@ -11887,33 +11946,124 @@ mod tests {
     fn a_folder_at_its_ceiling_refuses_a_new_child_but_not_one_it_holds() {
         let root = NodeId([0; 16]);
         let mut rendered = Snapshot::new(root);
+        let parent = ordinary_folder(&mut rendered, root);
         for i in 0..MAX_FOLDER_CHILDREN {
             let child = NodeId((i as u128 + 1).to_be_bytes());
             rendered.upsert_node(NodeMeta::new(child, "n", NodeKind::File));
-            rendered.link(root, child, 1);
+            rendered.link(parent, child, 1);
         }
         let held = NodeId(1u128.to_be_bytes());
         let full = Err(EngineError::MalformedInput {
             check: "folder-child-ceiling",
         });
 
-        assert_eq!(refuse_full_parent(&rendered, root, None, None), full);
+        assert_eq!(refuse_full_parent(&rendered, parent, None, None, &[]), full);
         assert_eq!(
-            refuse_full_parent(&rendered, root, Some(held), None),
+            refuse_full_parent(&rendered, parent, Some(held), None, &[]),
             Ok(()),
             "a relink inside its own parent adds nothing"
         );
         assert_eq!(
-            refuse_full_parent(&rendered, root, None, Some(held)),
+            refuse_full_parent(&rendered, parent, None, Some(held), &[]),
             Ok(()),
             "a move frees the place it replaces"
         );
 
-        rendered.unlink(root, held);
+        rendered.unlink(parent, held);
         assert_eq!(
-            refuse_full_parent(&rendered, root, None, None),
+            refuse_full_parent(&rendered, parent, None, None, &[]),
             Ok(()),
             "one place freed admits one new child"
+        );
+    }
+
+    /// A folder that is not a scope root, so the boundary charges it the
+    /// read-body seal bound alone.
+    fn ordinary_folder(rendered: &mut Snapshot, root: NodeId) -> NodeId {
+        let parent = NodeId(u128::MAX.to_be_bytes());
+        rendered.upsert_node(NodeMeta::new(parent, "folder", NodeKind::Folder));
+        rendered.link(root, parent, 1);
+        parent
+    }
+
+    /// One child whose name fills `listing` bytes of its parent's rendered
+    /// listing — a peer sizes its own children, so the boundary charges the
+    /// bytes it reads rather than the ones this device would author.
+    fn ballast(rendered: &mut Snapshot, parent: NodeId, id: u128, listing: usize) {
+        let child = NodeId(id.to_be_bytes());
+        let name = "n".repeat(listing - CHILD_REF_FIXED_BYTES);
+        rendered.upsert_node(NodeMeta::new(child, name, NodeKind::File));
+        rendered.link(parent, child, 1);
+    }
+
+    /// A scope root's record must hold the grant section a re-key rebuilds, so
+    /// its listing is charged the same reservation the author enforces. Refused
+    /// here, the member learns the folder is full; admitted here, the op commits
+    /// and comes back as a terminal dead letter.
+    #[test]
+    fn a_scope_root_charges_its_listing_against_its_re_seal_reservation() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let interior = NodeId(1u128.to_be_bytes());
+        rendered.upsert_node(NodeMeta::new(interior, "granted", NodeKind::Folder));
+        rendered.link(root, interior, 1);
+        let plain = ordinary_folder(&mut rendered, root);
+
+        // One listing size, between the two budgets: an ordinary folder's record
+        // still takes another child, a scope root's does not.
+        let listing = folder_listing_budget(true) + 1;
+        assert!(listing + MAX_AUTHORED_CHILD_REF_BYTES <= folder_listing_budget(false));
+        ballast(&mut rendered, plain, 10, listing);
+        ballast(&mut rendered, interior, 11, listing);
+        ballast(&mut rendered, root, 12, listing);
+
+        let full = Err(EngineError::MalformedInput {
+            check: "folder-child-ceiling",
+        });
+        let scope_roots = [interior];
+        assert_eq!(
+            refuse_full_parent(&rendered, plain, None, None, &scope_roots),
+            Ok(()),
+            "an ordinary folder is held to the read-body bound alone"
+        );
+        assert_eq!(
+            refuse_full_parent(&rendered, interior, None, None, &scope_roots),
+            full,
+            "a boundary this session knows is a scope root"
+        );
+        assert_eq!(
+            refuse_full_parent(&rendered, root, None, None, &scope_roots),
+            full,
+            "the vault root is a scope root no set has to name"
+        );
+    }
+
+    /// The same two budgets on the rename path, which no count arm backs up.
+    #[test]
+    fn a_rename_on_a_scope_root_is_held_to_the_reservation_too() {
+        let root = NodeId([0; 16]);
+        let mut rendered = Snapshot::new(root);
+        let plain = ordinary_folder(&mut rendered, root);
+        ballast(
+            &mut rendered,
+            plain,
+            10,
+            folder_listing_budget(true) - CHILD_REF_FIXED_BYTES - 1,
+        );
+        let target = NodeId(11u128.to_be_bytes());
+        rendered.upsert_node(NodeMeta::new(target, "n", NodeKind::File));
+        rendered.link(plain, target, 1);
+
+        assert_eq!(
+            refuse_over_budget_rename(&rendered, target, "nn", &[]),
+            Ok(()),
+            "an ordinary folder has room for the byte a scope root does not"
+        );
+        assert_eq!(
+            refuse_over_budget_rename(&rendered, target, "nn", &[plain]),
+            Err(EngineError::MalformedInput {
+                check: "folder-child-ceiling",
+            }),
         );
     }
 
@@ -11924,12 +12074,13 @@ mod tests {
     fn a_folder_of_peer_sized_names_refuses_on_bytes_far_below_the_count() {
         let root = NodeId([0; 16]);
         let mut rendered = Snapshot::new(root);
+        let parent = ordinary_folder(&mut rendered, root);
         let name = "n".repeat(2048);
         let children = MAX_READ_SEALED_BYTES / (CHILD_REF_FIXED_BYTES + name.len()) + 1;
         for i in 0..children {
             let child = NodeId((i as u128 + 1).to_be_bytes());
             rendered.upsert_node(NodeMeta::new(child, name.clone(), NodeKind::File));
-            rendered.link(root, child, 1);
+            rendered.link(parent, child, 1);
         }
 
         assert!(
@@ -11937,7 +12088,7 @@ mod tests {
             "the count ceiling alone would admit this listing"
         );
         assert_eq!(
-            refuse_full_parent(&rendered, root, None, None),
+            refuse_full_parent(&rendered, parent, None, None, &[]),
             Err(EngineError::MalformedInput {
                 check: "folder-child-ceiling",
             })
@@ -11951,23 +12102,26 @@ mod tests {
     fn a_rename_that_grows_a_listing_past_the_seal_budget_is_refused() {
         let root = NodeId([0; 16]);
         let mut rendered = Snapshot::new(root);
+        let parent = ordinary_folder(&mut rendered, root);
         let target = NodeId(1u128.to_be_bytes());
-        let ballast = NodeId(2u128.to_be_bytes());
         // A peer sizes its own child, so the listing sits exactly at the budget
         // and one more byte of name is over it.
-        let ballast_name = "n".repeat(MAX_READ_SEALED_BYTES - 2 * CHILD_REF_FIXED_BYTES - 1);
+        ballast(
+            &mut rendered,
+            parent,
+            2,
+            MAX_READ_SEALED_BYTES - CHILD_REF_FIXED_BYTES - 1,
+        );
         rendered.upsert_node(NodeMeta::new(target, "n", NodeKind::File));
-        rendered.link(root, target, 1);
-        rendered.upsert_node(NodeMeta::new(ballast, ballast_name, NodeKind::File));
-        rendered.link(root, ballast, 1);
+        rendered.link(parent, target, 1);
 
         assert_eq!(
-            refuse_over_budget_rename(&rendered, target, "n"),
+            refuse_over_budget_rename(&rendered, target, "n", &[]),
             Ok(()),
             "a listing that seals stays renamable"
         );
         assert_eq!(
-            refuse_over_budget_rename(&rendered, target, "nn"),
+            refuse_over_budget_rename(&rendered, target, "nn", &[]),
             Err(EngineError::MalformedInput {
                 check: "folder-child-ceiling",
             }),
@@ -11981,17 +12135,18 @@ mod tests {
     fn a_rename_that_shrinks_a_listing_is_never_refused() {
         let root = NodeId([0; 16]);
         let mut rendered = Snapshot::new(root);
+        let parent = ordinary_folder(&mut rendered, root);
         let name = "n".repeat(MAX_NODE_NAME_BYTES);
         let children = MAX_READ_SEALED_BYTES / (CHILD_REF_FIXED_BYTES + name.len()) + 1;
         for i in 0..children {
             let child = NodeId((i as u128 + 1).to_be_bytes());
             rendered.upsert_node(NodeMeta::new(child, name.clone(), NodeKind::File));
-            rendered.link(root, child, 1);
+            rendered.link(parent, child, 1);
         }
         let target = NodeId(1u128.to_be_bytes());
 
         assert_eq!(
-            refuse_over_budget_rename(&rendered, target, "n"),
+            refuse_over_budget_rename(&rendered, target, "n", &[]),
             Ok(()),
             "a shorter name is the way out of an overfilled folder"
         );
