@@ -185,34 +185,51 @@ pub fn record_matches_manifest(
     resolved == Some(manifest)
 }
 
-/// One delete's journal key: the prefix, the owner tag, then the delete's
-/// target. Both suffixes are fixed-width, so no target can alias another
-/// owner's entry.
+/// One delete's journal key: the prefix, the owner tag, the scope root the
+/// delete resolved onto, then the delete's target. Every suffix is fixed-width,
+/// so no target can alias another owner's entry.
+///
+/// The scope root is part of the key because only that scope's material can
+/// settle the entry: the names it holds derive from that scope's write seed and
+/// the records behind them open under its read seed. A pass replays the entries
+/// of the scopes it proved and leaves the rest untouched
+/// (`sync/drain.rs::settle`).
 #[must_use]
-pub fn doomed_journal_key(owner_tag: &[u8; OWNER_TAG_LEN], target: NodeId) -> Vec<u8> {
+pub fn doomed_journal_key(
+    owner_tag: &[u8; OWNER_TAG_LEN],
+    scope_root: NodeId,
+    target: NodeId,
+) -> Vec<u8> {
     let mut key = DOOMED_JOURNAL_PREFIX.to_vec();
     key.extend_from_slice(owner_tag);
+    key.extend_from_slice(&scope_root.0);
     key.extend_from_slice(&target.0);
     key
 }
 
-/// This owner's journal keys among `staged`, each with the delete target it
-/// names — the replay set a pass settles off its own listing.
+/// This owner's journal keys among `staged`, each with the scope root it was
+/// written under and the delete target it names — the replay set a pass settles
+/// off its own listing.
 #[must_use]
 pub fn journalled_keys(
     owner_tag: &[u8; OWNER_TAG_LEN],
     staged: &[Vec<u8>],
-) -> Vec<(Vec<u8>, NodeId)> {
-    let scope = {
-        let mut scope = DOOMED_JOURNAL_PREFIX.to_vec();
-        scope.extend_from_slice(owner_tag);
-        scope
+) -> Vec<(Vec<u8>, NodeId, NodeId)> {
+    let owned = {
+        let mut owned = DOOMED_JOURNAL_PREFIX.to_vec();
+        owned.extend_from_slice(owner_tag);
+        owned
     };
-    let mut keys: Vec<(Vec<u8>, NodeId)> = staged
+    let mut keys: Vec<(Vec<u8>, NodeId, NodeId)> = staged
         .iter()
         .filter_map(|key| {
-            let target: [u8; NODE_ID_LEN] = key.strip_prefix(&scope[..])?.try_into().ok()?;
-            Some((key.clone(), NodeId(target)))
+            let suffix: [u8; NODE_ID_LEN * 2] = key.strip_prefix(&owned[..])?.try_into().ok()?;
+            let (scope_root, target) = suffix.split_at(NODE_ID_LEN);
+            Some((
+                key.clone(),
+                NodeId(scope_root.try_into().ok()?),
+                NodeId(target.try_into().ok()?),
+            ))
         })
         .collect();
     // Store enumeration order is host-dependent; sorted, a pass settles in the
@@ -738,17 +755,24 @@ mod tests {
     }
 
     #[test]
-    fn keys_are_owner_scoped_and_target_addressed() {
+    fn keys_are_owner_scoped_scope_scoped_and_target_addressed() {
         let mine = [1u8; OWNER_TAG_LEN];
         let theirs = [2u8; OWNER_TAG_LEN];
-        let key = doomed_journal_key(&mine, node(7));
+        let vault = node(1);
+        let promoted = node(2);
+        let key = doomed_journal_key(&mine, vault, node(7));
         assert!(key.starts_with(DOOMED_JOURNAL_PREFIX));
-        assert_ne!(key, doomed_journal_key(&theirs, node(7)));
-        assert_ne!(key, doomed_journal_key(&mine, node(8)));
+        assert_ne!(key, doomed_journal_key(&theirs, vault, node(7)));
+        assert_ne!(key, doomed_journal_key(&mine, vault, node(8)));
+        assert_ne!(
+            key,
+            doomed_journal_key(&mine, promoted, node(7)),
+            "one target deleted in two scopes holds two entries"
+        );
 
         let staged = vec![
-            doomed_journal_key(&theirs, node(7)),
-            doomed_journal_key(&mine, node(9)),
+            doomed_journal_key(&theirs, vault, node(7)),
+            doomed_journal_key(&mine, promoted, node(9)),
             key.clone(),
             b"cbx/dj/short".to_vec(),
             b"unrelated".to_vec(),
@@ -756,10 +780,14 @@ mod tests {
         assert_eq!(
             journalled_keys(&mine, &staged),
             vec![
-                (key, node(7)),
-                (doomed_journal_key(&mine, node(9)), node(9)),
+                (key, vault, node(7)),
+                (
+                    doomed_journal_key(&mine, promoted, node(9)),
+                    promoted,
+                    node(9)
+                ),
             ],
-            "only this owner's fixed-width entries, in a host-stable order"
+            "only this owner's fixed-width entries, each with the scope that wrote it"
         );
     }
 }

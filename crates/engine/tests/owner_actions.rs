@@ -40,6 +40,8 @@ use cipherbox_engine::rotation::{
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, Mailbox, RecordTransport, Scheduler, StagingStore, UnixMillis,
 };
+use cipherbox_engine::settings::VaultSettings;
+use cipherbox_engine::sync::MAX_QUARANTINE_ATTEMPTS;
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::op::ScopeCrossing;
 use cipherbox_engine::sync::pointer::{
@@ -47,7 +49,7 @@ use cipherbox_engine::sync::pointer::{
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
-    serve_http,
+    retire_targets, serve_http,
 };
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -1612,6 +1614,135 @@ fn a_delete_unlinks_a_node_from_a_folder_in_each_end_of_the_pass() {
         published_child_names(&fx.world, &fx.blocks, keep, &read_key_of(keep)),
         Vec::<String>::new(),
         "and the folder in the vault's own scope under the anchor's"
+    );
+}
+
+/// The `ipnsName` `folder`'s published record names `child` by, read under
+/// `read_key`. A promoted scope names its own nodes, so the parent's record is
+/// the one plane that spells them.
+fn published_child_name(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    folder: &IpnsName,
+    read_key: &[u8; 32],
+    child: &str,
+) -> IpnsName {
+    let head = published_head(world, blocks, folder).expect("a published record");
+    let envelope = decode_envelope(&head).expect("the head block decodes");
+    let ReadBody::Folder { children, .. } =
+        open_read_body(&envelope, read_key).expect("the folder body opens")
+    else {
+        panic!("expected a folder body");
+    };
+    let named = children
+        .iter()
+        .find(|entry| entry.name == child)
+        .unwrap_or_else(|| panic!("no child named {child}"));
+    IpnsName::parse(core::str::from_utf8(&named.ipns_name).expect("a utf8 ipnsName"))
+        .expect("a canonical ipnsName")
+}
+
+/// A node's per-node read key under `scope_seed`.
+fn read_key_under(scope_seed: &[u8; 32], node: NodeId) -> [u8; 32] {
+    *kdf::read_key(kdf::node_seed(scope_seed, &node.0).as_bytes()).as_bytes()
+}
+
+/// Every target this device has asked the registry to retire, in order.
+fn retired(device: &FakeDevice) -> Vec<String> {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/registry/retire"))
+        .flat_map(|request| {
+            retire_targets(
+                request
+                    .body
+                    .as_deref()
+                    .expect("a retire call carries a body"),
+            )
+        })
+        .collect()
+}
+
+/// A delete below a promoted scope root is journaled under that scope, and only
+/// that scope's material derives the names it holds or opens the records behind
+/// them. A tick that cannot prove the scope leaves the entry alone rather than
+/// spending a quarantine attempt on a verdict it cannot reach, and the tick that
+/// does prove it retires the descendants (blueprint/engine.md "Retirement").
+#[test]
+fn a_delete_inside_a_promoted_scope_retires_the_descendants_that_scope_owns() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // A zero retention, so the delete below runs the reclamation itself rather
+    // than binning the subtree for a later purge.
+    block_on(fx.engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            bin_retention_days: 0,
+            ..VaultSettings::default()
+        },
+    }))
+    .expect("the settings publish");
+
+    // Two levels inside the promoted scope.
+    let album = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "album",
+    );
+    let deep = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, album, "deep");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let (scope_seed, _) = scope_material_of(&fx.world, &fx.blocks, fx.folder);
+    let album_name = published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &write_name(fx.folder),
+        &read_key_under(&scope_seed, fx.folder),
+        "album",
+    );
+    let deep_name = published_child_name(
+        &fx.world,
+        &fx.blocks,
+        &album_name,
+        &read_key_under(&scope_seed, album),
+        "deep",
+    );
+    assert_ne!(deep, album, "the descendant is a node of its own");
+
+    let mark = retired(&fx.owner_device).len();
+    block_on(fx.engine.command(Command::Delete { node: album })).expect("the delete stages");
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    // A whole attempt budget of ticks that cannot reach the promoted root, and
+    // so cannot attribute the entry that scope's delete wrote.
+    fx.world
+        .record_store
+        .fail_get_for(write_name(fx.folder).as_str());
+    for _ in 0..=MAX_QUARANTINE_ATTEMPTS {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    fx.world
+        .record_store
+        .heal_get_for(write_name(fx.folder).as_str());
+
+    // The tick converges the snapshot, the next proves the descendant, and the
+    // one after spends the debt the proof owed.
+    for _ in 0..3 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+
+    let retired = retired(&fx.owner_device)[mark..].to_vec();
+    assert!(
+        retired.contains(&album_name.as_str().to_owned()),
+        "the delete's own target leaves the inventory the republisher walks"
+    );
+    assert!(
+        retired.contains(&deep_name.as_str().to_owned()),
+        "and so does the descendant, which no attempt spent by a settle that \
+         could not attribute it was allowed to strand"
     );
 }
 

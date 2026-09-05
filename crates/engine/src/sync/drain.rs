@@ -1124,6 +1124,29 @@ enum Verdict {
     Retry,
 }
 
+/// What one tick's journal replay may spend across every scope it settles: the
+/// entries it replays and the quarantine proofs those entries decide against.
+/// Shared by the whole tick rather than held per scope, so a vault of many
+/// promoted scopes costs a tick what a vault of one costs.
+struct JournalBudget {
+    /// Entries left to replay ([`MAX_JOURNAL_REPLAYS`]). Each costs a store
+    /// read and a registry batch.
+    replays: usize,
+    /// Quarantine proofs left ([`MAX_QUARANTINE_PROOFS`]). Each costs a fresh
+    /// resolve of one descendant's record, so a delete of a large subtree
+    /// settles over several ticks rather than holding one open.
+    proofs: usize,
+}
+
+impl JournalBudget {
+    fn new() -> Self {
+        Self {
+            replays: MAX_JOURNAL_REPLAYS,
+            proofs: MAX_QUARANTINE_PROOFS,
+        }
+    }
+}
+
 /// Whether a settle pass may decide the reclamation's quarantined descendants,
 /// and so what bounds the quarantine to one converged poll tick
 /// (blueprint/engine.md "Retirement").
@@ -1398,10 +1421,21 @@ where
         report
     }
 
-    /// The identity-wide bookkeeping a tick owes once: the retire ledger, the
-    /// reclamation journal and the staging sweep. `scope` supplies the material
-    /// every name in that ledger is read under, so it is the vault root's.
-    pub(crate) async fn settle(&self, scope: &DrainScope<'_>, journalled_deletes: &[NodeId]) {
+    /// The bookkeeping a tick owes once the queues have run: the orphan heads,
+    /// the retire ledger and the staging sweep, all of them the identity's, plus
+    /// the reclamation journal, which is not. An entry settles only under the
+    /// scope whose write seed derives its names and whose read seed opens the
+    /// records behind them, so the replay runs once per scope in `scopes` and
+    /// leaves every other scope's entries untouched.
+    ///
+    /// `vault` supplies the material for the identity-wide half: every name in
+    /// the retire ledger derives from the vault root's own write seed.
+    pub(crate) async fn settle(
+        &self,
+        vault: &DrainScope<'_>,
+        scopes: &[DrainScope<'_>],
+        journalled_deletes: &[NodeId],
+    ) {
         self.orphan_heads.retire_pending(self.api).await;
         // One enumeration serves every consumer below. A desktop vault stages
         // on the order of ten thousand keys, and each of these was listing the
@@ -1415,10 +1449,20 @@ where
         };
         // An X25519 base-point multiply, so the pass derives it once and threads
         // it through every consumer below.
-        let owner = owner_tag(scope.enc_secret);
-        let seal = self.bookkeeping_seal(scope);
-        self.settle_journalled_deletes(scope, seal, &owner, &staged, journalled_deletes)
+        let owner = owner_tag(vault.enc_secret);
+        let seal = self.bookkeeping_seal(vault);
+        let mut budget = JournalBudget::new();
+        for scope in scopes {
+            self.settle_journalled_deletes(
+                scope,
+                seal,
+                &owner,
+                &staged,
+                journalled_deletes,
+                &mut budget,
+            )
             .await;
+        }
         if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, seal, &staged),
             &owner,
@@ -1426,7 +1470,7 @@ where
             self.gateway,
             self.http,
             self.content_profile,
-            async |node, owing| self.live_owing_record(scope, node, owing).await,
+            async |node, owing| self.live_owing_record(vault, node, owing).await,
         )
         .await
         {
@@ -2584,7 +2628,10 @@ where
         let reclamation = self.owed_by_delete(target, &doomed, None);
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
-        let key = doomed_journal_key(&owner, target);
+        // Keyed by the end the manifest belongs to, which is the end that
+        // derives every name in it: a pass carrying that end as its source is
+        // the only one that can settle the entry.
+        let key = doomed_journal_key(&owner, plane.end.root, target);
         let journalled = self.journal_doomed(seal, &key, target, &reclamation).await;
         if journalled {
             pass.journalled.push(target);
@@ -2751,7 +2798,7 @@ where
         let reclamation = self.owed_by_delete(target, &doomed, Some(deleted_at));
         let owner = owner_tag(scope.enc_secret);
         let seal = self.bookkeeping_seal(scope);
-        let key = doomed_journal_key(&owner, target);
+        let key = doomed_journal_key(&owner, binned_under.end.root, target);
         // Nothing is reclaimed yet, so the entry is still the whole retry.
         // Dropping it over an unwritten journal would strand the subtree's names
         // and its pins with no durable handle to finish from.
@@ -2924,16 +2971,12 @@ where
     /// An entry that does not answer to the target its key names is refused
     /// rather than replayed ([`Reclamation::is_for`]).
     ///
-    /// Bounded per pass by the entries it settles, never by the keys it lists
-    /// ([`MAX_JOURNAL_REPLAYS`]). A refused or unreadable entry costs a local
-    /// read and an HPKE open, but no slot: nothing sweeps this prefix, so
-    /// charging it one would starve every entry sorting behind it for good.
-    /// Settled entries leave, so the rest are reached on the next pass.
-    ///
-    /// The quarantine proofs the pass may spend are bounded across every entry
-    /// together ([`MAX_QUARANTINE_PROOFS`]), because each one is a fresh resolve
-    /// of a descendant's own record: a delete of a large subtree settles over
-    /// several passes rather than holding one open.
+    /// Bounded by the entries it settles, never by the keys it lists, and the
+    /// budget is the tick's rather than this scope's ([`JournalBudget`]). A
+    /// refused or unreadable entry costs a local read and an HPKE open, but no
+    /// slot: nothing sweeps this prefix, so charging it one would starve every
+    /// entry sorting behind it for good. Settled entries leave, so the rest are
+    /// reached on the next pass.
     async fn settle_journalled_deletes(
         &self,
         scope: &DrainScope<'_>,
@@ -2941,12 +2984,18 @@ where
         owner: &[u8; 32],
         staged: &[Vec<u8>],
         journalled_now: &[NodeId],
+        budget: &mut JournalBudget,
     ) {
-        let mut replayed = 0usize;
-        let mut proofs = MAX_QUARANTINE_PROOFS;
-        for (key, target) in journalled_keys(owner, staged) {
-            if replayed == MAX_JOURNAL_REPLAYS {
+        for (key, scope_root, target) in journalled_keys(owner, staged) {
+            if budget.replays == 0 {
                 break;
+            }
+            // Another scope's entry is that scope's to settle: its names derive
+            // from a write seed this end does not hold, so every verdict here
+            // would be a retry against a record this pass never read. Skipped
+            // whole — no replay slot, and no attempt against its quarantine.
+            if scope_root != scope.source.root {
+                continue;
             }
             // This pass wrote and settled that entry moments ago, and its
             // quarantine is waiting on the poll tick this pass has not had. It
@@ -2961,9 +3010,9 @@ where
             else {
                 continue;
             };
-            replayed += 1;
+            budget.replays -= 1;
             let settle = match self.converged_tick.get() {
-                true => Settle::Decide(&mut proofs),
+                true => Settle::Decide(&mut budget.proofs),
                 false => Settle::Hold,
             };
             let residue = self

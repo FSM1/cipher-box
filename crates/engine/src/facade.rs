@@ -5928,13 +5928,13 @@ where {
                             journalled.append(&mut report.journalled_deletes);
                             surface_drain_report(&events, &dead_letters, &report);
                         }
-                        // Once per tick, under the vault root's material: the
-                        // retire ledger and the reclamation journal are the
-                        // identity's, not one scope's. Every name in that ledger
-                        // derives from the vault root's own write seed, so a
-                        // tick that did not hold it owes none of this pass.
+                        // Once per tick. The retire ledger is the identity's
+                        // and reads under the vault root's material, so a tick
+                        // that did not hold that root owes none of this pass;
+                        // the reclamation journal is per scope, so every scope
+                        // this tick proved settles its own entries.
                         if root_scope_held && let Some(root_scope) = scopes.first() {
-                            drain.settle(root_scope, &journalled).await;
+                            drain.settle(root_scope, &scopes, &journalled).await;
                         }
                     }
                     if !root_scope_held {
