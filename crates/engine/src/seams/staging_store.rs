@@ -118,7 +118,10 @@ impl<S> QueueGenerationStore<S> {
         self.generation.get()
     }
 
-    /// The wrapped host store, for a caller that needs the concrete type.
+    /// The wrapped store, for a test that reaches a fake's failure injectors.
+    /// Test-only: a queue mutation made through it is not counted, and the
+    /// count is what tells a memoized read that its answer has expired.
+    #[cfg(any(test, feature = "test-kit"))]
     pub fn inner(&self) -> &S {
         &self.seam
     }
