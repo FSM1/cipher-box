@@ -1894,11 +1894,10 @@ impl EngineError {
             }
             CreateGrantError::InteriorPublish { error, .. }
             | CreateGrantError::DescendantPublish { error, .. }
-            | CreateGrantError::ParentPublish(error) => {
-                !matches!(error, RotationPublishError::Rejected)
-            }
+            | CreateGrantError::ParentPublish(error) => *error != RotationPublishError::Rejected,
             CreateGrantError::Converge(_)
             | CreateGrantError::SubtreeNotConverged { .. }
+            | CreateGrantError::SubtreeBoundaryDiverged { .. }
             | CreateGrantError::UnusableRecipientKey
             | CreateGrantError::RecipientIsTheOwner
             | CreateGrantError::CommitmentEncode(_)
@@ -1907,7 +1906,9 @@ impl EngineError {
             | CreateGrantError::Publish(_)
             | CreateGrantError::Resume(_)
             | CreateGrantError::ResumeNotThisGrant
+            | CreateGrantError::TargetAlreadyNamesAScope
             | CreateGrantError::InteriorNotConverged { .. }
+            | CreateGrantError::InteriorEpochRegressed { .. }
             | CreateGrantError::DescendantMint { .. }
             | CreateGrantError::ParentMint(_)
             | CreateGrantError::VouchScope(_)
@@ -10128,8 +10129,6 @@ mod tests {
     /// transport failure keeps that class.
     #[test]
     fn a_post_publish_transport_failure_reports_a_partial_commit_and_a_pre_publish_one_does_not() {
-        use crate::rotation::RotationPublishError;
-
         assert_eq!(
             EngineError::from_create_grant(CreateGrantError::InteriorPublish {
                 node_id: [1u8; 16],
@@ -10152,8 +10151,6 @@ mod tests {
     /// leg off `check`.
     #[test]
     fn every_post_publish_transport_leg_reports_one_class() {
-        use crate::rotation::RotationPublishError;
-
         let legs = [
             (
                 CreateGrantError::InteriorResolve {
@@ -10193,8 +10190,6 @@ mod tests {
     /// refused is still a fail-closed verdict the host must hear.
     #[test]
     fn a_gate_rejection_inside_a_post_publish_leg_stays_a_trust_violation() {
-        use crate::rotation::RotationPublishError;
-
         assert!(matches!(
             EngineError::from_create_grant(CreateGrantError::InteriorResolve {
                 node_id: [5u8; 16],
