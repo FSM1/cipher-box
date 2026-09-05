@@ -130,6 +130,15 @@ pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {
 /// committed count, so a root this build authors always has an authorable
 /// re-seal. A root whose body alone fills it is refused on both sides, because
 /// no cut shrinks a read-sealed body.
+///
+/// Only a committed write grantee authors such a root, and the refusal alone
+/// would leave that grantee un-revocable on the scope: the owner cannot adopt
+/// the record, so it can neither re-key nor replace it. The owner's rotation
+/// therefore falls back to the last gate-passing copy of the root it cached,
+/// and publishes the re-seal over that body above the refused record's
+/// sequence. What the writer published after that copy goes with the record
+/// the rotation steps over
+/// (`crate::net::rotation::OwnerRotationNet::last_known_good_root`).
 pub(crate) const fn resealable_root_rest_bytes(committed_grants: usize) -> usize {
     MAX_RESOLVED_RECORD_BYTES - resealable_section_bytes(committed_grants)
 }
