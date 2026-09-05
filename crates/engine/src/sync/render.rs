@@ -7,8 +7,7 @@
 //! vault again. The overlay clones the base snapshot, so the cost is the vault,
 //! not the folder.
 
-use std::cell::{Cell, Ref, RefCell};
-use std::ops::{Deref, DerefMut};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::sync::model::Snapshot;
@@ -40,32 +39,14 @@ impl BaseSnapshot {
     }
 
     /// Borrows the base for a repaint, bumping the generation.
-    pub(crate) fn borrow_mut(&self) -> BaseSnapshotMut<'_> {
+    pub(crate) fn borrow_mut(&self) -> RefMut<'_, Snapshot> {
         self.generation.set(self.generation.get().wrapping_add(1));
-        BaseSnapshotMut(self.snapshot.borrow_mut())
+        self.snapshot.borrow_mut()
     }
 
     /// The generation of the base a render must be keyed on.
     pub(crate) fn generation(&self) -> u64 {
         self.generation.get()
-    }
-}
-
-/// A mutable borrow of the base, handed out only by
-/// [`BaseSnapshot::borrow_mut`], which is what bumps the generation.
-pub(crate) struct BaseSnapshotMut<'a>(std::cell::RefMut<'a, Snapshot>);
-
-impl Deref for BaseSnapshotMut<'_> {
-    type Target = Snapshot;
-
-    fn deref(&self) -> &Snapshot {
-        &self.0
-    }
-}
-
-impl DerefMut for BaseSnapshotMut<'_> {
-    fn deref_mut(&mut self) -> &mut Snapshot {
-        &mut self.0
     }
 }
 
