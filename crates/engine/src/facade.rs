@@ -6532,8 +6532,8 @@ where {
                 // poll cadence, and only past the staleness threshold — a repeat
                 // visit renders the state already held.
                 let changed = self.refresh_focus_on_access(authored_at).await;
-                // After the folder leg, so a child this pass has just listed
-                // joins the queue with the ones the base already held.
+                // After the folder leg, so a child it has just listed is queued
+                // with the ones the base already held.
                 if let Some(folder) = node {
                     self.queue_focus_file_children(folder);
                 }
@@ -10541,12 +10541,10 @@ where {
     /// in child order.
     ///
     /// A `ChildRef` mirrors no size or mtime, so a listing paints those rows off
-    /// nothing until each child's own record is resolved. Putting them on the
-    /// file leg here serves every host from the focus window, so a host that
-    /// stats no row of its own — the web — is not left with a blank listing
-    /// until a download fills it in.
-    ///
-    /// The bound and the staleness damping are [`note_focus_file`](Self::note_focus_file)'s.
+    /// nothing until each child's own record resolves. Queueing them here serves
+    /// every host from the focus window, so a host that stats no row of its own
+    /// still paints a length without a download. The bound and the staleness
+    /// damping are [`note_focus_file`](Self::note_focus_file)'s.
     fn queue_focus_file_children(&self, folder: NodeId) {
         let unprojected: Vec<NodeId> = self
             .snapshot
@@ -16901,22 +16899,23 @@ mod focus_access_tests {
     }
 
     /// [`FOLDER`] under the root with `count` file children, every third one
-    /// carrying a projected size. Returns the ids in child order.
+    /// carrying a projected size. Returns the ids of the rest, in child order.
     fn folder_with_files(engine: &Engine<FakeSeamTypes>, count: usize) -> Vec<NodeId> {
         let mut base = engine.snapshot.borrow_mut();
         let root = base.root;
         base.upsert_node(NodeMeta::new(FOLDER, "photos", NodeKind::Folder));
         base.link(root, FOLDER, 1);
         (0..count)
-            .map(|i| {
+            .filter_map(|i| {
                 let id = file_id(i);
                 let mut meta = NodeMeta::new(id, format!("f{i}.bin"), NodeKind::File);
-                if i % 3 == 0 {
+                let projected = i % 3 == 0;
+                if projected {
                     meta.size = Some(11);
                 }
                 base.upsert_node(meta);
                 base.link(FOLDER, id, 1);
-                id
+                (!projected).then_some(id)
             })
             .collect()
     }
@@ -17006,16 +17005,10 @@ mod focus_access_tests {
     #[test]
     fn opening_a_folder_queues_the_children_it_projects_no_size_for() {
         let (engine, _clock) = engine();
-        let children = folder_with_files(&engine, 9);
+        let unprojected = folder_with_files(&engine, 9);
 
         engine.note_focus_access(Some(FOLDER));
 
-        let unprojected: Vec<NodeId> = children
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| i % 3 != 0)
-            .map(|(_, id)| id)
-            .collect();
         assert_eq!(
             engine.queued_focus_files(),
             unprojected,
@@ -17028,20 +17021,13 @@ mod focus_access_tests {
     #[test]
     fn a_listing_past_the_ceiling_queues_only_a_windows_worth() {
         let (engine, _clock) = engine();
-        let children = folder_with_files(&engine, MAX_FOCUS_FILES * 2 + 5);
+        let unprojected = folder_with_files(&engine, MAX_FOCUS_FILES * 2 + 5);
+        assert!(unprojected.len() > MAX_FOCUS_FILES);
 
         engine.note_focus_access(Some(FOLDER));
 
-        let queued = engine.queued_focus_files();
-        assert_eq!(queued.len(), MAX_FOCUS_FILES);
-        let unprojected: Vec<NodeId> = children
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| i % 3 != 0)
-            .map(|(_, id)| id)
-            .collect();
         assert_eq!(
-            queued,
+            engine.queued_focus_files(),
             unprojected[unprojected.len() - MAX_FOCUS_FILES..],
             "the newest rows win the window, oldest first"
         );
