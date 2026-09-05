@@ -1,5 +1,6 @@
 //! Shared content-plane size limits.
 
+use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
 use cipherbox_core::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
 
 use super::chunk::SEALED_LEAF_OVERHEAD;
@@ -132,6 +133,36 @@ pub(crate) const fn resealable_section_bytes(committed_grants: usize) -> usize {
 pub(crate) const fn resealable_root_rest_bytes(committed_grants: usize) -> usize {
     MAX_RESOLVED_RECORD_BYTES - resealable_section_bytes(committed_grants)
 }
+
+/// The listing budget one folder's children are held to at the facade boundary
+/// ([`refuse_full_parent`](crate::facade)). A scope root must leave room beside
+/// its listing for the grant section a re-key rebuilds, so it is charged the
+/// same reservation the author side enforces; an ordinary folder is charged the
+/// read-body seal bound alone. One home for both numbers, so a wire-cost edit
+/// that moves the reservation moves the boundary with it.
+///
+/// The reservation is charged at the ungranted count, which is the loosest one
+/// and exact below the first [`GRANT_RESERVATION_STEP`]: the boundary never
+/// refuses a create the author would take, and a root over its own tighter
+/// budget still meets [`AuthorError::ScopeRootNotResealable`].
+///
+/// [`AuthorError::ScopeRootNotResealable`]:
+///     crate::net::author::AuthorError::ScopeRootNotResealable
+pub(crate) const fn folder_listing_budget(is_scope_root: bool) -> usize {
+    if is_scope_root {
+        MAX_READ_SEALED_BYTES - resealable_section_bytes(0)
+    } else {
+        MAX_READ_SEALED_BYTES
+    }
+}
+
+/// A scope root's listing budget must stay well clear of zero, or the
+/// reservation has eaten the folder it reserves against. Compile-time, so it
+/// cannot reach a release build (AGENTS.md rule 8).
+const _: () = assert!(
+    folder_listing_budget(true) > MAX_READ_SEALED_BYTES / 2,
+    "a scope root must keep the larger half of the read-body bound for its own listing"
+);
 
 /// The bytes of a scope root that sit **outside** its grant section — what
 /// [`resealable_root_rest_bytes`] holds. One home for the measure, so the

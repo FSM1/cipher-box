@@ -16,6 +16,10 @@
 //!   needs a reader's secrets: stage 3's ascent-link seed cross-check takes an
 //!   ancestor node seed [`EnvelopeAuthoring`] does not carry, so it is enforced
 //!   where that seed lives, in `rotation/reseal.rs`;
+//! - an interior scope root carrying no ascent link returns `Err`, off the
+//!   presence check `net/rotation.rs::gated_child_root` makes on arrival. The
+//!   duty comes from the caller's own ancestor material, never from the bytes
+//!   being checked;
 //! - a kind transplant and a non-canonical child-ref `ipnsName` are
 //!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
 //!   [`IpnsName`] to both the body and the parent's ref.
@@ -65,6 +69,11 @@ pub enum AuthorError {
     /// the envelope's own scope and epoch, which the gate's stage 3 rejects
     /// whole-record.
     SectionSignatureInvalid,
+    /// An interior scope root's carried grant section holds no ascent link —
+    /// the binding that proves the record is the descendant its parent names,
+    /// and which `net/rotation.rs::gated_child_root` requires of every record
+    /// it gates as a child scope root.
+    MissingAscentLink,
     /// Core refused to seal or encode the authored body (a body decode would
     /// refuse to reopen, e.g. duplicate child ids).
     Seal(CodecError),
@@ -119,6 +128,7 @@ impl AuthorError {
             Self::CommitmentSignatureInvalid => "commitment-signature-invalid",
             // The gate's own verdict name: this is the same predicate.
             Self::SectionSignatureInvalid => "structure-signature-invalid",
+            Self::MissingAscentLink => "missing-ascent-link",
             Self::Seal(e) => e.check(),
             Self::HeadTooLarge { .. } => "head-too-large",
             Self::ScopeRootNotResealable { .. } => "scope-root-not-resealable",
@@ -139,7 +149,8 @@ impl AuthorError {
             | Self::InvalidGrantSection
             | Self::CommitmentNameMismatch
             | Self::CommitmentSignatureInvalid
-            | Self::SectionSignatureInvalid => true,
+            | Self::SectionSignatureInvalid
+            | Self::MissingAscentLink => true,
             Self::Seal(_)
             | Self::HeadTooLarge { .. }
             | Self::ScopeRootNotResealable { .. }
@@ -245,13 +256,18 @@ pub fn author_child_envelope(
 /// to some other name, authored at some other epoch, or authored by anyone but
 /// `owner_identity`, so the checks the gate makes on arrival run here first
 /// (release-active).
+///
+/// `owes_ascent_link` is the caller's own answer, read off the ancestor
+/// material it publishes under: an interior scope root owes the link the child
+/// gate requires, and the vault root carries none.
 pub fn author_scope_root_envelope(
     authoring: EnvelopeAuthoring<'_>,
     name: &IpnsName,
     owner_identity: &EcdsaVerifier,
+    owes_ascent_link: bool,
 ) -> Result<AuthoredHead, AuthorError> {
     let envelope = seal(&authoring)?;
-    let committed_grants = check_scope_root(&envelope, name, owner_identity)?;
+    let committed_grants = check_scope_root(&envelope, name, owner_identity, owes_ascent_link)?;
     encode_scope_root(envelope, committed_grants)
 }
 
@@ -271,7 +287,10 @@ pub fn author_scope_root_with_section(
         &mut envelope,
         encode_grant_section(section).map_err(grant_section_encode_error)?,
     );
-    let committed_grants = check_scope_root(&envelope, name, owner_identity)?;
+    // The ascent-link duty is settled where `section` is minted: a re-seal
+    // refuses to assemble a section that drops an owed link, or mints one no
+    // descent reproduces (`rotation/reseal.rs`, `owes_ascent_link`).
+    let committed_grants = check_scope_root(&envelope, name, owner_identity, false)?;
     encode_scope_root(envelope, committed_grants)
 }
 
@@ -284,17 +303,25 @@ pub fn author_scope_root_with_section(
 /// measured against the reader's own durable floor, not a property of these
 /// bytes, so it has no encode-side counterpart.
 ///
+/// The ascent link is checked for **presence** only, and only where the caller
+/// says one is owed: what the link seals is verified against an ancestor node
+/// seed this authoring does not carry.
+///
 /// Yields the owner-committed grant count the encode sizes its re-seal
 /// reservation from — verified here, so no caller sizes it off a writer's word.
 fn check_scope_root(
     envelope: &Envelope,
     name: &IpnsName,
     owner_identity: &EcdsaVerifier,
+    owes_ascent_link: bool,
 ) -> Result<usize, AuthorError> {
     let section = decode_grant_section(
         grant_section_bytes(envelope).ok_or(AuthorError::MissingGrantSection)?,
     )
     .map_err(|_| AuthorError::InvalidGrantSection)?;
+    if owes_ascent_link && section.ascent_link.is_none() {
+        return Err(AuthorError::MissingAscentLink);
+    }
     let commitment_sig = EcdsaSignature::from_compact(&section.commitment_sig)
         .ok_or(AuthorError::CommitmentSignatureInvalid)?;
     verify_grant_set_bound(
@@ -551,6 +578,23 @@ mod tests {
         root_signed_by(&[0x11; 32])
     }
 
+    /// The same root as an **interior** scope root: it carries the ascent link
+    /// its parent's node seed derives, which the vault root above has none of.
+    fn interior_root() -> OwnerRootFixture {
+        owner_root_fixture(OwnerRootSpec {
+            owner_identity: &EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar"),
+            owner_enc: &kdf::enc_subkey(&[0x33; 32]).public(),
+            scope_id: [2u8; 16],
+            root_id: [1u8; 16],
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: Some([0x44; 32]),
+            owner_write_blob_epoch: None,
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        })
+    }
+
     fn carried_section(section: &GrantSection) -> PreservedFields {
         [(
             "grantSection".to_owned(),
@@ -602,6 +646,7 @@ mod tests {
             authoring(&folder(), carried_section(&fixture.grant_section)),
             &fixture.name,
             &owner(),
+            false,
         )
         .unwrap();
         assert!(has_grant_section(&head.envelope));
@@ -618,6 +663,7 @@ mod tests {
                 authoring(&folder(), carried_section(&fixture.grant_section)),
                 &name(),
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::CommitmentNameMismatch,
@@ -640,6 +686,7 @@ mod tests {
                 ),
                 &fixture.name,
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
@@ -675,6 +722,7 @@ mod tests {
                 authoring(&folder(), carried_section(&section)),
                 &fixture.name,
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
@@ -715,6 +763,7 @@ mod tests {
                 authoring(&folder(), carried_section(&section)),
                 &fixture.name,
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
@@ -734,6 +783,7 @@ mod tests {
                 authoring(&folder(), carried_section(&fixture.grant_section)),
                 &fixture.name,
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::CommitmentSignatureInvalid,
@@ -752,6 +802,7 @@ mod tests {
                 authoring(&folder(), carried_section(&section)),
                 &fixture.name,
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::CommitmentSignatureInvalid,
@@ -814,6 +865,7 @@ mod tests {
             (AuthorError::CommitmentNameMismatch, true),
             (AuthorError::CommitmentSignatureInvalid, true),
             (AuthorError::SectionSignatureInvalid, true),
+            (AuthorError::MissingAscentLink, true),
             (
                 AuthorError::HeadTooLarge {
                     field: "envelope",
@@ -844,6 +896,7 @@ mod tests {
                 authoring(&folder(), grant_section_field()),
                 &name(),
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::InvalidGrantSection,
@@ -859,10 +912,45 @@ mod tests {
                 authoring(&folder(), PreservedFields::new()),
                 &name(),
                 &owner(),
+                false,
             )
             .unwrap_err(),
             AuthorError::MissingGrantSection,
         );
+    }
+
+    #[test]
+    fn an_interior_scope_root_without_its_ascent_link_is_refused() {
+        // Release-active: the guard returns `Err`, so a `--release` build
+        // refuses these bytes as a debug build does (security rule 8). The
+        // record they would publish is one `gated_child_root` always rejects,
+        // which is v1's revocation bypass on the write side.
+        let fixture = owner_root();
+        assert!(fixture.grant_section.ascent_link.is_none());
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring(&folder(), carried_section(&fixture.grant_section)),
+                &fixture.name,
+                &owner(),
+                true,
+            )
+            .unwrap_err(),
+            AuthorError::MissingAscentLink,
+        );
+    }
+
+    #[test]
+    fn an_interior_scope_root_carrying_its_ascent_link_is_authored() {
+        let fixture = interior_root();
+        assert!(fixture.grant_section.ascent_link.is_some());
+        let head = author_scope_root_envelope(
+            authoring(&folder(), carried_section(&fixture.grant_section)),
+            &fixture.name,
+            &owner(),
+            true,
+        )
+        .expect("an interior root that carries its link authors");
+        assert!(has_grant_section(&head.envelope));
     }
 
     #[test]
@@ -943,7 +1031,7 @@ mod tests {
         let carried = carried_section(&fixture.grant_section);
         // let-else: the `Ok` side would render megabytes.
         let Err(AuthorError::ScopeRootNotResealable { size, limit }) =
-            author_scope_root_envelope(authoring(&body, carried), &fixture.name, &owner())
+            author_scope_root_envelope(authoring(&body, carried), &fixture.name, &owner(), false)
         else {
             panic!("a root with no re-seal headroom must be refused");
         };
@@ -969,8 +1057,9 @@ mod tests {
         // Past what the frozen ceiling would have left, inside what this set needs.
         let body = folder_past_the_resealable_budget(resealable_root_rest_bytes(MAX_GRANT_BLOBS));
         let carried = carried_section(&fixture.grant_section);
-        let head = author_scope_root_envelope(authoring(&body, carried), &fixture.name, &owner())
-            .expect("a root inside its own committed set's reservation is authored");
+        let head =
+            author_scope_root_envelope(authoring(&body, carried), &fixture.name, &owner(), false)
+                .expect("a root inside its own committed set's reservation is authored");
         let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
         assert!(
             scope_root_rest_bytes(head.block.len(), section)
@@ -1054,9 +1143,13 @@ mod tests {
                 Value::Bytes(vec![0xab; MAX_RESOLVED_RECORD_BYTES]),
             )])
             .collect();
-        let head =
-            author_scope_root_envelope(authoring(&folder(), carried), &fixture.name, &owner())
-                .expect("a carried set is cut, never refused");
+        let head = author_scope_root_envelope(
+            authoring(&folder(), carried),
+            &fixture.name,
+            &owner(),
+            false,
+        )
+        .expect("a carried set is cut, never refused");
         assert!(head.block.len() <= MAX_RESOLVED_RECORD_BYTES);
         assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));
     }
@@ -1077,9 +1170,13 @@ mod tests {
             .chain([("bloat".to_owned(), Value::Bytes(vec![0xab; budget]))])
             .collect();
 
-        let head =
-            author_scope_root_envelope(authoring(&folder(), carried), &fixture.name, &owner())
-                .expect("the padding is cut, not refused");
+        let head = author_scope_root_envelope(
+            authoring(&folder(), carried),
+            &fixture.name,
+            &owner(),
+            false,
+        )
+        .expect("the padding is cut, not refused");
         let section = grant_section_bytes(&head.envelope).map_or(0, <[u8]>::len);
         assert!(
             scope_root_rest_bytes(head.block.len(), section) <= budget,

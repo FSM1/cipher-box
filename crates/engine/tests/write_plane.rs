@@ -5805,7 +5805,7 @@ fn a_descendant_no_pass_can_establish_drops_out_of_the_quarantine() {
     block_on(engine.command(Command::Delete { node: photos })).unwrap();
     tick(&world, &engine, &mut tasks);
 
-    let journal = doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), photos);
+    let journal = doomed_journal_key(&owner_tag(&kdf::enc_subkey(&SECRET)), ROOT, photos);
     assert!(
         block_on(alice.staging_store.staged_bytes(&journal))
             .unwrap()
@@ -6103,11 +6103,11 @@ fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
     // owner ahead of the real one: a leading zero id sorts below any the engine
     // mints.
     let owner = owner_tag(&kdf::enc_subkey(&SECRET));
-    let real_key = doomed_journal_key(&owner, doomed);
+    let real_key = doomed_journal_key(&owner, ROOT, doomed);
     for slot in 0..MAX_JOURNAL_REPLAYS {
         let mut id = [0u8; 16];
         id[15] = u8::try_from(slot).expect("the budget fits a byte");
-        let key = doomed_journal_key(&owner, NodeId(id));
+        let key = doomed_journal_key(&owner, ROOT, NodeId(id));
         assert!(
             key < real_key,
             "the planted entry sorts ahead of the real one"
