@@ -1194,12 +1194,7 @@ mod tests {
     /// [`resolve_gated`](crate::net::resolve_gated) takes once the bytes are
     /// durable, for a test that keeps no snapshot cache.
     fn committed(pass: GatePass, floors: &InMemoryFloorStore) -> Adopted {
-        match pass {
-            GatePass::Deferred(pending) => {
-                block_on(pending.commit(floors)).expect("the floors advance")
-            }
-            GatePass::Advanced(adopted) => adopted,
-        }
+        block_on(pass.commit(floors)).expect("the floors advance")
     }
 
     /// Seed the write-epoch floor to `epoch` (the cold-start seeding `sync/boot`

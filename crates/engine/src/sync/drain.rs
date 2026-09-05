@@ -71,8 +71,8 @@ use crate::net::retire::{
     retire,
 };
 use crate::net::{
-    Adopter, ChildAdopter, GatePass, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead,
-    ResolveOutcome, Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
+    Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
+    Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{ScopeExitRotator, derive_write_name, seed_at_epoch};
@@ -5266,16 +5266,11 @@ where
             .map_err(|e| PublishHalt::past_the_put(seam(e)))?;
         // Durable-first: the floor moves on the self-adopt that also left these
         // bytes as last-known-good.
-        let sequence = match pass {
-            GatePass::Advanced(adopted) => adopted.sequence,
-            GatePass::Deferred(pending) => {
-                pending
-                    .commit(self.floors)
-                    .await
-                    .map_err(|e| PublishHalt::past_the_put(seam(e)))?
-                    .sequence
-            }
-        };
+        let sequence = pass
+            .commit(self.floors)
+            .await
+            .map_err(|e| PublishHalt::past_the_put(seam(e)))?
+            .sequence;
         Ok(Published {
             sequence,
             held: HeldRecord {

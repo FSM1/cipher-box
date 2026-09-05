@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 
 use cipherbox_core::payload::RepointObject;
 
-use crate::gate::{GateError, GateRejection, GateStage, RejectionReason};
+use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 
 /// An owner-vouched epoch that regressed below a durable floor at cold-seed — a
@@ -343,6 +343,43 @@ pub async fn advance_sequence_on_unseal<F: FloorStore>(
 ) -> SeamResult<()> {
     floors.raise_sequence_floor(ipns_name, sequence).await?;
     Ok(())
+}
+
+/// A child gate pass whose sequence-floor raise is **deferred**: the record
+/// verified, bound and unsealed, but the durable floor has not moved yet. The
+/// caller makes the accepted bytes durable (the resolve driver's snapshot-cache
+/// write) and then calls [`commit`], so a failure between the two leaves the
+/// floor where the pass found it and the retry is a fresh adopt.
+///
+/// Sequence only: a child record's epoch is attested by the epoch-independent
+/// read key alone, so it is no source for the read-epoch (revocation) floor —
+/// the deferred root shape ([`PendingAdoption`](crate::gate::PendingAdoption))
+/// is what moves that one.
+///
+/// [`commit`]: PendingSequenceRaise::commit
+#[must_use = "the deferred sequence raise must be committed once the record is durable"]
+pub struct PendingSequenceRaise {
+    adopted: Adopted,
+    ipns_name: Vec<u8>,
+}
+
+impl PendingSequenceRaise {
+    /// Hold the raise `adopted` owes until its record is durable. Crate-internal:
+    /// the caller is the child pipeline, which runs the AAD-confirmed unseal
+    /// this advance rests on.
+    pub(crate) fn new(ipns_name: &[u8], adopted: Adopted) -> Self {
+        Self {
+            adopted,
+            ipns_name: ipns_name.to_vec(),
+        }
+    }
+
+    /// Commit the deferred raise ([`advance_sequence_on_unseal`]), then yield
+    /// the [`Adopted`] result. Call only after the record is durable.
+    pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
+        advance_sequence_on_unseal(floors, &self.ipns_name, self.adopted.sequence).await?;
+        Ok(self.adopted)
+    }
 }
 
 /// Why a body-revision mint produced no value a reader would accept. Both

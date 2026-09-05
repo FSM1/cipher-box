@@ -22,8 +22,9 @@ use super::fanout::fanout_get_verify;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::head_cid_from_value;
 use crate::facade::NodeId;
+use crate::gate::floor::PendingSequenceRaise;
 use crate::gate::{Adopted, GateError, GateRejection, PendingAdoption, RejectionReason};
-use crate::seams::{RecordTransport, SeamError, SnapshotCache};
+use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
 use crate::sync::model::Snapshot;
 use crate::sync::project::{FolderMerge, merge_root};
@@ -53,6 +54,23 @@ pub trait Adopter {
     async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Adopted, SeamError> {
         Err(SeamError::new(
             "a deferred gate pass reached an adopter that commits no floor",
+        ))
+    }
+
+    /// Commit the sequence-floor raise a [`GatePass::DeferredSequence`] pass
+    /// left uncommitted, now that its record is durable last-known-good in the
+    /// snapshot cache ([`PendingSequenceRaise`]).
+    ///
+    /// Refuses by default on the same terms as
+    /// [`commit_adoption`](Self::commit_adoption): dropping the raise would
+    /// cache the record under a stale sequence floor and leave a replay of an
+    /// older valid record above the bar this pass was to raise.
+    async fn commit_sequence_adoption(
+        &self,
+        _pending: PendingSequenceRaise,
+    ) -> Result<Adopted, SeamError> {
+        Err(SeamError::new(
+            "a deferred sequence raise reached an adopter that commits no floor",
         ))
     }
 
@@ -113,8 +131,27 @@ pub enum GatePass {
     /// The floor-law advance is still to be made:
     /// [`Adopter::commit_adoption`] makes it once the record is durable.
     Deferred(PendingAdoption),
+    /// The child arm's deferred shape: a sequence-floor raise alone, made by
+    /// [`Adopter::commit_sequence_adoption`] once the record is durable. A
+    /// child record moves no epoch floor (the floor law).
+    DeferredSequence(PendingSequenceRaise),
     /// The floors this record moves already moved inside the pass.
     Advanced(Adopted),
+}
+
+impl GatePass {
+    /// The adopted state with any deferred advance committed against `floors`
+    /// — for the direct-adopt callers (the drain's self-adopt, the write wave's
+    /// interior read) that hold the same floor store the pass was gated on and
+    /// have already made their record durable. The resolve driver commits
+    /// through the [`Adopter`] seam instead, having no floor store of its own.
+    pub(crate) async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, SeamError> {
+        match self {
+            GatePass::Deferred(pending) => pending.commit(floors).await,
+            GatePass::DeferredSequence(pending) => pending.commit(floors).await,
+            GatePass::Advanced(adopted) => Ok(adopted),
+        }
+    }
 }
 
 /// A gate pass plus the transient write material a write-capable holder needs to
@@ -293,6 +330,9 @@ where
                 // bytes as last-known-good, never ahead of it.
                 let adopted = match pass {
                     GatePass::Deferred(pending) => adopter.commit_adoption(pending).await?,
+                    GatePass::DeferredSequence(pending) => {
+                        adopter.commit_sequence_adoption(pending).await?
+                    }
                     GatePass::Advanced(adopted) => adopted,
                 };
                 (
@@ -509,8 +549,8 @@ pub(crate) fn refresh_base_from_resolved(
 #[cfg(test)]
 mod tests {
     use super::{
-        GatePass, HeldMaterial, OwnScopeMaterial, ResolveMode, ResolveOutcome, head_cid_from_value,
-        resolve_and_hold,
+        GatePass, HeldMaterial, OwnScopeMaterial, PendingSequenceRaise, ResolveMode,
+        ResolveOutcome, head_cid_from_value, resolve_and_hold, resolve_gated,
     };
 
     use core::cell::RefCell;
@@ -534,6 +574,9 @@ mod tests {
     #[derive(Clone, Copy)]
     enum Verdict {
         Accept,
+        /// A pass that owes a child-shaped sequence raise, on an adopter that
+        /// overrides no commit seam.
+        DeferSequence,
         TrustViolation,
         EqualSequence,
     }
@@ -603,6 +646,24 @@ mod tests {
                     node_id: self.grant.map(|(_, id)| id).unwrap_or([0u8; 16]),
                     read_scope_seed: None,
                 }),
+                Verdict::DeferSequence => Ok(super::AdoptOutcome {
+                    pass: GatePass::DeferredSequence(PendingSequenceRaise::new(
+                        name.as_str().as_bytes(),
+                        Adopted {
+                            read_body: ReadBody::Folder {
+                                created_at: 0,
+                                modified_at: 0,
+                                children: Vec::new(),
+                                unknown: PreservedFields::new(),
+                            },
+                            sequence,
+                            epoch: 1,
+                        },
+                    )),
+                    write_scope_seed: None,
+                    node_id: [0u8; 16],
+                    read_scope_seed: None,
+                }),
                 Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                     stage: GateStage::RecordVerify,
                     reason: RejectionReason::Trust(TrustViolation::IpnsSignatureInvalid.into()),
@@ -646,6 +707,36 @@ mod tests {
                 },
             }))
         }
+    }
+
+    /// A deferred raise that reaches an adopter with no commit seam must fail
+    /// the resolve, not be dropped: the alternative caches the record under a
+    /// floor that never moved, leaving a replay of an older valid record above
+    /// the bar the pass was to raise.
+    #[test]
+    fn a_deferred_sequence_raise_no_adopter_commits_fails_the_resolve() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = SessionIdentity::write_name_signer(&[9u8; 32], &[7u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), record(&signer, 1));
+
+        let Err(error) = block_on(resolve_gated(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::DeferSequence),
+            &name,
+            ResolveMode::CacheFirst,
+        )) else {
+            panic!("an uncommitted raise must fail the resolve");
+        };
+        assert!(
+            error.message().contains("commits no floor"),
+            "unexpected seam error: {error}"
+        );
     }
 
     fn record(signer: &Ed25519Signer, sequence: u64) -> Vec<u8> {

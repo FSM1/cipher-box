@@ -7,9 +7,9 @@
 //! transplant rejects) → the per-name sequence and scope read-epoch floors →
 //! the AAD-bound read-body unseal under `read-key(node-seed(scopeReadSeed,
 //! id))` — the same KDF edges the root walks, one level down. The sequence
-//! floor advances only after a successful unseal (the floor law); the scope
-//! epoch floor never moves from a child
-//! ([`floor::advance_sequence_on_unseal`]). No new crypto: pure composition of
+//! floor advances only after a successful unseal (the floor law) and only once
+//! the accepted record is durable ([`floor::PendingSequenceRaise`]); the scope
+//! epoch floor never moves from a child. No new crypto: pure composition of
 //! core verify/unseal plus the frozen KDF catalog.
 
 use core::cell::RefCell;
@@ -24,7 +24,7 @@ use super::adopter::{LocalHead, assemble_head_envelope, reject};
 use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, floor};
-use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
+use crate::seams::{FloorStore, Http, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::tick::ResolveMode;
 
 /// The child-record [`Adopter`] for one non-root node of an owned scope.
@@ -329,20 +329,29 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
         )
         .await?;
         let read_body = self.unseal(&envelope)?;
-        // Sequence floor only, after the AAD-confirmed unseal (the floor law).
-        floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
-            .await
-            .map_err(GateError::Seam)?;
-        Ok(AdoptOutcome {
-            pass: GatePass::Advanced(Adopted {
+        // Sequence floor only, after the AAD-confirmed unseal (the floor law),
+        // and deferred until the accepted record is durable.
+        let pending = floor::PendingSequenceRaise::new(
+            name.as_str().as_bytes(),
+            Adopted {
                 read_body,
                 sequence,
                 epoch: envelope.epoch,
-            }),
+            },
+        );
+        Ok(AdoptOutcome {
+            pass: GatePass::DeferredSequence(pending),
             write_scope_seed: None,
             node_id: envelope.id,
             read_scope_seed: None,
         })
+    }
+
+    async fn commit_sequence_adoption(
+        &self,
+        pending: floor::PendingSequenceRaise,
+    ) -> Result<Adopted, SeamError> {
+        pending.commit(self.floors).await
     }
 
     /// A child record carries no owner blob, so no arm of this adopter ever
@@ -368,8 +377,12 @@ mod tests {
 
     use crate::content::{DAG_ROOT_CODEC, GatewaySource};
     use crate::gate::{GateRejection, RejectionReason};
+    use crate::net::resolve::resolve_gated;
+    use crate::seams::EndpointId;
     use crate::testkit::block_on;
-    use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
+    use crate::testkit::fakes::{
+        InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, ScriptedHttp,
+    };
 
     const SCOPE: [u8; 16] = [0x44; 16];
     const NODE: [u8; 16] = [0x55; 16];
@@ -498,12 +511,25 @@ mod tests {
         published: &Published,
         node_id: [u8; 16],
     ) -> ChildAdopter<'a, ScriptedHttp, InMemoryFloorStore> {
+        seeded_adopter(gateway, http, floors, published, node_id, CURRENT_EPOCH)
+    }
+
+    /// The same adopter under the seed of `seed_epoch` — a read reaches a gate
+    /// pass only under the seed of the epoch its record was sealed at.
+    fn seeded_adopter<'a>(
+        gateway: &'a Gateway,
+        http: &'a ScriptedHttp,
+        floors: &'a InMemoryFloorStore,
+        published: &Published,
+        node_id: [u8; 16],
+        seed_epoch: u64,
+    ) -> ChildAdopter<'a, ScriptedHttp, InMemoryFloorStore> {
         let adopter = ChildAdopter::new(
             gateway,
             http,
             floors,
             SCOPE,
-            Zeroizing::new(scope_seed(CURRENT_EPOCH)),
+            Zeroizing::new(scope_seed(seed_epoch)),
             node_id,
         );
         adopter.hold_local_head(published.head.clone());
@@ -673,5 +699,80 @@ mod tests {
             );
             assert_eq!(refused.stage, GateStage::Unseal);
         }
+    }
+
+    /// The child arm's durability rule: the sequence floor moves only with the
+    /// snapshot write that makes those bytes last-known-good. A put that fails
+    /// must leave the floor unspent, or this device holds a replay bar for a
+    /// record it never cached — every later pass is then an equal-floor re-open
+    /// that caches nothing, and an offline read finds no last-known-good.
+    ///
+    /// Mirrors the root arm's
+    /// `a_failed_snapshot_write_leaves_the_sequence_floor_unspent_and_the_retry_caches`.
+    #[test]
+    fn a_failed_snapshot_write_leaves_the_sequence_floor_unspent_and_the_retry_caches() {
+        let published = publish(Spec::default());
+        let floors = InMemoryFloorStore::default();
+        let endpoint = EndpointId::new("e0");
+        let transport = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        transport.seed_record(
+            &endpoint,
+            published.name.as_str(),
+            published.record_bytes.clone(),
+        );
+        let cache = InMemorySnapshotCache::default();
+        cache.fail_puts();
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let cache_key = published.name.as_str().as_bytes().to_vec();
+        let resolve = || {
+            block_on(resolve_gated(
+                &transport,
+                &cache,
+                &seeded_adopter(&gw, &http, &floors, &published, NODE, LAGGING_EPOCH),
+                &published.name,
+                ResolveMode::CacheFirst,
+            ))
+        };
+
+        assert!(
+            resolve().is_err(),
+            "an unwritable snapshot cache aborts the resolve"
+        );
+        assert_eq!(
+            sequence_floor(&floors, &published.name),
+            0,
+            "and leaves the floor where the pass found it"
+        );
+        assert_eq!(read_epoch_floor(&floors), None, "no child raises an epoch");
+
+        cache.heal_puts();
+        let resolved = resolve().expect("the retry resolves");
+        assert!(
+            matches!(resolved.resolved.outcome, ResolveOutcome::Adopted(_)),
+            "the retry is a fresh adopt, not an equal-floor Current"
+        );
+        assert_eq!(
+            cache.peek(&cache_key).as_deref(),
+            Some(&published.record_bytes[..])
+        );
+        assert_eq!(sequence_floor(&floors, &published.name), SEQUENCE);
+        assert_eq!(
+            read_epoch_floor(&floors),
+            None,
+            "and the committed raise is the sequence floor alone",
+        );
+    }
+
+    /// The durable per-name sequence floor, zero where none was raised.
+    fn sequence_floor(floors: &InMemoryFloorStore, name: &IpnsName) -> u64 {
+        block_on(floor::sequence_floor(floors, name.as_str().as_bytes()))
+            .expect("the floor store answers")
+            .unwrap_or(0)
+    }
+
+    /// The scope's read-epoch floor, which no child record may move.
+    fn read_epoch_floor(floors: &InMemoryFloorStore) -> Option<u64> {
+        block_on(floor::read_epoch_floor(floors, &SCOPE)).expect("the floor store answers")
     }
 }
