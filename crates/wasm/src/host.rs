@@ -666,6 +666,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::ColdStart { .. } => "coldStart",
         EngineError::ScopeExitRefused { .. } => "scopeExitRefused",
         EngineError::UnsupportedTarget { .. } => "unsupportedTarget",
+        EngineError::PartialCommit { .. } => "partialCommit",
     };
     let js = js_sys::Error::new(&error.to_string());
     // Setting a plain property on a fresh `Error` cannot fail.

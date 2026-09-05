@@ -16,7 +16,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::author::AuthoredHead;
-use super::publish::{PublishError, PublishReceipt, PublishRequest, publish};
+use super::publish::{EpochBar, PublishError, PublishReceipt, PublishRequest, publish};
 use crate::api::{ApiClient, ApiError};
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::root_block_cid;
@@ -81,12 +81,17 @@ impl std::error::Error for PreflightError {}
 pub struct PreflightedHead {
     block: Vec<u8>,
     cid: String,
+    /// The read-epoch floor bar this head carries to its signature, for the
+    /// families that bind a scope epoch. Set from the dry run's own
+    /// [`HeadBinding`], so no caller can publish an envelope under a bar other
+    /// than the one it was proven against.
+    epoch_bar: Option<EpochBar>,
 }
 
 impl PreflightedHead {
     /// Address `block` and cap it. Private: reachable only past a family's
     /// reopen proof.
-    fn new(block: Vec<u8>) -> Result<Self, PreflightError> {
+    fn new(block: Vec<u8>, epoch_bar: Option<EpochBar>) -> Result<Self, PreflightError> {
         if block.len() > MAX_RESOLVED_RECORD_BYTES {
             return Err(PreflightError::TooLarge {
                 size: block.len(),
@@ -94,7 +99,11 @@ impl PreflightedHead {
             });
         }
         let cid = root_block_cid(&block);
-        Ok(Self { block, cid })
+        Ok(Self {
+            block,
+            cid,
+            epoch_bar,
+        })
     }
 
     /// The head block's content CID, as the record `Value` spells it.
@@ -131,7 +140,13 @@ pub fn preflight(
         return Err(PreflightError::BindingMismatch);
     }
     open_read_body(envelope, read_key).map_err(PreflightError::Unseal)?;
-    PreflightedHead::new(head.block.clone())
+    PreflightedHead::new(
+        head.block.clone(),
+        Some(EpochBar {
+            scope_id: binding.scope_id,
+            epoch: binding.epoch,
+        }),
+    )
 }
 
 /// Settings-record dry run: the vault settings head is a self-sealed blob
@@ -142,7 +157,8 @@ pub fn preflight_settings(
     block: Vec<u8>,
 ) -> Result<PreflightedHead, PreflightError> {
     open_settings_record(enc_secret, &block).map_err(PreflightError::Unseal)?;
-    PreflightedHead::new(block)
+    // The vault settings record binds no scope read epoch.
+    PreflightedHead::new(block, None)
 }
 
 /// Bin-index dry run: the record is a self-sealed blob under the owner's
@@ -152,7 +168,8 @@ pub fn preflight_bin_index(
     block: Vec<u8>,
 ) -> Result<PreflightedHead, PreflightError> {
     open_bin_index(seal_key, &block).map_err(PreflightError::Unseal)?;
-    PreflightedHead::new(block)
+    // The bin index binds no scope read epoch.
+    PreflightedHead::new(block, None)
 }
 
 /// One record publish: the name and its narrow per-name signer, the
@@ -236,6 +253,7 @@ where
             head_cid: request.head.cid.clone(),
             content_cids: request.content_cids.clone(),
             min_current_sequence: request.min_current_sequence,
+            epoch_bar: request.head.epoch_bar,
         },
     )
     .await

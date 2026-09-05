@@ -35,6 +35,24 @@ const IPFS_PREFIX: &str = "/ipfs/";
 /// not a durability guarantee.
 const MAX_REPUT_ATTEMPTS: u32 = 3;
 
+/// The durable read-epoch bar one record must clear at its signature: the scope
+/// whose read-epoch (revocation) floor bars it, and the read epoch the record
+/// binds.
+///
+/// A record sealed below its scope's read-epoch floor is one the adoption gate's
+/// epoch stage refuses for good, and a signed record cannot be unpublished
+/// (AGENTS.md rule 8). The floor is therefore read inside [`publish`], as the
+/// last durable read before the record is signed and with no await between the
+/// two — an authoring arm's own floor read goes stale while the head block
+/// uploads and the registration lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EpochBar {
+    /// The scope whose read-epoch floor bars the record.
+    pub scope_id: [u8; 16],
+    /// The read epoch the record binds.
+    pub epoch: u64,
+}
+
 /// One publish request: the name and its node signing key, the head (metadata)
 /// CID to point at, and the content CIDs to register for pinning.
 pub struct PublishRequest<'a> {
@@ -52,6 +70,11 @@ pub struct PublishRequest<'a> {
     /// revival passes the sequence recovered from the last-known record so the
     /// re-minted record is strictly newer than what lapsed.
     pub min_current_sequence: Option<u64>,
+    /// The read-epoch floor this record must clear at its signature, for the
+    /// record families that bind a scope epoch ([`EpochBar`]). `None` is a
+    /// family that binds none — the pointer plane, the vault settings record and
+    /// the bin index.
+    pub epoch_bar: Option<EpochBar>,
 }
 
 impl PublishRequest<'_> {
@@ -151,6 +174,16 @@ pub enum PublishError {
         /// The enforced ceiling ([`MAX_RECORD_BYTES`]).
         limit: usize,
     },
+    /// The record binds a read epoch below its scope's durable read-epoch floor
+    /// ([`EpochBar`]). Refused release-active at the signature, because the
+    /// adoption gate's epoch stage refuses such a record for good and a signed
+    /// record cannot be unpublished (security rule 8).
+    EpochBelowFloor {
+        /// The durable read-epoch floor in force at the signature.
+        floor: u64,
+        /// The read epoch the record binds.
+        epoch: u64,
+    },
 }
 
 /// One record the pipeline is about to sign: the name it publishes under, its
@@ -162,6 +195,7 @@ struct Publishable<'a> {
     value: Vec<u8>,
     registration: NameRegistration,
     min_current_sequence: Option<u64>,
+    epoch_bar: Option<EpochBar>,
 }
 
 /// One record whose `Value` is the payload itself rather than an `/ipfs/` head
@@ -218,6 +252,8 @@ where
                 content_cids: Vec::new(),
             },
             min_current_sequence: request.min_current_sequence,
+            // The pointer plane binds no scope read epoch.
+            epoch_bar: None,
         },
     )
     .await
@@ -258,6 +294,7 @@ where
             value: request.value(),
             registration: request.registration(),
             min_current_sequence: request.min_current_sequence,
+            epoch_bar: request.epoch_bar,
         },
     )
     .await
@@ -295,6 +332,21 @@ where
         .map_err(PublishError::FloorRead)?
         .unwrap_or(0);
     let sequence = durable.max(request.min_current_sequence.unwrap_or(0)) + 1;
+
+    // The read-epoch bar ([`EpochBar`]), read last so no await separates it from
+    // the signature below.
+    if let Some(bar) = request.epoch_bar {
+        let read_floor = floor::read_epoch_floor(floors, &bar.scope_id)
+            .await
+            .map_err(PublishError::FloorRead)?
+            .unwrap_or(0);
+        if bar.epoch < read_floor {
+            return Err(PublishError::EpochBelowFloor {
+                floor: read_floor,
+                epoch: bar.epoch,
+            });
+        }
+    }
 
     // Core signs; the engine injects the explicit TTL (from the profile, never a
     // library default) and the 90-day client-signed EOL (from the injected clock).

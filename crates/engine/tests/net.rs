@@ -427,6 +427,7 @@ fn publish_registers_first_embeds_sequence_one_and_confirms() {
         head_cid: "bafyhead".into(),
         content_cids: vec!["bafyc1".into()],
         min_current_sequence: None,
+        epoch_bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -470,6 +471,7 @@ fn publish_cas_embeds_the_exact_expected_sequence_floor_plus_one() {
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -506,6 +508,7 @@ fn register_first_fail_closed_puts_no_record() {
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
     let error = block_on(publish(
         &device.record_store,
@@ -571,6 +574,7 @@ fn publish_fails_closed_when_the_sequence_floor_cannot_be_read() {
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
     let error = block_on(publish(
         &device.record_store,
@@ -615,6 +619,7 @@ fn publish_succeeds_on_any_ack_and_the_background_retry_reaches_the_failed_endpo
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -678,6 +683,7 @@ fn publish_all_endpoints_failing_is_fail_closed() {
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
     let error = block_on(publish(
         &device.record_store,
@@ -723,6 +729,7 @@ fn publish_confirm_detects_a_lost_cas_race() {
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
     let outcome = block_on(publish(
         &device.record_store,
@@ -919,6 +926,7 @@ fn eol_republish_renews_at_seq_plus_one_only_inside_the_window() {
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
     block_on(publish(
         &device.record_store,
@@ -1289,6 +1297,7 @@ fn multi_day_eol_timeline_publish_renew_lapse_revive() {
         head_cid: "bafytimeline".into(),
         content_cids: Vec::new(),
         min_current_sequence: None,
+        epoch_bar: None,
     };
 
     // T0: first publish (seq 1, EOL T0+90d); model adoption (floor → 1).

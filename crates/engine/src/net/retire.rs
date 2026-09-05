@@ -96,6 +96,7 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             // refuses, and no record naming it reached the transport.
             PublishError::Register(_)
             | PublishError::FloorRead(_)
+            | PublishError::EpochBelowFloor { .. }
             | PublishError::RecordTooLarge { .. } => true,
             // Nothing was ever addressed, so there is no CID to retire.
             PublishError::EmptyHeadCid | PublishError::EmptyInlineValue => false,

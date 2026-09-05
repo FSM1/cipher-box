@@ -206,6 +206,7 @@ fn bench_publish(c: &mut Criterion) {
         head_cid: "bafybenchhead".into(),
         content_cids: vec!["bafybenchleaf".into()],
         min_current_sequence: None,
+        epoch_bar: None,
     };
 
     c.bench_function("publish", |b| {

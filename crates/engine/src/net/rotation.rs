@@ -458,7 +458,9 @@ fn author_verdict(refusal: AuthorError) -> RotationPublishError {
 fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. }
-        | RecordPublishError::Publish(PublishError::EmptyHeadCid) => RotationPublishError::Rejected,
+        | RecordPublishError::Publish(
+            PublishError::EmptyHeadCid | PublishError::EpochBelowFloor { .. },
+        ) => RotationPublishError::Rejected,
         _ => RotationPublishError::NotPublished,
     }
 }
@@ -2675,7 +2677,7 @@ where
             },
         )
         .await
-        .map_err(|_| RotationPublishError::NotPublished)?;
+        .map_err(record_publish_verdict)?;
 
         match receipt.outcome {
             PublishOutcome::Published { .. } => Ok(()),
@@ -2702,20 +2704,11 @@ where
             .swept_scope(scope)
             .map_err(|_| RotationPublishError::Rejected)?;
         let name = scope_name(node.ipns_name).map_err(publish_verdict)?;
-        // Release-active (security rule 8), both halves. The seam's own
-        // invariant: a node is only ever sealed at the epoch of the scope root
-        // this pass gated, since any other value signs under a key no reader
-        // re-derives. And the durable mirror: a concurrent cascade can raise the
-        // read-epoch floor after that gated read, and a record cannot be
-        // unpublished — so re-read the floor rather than trusting the snapshot.
+        // Release-active (security rule 8): a node is only ever sealed at the
+        // epoch of the scope root this pass gated, since any other value signs
+        // under a key no reader re-derives. The durable floor that same epoch
+        // must clear is read at the signature ([`EpochBar`]).
         if node.read_epoch != source.read_epoch {
-            return Err(RotationPublishError::Rejected);
-        }
-        let read_floor = floor::read_epoch_floor(self.floors, &source.scope_id)
-            .await
-            .map_err(|_| RotationPublishError::NotPublished)?
-            .unwrap_or(0);
-        if node.read_epoch < read_floor {
             return Err(RotationPublishError::Rejected);
         }
         let read_key = read_key_for(&source.read_scope_seed, &node.node_id);
@@ -2826,16 +2819,6 @@ where
         if node.node_id == root.scope_id
             || name != derive_write_name(&source.write_scope_seed, &node.node_id)
         {
-            return Err(RotationPublishError::Rejected);
-        }
-        // The durable mirror of the same rule the sweep's publish arm applies:
-        // the fresh scope's read-epoch floor can already stand above the epoch
-        // this record binds, and a signed record cannot be unpublished.
-        let read_floor = floor::read_epoch_floor(self.floors, &root.scope_id)
-            .await
-            .map_err(|_| RotationPublishError::NotPublished)?
-            .unwrap_or(0);
-        if root.read_epoch < read_floor {
             return Err(RotationPublishError::Rejected);
         }
         // Recovered from the owner blob the minted section wraps, so the seam
@@ -3344,7 +3327,9 @@ fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
         RecordPublishError::HeadCidMismatch { .. } => WritePublishError::Rejected,
         RecordPublishError::Publish(PublishError::Register(_)) => WritePublishError::RegistryFull,
         RecordPublishError::Publish(
-            PublishError::EmptyHeadCid | PublishError::RecordTooLarge { .. },
+            PublishError::EmptyHeadCid
+            | PublishError::EpochBelowFloor { .. }
+            | PublishError::RecordTooLarge { .. },
         ) => WritePublishError::Rejected,
         _ => WritePublishError::NotLanded,
     }
@@ -11571,6 +11556,155 @@ mod tests {
                 &interior_record_of(node_id, name.as_str().as_bytes(), &body, &empty),
             )),
             Err(RotationPublishError::Rejected),
+        );
+        assert_eq!(
+            sequence_at(&harness, &name),
+            sequence_before,
+            "and nothing was signed",
+        );
+    }
+
+    /// A floor store that raises one scope's read-epoch floor from *inside* a
+    /// publish window: the raise lands on the per-name sequence-floor read the
+    /// publish makes immediately before it signs, so a bar read any earlier than
+    /// the signature misses it ([`EpochBar`]).
+    struct RaisingFloors {
+        inner: InMemoryFloorStore,
+        /// The name whose sequence-floor read fires the raise.
+        on_name: Vec<u8>,
+        scope_id: [u8; 16],
+        raise_to: Cell<Option<u64>>,
+        fired: Cell<bool>,
+    }
+
+    impl RaisingFloors {
+        fn wrapping(
+            inner: &InMemoryFloorStore,
+            on_name: &IpnsName,
+            scope_id: [u8; 16],
+            raise_to: u64,
+        ) -> Self {
+            Self {
+                inner: inner.clone(),
+                on_name: on_name.as_str().as_bytes().to_vec(),
+                scope_id,
+                raise_to: Cell::new(Some(raise_to)),
+                fired: Cell::new(false),
+            }
+        }
+    }
+
+    impl FloorStore for RaisingFloors {
+        async fn epoch_floor(&self, key: &[u8]) -> SeamResult<Option<u64>> {
+            self.inner.epoch_floor(key).await
+        }
+
+        async fn raise_epoch_floor(&self, key: &[u8], epoch: u64) -> SeamResult<u64> {
+            self.inner.raise_epoch_floor(key, epoch).await
+        }
+
+        async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            if ipns_name == self.on_name
+                && let Some(epoch) = self.raise_to.take()
+            {
+                self.fired.set(true);
+                self.inner.raise_epoch_floor(&self.scope_id, epoch).await?;
+            }
+            self.inner.sequence_floor(ipns_name).await
+        }
+
+        async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+            self.inner.raise_sequence_floor(ipns_name, sequence).await
+        }
+
+        async fn clear(&self) -> SeamResult<()> {
+            self.inner.clear().await
+        }
+    }
+
+    /// The wiring of [`Harness::net`] over an arbitrary floor store.
+    fn net_over<'a, F: FloorStore>(
+        harness: &'a Harness<InMemoryRecordStore>,
+        floors: &'a F,
+    ) -> OwnerRotationNet<
+        'a,
+        InMemoryRecordStore,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        F,
+        VirtualScheduler,
+        SeededEntropy,
+    > {
+        harness.net_rooted_with_floors(
+            RotationAncestry::rooted_at(SCOPE, &OWNER_ROOT_SCOPE_SEED, &[]),
+            floors,
+        )
+    }
+
+    /// The mint's interior leg holds the bar to the signature: a read-epoch
+    /// floor that rises after the head block uploads still refuses the record.
+    #[test]
+    fn a_read_floor_rise_inside_the_mint_publish_window_refuses_the_re_seal() {
+        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let name = interior_name(node_id);
+        let floors =
+            RaisingFloors::wrapping(&harness.floors, &name, GRANTED_FOLDER, MINT_EPOCH + 1);
+        let net = net_over(&harness, &floors);
+        block_on(net.resolve_scope(&scope)).expect("the pass gates the parent scope");
+        let sequence_before = sequence_at(&harness, &name);
+        let root = promoted_folder_root();
+        let body = interior_body();
+        let empty = PreservedFields::new();
+
+        assert_eq!(
+            block_on(net.reseal_interior_node(
+                &scope,
+                &root,
+                &interior_record_of(node_id, name.as_str().as_bytes(), &body, &empty),
+            )),
+            Err(RotationPublishError::Rejected),
+        );
+        assert!(
+            floors.fired.get(),
+            "the raise landed inside the publish window",
+        );
+        assert_eq!(
+            sequence_at(&harness, &name),
+            sequence_before,
+            "and nothing was signed",
+        );
+    }
+
+    /// The sweep's publish arm holds the same bar to the same point.
+    #[test]
+    fn a_read_floor_rise_inside_the_sweep_publish_window_refuses_the_node() {
+        let (harness, scope, node_id) = staged_swept_scope(OWNER_ROOT_EPOCH);
+        let name = interior_name(node_id);
+        let floors = RaisingFloors::wrapping(&harness.floors, &name, SCOPE, SWEPT_EPOCH + 1);
+        let net = net_over(&harness, &floors);
+        let swept = block_on(net.resolve_scope(&scope)).expect("the scope root gates");
+        let sequence_before = sequence_at(&harness, &name);
+        let body = interior_body();
+        let empty = PreservedFields::new();
+
+        assert_eq!(
+            block_on(net.publish_node(
+                &scope,
+                &LaggingNode {
+                    node_id,
+                    ipns_name: name.as_str().as_bytes(),
+                    read_epoch: swept.current_read_epoch,
+                    sequence: 1,
+                    read_body: &body,
+                    carried_unknown: &empty,
+                    carried_epoch_tag_unknown: &empty,
+                },
+            )),
+            Err(RotationPublishError::Rejected),
+        );
+        assert!(
+            floors.fired.get(),
+            "the raise landed inside the publish window",
         );
         assert_eq!(
             sequence_at(&harness, &name),

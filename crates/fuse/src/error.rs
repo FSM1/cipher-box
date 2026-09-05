@@ -80,9 +80,13 @@ impl From<EngineError> for VfsError {
             EngineError::ScopeExitRefused { message } => VfsError::Refused { message },
             // A node this build cannot act on is a refusal of the target, which
             // is what `Refused` names — never an unavailability a mount retries.
-            error @ EngineError::UnsupportedTarget { .. } => VfsError::Refused {
-                message: error.to_string(),
-            },
+            // A share left partly made takes the same class: no mount call
+            // repeats it, and it is no verdict on a record.
+            error @ (EngineError::UnsupportedTarget { .. } | EngineError::PartialCommit { .. }) => {
+                VfsError::Refused {
+                    message: error.to_string(),
+                }
+            }
             EngineError::ContentUnavailable { message }
             | EngineError::RefreshFailed { message } => VfsError::Unavailable { message },
             // Retryable once the vault settings resolve or are saved again, and

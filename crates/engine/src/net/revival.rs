@@ -120,6 +120,9 @@ where
         content_cids: request.content_cids,
         // Strictly newer than what lapsed, even if this device's floor is stale.
         min_current_sequence: Some(basis.sequence),
+        // A revival re-mints the lapsed record's own value, whose epoch was
+        // barred at the publish that authored it.
+        epoch_bar: None,
     };
     publish(transport, api, floors, scheduler, profile, &publish_request)
         .await

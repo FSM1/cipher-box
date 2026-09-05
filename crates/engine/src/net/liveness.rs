@@ -406,6 +406,9 @@ where
                     // Renewal is a normal CAS write: the sequence comes from the
                     // durable floor + 1, not a recovered revival sequence.
                     min_current_sequence: None,
+                    // A renewal re-points the held value unchanged; the epoch it
+                    // binds was barred at the publish that authored it.
+                    epoch_bar: None,
                 };
                 eol_republish(transport, api, floors, scheduler, profile, &request).await
             }
@@ -547,6 +550,7 @@ mod tests {
             head_cid: String::new(),
             content_cids: Vec::new(),
             min_current_sequence: None,
+            epoch_bar: None,
         };
         // Encode/decode fail-closed symmetry (security rule 8): an empty head CID
         // would sign `/ipfs/`, which head_cid_from_value always rejects — so
@@ -629,6 +633,7 @@ mod tests {
             head_cid: "b".repeat(MAX_RECORD_BYTES),
             content_cids: Vec::new(),
             min_current_sequence: None,
+            epoch_bar: None,
         };
         // Encode/decode fail-closed symmetry (security rule 8): fanout_get_verify
         // skips an over-cap record, so publishing one would mint bytes this
