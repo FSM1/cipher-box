@@ -43,19 +43,21 @@ export function mountNames(path: string): Promise<string[]> {
   return readdir(path);
 }
 
-/** Waits for the mount to project `name` in `path`. */
+/** Waits for `name` under the mount. It takes the instance so a wedged read can abandon it. */
 export async function projects(
   context: ScenarioContext,
-  path: string,
-  name: string
+  mount: Instance,
+  name: string,
+  at: string = mount.mountRoot
 ): Promise<void> {
   await poll(
-    () => mountNames(path),
+    () => mountNames(at),
     (names) => names.includes(name),
     {
-      what: `the mount to project ${name} in ${path}`,
+      what: `the mount to project ${name} in ${at}`,
       timeoutMs: context.deadlines.refreshMs,
       intervalMs: context.deadlines.intervalMs,
+      release: () => mount.abandon(),
     }
   );
 }

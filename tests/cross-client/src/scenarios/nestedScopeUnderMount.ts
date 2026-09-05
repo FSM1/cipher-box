@@ -28,7 +28,7 @@ export const nestedScopeUnderMount: Scenario = {
     // One nocache pass is the whole barrier: the mount holds the scope root's
     // own read seed once the descent proves it, so nothing else has to happen.
     await mount.refresh();
-    await projects(context, join(mount.mountRoot, FOLDER), INSIDE);
+    await projects(context, mount, INSIDE, join(mount.mountRoot, FOLDER));
 
     mountHeld(await mount.status(), 'the nested scope read');
 

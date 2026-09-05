@@ -31,7 +31,7 @@ export const offlineConvergence: Scenario = {
     // The mount answers the write from its own state and queues the publish:
     // an outage is not a refusal (blueprint/desktop.md "FS projection").
     await mkdir(join(mount.mountRoot, OFFLINE));
-    await projects(context, mount.mountRoot, OFFLINE);
+    await projects(context, mount, OFFLINE);
 
     await context.stack.startApi();
     context.log('the API is back');

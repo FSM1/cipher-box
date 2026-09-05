@@ -47,7 +47,7 @@ export const leaderFailover: Scenario = {
 
     // A write made after the promotion, by the host that never lost its engine.
     await mkdir(join(mount.mountRoot, AFTER));
-    await projects(context, mount.mountRoot, AFTER);
+    await projects(context, mount, AFTER);
     await mount.refresh();
 
     const status = await mount.status();
