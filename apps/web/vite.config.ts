@@ -7,7 +7,7 @@ import { build, loadEnv, type Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
 import { DEV_SECURITY_HEADERS, SERVED_SECURITY_HEADERS } from './src/csp';
-import { missingDeployEnv, shipsE2eHook } from './src/engine/config';
+import { apiBaseUrl, missingDeployEnv, shipsE2eHook } from './src/engine/config';
 
 const OUT_DIR = fileURLToPath(new URL('dist', import.meta.url));
 const SW_ENTRY = fileURLToPath(new URL('src/sw.ts', import.meta.url));
@@ -83,8 +83,9 @@ function appShell(): Plugin[] {
 }
 
 /**
- * Fails a deployment build whose login-critical environment is unset, or one
- * that would ship the e2e introspection hook.
+ * Fails a deployment build whose login-critical environment is unset, one that
+ * carries an API origin the boot refuses, or one that would ship the e2e
+ * introspection hook.
  */
 function deployEnvGate(): Plugin {
   return {
@@ -98,6 +99,9 @@ function deployEnvGate(): Plugin {
           `a ${env.VITE_ENVIRONMENT} build cannot log in without ${missing.join(', ')}`
         );
       }
+      // Throws on an origin the boot would refuse, which is a red build rather
+      // than a bundle that dies on its first request.
+      apiBaseUrl(env);
       if (shipsE2eHook(env)) {
         throw new Error(`a ${env.VITE_ENVIRONMENT} build must not set VITE_E2E_HOOK`);
       }

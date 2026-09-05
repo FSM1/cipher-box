@@ -9,17 +9,43 @@ const DEFAULT_ROUTING_ENDPOINTS = 'https://delegated-ipfs.dev';
 /** The deployments the build-time environment names. */
 export type Environment = 'local' | 'ci' | 'staging' | 'production';
 
+/** The hosts the cleartext exception covers, at any port. */
+const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1'];
+
+/** Named once, so every refusal states the same rule. */
+const TRANSPORT_RULE =
+  'VITE_API_URL must be an https: URL; http: is allowed only for localhost and 127.0.0.1';
+
 /**
- * The API origin the engine authenticates and publishes against. Trimmed, since
- * it is concatenated into request URLs; a whitespace-only value trims to blank
- * rather than defaulting, so the engine's own edge check refuses it instead of
- * a misconfigured deployment quietly talking to the user's own machine.
+ * The API origin the engine authenticates and publishes against, held to the
+ * transport rule. Every authenticated call the web client makes goes here — the
+ * session bearer, the uploads, the device registration, and the device-approval
+ * exchange with its identity token — so a cleartext origin puts all of them on
+ * the wire in the clear. The rule binds in every environment, since one that
+ * bound only in a deployment would never run where the app is developed.
+ *
+ * A value that breaks it fails the boot, and the build where the bundler's
+ * deployment gate reads it; it never degrades to a page that works over
+ * cleartext. Trimmed, since the value is concatenated into request URLs.
  */
 export function apiBaseUrl(env: Partial<ImportMetaEnv>): string {
-  // `VITE_API_URL=` reads as `''`, which `new URL` rejects rather than defaults.
-  return env.VITE_API_URL === undefined || env.VITE_API_URL === ''
-    ? DEFAULT_API_URL
-    : env.VITE_API_URL.trim();
+  // `VITE_API_URL=` reads as `''`, which stands for an unset variable.
+  const value =
+    env.VITE_API_URL === undefined || env.VITE_API_URL === ''
+      ? DEFAULT_API_URL
+      : env.VITE_API_URL.trim();
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${TRANSPORT_RULE}; "${value}" is not a URL`);
+  }
+  const loopbackCleartext = url.protocol === 'http:' && LOOPBACK_HOSTS.includes(url.hostname);
+  if (url.protocol !== 'https:' && !loopbackCleartext) {
+    throw new Error(`${TRANSPORT_RULE}; "${value}" is refused`);
+  }
+  return value;
 }
 
 const ENVIRONMENTS: readonly Environment[] = ['local', 'ci', 'staging', 'production'];

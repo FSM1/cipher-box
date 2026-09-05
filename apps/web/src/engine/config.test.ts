@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  apiBaseUrl,
   engineHostConfig,
   environment,
   googleClientId,
@@ -47,7 +48,7 @@ describe('engineHostConfig', () => {
   });
 
   it('reads a blank API origin as unconfigured rather than as a base URL', () => {
-    // `VITE_API_URL=` reads as `''`, which `new URL` rejects outright.
+    // `VITE_API_URL=` reads as `''`, which stands for an unset variable.
     expect(engineHostConfig({ VITE_API_URL: '' }, artifact).apiBaseUrl).toBe(
       'http://localhost:3000'
     );
@@ -98,8 +99,62 @@ describe('engineHostConfig', () => {
 
   it('never defaults a whitespace API origin to localhost', () => {
     // Defaulting here would point a misconfigured deployment at whatever answers
-    // on the user's machine; the engine's own edge check refuses a blank base.
-    expect(engineHostConfig({ VITE_API_URL: '   ' }, artifact).apiBaseUrl).toBe('');
+    // on the user's machine, so the blank it trims to is refused instead.
+    expect(() => engineHostConfig({ VITE_API_URL: '   ' }, artifact)).toThrow(/VITE_API_URL/);
+  });
+});
+
+describe('apiBaseUrl', () => {
+  const DEPLOYMENTS = ['local', 'ci', 'staging', 'production'] as const;
+
+  it('accepts an https origin in every deployment', () => {
+    for (const deployment of DEPLOYMENTS) {
+      expect(
+        apiBaseUrl({ VITE_ENVIRONMENT: deployment, VITE_API_URL: 'https://api.example.test' })
+      ).toBe('https://api.example.test');
+    }
+  });
+
+  it('refuses a cleartext origin, naming the rule', () => {
+    // The session bearer, the uploads and the device-approval identity token all
+    // travel to this origin, so cleartext would put every one of them on the wire.
+    for (const deployment of DEPLOYMENTS) {
+      expect(() =>
+        apiBaseUrl({ VITE_ENVIRONMENT: deployment, VITE_API_URL: 'http://api.example.test' })
+      ).toThrow(
+        /VITE_API_URL must be an https: URL; http: is allowed only for localhost and 127\.0\.0\.1/
+      );
+    }
+  });
+
+  it('refuses a scheme that is neither https nor loopback http', () => {
+    for (const value of ['ws://api.example.test', 'ftp://api.example.test', 'file:///api']) {
+      expect(() => apiBaseUrl({ VITE_API_URL: value })).toThrow(/VITE_API_URL/);
+    }
+  });
+
+  it('keeps cleartext loopback for the local and CI stacks, at any port', () => {
+    for (const value of [
+      'http://localhost:3000',
+      'http://localhost',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1',
+    ]) {
+      expect(apiBaseUrl({ VITE_ENVIRONMENT: 'ci', VITE_API_URL: value })).toBe(value);
+    }
+  });
+
+  it('refuses a host that only reads as loopback', () => {
+    // A prefix or a subdomain match would take the exception off the machine.
+    for (const value of ['http://localhost.example.test', 'http://127.0.0.1.example.test']) {
+      expect(() => apiBaseUrl({ VITE_API_URL: value })).toThrow(/VITE_API_URL/);
+    }
+  });
+
+  it('refuses a malformed URL rather than concatenating it into requests', () => {
+    for (const value of ['api.example.test', 'https://', 'not a url']) {
+      expect(() => apiBaseUrl({ VITE_API_URL: value })).toThrow(/is not a URL/);
+    }
   });
 });
 
