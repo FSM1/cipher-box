@@ -929,12 +929,9 @@ fn charge_crossing_read(halt: Halt) -> Halt {
 ///
 /// - A **scope root** — either end's, or any this pass proved — re-authored as a
 ///   plain child loses the grant section its own readers gate on, which is what
-///   the child pipeline rejects on the way in. A nested one is refused for a
-///   second reason: carrying a scope root into another scope re-seals its ascent
-///   link and repoints the index of both enclosing roots (blueprint/engine.md
-///   "Rotation primitives"), and this pass holds no owner material for either.
-///   The relocation arms refuse such a move outright; the walk still meets one
-///   when a grant mints a scope root under an already-queued op.
+///   the child pipeline rejects on the way in. One inside the moved subtree is
+///   also a move no pass may make (`facade.rs::refuse_moving_a_scope_root`); it
+///   reaches here when a grant mints a scope root under an already-queued op.
 /// - A node the gate-passing base places **outside** the moved subtree is a
 ///   transplant. Re-sealing it would publish a wire-supplied body at that node's
 ///   own destination name, over whatever really lives there. A node the base
@@ -6472,10 +6469,9 @@ mod tests {
     /// The crossing walk descends through child refs anyone holding the source
     /// scope's write seed authors, so a ref naming any node at all reaches the
     /// re-seal. Two of those the walk must refuse, both release-active so the
-    /// refusal holds in a shipped build (AGENTS.md rule 8): a scope root, which
-    /// would lose the grant section its readers gate on and whose ascent link
-    /// and enclosing indices no pass can re-author, and a node the base places
-    /// outside the moved subtree, whose own destination record the re-seal would
+    /// refusal holds in a shipped build (AGENTS.md rule 8): a scope root, at
+    /// either end or inside the moved subtree, and a node the base places
+    /// outside that subtree, whose own destination record the re-seal would
     /// overwrite with a wire-supplied body.
     #[test]
     fn the_crossing_re_seal_refuses_a_scope_root_and_a_node_from_outside_the_subtree() {

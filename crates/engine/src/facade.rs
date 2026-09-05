@@ -10558,11 +10558,9 @@ mod tests {
         );
     }
 
-    /// A crossing that carries a scope root re-seals that root's ascent link and
-    /// repoints the index of the root it leaves and the root it joins — three
-    /// scope-root re-seals one drain pass cannot author. Refused at the command,
-    /// so the member hears it instead of the crossing walking the whole subtree
-    /// and dead-lettering.
+    /// Which subtrees carry a scope root, and which crossings the refusal
+    /// covers. The moved node counts as one of its own, and a scope root beside
+    /// the subtree or below it is not carried anywhere.
     #[test]
     fn a_crossing_that_carries_a_scope_root_is_refused() {
         let root = NodeId([1; 16]);

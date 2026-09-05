@@ -2007,12 +2007,10 @@ fn published_child_scope_index(
         .collect()
 }
 
-/// Carrying a scope root into another scope re-seals three scope roots: the
-/// moved root, whose ascent link opens only under the enclosing scope's own
-/// derivation, plus the root that loses the child and the root that gains it.
-/// No drain pass holds the owner material for that, so the command refuses and
-/// the member hears it — the queue spends nothing, neither index moves, and a
-/// cold session's boundary walk still reaches the scope root through them.
+/// The refusal end to end, over what another device would see: the member hears
+/// it at the command, neither enclosing scope root publishes, both indices still
+/// name the truth, and a cold session's boundary walk still reaches the nested
+/// scope root down the index chain.
 #[test]
 fn a_move_that_carries_a_shared_folder_into_another_scope_is_refused() {
     let mut fx = GrantScenario::new();
