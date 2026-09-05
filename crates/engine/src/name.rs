@@ -103,13 +103,9 @@ fn is_deceptive(c: char) -> bool {
 /// The name with every character the law refuses as deceptive removed, or `None`
 /// when the name holds none.
 ///
-/// [`validate_name`] keeps such a character out of anything this device
-/// authors, but a folder binds a child on id and never on name
-/// (`crates/core/src/seal/body.rs`), so a peer with a modified client commits
-/// whatever text string it likes. A read plane draws what it is given, thus one
-/// override in one child's name reorders the listing drawn around it. The set
-/// has one home here, so what an author cannot write is what a listing cannot
-/// draw.
+/// A read plane draws what it is given, thus one override in a peer's child
+/// name reorders every name drawn around it. The set has one home here, so what
+/// an author cannot write is what a listing cannot draw.
 pub fn strip_deceptive(name: &str) -> Option<Zeroizing<String>> {
     name.chars().any(is_deceptive).then(|| {
         Zeroizing::new(
