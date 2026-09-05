@@ -14,8 +14,9 @@ use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     AadContext, AscentLink, BinEntry, ChildRef, GrantSection, GrantSetCommitment,
     NodeKind as CoreNodeKind, Permission as CorePermission, PreservedFields, ReadBody,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, decode_envelope, decode_grant_section,
-    grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body, sign_grant_set,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, decode_envelope,
+    decode_grant_section, decode_write_body, grant_section_bytes, open_ascent_link,
+    open_grant_blob, open_read_body, sign_grant_set, unseal,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -1971,6 +1972,114 @@ fn a_session_that_minted_nothing_refuses_a_move_between_two_walked_scopes() {
             Err(EngineError::ScopeExitRefused { .. })
         ),
         "and a move into the scope above it needs a re-seal no pass can author"
+    );
+}
+
+/// The direct-child-scope index the scope root published at `node` carries,
+/// by scope id. A read grant cuts no write scope, so the granted scope's write
+/// body opens under the write key the vault root's own seed derives.
+fn published_child_scope_index(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    node: NodeId,
+    write_epoch: u64,
+) -> Vec<[u8; 16]> {
+    let section =
+        published_grant_section(world, blocks, node).expect("the node is a published scope root");
+    let write_key = kdf::write_key(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    let plaintext = unseal(
+        write_key.as_bytes(),
+        &AadContext {
+            v: ENVELOPE_V,
+            id: node.0,
+            scope: node.0,
+            epoch: write_epoch,
+            struct_tag: STRUCT_TAG_WRITE_BODY,
+        },
+        &section.write_body.sealed,
+    )
+    .expect("the scope's own write key opens its write body");
+    decode_write_body(&plaintext)
+        .expect("the write body decodes")
+        .direct_child_scope_index
+        .into_iter()
+        .map(|child| child.scope_id)
+        .collect()
+}
+
+/// Carrying a scope root into another scope re-seals three scope roots: the
+/// moved root, whose ascent link opens only under the enclosing scope's own
+/// derivation, plus the root that loses the child and the root that gains it.
+/// No drain pass holds the owner material for that, so the command refuses and
+/// the member hears it — the queue spends nothing, neither index moves, and a
+/// cold session's boundary walk still reaches the scope root through them.
+#[test]
+fn a_move_that_carries_a_shared_folder_into_another_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("in");
+    let holiday =
+        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "holiday");
+    let carton = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "carton",
+    );
+    assert!(
+        matches!(
+            block_on(fx.engine.command(Command::Relink {
+                node: inner,
+                new_parent: carton,
+            })),
+            Ok(CommandOutcome::Queued { .. })
+        ),
+        "a move that keeps the scope root inside its own scope crosses nothing"
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
+    let enclosing_before = sequence_at(&fx.world, &write_name(fx.folder));
+    for (node, why) in [
+        (carton, "a folder that holds a granted folder"),
+        (inner, "and the granted folder itself"),
+    ] {
+        assert!(
+            matches!(
+                block_on(fx.engine.command(Command::Relink {
+                    node,
+                    new_parent: holiday,
+                })),
+                Err(EngineError::ScopeExitRefused { .. })
+            ),
+            "{why} is refused at the command, before any subtree walk"
+        );
+    }
+    assert_eq!(
+        (
+            sequence_at(&fx.world, &write_name(ROOT)),
+            sequence_at(&fx.world, &write_name(fx.folder))
+        ),
+        (root_before, enclosing_before),
+        "a refused crossing publishes nothing at either enclosing scope root"
+    );
+
+    assert_eq!(
+        published_child_scope_index(&fx.world, &fx.blocks, ROOT, EPOCH),
+        vec![fx.folder.0],
+        "the vault root still names the one scope it directly holds"
+    );
+    assert_eq!(
+        published_child_scope_index(&fx.world, &fx.blocks, fx.folder, 1),
+        vec![inner.0],
+        "and the scope the move would have emptied still names the nested root"
+    );
+
+    let (fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    tick(&fx.world, &fresh, &mut tasks);
+    assert!(
+        block_on(fresh.walked_scope_material(inner)).is_some(),
+        "so an enumeration down the index chain still reaches the nested scope root"
     );
 }
 
