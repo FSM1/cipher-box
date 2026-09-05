@@ -10038,8 +10038,12 @@ where {
                 Ok(CommandOutcome::Queued { op_id })
             }
             Err(error) => {
+                // Best-effort, and the caller still hears why the command
+                // failed: a leg a tick has already drained is gone from the
+                // queue, and a cleanup that reported itself instead would name
+                // the wrong cause.
                 if let Some(op_id) = parked {
-                    self.dequeue_op(op_id).await?;
+                    let _ = self.dequeue_op(op_id).await;
                 }
                 Err(error)
             }
