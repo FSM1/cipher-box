@@ -47,6 +47,11 @@ const FORMAT_V1: u8 = 1;
 /// The engine's location-independent node id.
 const NODE_ID_LEN: usize = 16;
 
+/// What a scope root still owed a cut is reported under when the store refused
+/// the record: the obligation stands, but only for as long as this session
+/// does.
+const DEBT_NOT_DURABLE: &str = "debt-not-durable";
+
 /// Drive every cut this device owes and answer with the roots still owed after
 /// the pass, each with a key-material-free classification of what stopped it.
 ///
@@ -84,11 +89,23 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
         }
         held.clone()
     };
-    record_owed_cuts(staging, seal, enc_secret, &held).await;
+    // A refused write leaves the obligation in memory alone, which is the state
+    // the record exists to improve on, so the roots it would have named are
+    // reported under that rather than under what stopped their rotation.
+    let durable = record_owed_cuts(staging, seal, enc_secret, &held).await;
     cut.failed
         .iter()
         .filter(|(root, _)| held.contains(root))
-        .map(|(root, error)| (*root, error.check()))
+        .map(|(root, error)| {
+            (
+                *root,
+                if durable {
+                    error.check()
+                } else {
+                    DEBT_NOT_DURABLE
+                },
+            )
+        })
         .collect()
 }
 
@@ -97,7 +114,9 @@ pub(crate) async fn settle_owed_cuts<St: StagingStore, R: ScopeExitRotator>(
 ///
 /// Written here rather than only at the settle: everything from the crossing's
 /// ack onwards is a window a crash leaves the scope uncut, and the op that owed
-/// the cut is out of the queue by then.
+/// the cut is out of the queue by then. Every pass reaches
+/// [`settle_owed_cuts`], which writes the record again and reports a scope that
+/// is still owed one the store would not take.
 pub(crate) async fn owe_cut<St: StagingStore>(
     staging: &St,
     seal: BookkeepingSeal<'_>,
@@ -110,7 +129,7 @@ pub(crate) async fn owe_cut<St: StagingStore>(
         session.insert(scope_root);
         session.clone()
     };
-    record_owed_cuts(staging, seal, enc_secret, &owed).await;
+    let _ = record_owed_cuts(staging, seal, enc_secret, &owed).await;
 }
 
 /// Fold the durable debt into this session's owed set.
@@ -136,25 +155,27 @@ async fn adopt_owed_cuts<St: StagingStore>(
 /// Write `owed` through to the staging store, removing the record once nothing
 /// is owed.
 ///
-/// Best effort, and deliberately: the session's own set drives every cut this
-/// pass whatever the store answers, and a debt held in memory alone is the
-/// state this record improves on rather than a reason to fail the op that owed
-/// it.
+/// Answers whether the record is durable, which the caller reports: the op that
+/// owed the cut published before this runs, so a refused write is never a reason
+/// to fail it — the crossing cannot be taken back — but it is a revocation
+/// obligation this device may lose, and it is not left silent.
 pub(crate) async fn record_owed_cuts<St: StagingStore>(
     staging: &St,
     seal: BookkeepingSeal<'_>,
     enc_secret: &X25519Secret,
     owed: &BTreeSet<NodeId>,
-) {
+) -> bool {
     let key = scope_exit_debt_key(enc_secret);
     if owed.is_empty() {
+        // A record left standing over a cut that landed costs one re-cut, which
+        // rotates more than the owner asked rather than less.
         let _ = staging.remove_staged_bytes(&key).await;
-        return;
+        return true;
     }
     let Ok(blob) = seal_owed_cuts(seal, owed) else {
-        return;
+        return false;
     };
-    let _ = staging.put_staged_bytes(&key, &blob).await;
+    staging.put_staged_bytes(&key, &blob).await.is_ok()
 }
 
 /// This identity's one scope-exit debt key.
@@ -519,6 +540,49 @@ mod tests {
             stored(&staging, &entropy, &mine),
             Some(BTreeSet::from([node(3)])),
         );
+    }
+
+    /// A store that will not take the record leaves the obligation in memory
+    /// alone. That is the state the record exists to improve on, so the pass
+    /// says so rather than discarding the failure.
+    #[test]
+    fn a_refused_write_reports_the_root_as_a_debt_this_session_may_lose() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(18));
+        let mine = secret(9);
+        staging.interrupt_staged_write_after(&scope_exit_debt_key(&mine), 0);
+
+        let owed = pass(
+            &staging,
+            &entropy,
+            &mine,
+            &Rotator::refusing(node(3), RotateError::Publish(NOT_PUBLISHED)),
+            &RefCell::new(BTreeSet::from([node(3)])),
+        );
+
+        assert_eq!(owed, vec![(node(3), "debt-not-durable")]);
+        assert_eq!(stored(&staging, &entropy, &mine), None);
+    }
+
+    /// A cut that landed owes nothing, so a refused **removal** raises no alarm:
+    /// the record a later pass reads back costs one re-cut, which rotates more
+    /// than the owner asked rather than less.
+    #[test]
+    fn a_refused_removal_after_a_landed_cut_reports_nothing() {
+        let staging = InMemoryStagingStore::default();
+        let entropy = RefCell::new(SeededEntropy::new(19));
+        let mine = secret(9);
+        staging.interrupt_staged_removal_after(&scope_exit_debt_key(&mine), 0);
+
+        let owed = pass(
+            &staging,
+            &entropy,
+            &mine,
+            &Rotator::cutting_everything(),
+            &RefCell::new(BTreeSet::from([node(3)])),
+        );
+
+        assert!(owed.is_empty());
     }
 
     /// A pass with nothing owed and nothing stored costs no rotation and no
