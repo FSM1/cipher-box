@@ -21,6 +21,16 @@
       "emittable": true
     },
     {
+      "name": "\u0645\u06cc\u200c\u0631\u0648\u062f.txt",
+      "verdict": "accept",
+      "emittable": true
+    },
+    {
+      "name": "crew \ud83d\udc68\u200d\ud83d\udcbb",
+      "verdict": "accept",
+      "emittable": true
+    },
+    {
       "name": "..leading",
       "verdict": "accept",
       "emittable": true
@@ -117,6 +127,16 @@
     },
     {
       "name": "report\u200b.txt",
+      "verdict": "deceptive-character",
+      "emittable": true
+    },
+    {
+      "name": "a\u200eb",
+      "verdict": "deceptive-character",
+      "emittable": true
+    },
+    {
+      "name": "a\u200fb",
       "verdict": "deceptive-character",
       "emittable": true
     },

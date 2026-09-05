@@ -81,10 +81,16 @@ const RESERVED_DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
 /// manager draws it. `char::is_control` is category `Cc` only and misses all
 /// of these; the strict comparator folds case but not format characters, so
 /// nothing downstream catches them either.
+///
+/// U+200C and U+200D sit between the refused code points and are admitted:
+/// the non-joiner is mandatory orthography in Persian, Urdu and Kurdish, and
+/// the joiner builds Indic conjuncts and every multi-person emoji, so a
+/// refusal would deny whole scripts a name.
 fn is_deceptive(c: char) -> bool {
     matches!(
         c,
-        '\u{200B}'..='\u{200F}' // zero-width space/joiners, LRM/RLM
+        '\u{200B}' // zero-width space
+            | '\u{200E}' | '\u{200F}' // LRM/RLM
             | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
             | '\u{2066}'..='\u{2069}' // bidi isolates
             | '\u{FEFF}' // zero-width no-break space
@@ -171,6 +177,24 @@ mod tests {
         let name = "é".repeat(128);
         assert!(name.chars().count() < MAX_NODE_NAME_BYTES);
         assert_eq!(validate_name(&name), Err(NameError::TooLong));
+    }
+
+    /// The refusal set is a hand-listed set of code points, so a widening edit
+    /// can drop one of them and leave no vector row to notice.
+    #[test]
+    fn every_reordering_or_hiding_character_stays_refused() {
+        let refused = ['\u{200B}', '\u{200E}', '\u{200F}', '\u{FEFF}']
+            .into_iter()
+            .chain('\u{202A}'..='\u{202E}')
+            .chain('\u{2066}'..='\u{2069}');
+        for character in refused {
+            assert_eq!(
+                validate_name(&format!("a{character}b")),
+                Err(NameError::DeceptiveCharacter),
+                "U+{:04X} must stay refused",
+                character as u32
+            );
+        }
     }
 
     /// The frozen vector set is what the projection and the TypeScript client
