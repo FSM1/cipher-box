@@ -42,7 +42,7 @@ There are **no generated API clients** and no codegen loop. The engine contains 
 
 ## Code Generation Guidelines
 
-1. All engine, codec, and crypto logic is Rust (`crates/core`, `crates/engine`); TypeScript exists only in `packages/client` (WASM wrapper, browser seams), `packages/login` (host-agnostic login sequencing), `packages/auth-ui` (the React auth surfaces both hosts render), `apps/web` (React UI) and `apps/desktop` (the Tauri shell chrome)
+1. All engine, codec, and crypto logic is Rust (`crates/core`, `crates/engine`); TypeScript exists only in `packages/client` (WASM wrapper, browser seams), `packages/login` (host-agnostic login sequencing), `packages/auth-ui` (the React auth surfaces both hosts render), `apps/web` (React UI), `apps/desktop` (the Tauri shell chrome) and `tests/*` (the e2e harnesses)
 2. Use `Uint8Array`/`Vec<u8>` for binary data, not strings
 3. Determinism is injected: entropy, time, and policy enter as parameters/seam traits — never call clocks or RNGs directly in core/engine logic
 4. Every suite must block a merge in a named CI gate the day it lands (`blueprint/testing.md` law 1); assert behavior, never source text
