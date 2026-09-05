@@ -24,10 +24,11 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantBlobPayload, GrantLedgerEntry, GrantSection,
-    GrantSetCommitment, GrantSetEntry, NodeKind, Permission, PreservedFields, ReadBody,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, STRUCT_TAG_WRITE_HISTORY_LINK, SignedSealed,
-    WriteBody, decode_envelope, decode_write_body, has_grant_section, open_grant_blob,
-    open_owner_history_link, open_read_body, sign_grant_set, unseal,
+    GrantSetCommitment, GrantSetEntry, MAX_READ_SEALED_BYTES, NodeKind, Permission,
+    PreservedFields, ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY,
+    STRUCT_TAG_WRITE_HISTORY_LINK, SignedSealed, Version, WriteBody, decode_envelope,
+    decode_write_body, has_grant_section, open_grant_blob, open_owner_history_link, open_read_body,
+    sign_grant_set, unseal,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
@@ -51,8 +52,9 @@ use super::publish::{InlineRecordRequest, PublishError, PublishOutcome, publish_
 use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
+use super::register::register;
 use super::retire::{retire, root_retire_ready};
-use crate::api::ApiClient;
+use crate::api::{ApiClient, NameRegistration};
 use crate::content::Gateway;
 use crate::content::dag::decode_root;
 use crate::content::read::{ContentPlane, read_block};
@@ -2977,22 +2979,33 @@ where
     }
 }
 
-/// How many of a moved record's content versions the wave expands. A committed
-/// writer sizes the list, and each entry costs one gateway fetch inside a pass
-/// the revocation waits on.
-///
-/// Content past this bound and past [`MAX_MOVED_CONTENT_CIDS`] reaches no
-/// registration under the new name, and the retire that follows drops the old
-/// name's rows, so that content loses its last reference edge. Holding the old
-/// name back instead would leave live a name the revoked grantee's retired write
-/// scope seed still signs for, which is the hole the wave exists to close, so
-/// the bound is charged against reclaim rather than against trust. Carrying the
-/// whole set to the new name in continuation batches is not landed.
-const MAX_MOVED_VERSIONS: usize = 64;
+/// How many content CIDs one continuation batch of a moved record's carry holds
+/// resident. The registry splits an over-cap entry itself
+/// ([`register`](super::register::register)), so this bounds what the pass holds
+/// in memory rather than what one request carries. A batch cuts on a version
+/// boundary, so the resident set is this plus the leaves of one root manifest,
+/// which [`read_block`] holds to the block ceiling.
+const MOVED_CONTENT_BATCH_CIDS: usize = 8192;
 
-/// How many content CIDs one moved record's registration carries. A committed
-/// writer sizes the leaf list too. Same residual as [`MAX_MOVED_VERSIONS`].
-const MAX_MOVED_CONTENT_CIDS: usize = 8192;
+/// The smallest a version encodes to: a content CID, a wrapped content key, two
+/// integers, and the det-CBOR framing around them. A lower bound, so the version
+/// ceiling it yields is one no decodable record reaches.
+const MIN_VERSION_WIRE_BYTES: usize = 64;
+
+/// The fetch ceiling of one moved record's carry, which runs one gateway fetch
+/// per version. Derived rather than picked: the read body's own frozen byte
+/// bound is what caps a version list, so the walk is bounded by a number and
+/// never by a committed writer's list.
+const MAX_MOVED_VERSIONS: usize = MAX_READ_SEALED_BYTES / MIN_VERSION_WIRE_BYTES;
+
+/// The versions of a moved record the carry expands, held to
+/// [`MAX_MOVED_VERSIONS`]. A folder names no content.
+fn moved_versions(body: &ReadBody) -> &[Version] {
+    match body {
+        ReadBody::File { versions, .. } => &versions[..versions.len().min(MAX_MOVED_VERSIONS)],
+        ReadBody::Folder { .. } => &[],
+    }
+}
 
 /// The write-plane name wave's transport edge (blueprint/engine.md
 /// "rotateScopeWrite"): the owner arm of both [`WriteSubtreeResolver`] and
@@ -3781,10 +3794,16 @@ where
         .map_err(reseal_verdict)
     }
 
-    /// Every content CID the record the wave moves names, spelled as the
-    /// registry names them, so the new name anchors the pins the retired old
-    /// name anchored. Without them the wave leaves the account holding pin rows
-    /// no record of it names.
+    /// One continuation batch of the content CIDs the record the wave moves
+    /// names, spelled as the registry names them, so the new name anchors the
+    /// pins the retired old name anchored. Without them the wave leaves the
+    /// account holding pin rows no record of it names.
+    ///
+    /// The batch starts at version `from` and yields the version the next batch
+    /// resumes at, or `None` at the end of the list. It cuts on a version
+    /// boundary, so no version is fetched twice and the resident set is one
+    /// batch plus one manifest's leaves. Deduplication is per batch; a CID two
+    /// batches both name costs one more idempotent registry row.
     ///
     /// The whole version list is a committed writer's, so nothing here may cost
     /// the wave: a version this pass cannot expand contributes its own root and
@@ -3793,50 +3812,46 @@ where
     /// The leaves come from the manifest the fetched block decodes to, and
     /// [`read_block`] holds that block to the CID the record names, so a
     /// writer's `size` steers no CID into or out of the set.
-    ///
-    /// [`MAX_MOVED_VERSIONS`] and [`MAX_MOVED_CONTENT_CIDS`] bound the walk,
-    /// because neither the version count nor the leaf count is bounded by
-    /// anything but the record's own byte ceiling. Both bounds truncate rather
-    /// than refuse, and each names its own residual.
-    async fn moved_content_cids(&self, body: &ReadBody) -> Vec<String> {
-        let ReadBody::File { versions, .. } = body else {
-            return Vec::new();
-        };
+    async fn moved_content_batch(
+        &self,
+        versions: &[Version],
+        from: usize,
+    ) -> (Vec<String>, Option<usize>) {
         let mut cids = Vec::new();
         let mut seen = BTreeSet::new();
-        for version in versions.iter().take(MAX_MOVED_VERSIONS) {
-            if !is_wellformed_content_cid(&version.content_cid) {
-                continue;
+        for (index, version) in versions.iter().enumerate().skip(from) {
+            if is_wellformed_content_cid(&version.content_cid) {
+                let root_cid = encode_content_cid_str(&version.content_cid);
+                let leaves = match read_block(
+                    self.gateway,
+                    self.http,
+                    &root_cid,
+                    &version.content_cid,
+                    ContentPlane::Root,
+                )
+                .await
+                .ok()
+                .and_then(|block| decode_root(&block).ok())
+                {
+                    Some(manifest) => manifest.leaf_cid_vecs(),
+                    None => Vec::new(),
+                };
+                for cid in version_cids(
+                    &version.content_cid,
+                    leaves.iter().map(Vec::as_slice),
+                    RootPlacement::Last,
+                ) {
+                    if seen.insert(cid.clone()) {
+                        cids.push(cid);
+                    }
+                }
             }
-            let root_cid = encode_content_cid_str(&version.content_cid);
-            let leaves = match read_block(
-                self.gateway,
-                self.http,
-                &root_cid,
-                &version.content_cid,
-                ContentPlane::Root,
-            )
-            .await
-            .ok()
-            .and_then(|block| decode_root(&block).ok())
-            {
-                Some(manifest) => manifest.leaf_cid_vecs(),
-                None => Vec::new(),
-            };
-            for cid in version_cids(
-                &version.content_cid,
-                leaves.iter().map(Vec::as_slice),
-                RootPlacement::Last,
-            ) {
-                if cids.len() == MAX_MOVED_CONTENT_CIDS {
-                    return cids;
-                }
-                if seen.insert(cid.clone()) {
-                    cids.push(cid);
-                }
+            let next = index + 1;
+            if cids.len() >= MOVED_CONTENT_BATCH_CIDS && next < versions.len() {
+                return (cids, Some(next));
             }
         }
-        cids
+        (cids, None)
     }
 
     /// Author and CAS-publish `node`'s rewritten record at its new name, signing
@@ -3862,7 +3877,8 @@ where
             root,
         } = source;
         rewrite_child_names(&mut read_body, &node.child_names)?;
-        let content_cids = self.moved_content_cids(&read_body).await;
+        let versions = moved_versions(&read_body);
+        let (content_cids, mut resume) = self.moved_content_batch(versions, 0).await;
 
         // `read_epoch` is the enumeration's envelope epoch, carried across the
         // whole subtree since a name wave cuts no read key — so a read rotation
@@ -3970,10 +3986,32 @@ where
         .await
         .map_err(publish_record_verdict)?;
         match receipt.outcome {
-            PublishOutcome::Published { .. } => Ok(()),
-            PublishOutcome::LostRace { .. } => Err(WritePublishError::LostRace),
-            PublishOutcome::Unconfirmed { .. } => Err(WritePublishError::NotLanded),
+            PublishOutcome::Published { .. } => {}
+            PublishOutcome::LostRace { .. } => return Err(WritePublishError::LostRace),
+            PublishOutcome::Unconfirmed { .. } => return Err(WritePublishError::NotLanded),
         }
+
+        // The rest of the record's content set, under the name it now lives at.
+        // The wave retires the old names only after every node republished, so
+        // a batch that does not land halts the wave with the old name's rows —
+        // and the edges they anchor — still in place.
+        while let Some(from) = resume {
+            let (batch, next) = self.moved_content_batch(versions, from).await;
+            if !batch.is_empty() {
+                register(
+                    self.api,
+                    &[NameRegistration {
+                        ipns_name: node.new_name.as_str().to_owned(),
+                        head_cid: None,
+                        content_cids: batch,
+                    }],
+                )
+                .await
+                .map_err(|_| WritePublishError::NotLanded)?;
+            }
+            resume = next;
+        }
+        Ok(())
     }
 
     /// Flip one pointer plane to the sealed re-point `block`.
@@ -8335,6 +8373,135 @@ mod tests {
             vec![encode_content_cid_str(&unservable)],
             "the version root still anchors, and no leaf is invented for it"
         );
+    }
+
+    /// One version's content, filed in the harness so the wave's expansion can
+    /// serve it: the version the record names and the CIDs its carry owes.
+    fn served_version(
+        harness: &Harness<impl RecordTransport + Clone>,
+        seed: u8,
+        chunks: usize,
+    ) -> (Version, Vec<String>) {
+        let plaintext = vec![seed; chunks * ContentProfile::CI.chunk_size()];
+        let key = ContentKey::from_bytes([seed; 32]);
+        let leaves = frame_and_seal(
+            &plaintext,
+            &key,
+            &mut SeededEntropy::new(u64::from(seed)),
+            &ContentProfile::CI,
+        )
+        .expect("the leaves seal");
+        let leaf_cids: Vec<Vec<u8>> = leaves.iter().map(|leaf| leaf.cid.clone()).collect();
+        let dag = assemble(&leaf_cids, plaintext.len() as u64, &ContentProfile::CI)
+            .expect("the root manifest assembles");
+        harness.blocks.lock().expect("lock").insert(
+            encode_content_cid_str(&dag.content_cid),
+            dag.root_block.clone(),
+        );
+        let owed = version_cids(
+            &dag.content_cid,
+            leaf_cids.iter().map(Vec::as_slice),
+            RootPlacement::Last,
+        );
+        (
+            Version::new(
+                dag.content_cid,
+                [seed; SECRET_LEN],
+                plaintext.len() as u64,
+                0,
+            ),
+            owed,
+        )
+    }
+
+    /// The wave retires the old name account-wide once the re-point lands, so a
+    /// version the carry left behind loses its last reference edge and a later
+    /// doomed-root retire unpins a leaf a live node still names. Every version
+    /// the record names is carried, however long the list.
+    #[test]
+    fn a_moved_file_carries_every_version_it_names_to_the_new_name() {
+        let harness = Harness::plain();
+        let mut versions = Vec::new();
+        let mut owed = Vec::new();
+        for seed in 1..=70u8 {
+            let (version, cids) = served_version(&harness, seed, 1);
+            versions.push(version);
+            owed.extend(cids);
+        }
+
+        let node_id = [0x0e; 16];
+        let body = ReadBody::File {
+            created_at: 0,
+            modified_at: 0,
+            versions,
+            unknown: PreservedFields::new(),
+        };
+        let old_name = stage_node(&harness, node_id, &body);
+
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+        let moved = order(node_id, &old_name, BTreeMap::new(), false);
+        block_on(net.republish(&moved)).expect("the file republishes");
+
+        assert_eq!(
+            registered_content_cids(&harness, &moved.new_name),
+            owed,
+            "every version root and every leaf reaches the new name"
+        );
+    }
+
+    /// The carry holds one batch of CIDs resident and continues from the version
+    /// it cut at, so a record whose set outgrows a batch still arrives whole —
+    /// and every batch lands before the wave reaches its retire.
+    #[test]
+    fn a_content_set_past_one_batch_arrives_in_continuation_batches() {
+        let harness = Harness::plain();
+        // The first version alone fills a batch, so the second rides a
+        // continuation registration under the same name.
+        let (first, mut owed) = served_version(&harness, 3, MOVED_CONTENT_BATCH_CIDS);
+        let (second, tail) = served_version(&harness, 4, 1);
+        owed.extend(tail);
+
+        let node_id = [0x0f; 16];
+        let body = ReadBody::File {
+            created_at: 0,
+            modified_at: 0,
+            versions: vec![first, second],
+            unknown: PreservedFields::new(),
+        };
+        let old_name = stage_node(&harness, node_id, &body);
+
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let net = wave(&harness, &owner, &current_root, &plan);
+        let moved = order(node_id, &old_name, BTreeMap::new(), false);
+        block_on(net.republish(&moved)).expect("the file republishes");
+
+        assert_eq!(
+            registered_content_cids(&harness, &moved.new_name),
+            owed,
+            "the whole content set reaches the new name, in record order"
+        );
+        assert!(
+            register_calls(&harness) > 1,
+            "a set past one batch goes out as continuation registrations, so no \
+             pass ever holds the whole set resident"
+        );
+    }
+
+    /// How many registration requests the wave sent. The registry splits an
+    /// over-cap entry inside one request, so a second request is a second
+    /// batch rather than a second chunk of one.
+    fn register_calls<T: RecordTransport + Clone>(harness: &Harness<T>) -> usize {
+        harness
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.ends_with("/registry/register"))
+            .count()
     }
 
     #[test]
