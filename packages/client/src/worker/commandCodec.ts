@@ -757,6 +757,7 @@ export function readVaultStorage(
             advisory: quota.advisory,
           },
     pendingReclaimBytes: Number(view.pendingReclaimBytes),
+    pendingReclaimIsPartial: view.pendingReclaimIsPartial,
     reclaimStalls: view.reclaimStalls.map((stall) => ({
       node: stall.node,
       target: stall.target,

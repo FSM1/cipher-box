@@ -7,10 +7,16 @@ use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 
 use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{OwedRetire, RetireLedger};
+use crate::sync::MAX_BOOKKEEPING_OPENS;
 
 /// A distinct doomed-version root address, spelled as the ledger stores them.
 fn root(seed: u8) -> String {
-    encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &[seed]))
+    root_of(usize::from(seed))
+}
+
+/// The same, over a seed space wide enough to fill a bounded read.
+fn root_of(seed: usize) -> String {
+    encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &seed.to_be_bytes()))
 }
 
 /// The node one debt is owed against. The kit's targets all ride one file's
@@ -21,15 +27,31 @@ fn owed(target: &str, owed_bytes: u64) -> OwedRetire {
     OwedRetire::whole(NODE, target.into(), owed_bytes)
 }
 
+/// Every entry owed, read the way a pass reads them: one bounded window at a
+/// time, resuming where the last one stopped, until a window opens nothing new.
+async fn all<L: RetireLedger>(ledger: &L, owner_tag: &[u8]) -> BTreeMap<String, OwedRetire> {
+    let mut seen: BTreeMap<String, OwedRetire> = BTreeMap::new();
+    let mut cursor = None;
+    loop {
+        let page = ledger.owed(owner_tag, cursor.as_deref()).await.unwrap();
+        let before = seen.len();
+        for entry in page.entries {
+            seen.insert(entry.target.clone(), entry);
+        }
+        if !page.truncated || seen.len() == before {
+            return seen;
+        }
+        cursor = page.cursor;
+    }
+}
+
 /// The entries as a map, so a kit assertion never depends on an order the
 /// contract does not promise.
 async fn held<L: RetireLedger>(ledger: &L, owner_tag: &[u8]) -> BTreeMap<String, u64> {
-    ledger
-        .owed(owner_tag)
+    all(ledger, owner_tag)
         .await
-        .unwrap()
         .into_iter()
-        .map(|entry| (entry.target, entry.owed_bytes))
+        .map(|(target, entry)| (target, entry.owed_bytes))
         .collect()
 }
 
@@ -159,17 +181,45 @@ where
         .unwrap();
     let after_reopen = open().await;
     assert_eq!(
-        after_reopen
-            .owed(alice)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry.target == quoted.target),
-        Some(quoted),
+        all(&after_reopen, alice).await.get(&quoted.target),
+        Some(&quoted),
         "every field survives a replay and a reopen"
     );
 
+    check_bounded_reads(&after_reopen).await;
     check_tombstones(open).await;
+}
+
+/// The read is bounded, and rotation is what reaches the entries one window
+/// leaves out: nothing is removed for failing to open, so a backing holding
+/// more entries than the ceiling must still make progress on all of them.
+async fn check_bounded_reads<L: RetireLedger>(ledger: &L) {
+    let owner = b"ceiling-owner-tag".as_slice();
+    let over = MAX_BOOKKEEPING_OPENS + 3;
+    let entries: Vec<OwedRetire> = (0..over).map(|seed| owed(&root_of(seed), 8)).collect();
+    ledger.owe(owner, &entries).await.unwrap();
+
+    let page = ledger.owed(owner, None).await.unwrap();
+    assert!(
+        page.entries.len() <= MAX_BOOKKEEPING_OPENS,
+        "one read opens at most the ceiling"
+    );
+    assert!(page.truncated, "and says the set is larger than the window");
+    assert!(
+        page.cursor.is_some(),
+        "so the next read has somewhere to go"
+    );
+
+    let reached = all(ledger, owner).await;
+    assert_eq!(
+        reached.len(),
+        over,
+        "every entry is reached by rotation, however many windows it takes"
+    );
+
+    let targets: Vec<String> = reached.into_keys().collect();
+    ledger.settle(owner, &targets).await.unwrap();
+    assert!(all(ledger, owner).await.is_empty());
 }
 
 /// The node-keyed half of the contract: which nodes a hard delete retired.

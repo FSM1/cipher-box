@@ -45,7 +45,7 @@ pub use mailbox::{Mailbox, MailboxItem};
 // Wire-shape predicates the API DTO fixes; a host states no policy of its own.
 pub(crate) use mailbox::{is_unreserved_1_128, item_id_is_legal};
 pub use record_transport::{EndpointId, RecordTransport};
-pub use retire_ledger::{OwedRetire, OwingRecord, RetireLedger};
+pub use retire_ledger::{OwedPage, OwedRetire, OwingRecord, RetireLedger};
 pub use scheduler::{BoxedTask, Scheduler, UnixMillis};
 pub use snapshot_cache::SnapshotCache;
 pub use staging_store::{OpId, StagingStore};

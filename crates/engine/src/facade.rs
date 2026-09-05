@@ -118,7 +118,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{
-    Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict,
+    BookkeepingCursors, Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict,
     charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
@@ -660,6 +660,10 @@ pub struct VaultStorageView {
     pub quota: Option<QuotaView>,
     /// Vault-level pinned bytes a published prune still owes the registry.
     pub pending_reclaim_bytes: u64,
+    /// Whether that figure is a floor on the debt rather than its total: the
+    /// last reclaim pass opened a bounded window of the retire ledger and left
+    /// keys unattempted.
+    pub pending_reclaim_is_partial: bool,
     /// Debts the last reclaim pass could not settle, and why.
     pub reclaim_stalls: Vec<ReclaimStall>,
 }
@@ -4266,6 +4270,9 @@ pub struct Engine<T: SeamTypes> {
     /// [`pending_reclaim`](Self::pending_reclaim) is: every pass re-derives it
     /// from the retire ledger.
     reclaim_stalls: Rc<RefCell<Vec<ReclaimStall>>>,
+    /// Where each bounded bookkeeping loop stopped, and whether the reclaim
+    /// figure prices the whole owed set ([`BookkeepingCursors`]).
+    bookkeeping: Rc<RefCell<BookkeepingCursors>>,
     /// Head blocks the drain uploaded for a publish that never reached the
     /// record transport, pending retirement. Session-lived so a retire the
     /// registry refused goes out again on a later pass.
@@ -4421,6 +4428,7 @@ impl<T: SeamTypes> Engine<T> {
                 bin_index_hold: Rc::new(RefCell::new(None)),
                 pending_reclaim: Rc::new(Cell::new(0)),
                 reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
+                bookkeeping: Rc::new(RefCell::new(BookkeepingCursors::default())),
                 orphan_heads: Rc::new(OrphanHeads::default()),
                 converged_tick: Rc::new(Cell::new(false)),
                 alive: Rc::new(Cell::new(true)),
@@ -5420,6 +5428,7 @@ where {
         let bin_index_hold = self.bin_index_hold.clone();
         let pending_reclaim = self.pending_reclaim.clone();
         let reclaim_stalls = self.reclaim_stalls.clone();
+        let bookkeeping = self.bookkeeping.clone();
         let content_profile = self.content_profile;
         let storage_policy = self.storage_policy;
         let orphan_heads = self.orphan_heads.clone();
@@ -5996,6 +6005,7 @@ where {
                             settings_hold: &settings_hold,
                             pending_reclaim: &pending_reclaim,
                             reclaim_stalls: &reclaim_stalls,
+                            bookkeeping: &bookkeeping,
                             orphan_heads: &orphan_heads,
                             converged_tick: &converged_tick,
                             cancels: &cancels,
@@ -8779,6 +8789,14 @@ where {
         self.pending_reclaim.get()
     }
 
+    /// Whether that figure is a floor rather than the whole debt: the ledger
+    /// read is bounded, so a pass over a backlog larger than its ceiling prices
+    /// the window it opened and leaves the rest for the passes that follow.
+    #[must_use]
+    pub fn pending_reclaim_is_partial(&self) -> bool {
+        self.bookkeeping.borrow().reclaim_is_partial()
+    }
+
     /// Why the debts the last reclaim pass could not settle did not settle.
     ///
     /// Reclaim has no attempt budget and no dead-letter class, so a debt that
@@ -8876,6 +8894,7 @@ where {
             }),
             settings,
             pending_reclaim_bytes: self.pending_reclaim_bytes(),
+            pending_reclaim_is_partial: self.pending_reclaim_is_partial(),
             reclaim_stalls: self.reclaim_stalls(),
         })
     }

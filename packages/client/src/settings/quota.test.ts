@@ -44,6 +44,7 @@ function storage(overrides: {
   pinMode?: PinMode;
   quota?: VaultStorageDescriptor['quota'];
   pendingReclaimBytes?: number;
+  pendingReclaimIsPartial?: boolean;
   reclaimStalls?: ReclaimStallDescriptor[];
 }): VaultStorageDescriptor {
   const pinMode = overrides.pinMode ?? 'hosted';
@@ -54,6 +55,7 @@ function storage(overrides: {
         ? { usedBytes: 512, limitBytes: 2048, advisory: pinMode !== 'hosted' }
         : overrides.quota,
     pendingReclaimBytes: overrides.pendingReclaimBytes ?? 0,
+    pendingReclaimIsPartial: overrides.pendingReclaimIsPartial ?? false,
     reclaimStalls: overrides.reclaimStalls ?? [],
   };
 }

@@ -402,6 +402,11 @@ export interface VaultStorageDescriptor {
   /** `null` when the quota probe did not answer. */
   quota: QuotaDescriptor | null;
   pendingReclaimBytes: number;
+  /**
+   * True when `pendingReclaimBytes` is a floor on the debt rather than its
+   * total: the last reclaim pass read a bounded window of the retire ledger.
+   */
+  pendingReclaimIsPartial: boolean;
   reclaimStalls: ReclaimStallDescriptor[];
 }
 

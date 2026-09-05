@@ -54,10 +54,10 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    BookkeepingSeal, DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS,
-    PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key,
-    encode_upload_mark, owner_scoped_key, owner_tag, record_content_root_cid, scope_exit_debt_key,
-    seal_owed_cuts, upload_mark_key,
+    BookkeepingSeal, DRAINED_OP_MARK_PREFIX, MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS,
+    MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent,
+    UPLOAD_MARK_PREFIX, doomed_journal_key, encode_upload_mark, owner_scoped_key, owner_tag,
+    record_content_root_cid, scope_exit_debt_key, seal_owed_cuts, upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -6128,6 +6128,81 @@ fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
     assert!(
         retired_since(&alice, mark).contains(&name.as_str().to_owned()),
         "the real delete settles past the refused entries rather than queueing behind them"
+    );
+}
+
+/// The open budget is what bounds a prefix nothing sweeps: a key this pass
+/// reaches costs an HPKE open whether or not the value opens, so a wall of
+/// planted entries costs one pass its ceiling and no more. The resume point is
+/// what stops that wall starving the real delete sorting behind it: the read
+/// wraps, so a later pass reaches the entry the first one never got to.
+#[test]
+fn a_wall_of_planted_journal_keys_costs_a_pass_its_ceiling_and_not_the_delete() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+
+    blocks.refuse_retire(true);
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // More planted entries than one pass may open, every one of them sorting
+    // ahead of the real delete.
+    let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+    let real_key = doomed_journal_key(&owner, ROOT, doomed);
+    for slot in 0..MAX_BOOKKEEPING_OPENS {
+        let mut id = [0u8; 16];
+        id[14..].copy_from_slice(
+            &u16::try_from(slot)
+                .expect("the wall fits two bytes")
+                .to_be_bytes(),
+        );
+        let key = doomed_journal_key(&owner, ROOT, NodeId(id));
+        assert!(
+            key < real_key,
+            "the planted entry sorts ahead of the real one"
+        );
+        block_on(
+            alice
+                .staging_store
+                .put_staged_bytes(&key, b"not a reclamation this build can decode"),
+        )
+        .expect("the staging store takes the planted entry");
+    }
+
+    let mark = retire_targets(&alice).len();
+    blocks.refuse_retire(false);
+    let settled = || retired_since(&alice, mark).contains(&name.as_str().to_owned());
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !settled(),
+        "the wall is exactly one pass's ceiling, so the first pass reaches no further"
+    );
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        settled(),
+        "the next pass resumes past the wall and reaches the delete"
     );
 }
 

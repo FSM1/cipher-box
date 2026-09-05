@@ -28,10 +28,10 @@ use crate::content::{
 use crate::net::publish::PublishError;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
-    CredentialStore, Http, OwedRetire, OwingRecord, RetireLedger, SeamError, SeamResult,
+    CredentialStore, Http, OwedPage, OwedRetire, OwingRecord, RetireLedger, SeamError, SeamResult,
     StagingStore,
 };
-use crate::sync::BookkeepingSeal;
+use crate::sync::{BookkeepingSeal, MAX_BOOKKEEPING_OPENS};
 
 /// Registry rows a pass left charged and unreachable, pending retirement: the
 /// head blocks of a failed publish, and the names of a reclaimed subtree whose
@@ -329,28 +329,40 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
         Ok(())
     }
 
-    async fn owed(&self, owner_tag: &[u8]) -> SeamResult<Vec<OwedRetire>> {
+    async fn owed(&self, owner_tag: &[u8], resume: Option<&[u8]>) -> SeamResult<OwedPage> {
         let scope = Self::scope(RETIRE_LEDGER_PREFIX, owner_tag)?;
-        let mut entries = Vec::new();
-        for key in self.keys().await?.iter() {
-            let Some(cid) = key
-                .strip_prefix(&scope[..])
-                .filter(|cid| is_wellformed_content_cid(cid))
-            else {
-                continue;
-            };
-            let Some(stored) = self.entry(key, cid).await? else {
-                continue;
-            };
-            entries.push(OwedRetire {
-                target: encode_content_cid_str(cid),
-                ..stored
-            });
+        let listed = self.keys().await?;
+        // Store enumeration order is host-dependent, and a pass stops early;
+        // sorted, it stops at the same place on every host and the cursor names
+        // a point every host agrees on.
+        let mut scoped: Vec<&[u8]> = listed
+            .iter()
+            .filter_map(|key| {
+                key.strip_prefix(&scope[..])
+                    .filter(|cid| is_wellformed_content_cid(cid))
+            })
+            .collect();
+        scoped.sort_unstable();
+        let from = resume.map_or(0, |after| scoped.partition_point(|cid| *cid <= after));
+        let mut page = OwedPage {
+            truncated: scoped.len() > MAX_BOOKKEEPING_OPENS,
+            ..OwedPage::default()
+        };
+        // Wrapping, so an unopenable run of keys costs one pass its ceiling
+        // rather than starving every entry sorting behind it for good.
+        for at in 0..scoped.len().min(MAX_BOOKKEEPING_OPENS) {
+            let cid = scoped[(from + at) % scoped.len()];
+            page.cursor = Some(cid.to_vec());
+            let mut key = scope.clone();
+            key.extend_from_slice(cid);
+            if let Some(stored) = self.entry(&key, cid).await? {
+                page.entries.push(OwedRetire {
+                    target: encode_content_cid_str(cid),
+                    ..stored
+                });
+            }
         }
-        // Store enumeration order is host-dependent, and a pass can stop early;
-        // sorted, it at least stops at the same place on every host.
-        entries.sort_by(|a, b| a.target.cmp(&b.target));
-        Ok(entries)
+        Ok(page)
     }
 
     async fn settle(&self, owner_tag: &[u8], targets: &[String]) -> SeamResult<()> {
@@ -470,6 +482,12 @@ pub struct RootSource<'a, H> {
 /// entries this pass could read, and one it never saw is one whose tombstone is
 /// still load-bearing.
 ///
+/// `resume` is where the previous pass stopped. The ledger read is bounded
+/// ([`MAX_BOOKKEEPING_OPENS`]), so a pass prices the window it opened and says
+/// so ([`ReclaimPass::partial`]): the figure is a floor on the debt, never a
+/// claim that nothing else is owed. A truncated pass sweeps no tombstone
+/// either, because an entry it did not reach may still need one.
+///
 /// An entry clears on the registry's own answer. Everything else — offline, an
 /// expired token, a throttle, a root no source will serve — leaves the entry
 /// owed and retries on a later pass; a registry that refused one batch stops the
@@ -483,6 +501,7 @@ pub async fn drain_owed_retires<L, H, C>(
     api: &ApiClient<H, C>,
     source: &RootSource<'_, H>,
     owed_now: &BTreeSet<[u8; 16]>,
+    resume: Option<&[u8]>,
     live: impl AsyncFn([u8; 16], OwingRecord) -> Option<LiveRecord>,
 ) -> Option<ReclaimPass>
 where
@@ -490,7 +509,7 @@ where
     H: Http,
     C: CredentialStore,
 {
-    let owed = ledger.owed(owner_tag).await.ok()?;
+    let page = ledger.owed(owner_tag, resume).await.ok()?;
     let mut stalls: Vec<ReclaimStall> = Vec::new();
     let mut still_owed = 0u64;
     let mut registry_up = true;
@@ -505,7 +524,7 @@ where
     // A CID two doomed roots both name is one pin row either way, so the figure
     // counts it once whether or not the retire that names it lands.
     let mut counted: BTreeSet<String> = BTreeSet::new();
-    for entry in owed {
+    for entry in page.entries {
         let node = match live_of.entry(entry.node) {
             Entry::Occupied(held) => held.into_mut(),
             Entry::Vacant(slot) => {
@@ -577,26 +596,43 @@ where
         }
     }
     // A tombstone the pass read and no surviving entry needs is spent. Held for
-    // a node this pass owed a debt for after it took its key listing: that entry
-    // is not in `owed`, and dropping its classification would leave a hard
+    // a node this pass owed a debt for after it took its key listing, and held
+    // whole on a truncated pass: an entry outside the window is one whose
+    // classification is still load-bearing, and dropping it would leave a hard
     // delete's debt reading as published for good.
-    let spent: Vec<[u8; 16]> = tombstoned
-        .difference(&still_owing)
-        .filter(|node| !owed_now.contains(*node))
-        .copied()
-        .collect();
-    let _ = ledger.forget_tombstones(owner_tag, &spent).await;
-    Some(ReclaimPass { still_owed, stalls })
+    if !page.truncated {
+        let spent: Vec<[u8; 16]> = tombstoned
+            .difference(&still_owing)
+            .filter(|node| !owed_now.contains(*node))
+            .copied()
+            .collect();
+        let _ = ledger.forget_tombstones(owner_tag, &spent).await;
+    }
+    Some(ReclaimPass {
+        still_owed,
+        stalls,
+        partial: page.truncated,
+        cursor: page.cursor,
+    })
 }
 
 /// What one reclaim pass left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReclaimPass {
     /// The pinned bytes still owed after the pass — the vault's pending figure.
+    ///
+    /// A floor rather than a total when [`partial`](Self::partial) is set: it
+    /// prices every entry the pass opened and none of the ones it did not
+    /// reach.
     pub still_owed: u64,
     /// One entry per debt the pass could not settle, in ledger order, capped at
     /// one registry batch.
     pub stalls: Vec<ReclaimStall>,
+    /// Whether the ledger's open ceiling stopped the pass short of the whole
+    /// owed set.
+    pub partial: bool,
+    /// Where the next pass resumes ([`OwedPage::cursor`]).
+    pub cursor: Option<Vec<u8>>,
 }
 
 /// A debt the reclaim pass left owed, and why.
@@ -735,10 +771,12 @@ pub fn root_retire_ready() -> bool {
 mod tests {
     use core::sync::atomic::{AtomicU64, Ordering};
 
+    use cipherbox_core::content::compute_cid;
     use cipherbox_core::suite::x25519::X25519Secret;
 
     use super::*;
     use crate::api::RetireEntry;
+    use crate::content::DAG_ROOT_CODEC;
     use crate::seams::{HttpMethod, HttpResponse};
     use crate::testkit::fakes::{InMemoryCredentialStore, InMemoryStagingStore, ScriptedHttp};
     use crate::testkit::{
@@ -904,6 +942,12 @@ mod tests {
     /// is the shape a prune journals.
     const NODE: [u8; 16] = [0x3B; 16];
 
+    /// A distinct doomed-root address, over a seed space wide enough to fill a
+    /// bounded read.
+    fn foreign_root(seed: usize) -> String {
+        encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &seed.to_be_bytes()))
+    }
+
     /// The debt a prune journals for one sealed version.
     fn owed_version(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
         let (version, root_block, leaf_cids) = doomed_version(plaintext);
@@ -1016,13 +1060,11 @@ mod tests {
                 profile: &ContentProfile::CI,
             },
             &BTreeSet::new(),
+            None,
             async |_, _| live.clone().map(owning),
         ))
         .expect("the ledger reads");
-        (
-            remaining.still_owed,
-            block_on(ledger.owed(owner)).expect("owed"),
-        )
+        (remaining.still_owed, owed_entries(store, owner))
     }
 
     /// A pass whose node's record reaches nothing but the doomed versions.
@@ -1032,6 +1074,23 @@ mod tests {
         http: &ScriptedHttp,
     ) -> (u64, Vec<OwedRetire>) {
         drain_against(store, owner, http, Some(BTreeSet::new()))
+    }
+
+    /// Every entry owed, as one bounded window reads them. The fixtures all
+    /// hold well under the ceiling, so one window is the whole set.
+    fn owed_entries(store: &InMemoryStagingStore, owner: &[u8]) -> Vec<OwedRetire> {
+        owed_under(&Session::new(), store, owner)
+    }
+
+    /// The same, under an identity the caller chooses.
+    fn owed_under(
+        session: &Session,
+        store: &InMemoryStagingStore,
+        owner: &[u8],
+    ) -> Vec<OwedRetire> {
+        block_on(session.ledger(store).owed(owner, None))
+            .expect("owed")
+            .entries
     }
 
     /// Journal that a node's own record is retired, as the delete path does.
@@ -1174,7 +1233,7 @@ mod tests {
         assert_eq!(remaining, 0, "the other owner owes nothing");
         assert!(owed.is_empty());
         assert_eq!(
-            block_on(Session::new().ledger(&store).owed(OWNER)).expect("owed"),
+            owed_entries(&store, OWNER),
             vec![entry],
             "the debt is untouched"
         );
@@ -1368,10 +1427,7 @@ mod tests {
                 ..entry.clone()
             },
         );
-        assert_eq!(
-            block_on(Session::new().ledger(&store).owed(OWNER)).expect("owed"),
-            vec![entry]
-        );
+        assert_eq!(owed_entries(&store, OWNER), vec![entry]);
     }
 
     /// The class a hard delete journals is the one the pass asks `live` about,
@@ -1401,6 +1457,7 @@ mod tests {
                 profile: &ContentProfile::CI,
             },
             &BTreeSet::new(),
+            None,
             // What `live_owing_record` answers for a node the delete unlinked:
             // no live listing reaches it, whatever its lingering record names.
             async |_, owing| {
@@ -1422,9 +1479,7 @@ mod tests {
         assert_eq!(remaining.still_owed, 0);
         assert!(remaining.stalls.is_empty(), "and stalls on nothing");
         assert!(
-            block_on(Session::new().ledger(&store).owed(OWNER))
-                .expect("owed")
-                .is_empty(),
+            owed_entries(&store, OWNER).is_empty(),
             "the debt settles instead of standing forever"
         );
     }
@@ -1463,6 +1518,7 @@ mod tests {
                 profile: &ContentProfile::CI,
             },
             &BTreeSet::new(),
+            None,
             async |_, owing| {
                 asked.borrow_mut().push(owing);
                 Some(owning(BTreeSet::new()))
@@ -1475,12 +1531,7 @@ mod tests {
             vec![OwingRecord::Retired],
             "one read per node, and the delete decides its class"
         );
-        assert!(
-            block_on(Session::new().ledger(&store).owed(OWNER))
-                .expect("owed")
-                .is_empty(),
-            "both debts settle"
-        );
+        assert!(owed_entries(&store, OWNER).is_empty(), "both debts settle");
     }
 
     /// The class routes the read; it never overrides its answer. An entry
@@ -1533,22 +1584,18 @@ mod tests {
             "the entry grammar never reaches the store on its own"
         );
         assert_eq!(
-            block_on(Session::new().ledger(&store).owed(OWNER)).expect("owed"),
+            owed_entries(&store, OWNER),
             vec![entry.clone()],
             "and it round-trips under the owner's own key"
         );
         assert!(
-            block_on(Session::of(0x21).ledger(&store).owed(OWNER))
-                .expect("owed")
-                .is_empty(),
+            owed_under(&Session::of(0x21), &store, OWNER).is_empty(),
             "another identity's key opens nothing"
         );
 
         block_on(store.put_staged_bytes(&key, &encode_entry(&entry, &cid))).expect("plant");
         assert!(
-            block_on(Session::new().ledger(&store).owed(OWNER))
-                .expect("owed")
-                .is_empty(),
+            owed_entries(&store, OWNER).is_empty(),
             "an unsealed value is no debt"
         );
     }
@@ -1577,7 +1624,7 @@ mod tests {
         block_on(store.put_staged_bytes(&onto, &blob)).expect("transplant");
 
         assert_eq!(
-            block_on(Session::new().ledger(&store).owed(OWNER)).expect("owed"),
+            owed_entries(&store, OWNER),
             vec![mine],
             "the transplanted entry is no debt; its own key's entry still is"
         );
@@ -1678,6 +1725,7 @@ mod tests {
                 profile: &ContentProfile::CI,
             },
             &BTreeSet::from([NODE]),
+            None,
             async |_, _| Some(owning(BTreeSet::new())),
         ))
         .expect("the ledger reads");
@@ -1705,6 +1753,119 @@ mod tests {
         assert!(
             block_on(Session::new().ledger(&store).tombstoned(OWNER, NODE)).expect("tombstoned"),
             "an unsettled debt still needs its node classified"
+        );
+    }
+
+    /// A key set larger than the ceiling costs one pass the ceiling, never the
+    /// whole set — the store is shared with whoever else can write it, and an
+    /// entry that will not open costs the same HPKE open as one that will.
+    #[test]
+    fn one_pass_attempts_at_most_the_open_ceiling() {
+        let store = InMemoryStagingStore::default();
+        let foreign = Session::of(0x77);
+        let planted: Vec<OwedRetire> = (0..MAX_BOOKKEEPING_OPENS + 4)
+            .map(|seed| OwedRetire::whole(NODE, foreign_root(seed), 8))
+            .collect();
+        block_on(foreign.ledger(&store).owe(OWNER, &planted)).expect("plant");
+
+        let session = Session::new();
+        let page = block_on(session.ledger(&store).owed(OWNER, None)).expect("owed");
+        assert!(
+            page.entries.is_empty(),
+            "no planted key opens under this identity"
+        );
+        assert!(
+            page.truncated,
+            "and the pass says the set is larger than its window"
+        );
+        assert_eq!(
+            block_on(store.staged_keys()).expect("keys").len(),
+            planted.len(),
+            "no key is removed for failing to open"
+        );
+    }
+
+    /// The read wraps, so an unopenable run costs one pass its ceiling rather
+    /// than starving the entries sorting behind it for good.
+    #[test]
+    fn rotation_reaches_an_entry_a_wall_of_unopenable_keys_sorts_behind() {
+        let store = InMemoryStagingStore::default();
+        let foreign = Session::of(0x78);
+        let wall: Vec<OwedRetire> = (0..MAX_BOOKKEEPING_OPENS)
+            .map(|seed| OwedRetire::whole(NODE, foreign_root(seed), 8))
+            .collect();
+        block_on(foreign.ledger(&store).owe(OWNER, &wall)).expect("plant");
+        let (mine, ..) = owed_version(&[51u8; 40]);
+        owe(&store, OWNER, &mine);
+
+        let session = Session::new();
+        let mut cursor = None;
+        let mut reached = None;
+        for _ in 0..=(wall.len() / MAX_BOOKKEEPING_OPENS + 1) {
+            let page =
+                block_on(session.ledger(&store).owed(OWNER, cursor.as_deref())).expect("owed");
+            if let Some(entry) = page.entries.first() {
+                reached = Some(entry.clone());
+                break;
+            }
+            cursor = page.cursor;
+        }
+        assert_eq!(
+            reached,
+            Some(mine),
+            "the readable entry is reached by rotation"
+        );
+    }
+
+    /// The figure a truncated pass reports is a floor on the debt: it prices
+    /// every entry the window opened and says the window was not the whole set,
+    /// so a host renders "at least this much" rather than a smaller total.
+    #[test]
+    fn a_truncated_pass_prices_its_window_and_says_so() {
+        let (entry, root_block, _) = owed_version(&[52u8; 100]);
+        let store = InMemoryStagingStore::default();
+        owe(&store, OWNER, &entry);
+        let foreign = Session::of(0x79);
+        let planted: Vec<OwedRetire> = (0..MAX_BOOKKEEPING_OPENS)
+            .map(|seed| OwedRetire::whole(NODE, foreign_root(seed), 4_096))
+            .collect();
+        block_on(foreign.ledger(&store).owe(OWNER, &planted)).expect("plant");
+
+        // The registry refuses, so what the pass opened stays owed and priced.
+        let http = ledger_http(&entry, Some(root_block), None);
+        let session = Session::new();
+        let mut cursor = None;
+        let mut priced = None;
+        for _ in 0..=(planted.len() / MAX_BOOKKEEPING_OPENS + 1) {
+            let pass = block_on(drain_owed_retires(
+                &session.ledger(&store),
+                OWNER,
+                &ApiClient::new(
+                    http.clone(),
+                    InMemoryCredentialStore::default(),
+                    "http://api.test",
+                ),
+                &RootSource {
+                    gateway: &gateway(),
+                    http: &http,
+                    profile: &ContentProfile::CI,
+                },
+                &BTreeSet::new(),
+                cursor.as_deref(),
+                async |_, _| Some(owning(BTreeSet::new())),
+            ))
+            .expect("the ledger reads");
+            assert!(pass.partial, "a window short of the whole set says so");
+            if pass.still_owed > 0 {
+                priced = Some(pass.still_owed);
+                break;
+            }
+            cursor = pass.cursor;
+        }
+        assert_eq!(
+            priced,
+            Some(entry.owed_bytes),
+            "the window prices the entry it opened, and none it did not reach"
         );
     }
 

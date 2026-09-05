@@ -226,6 +226,7 @@ export interface WasmVaultStorageView {
   readonly settings: WasmVaultSettingsSummary;
   readonly quota?: WasmQuotaView;
   readonly pendingReclaimBytes: bigint;
+  readonly pendingReclaimIsPartial: boolean;
   readonly reclaimStalls: readonly WasmReclaimStall[];
 }
 

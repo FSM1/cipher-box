@@ -47,6 +47,18 @@ const NODE_ID_LEN: usize = 16;
 /// it, so bytes that merely happen to parse must not read as a reclamation.
 const FORMAT_V4: u8 = 4;
 
+/// Open attempts one drain pass spends on each bounded bookkeeping key space —
+/// the retire ledger's entries and this journal's — whether or not the value
+/// opens (blueprint/engine.md "Retirement").
+///
+/// A sealed value costs an HPKE auth-mode open, and neither prefix is ever
+/// swept: a large prune's backlog, or keys planted by whoever else can write
+/// the staging store, would otherwise spend a whole tick on refusals. Both
+/// loops resume after the last key they attempted and wrap at the end of the
+/// listing, so progress comes from rotation rather than from removing a key
+/// that would not open.
+pub const MAX_BOOKKEEPING_OPENS: usize = 256;
+
 /// Journal entries one drain pass replays. Each costs a store read and a
 /// registry batch, and a device that deleted a great deal offline holds one per
 /// target — the ceiling keeps a backlog from spending a whole tick.

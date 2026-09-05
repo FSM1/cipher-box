@@ -1494,6 +1494,13 @@ impl VaultStorageView {
         self.inner.pending_reclaim_bytes
     }
 
+    /// Whether that figure is a floor on the debt rather than its total: the
+    /// last reclaim pass read a bounded window of the retire ledger.
+    #[wasm_bindgen(getter, js_name = pendingReclaimIsPartial)]
+    pub fn pending_reclaim_is_partial(&self) -> bool {
+        self.inner.pending_reclaim_is_partial
+    }
+
     /// Debts the last reclaim pass could not settle.
     #[wasm_bindgen(getter, js_name = reclaimStalls)]
     pub fn reclaim_stalls(&self) -> Vec<ReclaimStall> {

@@ -62,6 +62,25 @@ impl OwedRetire {
     }
 }
 
+/// One bounded read of the owed set.
+///
+/// A pass attempts at most
+/// [`MAX_BOOKKEEPING_OPENS`](crate::sync::MAX_BOOKKEEPING_OPENS) keys, so a
+/// backing holding more than that — a large prune's backlog, or keys planted by
+/// whoever else can write the store — costs the pass a ceiling rather than the
+/// whole set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwedPage {
+    /// The entries this read opened, in the backing's own key order.
+    pub entries: Vec<OwedRetire>,
+    /// The last key this read attempted, opened or not. The next read resumes
+    /// after it; `None` starts at the beginning.
+    pub cursor: Option<Vec<u8>>,
+    /// Whether the ceiling left keys unattempted, so `entries` is a window of
+    /// the owed set rather than the whole of it.
+    pub truncated: bool,
+}
+
 /// Durable per-owner set of retirements a prune still owes the registry.
 ///
 /// Distinct from the op queue on all four axes at once: it outlives the op that
@@ -82,7 +101,9 @@ impl OwedRetire {
 /// - **Never-discard**: nothing but `settle` removes an entry. There is no
 ///   attempt budget, no expiry, and no sweep — every failure mode is either
 ///   self-clearing or ours, and the byte figure is the only record of what was
-///   owed.
+///   owed. An entry a pass cannot open keeps its key in particular: a downgrade
+///   and another identity's entry both read that way, and removing either would
+///   turn a bounded read into destructive collection.
 /// - **Durable**: entries and tombstones survive reopening the store.
 ///
 /// `owner_tag` is opaque engine-chosen bytes; the store never interprets it.
@@ -91,8 +112,11 @@ pub trait RetireLedger {
     /// rather than adding a second entry for it.
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()>;
 
-    /// Every entry owed under `owner_tag`, in unspecified order.
-    async fn owed(&self, owner_tag: &[u8]) -> SeamResult<Vec<OwedRetire>>;
+    /// One bounded window of the entries owed under `owner_tag`, resuming after
+    /// `resume` and wrapping at the end of the key set. Every entry is reached
+    /// by rotation, however many neighbouring keys will not open, and no key is
+    /// removed for failing to open.
+    async fn owed(&self, owner_tag: &[u8], resume: Option<&[u8]>) -> SeamResult<OwedPage>;
 
     /// Clears `targets` under `owner_tag`. Idempotent: an unheld target
     /// succeeds.
