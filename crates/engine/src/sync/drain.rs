@@ -927,9 +927,11 @@ fn charge_crossing_read(halt: Halt) -> Halt {
 /// 8), because the walk descends through child refs anyone holding the source
 /// scope's write seed authors:
 ///
-/// - A scope root re-authored as a plain child loses the grant section its own
-///   readers gate on, which is exactly what the child pipeline rejects on the
-///   way in.
+/// - A **scope root** — either end's, or any this pass proved — re-authored as a
+///   plain child loses the grant section its own readers gate on, which is what
+///   the child pipeline rejects on the way in. One inside the moved subtree is
+///   also a move no pass may make (`facade.rs::refuse_moving_a_scope_root`); it
+///   reaches here when a grant mints a scope root under an already-queued op.
 /// - A node the gate-passing base places **outside** the moved subtree is a
 ///   transplant. Re-sealing it would publish a wire-supplied body at that node's
 ///   own destination name, over whatever really lives there. A node the base
@@ -937,13 +939,16 @@ fn charge_crossing_read(halt: Halt) -> Halt {
 ///   the same footing as the delete walk's own descendants.
 fn crossing_may_reseal(
     base: &Snapshot,
+    scope_roots: &[NodeId],
     source: &SealPlane<'_>,
     dest: &SealPlane<'_>,
     target: NodeId,
     node: NodeId,
 ) -> Result<(), Halt> {
+    let a_scope_root =
+        node == source.end.root || node == dest.end.root || scope_roots.contains(&node);
     let transplant = node != target && base.contains(node) && !base.is_descendant_of(node, target);
-    if node == source.end.root || node == dest.end.root || transplant {
+    if a_scope_root || transplant {
         return Err(Halt::UploadAttempt);
     }
     Ok(())
@@ -4098,7 +4103,14 @@ where
             if !seen.insert(node.0) {
                 continue;
             }
-            crossing_may_reseal(&self.base.borrow(), source, dest, target, node)?;
+            crossing_may_reseal(
+                &self.base.borrow(),
+                scope.scope_roots,
+                source,
+                dest,
+                target,
+                node,
+            )?;
             let Some(node_body) = self
                 .load_for_reseal(source, source_anchor, dest, dest_anchor, node)
                 .await?
@@ -6457,10 +6469,10 @@ mod tests {
     /// The crossing walk descends through child refs anyone holding the source
     /// scope's write seed authors, so a ref naming any node at all reaches the
     /// re-seal. Two of those the walk must refuse, both release-active so the
-    /// refusal holds in a shipped build (AGENTS.md rule 8): an end's own scope
-    /// root, which would lose the grant section its readers gate on, and a node
-    /// the base places outside the moved subtree, whose own destination record
-    /// the re-seal would overwrite with a wire-supplied body.
+    /// refusal holds in a shipped build (AGENTS.md rule 8): a scope root, at
+    /// either end or inside the moved subtree, and a node the base places
+    /// outside that subtree, whose own destination record the re-seal would
+    /// overwrite with a wire-supplied body.
     #[test]
     fn the_crossing_re_seal_refuses_a_scope_root_and_a_node_from_outside_the_subtree() {
         let (source, destination) = ends();
@@ -6470,14 +6482,31 @@ mod tests {
         );
         let (target, inside, beside) = (NodeId([9; 16]), NodeId([10; 16]), NodeId([11; 16]));
         let base = crossing_base(target, inside, beside);
-        let may =
-            |node| crossing_may_reseal(&base, &source_plane, &destination_plane, target, node);
+        let roots = [SOURCE_ROOT, DESTINATION_ROOT, inside];
+        let may = |node| {
+            crossing_may_reseal(
+                &base,
+                &roots,
+                &source_plane,
+                &destination_plane,
+                target,
+                node,
+            )
+        };
 
-        for root in [SOURCE_ROOT, DESTINATION_ROOT] {
+        for (root, why) in [
+            (SOURCE_ROOT, "an end's own scope root"),
+            (DESTINATION_ROOT, "at either end"),
+            (
+                inside,
+                "and one a grant minted inside the moved subtree, which this pass can \
+                 neither re-key nor re-index",
+            ),
+        ] {
             assert_eq!(
                 may(root),
                 Err(Halt::UploadAttempt),
-                "a scope root is never re-sealed as an interior node"
+                "{why} is never re-sealed as an interior node"
             );
         }
         assert_eq!(
@@ -6485,7 +6514,7 @@ mod tests {
             Err(Halt::UploadAttempt),
             "a node the base places outside the subtree is a transplant"
         );
-        for node in [target, inside, NodeId([12; 16])] {
+        for node in [target, NodeId([12; 16])] {
             assert_eq!(
                 may(node),
                 Ok(()),

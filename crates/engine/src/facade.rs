@@ -2347,6 +2347,41 @@ fn classify_crossing(
     })
 }
 
+/// Refuse a crossing whose moved subtree holds a scope root.
+///
+/// Moving a scope root into another scope is one of the ops that maintains the
+/// write-body `directChildScopeIndex` (blueprint/engine.md "Rotation
+/// primitives"), and it re-seals three scope roots: the moved one, whose ascent
+/// link opens only under `nodeSeed(enclosingOverrideSeed, scopeId)` and whose
+/// record publishes at a name the enclosing scope's write seed derives, plus the
+/// root that loses the child and the one that gains it. A drain pass carries one
+/// interior end and none of the owner material those re-seals need, so no pass
+/// can author them. Refused here, where the member is still there to be told,
+/// rather than walked first and dead-lettered after.
+///
+/// An intra-scope move changes no scope parentage, so it passes.
+fn refuse_moving_a_scope_root(
+    rendered: &Snapshot,
+    node: NodeId,
+    crossing: ScopeCrossing,
+    scope_roots: &[NodeId],
+) -> Result<(), EngineError> {
+    if crossing == ScopeCrossing::Intra {
+        return Ok(());
+    }
+    if scope_roots
+        .iter()
+        .any(|root| *root == node || rendered.is_descendant_of(*root, node))
+    {
+        return Err(EngineError::ScopeExitRefused {
+            message: "it carries a shared folder into another scope, which needs a re-seal this \
+                      session cannot author"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// The scope `node` belongs to, named by its root. The render root is the
 /// fallback the shared walk leaves to its callers: it anchors the vault's
 /// initial scope, which every node reaching no listed root belongs to.
@@ -9474,12 +9509,9 @@ where {
                 EngineError::UnknownNode
             });
         };
-        let crossing = classify_crossing(
-            rendered,
-            from_parent,
-            new_parent,
-            &self.relocation_scope_roots(),
-        )?;
+        let scope_roots = self.relocation_scope_roots();
+        let crossing = classify_crossing(rendered, from_parent, new_parent, &scope_roots)?;
+        refuse_moving_a_scope_root(rendered, node, crossing, &scope_roots)?;
         Ok((
             from_parent,
             rendered.record_sequence(node).unwrap_or(1),
@@ -10524,6 +10556,72 @@ mod tests {
             Ok(ScopeCrossing::ExitsGrantedSource),
             "while a crossing one end of which is the vault root is authorable"
         );
+    }
+
+    /// Which subtrees carry a scope root, and which crossings the refusal
+    /// covers. The moved node counts as one of its own, and a scope root beside
+    /// the subtree or below it is not carried anywhere.
+    #[test]
+    fn a_crossing_that_carries_a_scope_root_is_refused() {
+        let root = NodeId([1; 16]);
+        let (granted, box_folder, deep) = (NodeId([2; 16]), NodeId([3; 16]), NodeId([4; 16]));
+        let (plain, beside) = (NodeId([5; 16]), NodeId([6; 16]));
+        let mut rendered = Snapshot::new(root);
+        for (parent, node, name) in [
+            (root, box_folder, "box"),
+            (box_folder, granted, "shared"),
+            (granted, deep, "deep"),
+            (root, plain, "mine"),
+            (root, beside, "beside"),
+        ] {
+            rendered.upsert_node(NodeMeta::new(node, name, NodeKind::Folder));
+            rendered.link_next(parent, node);
+        }
+        let roots = [granted];
+
+        for (node, why) in [
+            (granted, "the scope root itself"),
+            (box_folder, "and a subtree that holds one at depth"),
+        ] {
+            assert!(
+                matches!(
+                    refuse_moving_a_scope_root(
+                        &rendered,
+                        node,
+                        ScopeCrossing::ExitsGrantedSource,
+                        &roots
+                    ),
+                    Err(EngineError::ScopeExitRefused { .. })
+                ),
+                "{why}"
+            );
+            assert!(
+                matches!(
+                    refuse_moving_a_scope_root(&rendered, node, ScopeCrossing::Cross, &roots),
+                    Err(EngineError::ScopeExitRefused { .. })
+                ),
+                "{why}, whichever end of the crossing the vault root is"
+            );
+            assert_eq!(
+                refuse_moving_a_scope_root(&rendered, node, ScopeCrossing::Intra, &roots),
+                Ok(()),
+                "{why}, but an intra-scope move changes no scope parentage"
+            );
+        }
+        for (node, why) in [
+            (plain, "a subtree that holds no scope root crosses freely"),
+            (
+                deep,
+                "and so does one below the scope root, which stays inside it",
+            ),
+            (beside, "a scope root beside the subtree is not carried"),
+        ] {
+            assert_eq!(
+                refuse_moving_a_scope_root(&rendered, node, ScopeCrossing::Cross, &roots),
+                Ok(()),
+                "{why}"
+            );
+        }
     }
 
     /// An accepted shared scope is grafted in parentless, so a browse reaches it
