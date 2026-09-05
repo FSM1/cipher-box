@@ -96,10 +96,10 @@ use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
     RevokeError, RevokedCommittedSet, RotateError, RotateOnExit, RotateScopePlan, RotationOutcome,
-    ScopeRootIdentity, ScopeRootPublisher, SweepResolveFailure, WalkedReadEpochs, WriteHistory,
-    WriteRevokeKind, bounded, cut_for_write_grant, derive_write_name, install_walked_read_epochs,
-    record_grant_floor, reseal_scope_root, revoke_read_grant, revoke_write_grant, rotate_on_cut,
-    rotate_scope, run_sweep,
+    RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepResolveFailure,
+    WalkedReadEpochs, WriteHistory, WriteRevokeKind, bounded, cut_for_write_grant,
+    derive_write_name, install_walked_read_epochs, record_grant_floor, reseal_scope_root,
+    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
@@ -1651,6 +1651,22 @@ pub enum EngineError {
         /// The rule that refused; never key material.
         check: &'static str,
     },
+    /// A share left partly made: the grantee scope root published and a leg
+    /// after it stopped on transport or a lost race, so the command neither
+    /// succeeded nor left nothing behind. Re-driving the same share resumes the
+    /// move against the root already published
+    /// ([`left_partly_made`](EngineError::left_partly_made)).
+    ///
+    /// Reported apart from [`Seam`](EngineError::Seam), which says a retry
+    /// clears it and nothing was left behind, and from
+    /// [`TrustViolation`](EngineError::TrustViolation), which rule 6 reserves
+    /// for a fail-closed verdict on a resolved record — a host that alarms or
+    /// quarantines on that class must not do so for a stalled gateway.
+    PartialCommit {
+        /// The leg that stopped ([`CreateGrantError::check`]); never key
+        /// material.
+        check: &'static str,
+    },
 }
 
 /// A device-surface field refusal, as the host sees it: a refusal of the input,
@@ -1853,13 +1869,65 @@ impl EngineError {
         }
     }
 
+    /// Whether `err` left the mint **partially committed**: the grantee scope
+    /// root is on the network, a leg after it stopped on transport or a lost CAS
+    /// race, and no reconciliation pass reclaims what that leg did not move
+    /// ([`CreateGrantError`]'s post-publish variants).
+    ///
+    /// Exhaustive on purpose, so a new failure is classified here rather than
+    /// falling to a class that misreports what it left behind.
+    ///
+    /// Three groups answer `false`. Everything through the grantee root's own
+    /// publish is fail-closed, so nothing is left behind. A leg the adoption
+    /// gate refused is a verdict on a resolved record, which rule 6 keeps on the
+    /// trust axis, and `InteriorNotConverged` and the two mint arms are the same
+    /// kind of refusal on material this device holds. The mailbox post is last:
+    /// the mint landed whole and only the share pointer is missing, so a retry
+    /// posting a fresh item is complete recovery, which is what `Seam` says.
+    fn left_partly_made(err: &CreateGrantError) -> bool {
+        match err {
+            CreateGrantError::DescendantResolve { reason, .. } => {
+                *reason != ResolveFailure::Rejected
+            }
+            CreateGrantError::InteriorResolve { reason, .. } => {
+                *reason != SweepResolveFailure::Rejected
+            }
+            CreateGrantError::InteriorPublish { error, .. }
+            | CreateGrantError::DescendantPublish { error, .. }
+            | CreateGrantError::ParentPublish(error) => {
+                !matches!(error, RotationPublishError::Rejected)
+            }
+            CreateGrantError::Converge(_)
+            | CreateGrantError::SubtreeNotConverged { .. }
+            | CreateGrantError::UnusableRecipientKey
+            | CreateGrantError::RecipientIsTheOwner
+            | CreateGrantError::CommitmentEncode(_)
+            | CreateGrantError::Entropy(_)
+            | CreateGrantError::Mint(_)
+            | CreateGrantError::Publish(_)
+            | CreateGrantError::Resume(_)
+            | CreateGrantError::ResumeNotThisGrant
+            | CreateGrantError::InteriorNotConverged { .. }
+            | CreateGrantError::DescendantMint { .. }
+            | CreateGrantError::ParentMint(_)
+            | CreateGrantError::VouchScope(_)
+            | CreateGrantError::Mailbox(_) => false,
+        }
+    }
+
     /// Map a read-grant creation failure on the classes a host acts on:
-    /// availability it may retry, an input or a bound it can change, and a
-    /// fail-closed refusal it must never retry.
+    /// availability it may retry, a share left partly made, an input or a bound
+    /// it can change, and a fail-closed refusal it must never retry.
     fn from_create_grant(err: CreateGrantError) -> Self {
         match err {
             CreateGrantError::Entropy(e) => EngineError::from_entropy(e),
             CreateGrantError::Mailbox(e) => EngineError::from_seam(e),
+            // Ahead of the availability arms below: a leg that stopped after the
+            // grantee root published left something behind, which is exactly
+            // what `Seam` denies.
+            ref e if EngineError::left_partly_made(e) => {
+                EngineError::PartialCommit { check: e.check() }
+            }
             CreateGrantError::Converge(e) if e.is_retryable() => EngineError::Seam {
                 message: e.to_string(),
             },
@@ -2005,6 +2073,9 @@ impl fmt::Display for EngineError {
             }
             EngineError::TrustViolation { message } => write!(f, "trust violation: {message}"),
             EngineError::MalformedInput { check } => write!(f, "malformed input: {check}"),
+            EngineError::PartialCommit { check } => {
+                write!(f, "share left partly made: {check}")
+            }
             EngineError::UnsupportedContentFormat { version } => write!(
                 f,
                 "content format version {version} is not supported by this client"
@@ -10050,6 +10121,94 @@ mod tests {
             None,
             "one end serves it"
         );
+    }
+
+    /// A leg that stopped after the grantee root published left the share half
+    /// made, which is what `Seam` denies — the pre-publish arm of the same
+    /// transport failure keeps that class.
+    #[test]
+    fn a_post_publish_transport_failure_reports_a_partial_commit_and_a_pre_publish_one_does_not() {
+        use crate::rotation::RotationPublishError;
+
+        assert_eq!(
+            EngineError::from_create_grant(CreateGrantError::InteriorPublish {
+                node_id: [1u8; 16],
+                error: RotationPublishError::NotPublished,
+            }),
+            EngineError::PartialCommit {
+                check: "interior-publish-failed",
+            },
+        );
+        assert!(matches!(
+            EngineError::from_create_grant(CreateGrantError::Publish(
+                RotationPublishError::NotPublished,
+            )),
+            EngineError::Seam { .. },
+        ));
+    }
+
+    /// Every post-publish leg whose failure is transport or a lost race answers
+    /// in one class, so a host reads the partial commit off the class and the
+    /// leg off `check`.
+    #[test]
+    fn every_post_publish_transport_leg_reports_one_class() {
+        use crate::rotation::RotationPublishError;
+
+        let legs = [
+            (
+                CreateGrantError::InteriorResolve {
+                    node_id: [2u8; 16],
+                    reason: SweepResolveFailure::Unavailable,
+                },
+                "interior-resolve-failed",
+            ),
+            (
+                CreateGrantError::DescendantResolve {
+                    scope_id: [3u8; 16],
+                    reason: ResolveFailure::Unavailable,
+                },
+                "descendant-resolve-failed",
+            ),
+            (
+                CreateGrantError::DescendantPublish {
+                    scope_id: [4u8; 16],
+                    error: RotationPublishError::LostRace,
+                },
+                "descendant-publish-failed",
+            ),
+            (
+                CreateGrantError::ParentPublish(RotationPublishError::NotPublished),
+                "parent-publish-failed",
+            ),
+        ];
+        for (leg, check) in legs {
+            assert_eq!(
+                EngineError::from_create_grant(leg),
+                EngineError::PartialCommit { check },
+            );
+        }
+    }
+
+    /// Rule 6 outranks the partial-commit report: a leg the adoption gate
+    /// refused is still a fail-closed verdict the host must hear.
+    #[test]
+    fn a_gate_rejection_inside_a_post_publish_leg_stays_a_trust_violation() {
+        use crate::rotation::RotationPublishError;
+
+        assert!(matches!(
+            EngineError::from_create_grant(CreateGrantError::InteriorResolve {
+                node_id: [5u8; 16],
+                reason: SweepResolveFailure::Rejected,
+            }),
+            EngineError::TrustViolation { .. },
+        ));
+        assert!(matches!(
+            EngineError::from_create_grant(CreateGrantError::InteriorPublish {
+                node_id: [6u8; 16],
+                error: RotationPublishError::Rejected,
+            }),
+            EngineError::TrustViolation { .. },
+        ));
     }
 
     #[test]
