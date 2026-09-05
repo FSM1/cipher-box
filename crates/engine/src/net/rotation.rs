@@ -174,8 +174,7 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// [`Self::last_known_good_root`], which is the one arm that resolves a
     /// scope root from anything but the record plane.
     pub snapshot_cache: &'a S,
-    /// The one-way stream out, for the trade [`Self::last_known_good_root`]
-    /// makes.
+    /// The one-way stream out, for the trade [`Self::resealable_root`] makes.
     pub events: &'a mpsc::UnboundedSender<Event>,
     /// The scheduler the publish pipeline's background re-PUT rides.
     pub scheduler: &'a Sch,
@@ -1427,13 +1426,38 @@ where
             return Err(RootGateVerdict::Unavailable);
         };
         match gated_at_anchor(&adopter, name, &record_bytes, scope_id, anchor).await {
-            Ok(root) => Ok(ResealableRoot {
-                root,
-                over_sequence: None,
-            }),
+            Ok(root) => {
+                // Only a gate pass writes the record cache, on the same terms
+                // the read plane writes it — and this arm's own fallback is
+                // what reads it back ([`Self::last_known_good_root`]).
+                let _ = self
+                    .snapshot_cache
+                    .put(name.as_str().as_bytes(), &record_bytes)
+                    .await;
+                Ok(ResealableRoot {
+                    root,
+                    over_sequence: None,
+                })
+            }
             Err(RootGateVerdict::NotResealable) => {
-                self.last_known_good_root(&adopter, name, scope_id, anchor, verified.sequence)
-                    .await
+                let stepped_over = self
+                    .last_known_good_root(&adopter, name, scope_id, anchor, verified.sequence)
+                    .await;
+                emit_trust_violation(
+                    self.events,
+                    name.as_str(),
+                    format_args!(
+                        "scope root [{}] leaves no room for its own re-seal; {}",
+                        hex_lower(&scope_id),
+                        match stepped_over {
+                            Ok(_) =>
+                                "the rotation runs on the last gate-passing copy and drops what \
+                                 a committed writer published after it",
+                            Err(_) => "no gate-passing copy carries the rotation, so it refuses",
+                        }
+                    ),
+                );
+                stepped_over
             }
             Err(verdict) => Err(verdict),
         }
@@ -1453,8 +1477,9 @@ where
     /// The cached bytes are not trusted for being cached: they run the same
     /// ladder every other record runs, under the same label and the same
     /// binding, and no copy or one that does not gate now keeps the fail-closed
-    /// rejection. The CAS bound is the refused record's own verified sequence,
-    /// so the re-seal lands above the record it replaces rather than under it.
+    /// rejection the record plane's own copy earned. The CAS bound is the
+    /// refused record's own verified sequence, so the re-seal lands above the
+    /// record it replaces rather than under it.
     async fn last_known_good_root(
         &self,
         adopter: &RootAdopter<'_, H, F>,
@@ -1475,16 +1500,6 @@ where
         let root = gated_at_anchor(adopter, name, &cached, scope_id, anchor)
             .await
             .map_err(|_| RootGateVerdict::Rejected)?;
-        emit_trust_violation(
-            self.events,
-            name.as_str(),
-            format_args!(
-                "scope root [{}] leaves no room for its own re-seal; \
-                 the rotation runs on the last gate-passing copy and drops \
-                 what a committed writer published after it",
-                hex_lower(&scope_id)
-            ),
-        );
         Ok(ResealableRoot {
             root,
             over_sequence: Some(refused_sequence),
@@ -6476,8 +6491,8 @@ mod tests {
         });
         let harness = Harness::plain();
         harness.stage(scope_id, &good, Some(OWNER_ROOT_EPOCH));
-        // Adopt it, which is what raises this name's sequence floor, and cache
-        // the bytes the adopting read would have cached.
+        // One earlier rotation read, which raises this name's sequence floor
+        // and leaves the gate-passing record in the cache the fallback reads.
         let ancestry =
             RotationAncestry::default().under_parent_node_seed(scope_id, parent_node_seed.as_ref());
         block_on(
@@ -6486,11 +6501,12 @@ mod tests {
                 .gated_root(scope_id, &good.name),
         )
         .expect("the good root gates");
-        block_on(harness.cache.put(
-            good.name.as_str().as_bytes(),
-            &record_for(&scope_id, &good.head_cid_str, 1),
-        ))
-        .expect("the cache takes the last gate-passing record");
+        assert!(
+            block_on(harness.cache.get(good.name.as_str().as_bytes()))
+                .expect("the cache answers")
+                .is_some(),
+            "the rotation's own gate-passing read is what leaves the copy behind",
+        );
         let wedge = root_past_the_reseal_reservation(scope_id, parent_node_seed);
         serve_at(&harness, scope_id, &wedge, 2);
         (harness, good)
@@ -6529,7 +6545,8 @@ mod tests {
     }
 
     /// No cached copy, no fallback: a rotation that cannot prove a body under
-    /// the gate refuses rather than inventing one.
+    /// the gate refuses rather than inventing one. The wedge still reaches the
+    /// host — a refusal is where it matters most.
     #[test]
     fn a_root_that_fills_the_reservation_with_no_cached_copy_stays_rejected() {
         let (harness, good) = wedged_scope(SCOPE, None);
@@ -6544,6 +6561,10 @@ mod tests {
             sequence_at(&harness, &good.name),
             Some(2),
             "the writer's record still stands — nothing was published",
+        );
+        assert!(
+            !harness.events().is_empty(),
+            "the refusal is surfaced, never silent",
         );
     }
 
