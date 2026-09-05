@@ -14,6 +14,7 @@
     "test": "tsc -b && vitest run"
   },
   "dependencies": {
+    "@cipherbox/auth-ui": "workspace:*",
     "@cipherbox/client": "workspace:*",
     "@cipherbox/login": "workspace:*",
     "@tanstack/react-query": "^5.90.2",

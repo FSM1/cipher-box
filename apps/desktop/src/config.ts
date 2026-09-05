@@ -28,6 +28,34 @@ function configured(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
 }
 
+const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1'];
+
+/** Named once, so every refusal states the same rule. */
+const TRANSPORT_RULE =
+  'VITE_API_URL must be an https: URL; http: is allowed only for localhost and 127.0.0.1';
+
+/**
+ * The API origin the identity exchange is spoken to, held to the transport
+ * rule. This webview mints the identity token here and the engine carries its
+ * session bearer to the same origin, so a cleartext one puts both on the wire
+ * in the clear. A value that breaks the rule fails the shell's boot rather than
+ * leaving a window that signs in over cleartext.
+ */
+function apiBaseUrl(env: Partial<ImportMetaEnv>): string {
+  const value = configured(env.VITE_API_URL) ?? DEFAULT_API_URL;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${TRANSPORT_RULE}; "${value}" is not a URL`);
+  }
+  const loopbackCleartext = url.protocol === 'http:' && LOOPBACK_HOSTS.includes(url.hostname);
+  if (url.protocol !== 'https:' && !loopbackCleartext) {
+    throw new Error(`${TRANSPORT_RULE}; "${value}" is refused`);
+  }
+  return value;
+}
+
 /**
  * A typo is rejected rather than defaulted: it would silently pick the wrong
  * Web3Auth network, and so a different identity over an empty vault.
@@ -51,7 +79,7 @@ export function desktopConfig(env: Partial<ImportMetaEnv>): DesktopConfig {
   }
   return {
     environment: environmentOf(env),
-    apiBaseUrl: configured(env.VITE_API_URL) ?? DEFAULT_API_URL,
+    apiBaseUrl: apiBaseUrl(env),
     web3AuthClientId,
     verifier,
     googleClientId: configured(env.VITE_GOOGLE_CLIENT_ID),

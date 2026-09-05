@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { EmailLoginForm, LoginError } from '@cipherbox/auth-ui';
 import { useIdentity } from '../auth/IdentityProvider';
 import { useAuth } from '../auth/useAuth';
 import { DeviceApprovalWait } from '../components/auth/DeviceApprovalWait';
-import { EmailLoginForm } from '../components/auth/EmailLoginForm';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
-import { LoginError } from '../components/auth/LoginError';
 import { RecoveryPhraseLogin } from '../components/auth/RecoveryPhraseLogin';
 import { SignedInElsewhere } from '../components/auth/SignedInElsewhere';
 import { WalletLoginButton } from '../components/auth/WalletLoginButton';

@@ -18,6 +18,7 @@ import BN from 'bn.js';
 import {
   accountIdFromTssPoint,
   isIdentityMethod,
+  normalizeRecoveryPhrase,
   RecoveryRequiredError,
   type CoreKitSession,
   type IdentityCredential,
@@ -55,11 +56,6 @@ export interface ShellCoreKitSession extends CoreKitSession {
  */
 const REDEMPTION_FAILED =
   'that recovery phrase did not open this account — check the phrase, and check you are online';
-
-/** The one reading of a typed phrase, so a field and the redemption agree. */
-function normalizeRecoveryPhrase(typed: string): string {
-  return typed.trim().toLowerCase().replace(/\s+/g, ' ');
-}
 
 /**
  * The Core Kit store, in the OS keyring's custody.

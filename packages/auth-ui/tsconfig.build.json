@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    // Referenced by both hosts, which build this project to get its declarations.
+    "composite": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "references": [{ "path": "../login/tsconfig.build.json" }],
+  "include": ["src"],
+  "exclude": ["src/**/*.test.tsx", "src/test-setup.ts"]
+}

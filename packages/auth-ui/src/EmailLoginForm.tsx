@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
-interface EmailLoginFormProps {
+export interface EmailLoginFormProps {
   /** Asks CipherBox to deliver a code; resolves once it is on its way. */
   onSendCode: (email: string) => Promise<void>;
   onVerify: (email: string, code: string) => Promise<void>;

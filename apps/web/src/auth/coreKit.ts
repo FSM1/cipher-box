@@ -22,6 +22,7 @@ import BN from 'bn.js';
 import {
   accountIdFromTssPoint,
   isIdentityMethod,
+  normalizeRecoveryPhrase,
   RecoveryRequiredError,
   type CoreKitSession,
   type IdentityCredential,
@@ -86,9 +87,6 @@ export interface RecoveryEnrollment {
   warning: string | null;
 }
 
-/** What the Core Kit's own serializer emits, and so what a field must collect. */
-export const RECOVERY_PHRASE_WORDS = 24;
-
 /**
  * How many factors an account with no policy carries. Past that count one has
  * been enrolled, whatever kind it is.
@@ -113,11 +111,6 @@ function isRecoveryFactor(entry: string): boolean {
     described.module === FactorKeyTypeShareDescription.SeedPhrase ||
     described.tssShareIndex === TssShareType.RECOVERY
   );
-}
-
-/** The one reading of a typed phrase, so a field and the redemption agree. */
-export function normalizeRecoveryPhrase(typed: string): string {
-  return typed.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 /** Adapts the Web3Auth SDK to the narrow session seam the login flow drives. */

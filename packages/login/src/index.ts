@@ -20,6 +20,11 @@ export {
   type IdentityMethod,
 } from './identity';
 export {
+  isRecoveryPhraseWellFormed,
+  normalizeRecoveryPhrase,
+  RECOVERY_PHRASE_WORDS,
+} from './phrase';
+export {
   accountIdFromTssPoint,
   exportLoginSecret,
   handOffLoginSecret,

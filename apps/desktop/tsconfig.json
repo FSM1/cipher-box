@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
     // `scripts/` runs on Node, and the CSP it builds is asserted from `src/`.
     "allowJs": true,
     "types": ["vite/client", "node"],
@@ -9,6 +10,9 @@
     "declaration": false,
     "declarationMap": false
   },
-  "references": [{ "path": "../../packages/login/tsconfig.build.json" }],
+  "references": [
+    { "path": "../../packages/auth-ui/tsconfig.build.json" },
+    { "path": "../../packages/login/tsconfig.build.json" }
+  ],
   "include": ["src", "scripts", "vite.config.ts"]
 }

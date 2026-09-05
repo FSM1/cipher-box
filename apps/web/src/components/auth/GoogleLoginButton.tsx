@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { GOOGLE_CLIENT_ID_ENV } from '../../engine/config';
 import { errorMessage } from '../../lib/errorMessage';
-import { LoginError } from './LoginError';
+import { LoginError } from '@cipherbox/auth-ui';
 
 /** The slice of Google Identity Services this component drives. */
 interface GoogleIdentityServices {

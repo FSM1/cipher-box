@@ -53,7 +53,7 @@ p {
 }
 
 .front-door,
-.recovery,
+.recovery-panel,
 .signed-in {
   display: flex;
   flex-direction: column;
@@ -110,4 +110,89 @@ button:disabled {
   line-height: 1.4;
   user-select: text;
   overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   The shared auth surfaces (`@cipherbox/auth-ui`)
+
+   The components carry the class names; this window carries the skin, so the
+   shell keeps its own look without a second implementation of the surface.
+   ========================================================================== */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.login-description {
+  color: var(--muted);
+}
+
+.email-login-form {
+  width: 100%;
+}
+
+.email-login-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.email-login-sent {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* A way back to the address field, not a second call to action. */
+.email-login-restart {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.email-login-restart:hover:not(:disabled) {
+  color: var(--fg);
+}
+
+.recovery-panel {
+  text-align: left;
+}
+
+.recovery-panel h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.recovery-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.recovery-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.login-error {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.4rem 0.6rem;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.login-error p {
+  margin: 0;
 }
