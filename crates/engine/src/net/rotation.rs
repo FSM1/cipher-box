@@ -3877,8 +3877,33 @@ where
             root,
         } = source;
         rewrite_child_names(&mut read_body, &node.child_names)?;
+        // The carry runs before the record moves: a resume skips a node already
+        // at its new name, so a batch left for after the publish would be one a
+        // restart never sends, and the retire that follows drops the old name's
+        // rows either way. Every batch but the last goes out on its own; the
+        // last rides the record's own registration.
         let versions = moved_versions(&read_body);
-        let (content_cids, mut resume) = self.moved_content_batch(versions, 0).await;
+        let mut content_cids = Vec::new();
+        let mut resume = Some(0usize);
+        while let Some(from) = resume {
+            let (batch, next) = self.moved_content_batch(versions, from).await;
+            match next {
+                Some(_) => {
+                    register(
+                        self.api,
+                        &[NameRegistration {
+                            ipns_name: node.new_name.as_str().to_owned(),
+                            head_cid: None,
+                            content_cids: batch,
+                        }],
+                    )
+                    .await
+                    .map_err(|_| WritePublishError::NotLanded)?;
+                }
+                None => content_cids = batch,
+            }
+            resume = next;
+        }
 
         // `read_epoch` is the enumeration's envelope epoch, carried across the
         // whole subtree since a name wave cuts no read key — so a read rotation
@@ -3986,32 +4011,10 @@ where
         .await
         .map_err(publish_record_verdict)?;
         match receipt.outcome {
-            PublishOutcome::Published { .. } => {}
-            PublishOutcome::LostRace { .. } => return Err(WritePublishError::LostRace),
-            PublishOutcome::Unconfirmed { .. } => return Err(WritePublishError::NotLanded),
+            PublishOutcome::Published { .. } => Ok(()),
+            PublishOutcome::LostRace { .. } => Err(WritePublishError::LostRace),
+            PublishOutcome::Unconfirmed { .. } => Err(WritePublishError::NotLanded),
         }
-
-        // The rest of the record's content set, under the name it now lives at.
-        // The wave retires the old names only after every node republished, so
-        // a batch that does not land halts the wave with the old name's rows —
-        // and the edges they anchor — still in place.
-        while let Some(from) = resume {
-            let (batch, next) = self.moved_content_batch(versions, from).await;
-            if !batch.is_empty() {
-                register(
-                    self.api,
-                    &[NameRegistration {
-                        ipns_name: node.new_name.as_str().to_owned(),
-                        head_cid: None,
-                        content_cids: batch,
-                    }],
-                )
-                .await
-                .map_err(|_| WritePublishError::NotLanded)?;
-            }
-            resume = next;
-        }
-        Ok(())
     }
 
     /// Flip one pointer plane to the sealed re-point `block`.
