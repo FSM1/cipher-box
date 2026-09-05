@@ -2637,12 +2637,14 @@ fn origin_folder(rendered: &Snapshot, parent: NodeId) -> BinOrigin {
 /// *for*. A relocation out of a folder this vault granted leaves a scope the
 /// vault **owns**, so its plan is the owner's — the same flat root cut
 /// [`Engine::rotate_now`] assembles.
-struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     transport: &'a T,
     api: &'a ApiClient<H, C>,
     gateway: &'a Gateway,
     http: &'a H,
     floors: &'a F,
+    snapshot_cache: &'a S,
+    events: &'a mpsc::UnboundedSender<Event>,
     scheduler: &'a Sch,
     profile: &'a SyncTimingProfile,
     entropy: &'a RefCell<E>,
@@ -2664,8 +2666,8 @@ struct ScopeExitArm<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
 ///
 /// A trigger naming a boundary this session has not proved is refused rather
 /// than cut under material it would have to guess at.
-async fn cut_exited_scope<T, H, C, F, Sch, E>(
-    arm: ScopeExitArm<'_, T, H, C, F, Sch, E>,
+async fn cut_exited_scope<T, H, C, F, Sch, E, S>(
+    arm: ScopeExitArm<'_, T, H, C, F, Sch, E, S>,
     scope_root: NodeId,
 ) -> Result<RotationOutcome, RotateError>
 where
@@ -2675,6 +2677,7 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
+    S: SnapshotCache,
 {
     let (Some(keys), Some(sweep)) = (arm.keys.borrow().clone(), arm.sweep.borrow().clone()) else {
         return Err(RotateError::Resolve(ResolveFailure::Unavailable));
@@ -2704,6 +2707,8 @@ where
         gateway: arm.gateway,
         http: arm.http,
         floors: arm.floors,
+        snapshot_cache: arm.snapshot_cache,
+        events: arm.events,
         scheduler: arm.scheduler,
         profile: arm.profile,
         entropy: arm.entropy,
@@ -2743,8 +2748,8 @@ where
 /// The one plan a manual rotation and a scope exit share (blueprint/engine.md
 /// "Triggers": both re-seal an unchanged committed set, so neither is the
 /// revocation cascade). Only which scope, whose seams and which sweep differ.
-async fn flat_root_cut<T, H, C, F, Sch, E>(
-    net: &OwnerRotationNet<'_, T, H, C, F, Sch, E>,
+async fn flat_root_cut<T, H, C, F, Sch, E, S>(
+    net: &OwnerRotationNet<'_, T, H, C, F, Sch, E, S>,
     cut: FlatCut<'_, impl Fn() -> BoxedTask>,
 ) -> Result<RotationOutcome, RotateError>
 where
@@ -2754,6 +2759,7 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
+    S: SnapshotCache,
 {
     let FlatCut {
         scope,
@@ -2817,6 +2823,7 @@ type OwnerNet<'a, T> = OwnerRotationNet<
     OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>,
     <T as SeamTypes>::Scheduler,
     Box<dyn Entropy>,
+    <T as SeamTypes>::SnapshotCache,
 >;
 
 /// A name a command authors, held to the one name law ([`crate::name`]) — the
@@ -5207,6 +5214,7 @@ where {
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
+        T::SnapshotCache: Clone + 'static,
     {
         let session = self.session.as_ref()?;
         *self.sweep_keys.borrow_mut() = Some(Rc::new(SweepKeys {
@@ -5217,6 +5225,8 @@ where {
         let held = self.sweep_keys.clone();
         let transport = self.seams.record_transport.clone();
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
+        let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
+        let events = self.events.clone();
         let scheduler = self.seams.scheduler.clone();
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
@@ -5230,6 +5240,8 @@ where {
                 let api = api.clone();
                 let transport = transport.clone();
                 let floors = floors.clone();
+                let snapshot_cache = snapshot_cache.clone();
+                let events = events.clone();
                 let scheduler = scheduler.clone();
                 let http = http.clone();
                 let gateway = gateway.clone();
@@ -5247,6 +5259,8 @@ where {
                         gateway: &gateway,
                         http: &http,
                         floors: &floors,
+                        snapshot_cache: &snapshot_cache,
+                        events: &events,
                         scheduler: &scheduler,
                         profile: &profile,
                         entropy: &entropy,
@@ -5294,10 +5308,12 @@ where {
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
+        T::SnapshotCache: Clone + 'static,
     {
         let scheduler = self.seams.scheduler.clone();
         let transport = self.seams.record_transport.clone();
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
+        let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
         let profile = self.profile;
         let held = self.held_records.clone();
         let settings_record = self.settings_record.clone();
@@ -5328,6 +5344,8 @@ where {
                         gateway: &gateway,
                         http: &http,
                         floors: &floors,
+                        snapshot_cache: &snapshot_cache,
+                        events: &events,
                         scheduler: &scheduler,
                         profile: &profile,
                         entropy: &entropy,
@@ -5898,6 +5916,8 @@ where {
                                 gateway: &gateway,
                                 http: &http,
                                 floors: &floors,
+                                snapshot_cache: &snapshot_cache,
+                                events: &events,
                                 scheduler: &scheduler,
                                 profile: &profile,
                                 entropy: &entropy,
@@ -6683,6 +6703,8 @@ where {
             gateway: &self.gateway,
             http: &self.seams.http,
             floors: &self.seams.floor_store,
+            snapshot_cache: &self.seams.snapshot_cache,
+            events: &self.events,
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
             entropy: &self.entropy,
@@ -6981,6 +7003,8 @@ where {
             gateway: &self.gateway,
             http: &self.seams.http,
             floors: &self.seams.floor_store,
+            snapshot_cache: &self.seams.snapshot_cache,
+            events: &self.events,
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
             entropy: &self.entropy,

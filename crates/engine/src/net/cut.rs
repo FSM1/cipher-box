@@ -9,6 +9,8 @@
 
 use core::cell::RefCell;
 
+use futures_channel::mpsc;
+
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::ChildScopeRef;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -18,7 +20,7 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::entropy::{Entropy, SharedEntropy};
-use crate::facade::NodeId;
+use crate::facade::{Event, NodeId};
 use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
@@ -33,14 +35,16 @@ use crate::rotation::{
     ScopeRootPublisher, WriteHistory, WriteRotateError, WriteRotationOutcome, bounded,
     cascade_rotate_scope, derive_write_name, reseal_scope_root, rotate_scope_write,
 };
-use crate::seams::{BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
+use crate::seams::{
+    BoxedTask, CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SnapshotCache,
+};
 
 /// The owner arm's committed-set cut over the live net plane.
 ///
 /// Anchored at the vault root: `scope_root_name` is the name the cut was
 /// authorized against, and a cut naming any other scope is refused before a
 /// resolve ([`Self::scope`]).
-pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     // The seam bundle both planes run on; see the identically-named fields of
     // [`OwnerRotationNet`].
     pub transport: &'a T,
@@ -48,6 +52,8 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub gateway: &'a Gateway,
     pub http: &'a H,
     pub floors: &'a F,
+    pub snapshot_cache: &'a S,
+    pub events: &'a mpsc::UnboundedSender<Event>,
     pub scheduler: &'a Sch,
     pub profile: &'a SyncTimingProfile,
     pub entropy: &'a RefCell<E>,
@@ -87,7 +93,7 @@ pub(crate) struct OwnerCutNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub sweep: &'a dyn Fn() -> BoxedTask,
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> OwnerCutNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerCutNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
@@ -132,13 +138,15 @@ where
     /// A rotation net over this cut's seams, anchored at this cut's own scope —
     /// which is what decides the binding a gated root read must prove
     /// ([`OwnerRotationNet::resolve_anchored`]).
-    fn rotation_net(&self) -> OwnerRotationNet<'_, T, H, C, F, Sch, E> {
+    fn rotation_net(&self) -> OwnerRotationNet<'_, T, H, C, F, Sch, E, S> {
         OwnerRotationNet {
             transport: self.transport,
             api: self.api,
             gateway: self.gateway,
             http: self.http,
             floors: self.floors,
+            snapshot_cache: self.snapshot_cache,
+            events: self.events,
             scheduler: self.scheduler,
             profile: self.profile,
             entropy: self.entropy,
@@ -157,12 +165,14 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> CutRotator for OwnerCutNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> CutRotator
+    for OwnerCutNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
+    S: SnapshotCache,
 {
     async fn publish_cut_set(
         &self,
