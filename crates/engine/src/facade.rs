@@ -118,7 +118,7 @@ use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{
     Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict,
-    charge_the_identity_to_one_pass, hold_captures, published_op_mark,
+    charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -139,8 +139,9 @@ use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 use crate::sync::staging::{
-    LiveBlocks, PreservedBounds, PreservedDeadLetter, StagedBlocks, read_preserved_dead_letters,
-    reconcile_staging, release_version_blocks, stage_op, take_preserved_dead_letter,
+    DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, PreservedBounds, PreservedDeadLetter, StagedBlocks,
+    read_dead_letter_notices, read_preserved_dead_letters, reconcile_staging,
+    release_version_blocks, stage_op, take_dead_letter_notice, take_preserved_dead_letter,
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
@@ -2266,25 +2267,54 @@ fn scope_of(rendered: &Snapshot, node: NodeId, scope_roots: &[NodeId]) -> NodeId
     enclosing_scope_root(rendered, node, scope_roots).unwrap_or(rendered.root)
 }
 
-/// The interior scope one drain pass carries as its second end: the boundary the
-/// queue's **head** crossing names, with the material the tick's boundary walk
-/// proved for it.
+/// The interior scope one queued op needs a pass to hold beside its anchor: the
+/// far end of a crossing, or the one interior boundary a delete's target is
+/// linked from.
 ///
-/// The two ends are resolved from the base here, not read off the crossing the
-/// command journaled. A grant minted after a relocation was queued turns an
-/// intra-scope relink into one that leaves a scope somebody now reads, and that
-/// relocation needs the same second end the drain re-seals under.
+/// A delete unlinks its target from every folder that links it
+/// (blueprint/engine.md "Delete branch"), so a link in an interior scope is an
+/// end the pass owes. Links in two interior scopes are a span no pass pairs, and
+/// naming one of them here would leave the other standing: the replay
+/// dead-letters that shape instead.
+fn second_end_scope(base: &Snapshot, op: &Op, listed: &[NodeId]) -> Option<NodeId> {
+    if let Some((from_parent, new_parent, _)) = op.relocation() {
+        let source = enclosing_scope_root(base, from_parent, listed);
+        let destination = enclosing_scope_root(base, new_parent, listed);
+        if source == destination {
+            return None;
+        }
+        return source.or(destination);
+    }
+    if !matches!(op.kind, OpKind::Delete { .. }) {
+        return None;
+    }
+    let mut interior = base
+        .links_to(op.target)
+        .into_iter()
+        .filter_map(|link| enclosing_scope_root(base, link.parent, listed));
+    let first = interior.next()?;
+    interior.all(|root| root == first).then_some(first)
+}
+
+/// The interior scope the **first** queued op that names one needs
+/// ([`second_end_scope`]), with the material the tick's boundary walk proved for
+/// it.
+///
+/// The ends are resolved from the base here, not read off the crossing the
+/// command journaled. A grant minted after an op was queued turns an intra-scope
+/// relink into one that leaves a scope somebody now reads, and moves a
+/// boundary under a link a queued delete must still remove.
 ///
 /// One pass carries one interior end and the queue drains strict FIFO, so the
-/// head crossing decides and no later one may take its place — an end resolved
-/// for a crossing further back leaves the head walking a chain neither end
-/// roots, which stalls it where no budget reaches. A head whose boundary this
-/// session has proved no material for therefore answers `None`, and the drain
-/// charges it.
+/// first such op decides and no later one may take its place — an end resolved
+/// for an op further back leaves the head walking a chain neither end roots,
+/// which stalls it where no budget reaches. A head whose boundary this session
+/// has proved no material for therefore answers `None`, and the drain charges
+/// it.
 ///
 /// The decode rides the session's own queue memo: it is an HPKE open per owned
 /// record.
-async fn queued_crossing_scope<St: StagingStore>(
+async fn queued_second_end<St: StagingStore>(
     staging: &St,
     enc_secret: &X25519Secret,
     memo: &RefCell<QueueScanMemo>,
@@ -2302,15 +2332,7 @@ async fn queued_crossing_scope<St: StagingStore>(
         .scan(&reader, &raw, decode_queue)
         .mine
         .iter()
-        .find_map(|(_, op)| {
-            let (from_parent, new_parent, _) = op.relocation()?;
-            let source = enclosing_scope_root(&base, from_parent, listed);
-            let destination = enclosing_scope_root(&base, new_parent, listed);
-            if source == destination {
-                return None;
-            }
-            source.or(destination)
-        })?;
+        .find_map(|(_, op)| second_end_scope(&base, op, listed))?;
     let proved = boundaries.material.get(&scope)?;
     Some(SecondEnd {
         ascent: ascent_node_seed(
@@ -4696,6 +4718,29 @@ impl<T: SeamTypes> Engine<T> {
             }
         }
 
+        // A dead letter that parked no version is named by its notice alone,
+        // and the notice set is owner-scoped, so the key answers for it what
+        // `classify` answers for a preserved record.
+        match read_dead_letter_notices(
+            &self.seams.staging_store,
+            &owner_scoped_key(DEAD_LETTER_NOTICES_PREFIX, session.enc_subkey()),
+        )
+        .await
+        .map_err(ColdStartError::Seam)?
+        {
+            Some(noted) => {
+                let mut notices = self.dead_letters.borrow_mut();
+                for notice in noted {
+                    if !raw.iter().any(|(id, _)| *id == notice.op_id) {
+                        notices.insert(notice.op_id, (None, notice.reason));
+                    }
+                }
+            }
+            None => {
+                let _ = self.events.unbounded_send(Event::ParkedWritesUnreadable);
+            }
+        }
+
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
         // its op record from the durable queue so a corrupt entry is not
         // re-decoded and re-emitted on every boot.
@@ -5609,8 +5654,7 @@ where {
                     });
                     let second = match &boundaries {
                         Some(boundaries) => {
-                            queued_crossing_scope(&staging, &enc_subkey, &queue_scan, boundaries)
-                                .await
+                            queued_second_end(&staging, &enc_subkey, &queue_scan, boundaries).await
                         }
                         None => None,
                     };
@@ -9505,11 +9549,32 @@ where {
         }
     }
 
+    /// This owner's notice set: the dead letters that parked no version
+    /// ([`DEAD_LETTER_NOTICES_PREFIX`]).
+    fn notices_key(&self) -> Result<Vec<u8>, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        Ok(owner_scoped_key(
+            DEAD_LETTER_NOTICES_PREFIX,
+            session.enc_subkey(),
+        ))
+    }
+
     /// The shortened set is durable before a byte is released, so a failed write
     /// leaves a list that still names the version rather than one naming blocks
     /// that are already gone.
+    ///
+    /// A notice holds no record and no blocks, so dropping one releases nothing
+    /// and needs none of that ordering.
     async fn discard_dead_letter(&self, op_id: OpId) -> Result<(), EngineError> {
         self.live_session()?;
+        if take_dead_letter_notice(&self.seams.staging_store, &self.notices_key()?, op_id)
+            .await
+            .map_err(EngineError::from_seam)?
+        {
+            self.dead_letters.borrow_mut().remove(&op_id);
+            let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+            return Ok(());
+        }
         let (parked, _) = self.parked_write(op_id).await?;
         take_preserved_dead_letter(&self.seams.staging_store, op_id)
             .await
@@ -9533,6 +9598,19 @@ where {
     async fn recover_dead_letter(&mut self, op_id: OpId) -> Result<CommandOutcome, EngineError> {
         self.live_session()?;
         let authored_at = self.seams.scheduler.now();
+        // A noticed dead letter parked no version, which is the refusal every
+        // other versionless intent earns below rather than an unknown op.
+        if read_dead_letter_notices(&self.seams.staging_store, &self.notices_key()?)
+            .await
+            .map_err(EngineError::from_seam)?
+            .unwrap_or_default()
+            .iter()
+            .any(|notice| notice.op_id == op_id)
+        {
+            return Err(EngineError::MalformedInput {
+                check: "parked-write-carries-no-version",
+            });
+        }
         let (_, op) = self.parked_write(op_id).await?;
 
         // A recover re-stages the parked intent, so it owes the caller the
@@ -9829,6 +9907,104 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A vault root holding two granted folders, one file in each, and one
+    /// target the caller links where the case needs it.
+    fn boundaries_fixture() -> (Snapshot, NodeId) {
+        let root = NodeId([0; 16]);
+        let mut base = Snapshot::new(root);
+        for (parent, node, name) in [
+            (root, NodeId([5; 16]), "granted"),
+            (root, NodeId([8; 16]), "other"),
+            (NodeId([5; 16]), NodeId([10; 16]), "inside-granted"),
+            (NodeId([8; 16]), NodeId([9; 16]), "inside-other"),
+            (root, NodeId([6; 16]), "plain"),
+        ] {
+            base.upsert_node(NodeMeta::new(node, name, NodeKind::Folder));
+            base.link(parent, node, 1);
+        }
+        base.upsert_node(NodeMeta::new(NodeId([7; 16]), "shared.txt", NodeKind::File));
+        (base, NodeId([7; 16]))
+    }
+
+    fn delete_of(target: NodeId) -> Op {
+        Op::delete(target, 1, UnixMillis(0), 1, true)
+    }
+
+    /// A delete unlinks its target from every folder that links it, so the pass
+    /// owes an end for the interior boundary one of those folders sits under.
+    #[test]
+    fn a_delete_names_the_one_granted_scope_its_target_is_linked_from() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([6; 16]), target, 1);
+        base.link(NodeId([10; 16]), target, 2);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &delete_of(target),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            Some(NodeId([5; 16])),
+            "the link outside every granted folder is the anchor's own"
+        );
+    }
+
+    /// Naming one of two interior boundaries would leave the other's link
+    /// standing, which is the span the replay refuses outright.
+    #[test]
+    fn a_delete_linked_from_two_granted_scopes_names_no_second_end() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([10; 16]), target, 1);
+        base.link(NodeId([9; 16]), target, 2);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &delete_of(target),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            None,
+            "no pass pairs two interior ends"
+        );
+    }
+
+    /// Only a delete acts on every link its target has. Every other op acts on
+    /// the one place the target already sits, so its links name no end.
+    #[test]
+    fn a_rename_of_a_target_linked_across_two_scopes_names_no_second_end() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([6; 16]), target, 1);
+        base.link(NodeId([10; 16]), target, 2);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &Op::rename(target, "renamed.txt", 1, UnixMillis(0)),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            None,
+            "the rename touches one child ref, not every link"
+        );
+    }
+
+    /// Every link outside the listed boundaries is the anchor's, and a pass
+    /// anchored there needs no second end at all.
+    #[test]
+    fn a_delete_linked_outside_every_granted_scope_names_no_second_end() {
+        let (mut base, target) = boundaries_fixture();
+        base.link(NodeId([6; 16]), target, 1);
+
+        assert_eq!(
+            second_end_scope(
+                &base,
+                &delete_of(target),
+                &[NodeId([5; 16]), NodeId([8; 16])]
+            ),
+            None,
+            "one end serves it"
+        );
+    }
 
     #[test]
     fn lookup_prefers_the_exact_name_over_a_folding_twin_that_sorts_first() {

@@ -27,6 +27,8 @@ const REASONS: Record<DeadLetterReason, string> = {
     'this item would end up in a different shared folder than the one it came from, which CipherBox cannot do in one step; move it to a folder you do not share first, then into the one you want',
   binIndexStrandedMint:
     'this device cannot read your bin, and its own first attempt to set one up did not finish, so it cannot move this item there; sign in on another device to repair the bin, or delete this item permanently',
+  targetLinkedAcrossScopes:
+    'this item is also in a shared folder that CipherBox cannot save in the same step; remove it from that shared folder first, then delete it',
 };
 
 /**

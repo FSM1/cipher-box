@@ -79,7 +79,8 @@ export type DeadLetterReason =
   | 'scopeRootNotResealable'
   | 'binIndexFull'
   | 'crossingUnauthorable'
-  | 'binIndexStrandedMint';
+  | 'binIndexStrandedMint'
+  | 'targetLinkedAcrossScopes';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {

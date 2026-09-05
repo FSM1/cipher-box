@@ -18,9 +18,14 @@
 //!   this node has a delete pending; the seal removes the rest of each
 //!   association, and the figures.
 //! - **The op-id high-water marks**
-//!   ([`owner_scoped_key`](crate::sync::owner_scoped_key)) and the per-op
-//!   attempt counts. Their values associate no two identifiers and name
-//!   nothing outside this store.
+//!   ([`owner_scoped_key`](crate::sync::owner_scoped_key)), the per-op attempt
+//!   counts, and the notices of versionless dead letters
+//!   (`crate::sync::staging`'s `DEAD_LETTER_NOTICES_PREFIX`).
+//!   Their values associate no two identifiers and name nothing outside this
+//!   store: an op id, a count, an enumerated reason, a timestamp. The preserved
+//!   set beside them already carries the same op id and reason in the clear,
+//!   and a writer who could forge a notice could rewrite that set instead — a
+//!   notice holds no key, no block reference and no name.
 
 use core::cell::RefCell;
 

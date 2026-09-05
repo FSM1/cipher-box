@@ -347,20 +347,6 @@ impl Snapshot {
         links
     }
 
-    /// [`Self::links_ranked`], narrowed to the links whose parent sits at or
-    /// under `under`.
-    ///
-    /// The snapshot spans the whole vault, so a child can be linked from a
-    /// folder outside the scope acting on it. That folder publishes under a
-    /// write plane this caller does not hold, so it is not this caller's link
-    /// to remove.
-    pub fn links_ranked_under(&self, child: NodeId, under: NodeId) -> Vec<Link> {
-        self.links_ranked(child)
-            .into_iter()
-            .filter(|link| link.parent == under || self.is_descendant_of(link.parent, under))
-            .collect()
-    }
-
     /// The children linked under `parent`, deterministically ordered by child
     /// id. Dual-linked children appear under every parent that links them
     /// (the residue [`observed_repair`](crate::sync::rebase::observed_repair)
@@ -1258,12 +1244,11 @@ mod tests {
         assert_eq!(snap.ancestors(id(0)), Vec::<NodeId>::new());
     }
 
-    /// A delete acts on every link the scope holds, so the set is ranked once
+    /// A delete acts on every link the base holds, so the set is ranked once
     /// here — winner first, so the head is the parent readers resolve the child
-    /// under — and narrowed to the scope, because a folder outside it publishes
-    /// under a write plane the caller does not hold.
+    /// under, and so the folder a restore returns it to.
     #[test]
-    fn ranked_links_put_the_winner_first_and_drop_the_ones_outside_the_scope() {
+    fn ranked_links_put_the_winner_first() {
         let mut snap = Snapshot::new(id(0));
         for node in [1u8, 2, 3, 4] {
             snap.upsert_node(NodeMeta::new(id(node), "n", NodeKind::Folder));
@@ -1285,14 +1270,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![id(4), id(3), id(2)],
             "highest counter first",
-        );
-        assert_eq!(
-            snap.links_ranked_under(id(9), id(1))
-                .into_iter()
-                .map(|link| link.parent)
-                .collect::<Vec<_>>(),
-            vec![id(3), id(2)],
-            "and the link from outside the scope is not the scope's to act on",
         );
     }
 

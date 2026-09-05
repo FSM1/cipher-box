@@ -201,6 +201,14 @@ pub enum DeadLetterReason {
     /// at journal time; a grant minted after the op was queued is what moves a
     /// boundary under one already journaled.
     CrossingUnauthorable,
+    /// A delete whose target is linked from folders in scopes no one pass
+    /// pairs. The delete unlinks the node from every folder that links it, and
+    /// a pass anchors on one scope and carries one interior end beside it, so
+    /// links spread over three scopes, or over two interior ones, leave no pass
+    /// that can author them all. Distinct from [`Self::CrossingUnauthorable`]
+    /// because nothing is being moved and the remedy is the member's own:
+    /// remove the link the other scope's folder holds, then delete.
+    TargetLinkedAcrossScopes,
 }
 
 /// One applied op, resolved for republish.
@@ -401,6 +409,10 @@ pub fn replay(
         .filter(|node| working.contains(*node));
         if names_three_scopes(&working, op, scopes) {
             dead_letters.push((*op_id, DeadLetterReason::CrossingUnauthorable));
+            continue;
+        }
+        if delete_names_unpairable_scopes(&working, op, scopes) {
+            dead_letters.push((*op_id, DeadLetterReason::TargetLinkedAcrossScopes));
             continue;
         }
         match rebase_one(&mut working, local, op, scopes.roots) {
@@ -787,6 +799,33 @@ fn names_three_scopes(working: &Snapshot, op: &Op, scopes: ReplayScopes<'_>) -> 
     let ends = [from_parent, new_parent]
         .map(|end| enclosing_scope_root(working, end, scopes.roots).unwrap_or(scopes.anchor));
     ends[0] != ends[1] && !ends.contains(&scopes.anchor)
+}
+
+/// Whether a delete's target is linked from scopes no one pass pairs.
+///
+/// A delete unlinks its target from every folder that links it
+/// (blueprint/engine.md "Delete branch"), and a pass anchors on one scope and
+/// carries one interior end beside it (`crate::sync::drain::DrainScope`), so a
+/// link set that reaches three scopes, or two neither of which is the anchor,
+/// has no pass that can author it. Left to the drain it would hold the
+/// strict-FIFO head for a delete no tick ever completes.
+///
+/// Read off the links the pass would publish onto, so a grant minted since the
+/// delete was queued counts as the boundary it now is.
+fn delete_names_unpairable_scopes(working: &Snapshot, op: &Op, scopes: ReplayScopes<'_>) -> bool {
+    if !matches!(op.kind, OpKind::Delete { .. }) {
+        return false;
+    }
+    let mut roots: Vec<crate::facade::NodeId> = working
+        .links_to(op.target)
+        .iter()
+        .map(|link| {
+            enclosing_scope_root(working, link.parent, scopes.roots).unwrap_or(scopes.anchor)
+        })
+        .collect();
+    roots.sort_unstable();
+    roots.dedup();
+    roots.len() > 2 || (roots.len() == 2 && !roots.contains(&scopes.anchor))
 }
 
 /// Combined move: the relink rule's races, then the rename rule's collision
@@ -1713,6 +1752,113 @@ mod tests {
         assert!(
             report.scope_exit_triggers.is_empty(),
             "and nothing was applied, so the exit it would have owed is not queued"
+        );
+    }
+
+    /// [`granted_scope`] with a second granted scope beside the first, and one
+    /// target the caller links into whichever of them the case needs.
+    fn two_granted_scopes() -> Snapshot {
+        let mut base = granted_scope();
+        with_node(&mut base, id(0), id(8), "other", NodeKind::Folder);
+        with_node(&mut base, id(8), id(9), "inside-other", NodeKind::Folder);
+        base.upsert_node(NodeMeta::new(id(7), "shared.txt", NodeKind::File));
+        base
+    }
+
+    /// The scope roots for [`two_granted_scopes`].
+    const TWO_GRANTED: &[NodeId] = &[NodeId([0; 16]), NodeId([5; 16]), NodeId([8; 16])];
+
+    /// A delete unlinks its target from every folder that links it, and a pass
+    /// carries the anchor plus one interior end. Two interior ends is the span
+    /// no pass pairs, so it is terminal rather than a queue head no later tick
+    /// clears.
+    #[test]
+    fn a_delete_linked_from_two_granted_scopes_dead_letters() {
+        let mut base = two_granted_scopes();
+        base.link(id(10), id(7), 1);
+        base.link(id(9), id(7), 2);
+        let local = base.clone();
+        let ops = [(OpId(1), Op::delete(id(7), 1, AT, 1, true))];
+
+        let report = replay(&base, &local, &ops, replay_scopes(TWO_GRANTED));
+
+        assert_eq!(
+            report.dead_letters,
+            [(OpId(1), DeadLetterReason::TargetLinkedAcrossScopes)],
+            "neither end is the anchor, so no pass unlinks both"
+        );
+    }
+
+    /// Three scopes leave no pass either, whichever two a pass could pair.
+    #[test]
+    fn a_delete_linked_from_three_scopes_dead_letters() {
+        let mut base = two_granted_scopes();
+        base.link(id(10), id(7), 1);
+        base.link(id(9), id(7), 2);
+        base.link(id(6), id(7), 3);
+        let local = base.clone();
+        let ops = [(OpId(1), Op::delete(id(7), 1, AT, 1, true))];
+
+        let report = replay(&base, &local, &ops, replay_scopes(TWO_GRANTED));
+
+        assert_eq!(
+            report.dead_letters,
+            [(OpId(1), DeadLetterReason::TargetLinkedAcrossScopes)],
+            "one pass carries two ends, never three"
+        );
+    }
+
+    /// The anchor and one interior end are exactly what a pass carries, so this
+    /// shape is the drain's to publish. The two links inside the interior scope
+    /// straddle the one outside it, so the set counts scopes and not links.
+    #[test]
+    fn a_delete_linked_from_the_anchor_and_one_granted_scope_reaches_the_drain() {
+        let mut base = two_granted_scopes();
+        base.link(id(10), id(7), 1);
+        base.link(id(6), id(7), 2);
+        base.link(id(11), id(7), 3);
+        let local = base.clone();
+        let ops = [(OpId(1), Op::delete(id(7), 1, AT, 1, true))];
+
+        let report = replay(&base, &local, &ops, replay_scopes(TWO_GRANTED));
+
+        assert!(report.dead_letters.is_empty(), "one pass holds both ends");
+        assert_eq!(report.applied.len(), 1, "and the delete rebases");
+    }
+
+    /// Every link under one interior root is that scope's own pass to take, and
+    /// dead-lettering it here would abandon a delete every tick can publish.
+    #[test]
+    fn a_delete_linked_only_inside_one_granted_scope_reaches_the_drain() {
+        let mut base = two_granted_scopes();
+        base.link(id(10), id(7), 1);
+        base.link(id(11), id(7), 2);
+        let local = base.clone();
+        let ops = [(OpId(1), Op::delete(id(7), 1, AT, 1, true))];
+
+        let report = replay(&base, &local, &ops, replay_scopes(TWO_GRANTED));
+
+        assert!(
+            report.dead_letters.is_empty(),
+            "one scope, so the pass anchored there unlinks both"
+        );
+    }
+
+    /// Only a delete unlinks from every parent. Every other op acts on the one
+    /// place its target already sits, so a span of scopes is no refusal of it.
+    #[test]
+    fn a_rename_of_a_target_linked_across_two_granted_scopes_stands() {
+        let mut base = two_granted_scopes();
+        base.link(id(10), id(7), 1);
+        base.link(id(9), id(7), 2);
+        let local = base.clone();
+        let ops = [(OpId(1), Op::rename(id(7), "renamed.txt", 1, AT))];
+
+        let report = replay(&base, &local, &ops, replay_scopes(TWO_GRANTED));
+
+        assert!(
+            report.dead_letters.is_empty(),
+            "the rename touches one child ref, not every link"
         );
     }
 

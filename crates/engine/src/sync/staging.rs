@@ -43,7 +43,8 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// per-identity op-id high-water mark
 /// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)), a retire-ledger entry, a
 /// doomed-name journal entry, a
-/// received-shares list, a contact book, or the owner's invite records. All are per-owner, so their whole prefixes are
+/// received-shares list, a contact book, the owner's invite records, or the
+/// notices of its versionless dead letters. All are per-owner, so their whole prefixes are
 /// referenced — an entry this session cannot read belongs to the identity that
 /// still needs it.
 ///
@@ -57,6 +58,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(RECEIVED_SHARES_PREFIX)
         || key.starts_with(CONTACTS_PREFIX)
         || key.starts_with(INVITE_RECORDS_PREFIX)
+        || key.starts_with(DEAD_LETTER_NOTICES_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -109,6 +111,39 @@ pub(crate) const PRESERVED_DEAD_LETTERS_KEY: &[u8] = b"cipherbox/preserved-dead-
 /// build wrote it, so bytes that merely happen to be well-shaped must not parse.
 const PRESERVED_FORMAT_V3: u8 = 3;
 
+/// The staging-key prefix for the notices of dead letters that parked no
+/// version — one owner-scoped record of fixed-width `(op id, reason, stamp)`
+/// rows behind a one-byte format tag
+/// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)).
+///
+/// The notice a host reads and the custody of a content key are two concerns.
+/// An op with no staged version has no key to keep, so it takes no
+/// preserved-set slot and stores no record bytes: the preserved set evicts
+/// oldest-first, and a slot spent here would release a version whose
+/// per-version key nothing re-derives.
+pub(crate) const DEAD_LETTER_NOTICES_PREFIX: &[u8] = b"cipherbox/dead-letter-notices/";
+
+/// The notice record's format tag, read in the same fail-safe direction as
+/// [`PRESERVED_FORMAT_V3`].
+const NOTICE_FORMAT_V1: u8 = 1;
+
+/// One notice row: the op id, the reason tag and the stamp.
+const NOTICE_ROW_BYTES: usize = size_of::<u64>() + 1 + size_of::<u64>();
+
+/// How many notices one owner keeps. Higher than
+/// [`MAX_PRESERVED_DEAD_LETTERS`] because a notice holds no record and no
+/// blocks: the whole set at this bound is one small staging value.
+const MAX_DEAD_LETTER_NOTICES: usize = 64;
+
+/// One dead letter that parked no version: what a cold-started session needs to
+/// name it again, and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeadLetterNotice {
+    pub(crate) op_id: OpId,
+    pub(crate) reason: DeadLetterReason,
+    pub(crate) noted_at: UnixMillis,
+}
+
 /// One preserved dead letter: which op it was, why it parked, the op record,
 /// and when the engine parked it.
 ///
@@ -149,6 +184,7 @@ fn reason_tag(reason: DeadLetterReason) -> u8 {
         DeadLetterReason::BinIndexFull => 15,
         DeadLetterReason::CrossingUnauthorable => 16,
         DeadLetterReason::BinIndexStrandedMint => 17,
+        DeadLetterReason::TargetLinkedAcrossScopes => 18,
     }
 }
 
@@ -174,6 +210,7 @@ fn reason_of_tag(tag: u8) -> Option<DeadLetterReason> {
         15 => DeadLetterReason::BinIndexFull,
         16 => DeadLetterReason::CrossingUnauthorable,
         17 => DeadLetterReason::BinIndexStrandedMint,
+        18 => DeadLetterReason::TargetLinkedAcrossScopes,
         _ => return None,
     })
 }
@@ -316,28 +353,35 @@ impl Preservation {
 /// Only a seam failure is an `Err`, and only that retries.
 pub(crate) async fn preserve_dead_letter<S: StagingStore>(
     store: &S,
+    notices_key: &[u8],
     op_id: OpId,
     reason: DeadLetterReason,
     record: &[u8],
     now: UnixMillis,
 ) -> SeamResult<Preservation> {
-    // First: an unreadable preserved record decides this path, and must do so
-    // before any verdict a caller would act on.
+    let root = record_content_root_cid(record)
+        .map_err(|_| SeamError::new("preserve_dead_letter: unreadable op record"))?;
+    // An op with no staged version has no content key to keep custody of, so it
+    // takes a notice instead of a slot in a set that evicts oldest-first
+    // ([`DEAD_LETTER_NOTICES_PREFIX`]). Ahead of the readability check below,
+    // because a set this path never writes cannot refuse it.
+    let Some(root) = root else {
+        note_dead_letter(store, notices_key, op_id, reason, now).await?;
+        return Ok(Preservation::Kept);
+    };
+    // An unreadable preserved record decides this path, and must do so before
+    // any verdict a caller would act on.
     let Some(mut kept) = read_preserved_dead_letters(store).await? else {
         return Ok(Preservation::Refused);
     };
-    let root = record_content_root_cid(record)
-        .map_err(|_| SeamError::new("preserve_dead_letter: unreadable op record"))?;
-    if let Some(root) = &root {
-        match open_version(store, root).await? {
-            OpenedVersion::Gone => return Ok(Preservation::ContentGone),
-            // Holes are undecidable without the manifest, and an undecidable
-            // hole preserves.
-            OpenedVersion::Opaque => {}
-            OpenedVersion::Open(manifest, _) => {
-                if has_a_hole(store, root, &manifest).await? {
-                    return Ok(Preservation::ContentGone);
-                }
+    match open_version(store, &root).await? {
+        OpenedVersion::Gone => return Ok(Preservation::ContentGone),
+        // Holes are undecidable without the manifest, and an undecidable hole
+        // preserves.
+        OpenedVersion::Opaque => {}
+        OpenedVersion::Open(manifest, _) => {
+            if has_a_hole(store, &root, &manifest).await? {
+                return Ok(Preservation::ContentGone);
             }
         }
     }
@@ -587,6 +631,114 @@ async fn write_preserved_dead_letters<S: StagingStore>(
     store
         .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, &bytes)
         .await
+}
+
+/// The notices this owner's key holds. `None` when the record is present but not
+/// one this build reads — the same fail-safe direction the preserved set takes,
+/// so no caller overwrites notices another build wrote.
+pub(crate) async fn read_dead_letter_notices<S: StagingStore>(
+    store: &S,
+    key: &[u8],
+) -> SeamResult<Option<Vec<DeadLetterNotice>>> {
+    let Some(stored) = store.staged_bytes(key).await? else {
+        return Ok(Some(Vec::new()));
+    };
+    let Some(rows) = stored.strip_prefix(&[NOTICE_FORMAT_V1]) else {
+        return Ok(None);
+    };
+    // `chunks_exact` drops a trailing partial row, so the length decides first:
+    // a truncated record is one this build does not read, never a short set.
+    if !rows.len().is_multiple_of(NOTICE_ROW_BYTES) {
+        return Ok(None);
+    }
+    let mut notices = Vec::with_capacity(rows.len() / NOTICE_ROW_BYTES);
+    for row in rows.chunks_exact(NOTICE_ROW_BYTES) {
+        let Some(notice) = decode_notice(row) else {
+            return Ok(None);
+        };
+        notices.push(notice);
+    }
+    Ok(Some(notices))
+}
+
+/// One [`NOTICE_ROW_BYTES`] row, or `None` for a reason tag this build does not
+/// know.
+fn decode_notice(row: &[u8]) -> Option<DeadLetterNotice> {
+    let (op_id, tail) = row.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let (tag, stamp) = tail.split_first()?;
+    let (stamp, _) = stamp.split_first_chunk::<{ size_of::<u64>() }>()?;
+    Some(DeadLetterNotice {
+        op_id: OpId(u64::from_be_bytes(*op_id)),
+        reason: reason_of_tag(*tag)?,
+        noted_at: UnixMillis(u64::from_be_bytes(*stamp)),
+    })
+}
+
+/// Note one dead letter that parked no version, oldest-first over
+/// [`MAX_DEAD_LETTER_NOTICES`].
+///
+/// A set this build cannot read is left exactly as it stands: the op still
+/// dead-letters and still reaches the event stream, and the notice is the one
+/// thing a restart loses — which is what a build that owns those bytes must
+/// decide, not this one.
+pub(crate) async fn note_dead_letter<S: StagingStore>(
+    store: &S,
+    key: &[u8],
+    op_id: OpId,
+    reason: DeadLetterReason,
+    now: UnixMillis,
+) -> SeamResult<()> {
+    let Some(mut noted) = read_dead_letter_notices(store, key).await? else {
+        return Ok(());
+    };
+    if noted.iter().any(|held| held.op_id == op_id) {
+        return Ok(());
+    }
+    noted.push(DeadLetterNotice {
+        op_id,
+        reason,
+        noted_at: now,
+    });
+    let over = noted.len().saturating_sub(MAX_DEAD_LETTER_NOTICES);
+    noted.drain(..over);
+    write_dead_letter_notices(store, key, &noted).await
+}
+
+/// Drop the notice `op_id` names, answering whether the set held one.
+pub(crate) async fn take_dead_letter_notice<S: StagingStore>(
+    store: &S,
+    key: &[u8],
+    op_id: OpId,
+) -> SeamResult<bool> {
+    let Some(mut noted) = read_dead_letter_notices(store, key).await? else {
+        return Ok(false);
+    };
+    let Some(at) = noted.iter().position(|held| held.op_id == op_id) else {
+        return Ok(false);
+    };
+    noted.remove(at);
+    write_dead_letter_notices(store, key, &noted).await?;
+    Ok(true)
+}
+
+/// An empty set removes the key, so a device that has never dead-lettered a
+/// versionless op spends no staging budget on this.
+async fn write_dead_letter_notices<S: StagingStore>(
+    store: &S,
+    key: &[u8],
+    noted: &[DeadLetterNotice],
+) -> SeamResult<()> {
+    if noted.is_empty() {
+        return store.remove_staged_bytes(key).await;
+    }
+    let mut bytes = Vec::with_capacity(1 + noted.len() * NOTICE_ROW_BYTES);
+    bytes.push(NOTICE_FORMAT_V1);
+    for notice in noted {
+        bytes.extend_from_slice(&notice.op_id.0.to_be_bytes());
+        bytes.push(reason_tag(notice.reason));
+        bytes.extend_from_slice(&notice.noted_at.0.to_be_bytes());
+    }
+    store.put_staged_bytes(key, &bytes).await
 }
 
 /// The staging keys write handles hold outside the durable queue.
@@ -852,6 +1004,11 @@ mod tests {
     /// Far enough into the epoch that a test can park an entry either side of it.
     const NOW: UnixMillis = UnixMillis(1_000_000);
 
+    /// One owner's notice set, as [`owner_scoped_key`] would key it.
+    ///
+    /// [`owner_scoped_key`]: crate::sync::drain::owner_scoped_key
+    const NOTICES_KEY: &[u8] = b"cipherbox/dead-letter-notices/an-owner-tag";
+
     /// Bounds no entry can age out of, so a case exercising the byte or count
     /// ceiling is not decided by expiry instead.
     fn bounds(budget_bytes: u64) -> PreservedBounds {
@@ -924,6 +1081,7 @@ mod tests {
     async fn park<S: StagingStore>(store: &S, record: &[u8]) -> Preservation {
         preserve_dead_letter(
             store,
+            NOTICES_KEY,
             record_op_id(record),
             DeadLetterReason::AttemptsExhausted,
             record,
@@ -1712,6 +1870,11 @@ mod tests {
         let store = InMemoryStagingStore::default();
         block_on(async {
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
+            // A version-bearing op, so the refusal below is the set's and not
+            // the notice path a versionless op takes.
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
             // A wrong tag, a length prefix past the end, and a zero-length entry
             // that would otherwise loop forever.
             for stored in [
@@ -1742,7 +1905,7 @@ mod tests {
                 assert!(read_preserved_dead_letters(&store).await.unwrap().is_none());
                 assert!(sweep(&store, &[]).await.unwrap().is_empty());
                 assert_eq!(
-                    park(&store, b"record").await,
+                    park(&store, &record).await,
                     Preservation::Refused,
                     "a permanent refusal, not a failure the caller retries"
                 );
@@ -1755,6 +1918,205 @@ mod tests {
                     "and the dead letters it already holds are left standing"
                 );
             }
+        });
+    }
+
+    /// An op record that stages no version — the shape whose dead letter has no
+    /// content key to keep custody of.
+    fn versionless_record(op: u8) -> Vec<u8> {
+        encode_op_record(seal(op), &Op::rename(id(op), "n", 1, UnixMillis(1))).unwrap()
+    }
+
+    async fn note<S: StagingStore>(store: &S, op: u8, reason: DeadLetterReason) -> Preservation {
+        preserve_dead_letter(
+            store,
+            NOTICES_KEY,
+            OpId(u64::from(op)),
+            reason,
+            &versionless_record(op),
+            NOW,
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn notices<S: StagingStore>(store: &S) -> Vec<DeadLetterNotice> {
+        read_dead_letter_notices(store, NOTICES_KEY)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    /// The notice a host reads and the custody of a content key are two
+    /// concerns on one carrier. An op with no staged version has no key to
+    /// keep, so it is named by a notice and takes no slot in a set that evicts
+    /// oldest-first.
+    #[test]
+    fn a_versionless_dead_letter_takes_a_notice_and_no_preserved_slot() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            assert_eq!(
+                note(&store, 3, DeadLetterReason::TargetGone).await,
+                Preservation::Kept,
+                "nothing was refused: this path never reaches the preserved set"
+            );
+
+            assert!(
+                kept_records(&store).await.is_empty(),
+                "and it spends none of the set's slots"
+            );
+            assert_eq!(
+                notices(&store).await,
+                vec![DeadLetterNotice {
+                    op_id: OpId(3),
+                    reason: DeadLetterReason::TargetGone,
+                    noted_at: NOW,
+                }],
+                "the notice carries the id and the words a restart renders"
+            );
+            assert_eq!(
+                note(&store, 3, DeadLetterReason::TargetGone).await,
+                Preservation::Kept,
+                "a second pass over the same op is idempotent"
+            );
+            assert_eq!(notices(&store).await.len(), 1, "and adds no second row");
+            assert!(
+                !sweep(&store, &[])
+                    .await
+                    .unwrap()
+                    .contains(&NOTICES_KEY.to_vec()),
+                "the sweep reads it as this owner's bookkeeping, not upload residue"
+            );
+        });
+    }
+
+    /// The bound the current skip protects: a versionless dead letter must
+    /// never displace a record that carries a version's only content key.
+    #[test]
+    fn notices_never_evict_a_record_that_carries_a_content_key() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            park(&store, &record).await;
+
+            for op in 0..u8::try_from(MAX_DEAD_LETTER_NOTICES).unwrap() {
+                note(&store, op, DeadLetterReason::AttemptsExhausted).await;
+            }
+
+            assert_eq!(
+                kept_records(&store).await,
+                vec![record],
+                "a full notice set leaves the preserved record where it is"
+            );
+        });
+    }
+
+    /// The notice set is bounded on its own count, and drops in the order the
+    /// preserved set does.
+    #[test]
+    fn the_notice_set_keeps_the_newest_and_drops_the_oldest() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let over = u8::try_from(MAX_DEAD_LETTER_NOTICES).unwrap() + 3;
+            for op in 0..over {
+                note(&store, op, DeadLetterReason::AttemptsExhausted).await;
+            }
+
+            let held = notices(&store).await;
+            assert_eq!(held.len(), MAX_DEAD_LETTER_NOTICES, "bounded on its count");
+            assert_eq!(held[0].op_id, OpId(3), "oldest-first");
+            assert_eq!(
+                held[MAX_DEAD_LETTER_NOTICES - 1].op_id,
+                OpId(u64::from(over) - 1),
+                "and the newest is the one just noted"
+            );
+        });
+    }
+
+    /// The same fail-safe direction the preserved set takes: bytes this build
+    /// does not read are never overwritten, and the op still dead-letters.
+    #[test]
+    fn a_notice_record_this_build_cannot_read_is_left_standing() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            // A wrong tag, and a row cut short of its own width.
+            for stored in [
+                b"not a notice record".to_vec(),
+                vec![NOTICE_FORMAT_V1, 0, 0, 0, 0, 0, 0, 0, 1, 7],
+                vec![
+                    NOTICE_FORMAT_V1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0xFF,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                ],
+            ] {
+                store.put_staged_bytes(NOTICES_KEY, &stored).await.unwrap();
+                assert!(
+                    read_dead_letter_notices(&store, NOTICES_KEY)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+                assert_eq!(
+                    note(&store, 3, DeadLetterReason::TargetGone).await,
+                    Preservation::Kept,
+                    "the abandonment still finishes"
+                );
+                assert_eq!(
+                    store.staged_bytes(NOTICES_KEY).await.unwrap(),
+                    Some(stored),
+                    "and the notices it already holds are left standing"
+                );
+            }
+        });
+    }
+
+    /// Discard is the exit a notice owes the host, and an empty set leaves no
+    /// staging value behind.
+    #[test]
+    fn taking_a_notice_removes_it_and_a_second_take_names_nothing() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            note(&store, 3, DeadLetterReason::TargetGone).await;
+
+            assert!(
+                !take_dead_letter_notice(&store, NOTICES_KEY, OpId(9))
+                    .await
+                    .unwrap(),
+                "an id the set never held removes nothing"
+            );
+            assert!(
+                take_dead_letter_notice(&store, NOTICES_KEY, OpId(3))
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                !take_dead_letter_notice(&store, NOTICES_KEY, OpId(3))
+                    .await
+                    .unwrap(),
+                "and a second discard names nothing"
+            );
+            assert_eq!(
+                store.staged_bytes(NOTICES_KEY).await.unwrap(),
+                None,
+                "an empty set spends no staging budget"
+            );
         });
     }
 
@@ -1771,6 +2133,7 @@ mod tests {
             assert_eq!(
                 preserve_dead_letter(
                     &store,
+                    NOTICES_KEY,
                     OpId(4_242),
                     DeadLetterReason::BaseSuperseded,
                     &record,
@@ -1818,7 +2181,7 @@ mod tests {
     /// comes back under another reason's words.
     #[test]
     fn every_parked_reason_round_trips_its_tag() {
-        for reason in [
+        let reasons = [
             DeadLetterReason::TargetGone,
             DeadLetterReason::DestinationGone,
             DeadLetterReason::DestinationInsideTarget,
@@ -1834,13 +2197,28 @@ mod tests {
             DeadLetterReason::TargetStillLinked,
             DeadLetterReason::ScopeRootNotResealable,
             DeadLetterReason::BinIndexFull,
-        ] {
+            DeadLetterReason::CrossingUnauthorable,
+            DeadLetterReason::BinIndexStrandedMint,
+            DeadLetterReason::TargetLinkedAcrossScopes,
+        ];
+        for reason in reasons {
             assert_eq!(
                 reason_of_tag(reason_tag(reason)),
                 Some(reason),
                 "{reason:?} does not round trip"
             );
         }
+        // The tags run 1..=len with nothing past them, so a reason added to the
+        // table and not to this list fails here rather than going untested.
+        assert!(
+            (1..=u8::try_from(reasons.len()).unwrap()).all(|tag| reason_of_tag(tag).is_some()),
+            "the tags are contiguous from 1"
+        );
+        assert_eq!(
+            reason_of_tag(u8::try_from(reasons.len()).unwrap() + 1),
+            None,
+            "and this list covers every one of them"
+        );
     }
 
     /// Discard names one entry and leaves the rest, and an id the set never held
@@ -1857,9 +2235,16 @@ mod tests {
             put_blocks(&store, &more, &more_root, &more_staged).await;
             let second = encode_op_record(seal(2), &content_op(2, more_staged)).unwrap();
             for (id, record) in [(OpId(1), &first), (OpId(2), &second)] {
-                preserve_dead_letter(&store, id, DeadLetterReason::AttemptsExhausted, record, NOW)
-                    .await
-                    .unwrap();
+                preserve_dead_letter(
+                    &store,
+                    NOTICES_KEY,
+                    id,
+                    DeadLetterReason::AttemptsExhausted,
+                    record,
+                    NOW,
+                )
+                .await
+                .unwrap();
             }
 
             assert!(
