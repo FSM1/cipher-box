@@ -43,7 +43,7 @@ export function mountNames(path: string): Promise<string[]> {
   return readdir(path);
 }
 
-/** Waits for the mount to project `name`, at its root or in `at` under it. */
+/** Waits for `name` under the mount. It takes the instance so a wedged read can abandon it. */
 export async function projects(
   context: ScenarioContext,
   mount: Instance,

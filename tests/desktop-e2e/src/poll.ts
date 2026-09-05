@@ -3,10 +3,9 @@
  * anywhere, so every wait re-reads a real signal and stops on a deadline.
  */
 
-/** A timer that fires once. `expired` never rejects. */
+/** A timer that fires once. `expired` never rejects, and `cancel` is safe after it fired. */
 export interface Alarm {
   readonly expired: Promise<void>;
-  /** Releases the timer. It is safe once the alarm has fired. */
   cancel(): void;
 }
 
@@ -44,6 +43,7 @@ export interface PollOptions {
    * A kernel call on a mount carries no timeout of its own, so only the mount
    * going away returns it: a wait that reads a mount gives its instance here.
    * A deadline that every read answered holds nothing, and calls none of this.
+   * The report waits for the release, bounded by `RELEASE_WITHIN_MS`.
    */
   release?: () => Promise<unknown>;
 }
@@ -102,11 +102,18 @@ export async function poll<T>(
   let attempts = 0;
   let reading = false;
 
+  // The deadline latches one timeout, which every path then reports. The loop
+  // reads it on both sides of a read, so the deadline starts no further read
+  // and accepts no value that landed after it.
+  let expired: PollTimeout | undefined;
+
   const reads = (async (): Promise<T> => {
     for (;;) {
+      if (expired) throw expired;
       reading = true;
       const value = await probe();
       reading = false;
+      if (expired) throw expired;
       attempts += 1;
       last = value;
       if (accept(value)) return value;
@@ -124,16 +131,34 @@ export async function poll<T>(
     return await Promise.race([
       reads,
       alarm.expired.then(async (): Promise<never> => {
-        if (reading) {
-          await Promise.resolve()
-            .then(options.release)
-            .catch(() => undefined);
-        }
-        throw new PollTimeout(options.what, last, attempts, options.timeoutMs, reading);
+        expired = new PollTimeout(options.what, last, attempts, options.timeoutMs, reading);
+        if (reading) await freeWithin(clock, options.release);
+        throw expired;
       }),
     ]);
   } finally {
     alarm.cancel();
+  }
+}
+
+/**
+ * How long a release is given. It is teardown, never a wait: a release that
+ * hangs must not become the wait it was called to end.
+ */
+const RELEASE_WITHIN_MS = 30_000;
+
+async function freeWithin(clock: PollClock, release: PollOptions['release']): Promise<void> {
+  if (!release) return;
+  const bound = clock.alarm(RELEASE_WITHIN_MS);
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(release)
+        .catch(() => undefined),
+      bound.expired,
+    ]);
+  } finally {
+    bound.cancel();
   }
 }
 

@@ -247,6 +247,93 @@ describe('poll', () => {
     expect(released).toBe(false);
   });
 
+  it('starts no read after a deadline that passed during an interval wait', async () => {
+    let millis = 0;
+    let reads = 0;
+    // The alarm fires while the interval wait is still in flight, which is what
+    // a real pair of timers does at the deadline.
+    const clock: PollClock = {
+      now: () => millis,
+      wait: (ms) =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            millis += ms;
+            resolve();
+          }, 20);
+        }),
+      alarm: (ms) => {
+        const due = millis + ms;
+        let timer: NodeJS.Timeout | undefined;
+        const expired = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            millis = Math.max(millis, due);
+            resolve();
+          }, 5);
+        });
+        return { expired, cancel: () => clearTimeout(timer) };
+      },
+    };
+
+    const failure = await poll(
+      () => {
+        reads += 1;
+        return 'opening';
+      },
+      () => false,
+      { what: 'the mount to open', timeoutMs: 100, intervalMs: 25, clock }
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PollTimeout);
+    expect((failure as PollTimeout).stalled).toBe(false);
+    // Past the interval wait: the loop resumed, and it read nothing more.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(reads).toBe(1);
+  });
+
+  it('reports the deadline when the release never settles', async () => {
+    const clock = fakeClock();
+    let released = false;
+
+    const failure = await poll(
+      () => new Promise<string>(() => {}),
+      () => true,
+      {
+        what: 'the mount to answer',
+        timeoutMs: 50,
+        intervalMs: 10,
+        clock,
+        release: () => {
+          released = true;
+          return new Promise<void>(() => {});
+        },
+      }
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PollTimeout);
+    expect((failure as PollTimeout).stalled).toBe(true);
+    expect(released).toBe(true);
+  });
+
+  it('takes no value a read answered after the deadline', async () => {
+    const clock = fakeClock();
+    let accepted = 0;
+
+    const failure = await poll(
+      () => new Promise<string>((resolve) => setTimeout(() => resolve('mounted'), 30)),
+      (state) => {
+        accepted += 1;
+        return state === 'mounted';
+      },
+      { what: 'the mount to open', timeoutMs: 50, intervalMs: 10, clock }
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PollTimeout);
+    expect((failure as PollTimeout).stalled).toBe(true);
+    // Past the read: it answered a value the deadline had already refused.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(accepted).toBe(0);
+  });
+
   it('cancels its alarm, so no timer outlives the wait', async () => {
     const clock = fakeClock();
 
