@@ -6238,7 +6238,7 @@ where {
                         )
                     },
                 );
-                self.stage_relocation(park.as_ref(), &arrive).await
+                self.stage_legs_and_notify(park.as_ref(), &arrive).await
             }
             Command::Move {
                 node,
@@ -6284,7 +6284,7 @@ where {
                         )
                     },
                 );
-                self.stage_relocation(park.as_ref(), &arrive).await
+                self.stage_legs_and_notify(park.as_ref(), &arrive).await
             }
             Command::CancelUpload { op_id } => self
                 .cancel_upload(op_id)
@@ -9663,39 +9663,6 @@ where {
         ))
     }
 
-    /// Journal the legs of one relocation, in order, and report the id of the
-    /// last — the op whose publish completes the command.
-    ///
-    /// A leg that will not journal takes the leg before it back off the queue:
-    /// a staged crossing left half-journaled would park the subtree in the
-    /// vault-root scope, which is neither the move the caller asked for nor the
-    /// failure they were told about.
-    async fn stage_relocation(
-        &mut self,
-        park: Option<&Op>,
-        arrive: &Op,
-    ) -> Result<CommandOutcome, EngineError> {
-        let parked = match park {
-            Some(op) => Some(
-                stage_op(&self.seams.staging_store, self.record_seal()?, op)
-                    .await
-                    .map_err(EngineError::from_seam)?,
-            ),
-            None => None,
-        };
-        let staged = stage_op(&self.seams.staging_store, self.record_seal()?, arrive).await;
-        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-        match staged {
-            Ok(op_id) => Ok(CommandOutcome::Queued { op_id }),
-            Err(error) => {
-                if let Some(op_id) = parked {
-                    self.dequeue_op(op_id).await?;
-                }
-                Err(EngineError::from_seam(error))
-            }
-        }
-    }
-
     /// The version a new write of `node` follows — the conditional-edit anchor
     /// ([`OpKind::UpdateContent`](crate::sync::op::OpKind::UpdateContent)): the
     /// last queued op that authors one, else the published head.
@@ -10044,14 +10011,46 @@ where {
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,
     /// returning the durable queue id the drain will report the op under.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<CommandOutcome, EngineError> {
-        let seal = self.record_seal()?;
-        let op_id = stage_op(&self.seams.staging_store, seal, op)
+        self.stage_legs_and_notify(None, op).await
+    }
+
+    /// Journal the legs one command owes, in order, and report the id of the
+    /// last — the op whose publish completes it.
+    ///
+    /// A leg that will not journal takes the leg before it back off the queue:
+    /// a staged crossing left half-journaled would park the subtree in the
+    /// vault-root scope ([`relocation_legs`]), which is neither the move the
+    /// caller asked for nor the failure they were told about.
+    async fn stage_legs_and_notify(
+        &mut self,
+        park: Option<&Op>,
+        arrive: &Op,
+    ) -> Result<CommandOutcome, EngineError> {
+        let parked = match park {
+            Some(op) => Some(self.journal(op).await?),
+            None => None,
+        };
+        match self.journal(arrive).await {
+            Ok(op_id) => {
+                // Best-effort push-invalidation trigger; a dropped receiver
+                // (host torn down) is fine.
+                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+                Ok(CommandOutcome::Queued { op_id })
+            }
+            Err(error) => {
+                if let Some(op_id) = parked {
+                    self.dequeue_op(op_id).await?;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Seal one op onto the durable queue, under an ephemeral of its own.
+    async fn journal(&self, op: &Op) -> Result<OpId, EngineError> {
+        stage_op(&self.seams.staging_store, self.record_seal()?, op)
             .await
-            .map_err(EngineError::from_seam)?;
-        // Best-effort push-invalidation trigger; a dropped receiver (host torn
-        // down) is fine.
-        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-        Ok(CommandOutcome::Queued { op_id })
+            .map_err(EngineError::from_seam)
     }
 
     /// Sealing inputs for one durable op record: the session's enc-subkey plus

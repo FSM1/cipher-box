@@ -2684,9 +2684,14 @@ fn a_move_into_a_granted_folder_re_seals_and_cuts_nothing() {
 /// Two granted sibling folders and a node inside the first, ready to move. The
 /// mint leaves the node sealed under the scope it left, so it converges onto
 /// the enclosing scope before the move reads it.
-fn two_granted_folders(fx: &mut GrantScenario, name: &str) -> (NodeId, NodeId) {
-    let moving =
-        create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, fx.folder, name);
+fn two_granted_folders(fx: &mut GrantScenario) -> (NodeId, NodeId) {
+    let moving = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "holiday",
+    );
     let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
     converge_into_granted_scope(fx, moving);
@@ -2712,7 +2717,7 @@ fn two_granted_folders(fx: &mut GrantScenario, name: &str) -> (NodeId, NodeId) {
 #[test]
 fn a_move_between_two_granted_folders_re_seals_into_the_destination_scope() {
     let mut fx = GrantScenario::new();
-    let (holiday, album) = two_granted_folders(&mut fx, "holiday");
+    let (holiday, album) = two_granted_folders(&mut fx);
     let source_before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
     let destination_before = published_read_epoch(&fx.world, &fx.blocks, album);
 
@@ -2814,7 +2819,7 @@ fn a_move_between_two_granted_folders_re_seals_into_the_destination_scope() {
 #[test]
 fn a_restart_between_the_legs_of_a_staged_move_cuts_the_source_once() {
     let mut fx = GrantScenario::new();
-    let (holiday, album) = two_granted_folders(&mut fx, "holiday");
+    let (holiday, album) = two_granted_folders(&mut fx);
     let source_before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
 
     block_on(fx.engine.command(Command::Relink {
@@ -2871,7 +2876,7 @@ fn a_restart_between_the_legs_of_a_staged_move_cuts_the_source_once() {
 #[test]
 fn the_passes_that_cannot_author_a_staged_move_do_not_spend_it() {
     let mut fx = GrantScenario::new();
-    let (holiday, album) = two_granted_folders(&mut fx, "holiday");
+    let (holiday, album) = two_granted_folders(&mut fx);
     for name in ["one", "two", "three", "four"] {
         let bystander =
             create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, name);
