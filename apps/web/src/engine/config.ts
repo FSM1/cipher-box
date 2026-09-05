@@ -9,7 +9,6 @@ const DEFAULT_ROUTING_ENDPOINTS = 'https://delegated-ipfs.dev';
 /** The deployments the build-time environment names. */
 export type Environment = 'local' | 'ci' | 'staging' | 'production';
 
-/** The hosts the cleartext exception covers, at any port. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1'];
 
 /** Named once, so every refusal states the same rule. */

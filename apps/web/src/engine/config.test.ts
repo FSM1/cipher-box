@@ -140,7 +140,9 @@ describe('apiBaseUrl', () => {
       'http://127.0.0.1:3000',
       'http://127.0.0.1',
     ]) {
-      expect(apiBaseUrl({ VITE_ENVIRONMENT: 'ci', VITE_API_URL: value })).toBe(value);
+      for (const deployment of ['local', 'ci'] as const) {
+        expect(apiBaseUrl({ VITE_ENVIRONMENT: deployment, VITE_API_URL: value })).toBe(value);
+      }
     }
   });
 
