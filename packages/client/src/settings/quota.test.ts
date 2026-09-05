@@ -96,6 +96,17 @@ describe('quotaChrome', () => {
     expect(chrome.stalls).toEqual([STALL]);
   });
 
+  // A pass that read only a window of the ledger priced only that window, so a
+  // zero it reports is not a drained ledger.
+  it('holds the figure on screen when the pass priced only a window', () => {
+    const chrome = quotaChrome(
+      storage({ pendingReclaimBytes: 0, reclaimStalls: [], pendingReclaimIsPartial: true })
+    );
+
+    expect(chrome.pendingReclaimBytes).toBe(0);
+    expect(chrome.pendingReclaimIsPartial).toBe(true);
+  });
+
   it('degrades rather than throwing when the quota probe did not answer', () => {
     const chrome = quotaChrome(storage({ pinMode: 'external', quota: null }));
 

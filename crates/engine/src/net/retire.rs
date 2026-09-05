@@ -168,7 +168,9 @@ pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cbx/rl/";
 /// node across every debt it owes, so one key per node records it once and a
 /// delete that lands after a prune journaled its debt still reaches it.
 /// [`orphan_staging_keys`] treats the whole prefix as referenced, and it is kept
-/// short for the reason [`RETIRE_LEDGER_PREFIX`] is.
+/// short for the reason [`RETIRE_LEDGER_PREFIX`] is. The key stays clear and
+/// says only what the doomed-name journal's key already says to the same
+/// reader: this owner has a delete against this node.
 ///
 /// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
 pub const NODE_TOMBSTONE_PREFIX: &[u8] = b"cbx/rt/";
@@ -295,25 +297,6 @@ impl<'a, St: StagingStore> StagingRetireLedger<'a, St> {
     }
 }
 
-impl<St: StagingStore> StagingRetireLedger<'_, St> {
-    /// Whether the value at `key` is this identity's own tombstone for `node`.
-    ///
-    /// The seal is the whole defence here: the key is clear, so anyone who can
-    /// write the staging store can plant one, and a believed tombstone settles a
-    /// debt without re-reading the owing node — which would unpin content that
-    /// is still live. The node id rides inside the seal as the bound tail, for
-    /// the reason an entry's CID does.
-    async fn opens_as_tombstone(&self, key: &[u8], node: [u8; 16]) -> SeamResult<bool> {
-        let Some(blob) = self.staging.staged_bytes(key).await? else {
-            return Ok(false);
-        };
-        Ok(self
-            .seal
-            .open(OwnerLocalKind::RetireLedger, &blob)
-            .is_some_and(|body| body.as_slice() == node.as_slice()))
-    }
-}
-
 impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     async fn owe(&self, owner_tag: &[u8], entries: &[OwedRetire]) -> SeamResult<()> {
         for entry in entries {
@@ -344,15 +327,18 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
             .collect();
         scoped.sort_unstable();
         let from = resume.map_or(0, |after| scoped.partition_point(|cid| *cid <= after));
+        let attempts = scoped.len().min(MAX_BOOKKEEPING_OPENS);
         let mut page = OwedPage {
-            truncated: scoped.len() > MAX_BOOKKEEPING_OPENS,
+            truncated: scoped.len() > attempts,
+            // Wrapping, so an unopenable run of keys costs one pass its ceiling
+            // rather than starving every entry sorting behind it for good.
+            cursor: attempts
+                .checked_sub(1)
+                .map(|last| scoped[(from + last) % scoped.len()].to_vec()),
             ..OwedPage::default()
         };
-        // Wrapping, so an unopenable run of keys costs one pass its ceiling
-        // rather than starving every entry sorting behind it for good.
-        for at in 0..scoped.len().min(MAX_BOOKKEEPING_OPENS) {
+        for at in 0..attempts {
             let cid = scoped[(from + at) % scoped.len()];
-            page.cursor = Some(cid.to_vec());
             let mut key = scope.clone();
             key.extend_from_slice(cid);
             if let Some(stored) = self.entry(&key, cid).await? {
@@ -381,8 +367,22 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
     }
 
     async fn tombstoned(&self, owner_tag: &[u8], node: [u8; 16]) -> SeamResult<bool> {
-        let key = Self::tombstone_key(owner_tag, node)?;
-        self.opens_as_tombstone(&key, node).await
+        let Some(blob) = self
+            .staging
+            .staged_bytes(&Self::tombstone_key(owner_tag, node)?)
+            .await?
+        else {
+            return Ok(false);
+        };
+        // The seal is the whole defence: the key is clear, so anyone who can
+        // write the staging store can plant one, and a believed tombstone
+        // settles a debt without re-reading the owing node — which would unpin
+        // content a live record still names. The node id rides inside the seal
+        // as the bound tail, for the reason an entry's CID does.
+        Ok(self
+            .seal
+            .open(OwnerLocalKind::RetireLedger, &blob)
+            .is_some_and(|body| body.as_slice() == node.as_slice()))
     }
 
     async fn forget_tombstones(&self, owner_tag: &[u8], nodes: &[[u8; 16]]) -> SeamResult<()> {
@@ -421,12 +421,13 @@ fn decode_entry(stored: &[u8], cid: &[u8]) -> Option<OwedRetire> {
         return None;
     }
     let (node, rest) = head.split_first_chunk::<NODE_ID_LEN>()?;
-    let (owed, manifest) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let (owed, rest) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
+    let (manifest, _) = rest.split_first_chunk::<{ size_of::<u64>() }>()?;
     Some(OwedRetire {
         node: *node,
         target: String::new(),
         owed_bytes: u64::from_be_bytes(*owed),
-        manifest_bytes: u64::from_be_bytes(manifest.try_into().ok()?),
+        manifest_bytes: u64::from_be_bytes(*manifest),
     })
 }
 

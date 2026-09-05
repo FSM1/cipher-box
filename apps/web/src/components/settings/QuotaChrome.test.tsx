@@ -51,6 +51,16 @@ describe('the quota chrome', () => {
     expect(stall.textContent).toContain('still names this version');
   });
 
+  it('says a figure the pass priced off one window of the ledger is a floor', () => {
+    render(
+      <QuotaChrome
+        storage={storage({ pendingReclaimBytes: 4096, pendingReclaimIsPartial: true })}
+      />
+    );
+
+    expect(screen.getByTestId('settings-pending-reclaim').textContent).toBe('at least 4 KB');
+  });
+
   it('says the probe did not answer rather than rendering a figure it has not got', () => {
     render(<QuotaChrome storage={storage({ quota: null })} />);
 

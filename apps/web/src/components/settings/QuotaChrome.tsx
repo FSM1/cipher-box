@@ -29,7 +29,9 @@ export function QuotaChrome({ storage }: QuotaChromeProps) {
           <>
             <dt>pending reclaim</dt>
             <dd data-testid="settings-pending-reclaim">
-              {formatBytes(chrome.pendingReclaimBytes)}
+              {chrome.pendingReclaimIsPartial
+                ? `at least ${formatBytes(chrome.pendingReclaimBytes)}`
+                : formatBytes(chrome.pendingReclaimBytes)}
             </dd>
           </>
         )}
