@@ -406,16 +406,6 @@ impl PendingAdoption {
         .await?;
         Ok(self.adopted)
     }
-
-    /// Take the authenticated record and drop the deferred advance, for a holder
-    /// with no floor store to commit it against.
-    ///
-    /// Fail-safe by construction: a floor that does not rise refuses nothing it
-    /// would otherwise admit, and the next resolve of the same record adopts it
-    /// again.
-    pub fn into_adopted(self) -> Adopted {
-        self.adopted
-    }
 }
 
 /// The committed write-capable pseudonym keys of a scope root: the owner

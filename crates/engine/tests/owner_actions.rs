@@ -3067,11 +3067,8 @@ fn a_stalled_grant_re_drives_into_the_scope_the_first_attempt_promoted() {
     }
 }
 
-/// The re-drive's own resume probe gates the promoted root, and that adoption
-/// raises a read-epoch floor at the folder's own scope id. Measured ahead of the
-/// probe, that floor reads as "a scope already stands here" and refuses every
-/// further drive, so a grant that stalls twice is stranded half moved with no
-/// command that can finish it.
+/// A floor read ahead of the resume probe strands a grant that stalls twice:
+/// half moved, and with no command that can finish it.
 #[test]
 fn a_grant_that_stalls_twice_is_still_re_drivable() {
     let mut fx = GrantScenario::new();

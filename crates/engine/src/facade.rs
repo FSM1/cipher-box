@@ -1835,9 +1835,6 @@ impl EngineError {
         }
     }
 
-    /// Map a read-grant creation failure on the classes a host acts on:
-    /// availability it may retry, an input or a bound it can change, and a
-    /// fail-closed refusal it must never retry.
     /// A scope mint's failure under the names `checks` gives this command: a
     /// grant and an invite link report the same ground differently, and only the
     /// caller knows which one it is.
@@ -1850,6 +1847,9 @@ impl EngineError {
         }
     }
 
+    /// Map a read-grant creation failure on the classes a host acts on:
+    /// availability it may retry, an input or a bound it can change, and a
+    /// fail-closed refusal it must never retry.
     fn from_create_grant(err: CreateGrantError) -> Self {
         match err {
             CreateGrantError::Entropy(e) => EngineError::from_entropy(e),

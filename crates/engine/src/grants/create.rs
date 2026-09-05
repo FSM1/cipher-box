@@ -1659,6 +1659,12 @@ mod tests {
             self
         }
 
+        /// Have this device hold a read-epoch floor at `node_id`.
+        fn floored_at(self, node_id: [u8; 16]) -> Self {
+            self.floored.borrow_mut().insert(node_id);
+            self
+        }
+
         /// Put a descendant scope root inside the granted folder, named by both
         /// the folder's body and the parent scope's committed index.
         fn with_descendant_scope(mut self, child: ChildScopeRef) -> Self {
@@ -2752,6 +2758,22 @@ mod tests {
                 .check(),
             "resume-not-this-grant",
         );
+    }
+
+    /// A live scope root the resume probe does not claim still stands at the
+    /// name this mint would publish at, and only the floor answers for it.
+    #[test]
+    fn a_floored_target_the_probe_does_not_resume_refuses_the_mint() {
+        let net = FakeNet::new(Ok(())).floored_at(GRANTEE_SCOPE);
+        let (refused, published, hub) = run(7, &[], net, &[]);
+        assert_eq!(
+            refused
+                .expect_err("a mint over a floored target is refused")
+                .check(),
+            "target-already-names-a-scope",
+        );
+        assert!(published.is_empty(), "and nothing is published");
+        assert_nothing_delivered(&hub);
     }
 
     #[test]

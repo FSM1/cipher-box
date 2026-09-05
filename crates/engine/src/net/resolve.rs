@@ -46,12 +46,14 @@ pub trait Adopter {
     /// uncommitted, now that its record is durable last-known-good in the
     /// snapshot cache ([`PendingAdoption`]).
     ///
-    /// The default discards the advance, which is what an adopter that only ever
-    /// yields [`GatePass::Advanced`] owes — the floors it raises already moved
-    /// inside [`adopt`](Self::adopt). Discarding is fail-safe either way: a floor
-    /// that does not rise costs a re-adopt of the same record, never a lost bar.
-    async fn commit_adoption(&self, pending: PendingAdoption) -> Result<Adopted, SeamError> {
-        Ok(pending.into_adopted())
+    /// The default refuses, because an adopter that never defers never reaches
+    /// it: discarding the advance instead would cache the record under stale
+    /// cut-epoch, read-epoch and sequence floors, and leave a replay of an older
+    /// valid record above every bar this pass was to raise.
+    async fn commit_adoption(&self, _pending: PendingAdoption) -> Result<Adopted, SeamError> {
+        Err(SeamError::new(
+            "a deferred gate pass reached an adopter that commits no floor",
+        ))
     }
 
     /// Recover the OWNER's own scope material for an equal-floor `Current` own
