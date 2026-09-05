@@ -14,6 +14,8 @@
 //! top. Everything the wider tier refuses stays listable and removable, or a
 //! name another client committed would be stranded in the vault forever.
 
+use zeroize::Zeroizing;
+
 /// The longest node name a command may carry, in bytes.
 ///
 /// The projection advertises this same constant through `statfs`, so what a
@@ -37,9 +39,10 @@ pub enum NameError {
     Separator,
     /// The name contained NUL or another control character.
     Control,
-    /// The name contained a bidi-override or zero-width character. These
-    /// render as a different name than they compare as, so a hostile grant
-    /// recipient could dress an executable up as a document.
+    /// The name contained a bidi control or a zero-width character that
+    /// `is_deceptive` refuses. These render as a different name than they
+    /// compare as, so a hostile grant recipient could dress an executable up
+    /// as a document.
     DeceptiveCharacter,
     /// The name contained a character Windows reserves (`< > : " | ? *`).
     ReservedCharacter,
@@ -81,14 +84,36 @@ const RESERVED_DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
 /// manager draws it. `char::is_control` is category `Cc` only and misses all
 /// of these; the strict comparator folds case but not format characters, so
 /// nothing downstream catches them either.
+///
+/// U+200C and U+200D sit between the refused code points and are admitted:
+/// the non-joiner is mandatory orthography in Persian, Urdu and Kurdish, and
+/// the joiner builds Indic conjuncts and every multi-person emoji, so a
+/// refusal would deny whole scripts a name.
 fn is_deceptive(c: char) -> bool {
     matches!(
         c,
-        '\u{200B}'..='\u{200F}' // zero-width space/joiners, LRM/RLM
+        '\u{200B}' // zero-width space
+            | '\u{200E}' | '\u{200F}' // LRM/RLM
             | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
             | '\u{2066}'..='\u{2069}' // bidi isolates
             | '\u{FEFF}' // zero-width no-break space
     )
+}
+
+/// The name with every character the law refuses as deceptive removed, or `None`
+/// when the name holds none.
+///
+/// A read plane draws what it is given, thus one override in a peer's child
+/// name reorders every name drawn around it. The set has one home here, so what
+/// an author cannot write is what a listing cannot draw.
+pub fn strip_deceptive(name: &str) -> Option<Zeroizing<String>> {
+    name.chars().any(is_deceptive).then(|| {
+        Zeroizing::new(
+            name.chars()
+                .filter(|c| !is_deceptive(*c))
+                .collect::<String>(),
+        )
+    })
 }
 
 /// Whether the name can be handed to a kernel at all: within the advertised
@@ -171,6 +196,24 @@ mod tests {
         let name = "é".repeat(128);
         assert!(name.chars().count() < MAX_NODE_NAME_BYTES);
         assert_eq!(validate_name(&name), Err(NameError::TooLong));
+    }
+
+    /// The refusal set is a hand-listed set of code points, so a widening edit
+    /// can drop one of them and leave no vector row to notice.
+    #[test]
+    fn every_reordering_or_hiding_character_stays_refused() {
+        let refused = ['\u{200B}', '\u{200E}', '\u{200F}', '\u{FEFF}']
+            .into_iter()
+            .chain('\u{202A}'..='\u{202E}')
+            .chain('\u{2066}'..='\u{2069}');
+        for character in refused {
+            assert_eq!(
+                validate_name(&format!("a{character}b")),
+                Err(NameError::DeceptiveCharacter),
+                "U+{:04X} must stay refused",
+                character as u32
+            );
+        }
     }
 
     /// The frozen vector set is what the projection and the TypeScript client

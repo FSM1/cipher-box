@@ -23,7 +23,7 @@ use unicode_normalization::UnicodeNormalization;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::facade::{NodeId, NodeKind};
-use crate::name::MAX_NODE_NAME_BYTES;
+use crate::name::{MAX_NODE_NAME_BYTES, is_emittable, strip_deceptive};
 
 /// One node's metadata in the working tree.
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
@@ -563,16 +563,38 @@ impl Drop for TakenNames {
 pub(crate) struct RenderedChild<'a> {
     /// The child's stored metadata — never rewritten by the render.
     pub(crate) meta: &'a NodeMeta,
-    suffixed: Option<Zeroizing<String>>,
+    rendered: Option<Zeroizing<String>>,
 }
 
 impl RenderedChild<'_> {
     /// The name this child is shown and resolved under.
     pub(crate) fn name(&self) -> &str {
-        self.suffixed
-            .as_ref()
-            .map_or_else(|| self.meta.name(), |name| name.as_str())
+        shown(self.meta, &self.rendered)
     }
+}
+
+/// The name a child is shown under, given whatever the render made of it.
+fn shown<'a>(meta: &'a NodeMeta, rendered: &'a Option<Zeroizing<String>>) -> &'a str {
+    rendered
+        .as_ref()
+        .map_or_else(|| meta.name(), |name| name.as_str())
+}
+
+/// The name a child enters the render under: its stored name, or a neutralised
+/// spelling when the stored name holds a character the law refuses as deceptive
+/// ([`crate::name::strip_deceptive`]).
+///
+/// The strip can leave a name no kernel carries — one built of nothing else —
+/// and a listing drops such a name, so that child falls back to its node id and
+/// stays removable, the way a share label the law refuses does
+/// ([`crate::grants::received_status::grafted_root_name`]).
+fn neutralised(meta: &NodeMeta) -> Option<Zeroizing<String>> {
+    let stripped = strip_deceptive(meta.name())?;
+    Some(if is_emittable(&stripped) {
+        stripped
+    } else {
+        Zeroizing::new(node_id_label(meta.id))
+    })
 }
 
 /// The children of `parent` as a read plane shows them, ordered by node id: a
@@ -595,41 +617,59 @@ impl RenderedChild<'_> {
 /// not separate them. The strict comparator still decides which suffix is free.
 pub(crate) fn rendered_children(snapshot: &Snapshot, parent: NodeId) -> Vec<RenderedChild<'_>> {
     let children = snapshot.children(parent);
+    let neutral: Vec<Option<Zeroizing<String>>> =
+        children.iter().map(|meta| neutralised(meta)).collect();
     // The ordinary folder holds no two children under one name, and this runs
     // on the kernel's readdir and lookup path: borrowed names, no fold, no copy.
-    let mut names: HashSet<&str> = HashSet::with_capacity(children.len());
-    if children.iter().all(|child| names.insert(child.name())) {
+    let unique = {
+        let mut names: HashSet<&str> = HashSet::with_capacity(children.len());
+        children
+            .iter()
+            .zip(&neutral)
+            .all(|(meta, name)| names.insert(shown(meta, name)))
+    };
+    if unique {
         return children
             .into_iter()
-            .map(|meta| RenderedChild {
-                meta,
-                suffixed: None,
-            })
+            .zip(neutral)
+            .map(|(meta, rendered)| RenderedChild { meta, rendered })
             .collect();
     }
-    disambiguate(children)
+    disambiguate(children, neutral)
 }
 
-/// The suffixing pass, over a folder that really holds a duplicate.
-fn disambiguate(children: Vec<&NodeMeta>) -> Vec<RenderedChild<'_>> {
+/// The suffixing pass, over a folder that really holds a duplicate — of a
+/// stored name, or of the neutralised spelling a stored name renders under.
+fn disambiguate(
+    children: Vec<&NodeMeta>,
+    neutral: Vec<Option<Zeroizing<String>>>,
+) -> Vec<RenderedChild<'_>> {
     let mut folded: TakenNames = children
         .iter()
-        .map(|child| collation_key(child.name()).to_string())
+        .zip(&neutral)
+        .map(|(meta, name)| collation_key(shown(meta, name)).to_string())
         .collect();
     let mut floors = SuffixFloors::default();
     children
         .into_iter()
-        .map(|meta| {
-            let suffixed = floors.floor_for(meta.name()).map(|from| {
-                match lowest_free_suffix(meta.name(), from, &mut folded) {
-                    Some((candidate, n)) => {
-                        floors.advance(meta.name(), n);
-                        candidate
+        .zip(neutral)
+        .map(|(meta, neutral)| {
+            let suffixed = {
+                let name = shown(meta, &neutral);
+                floors.floor_for(name).map(|from| {
+                    match lowest_free_suffix(name, from, &mut folded) {
+                        Some((candidate, n)) => {
+                            floors.advance(name, n);
+                            candidate
+                        }
+                        None => node_id_name(name, meta.id, &mut folded),
                     }
-                    None => node_id_name(meta, &mut folded),
-                }
-            });
-            RenderedChild { meta, suffixed }
+                })
+            };
+            RenderedChild {
+                meta,
+                rendered: suffixed.or(neutral),
+            }
         })
         .collect()
 }
@@ -639,8 +679,8 @@ fn disambiguate(children: Vec<&NodeMeta>) -> Vec<RenderedChild<'_>> {
 /// (`crates/core/src/seal/body.rs`). Leaving such a twin under its stored name
 /// instead would put two children back under one name, and the first by id — a
 /// grantee's, since it mints them — would take every lookup of it.
-fn node_id_name(meta: &NodeMeta, folded: &mut TakenNames) -> Zeroizing<String> {
-    let tagged = insert_before_extension(meta.name(), &format!(" {}", node_id_label(meta.id)));
+fn node_id_name(name: &str, id: NodeId, folded: &mut TakenNames) -> Zeroizing<String> {
+    let tagged = insert_before_extension(name, &format!(" {}", node_id_label(id)));
     // A sibling that stored this very spelling still gives way; the id is
     // unique, so numbering off it terminates.
     if folded.claim(&collation_key(&tagged)) {
@@ -1101,6 +1141,49 @@ mod tests {
             .iter()
             .map(|child| child.name().to_owned())
             .collect()
+    }
+
+    /// A peer commits any text string, and a host draws a listing as it is
+    /// given: one override reorders every name drawn around it.
+    #[test]
+    fn a_deceptive_stored_name_renders_stripped() {
+        let mut snap = Snapshot::new(id(0));
+        child(&mut snap, id(0), 1, "invoice\u{202E}cod.exe");
+
+        assert_eq!(rendered_names(&snap, id(0)), ["invoicecod.exe"]);
+    }
+
+    /// The strip can leave nothing a kernel carries, and a listing drops such a
+    /// name — the child would be unreachable, not merely misdrawn.
+    #[test]
+    fn a_name_of_nothing_but_deceptive_characters_renders_under_its_node_id() {
+        let mut snap = Snapshot::new(id(0));
+        child(&mut snap, id(0), 1, "\u{200B}\u{FEFF}");
+
+        assert_eq!(rendered_names(&snap, id(0)), [node_id_label(id(1))]);
+    }
+
+    /// The author-time law admits the joiner and the non-joiner, so the render
+    /// carries them. Stripping here would deny the same scripts a name again,
+    /// one tier down.
+    #[test]
+    fn the_render_keeps_the_joiner_and_the_non_joiner() {
+        let mut snap = Snapshot::new(id(0));
+        child(
+            &mut snap,
+            id(0),
+            1,
+            "\u{645}\u{6CC}\u{200C}\u{631}\u{648}\u{62F}.txt",
+        );
+        child(&mut snap, id(0), 2, "crew \u{1F468}\u{200D}\u{1F4BB}");
+
+        assert_eq!(
+            rendered_names(&snap, id(0)),
+            [
+                "\u{645}\u{6CC}\u{200C}\u{631}\u{648}\u{62F}.txt",
+                "crew \u{1F468}\u{200D}\u{1F4BB}"
+            ]
+        );
     }
 
     /// The two spellings render differently, so a host that spells either one
