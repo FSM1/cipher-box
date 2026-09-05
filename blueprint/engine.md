@@ -794,9 +794,13 @@ for an ordinary write
 ([ADR 0012](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0012-the-drain-carries-the-write-wave-forward.md)).
 A lagging node sits below that floor by construction, and carries no seed,
 grant blob or commitment for the stage to protect; its body opens under the
-seed the scope's history-link ratchet walks back to. Both paths hold the same
-conditions: the record carries no grant section, the read moves no floor, and
-the epoch is one the scope root's own ratchet reaches. A node the retained
+seed the scope's history-link ratchet walks back to. The re-seal relabels the
+node's epoch tag: the tag is a key-selection label that names the epoch whose
+read seed opens the body, and no reader treats it as authorship
+([ADR 0017](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0017-the-epoch-tag-is-a-key-selection-label-not-an-attestation.md)).
+Both paths hold the same conditions: the record carries no grant section, the
+read moves no floor, and the epoch is one the scope root's own ratchet
+reaches. A node the retained
 window no longer reaches is readable by nobody: it is reported unreachable and
 neither swept nor descended into, never treated as a trust violation of its own
 record. Runnable by any write-capable client; ordinary writes advance it for
@@ -884,6 +888,9 @@ primitive on a timer.
   duration" was wrong and is retired.
 - Revoked readers: stale interior metadata for a sweep-length window, never a
   live grant, never anything sealed after the cut.
+- Revoked writers: a revoked writer inserts a record only inside the name wave,
+  at a name the wave has not yet rotated. The inserted record keeps its epoch
+  label for a sweep-length window, and the label attests nothing.
 
 ## Pointer planes
 
