@@ -22,6 +22,11 @@ pub mod windows;
 /// refused where it belongs, by the engine's `ENOSPC`/`EDQUOT` equivalents.
 pub(crate) const ADVISORY_CAPACITY_BYTES: u64 = 1 << 40;
 
+/// The refusal every backend answers when the mount point holds something that
+/// is not this mount's to move. One message, because a member reads it out of
+/// whichever backend their device runs.
+pub(crate) const NOT_EMPTY: &str = "the mount point is not empty";
+
 /// How many invalidations may queue for the thread that pushes them at the
 /// kernel. A queue that overflows drops its oldest: a mount cannot make the
 /// kernel wait, and the cache lifetimes are the backstop.

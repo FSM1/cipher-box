@@ -46,7 +46,7 @@ use zeroize::Zeroizing;
 use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
 use crate::adapters::descriptor::OwnerOnlyDescriptor;
 use crate::adapters::{
-    ADVISORY_CAPACITY_BYTES, DOT_ENTRIES, Listed, NOTIFY_QUEUE_DEPTH, cursor_of,
+    ADVISORY_CAPACITY_BYTES, DOT_ENTRIES, Listed, NOT_EMPTY, NOTIFY_QUEUE_DEPTH, cursor_of,
 };
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
@@ -1644,8 +1644,11 @@ fn prepare(mountpoint: &Path) -> io::Result<()> {
             if !found.is_dir() {
                 return Err(io::Error::other("the mount point is not a directory"));
             }
+            // Junk the unix backends cover is refused here too: WinFsp makes
+            // the mount point directory itself, so clearing a leftover out of
+            // its way would mean deleting what it holds.
             if fs::read_dir(mountpoint)?.next().is_some() {
-                return Err(io::Error::other("the mount point is not empty"));
+                return Err(io::Error::other(NOT_EMPTY));
             }
             // An empty leftover directory holds nothing and is in WinFsp's way.
             fs::remove_dir(mountpoint)
@@ -2027,6 +2030,24 @@ mod tests {
 
         assert!(prepare(&at).is_err());
         assert!(theirs.exists(), "nothing under the mount point is deleted");
+    }
+
+    /// The unix backends mount over platform junk, because the mount covers it.
+    /// WinFsp is handed the path instead of the directory, so junk here keeps
+    /// the leftover in place and the mount is refused rather than the junk
+    /// deleted.
+    #[test]
+    fn a_mount_point_holding_platform_junk_is_refused_and_left_alone() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let at = home.path().join("CipherBox");
+        fs::create_dir(&at).expect("a mount point");
+        let junk = at.join("desktop.ini");
+        fs::write(&junk, b"what Explorer wrote by itself").expect("a junk file");
+
+        let refused = prepare(&at).expect_err("a leftover WinFsp cannot be given");
+        assert_eq!(refused.to_string(), "the mount point is not empty");
+        assert!(junk.exists(), "nothing under the mount point is deleted");
+        assert!(at.is_dir());
     }
 
     /// WinFsp makes the mount point itself, so an empty leftover is cleared out
