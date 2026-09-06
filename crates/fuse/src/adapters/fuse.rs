@@ -39,11 +39,13 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation, Publication};
-use crate::adapters::{ADVISORY_CAPACITY_BYTES, Listed, NOTIFY_QUEUE_DEPTH, cursor_of, stale};
+use crate::adapters::{
+    ADVISORY_CAPACITY_BYTES, Listed, NOT_EMPTY, NOTIFY_QUEUE_DEPTH, cursor_of, stale,
+};
 use crate::errno::errno_of;
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId};
-use crate::name::MAX_NAME_BYTES;
+use crate::name::{MAX_NAME_BYTES, is_platform_junk};
 use crate::ops::{Attributes, DirEntry, DirHandleId, OperationCore};
 use crate::spill::restrict_dir;
 
@@ -615,13 +617,28 @@ fn device_of(path: &Path) -> io::Result<u64> {
     fs::metadata(path).map(|found| found.dev())
 }
 
+/// Whether `mountpoint` holds nothing but platform junk — the names a file
+/// manager writes by itself ([`is_platform_junk`]). A name this projection
+/// cannot read as UTF-8 is not junk, so it occupies the mount point.
+fn holds_only_platform_junk(mountpoint: &Path) -> io::Result<bool> {
+    for entry in fs::read_dir(mountpoint)? {
+        let name = entry?.file_name();
+        if !name.to_str().is_some_and(is_platform_junk) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Make `mountpoint` fit to mount on: a private, empty directory, created if it
 /// is not there.
 ///
 /// v1 emptied whatever it found. Deleting a member's files is not a trade for a
 /// tidier mount, so anything already in the way refuses the mount instead — and
 /// a refusal costs the session nothing (blueprint/desktop.md "Lifecycle": mount
-/// failure never fails login).
+/// failure never fails login). Platform junk is the exception: Finder writes a
+/// `.DS_Store` into every folder it opens, so the mount covers one rather than
+/// refuse over a file the member never asked for.
 fn prepare(mountpoint: &Path) -> io::Result<()> {
     match fs::symlink_metadata(mountpoint) {
         Ok(found) => {
@@ -633,8 +650,8 @@ fn prepare(mountpoint: &Path) -> io::Result<()> {
             if !found.is_dir() {
                 return Err(io::Error::other("the mount point is not a directory"));
             }
-            if fs::read_dir(mountpoint)?.next().is_some() {
-                return Err(io::Error::other("the mount point is not empty"));
+            if !holds_only_platform_junk(mountpoint)? {
+                return Err(io::Error::other(NOT_EMPTY));
             }
         }
         // Owner-only from the moment it exists, not narrowed after: a
@@ -1388,6 +1405,30 @@ mod tests {
 
         assert!(prepare(&at).is_err());
         assert!(theirs.exists(), "nothing under the mount point is deleted");
+    }
+
+    /// Finder writes a `.DS_Store` into every folder it opens, the mount point
+    /// included while nothing is mounted on it. That file is no reason to
+    /// refuse the mount, and no reason to delete anything either.
+    #[test]
+    fn a_mount_point_holding_only_platform_junk_is_mounted_over() {
+        let home = tempfile::tempdir().expect("a temp dir");
+        let at = home.path().join("CipherBox");
+        fs::create_dir(&at).expect("a mount point");
+        let junk = at.join(".DS_Store");
+        fs::write(&junk, b"what Finder wrote by itself").expect("a junk file");
+
+        prepare(&at).expect("junk alone does not occupy the mount point");
+        assert!(
+            junk.exists(),
+            "the mount covers the junk file, not deletes it"
+        );
+
+        let theirs = at.join("their-file.txt");
+        fs::write(&theirs, b"not the mount's to delete").expect("a member's file");
+        let refused = prepare(&at).expect_err("a member's file beside the junk refuses");
+        assert_eq!(refused.to_string(), "the mount point is not empty");
+        assert!(theirs.exists());
     }
 
     /// A symlink at the mount point projects the vault wherever it points.
