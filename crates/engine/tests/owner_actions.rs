@@ -27,9 +27,9 @@ use zeroize::Zeroizing;
 
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
-    CLAIM_ID_LEN, EphemeralInvitee, GrantRow, InviteClaim, InviteFragment, InviteRecords,
-    InviteStore, MintedInvite, RecordedInvite, StagingInviteStore, import_contact, mint_grant_row,
-    mint_invite_grant, post_invite_claim, recipient_blinded_tag,
+    CLAIM_ID_LEN, Contact, ConvertedClaimRecord, EphemeralInvitee, GrantRow, InviteClaim,
+    InviteFragment, InviteRecords, InviteStore, MintedInvite, RecordedInvite, StagingInviteStore,
+    import_contact, mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
 };
 use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_child_envelope, author_scope_root_with_section,
@@ -609,6 +609,16 @@ fn recorded_links(device: &FakeDevice) -> Vec<RecordedInvite> {
         .links
 }
 
+/// The spent claims the owner records, which is what keeps a claim single-use
+/// against a transport that chooses what to redeliver.
+fn recorded_claims(device: &FakeDevice) -> Vec<ConvertedClaimRecord> {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(12));
+    block_on(StagingInviteStore::new(&device.staging_store, &enc, &entropy).load())
+        .expect("the records load")
+        .claims
+}
+
 /// The staging key the owner's invite records live under — the write a
 /// conversion makes durable before it acks the claim.
 fn invite_staging_key(device: &FakeDevice) -> Vec<u8> {
@@ -894,22 +904,12 @@ impl GrantScenario {
                 // Never all-zero, which the conversion refuses outright.
                 let mut claim_id = [1u8; CLAIM_ID_LEN];
                 claim_id[0] = index;
-                block_on(post_invite_claim(
-                    &self.recipient_device.mailbox,
-                    &owner,
-                    &invitee,
-                    // One HPKE ephemeral per post: a (key, nonce) pair must
-                    // never cover two plaintexts (blueprint/core.md).
-                    &[CLAIM_EPHEMERAL_BASE + index; 32],
-                    ENVELOPE_V,
-                    &InviteClaim {
-                        claim_id,
-                        scope_root_name: opened.scope_root_name.clone(),
-                        contact_code: contact_code(&scalar),
-                    },
-                    &format!("claim-{i}"),
-                ))
-                .expect("the claim posts");
+                let claim = InviteClaim {
+                    claim_id,
+                    scope_root_name: opened.scope_root_name.clone(),
+                    contact_code: contact_code(&scalar),
+                };
+                self.post_claim(&owner, &invitee, index, &claim, &format!("claim-{i}"));
                 EcdsaSigner::from_scalar(&scalar)
                     .expect("valid identity scalar")
                     .verifying_key()
@@ -917,6 +917,29 @@ impl GrantScenario {
                     .to_vec()
             })
             .collect()
+    }
+
+    /// Post one claim under `idempotency_key`. `index` picks this post's own
+    /// HPKE ephemeral: a (key, nonce) pair must never cover two plaintexts
+    /// (blueprint/core.md).
+    fn post_claim(
+        &self,
+        owner: &Contact,
+        invitee: &EphemeralInvitee,
+        index: u8,
+        claim: &InviteClaim,
+        idempotency_key: &str,
+    ) {
+        block_on(post_invite_claim(
+            &self.recipient_device.mailbox,
+            owner,
+            invitee,
+            &[CLAIM_EPHEMERAL_BASE + index; 32],
+            ENVELOPE_V,
+            claim,
+            idempotency_key,
+        ))
+        .expect("the claim posts");
     }
 }
 
@@ -4659,6 +4682,43 @@ fn a_conversion_pass_publishes_the_scope_root_once_for_every_claim_it_converts()
         inbox(&fx.owner_device).is_empty(),
         "and every claim is acked, because the one publish landed"
     );
+}
+
+/// A claimant that claims twice before the owner presses convert puts two items
+/// carrying one claim id in one pass. The pass converts against the records it
+/// has already made in memory, so the second item mints no second spent record
+/// and no second grant.
+#[test]
+fn one_claim_delivered_twice_in_one_pass_is_recorded_once() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    let claim = InviteClaim {
+        claim_id: [0x33; CLAIM_ID_LEN],
+        scope_root_name: opened.scope_root_name.clone(),
+        contact_code: contact_code(&RECIPIENT_SECRET),
+    };
+    fx.post_claim(&owner, &invitee, 0, &claim, "twice-a");
+    fx.post_claim(&owner, &invitee, 1, &claim, "twice-b");
+    assert_eq!(inbox(&fx.owner_device).len(), 2);
+    let before = sequence_at(&fx.world, &write_name(fx.folder));
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        recorded_claims(&fx.owner_device).len(),
+        1,
+        "one claim id spends one record, whatever the transport delivered"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &write_name(fx.folder)),
+        before + 1,
+        "and the pass publishes once"
+    );
+    assert!(inbox(&fx.owner_device).is_empty());
 }
 
 /// Ack-after-durable, at the batch scale: nothing this pass converted reached
