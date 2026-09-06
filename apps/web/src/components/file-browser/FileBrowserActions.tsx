@@ -173,8 +173,8 @@ export function FileBrowserActions({
 
       {menu.state !== null && (
         <ContextMenu
-          x={menu.state.x}
-          y={menu.state.y}
+          right={menu.state.right}
+          top={menu.state.top}
           label={`actions for ${menu.state.row.name}`}
           items={menuItems(menu.state.row)}
           onClose={menu.close}

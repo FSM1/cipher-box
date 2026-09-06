@@ -11,17 +11,18 @@ export interface ContextMenuItem {
 }
 
 interface ContextMenuProps {
-  x: number;
-  y: number;
+  /** Viewport x the menu's own right edge is placed on. */
+  right: number;
+  top: number;
   label: string;
   items: ContextMenuItem[];
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, label, items, onClose }: ContextMenuProps) {
+export function ContextMenu({ right, top, label, items, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const opener = useRef<Element | null>(null);
-  const [position, setPosition] = useState({ left: x, top: y });
+  const [position, setPosition] = useState({ left: right, top });
 
   const stops = useCallback(
     () => [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])],
@@ -42,12 +43,11 @@ export function ContextMenu({ x, y, label, items, onClose }: ContextMenuProps) {
     const menu = menuRef.current;
     if (menu === null) return;
     const { width, height } = menu.getBoundingClientRect();
-    const left = Math.max(EDGE_GAP, Math.min(x, window.innerWidth - width - EDGE_GAP));
-    const top = Math.max(EDGE_GAP, Math.min(y, window.innerHeight - height - EDGE_GAP));
-    setPosition((current) =>
-      current.left === left && current.top === top ? current : { left, top }
-    );
-  }, [x, y]);
+    setPosition({
+      left: clamp(right - width, window.innerWidth, width),
+      top: clamp(top, window.innerHeight, height),
+    });
+  }, [right, top]);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -106,6 +106,10 @@ export function ContextMenu({ x, y, label, items, onClose }: ContextMenuProps) {
       </div>
     </Portal>
   );
+}
+
+function clamp(at: number, viewport: number, size: number): number {
+  return Math.max(EDGE_GAP, Math.min(at, viewport - size - EDGE_GAP));
 }
 
 /** The menu roving-focus model: where a key moves focus, or `null` to ignore it. */

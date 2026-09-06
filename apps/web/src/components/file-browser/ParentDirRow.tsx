@@ -35,6 +35,8 @@ export function ParentDirRow({ onActivate }: ParentDirRowProps) {
           -
         </span>
       </div>
+      {/* No actions on `[..]`, but the grid still owes the header a fourth cell. */}
+      <div className="file-list-item-actions" role="gridcell" />
     </div>
   );
 }

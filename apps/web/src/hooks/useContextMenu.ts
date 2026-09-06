@@ -2,11 +2,11 @@ import { useCallback, useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { ListingRow } from '../vault/listing';
 
-/** Where the menu is anchored and which row it acts on. */
+/** The row the menu acts on, and the viewport point its top-right corner takes. */
 export interface ContextMenuState {
   row: ListingRow;
-  x: number;
-  y: number;
+  right: number;
+  top: number;
 }
 
 export interface ContextMenu {
@@ -22,14 +22,10 @@ export function useContextMenu(): ContextMenu {
     state,
     open: useCallback((event: MouseEvent<HTMLElement>, row: ListingRow) => {
       event.preventDefault();
-      // A keyboard activation carries no pointer position, so the menu anchors
-      // to the control rather than the viewport corner.
-      const anchor = event.detail === 0 ? event.currentTarget.getBoundingClientRect() : null;
-      setState({
-        row,
-        x: anchor === null ? event.clientX : anchor.left,
-        y: anchor === null ? event.clientY : anchor.bottom,
-      });
+      const anchor = event.currentTarget.closest('[role="row"]');
+      if (anchor === null) return;
+      const box = anchor.getBoundingClientRect();
+      setState({ row, right: box.right, top: box.bottom });
     }, []),
     close: useCallback(() => setState(null), []),
   };

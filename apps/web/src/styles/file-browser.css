@@ -74,11 +74,14 @@
   flex: 1;
   min-height: 0;
   border: var(--border-thickness) solid var(--color-green-primary);
+  /* The header's action column is empty, so only a fixed width in the same unit
+     as the other columns keeps the size and date headers over their cells. */
+  --file-list-menu-column: 48px;
 }
 
 .file-list-header {
   display: grid;
-  grid-template-columns: 1fr 120px 180px;
+  grid-template-columns: 1fr 120px 180px var(--file-list-menu-column);
   gap: var(--spacing-md);
   padding: var(--spacing-sm) var(--spacing-md);
   border-bottom: var(--border-thickness) solid var(--color-green-primary);
@@ -104,11 +107,11 @@
   overflow-y: auto;
 }
 
-/* Desktop is a 3-column grid; the two row wrappers collapse to lines on mobile. */
+/* Desktop is a 4-column grid; the two row wrappers collapse to lines on mobile. */
 .file-list-item {
   display: grid;
-  grid-template-columns: 1fr 120px 180px;
-  grid-template-areas: 'name size date';
+  grid-template-columns: 1fr 120px 180px var(--file-list-menu-column);
+  grid-template-areas: 'name size date menu';
   gap: var(--spacing-md);
   padding: var(--spacing-sm) var(--spacing-md);
   cursor: pointer;
@@ -173,6 +176,11 @@
   align-items: center;
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+}
+
+.file-list-item-actions {
+  grid-area: menu;
+  place-self: center end;
 }
 
 /* Queue marker after the name: [~] unpublished, [!] dead-lettered. */

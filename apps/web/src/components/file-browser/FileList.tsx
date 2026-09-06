@@ -54,6 +54,7 @@ export function FileList({
         <div className="file-list-header-date" role="columnheader">
           [MODIFIED]
         </div>
+        <div className="file-list-header-menu" role="columnheader" aria-label="actions" />
       </div>
       <div className="file-list-body" role="rowgroup">
         {showParentRow && <ParentDirRow onActivate={onNavigateUp} />}

@@ -1190,32 +1190,87 @@ describe('the text editor', () => {
   });
 });
 
+const ROW = { right: 640, bottom: 96 };
+const MENU = { width: 180, height: 120 };
+
+/** jsdom measures every box as zero, so the anchor maths needs stated numbers. */
+function measure(row: typeof ROW, menu: typeof MENU): void {
+  const rowRect = DOMRect.fromRect({ x: row.right, y: row.bottom });
+  const menuRect = DOMRect.fromRect(menu);
+  const real = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement
+  ): DOMRect {
+    const id = this.dataset.testid;
+    if (id === 'file-list-item') return rowRect;
+    if (id === 'context-menu') return menuRect;
+    return real.call(this);
+  });
+}
+
 describe('the row action menu', () => {
-  it('anchors to the control when opened without a pointer position', async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('puts the menu right edge on the row right edge for a right-click', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
     await landSnapshot(engine, listing());
+    measure(ROW, MENU);
 
-    const control = screen.getByLabelText('actions for notes.txt');
-    control.getBoundingClientRect = () => ({ left: 120, bottom: 48 }) as DOMRect;
-    fireEvent.click(control, { detail: 0, clientX: 0, clientY: 0 });
+    // Chromium reports `detail` 0 on a right-click, and the pointer lands anywhere.
+    const row = screen.getAllByTestId('file-list-item')[1];
+    fireEvent.contextMenu(row, { detail: 0, clientX: 12, clientY: 400 });
 
     const menu = screen.getByTestId('context-menu');
-    expect(menu.style.left).toBe('120px');
-    expect(menu.style.top).toBe('48px');
+    expect(menu.style.left).toBe(`${ROW.right - MENU.width}px`);
+    expect(menu.style.top).toBe(`${ROW.bottom}px`);
   });
 
-  it('anchors to the pointer on a right-click', async () => {
+  it('opens at that same place from the action button and from the keyboard', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+    measure(ROW, MENU);
+    const anchored = { left: `${ROW.right - MENU.width}px`, top: `${ROW.bottom}px` };
+
+    const control = screen.getByLabelText('actions for notes.txt');
+    fireEvent.click(control, { detail: 1 });
+    expect(screen.getByTestId('context-menu').style).toMatchObject(anchored);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('context-menu')).toBeNull());
+
+    // A keyboard activation of a button reaches the page as a click of detail 0.
+    fireEvent.click(control, { detail: 0 });
+    expect(screen.getByTestId('context-menu').style).toMatchObject(anchored);
+  });
+
+  it('holds the menu inside the viewport when the row sits on the edge', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+    measure({ right: window.innerWidth - 4, bottom: window.innerHeight - 8 }, MENU);
+
+    fireEvent.contextMenu(screen.getAllByTestId('file-list-item')[1], { detail: 0 });
+
+    const menu = screen.getByTestId('context-menu');
+    expect(menu.style.left).toBe(`${window.innerWidth - MENU.width - 8}px`);
+    expect(menu.style.top).toBe(`${window.innerHeight - MENU.height - 8}px`);
+  });
+
+  it('gives the action button the last cell of the row', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
     await landSnapshot(engine, listing());
 
     const row = screen.getAllByTestId('file-list-item')[1];
-    fireEvent.contextMenu(row, { detail: 1, clientX: 200, clientY: 90 });
-
-    const menu = screen.getByTestId('context-menu');
-    expect(menu.style.left).toBe('200px');
-    expect(menu.style.top).toBe('90px');
+    const cells = [...row.querySelectorAll('[role="gridcell"]')];
+    expect(cells).toHaveLength(4);
+    expect(cells[cells.length - 1].contains(screen.getByLabelText('actions for notes.txt'))).toBe(
+      true
+    );
   });
 
   it('leaves the action button its own keyboard activation', async () => {
