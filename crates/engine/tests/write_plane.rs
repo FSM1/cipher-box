@@ -11953,13 +11953,25 @@ fn a_set_focus_command_paints_the_folders_unprojected_rows() {
 
 /// Re-opening a folder inside the staleness threshold renders the state already
 /// held, so a host that navigates in a loop costs the record plane nothing.
+///
+/// The row here has published no version, so it projects no size however often a
+/// pass resolves it. Only the staleness stamp the pass leaves can keep the
+/// repeat visit off the record plane.
 #[test]
 fn a_repeat_set_focus_inside_the_threshold_resolves_no_file_again() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
-    let served: Vec<u8> = (0..48u8).collect();
-    let (_engine_a, _events_a, _tasks_a, node) = publish_clip(&world, &blocks, &served);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "unwritten.bin".to_owned(),
+        kind: NodeKind::File,
+    }))
+    .expect("the create commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let node = child_id(&engine_a, ROOT, "unwritten.bin");
 
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
@@ -11982,6 +11994,11 @@ fn a_repeat_set_focus_inside_the_threshold_resolves_no_file_again() {
         after_first > before,
         "the first navigation resolved the row it listed"
     );
+    assert_eq!(
+        block_on(engine_b.view()).unwrap().attrs(node).unwrap().size,
+        None,
+        "an unwritten row projects no size, so no size filter holds it back"
+    );
 
     world
         .scheduler
@@ -11991,7 +12008,7 @@ fn a_repeat_set_focus_inside_the_threshold_resolves_no_file_again() {
     assert_eq!(
         resolves(),
         after_first,
-        "the view has not moved, so the repeat visit resolves nothing"
+        "the stamp the first pass left keeps the repeat visit off the record plane"
     );
 }
 
