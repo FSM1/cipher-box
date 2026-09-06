@@ -239,8 +239,9 @@ struct RepublishBase {
     epoch_tag_unknown: PreservedFields,
     /// `None` when the root is held keyless — no seed to sign a republish under.
     write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
-    /// The CAS lower bound the republish must land above, `Some` only where the
-    /// body is not the one the record plane serves
+    /// The CAS lower bound the republish must land above: the sequence a landed
+    /// publish at this name already spent ([`RootPublish::run`]), or the one the
+    /// record plane's own refused copy sits at
     /// ([`OwnerRotationNet::last_known_good_root`]).
     min_current_sequence: Option<u64>,
 }
@@ -1781,13 +1782,19 @@ where
 
     /// Author `record`'s envelope over `current` — the record it replaces — dry
     /// run it, and CAS-publish it register-first at `name`.
+    ///
+    /// A landed publish hands back the base the record it just authored
+    /// republishes from: the read body and the preserved fields are carried
+    /// forward byte for byte, so the record now standing at `name` has the same
+    /// ones, and the CAS bound rises to the sequence this publish spent
+    /// ([`GatedRoots`]).
     async fn run(
         &self,
         name: &IpnsName,
         record: &ResealedScopeRoot,
         override_seed: &[u8; SECRET_LEN],
         current: RepublishBase,
-    ) -> Result<(), RotationPublishError> {
+    ) -> Result<RepublishBase, RotationPublishError> {
         // `check_publishable`'s floor read must still hold when this function
         // signs the record ([`floor::WriteEpochLease`]).
         let _write_lease = floor::acquire_write_epoch_lease(&record.scope_id)
@@ -1805,8 +1812,8 @@ where
                 read_key: &read_key,
                 nonce: &nonce,
                 body: &current.read_body,
-                carried_unknown: current.unknown,
-                carried_epoch_tag_unknown: current.epoch_tag_unknown,
+                carried_unknown: current.unknown.clone(),
+                carried_epoch_tag_unknown: current.epoch_tag_unknown.clone(),
             },
             name,
             &record.section,
@@ -1846,7 +1853,17 @@ where
         .map_err(record_publish_verdict)?;
 
         match receipt.outcome {
-            PublishOutcome::Published { .. } => Ok(()),
+            // The CAS sequence a republish takes is the durable floor plus one,
+            // and the floor only moves when a **read** adopts. A second publish
+            // at this name in the same pass would therefore re-CAS at the
+            // sequence this one spent, so the bound rides in the base instead —
+            // pass-local, because raising the floor here would make this
+            // device's own next resolve read its record as current rather than
+            // adopt the epoch it just cut (`net/resolve.rs`).
+            PublishOutcome::Published { sequence } => Ok(RepublishBase {
+                min_current_sequence: Some(sequence),
+                ..current
+            }),
             PublishOutcome::LostRace { .. } => Err(RotationPublishError::LostRace),
             // Acked but not read back as ours: nothing is proven durable, and
             // re-publishing is idempotent-in-sequence.
@@ -1900,9 +1917,14 @@ where
                     .map_err(|verdict| publish_verdict(verdict.into()))?,
             ),
         };
-        self.root_publish()
+        let published = self
+            .root_publish()
             .run(&name, record, &override_seed, current)
-            .await
+            .await?;
+        // Only on a landed publish: a race the record plane refused leaves the
+        // slot empty, so the next publish re-resolves.
+        self.gated.park(name, published);
+        Ok(())
     }
 }
 
@@ -2330,7 +2352,9 @@ where
         let override_seed = Zeroizing::new(*grant.read_scope_seed());
 
         // The read [`Self::resolve_plan`] gated parks the body and the envelope
-        // fields a republish preserves ([`GatedRoots`]).
+        // fields a republish preserves ([`GatedRoots`]). A grantee republishes
+        // over the plan its own read gated and over nothing else, so the base
+        // the publish hands back is dropped rather than re-parked.
         let current = self
             .gated
             .take(&name)
@@ -2341,7 +2365,8 @@ where
         let floors = self.granted_floors(granted);
         self.root_publish(&floors)
             .run(&name, record, &override_seed, current)
-            .await
+            .await?;
+        Ok(())
     }
 }
 
@@ -7690,6 +7715,61 @@ mod tests {
             Err(RotationPublishError::LostRace),
             "a lost CAS race is reported, never a silent drop",
         );
+    }
+
+    /// The publish hands its base back, so a pass that republishes one name
+    /// reads the record once: a fanout GET to gate it, then one confirm read per
+    /// publish. Without the hand-off the second publish gates the record again.
+    #[test]
+    fn a_second_publish_at_one_name_in_one_pass_re_reads_nothing() {
+        let root = vault_root(SCOPE, Vec::new());
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        let net = harness.net(&[]);
+        let key = root.name.as_str();
+        let confirm = harness.store.endpoints().len();
+
+        block_on(net.publish_scope_root(&cut(&root, SCOPE, OWNER_ROOT_EPOCH + 1)))
+            .expect("the first cut lands");
+        let gated = harness.store.get_count(key);
+        block_on(net.publish_scope_root(&cut(&root, SCOPE, OWNER_ROOT_EPOCH + 2)))
+            .expect("the second cut lands");
+
+        assert_eq!(
+            gated,
+            2 * confirm,
+            "the first publish gates the record and then confirms its own",
+        );
+        assert_eq!(
+            harness.store.get_count(key) - gated,
+            confirm,
+            "the second publish only confirms — it re-reads no record",
+        );
+        let (verified, envelope) = published_head(&harness, &root.name);
+        assert_eq!(
+            verified.sequence, 3,
+            "and it CASes above the sequence the first publish spent",
+        );
+        assert_eq!(envelope.epoch, OWNER_ROOT_EPOCH + 2);
+    }
+
+    /// The slot holds only a base the record plane accepted. A publish the race
+    /// beat leaves it empty, so the next publish re-resolves rather than
+    /// republishing over a record another writer has already superseded.
+    #[test]
+    fn a_publish_the_race_beat_parks_nothing() {
+        let root = vault_root(SCOPE, Vec::new());
+        let winner = record_for(&SCOPE, &root.head_cid_str, 9);
+        let harness = Harness::racing(root.name.as_str(), winner);
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        let net = harness.net(&[]);
+
+        assert_eq!(
+            block_on(net.publish_scope_root(&cut(&root, SCOPE, OWNER_ROOT_EPOCH + 1))),
+            Err(RotationPublishError::LostRace),
+        );
+
+        assert!(net.gated.take(&root.name).is_none());
     }
 
     // --- The grantee arm: the flat scope-exit cut --------------------------

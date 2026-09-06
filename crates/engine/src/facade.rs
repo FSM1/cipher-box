@@ -27,8 +27,9 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinIndex, ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    MAX_READ_SEALED_BYTES, ReadBody, Version, open_content_key, seal_content_key, sign_grant_set,
+    BinIndex, ChildScopeRef, GrantLedgerEntry, GrantSection, MAX_READ_SEALED_BYTES,
+    Permission as CommittedPermission, ReadBody, Version, open_content_key, seal_content_key,
+    sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -63,15 +64,15 @@ use crate::grants::received_status::{
 };
 use crate::grants::{
     ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
-    CreateGrantError, EphemeralInvitee, GrantRecipient, GranteeScopePlan, InviteClaim, InviteError,
-    InviteFragment, InviteMintError, InviteMintPlan, InviteStore, InviteStoreError,
-    MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PendingInviteLink,
-    PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, SharePointer,
-    StagingContactStore, StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK,
-    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
-    link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
-    post_invite_claim, post_share_pointer, recipient_blinded_tag, resolve_recipient,
-    row_is_owner_attested,
+    ConvertedClaimRecord, CreateGrantError, EphemeralInvitee, GrantRecipient, GranteeScopePlan,
+    InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan, InviteStore,
+    InviteStoreError, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
+    PendingInviteLink, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
+    ResolutionClass, SharePointer, StagingContactStore, StagingInviteStore,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, convert_invite_claim, create_grant,
+    enforce_committed_ledger, import_contact, insert_child, link_budget_full, locate_invite_link,
+    mint_invite_link, partition_scope_links, post_invite_claim, post_share_pointer,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::{poll_verified, post_sealed};
 use crate::name::{NameError, is_emittable, validate_name};
@@ -7807,13 +7808,17 @@ where {
     /// signature over the set it is changing, and the links it converts against
     /// come from the owner's durable records, never from an item.
     ///
-    /// Per item, in order — convert, publish, post the claimant their pointer,
-    /// record the spent claim, ack. A seam failure anywhere in that sequence
-    /// leaves the item unacked and unrecorded, so the pass moves on and reports
-    /// the failure at the end rather than letting one undeliverable claim block
-    /// every later one. The publish is deliberately outside
-    /// [`Self::bounded_rotation`]: a lost race is re-driven by the next pass
-    /// against a re-resolved set, never retried against a stale one.
+    /// Two passes over the inbox. The first converts every item against the set
+    /// the pass is accumulating in memory and publishes that set **once**; the
+    /// second posts each claimant their pointer, records the spent claim and
+    /// acks. Ack-after-durable holds across the split: nothing is acked until
+    /// the one publish landed and that item's own pointer and record are
+    /// durable, so a failure anywhere leaves its claim un-acked and
+    /// re-convertible on the next press. A seam failure on one item does not
+    /// block the rest — the pass moves on and reports the first failure at the
+    /// end. The publish is deliberately outside [`Self::bounded_rotation`]: a
+    /// lost race is re-driven by the next pass against a re-resolved set, never
+    /// retried against a stale one.
     async fn convert_invite_claims(&self, node: NodeId) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
@@ -7868,14 +7873,31 @@ where {
         enforce_committed_ledger(&current.commitment, &current.grant_ledger)
             .map_err(|v| EngineError::from_invite(InviteError::Authority(v)))?;
 
+        /// One converted claim, held from the conversion pass to the delivery
+        /// pass. The set publishes once for the whole pass, so a delivery reads
+        /// nothing off the record its own item converted against.
+        struct Delivery {
+            claimant: Contact,
+            permission: CommittedPermission,
+            outcome: ClaimOutcome,
+            record: Option<ConvertedClaimRecord>,
+            item_id: String,
+        }
+
         let mut failure: Option<EngineError> = None;
+        // The spent set this pass converts against: the durable records plus
+        // what the pass has already converted, so two items carrying one claim
+        // cannot both mint a record. It reaches [`records`] — and durability —
+        // only in the delivery pass, one item at a time.
+        let mut spent = records.claims.clone();
+        let mut deliveries: Vec<Delivery> = Vec::new();
         for item in &items {
             let converted = convert_invite_claim(
                 &authority,
                 &bound_scope(&target, &current, &commitment_sig)?,
                 &current.pointer_read_key,
                 &records.links,
-                &records.claims,
+                &spent,
                 item,
                 self.seams.scheduler.now(),
             );
@@ -7914,8 +7936,15 @@ where {
                     | InviteError::LinkNotCommitted
                     | InviteError::LinkExpired,
                 ) => continue,
-                // The set cannot take another grant, or would not publish.
-                Err(e) => return Err(EngineError::from_invite(e)),
+                // A verdict on the set this item proposed. The pass stops
+                // converting but still publishes what it converted, which is
+                // the last set this owner signed: to discard it would strand
+                // those claimants on every later press, where this item refuses
+                // again.
+                Err(e) => {
+                    failure.get_or_insert(EngineError::from_invite(e));
+                    break;
+                }
             };
 
             // Ahead of the publish: `revoke`/`downgrade` resolve their recipient
@@ -7934,40 +7963,62 @@ where {
             }
 
             if outcome != ClaimOutcome::Unchanged {
-                match self
-                    .publish_converted_claim(session, &net, &target, &current, &commitment, &ledger)
-                    .await
+                // The next item converts against what this one changed, and
+                // `convert_invite_claim` authorises against the signature over
+                // the set it is handed — so the accumulating set is re-signed
+                // per item and published once, at the end of the pass.
+                commitment_sig = sign_grant_set(session.identity(), &commitment).map_err(|_| {
+                    EngineError::MalformedInput {
+                        check: "converted-commitment-unsignable",
+                    }
+                })?;
+                current.commitment_sig = commitment_sig.to_compact();
+                current.commitment = commitment;
+                current.grant_ledger = ledger;
+            }
+            if let Some(record) = record {
+                spent.push(record);
+            }
+            deliveries.push(Delivery {
+                claimant,
+                permission: row.commitment_entry.permission,
+                outcome,
+                record,
+                item_id: item.item_id.clone(),
+            });
+        }
+
+        let changed = deliveries
+            .iter()
+            .any(|delivery| delivery.outcome != ClaimOutcome::Unchanged);
+        if changed
+            && let Err(e) = self
+                .publish_converted_set(session, &net, &target, &current, &commitment_sig)
+                .await
+        {
+            // Nothing this pass converted reached the record plane, so no claim
+            // is acked and no spent record is made durable.
+            return Err(failure.unwrap_or(e));
+        }
+
+        for delivery in deliveries {
+            // The owner's own grant decision, and the only evidence of one this
+            // pass holds: the conversion **minted** this row, and the set
+            // carrying it landed. `Upgraded` and `Unchanged` both turn on a row
+            // the resolved record already carried, which a committed write
+            // grantee authors, so neither may lift a cut
+            // (`rotation::record_grant_floor`).
+            if delivery.outcome == ClaimOutcome::Granted {
+                if let Err(e) = record_grant_floor(
+                    &self.seams.floor_store,
+                    &target.scope.scope_id,
+                    &delivery.claimant.enc_subkey(),
+                    current.current_read_epoch,
+                )
+                .await
                 {
-                    Ok(signed) => {
-                        current.commitment_sig = signed.to_compact();
-                        commitment_sig = signed;
-                        current.commitment = commitment;
-                        current.grant_ledger = ledger;
-                        // The owner's own grant decision, and the only evidence
-                        // of one this pass holds: the conversion **minted** this
-                        // row, and the set carrying it landed. `Upgraded` and
-                        // `Unchanged` both turn on a row the resolved record
-                        // already carried, which a committed write grantee
-                        // authors, so neither may lift a cut
-                        // (`rotation::record_grant_floor`).
-                        if outcome == ClaimOutcome::Granted {
-                            if let Err(e) = record_grant_floor(
-                                &self.seams.floor_store,
-                                &target.scope.scope_id,
-                                &claimant.enc_subkey(),
-                                current.current_read_epoch,
-                            )
-                            .await
-                            {
-                                failure.get_or_insert(EngineError::from_seam(e));
-                                continue;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        failure.get_or_insert(e);
-                        continue;
-                    }
+                    failure.get_or_insert(EngineError::from_seam(e));
+                    continue;
                 }
             }
 
@@ -7982,12 +8033,12 @@ where {
                 scope_root_name: current.commitment.ipns_name.clone(),
                 sharer_identity_pk: owner_identity.to_sec1(),
                 display_name: display_name.clone(),
-                permission: row.commitment_entry.permission,
+                permission: delivery.permission,
             };
             if let Err(e) = post_sealed(
                 api.as_ref(),
-                &claimant.enc_subkey(),
-                &claimant.identity_pk(),
+                &delivery.claimant.enc_subkey(),
+                &delivery.claimant.identity_pk(),
                 &ephemeral,
                 ENVELOPE_V,
                 session.identity(),
@@ -8000,18 +8051,18 @@ where {
                 continue;
             }
 
-            if let Some(record) = record {
+            if let Some(record) = delivery.record {
                 records.claims.push(record);
                 if let Err(e) = store.persist(&records).await {
-                    // The held set is what the next item converts against, so it
-                    // must not carry a record the durable one does not.
+                    // A record the durable set does not carry must not stand in
+                    // the held one either — the next press converts against it.
                     records.claims.pop();
                     failure.get_or_insert(EngineError::from_invite_store(e));
                     continue;
                 }
             }
 
-            if let Err(e) = api.ack(&item.item_id).await {
+            if let Err(e) = api.ack(&delivery.item_id).await {
                 failure.get_or_insert(EngineError::from_seam(e));
             }
         }
@@ -8021,24 +8072,19 @@ where {
         }
     }
 
-    /// Publish the set one converted claim produced at the scope root it belongs
-    /// to: owner-re-sign, re-seal at the **same** read epoch (a claim cuts no
-    /// key, so it mints no history link), publish, and hand back the signature
-    /// the published set now carries.
-    async fn publish_converted_claim(
+    /// Publish the set a whole conversion pass produced at the scope root it
+    /// belongs to: re-seal at the **same** read epoch (a claim cuts no key, so
+    /// it mints no history link) and publish. `commitment_sig` is the owner's
+    /// signature over `current.commitment`, which the pass already made to
+    /// authorise each conversion against the set the one before it left.
+    async fn publish_converted_set(
         &self,
         session: &SessionIdentity,
         net: &OwnerNet<'_, T>,
         target: &OwnerScope,
         current: &CascadeTarget,
-        commitment: &GrantSetCommitment,
-        ledger: &[GrantLedgerEntry],
-    ) -> Result<EcdsaSignature, EngineError> {
-        let signature = sign_grant_set(session.identity(), commitment).map_err(|_| {
-            EngineError::MalformedInput {
-                check: "converted-commitment-unsignable",
-            }
-        })?;
+        commitment_sig: &EcdsaSignature,
+    ) -> Result<(), EngineError> {
         let section = reseal_scope_root(
             &mut SharedEntropy(&self.entropy),
             &ScopeRootIdentity {
@@ -8064,9 +8110,9 @@ where {
                 pointer_read_key: &current.pointer_read_key,
             },
             &CommittedSet {
-                commitment,
-                commitment_sig: &signature.to_compact(),
-                grant_ledger: ledger,
+                commitment: &current.commitment,
+                commitment_sig: &commitment_sig.to_compact(),
+                grant_ledger: &current.grant_ledger,
                 direct_child_scope_index: &current.direct_child_scope_index,
                 revoked_recipients: &[],
             },
@@ -8088,7 +8134,7 @@ where {
                 false => EngineError::TrustViolation { message },
             }
         })?;
-        Ok(signature)
+        Ok(())
     }
 
     /// This session's durable received-share bookmarks.
