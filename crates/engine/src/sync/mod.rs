@@ -31,6 +31,7 @@ pub(crate) mod provision;
 pub mod rebase;
 pub mod record;
 pub(crate) mod refresh;
+pub(crate) mod render;
 pub(crate) mod scope_exit_debt;
 pub mod staging;
 pub mod staleness;

@@ -466,6 +466,7 @@ fn an_import_the_book_cannot_take_is_not_reported_as_imported() {
     let book = StagingContactStore::new(&device.staging_store, &enc_subkey, &entropy);
     device
         .staging_store
+        .inner()
         .interrupt_staged_write_after(book.staging_key(), 0);
 
     let result = block_on(engine.command(Command::ImportContact {

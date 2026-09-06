@@ -2736,6 +2736,7 @@ fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
         // staging store, died the instant after that leaf uploaded.
         alice
             .staging_store
+            .inner()
             .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, interrupted as u64);
         write_file(
             &mut engine,
@@ -2808,6 +2809,7 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
         let (root_cid, leaves) = staged_version(&alice);
         alice
             .staging_store
+            .inner()
             .interrupt_staged_removal_after(&leaves[interrupted], 0);
         tick(&world, &engine, &mut tasks);
 
@@ -2879,7 +2881,10 @@ fn a_re_uploaded_leaf_never_pulls_the_mark_back_over_leaves_it_covers() {
     blocks.refuse_upload(Box::new(move |block| {
         (block == stop_at).then(unreachable_upload)
     }));
-    alice.staging_store.drop_staged_removal_after(&leaves[0], 0);
+    alice
+        .staging_store
+        .inner()
+        .drop_staged_removal_after(&leaves[0], 0);
 
     tick(&world, &engine, &mut tasks);
 
@@ -9271,7 +9276,7 @@ fn a_cancel_that_cannot_dequeue_retires_nothing_and_leaves_the_op_publishable() 
     }
     assert!(uploads(&alice) > 0);
 
-    alice.staging_store.fail_remove_op();
+    alice.staging_store.inner().fail_remove_op();
     assert!(
         block_on(engine.command(Command::CancelUpload { op_id })).is_err(),
         "the cancel could not remove the op, so it did not happen"
@@ -9330,7 +9335,7 @@ fn the_drains_cancel_retire_is_gated_on_the_op_leaving_the_durable_queue() {
 
     // The drain now stops on the claim with no removal available to it, which
     // is indistinguishable from the op never having left the queue.
-    alice.staging_store.fail_remove_op();
+    alice.staging_store.inner().fail_remove_op();
     poll_tasks_until_parked(&mut tasks);
 
     assert_eq!(
@@ -9483,7 +9488,10 @@ fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
         uploads(&alice) > 0,
         "the cancel must land mid-transfer, not before it started"
     );
-    alice.staging_store.drop_staged_removal_after(&stranded, 0);
+    alice
+        .staging_store
+        .inner()
+        .drop_staged_removal_after(&stranded, 0);
     block_on(engine.command(Command::CancelUpload { op_id })).unwrap();
     assert!(
         block_on(alice.staging_store.staged_keys())
@@ -10785,6 +10793,7 @@ fn a_placement_changed_mid_upload_resumes_only_where_the_bytes_already_are() {
         // that leaf uploaded and the two before it were released.
         alice
             .staging_store
+            .inner()
             .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, 2);
         write_file(
             &mut engine,
@@ -11220,6 +11229,7 @@ fn a_dual_mark_names_the_mirror_only_where_the_mirror_took_the_bytes() {
         // The process dies two leaves in, with those two already released.
         alice
             .staging_store
+            .inner()
             .interrupt_staged_write_family_after(UPLOAD_MARK_PREFIX, 2);
         write_file(
             &mut engine,
@@ -11945,10 +11955,10 @@ fn a_drain_tick_enumerates_the_staged_key_set_once() {
         &(0..200u8).collect::<Vec<u8>>(),
     )
     .unwrap();
-    let before = alice.staging_store.key_listings();
+    let before = alice.staging_store.inner().key_listings();
     tick(&world, &engine, &mut tasks);
     assert_eq!(
-        alice.staging_store.key_listings() - before,
+        alice.staging_store.inner().key_listings() - before,
         1,
         "a publishing tick lists once"
     );
@@ -11965,10 +11975,10 @@ fn a_drain_tick_enumerates_the_staged_key_set_once() {
         &(0..200u8).collect::<Vec<u8>>(),
     )
     .unwrap();
-    let before = alice.staging_store.key_listings();
+    let before = alice.staging_store.inner().key_listings();
     let (_, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert_eq!(
-        alice.staging_store.key_listings() - before,
+        alice.staging_store.inner().key_listings() - before,
         passes as u64,
         "a dead-lettering tick lists once too"
     );
@@ -13069,6 +13079,7 @@ fn a_prune_whose_ledger_write_fails_leaves_the_history_standing_and_still_reclai
     let retired_before = retire_targets(&alice).len();
     alice
         .staging_store
+        .inner()
         .interrupt_staged_write_after(&retire_ledger_key(&doomed), 0);
 
     stage_prune(&alice, &world, file, 1);

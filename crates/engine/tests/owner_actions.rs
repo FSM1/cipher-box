@@ -4980,6 +4980,7 @@ fn a_record_write_that_fails_after_the_publish_leaves_its_claim_convertible() {
     let before = sequence_at(&fx.world, &name);
     fx.owner_device
         .staging_store
+        .inner()
         .interrupt_staged_write_after(&invite_staging_key(&fx.owner_device), 0);
 
     assert!(

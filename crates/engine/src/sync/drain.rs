@@ -100,6 +100,7 @@ use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, decode_queue, enclosing_scope_root, replay,
 };
 use crate::sync::record::{RecordReader, RecordSeal};
+use crate::sync::render::BaseSnapshot;
 use crate::sync::scope_exit_debt::{owe_cut, settle_owed_cuts};
 use crate::sync::staging::{
     DEAD_LETTER_NOTICES_PREFIX, LiveBlocks, Preservation, PreservedBounds, preserve_dead_letter,
@@ -981,7 +982,7 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// Seal nonces enter as injected entropy; the drain reads no RNG of its own.
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
     /// The gate-passing base snapshot, repainted in place on each publish.
-    pub(crate) base: &'a RefCell<Snapshot>,
+    pub(crate) base: &'a BaseSnapshot,
     /// The live held-record set the liveness loop keeps alive.
     pub(crate) held: &'a RefCell<HeldRecords>,
     /// The over-quota hold, shared with the facade's read surface. It clears

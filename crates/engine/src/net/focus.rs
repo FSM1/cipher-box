@@ -22,9 +22,9 @@ use crate::gate::{Adopted, GateError, RejectionReason};
 use crate::grants::TooLong;
 use crate::grants::grafted::{BookmarkedScopeRoots, ClaimRecord, GraftedPlane, PlaneSplit};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
-use crate::sync::model::Snapshot;
 use crate::sync::project::{UnlinkedChild, merge_folder, project_child_version};
 use crate::sync::refresh::RefreshVerdict;
+use crate::sync::render::BaseSnapshot;
 use crate::sync::tick::ResolveMode;
 
 /// What one focus-folder pass did. The verdict is the pass's own read legs, kept
@@ -94,7 +94,7 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     pub(crate) floors: &'a F,
     pub(crate) gateway: &'a Gateway,
     /// The gate-passing base snapshot, merged into in place.
-    pub(crate) base: &'a RefCell<Snapshot>,
+    pub(crate) base: &'a BaseSnapshot,
     /// Where a fail-closed rejection on a focused folder is surfaced.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
     /// The scope every focus folder is sealed under.
@@ -322,6 +322,8 @@ where
 mod tests {
     use super::*;
 
+    use crate::sync::model::Snapshot;
+
     use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
@@ -383,7 +385,7 @@ mod tests {
         http: ScriptedHttp,
         gateway: Gateway,
         floors: InMemoryFloorStore,
-        base: RefCell<Snapshot>,
+        base: BaseSnapshot,
         read_seed: Zeroizing<[u8; 32]>,
         head_block: Vec<u8>,
         /// The captures the last pass reported, so a test can hold the
@@ -442,7 +444,7 @@ mod tests {
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
                 },
                 floors: InMemoryFloorStore::default(),
-                base: RefCell::new(Snapshot::new(NodeId(OWN_ROOT))),
+                base: BaseSnapshot::new(Snapshot::new(NodeId(OWN_ROOT))),
                 read_seed: Zeroizing::new(READ_SCOPE_SEED),
                 head_block,
                 captured: RefCell::new(Vec::new()),

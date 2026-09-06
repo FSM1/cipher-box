@@ -26,8 +26,8 @@ use crate::gate::floor::PendingSequenceRaise;
 use crate::gate::{Adopted, GateError, GateRejection, PendingAdoption, RejectionReason};
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
-use crate::sync::model::Snapshot;
 use crate::sync::project::{FolderMerge, merge_root};
+use crate::sync::render::BaseSnapshot;
 use crate::sync::tick::ResolveMode;
 
 /// Runs the adoption gate over a fetched record. The concrete implementation
@@ -534,7 +534,7 @@ where
 /// Non-await by construction — the short borrows never span an `.await`
 /// (facade single-threaded executor rule).
 pub(crate) fn refresh_base_from_resolved(
-    base: &RefCell<Snapshot>,
+    base: &BaseSnapshot,
     root: NodeId,
     resolved: &Resolved,
 ) -> FolderMerge {
@@ -1475,8 +1475,6 @@ mod tests {
 
         use super::{GateRejection, GateStage, RejectionReason, ResolveOutcome};
 
-        use core::cell::RefCell;
-
         use cipherbox_core::error::TrustViolation;
         use cipherbox_core::seal::{ChildRef, NodeKind, PreservedFields, ReadBody};
 
@@ -1485,6 +1483,7 @@ mod tests {
         use crate::sync::model::Snapshot;
         use crate::sync::overlay::apply_overlay;
         use crate::sync::project::project_child_version;
+        use crate::sync::render::BaseSnapshot;
 
         fn adopted_with_one_child(child_id: [u8; 16]) -> Adopted {
             Adopted {
@@ -1509,7 +1508,7 @@ mod tests {
         #[test]
         fn refresh_base_from_a_newer_adopted_updates_the_cell() {
             let root = NodeId([0u8; 16]);
-            let cell = RefCell::new(Snapshot::new(root));
+            let cell = BaseSnapshot::new(Snapshot::new(root));
             let child_id = [7u8; 16];
 
             assert!(
@@ -1532,7 +1531,7 @@ mod tests {
         fn a_root_advance_keeps_the_values_the_root_body_cannot_express() {
             let root = NodeId([0u8; 16]);
             let child_id = [7u8; 16];
-            let cell = RefCell::new(Snapshot::new(root));
+            let cell = BaseSnapshot::new(Snapshot::new(root));
 
             assert!(
                 refresh_base_from_resolved(
@@ -1579,7 +1578,7 @@ mod tests {
         #[test]
         fn a_current_root_paints_the_base_from_its_floor_recovery() {
             let root = NodeId([0u8; 16]);
-            let cell = RefCell::new(Snapshot::new(root));
+            let cell = BaseSnapshot::new(Snapshot::new(root));
             let child_id = [0x3C; 16];
 
             assert!(
@@ -1618,7 +1617,7 @@ mod tests {
                 },
                 ResolveOutcome::TrustViolation(rejection),
             ] {
-                let cell = RefCell::new(before.clone());
+                let cell = BaseSnapshot::new(before.clone());
                 assert!(
                     !refresh_base_from_resolved(&cell, root, &Resolved::just(outcome.clone()))
                         .changed,

@@ -38,8 +38,9 @@ use crate::seams::{
     ContactLabel, FloorStore, Http, RecordTransport, SharerScopedFloorStore, StagingStore,
     UnixMillis,
 };
-use crate::sync::model::{NodeMeta, Snapshot, node_id_label};
+use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
+use crate::sync::render::BaseSnapshot;
 use crate::sync::tick::on_access_refresh_due;
 
 use super::accept::ReceivedShareStore;
@@ -88,7 +89,7 @@ pub(crate) type ReceivedVerdicts = BTreeMap<BookmarkKey, ReceivedVerdict>;
 /// its root reads with, and the repaint signal a merge emits.
 pub(crate) struct ScopeRender<'a> {
     /// The last-known-good render tree.
-    pub base: &'a RefCell<Snapshot>,
+    pub base: &'a BaseSnapshot,
     /// Scope id -> the recovered read scope seed.
     pub read_seeds: &'a RefCell<ScopeSeeds>,
     /// Which identity granted each scope root the tree holds by graft — the
@@ -623,6 +624,8 @@ pub(crate) fn facts_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::sync::model::Snapshot;
 
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
     use cipherbox_core::kdf;
@@ -1400,7 +1403,7 @@ mod tests {
         floors: InMemoryFloorStore,
         staging: InMemoryStagingStore,
         entropy: RefCell<SeededEntropy>,
-        base: RefCell<Snapshot>,
+        base: BaseSnapshot,
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
@@ -1471,7 +1474,7 @@ mod tests {
                 floors: InMemoryFloorStore::default(),
                 staging: InMemoryStagingStore::default(),
                 entropy: RefCell::new(SeededEntropy::new(9)),
-                base: RefCell::new(Snapshot::new(NodeId(vault_root))),
+                base: BaseSnapshot::new(Snapshot::new(NodeId(vault_root))),
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
@@ -1970,7 +1973,7 @@ mod tests {
         floors: InMemoryFloorStore,
         staging: InMemoryStagingStore,
         entropy: RefCell<SeededEntropy>,
-        base: RefCell<Snapshot>,
+        base: BaseSnapshot,
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
@@ -2023,7 +2026,7 @@ mod tests {
                 floors: InMemoryFloorStore::default(),
                 staging: InMemoryStagingStore::default(),
                 entropy: RefCell::new(SeededEntropy::new(9)),
-                base: RefCell::new(Snapshot::new(NodeId(VAULT_ROOT))),
+                base: BaseSnapshot::new(Snapshot::new(NodeId(VAULT_ROOT))),
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
@@ -2490,7 +2493,7 @@ mod tests {
                 snapshot.link_next(NodeId(parent), NodeId(id));
             }
         }
-        let base = RefCell::new(snapshot);
+        let base = BaseSnapshot::new(snapshot);
         let read_seeds = RefCell::new(ScopeSeeds::new());
         let grafted_sharers = RefCell::new(GraftedSharers::new());
         let scope_roots = RefCell::new(BookmarkedScopeRoots::from([SCOPE]));

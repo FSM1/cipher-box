@@ -1954,6 +1954,7 @@ fn a_recovered_persist_lands_in_the_durable_list() {
     // it acks: nothing is acked and no floor moves.
     recipient
         .staging_store
+        .inner()
         .interrupt_staged_write_after(store.staging_key(), 0);
     let mut received = block_on(store.load()).expect("cold load");
     let err = block_on(accept_share(

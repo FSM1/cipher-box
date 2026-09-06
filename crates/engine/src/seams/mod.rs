@@ -48,7 +48,7 @@ pub use record_transport::{EndpointId, RecordTransport};
 pub use retire_ledger::{OwedPage, OwedRetire, OwingRecord, RetireLedger};
 pub use scheduler::{BoxedTask, Scheduler, UnixMillis};
 pub use snapshot_cache::SnapshotCache;
-pub use staging_store::{OpId, StagingStore};
+pub use staging_store::{OpId, QueueGenerationStore, StagingStore};
 
 use core::fmt;
 
@@ -135,8 +135,10 @@ pub struct SeamSet<T: SeamTypes> {
     pub http: T::Http,
     /// Timers, background task execution, wall clock.
     pub scheduler: T::Scheduler,
-    /// Durable op queue plus staged upload bytes.
-    pub staging_store: T::StagingStore,
+    /// Durable op queue plus staged upload bytes. Wrapped so the queue counts
+    /// its own mutations, which is what tells a memoized read of it that it
+    /// still stands ([`QueueGenerationStore`]).
+    pub staging_store: QueueGenerationStore<T::StagingStore>,
     /// Durable last-known-good record/metadata cache, ciphertext-only.
     pub snapshot_cache: T::SnapshotCache,
     /// Refresh-token persistence.
