@@ -537,6 +537,19 @@ impl CommandOutcome {
         }
     }
 
+    /// `forgotten`: whether that figure is a floor rather than the whole debt;
+    /// otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = unsettledIsPartial)]
+    pub fn unsettled_is_partial(&self) -> Option<bool> {
+        match self.inner {
+            facade::CommandOutcome::Forgotten {
+                unsettled_is_partial,
+                ..
+            } => Some(unsettled_is_partial),
+            _ => None,
+        }
+    }
+
     /// `forgotten`: how many of those debts the settling pass could name a
     /// reason for; otherwise `undefined`.
     #[wasm_bindgen(getter, js_name = unsettledStalls)]

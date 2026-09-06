@@ -1265,6 +1265,10 @@ pub enum CommandOutcome {
         /// owing them. `None` when no pass ran at all — an unstarted or
         /// logged-out engine never read the ledger, so what it held is unknown.
         unsettled_bytes: Option<u64>,
+        /// Whether that figure is a floor rather than the whole debt: the pass
+        /// read a bounded window of the retire ledger and left keys
+        /// unattempted, so more may be abandoned than it names.
+        unsettled_is_partial: bool,
         /// How many of those debts the pass could name a reason for
         /// ([`ReclaimStall`]).
         stalls: usize,
@@ -1280,10 +1284,11 @@ impl fmt::Debug for CommandOutcome {
             CommandOutcome::InviteLinkMinted(_) => f.write_str("CommandOutcome(inviteLinkMinted)"),
             CommandOutcome::Forgotten {
                 unsettled_bytes,
+                unsettled_is_partial,
                 stalls,
             } => write!(
                 f,
-                "CommandOutcome(forgotten unsettled={unsettled_bytes:?} stalls={stalls})"
+                "CommandOutcome(forgotten unsettled={unsettled_bytes:?} partial={unsettled_is_partial} stalls={stalls})"
             ),
         }
     }
@@ -4936,18 +4941,24 @@ impl<T: SeamTypes> Engine<T> {
         if !self.owes_bookkeeping().await {
             return CommandOutcome::Forgotten {
                 unsettled_bytes: Some(0),
+                unsettled_is_partial: false,
                 stalls: 0,
             };
         }
         let Ok(Some(pass)) = self.file_forced_pass() else {
             return CommandOutcome::Forgotten {
                 unsettled_bytes: None,
+                unsettled_is_partial: false,
                 stalls: 0,
             };
         };
         pass.drained().await;
+        // One pass, so the figure carries the ledger read's own completeness:
+        // a pass that opened a window of a backlog larger than its ceiling
+        // priced that window and abandons more than it names.
         CommandOutcome::Forgotten {
             unsettled_bytes: Some(self.pending_reclaim_bytes()),
+            unsettled_is_partial: self.pending_reclaim_is_partial(),
             stalls: self.reclaim_stalls().len(),
         }
     }
@@ -13000,6 +13011,7 @@ mod tests {
                 block_on(engine.command(Command::ForgetDevice)),
                 Ok(CommandOutcome::Forgotten {
                     unsettled_bytes: Some(0),
+                    unsettled_is_partial: false,
                     stalls: 0
                 }),
                 "a device owing nothing reports a settled ledger, not an unread one"
@@ -13083,6 +13095,7 @@ mod tests {
                 block_on(engine.command(Command::ForgetDevice)),
                 Ok(CommandOutcome::Forgotten {
                     unsettled_bytes: Some(0),
+                    unsettled_is_partial: false,
                     stalls: 0
                 })
             );
@@ -13111,6 +13124,7 @@ mod tests {
                 block_on(engine.command(Command::ForgetDevice)),
                 Ok(CommandOutcome::Forgotten {
                     unsettled_bytes: None,
+                    unsettled_is_partial: false,
                     stalls: 0
                 }),
                 "a forget with no pass behind it reports the ledger as unread"

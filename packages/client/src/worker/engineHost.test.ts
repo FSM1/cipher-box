@@ -457,19 +457,34 @@ describe('EngineHost command outcomes', () => {
     const paid = outcomeHandle({
       kind: 'forgotten',
       unsettledBytes: 4096n,
+      unsettledIsPartial: true,
       unsettledStalls: 2,
     });
 
     await expect(
       (await commandingHost(paid.outcome)).command({ kind: 'manualRefresh' })
-    ).resolves.toEqual({ kind: 'forgotten', unsettledBytes: 4096, stalls: 2 });
+    ).resolves.toEqual({
+      kind: 'forgotten',
+      unsettledBytes: 4096,
+      unsettledIsPartial: true,
+      stalls: 2,
+    });
     expect(paid.freed()).toBe(1);
 
-    const unread = outcomeHandle({ kind: 'forgotten', unsettledStalls: 0 });
+    const unread = outcomeHandle({
+      kind: 'forgotten',
+      unsettledIsPartial: false,
+      unsettledStalls: 0,
+    });
 
     await expect(
       (await commandingHost(unread.outcome)).command({ kind: 'manualRefresh' })
-    ).resolves.toEqual({ kind: 'forgotten', unsettledBytes: null, stalls: 0 });
+    ).resolves.toEqual({
+      kind: 'forgotten',
+      unsettledBytes: null,
+      unsettledIsPartial: false,
+      stalls: 0,
+    });
   });
 
   it('refuses an outcome kind this build does not know, still releasing it', async () => {

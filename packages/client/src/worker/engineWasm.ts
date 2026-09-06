@@ -60,6 +60,7 @@ export interface WasmCommandOutcome {
   readonly permission?: number;
   readonly newlyAdded?: boolean;
   readonly unsettledBytes?: bigint;
+  readonly unsettledIsPartial?: boolean;
   readonly unsettledStalls?: number;
   free(): void;
 }

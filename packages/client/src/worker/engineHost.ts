@@ -137,6 +137,7 @@ function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
         kind: 'forgotten',
         unsettledBytes:
           outcome.unsettledBytes === undefined ? null : Number(outcome.unsettledBytes),
+        unsettledIsPartial: present(outcome.unsettledIsPartial, kind, 'unsettledIsPartial'),
         stalls: present(outcome.unsettledStalls, kind, 'unsettledStalls'),
       };
   }

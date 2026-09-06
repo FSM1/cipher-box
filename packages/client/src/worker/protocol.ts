@@ -632,10 +632,15 @@ export type CommandOutcomeDescriptor =
 /**
  * What a forget's settling pass could not pay before the erase: pinned bytes
  * that stay charged to the account with no device left owing them.
- * `unsettledBytes` is `null` when no pass ran, so the ledger was never read.
  */
 export interface ForgottenResidual {
+  /** `null` when no pass ran, so the ledger was never read. */
   unsettledBytes: number | null;
+  /**
+   * True when that figure is a floor rather than the whole debt: the pass read
+   * a bounded window of the retire ledger and left keys unattempted.
+   */
+  unsettledIsPartial: boolean;
   stalls: number;
 }
 

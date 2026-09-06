@@ -6131,11 +6131,10 @@ fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
     );
 }
 
-/// The open budget is what bounds a prefix nothing sweeps: a key this pass
-/// reaches costs an HPKE open whether or not the value opens, so a wall of
-/// planted entries costs one pass its ceiling and no more. The resume point is
-/// what stops that wall starving the real delete sorting behind it: the read
-/// wraps, so a later pass reaches the entry the first one never got to.
+/// A wall of planted entries exactly one ceiling wide, sorting ahead of a real
+/// delete: the first pass reaches no further than the wall, and the next
+/// resumes past it and settles the delete
+/// ([`MAX_BOOKKEEPING_OPENS`]).
 #[test]
 fn a_wall_of_planted_journal_keys_costs_a_pass_its_ceiling_and_not_the_delete() {
     let world = FakeWorld::new();
@@ -12977,6 +12976,7 @@ fn a_forget_settles_the_owed_retirement_before_it_erases_the_store() {
         command_while_ticking(&mut engine, Command::ForgetDevice, &mut tasks),
         Ok(CommandOutcome::Forgotten {
             unsettled_bytes: Some(0),
+            unsettled_is_partial: false,
             stalls: 0
         }),
         "the pass ahead of the erase pays the whole debt"

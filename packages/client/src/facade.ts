@@ -100,16 +100,19 @@ export class EngineFacade {
    * what zeroizes it — and what removes the emptied containers. A refused erase
    * rejects rather than resolving.
    *
-   * Answers with what the settling pass ahead of the erase could not pay:
-   * pinned bytes that stay charged to the account with no device left owing
-   * them, and `null` when no pass ran, so the ledger was never read.
+   * Answers with the {@link ForgottenResidual} the settling pass ahead of the
+   * erase left behind.
    */
   async forgetDevice(): Promise<ForgottenResidual> {
     const outcome = await this.command({ kind: 'forgetDevice' });
     this.forgotten = this.transport.signedInAccount?.() ?? null;
     return outcome.kind === 'forgotten'
-      ? { unsettledBytes: outcome.unsettledBytes, stalls: outcome.stalls }
-      : { unsettledBytes: null, stalls: 0 };
+      ? {
+          unsettledBytes: outcome.unsettledBytes,
+          unsettledIsPartial: outcome.unsettledIsPartial,
+          stalls: outcome.stalls,
+        }
+      : { unsettledBytes: null, unsettledIsPartial: false, stalls: 0 };
   }
 
   /**
