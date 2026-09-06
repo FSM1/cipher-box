@@ -415,10 +415,13 @@ mod tests {
             seal_seed: [u8; 32],
         ) -> Self {
             let node_seed = kdf::node_seed(&seal_seed, &FOLDER);
-            // Distinct per scope and epoch: one key with one nonce over two
-            // bodies would break the seal's uniqueness precondition.
+            // Distinct per scope, epoch and body: one key with one nonce over
+            // two bodies would break the seal's uniqueness precondition.
             let mut nonce = [scope[0]; 24];
             nonce[..8].copy_from_slice(&epoch.to_be_bytes());
+            for (i, child) in children.iter().enumerate() {
+                nonce[8 + i % 16] ^= child.id[0] ^ child.name.len() as u8;
+            }
             let envelope = seal_read_body(
                 kdf::read_key(node_seed.as_bytes()).as_bytes(),
                 &nonce,
@@ -761,12 +764,11 @@ mod tests {
     /// A rotation another device performed leaves this device holding the
     /// previous epoch's read seed until its own next root leg. A navigation has
     /// no root leg, so its folder leg meets a record sealed above this device's
-    /// read-epoch floor and opens nothing. Nobody is accused for read material
-    /// this device has yet to be given, and the row paints on the pass that
-    /// recovers the seed.
+    /// read-epoch floor and opens nothing. The leg charges availability and
+    /// accuses nobody.
     #[test]
     fn a_folder_above_this_devices_read_epoch_floor_accuses_nobody() {
-        let mut leg = FolderLeg::sealed_at(
+        let leg = FolderLeg::sealed_at(
             SCOPE_A,
             vec![child_ref(HONEST, "a-photo", 1)],
             NEWER_EPOCH,
@@ -784,16 +786,6 @@ mod tests {
         assert!(
             leg.listing(FOLDER).is_empty(),
             "and the row stays unpainted"
-        );
-
-        leg.read_seed = Zeroizing::new(NEWER_READ_SCOPE_SEED);
-        let reported = leg.run(SCOPE_A, Some(&scope_roots()));
-
-        assert!(!reported);
-        assert_eq!(
-            leg.listing(FOLDER),
-            vec!["a-photo".to_owned()],
-            "the pass that recovers the seed paints the row"
         );
     }
 

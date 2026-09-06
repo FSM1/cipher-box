@@ -7007,9 +7007,7 @@ fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
         "last-known-good stays pinned"
     );
     assert!(
-        events_so_far(&mut events_b)
-            .iter()
-            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        accused_nobody(&mut events_b),
         "an unswept folder is not an attacker"
     );
 
@@ -7061,9 +7059,7 @@ fn a_navigation_onto_a_newer_epoch_record_raises_no_abuse() {
     block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
 
     assert!(
-        events_so_far(&mut events_b)
-            .iter()
-            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        accused_nobody(&mut events_b),
         "a seed this device does not hold yet is not an attacker"
     );
     assert_eq!(
@@ -7081,11 +7077,7 @@ fn a_navigation_onto_a_newer_epoch_record_raises_no_abuse() {
         ["2026", "2027"],
         "the pass that recovers the seed paints the row"
     );
-    assert!(
-        events_so_far(&mut events_b)
-            .iter()
-            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
-    );
+    assert!(accused_nobody(&mut events_b));
 }
 
 /// An unreachable record plane is availability staleness, never data loss: the
@@ -10494,6 +10486,13 @@ fn events_so_far(events: &mut EventStream) -> Vec<Event> {
         out.push(event);
     }
     out
+}
+
+/// Whether the events since the last read accuse anybody.
+fn accused_nobody(events: &mut EventStream) -> bool {
+    events_so_far(events)
+        .iter()
+        .all(|event| !matches!(event, Event::AttributableAbuse { .. }))
 }
 
 /// How many content uploads this device has sent.

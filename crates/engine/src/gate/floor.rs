@@ -271,6 +271,10 @@ pub async fn check_sequence<F: FloorStore>(
 /// The durable floor checks — gate stages 4/5: the per-name sequence floor
 /// (per `strictness`) and the scope's read-epoch floor (the revocation
 /// boundary, always `>=`). Shared by the root gate and the child pipeline.
+///
+/// Answers the read-epoch floor as this pass observed it — `None` where the
+/// scope has none — so a caller that classifies a later stage against that
+/// floor reads the one value this stage compared against.
 pub async fn check<F: FloorStore>(
     floors: &F,
     ipns_name: &[u8],
@@ -278,12 +282,12 @@ pub async fn check<F: FloorStore>(
     sequence: u64,
     epoch: u64,
     strictness: Strictness,
-) -> Result<(), GateError> {
+) -> Result<Option<u64>, GateError> {
     check_sequence(floors, ipns_name, sequence, strictness).await?;
-    let epoch_floor = read_epoch_floor(floors, scope_id)
+    let observed = read_epoch_floor(floors, scope_id)
         .await
-        .map_err(GateError::Seam)?
-        .unwrap_or(0);
+        .map_err(GateError::Seam)?;
+    let epoch_floor = observed.unwrap_or(0);
     if epoch < epoch_floor {
         return Err(GateError::Rejected(GateRejection {
             stage: GateStage::Epoch,
@@ -293,7 +297,7 @@ pub async fn check<F: FloorStore>(
             },
         }));
     }
-    Ok(())
+    Ok(observed)
 }
 
 /// Advance floors after an AAD-confirmed **root** unseal. Raises the per-scope

@@ -171,9 +171,7 @@ impl std::error::Error for GateRejection {}
 pub enum GateError {
     /// A fail-closed gate rejection.
     Rejected(GateRejection),
-    /// The gate reached no verdict and the read is retryable: host seam I/O, a
-    /// source the pass could not read, or read material this device does not
-    /// hold yet. Accuses nobody.
+    /// The gate reached no verdict and the read is retryable. Accuses nobody.
     Seam(SeamError),
 }
 
