@@ -55,16 +55,9 @@ function PreviewContent({ preview, name }: { preview: FilePreview; name: string 
     );
   }
   if (preview.status === 'pdf') {
-    // A blob URL is same-origin with the app, so the embedded document runs
-    // under a sandbox that grants it nothing.
+    // Chromium does not run its PDF viewer in a sandboxed frame.
     return (
-      <iframe
-        className="preview-pdf"
-        src={preview.url}
-        title={name}
-        sandbox=""
-        data-testid="preview-pdf"
-      />
+      <iframe className="preview-pdf" src={preview.url} title={name} data-testid="preview-pdf" />
     );
   }
   return (
