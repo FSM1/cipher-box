@@ -7007,9 +7007,7 @@ fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
         "last-known-good stays pinned"
     );
     assert!(
-        events_so_far(&mut events_b)
-            .iter()
-            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        accused_nobody(&mut events_b),
         "an unswept folder is not an attacker"
     );
 
@@ -7023,6 +7021,63 @@ fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
         ["2026", "2027"],
         "the wave's re-seal at the current epoch is adopted"
     );
+}
+
+/// The mirror of epoch lag. A rotation another device performed leaves this
+/// device on the previous epoch's read seed until its own next root leg. A
+/// navigation runs no root leg, so its folder leg meets a record sealed at the
+/// new epoch and opens nothing — read material this device has yet to be given,
+/// which accuses the owner's own honest device of nothing.
+#[test]
+fn a_navigation_onto_a_newer_epoch_record_raises_no_abuse() {
+    let DeepCreate {
+        world,
+        blocks,
+        mut engine_b,
+        mut events_b,
+        mut tasks_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    // The other device rotates and the wave reaches `photos`, all before this
+    // device ticks: its floor and its cached seed stay at the old epoch.
+    rotate_read_epoch(&world.record_store, &blocks);
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        child_ref([0x27; 16], "2027", CoreNodeKind::Folder),
+    );
+    sweep_folder(&world.record_store, &blocks, photos);
+
+    // Past the on-access damping, so the navigation runs the folder leg.
+    world.scheduler.advance(engine_b.profile().stale_after);
+    let _ = events_so_far(&mut events_b);
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+
+    assert!(
+        accused_nobody(&mut events_b),
+        "a seed this device does not hold yet is not an attacker"
+    );
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026"],
+        "last-known-good stays pinned"
+    );
+
+    // The control: this device's own root leg recovers the epoch's seed, and
+    // the same record renders.
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026", "2027"],
+        "the pass that recovers the seed paints the row"
+    );
+    assert!(accused_nobody(&mut events_b));
 }
 
 /// An unreachable record plane is availability staleness, never data loss: the
@@ -10431,6 +10486,13 @@ fn events_so_far(events: &mut EventStream) -> Vec<Event> {
         out.push(event);
     }
     out
+}
+
+/// Whether the events since the last read accuse anybody.
+fn accused_nobody(events: &mut EventStream) -> bool {
+    events_so_far(events)
+        .iter()
+        .all(|event| !matches!(event, Event::AttributableAbuse { .. }))
 }
 
 /// How many content uploads this device has sent.

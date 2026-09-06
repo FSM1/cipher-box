@@ -133,10 +133,31 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
 
     /// Unseal the read-body under the per-node read key derived from the scope
     /// read seed (`node-seed` → `read-key`, the frozen KDF edges).
-    fn unseal(&self, envelope: &Envelope) -> Result<ReadBody, GateError> {
+    ///
+    /// A failure above `epoch_floor` is availability: this device holds no seed
+    /// for that epoch, so the record accuses nobody by failing to open, and the
+    /// root leg that recovers the seed repaints it. At or below the floor this
+    /// seed is the one the record must open under, so the failure stays the
+    /// fail-closed trust verdict. An absent floor proves nothing above it and
+    /// keeps the verdict.
+    ///
+    /// Accepted: the epoch tag attests nothing (ADR 0017), so a party that can
+    /// sign at this name buys unreachability instead of an accusation. It can
+    /// already withhold the body outright, and neither arm adopts a record or
+    /// moves a floor.
+    fn unseal(&self, envelope: &Envelope, epoch_floor: Option<u64>) -> Result<ReadBody, GateError> {
         let node_seed = kdf::node_seed(&self.scope_read_seed, &envelope.id);
         let read_key = kdf::read_key(node_seed.as_bytes());
-        open_read_body(envelope, read_key.as_bytes()).map_err(|e| reject(GateStage::Unseal, e))
+        match open_read_body(envelope, read_key.as_bytes()) {
+            Ok(read_body) => Ok(read_body),
+            Err(_) if epoch_floor.is_some_and(|floor| envelope.epoch > floor) => {
+                Err(GateError::Seam(SeamError::new(format!(
+                    "record at epoch {} is above this scope's read-epoch floor",
+                    envelope.epoch
+                ))))
+            }
+            Err(e) => Err(reject(GateStage::Unseal, e)),
+        }
     }
 
     /// Re-open a record already at the durable floor — our own current record
@@ -181,7 +202,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         record_bytes: &[u8],
     ) -> Result<(Adopted, Envelope), GateError> {
         let (sequence, envelope) = self.assembled_head(name, record_bytes).await?;
-        floor::check(
+        let epoch_floor = floor::check(
             self.floors,
             name.as_str().as_bytes(),
             &self.scope_id,
@@ -190,7 +211,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
             floor::Strictness::AtFloor,
         )
         .await?;
-        let read_body = self.unseal(&envelope)?;
+        let read_body = self.unseal(&envelope, epoch_floor)?;
         Ok((
             Adopted {
                 read_body,
@@ -319,7 +340,7 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             sequence,
             envelope: envelope.clone(),
         });
-        floor::check(
+        let epoch_floor = floor::check(
             self.floors,
             name.as_str().as_bytes(),
             &self.scope_id,
@@ -328,7 +349,7 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             floor::Strictness::StrictlyNewer,
         )
         .await?;
-        let read_body = self.unseal(&envelope)?;
+        let read_body = self.unseal(&envelope, epoch_floor)?;
         // Sequence floor only, after the AAD-confirmed unseal (the floor law),
         // and deferred until the accepted record is durable.
         let pending = floor::PendingSequenceRaise::new(
@@ -394,12 +415,19 @@ mod tests {
     /// this session reads is still sealed at.
     const CURRENT_EPOCH: u64 = 4;
     const LAGGING_EPOCH: u64 = 1;
+    /// The epoch a rotation on another device moved the scope to, which this
+    /// device has not observed: above its own read-epoch floor.
+    const UNOBSERVED_EPOCH: u64 = CURRENT_EPOCH + 1;
     const SEQUENCE: u64 = 3;
 
     /// One scope read seed per epoch — a cut leaves a distinct seed behind, so
     /// no test can pass by opening the wrong epoch under the right key.
     fn scope_seed(epoch: u64) -> [u8; 32] {
-        [0xA0 ^ u8::try_from(epoch).expect("a small test epoch"); 32]
+        let mut seed = [0xA0; 32];
+        for (slot, byte) in seed.iter_mut().zip(epoch.to_be_bytes()) {
+            *slot ^= byte;
+        }
+        seed
     }
 
     /// One interior node's published record, and the head block it anchors.
@@ -413,6 +441,8 @@ mod tests {
         node_id: [u8; 16],
         scope_id: [u8; 16],
         sequence: u64,
+        /// The epoch the record is labelled with, and whose seed seals it.
+        epoch: u64,
         /// Attach a grant section, the marker that makes a record a scope root.
         scope_root: bool,
     }
@@ -423,6 +453,7 @@ mod tests {
                 node_id: NODE,
                 scope_id: SCOPE,
                 sequence: SEQUENCE,
+                epoch: LAGGING_EPOCH,
                 scope_root: false,
             }
         }
@@ -442,10 +473,10 @@ mod tests {
         nonce
     }
 
-    /// Publish `spec` at [`LAGGING_EPOCH`], under that epoch's scope read seed.
+    /// Publish `spec` at its own epoch, under that epoch's scope read seed.
     fn publish(spec: Spec) -> Published {
         let nonce = fixture_nonce(&spec);
-        let seed = scope_seed(LAGGING_EPOCH);
+        let seed = scope_seed(spec.epoch);
         let node_seed = kdf::node_seed(&seed, &spec.node_id);
         let read_key = kdf::read_key(node_seed.as_bytes());
         let body = ReadBody::Folder {
@@ -460,7 +491,7 @@ mod tests {
             V,
             spec.node_id,
             spec.scope_id,
-            LAGGING_EPOCH,
+            spec.epoch,
             &body,
         )
         .expect("the fixture body seals");
@@ -613,6 +644,88 @@ mod tests {
             );
             assert_eq!(refused.stage, GateStage::Unseal, "epoch {wrong}");
         }
+    }
+
+    /// Adopt `epoch`'s record under a seed it was never sealed under, over a
+    /// device whose read-epoch floor stands at [`CURRENT_EPOCH`]. The unseal
+    /// fails whatever the epoch, so the label is the only input the two arms
+    /// below differ on. Answers the error, and asserts no arm moved a floor.
+    fn failed_unseal_at(epoch: u64) -> GateError {
+        let published = publish(Spec {
+            epoch,
+            ..Spec::default()
+        });
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let floors = floors_after_a_cut();
+        let adopter = seeded_adopter(&gw, &http, &floors, &published, NODE, LAGGING_EPOCH);
+
+        let error = block_on(adopter.adopt(&published.name, &published.record_bytes))
+            .err()
+            .expect("a seed the record was not sealed under must open nothing");
+        assert_eq!(
+            sequence_floor(&floors, &published.name),
+            0,
+            "a failed unseal moves no replay bar",
+        );
+        assert_eq!(
+            read_epoch_floor(&floors),
+            Some(CURRENT_EPOCH),
+            "and no revocation boundary",
+        );
+        error
+    }
+
+    /// A record above the floor needs a seed a rotation minted on another
+    /// device, which this one recovers on its next root leg. Availability.
+    #[test]
+    fn a_failed_unseal_above_the_read_epoch_floor_is_availability() {
+        let error = failed_unseal_at(UNOBSERVED_EPOCH);
+        assert!(
+            matches!(error, GateError::Seam(_)),
+            "epoch {UNOBSERVED_EPOCH} over floor {CURRENT_EPOCH} earned [{error}]"
+        );
+    }
+
+    /// At the floor this device holds the seed the record must open under, so a
+    /// body that does not open is tampering.
+    #[test]
+    fn a_failed_unseal_at_the_read_epoch_floor_stays_a_trust_verdict() {
+        let refused = refusal(
+            Err::<(), _>(failed_unseal_at(CURRENT_EPOCH)),
+            "unreachable: the input is already an error",
+        );
+        assert_eq!(refused.stage, GateStage::Unseal);
+        assert_eq!(refused.check(), "seal-open-failed");
+    }
+
+    /// The accepted cost of reading an unauthenticated label (ADR 0017): a
+    /// party that can sign at this name escapes the accusation by claiming any
+    /// epoch above the floor. It buys an unrenderable row, which withholding
+    /// the record already bought it, and no floor moves either way.
+    #[test]
+    fn a_far_future_epoch_label_also_escapes_the_accusation() {
+        let error = failed_unseal_at(u64::MAX);
+        assert!(matches!(error, GateError::Seam(_)), "earned [{error}]");
+    }
+
+    /// A scope with no read-epoch floor has authenticated no epoch at all, so
+    /// no label can claim to sit above one. The verdict stands.
+    #[test]
+    fn a_failed_unseal_under_no_read_epoch_floor_stays_a_trust_verdict() {
+        let published = publish(Spec::default());
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let floors = InMemoryFloorStore::default();
+        let adopter = seeded_adopter(&gw, &http, &floors, &published, NODE, CURRENT_EPOCH);
+
+        let refused = refusal(
+            block_on(adopter.adopt(&published.name, &published.record_bytes)),
+            "a seed the record was not sealed under must open nothing",
+        );
+        assert_eq!(refused.stage, GateStage::Unseal);
+        assert_eq!(refused.check(), "seal-open-failed");
+        assert_eq!(read_epoch_floor(&floors), None, "the floor stayed absent");
     }
 
     /// A scope root below its own read-epoch floor is never a wave target: it

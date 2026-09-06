@@ -365,6 +365,10 @@ mod tests {
     const READ_SCOPE_SEED: [u8; 32] = [0x66; 32];
     const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
     const EPOCH: u64 = 1;
+    /// The epoch a rotation on another device moved the scope to, and the seed
+    /// that rotation minted — neither of which this device has observed yet.
+    const NEWER_EPOCH: u64 = EPOCH + 1;
+    const NEWER_READ_SCOPE_SEED: [u8; 32] = [0x69; 32];
 
     fn child_ref(id: [u8; 16], name: &str, link_counter: u64) -> ChildRef {
         ChildRef {
@@ -399,16 +403,32 @@ mod tests {
         /// `FOLDER` sealed under `scope` at `READ_SCOPE_SEED`, serving
         /// `children`, published at its own write-plane name.
         fn new(scope: [u8; 16], children: Vec<ChildRef>) -> Self {
-            let node_seed = kdf::node_seed(&READ_SCOPE_SEED, &FOLDER);
+            Self::sealed_at(scope, children, EPOCH, READ_SCOPE_SEED)
+        }
+
+        /// The same world with the body sealed at `epoch` under `seal_seed`, so
+        /// a leg can meet a record its own read seed does not open.
+        fn sealed_at(
+            scope: [u8; 16],
+            children: Vec<ChildRef>,
+            epoch: u64,
+            seal_seed: [u8; 32],
+        ) -> Self {
+            let node_seed = kdf::node_seed(&seal_seed, &FOLDER);
+            // Distinct per scope, epoch and body: one key with one nonce over
+            // two bodies would break the seal's uniqueness precondition.
+            let mut nonce = [scope[0]; 24];
+            nonce[..8].copy_from_slice(&epoch.to_be_bytes());
+            for (i, child) in children.iter().enumerate() {
+                nonce[8 + i % 16] ^= child.id[0] ^ child.name.len() as u8;
+            }
             let envelope = seal_read_body(
                 kdf::read_key(node_seed.as_bytes()).as_bytes(),
-                // Distinct per scope: one key with one nonce over two bodies
-                // would break the seal's uniqueness precondition.
-                &[scope[0]; 24],
+                &nonce,
                 1,
                 FOLDER,
                 scope,
-                EPOCH,
+                epoch,
                 &ReadBody::Folder {
                     created_at: 0,
                     modified_at: 500,
@@ -739,6 +759,56 @@ mod tests {
         leg.run(OWN_ROOT, None);
 
         assert_eq!(leg.listing(FOLDER), vec!["my-note".to_owned()]);
+    }
+
+    /// A rotation another device performed leaves this device holding the
+    /// previous epoch's read seed until its own next root leg. A navigation has
+    /// no root leg, so its folder leg meets a record sealed above this device's
+    /// read-epoch floor and opens nothing. The leg charges availability and
+    /// accuses nobody.
+    #[test]
+    fn a_folder_above_this_devices_read_epoch_floor_accuses_nobody() {
+        let leg = FolderLeg::sealed_at(
+            SCOPE_A,
+            vec![child_ref(HONEST, "a-photo", 1)],
+            NEWER_EPOCH,
+            NEWER_READ_SCOPE_SEED,
+        );
+        block_on(leg.floors.raise_epoch_floor(&SCOPE_A, EPOCH))
+            .expect("the last root leg left this floor behind");
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+
+        let reported = leg.run(SCOPE_A, Some(&scope_roots()));
+
+        assert!(!reported, "a seed this device does not hold accuses nobody");
+        assert_eq!(leg.verdict.get(), RefreshVerdict::Unreachable);
+        assert!(
+            leg.listing(FOLDER).is_empty(),
+            "and the row stays unpainted"
+        );
+    }
+
+    /// The other arm of that rule. A record at the epoch this device last
+    /// gate-adopted a root for must open under the seed this device holds, so a
+    /// body that does not open is tampering and stays attributable.
+    #[test]
+    fn a_folder_at_this_devices_read_epoch_floor_stays_attributable() {
+        let leg = FolderLeg::sealed_at(
+            SCOPE_A,
+            vec![child_ref(HONEST, "a-photo", 1)],
+            EPOCH,
+            NEWER_READ_SCOPE_SEED,
+        );
+        block_on(leg.floors.raise_epoch_floor(&SCOPE_A, EPOCH)).expect("the floor raises");
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+
+        let reported = leg.run(SCOPE_A, Some(&scope_roots()));
+
+        assert!(reported, "a body that does not open at the floor is abuse");
+        assert_eq!(leg.verdict.get(), RefreshVerdict::Rejected);
+        assert!(leg.listing(FOLDER).is_empty());
     }
 
     #[test]

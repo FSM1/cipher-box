@@ -164,15 +164,14 @@ impl fmt::Display for GateRejection {
 
 impl std::error::Error for GateRejection {}
 
-/// The result of running the gate: a fail-closed [`GateRejection`], or a host
-/// seam I/O failure — availability, never a trust decision. Only
-/// [`GateError::Rejected`] means the record was untrustworthy; a
-/// [`GateError::Seam`] is a retryable read of the durable floors.
+/// The result of running the gate: a fail-closed [`GateRejection`], or an
+/// availability failure, never a trust decision. Only
+/// [`GateError::Rejected`] means the record was untrustworthy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateError {
     /// A fail-closed gate rejection.
     Rejected(GateRejection),
-    /// A [`FloorStore`] seam failure — host I/O, not a trust verdict.
+    /// The gate reached no verdict and the read is retryable. Accuses nobody.
     Seam(SeamError),
 }
 
