@@ -67,8 +67,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # `tsc -b` builds the referenced shared packages, so each host typechecks
-      # against the same declarations the bundle will consume.
+      # The smoke harness types itself against the `apps/web` source, which
+      # reaches the shared packages through their published entries, so those
+      # declarations must exist before the type checker runs.
+      - name: Build the shared packages the harness reaches
+        run: pnpm --filter @cipherbox/client --filter @cipherbox/login --filter @cipherbox/auth-ui run build
+
       - name: Run the type checker
         run: pnpm --filter @cipherbox/web --filter @cipherbox/web-e2e run typecheck
 

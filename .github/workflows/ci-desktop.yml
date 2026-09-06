@@ -37,10 +37,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # `tests/cross-client` resolves `@cipherbox/client` through its published
-      # entry, so the package's declarations must exist before vitest runs.
-      - name: Build the client package the harness imports
-        run: pnpm --filter @cipherbox/client run build
+      # The harnesses type and drive themselves against the `apps/web` source,
+      # which reaches the shared packages through their published entries, so
+      # those declarations must exist before the type checker and vitest run.
+      - name: Build the shared packages the harnesses reach
+        run: pnpm --filter @cipherbox/client --filter @cipherbox/login --filter @cipherbox/auth-ui run build
 
       # The two mounted-matrix harnesses typecheck and unit-test here: their
       # suites run on the main gate, so this is where a broken harness fails a
