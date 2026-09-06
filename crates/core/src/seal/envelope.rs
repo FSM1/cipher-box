@@ -35,7 +35,7 @@ pub struct Envelope {
     pub id: [u8; 16],
     /// The scope-root node id (16-byte UUID) — the epoch tag's scope.
     pub scope: [u8; 16],
-    /// The epoch-tag epoch.
+    /// Key-selection label: the epoch whose read seed opens the body, not authorship (ADR 0017).
     pub epoch: u64,
     /// The sealed read-body: `nonce(24) || ciphertext||tag`.
     pub read_sealed: Vec<u8>,

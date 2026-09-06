@@ -1211,6 +1211,40 @@ fn committed_as(published: &GrantSetEntry, minted: &GrantSetEntry) -> bool {
         && published.masked_recipient_enc_pk() == minted.masked_recipient_enc_pk()
 }
 
+/// Whether `commitment` already commits the row a `Permission::Write` grant of
+/// `scope_id` at `scope_root_name` to `contact` would mint.
+///
+/// The whole-entry rule of [`mint_grantee_scope`]'s resume arm ([`committed_as`]),
+/// for a caller deciding whether a published scope root is the one its own
+/// stalled write grant left behind. The row is re-minted here rather than
+/// compared field by field, so the proof cannot drift from the mint it proves.
+pub(crate) fn commits_write_grant(
+    commitment: &GrantSetCommitment,
+    owner_identity_signer: &EcdsaSigner,
+    owner_enc_secret: &X25519Secret,
+    pointer_read_key: &[u8; SECRET_LEN],
+    contact: &Contact,
+    scope_id: &[u8; 16],
+    scope_root_name: &IpnsName,
+) -> bool {
+    let Some(row) = mint_grant_row(
+        owner_identity_signer,
+        owner_enc_secret,
+        pointer_read_key,
+        contact.identity_pk().to_sec1(),
+        &contact.enc_subkey(),
+        scope_id,
+        scope_root_name.as_str().as_bytes(),
+        Permission::Write,
+    ) else {
+        return false;
+    };
+    commitment
+        .entries
+        .iter()
+        .any(|entry| committed_as(entry, &row.commitment_entry))
+}
+
 /// Re-seal every interior node under the granted folder into `root`, the scope
 /// published over that folder.
 ///
@@ -1902,6 +1936,7 @@ mod tests {
                 current_read_epoch: 1,
                 owner_enc_pub: owner_enc().public(),
                 pseudonym_signer: pseudonym,
+                write_body_signer: None,
                 override_seed: Zeroizing::new([0x71; SECRET_LEN]),
                 write_epoch: 1,
                 write_scope_seed: Zeroizing::new([0x72; SECRET_LEN]),

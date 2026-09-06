@@ -367,6 +367,7 @@ where
                 scheduler: self.scheduler,
                 profile: self.profile,
                 entropy: self.entropy,
+                events: self.events,
                 scope_id: scope_root.0,
                 read_scope_seed: &current.override_seed,
                 parent_node_seed: self.parent_node_seed,

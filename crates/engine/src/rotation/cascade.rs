@@ -105,6 +105,11 @@ pub struct CascadeTarget {
     pub owner_enc_pub: X25519Public,
     /// The owner-committed writer pseudonym signer (re-sealer identity).
     pub pseudonym_signer: Ed25519Signer,
+    /// The committed pseudonym that structure-signed the record's write body —
+    /// the author of the grant ledger below, and so the party an abuse event
+    /// over a row that ledger carries names. `None` where the resolver could
+    /// name none.
+    pub write_body_signer: Option<[u8; 32]>,
     /// The scope's **current** override (read scope) seed — becomes the fresh
     /// history link's prior; the cascade mints a new seed to replace it.
     pub override_seed: Zeroizing<[u8; SECRET_LEN]>,
@@ -1177,6 +1182,7 @@ mod tests {
                 current_read_epoch: s.current_epoch,
                 owner_enc_pub: s.owner_enc_pub.unwrap_or_else(|| self.owner.enc.public()),
                 pseudonym_signer: self.owner.pseudonym.clone(),
+                write_body_signer: None,
                 override_seed: Zeroizing::new(s.override_seed),
                 write_scope_seed: Zeroizing::new(s.write_scope_seed),
                 pointer_read_key: Zeroizing::new(s.pointer_read_key),

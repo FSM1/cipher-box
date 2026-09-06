@@ -8,6 +8,7 @@
 
 use core::cell::RefCell;
 
+use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
@@ -19,7 +20,7 @@ use cipherbox_core::seal::{
     open_grant_blob, open_read_body, sign_grant_set, unseal,
 };
 use cipherbox_core::suite::contact::ContactCode;
-use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::ct_eq;
 
@@ -725,6 +726,26 @@ impl GrantScenario {
             .heal_put_for(write_name(ROOT).as_str());
         published_grant_section(&self.world, &self.blocks, self.folder)
             .expect("the grantee scope root is live at its derived name")
+    }
+
+    /// Drive a write share whose owed name wave fails: the grantee scope is
+    /// live, the parent index names it at the name the **parent's** own write
+    /// seed derives, and the recipient was never told where it answers.
+    ///
+    /// The mint adopts the root it publishes, so one read of that scope's
+    /// cut-epoch bar is spent by the time the cut's own resolve makes the next
+    /// one — which is the read this fails.
+    fn strand_the_owed_wave(&mut self) {
+        let mut cut_epoch_floor = self.folder.0.to_vec();
+        cut_epoch_floor.extend_from_slice(b"/cut-epoch");
+        self.owner_device
+            .floor_store
+            .fail_epoch_floor_reads_after(&cut_epoch_floor, 1);
+        assert!(
+            self.grant_folder_at(Permission::Write).is_err(),
+            "the write-scope cut fails, so the share never reaches its delivery"
+        );
+        self.owner_device.floor_store.heal_floors();
     }
 
     /// Grant `name`, a folder inside the already-granted one, and report it.
@@ -3857,6 +3878,196 @@ fn the_sharing_read_will_not_name_a_recipient_the_owner_never_signed() {
     );
 }
 
+/// A committed writer authors the ledger, and no commitment entry carries
+/// `recipientIdentityPk` — so a write grantee can rewrite the very label the
+/// owner revokes by. Filing the rewritten row under the all-zero identity would
+/// leave the owner a live grant no command can name, so the label is resolved
+/// from the owner's own commitment instead: the committed `recipientEncPk`
+/// names the contact a cut of that tag reaches. The rewrite is still reported.
+#[test]
+fn the_sharing_read_names_a_rewritten_row_from_the_owners_own_commitment() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let mut poisoned = recipient_row_at_root(CorePermission::Write);
+    let honest = poisoned.ledger_entry.recipient_identity_pk;
+    poisoned.ledger_entry.recipient_identity_pk = [0x11; IDENTITY_PUBLIC_LEN];
+    seed_vault(&world, &blocks, vec![poisoned.clone()]);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    let _ = events_so_far(&mut events);
+
+    let named: Vec<Vec<u8>> = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved")
+        .grants
+        .into_iter()
+        .map(|grant| grant.recipient_identity_public_key)
+        .collect();
+
+    assert_eq!(
+        named,
+        vec![honest.to_vec()],
+        "the owner sees the party their own commitment names, so a revoke can \
+         reach the tag"
+    );
+    assert!(
+        !named.contains(&vec![0x11; IDENTITY_PUBLIC_LEN]),
+        "and never the label the writer chose"
+    );
+    let reported: Vec<String> = events_so_far(&mut events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect();
+    let signer = hex_lower(&owner_pseudonym().verifying_key().to_bytes());
+    assert!(
+        reported.iter().any(
+            |description| description.contains(&hex_lower(&poisoned.tag))
+                && description.contains(&signer)
+        ),
+        "the rewritten row is reported as abuse, naming the tag and the pseudonym \
+         that signed the body it rode in: {reported:?}"
+    );
+}
+
+/// The name wave re-mints every committed row, and files the all-zero
+/// placeholder for one whose recipient binding the owner never signed. Doing
+/// that silently would leave the owner a live grant they can neither name nor
+/// explain, so the wave reports the row with its tag and with the committed
+/// pseudonym that signed the body it rode in.
+#[test]
+fn a_name_wave_reports_the_row_it_re_mints_without_an_owner_binding() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let rewritten = bystander_row_with_corrupt_sig();
+    seed_vault(
+        &world,
+        &blocks,
+        vec![
+            recipient_row_at_root(CorePermission::Write),
+            rewritten.clone(),
+        ],
+    );
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    let _ = events_so_far(&mut events);
+
+    assert_eq!(
+        block_on(engine.command(Command::Downgrade {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Ok(CommandOutcome::Done),
+        "the write cut drives the wave that re-mints the set"
+    );
+
+    let reported: Vec<String> = events_so_far(&mut events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::AttributableAbuse { description } => Some(description),
+            _ => None,
+        })
+        .collect();
+    let signer = hex_lower(&owner_pseudonym().verifying_key().to_bytes());
+    assert!(
+        reported.iter().any(
+            |description| description.contains(&hex_lower(&rewritten.tag))
+                && description.contains(&signer)
+        ),
+        "the re-minted row is reported as abuse, naming the tag and the pseudonym \
+         that signed the body it rode in: {reported:?}"
+    );
+}
+
+/// A re-mint that cannot vouch for a row's label files the all-zero placeholder
+/// under the owner's **own** signature rather than laundering a writer's choice
+/// into it, so the row reads as attested and still names nobody. The commitment
+/// resolves it the same way, and nothing is reported: the owner signed that row.
+#[test]
+fn the_sharing_read_names_a_row_the_owner_signed_without_a_label() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let relabelled = mint_grant_row(
+        &owner_identity(),
+        &kdf::enc_subkey(&SECRET),
+        &owner_pointer_read_key(),
+        [0u8; IDENTITY_PUBLIC_LEN],
+        &kdf::enc_subkey(&RECIPIENT_SECRET).public(),
+        &SCOPE,
+        write_name(ROOT).as_str().as_bytes(),
+        CorePermission::Write,
+    )
+    .expect("a contributory recipient key");
+    seed_vault(&world, &blocks, vec![relabelled]);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    let _ = events_so_far(&mut events);
+
+    let named: Vec<Vec<u8>> = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved")
+        .grants
+        .into_iter()
+        .map(|grant| grant.recipient_identity_public_key)
+        .collect();
+
+    assert_eq!(
+        named,
+        vec![recipient_identity().verifying_key().to_sec1().to_vec()],
+        "the owner sees the party their own commitment names"
+    );
+    assert_eq!(
+        abuse_events(&mut events),
+        0,
+        "and a row the owner signed is no abuse to report"
+    );
+}
+
+/// A contact code binds an encryption subkey under its **own** holder's
+/// signature, so a second holder can bind the subkey a contact the owner already
+/// holds is named by. Either name would then answer for the same committed
+/// entry, and the label is what a host revokes from — so an ambiguous match
+/// leaves the row unattested rather than naming a party the owner never granted.
+#[test]
+fn the_sharing_read_leaves_a_row_two_contacts_claim_unattested() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let mut poisoned = recipient_row_at_root(CorePermission::Write);
+    poisoned.ledger_entry.recipient_identity_pk = [0x11; IDENTITY_PUBLIC_LEN];
+    seed_vault(&world, &blocks, vec![poisoned]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    let impostor = EcdsaSigner::from_scalar(&BYSTANDER_SECRET).expect("valid identity scalar");
+    block_on(engine.command(Command::ImportContact {
+        contact_code:
+            ContactCode::create(&impostor, kdf::enc_subkey(&RECIPIENT_SECRET).public()).encode(),
+    }))
+    .expect("a code its own holder signed imports");
+
+    let named: Vec<Vec<u8>> = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved")
+        .grants
+        .into_iter()
+        .map(|grant| grant.recipient_identity_public_key)
+        .collect();
+
+    assert_eq!(
+        named,
+        vec![vec![0u8; IDENTITY_PUBLIC_LEN]],
+        "neither claimant is named for the row"
+    );
+}
+
 /// A share mints a fresh scope at the node, so a node that is not one yet is
 /// exactly where a host may still offer the mint — and nothing is shared there
 /// to report, by grant or by link. The vault root is refused on its own ground,
@@ -5081,5 +5292,200 @@ fn a_conversion_pass_leaves_an_item_that_is_not_its_own() {
         inbox(&fx.owner_device).len(),
         1,
         "the share pointer is still there for the arm that owns it"
+    );
+}
+
+/// A write share publishes the grantee scope and names it in the parent index
+/// before it runs the name wave that moves the scope onto the names the granted
+/// seed derives. A cut that fails there leaves a scope the recipient was never
+/// told about, at the name the parent's own write seed still derives. The same
+/// share re-driven finishes that wave and delivers, rather than making the owner
+/// revoke a grant nobody holds.
+#[test]
+fn a_write_share_whose_cut_failed_is_finished_by_the_same_share() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+    let minted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the grantee scope is live at the parent-derived name");
+    assert_eq!(
+        fx.committed_permission(&stalled),
+        Some(CorePermission::Write),
+        "the stalled scope commits the recipient's write row"
+    );
+    assert!(
+        inbox(&fx.recipient_device).is_empty(),
+        "and delivered nothing"
+    );
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, stalled, "the re-drive ran the owed wave");
+    let resumed = published_grant_section_at(&fx.world, &fx.blocks, &moved)
+        .expect("the moved root answers as a scope root");
+    // A write cut leaves the read plane alone, so the seed the mint sealed is
+    // the same one at the moved root — which is what separates a resume from a
+    // second mint over a scope the grantee already holds a blob for.
+    assert!(
+        stranded_override_seed(&resumed, fx.folder) == stranded_override_seed(&minted, fx.folder),
+        "against the scope the first attempt minted, not a second one"
+    );
+    assert_eq!(
+        fx.granted_blob_carries_write_seed(&moved),
+        Some(true),
+        "the grantee's blob at the moved root conveys the granted write seed"
+    );
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        moved.as_str().as_bytes(),
+        "and the pointer the share owed names the root the wave moved to"
+    );
+}
+
+/// The re-drive is the unfinished share, never a further one. A share whose wave
+/// ran has moved its scope off the name the parent's seed derives, so the index
+/// no longer names it there and the standing refuses as before.
+#[test]
+fn a_second_write_share_of_a_finished_scope_is_still_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let moved = fx.granted_scope_repoint().current_root;
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        moved,
+        "and the scope stayed where its own wave left it"
+    );
+}
+
+/// The pre-wave root lingers at the parent-derived name for ever, and the
+/// write-epoch floor that refuses it is durable and **local**. A second owner
+/// device that never saw the wave holds no such floor, so the parent index is
+/// the only authority that separates an owed wave from a finished one.
+#[test]
+fn a_write_share_of_a_finished_scope_is_refused_on_a_device_that_missed_the_wave() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let moved = fx.granted_scope_repoint().current_root;
+
+    let second = fx.world.device(b"the owner's second device");
+    let (mut engine, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &second);
+    import_recipient(&mut engine);
+
+    assert_eq!(
+        block_on(engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        moved,
+        "and the scope stayed where its own wave left it"
+    );
+}
+
+/// A read share cuts no write scope, so its scope root sits at the
+/// parent-derived name for good. Only the write row the stalled scope commits
+/// says a wave is owed there — without that proof a write share over a read
+/// grantee's live scope would re-key the scope they already hold.
+#[test]
+fn a_write_share_over_a_read_granted_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+    assert_eq!(
+        fx.committed_permission(&write_name(fx.folder)),
+        Some(CorePermission::Read),
+        "and the read grantee's row is untouched"
+    );
+}
+
+/// The share that finishes a stalled one is the same share. A read share of a
+/// folder whose stalled scope commits a **write** row is a different grant, and
+/// finishing it would deliver a pointer naming a permission the scope's own
+/// committed set contradicts.
+#[test]
+fn a_read_share_over_a_stalled_write_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+
+    assert_eq!(
+        fx.grant_folder_to_recipient(),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+    assert!(
+        inbox(&fx.recipient_device).is_empty(),
+        "so no pointer was delivered"
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        stalled,
+        "and the owed wave is still owed"
+    );
+}
+
+/// The row the stalled scope commits names one recipient. A share of that folder
+/// to anyone else is a share of a scope whose committed set holds nothing for
+/// them, which is refused rather than resumed.
+#[test]
+fn a_write_share_to_another_recipient_over_a_stalled_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_wave();
+    let stalled = write_name(fx.folder);
+
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(
+            fx.engine.command(Command::Grant {
+                node: fx.folder,
+                recipient_identity_public_key: EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+                    .expect("valid identity scalar")
+                    .verifying_key()
+                    .to_sec1()
+                    .to_vec(),
+                permission: Permission::Write,
+            })
+        ),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        stalled,
+        "and the owed wave is still owed"
     );
 }

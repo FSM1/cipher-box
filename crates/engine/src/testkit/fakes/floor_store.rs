@@ -17,6 +17,9 @@ struct Inner {
     failing_reads: bool,
     /// Floor keys whose epoch **read** is injected to fail.
     failing_read_keys: HashSet<Vec<u8>>,
+    /// Floor keys whose epoch **read** fails once a budget of earlier reads
+    /// of the same bar is spent.
+    read_budgets: HashMap<Vec<u8>, u64>,
 }
 
 impl Inner {
@@ -38,13 +41,30 @@ impl Inner {
     /// as well as on the owner-tag-stripped one, because a unit test drives this
     /// store bare while the engine reaches it through
     /// [`OwnerScopedFloorStore`](crate::seams::OwnerScopedFloorStore).
-    fn refuse_read(&self, key: &[u8]) -> Option<SeamError> {
+    fn refuse_read(&mut self, key: &[u8]) -> Option<SeamError> {
         if self.failing_reads {
             return Some(SeamError::new("floor read injected to fail"));
         }
-        let untagged = key.get(OWNER_TAG_LEN..).unwrap_or_default();
-        (self.failing_read_keys.contains(key) || self.failing_read_keys.contains(untagged))
-            .then(|| SeamError::new(format!("floor read injected to fail for key {key:?}")))
+        let untagged = key.get(OWNER_TAG_LEN..).unwrap_or_default().to_vec();
+        if self.failing_read_keys.contains(key) || self.failing_read_keys.contains(&untagged) {
+            return Some(SeamError::new(format!(
+                "floor read injected to fail for key {key:?}"
+            )));
+        }
+        if self.read_budgets.is_empty() {
+            return None;
+        }
+        let budgeted = [key.to_vec(), untagged]
+            .into_iter()
+            .find(|candidate| self.read_budgets.contains_key(candidate))?;
+        let budget = self.read_budgets.get_mut(&budgeted)?;
+        if *budget == 0 {
+            return Some(SeamError::new(format!(
+                "floor read injected to fail for key {key:?} past its budget"
+            )));
+        }
+        *budget -= 1;
+        None
     }
 }
 
@@ -86,6 +106,18 @@ impl InMemoryFloorStore {
         inner.failing_clear = false;
         inner.failing_reads = false;
         inner.failing_read_keys.clear();
+        inner.read_budgets.clear();
+    }
+
+    /// Let `budget` epoch-floor reads naming `key` through and fail every one
+    /// after, so a test can fail a later pass of a sequence that reads the same
+    /// bar more than once.
+    pub fn fail_epoch_floor_reads_after(&self, key: &[u8], budget: u64) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .read_budgets
+            .insert(key.to_vec(), budget);
     }
 
     /// Make every floor read fail, so a test can drive a consumer that must
@@ -136,7 +168,7 @@ fn raise(map: &mut HashMap<Vec<u8>, u64>, key: &[u8], value: u64) -> u64 {
 
 impl FloorStore for InMemoryFloorStore {
     async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        let inner = self.inner.lock().expect("lock");
+        let mut inner = self.inner.lock().expect("lock");
         if let Some(error) = inner.refuse_read(scope_id) {
             return Err(error);
         }
