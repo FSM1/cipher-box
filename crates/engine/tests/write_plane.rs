@@ -11916,6 +11916,38 @@ fn a_folder_open_paints_the_rows_it_lists_and_refuses_a_bent_one() {
     );
 }
 
+/// A host with no kernel to answer opens a folder with `SetFocus` rather than
+/// with the FUSE-op TTL check, so that arm queues the listing's unprojected rows
+/// as well. This is the path the web takes, and the one the blank listing was
+/// reported on.
+#[test]
+fn a_set_focus_command_queues_the_folders_unprojected_rows() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let served: Vec<u8> = (0..48u8).collect();
+    let (_engine_a, _events_a, _tasks_a, node) = publish_clip(&world, &blocks, &served);
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        block_on(engine_b.view()).unwrap().attrs(node).unwrap().size,
+        None,
+        "the listing alone paints no length"
+    );
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(ROOT) })).expect("the window opens");
+    assert_eq!(engine_b.queued_focus_files(), vec![node]);
+
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        block_on(engine_b.view()).unwrap().attrs(node).unwrap().size,
+        Some(served.len() as u64),
+        "the command a non-FUSE host issues paints the row too"
+    );
+}
+
 /// A version another device published between the commit and the drain is not
 /// superseded: the queued edit dead-letters with its own bytes preserved, and
 /// the concurrent version stays the head every reader sees.
