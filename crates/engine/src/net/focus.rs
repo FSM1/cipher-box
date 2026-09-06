@@ -781,7 +781,10 @@ mod tests {
 
         assert!(!reported, "a seed this device does not hold accuses nobody");
         assert_eq!(leg.verdict.get(), RefreshVerdict::Unreachable);
-        assert!(leg.listing(FOLDER).is_empty(), "and the row stays unpainted");
+        assert!(
+            leg.listing(FOLDER).is_empty(),
+            "and the row stays unpainted"
+        );
 
         leg.read_seed = Zeroizing::new(NEWER_READ_SCOPE_SEED);
         let reported = leg.run(SCOPE_A, Some(&scope_roots()));
