@@ -3,10 +3,10 @@
 //!
 //! One model, two triggers: the poll timer and a host `ManualRefresh`, which
 //! brings the next pass forward. A tick refreshes
-//! the **focus window**: the vault pointer, the open folder, its full ancestor
-//! chain to root, the scope pointers of open shared scopes, and the mailbox
-//! poll — everything else refreshes on access past the staleness threshold, so
-//! there is no background churn over the whole tree.
+//! the **focus window**: the vault pointer, the folders in view with their full
+//! ancestor chains to root, the scope pointers of open shared scopes, and the
+//! mailbox poll — everything else refreshes on access past the staleness
+//! threshold, so there is no background churn over the whole tree.
 
 use core::pin::pin;
 use core::task::Poll;
@@ -20,12 +20,26 @@ use crate::sync::model::Snapshot;
 use crate::sync::pointer::{ConsultReason, should_consult};
 use crate::sync::refresh::{ManualRefresh, RefreshVerdict};
 
-/// The open focus of the UI: the folder in view, any open shared scopes, and
-/// the files in view.
+/// The open focus of the UI: the folder navigation opened, the folders a host
+/// operation stream put in view, any open shared scopes, and the files in view.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FocusWindow {
-    /// The open folder driving the window; `None` when no folder is open.
+    /// The folder navigation opened; `None` when no folder is open. The web's
+    /// trigger source, which names one folder at a time and closes its own
+    /// window — the focus horizon measures an operation stream, not navigation.
     pub open_folder: Option<NodeId>,
+    /// Folders a host operation stream put in view, each with the stamp of the
+    /// last operation on it. The desktop's trigger source: a FUSE stream reports
+    /// the parent on a `lookup` and the folder itself on a `readdir`, so a
+    /// routine stat of the mount root arrives between two operations on the
+    /// folder the user is actually reading. One slot would let that stat evict
+    /// the folder in view before the next tick (blueprint/desktop.md
+    /// "Freshness": folders with traffic inside the focus horizon count as
+    /// open).
+    ///
+    /// Bounded by [`MAX_FOCUS_FOLDERS`](crate::facade::MAX_FOCUS_FOLDERS) and
+    /// expired per entry by [`expire_touched_folders`].
+    pub touched_folders: BTreeMap<NodeId, UnixMillis>,
     /// Scope roots of shared scopes currently open (their scope pointers ride
     /// the tick, #38 D4).
     pub open_shared_scopes: Vec<NodeId>,
@@ -36,6 +50,19 @@ pub struct FocusWindow {
     /// a full queue drops its oldest entry rather than refusing the file the
     /// host just looked at.
     pub open_files: Vec<NodeId>,
+}
+
+impl FocusWindow {
+    /// Every folder the window holds open, navigation's slot first, each named
+    /// once.
+    pub fn folders_in_view(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.open_folder.into_iter().chain(
+            self.touched_folders
+                .keys()
+                .copied()
+                .filter(|node| Some(*node) != self.open_folder),
+        )
+    }
 }
 
 /// One target a tick refreshes.
@@ -81,20 +108,36 @@ pub fn resolve_mode(cause: TickCause) -> ResolveMode {
 }
 
 /// The focus set a tick refreshes, in deterministic order: vault pointer, open
-/// shared-scope pointers, mailbox poll, open folder, ancestors to root, then the
-/// files in view. Everything else is out of the window (on-access refresh only).
+/// shared-scope pointers, mailbox poll, the open folder and each touched folder
+/// with their ancestor chains, then the files in view. Everything else is out of
+/// the window (on-access refresh only).
 pub fn focus_set(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<FocusTarget> {
     let mut targets = vec![FocusTarget::VaultPointer];
     for scope in &focus.open_shared_scopes {
         targets.push(FocusTarget::ScopePointer(*scope));
     }
     targets.push(FocusTarget::MailboxPoll);
-    if let Some(open) = focus.open_folder {
-        targets.push(FocusTarget::Folder(open));
-        for ancestor in snapshot.ancestors(open) {
-            targets.push(FocusTarget::Folder(ancestor));
+    let mut folders: Vec<(usize, NodeId)> = Vec::new();
+    let mut named: BTreeSet<NodeId> = BTreeSet::new();
+    for open in focus.folders_in_view() {
+        let chain = snapshot.ancestors(open);
+        for (rise, node) in core::iter::once(open)
+            .chain(chain.iter().copied())
+            .enumerate()
+        {
+            if named.insert(node) {
+                folders.push((chain.len() - rise, node));
+            }
         }
     }
+    // Deepest first, so the caller's root-ward merge sees every folder after its
+    // own ancestors even where two chains meet.
+    folders.sort_by_key(|&(depth, _)| core::cmp::Reverse(depth));
+    targets.extend(
+        folders
+            .into_iter()
+            .map(|(_, node)| FocusTarget::Folder(node)),
+    );
     for file in &focus.open_files {
         targets.push(FocusTarget::File(*file));
     }
@@ -266,18 +309,19 @@ pub fn focus_folders_due(
         .collect()
 }
 
-/// Whether an operation-stream focus window has gone quiet past the profile's
-/// focus horizon, so the folder it holds stops counting as open. `None` is a
-/// window nothing has touched, which nothing has to close.
+/// Drop every operation-stream folder whose traffic went quiet past the
+/// profile's focus horizon, so it stops counting as open.
 ///
 /// A window is closed by the tick, not by the host that opened it: an operation
 /// stream that stops arriving produces no call to close it with.
-pub fn focus_window_expired(
+pub fn expire_touched_folders(
+    focus: &mut FocusWindow,
     now: UnixMillis,
-    touched: Option<UnixMillis>,
     profile: &SyncTimingProfile,
-) -> bool {
-    touched.is_some_and(|last| elapsed_at_least(now, last, profile.focus_horizon))
+) {
+    focus
+        .touched_folders
+        .retain(|_, last| !elapsed_at_least(now, *last, profile.focus_horizon));
 }
 
 /// Whether a cached folder outside the focus window is due for an on-access
@@ -359,35 +403,47 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    #[test]
-    fn a_window_closes_only_once_the_horizon_has_fully_elapsed() {
-        let profile = SyncTimingProfile::CI;
-        let horizon = crate::sync::duration_millis(profile.focus_horizon);
-        let touched = UnixMillis(1_000);
-
-        assert!(
-            !focus_window_expired(UnixMillis(1_000), Some(touched), &profile),
-            "traffic that just arrived holds the window open"
-        );
-        assert!(!focus_window_expired(
-            UnixMillis(1_000 + horizon - 1),
-            Some(touched),
-            &profile
-        ));
-        assert!(focus_window_expired(
-            UnixMillis(1_000 + horizon),
-            Some(touched),
-            &profile
-        ));
+    /// The window a stream holds open, at `touched`.
+    fn touched_at(nodes: &[(NodeId, u64)]) -> FocusWindow {
+        FocusWindow {
+            touched_folders: nodes
+                .iter()
+                .map(|(node, at)| (*node, UnixMillis(*at)))
+                .collect(),
+            ..FocusWindow::default()
+        }
     }
 
     #[test]
-    fn a_window_nothing_ever_touched_needs_no_closing() {
-        assert!(!focus_window_expired(
-            UnixMillis(u64::MAX),
-            None,
-            &SyncTimingProfile::CI
-        ));
+    fn a_folder_leaves_the_window_only_once_the_horizon_has_fully_elapsed() {
+        let profile = SyncTimingProfile::CI;
+        let horizon = crate::sync::duration_millis(profile.focus_horizon);
+        let held = id(1);
+
+        for (now, still_open) in [
+            (1_000, true),
+            (1_000 + horizon - 1, true),
+            (1_000 + horizon, false),
+        ] {
+            let mut focus = touched_at(&[(held, 1_000)]);
+            expire_touched_folders(&mut focus, UnixMillis(now), &profile);
+            assert_eq!(focus.touched_folders.contains_key(&held), still_open);
+        }
+    }
+
+    /// Each folder is measured from its own last operation: the stream that
+    /// stopped feeding one has not stopped feeding the rest.
+    #[test]
+    fn a_quiet_folder_leaves_the_window_without_taking_a_busy_one_with_it() {
+        let profile = SyncTimingProfile::CI;
+        let horizon = crate::sync::duration_millis(profile.focus_horizon);
+        let (quiet, busy) = (id(1), id(2));
+        let mut focus = touched_at(&[(quiet, 0), (busy, horizon)]);
+
+        expire_touched_folders(&mut focus, UnixMillis(horizon), &profile);
+
+        assert!(!focus.touched_folders.contains_key(&quiet));
+        assert!(focus.touched_folders.contains_key(&busy));
     }
 
     use crate::facade::NodeKind;
@@ -415,6 +471,7 @@ mod tests {
             open_folder: None,
             open_shared_scopes: vec![id(7), id(0), id(7)],
             open_files: Vec::new(),
+            ..FocusWindow::default()
         };
         assert_eq!(
             consult_scopes(&snap, &focus),
@@ -456,6 +513,7 @@ mod tests {
             open_folder: Some(id(2)),
             open_shared_scopes: vec![id(7)],
             open_files: vec![id(3), id(4)],
+            ..FocusWindow::default()
         };
         assert_eq!(
             focus_set(&snap, &focus),
@@ -472,6 +530,30 @@ mod tests {
         );
     }
 
+    /// Two chains that meet still arrive deepest first, because the caller
+    /// merges them root-ward and a child merged before its parent would be
+    /// projected into a folder the parent then unlinks.
+    #[test]
+    fn two_focused_chains_arrive_deepest_first_and_name_each_folder_once() {
+        let mut snap = Snapshot::new(id(0));
+        for (parent, child) in [(0, 1), (1, 2), (1, 3), (3, 4)] {
+            snap.upsert_node(NodeMeta::new(id(child), "n", NodeKind::Folder));
+            snap.link(id(parent), id(child), 1);
+        }
+
+        let focus = FocusWindow {
+            open_folder: Some(id(2)),
+            touched_folders: BTreeMap::from([(id(4), UnixMillis(0))]),
+            ..FocusWindow::default()
+        };
+
+        assert_eq!(
+            focus_folders(&snap, &focus),
+            vec![id(4), id(2), id(3), id(1)],
+            "id(1) is the shared ancestor, named once and last"
+        );
+    }
+
     #[test]
     fn focus_folders_are_the_chain_below_the_root_nearest_first() {
         let mut snap = Snapshot::new(id(0));
@@ -484,6 +566,7 @@ mod tests {
             open_folder: Some(id(2)),
             open_shared_scopes: vec![id(7)],
             open_files: vec![id(3)],
+            ..FocusWindow::default()
         };
         assert_eq!(focus_folders(&snap, &focus), vec![id(2), id(1)]);
         assert!(focus_folders(&snap, &FocusWindow::default()).is_empty());
@@ -498,6 +581,7 @@ mod tests {
             open_folder: None,
             open_shared_scopes: vec![id(7)],
             open_files: vec![id(5), id(3), id(9)],
+            ..FocusWindow::default()
         };
         assert_eq!(focus_files(&snap, &focus), vec![id(5), id(3), id(9)]);
         assert!(focus_files(&snap, &FocusWindow::default()).is_empty());
@@ -523,6 +607,7 @@ mod tests {
             open_folder: Some(id(2)),
             open_shared_scopes: Vec::new(),
             open_files: Vec::new(),
+            ..FocusWindow::default()
         };
         let profile = SyncTimingProfile::PRODUCTION; // stale_after 90 s
         let due = |stamps: &BTreeMap<NodeId, UnixMillis>, now| {
@@ -551,6 +636,7 @@ mod tests {
             open_folder: Some(id(0)),
             open_shared_scopes: Vec::new(),
             open_files: Vec::new(),
+            ..FocusWindow::default()
         };
         assert!(
             focus_folders(&snap, &focus).is_empty(),
@@ -706,6 +792,7 @@ mod tests {
                 open_folder: Some(id(8)),
                 open_shared_scopes: vec![id(7)],
                 open_files: vec![id(9)],
+                ..FocusWindow::default()
             },
             &BTreeSet::new(),
         );
@@ -730,6 +817,7 @@ mod tests {
                 open_folder: Some(id(1)),
                 open_shared_scopes: Vec::new(),
                 open_files: Vec::new(),
+                ..FocusWindow::default()
             },
             &BTreeSet::new(),
         );
@@ -760,6 +848,7 @@ mod tests {
             open_folder: Some(id(3)),
             open_shared_scopes: Vec::new(),
             open_files: vec![id(4)],
+            ..FocusWindow::default()
         };
 
         let one = focus_by_scope(&snap, &window, &BTreeSet::from([id(1)]));

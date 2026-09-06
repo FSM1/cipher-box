@@ -152,7 +152,7 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
-    focus_by_scope, focus_folders_due, focus_window_expired, on_access_refresh_due, resolve_mode,
+    expire_touched_folders, focus_by_scope, focus_folders_due, on_access_refresh_due, resolve_mode,
     run_tick_loop, scope_root_of,
 };
 
@@ -4175,6 +4175,14 @@ pub const MAX_OPEN_STREAMS: usize = 256;
 /// to the window rather than to the listing.
 pub const MAX_FOCUS_FILES: usize = 64;
 
+/// The most folders one host operation stream holds open at once.
+///
+/// Each folder in the window costs the tick one record resolve plus its
+/// ancestor chain, so the pass's real budget is this ceiling times the depth of
+/// the tree in view. It bounds a stream that walks a whole tree, so no folder it
+/// merely passed turns into standing poll traffic.
+pub const MAX_FOCUS_FOLDERS: usize = 8;
+
 pub use crate::grants::MAX_CONTACT_CODE_BYTES;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
@@ -4385,11 +4393,6 @@ pub struct Engine<T: SeamTypes> {
     /// the only writer; read by
     /// [`relocation_scope_roots`](Self::relocation_scope_roots).
     minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// When a host operation last put the focus window's folder in view
-    /// ([`note_focus_access`](Self::note_focus_access)). Shared with the tick
-    /// loop, which is what closes a window the operation stream stopped
-    /// feeding. `None` when no window is open.
-    focus_touched: Rc<Cell<Option<UnixMillis>>>,
     /// The folder the FUSE-op TTL check last fired a hint for, and when. One
     /// slot: the check only ever asks about the folder in view, and a hint is
     /// not the refresh stamp a completed pass earns
@@ -4572,7 +4575,6 @@ impl<T: SeamTypes> Engine<T> {
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
                 grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
                 minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                focus_touched: Rc::new(Cell::new(None)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
@@ -5674,7 +5676,6 @@ where {
         let walked_read_epochs = self.walked_read_epochs.clone();
         let current_root_name = self.current_root_name.clone();
         let focus = self.focus.clone();
-        let focus_touched = self.focus_touched.clone();
         let focus_refreshed = self.focus_refreshed.clone();
         let pointer_consulted = self.pointer_consulted.clone();
         let received_verdicts = self.received_verdicts.clone();
@@ -5967,14 +5968,7 @@ where {
                             Some(WalkFailure::Unavailable) => {}
                         }
                     }
-                    // A host that derives focus from an operation stream cannot
-                    // close its own window: a stream that stops arriving produces
-                    // no call to close it with. The tick has the timer, so the
-                    // tick closes it.
-                    if focus_window_expired(scheduler.now(), focus_touched.get(), &profile) {
-                        focus.borrow_mut().open_folder = None;
-                        focus_touched.set(None);
-                    }
+                    expire_touched_folders(&mut focus.borrow_mut(), scheduler.now(), &profile);
                     // The focus window's folders below each scope root — the read
                     // leg for a subtree this device did not author. It runs before
                     // the drain, so the queue rebases onto the deepest state this
@@ -5992,8 +5986,19 @@ where {
                         focus_by_scope(&base.borrow(), &focus.borrow(), &proved_scope_ids);
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
                     for (scope_root, targets) in by_scope {
+                        let own = is_own_scope(&root_id, &proved_scope_ids, &scope_root.0);
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
+                            // A scope this vault owns and cannot read is an
+                            // outage on its own leg: a promotion the last
+                            // boundary walk could not re-prove keeps its place
+                            // in the proved set and loses its seed, so the
+                            // folders in view under it stay unread. Charge the
+                            // pass for them rather than reporting a window it
+                            // never read.
+                            if own {
+                                folder_verdict = folder_verdict.worst(RefreshVerdict::Unreachable);
+                            }
                             continue;
                         };
                         let Some(scope_floors) = floor_view(
@@ -6017,11 +6022,10 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
-                            plane: (!is_own_scope(&root_id, &proved_scope_ids, &scope_root.0))
-                                .then_some(GraftedLeg {
-                                    scope_roots: &scope_roots,
-                                    claims: &grafted_claims,
-                                }),
+                            plane: (!own).then_some(GraftedLeg {
+                                scope_roots: &scope_roots,
+                                claims: &grafted_claims,
+                            }),
                             mode,
                             observed_at: now.0,
                         };
@@ -10555,8 +10559,7 @@ where {
             .node(node)
             .is_some_and(|meta| meta.kind == NodeKind::File);
         if !is_file {
-            self.focus.borrow_mut().open_folder = Some(node);
-            self.focus_touched.set(Some(now));
+            self.note_touched_folder(node, now);
         }
         // A pass that resolved the node and a hint already filed for it both
         // answer this access; the later of the two is what it is measured from.
@@ -10581,6 +10584,32 @@ where {
             }
         }
         stale
+    }
+
+    /// Put `folder` in the operation-stream focus window, or refresh the stamp
+    /// it is already held under. Bounded by [`MAX_FOCUS_FOLDERS`], dropping the
+    /// least recently touched folder rather than refusing the folder the host
+    /// just read.
+    ///
+    /// The vault root is not admitted: it rides the vault-pointer leg of every
+    /// pass, so a slot spent on it serves no resolve and evicts a folder that
+    /// would have had one.
+    fn note_touched_folder(&self, folder: NodeId, now: UnixMillis) {
+        if folder == self.snapshot.borrow().root {
+            return;
+        }
+        let mut focus = self.focus.borrow_mut();
+        focus.touched_folders.insert(folder, now);
+        if focus.touched_folders.len() > MAX_FOCUS_FOLDERS {
+            let coldest = focus
+                .touched_folders
+                .iter()
+                .min_by_key(|(node, at)| (**at, **node))
+                .map(|(node, _)| *node);
+            if let Some(coldest) = coldest {
+                focus.touched_folders.remove(&coldest);
+            }
+        }
     }
 
     /// Queue every direct file child of `folder` the base projects no size for,
@@ -10631,9 +10660,11 @@ where {
         self.focus.borrow().open_files.clone()
     }
 
-    /// The folder the focus window currently holds open.
-    pub fn focus_folder(&self) -> Option<NodeId> {
-        self.focus.borrow().open_folder
+    /// The folders the focus window currently holds open: the folder navigation
+    /// opened, and every folder a host operation stream touched inside the focus
+    /// horizon.
+    pub fn focus_folders(&self) -> Vec<NodeId> {
+        self.focus.borrow().folders_in_view().collect()
     }
 
     /// The sync timing profile this engine runs under.
@@ -15371,6 +15402,51 @@ mod tests {
             );
         }
 
+        /// A promotion the last boundary walk could not re-prove keeps its place
+        /// in the proved set and loses its seed, so a folder in view under it
+        /// stays unread. The pass must charge itself for that rather than
+        /// answering a forced refresh with a window it never read.
+        #[test]
+        fn a_folder_under_a_scope_this_pass_cannot_read_fails_the_forced_refresh() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+
+            let promoted = NodeId([0xD1; 16]);
+            let inside = NodeId([0xD2; 16]);
+            {
+                let mut base = engine.snapshot.borrow_mut();
+                base.upsert_node(NodeMeta::new(promoted, "promoted", NodeKind::Folder));
+                base.upsert_node(NodeMeta::new(inside, "inside", NodeKind::Folder));
+                base.link(ROOT, promoted, 1);
+                base.link(promoted, inside, 1);
+            }
+            engine.descendant_scope_roots.borrow_mut().insert(promoted);
+            assert!(
+                !engine.scope_read_seeds.borrow().contains_key(&promoted.0),
+                "the walk that dropped the seed left the promotion proved"
+            );
+            engine.note_focus_access(Some(inside));
+
+            let forced = engine
+                .file_forced_pass()
+                .expect("a tick loop is running")
+                .expect("the pass is filed");
+            let mut landed = Box::pin(forced.landed());
+            tick(&world, &device, &mut tasks);
+
+            assert!(
+                matches!(
+                    landed
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop())),
+                    Poll::Ready(Err(EngineError::RefreshFailed { .. }))
+                ),
+                "a scope the pass could not read is an outage, not a refreshed window"
+            );
+        }
+
         /// A rotation that raises the scope's durable read-epoch floor revokes
         /// the epoch the cached seed was recovered under, so the seed goes —
         /// least privilege binds retention, not only install.
@@ -17023,15 +17099,74 @@ mod focus_access_tests {
     }
 
     #[test]
-    fn the_folder_in_view_becomes_the_open_folder() {
+    fn every_folder_in_view_stays_in_the_window() {
         let (engine, _clock) = engine();
-        assert_eq!(engine.focus_folder(), None);
+        assert!(engine.focus_folders().is_empty());
 
         engine.note_focus_access(Some(FOLDER));
-        assert_eq!(engine.focus_folder(), Some(FOLDER));
-
         engine.note_focus_access(Some(OTHER));
-        assert_eq!(engine.focus_folder(), Some(OTHER));
+
+        let held = engine.focus_folders();
+        assert!(held.contains(&FOLDER) && held.contains(&OTHER));
+    }
+
+    /// Every operation under the root reports the root, and the root resolves on
+    /// the vault-pointer leg of every pass. A slot spent on it would buy no
+    /// resolve and cost the folder it evicted one.
+    #[test]
+    fn the_vault_root_takes_no_slot_in_the_window() {
+        let (engine, _clock) = engine();
+        let root = engine.snapshot.borrow().root;
+
+        assert!(engine.note_focus_access(Some(root)), "the root still hints");
+
+        assert!(engine.focus_folders().is_empty());
+    }
+
+    /// The window admits what is in view now, never a whole tree walk.
+    #[test]
+    fn a_stream_past_the_ceiling_holds_only_a_windows_worth_of_folders() {
+        let (engine, clock) = engine();
+        let walked: Vec<NodeId> = (0..MAX_FOCUS_FOLDERS as u8 + 3)
+            .map(|i| NodeId([i; 16]))
+            .collect();
+        for folder in &walked {
+            engine.note_focus_access(Some(*folder));
+            clock.advance(core::time::Duration::from_millis(1));
+        }
+
+        let held = engine.focus_folders();
+        assert_eq!(
+            held.len(),
+            MAX_FOCUS_FOLDERS,
+            "the least recently touched folders leave"
+        );
+        for folder in &walked[walked.len() - MAX_FOCUS_FOLDERS..] {
+            assert!(held.contains(folder));
+        }
+    }
+
+    /// A stream that fills the window inside one clock tick still evicts
+    /// deterministically, which two devices replaying the same stream depend on.
+    #[test]
+    fn a_window_filled_inside_one_millisecond_evicts_deterministically() {
+        let held: Vec<NodeId> = (0..MAX_FOCUS_FOLDERS as u8 + 1)
+            .map(|i| NodeId([i; 16]))
+            .collect();
+        let evicted = |order: &[NodeId]| {
+            let (engine, _clock) = engine();
+            for folder in order {
+                engine.note_focus_access(Some(*folder));
+            }
+            engine.focus_folders()
+        };
+        let forward = evicted(&held);
+        let mut reversed = held.clone();
+        reversed.reverse();
+
+        assert_eq!(forward.len(), MAX_FOCUS_FOLDERS);
+        assert_eq!(forward, evicted(&reversed), "arrival order breaks no tie");
+        assert!(!forward.contains(&held[0]), "the lowest id loses the tie");
     }
 
     #[test]
@@ -17042,8 +17177,8 @@ mod focus_access_tests {
         clock.advance(SyncTimingProfile::CI.focus_horizon * 2);
         assert!(!engine.note_focus_access(None));
         assert_eq!(
-            engine.focus_folder(),
-            Some(FOLDER),
+            engine.focus_folders(),
+            vec![FOLDER],
             "closing a quiet window is the tick's job, not an operation's"
         );
     }

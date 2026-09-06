@@ -11783,6 +11783,95 @@ fn a_file_in_view_repaints_from_another_devices_version_on_the_tick() {
     );
 }
 
+/// A device that restarts on its own cached state resolves the sub-folder a
+/// host operation puts in view, and a later operation on another folder does
+/// not take it out of view.
+#[test]
+fn a_focused_sub_folder_survives_an_operation_on_another_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "test".to_owned(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the folder command queues");
+    tick(&world, &engine_a, &mut tasks_a);
+    let sub = child_id(&engine_a, ROOT, "test");
+
+    // The first device restarts on its own persisted floors and snapshot cache.
+    // Nothing published since, so its root resolves `Current` at the floor.
+    drop(tasks_a);
+    drop(engine_a);
+    let (engine_a2, _events_a2, mut tasks_a2) = boot(&world, &blocks, &alice, 43);
+
+    // Only now does a second device add a file under that folder.
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+    write_file(
+        &mut engine_b,
+        WriteTarget::NewFile {
+            parent: sub,
+            name: "remote.bin".to_owned(),
+        },
+        &(0..64u8).collect::<Vec<_>>(),
+    )
+    .expect("the second device's write commits");
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        block_on(engine_b.view()).unwrap().children(sub).len(),
+        1,
+        "the second device published the child"
+    );
+
+    assert!(
+        engine_a2.note_focus_access(Some(sub)),
+        "a folder no pass has refreshed is stale"
+    );
+    engine_a2.note_focus_access(Some(ROOT));
+
+    tick(&world, &engine_a2, &mut tasks_a2);
+    let names: Vec<String> = block_on(engine_a2.view())
+        .unwrap()
+        .children(sub)
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["remote.bin".to_owned()],
+        "the focus leg resolved the sub-folder the host put in view"
+    );
+}
+
+/// A folder leaves the window on its own quiet, not on another folder's
+/// traffic: a stream that keeps reading one folder must not keep a folder it
+/// abandoned on the poll tick for ever.
+#[test]
+fn a_folder_the_operation_stream_abandoned_leaves_the_focus_window() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (left, held) = (NodeId([0xA1; 16]), NodeId([0xA2; 16]));
+
+    engine.note_focus_access(Some(left));
+    world.scheduler.advance(engine.profile().focus_horizon);
+    engine.note_focus_access(Some(held));
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        engine.focus_folders(),
+        vec![held],
+        "the folder nothing has touched for a horizon stops riding the tick"
+    );
+}
+
 /// The on-access file queue is bounded: a host that stats a whole listing costs
 /// the next tick a window's worth of resolves, never one per entry.
 #[test]

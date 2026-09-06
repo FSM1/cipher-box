@@ -863,30 +863,36 @@ fn a_stale_hit_answers_from_the_render_without_yielding() {
     );
 }
 
-/// The op stream is the desktop focus trigger: a folder the kernel touched is
-/// the open folder, and the engine's tick refreshes it. Closing a window the
-/// stream stopped feeding is the tick's own job (`focus_window_expired`) — an
+/// The op stream is the desktop focus trigger: every folder the kernel touched
+/// is in view, and the engine's tick refreshes them. Closing a window the stream
+/// stopped feeding is the tick's own job (`expire_touched_folders`) — an
 /// operation that never arrives cannot close anything.
 #[test]
 fn fuse_traffic_puts_a_folder_in_the_focus_set() {
-    let (mut core, root, _clock, _events) = mount_clocked(
+    let (mut core, _root, _clock, _events) = mount_clocked(
         RecordingAdapter::push_capable(),
         &[("notes.txt", NodeKind::File), ("sub", NodeKind::Folder)],
     );
-    assert_eq!(core.engine_mut().focus_folder(), None);
+    assert!(core.engine_mut().focus_folders().is_empty());
 
     let sub = block_on(core.lookup(ROOT_INO, "sub")).expect("lookup");
-    assert_eq!(
-        core.engine_mut().focus_folder(),
-        Some(root),
-        "a lookup puts the folder it searched in view"
+    assert!(
+        core.engine_mut().focus_folders().is_empty(),
+        "the vault root rides the pointer leg of every pass, so it takes no slot"
     );
 
     listing(&mut core, sub.ino);
     assert_eq!(
-        core.engine_mut().focus_folder(),
-        Some(sub.node),
+        core.engine_mut().focus_folders(),
+        vec![sub.node],
         "the window follows the op stream into the folder it descends into"
+    );
+
+    block_on(core.getattr(ROOT_INO)).expect("the root stats");
+    assert_eq!(
+        core.engine_mut().focus_folders(),
+        vec![sub.node],
+        "and a stat of the folder it came from does not take it out of view"
     );
 }
 
@@ -2390,9 +2396,13 @@ mod published {
     }
 
     fn engine_on(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
+        engine_seeded(device, 42)
+    }
+
+    fn engine_seeded(device: &FakeDevice, seed: u64) -> (Engine<FakeSeamTypes>, EventStream) {
         Engine::new(
             device.seam_set(),
-            Box::new(SeededEntropy::new(42)),
+            Box::new(SeededEntropy::new(seed)),
             SyncTimingProfile::CI,
             ContentProfile::CI,
             StoragePolicy::CI,
@@ -2492,20 +2502,26 @@ mod published {
         advance_and_pump(mount);
     }
 
-    /// Publish a new version of `CLIP` from a second device of the same
-    /// account. The mount's own engine stages nothing, so only a resolve can
-    /// tell it the head moved.
-    fn publish_from_another_device(mount: &mut Mount, plaintext: &[u8]) {
-        let node = mount.node;
+    /// Publish `target` from a second device of the same account. The mount's
+    /// engine stages nothing, so only a resolve can tell it what landed.
+    ///
+    /// `seed` is that device's entropy: two devices drawing the same node ids
+    /// would collide rather than converge.
+    fn publish_from_another_device(
+        mount: &mut Mount,
+        seed: u64,
+        target: WriteTarget,
+        plaintext: &[u8],
+    ) {
         let device = mount.world.device(b"alice-second-device");
         serve_http(&device, &mount.blocks, 1_000);
-        let (mut engine, _events) = engine_on(&device);
+        let (mut engine, _events) = engine_seeded(&device, seed);
         block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
             .expect("the second device adopts the same owner root");
         let mut tasks = mount.world.scheduler.take_spawned_tasks();
         poll_tasks_until_parked(&mut tasks);
 
-        let handle = block_on(engine.begin_write(version(node), plaintext.len() as u64))
+        let handle = block_on(engine.begin_write(target, plaintext.len() as u64))
             .expect("the second device's write opens");
         for slice in plaintext.chunks(7) {
             block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
@@ -2524,6 +2540,40 @@ mod published {
 
     fn opened(mount: &mut Mount) -> HandleId {
         block_on(mount.core.open(mount.ino, Access::Read)).expect("the file opens")
+    }
+
+    /// The mount's focus window is the FUSE op stream: a sub-folder the kernel
+    /// listed picks up what another device published into it on the next tick,
+    /// and a stat of the mount root between the listing and the tick does not
+    /// take it out of view.
+    #[test]
+    fn a_listed_sub_folder_picks_up_a_remote_child_on_the_next_tick() {
+        let mut mount = mount_published(&clip_bytes(), CacheBudget::CI);
+        let sub = block_on(mount.core.mkdir(ROOT_INO, "sub")).expect("the folder is created");
+        advance_and_pump(&mut mount);
+
+        publish_from_another_device(
+            &mut mount,
+            7,
+            WriteTarget::NewFile {
+                parent: sub.node,
+                name: "remote.bin".to_owned(),
+            },
+            &(0..64u8).collect::<Vec<_>>(),
+        );
+
+        // The listing is what puts the folder in the focus window.
+        assert!(names(&mut mount.core, sub.ino).is_empty());
+        // Then the kernel stats the mount root, the way a shell and a volume
+        // poller do between two reads of the folder in view.
+        block_on(mount.core.getattr(ROOT_INO)).expect("the root stats");
+
+        advance_and_pump(&mut mount);
+        assert_eq!(
+            names(&mut mount.core, sub.ino),
+            vec!["remote.bin".to_owned()],
+            "the tick's own-scope focus leg resolved the listed folder"
+        );
     }
 
     /// An append lands after every byte the file already has, and reading the
@@ -3014,7 +3064,8 @@ mod published {
         block_on(mount.core.read(reader, 0, 1)).expect("the first read binds the stream");
 
         let remote = vec![0xBB; 323];
-        publish_from_another_device(&mut mount, &remote);
+        let node = mount.node;
+        publish_from_another_device(&mut mount, 42, version(node), &remote);
 
         // A fresh open resolves the newer head and repaints the rendered length.
         let fresh = opened(&mut mount);
@@ -3053,7 +3104,8 @@ mod published {
         let ino = mount.ino;
         let remote = vec![0xBB; 323];
         assert_ne!(remote.len(), published.len(), "the head length moves");
-        publish_from_another_device(&mut mount, &remote);
+        let node = mount.node;
+        publish_from_another_device(&mut mount, 42, version(node), &remote);
 
         // Nothing has resolved the file's own record yet, so the base still
         // holds what the mount came up on — and this call is what asks for it.
@@ -3304,10 +3356,9 @@ mod published {
             "the lookup queued the child's own record, which is the only thing \
              that projects a length"
         );
-        assert_eq!(
-            mount.core.engine_mut().focus_folder(),
-            Some(ROOT),
-            "the window stays on the folder the lookup searched"
+        assert!(
+            mount.core.engine_mut().focus_folders().is_empty(),
+            "the vault root the lookup searched rides the pointer leg, not the window"
         );
     }
 
