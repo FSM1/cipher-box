@@ -709,6 +709,25 @@ mod tests {
         assert!(matches!(error, GateError::Seam(_)), "earned [{error}]");
     }
 
+    /// A scope with no read-epoch floor has authenticated no epoch at all, so
+    /// no label can claim to sit above one. The verdict stands.
+    #[test]
+    fn a_failed_unseal_under_no_read_epoch_floor_stays_a_trust_verdict() {
+        let published = publish(Spec::default());
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let floors = InMemoryFloorStore::default();
+        let adopter = seeded_adopter(&gw, &http, &floors, &published, NODE, CURRENT_EPOCH);
+
+        let refused = refusal(
+            block_on(adopter.adopt(&published.name, &published.record_bytes)),
+            "a seed the record was not sealed under must open nothing",
+        );
+        assert_eq!(refused.stage, GateStage::Unseal);
+        assert_eq!(refused.check(), "seal-open-failed");
+        assert_eq!(read_epoch_floor(&floors), None, "the floor stayed absent");
+    }
+
     /// A scope root below its own read-epoch floor is never a wave target: it
     /// carries seeds, a grant blob and a commitment, so admitting one hands a
     /// revoked reader material the cut took away. The grant section marks it,
