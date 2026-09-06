@@ -60,7 +60,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: macos-cargo-${{ hashFiles('Cargo.lock') }}
+          key: macos-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: macos-cargo-
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -120,7 +120,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
+          key: windows-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: windows-cargo-
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -192,7 +192,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/desktop/src-tauri/target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: linux-cargo-
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10

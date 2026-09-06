@@ -2,7 +2,7 @@
 # Never a PR gate: it is a load generator, and the only thing it can be pointed
 # at is a loopback stack this job stands up, or staging behind the `staging`
 # environment's approval. The harness crate's own unit tests block merges in
-# CI's `Cargo Check & Test (Linux)` job.
+# CI's `Rust` area's `Workspace tests (Linux)` job.
 name: Load Tests
 
 on:
@@ -116,7 +116,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: linux-cargo-
 
       - name: Install dependencies

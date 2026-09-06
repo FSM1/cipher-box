@@ -1,0 +1,161 @@
+# The Desktop area of the PR gate (blueprint/testing.md, blueprint/desktop.md):
+# the Tauri shell on all three platforms, its frontend, and the harnesses that
+# drive it. Called by ci.yml.
+name: CI Desktop
+
+on:
+  workflow_call:
+    inputs:
+      ts:
+        description: The TypeScript path filter matched.
+        required: true
+        type: boolean
+      desktop:
+        description: The desktop path filter matched.
+        required: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  frontend:
+    name: Desktop frontend typecheck + tests
+    if: inputs.ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The harnesses type and drive themselves against the `apps/web` source,
+      # which reaches the shared packages through their published entries, so
+      # those declarations must exist before the type checker and vitest run.
+      - name: Build the shared packages the harnesses reach
+        run: pnpm --filter @cipherbox/client --filter @cipherbox/login --filter @cipherbox/auth-ui run build
+
+      # The two mounted-matrix harnesses typecheck and unit-test here: their
+      # suites run on the main gate, so this is where a broken harness fails a
+      # pull request.
+      - name: Run the type checker
+        run: pnpm --filter @cipherbox/desktop --filter @cipherbox/desktop-e2e --filter @cipherbox/cross-client-e2e run typecheck
+
+      - name: Run the unit suites
+        run: pnpm --filter @cipherbox/desktop --filter @cipherbox/desktop-e2e --filter @cipherbox/cross-client-e2e run test
+
+  build:
+    name: Desktop Build
+    if: inputs.desktop
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            pkg-config \
+            build-essential
+
+      # The shell links the macOS host adapter, whose vendored `fuser` probes
+      # `fuse-t.pc` at build time (blueprint/desktop.md "Backends").
+      - uses: ./.github/actions/setup-fuse-t
+        if: runner.os == 'macOS'
+
+      # And the Windows one, whose `winfsp-sys` generates its bindings against
+      # the headers and import library the MSI installs — the shell links the
+      # adapter and states WinFsp's `/DELAYLOAD` arg itself, so this leg needs
+      # the driver as much as the leg that checks the adapter does.
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cargo fmt (desktop shell)
+        run: cargo fmt -p cipherbox-desktop --check
+
+      # Clippy is a superset of `cargo check` over the same targets, so a
+      # separate check step only compiles the crate twice.
+      - name: Cargo clippy (desktop shell)
+        run: cargo clippy -p cipherbox-desktop --all-targets -- -D warnings
+
+      # The workspace-wide `cargo test` excludes this crate (webkit2gtk deps),
+      # so the loopback OAuth callback's suite blocks a merge here or nowhere.
+      - name: Cargo test (desktop shell)
+        run: cargo test -p cipherbox-desktop
+
+      # The `e2e-hook` build carries the control endpoint's token compare, its
+      # refusal parity and its byte ceilings. The mounted suite runs on the main
+      # gate only, so those would otherwise reach main unlinted and untested.
+      - name: Cargo clippy and test with the e2e hook
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy -p cipherbox-desktop --all-targets --features e2e-hook -- -D warnings
+          cargo test -p cipherbox-desktop --features e2e-hook
+
+      # The hook must never ship. A default feature set that pulled it in would
+      # put a control endpoint in a member's build.
+      - name: The e2e hook is off by default
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --no-deps --format-version 1 \
+            | node -e '
+              const meta = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              const shell = meta.packages.find((p) => p.name === "cipherbox-desktop");
+              const enabled = shell.features.default ?? [];
+              if (enabled.includes("e2e-hook")) {
+                console.error("cipherbox-desktop enables e2e-hook by default");
+                process.exit(1);
+              }
+            '
+
+      # Builds the frontend too, through `beforeBuildCommand`.
+      - name: Tauri build (unsigned, no bundle)
+        run: pnpm --filter @cipherbox/desktop tauri build --no-bundle
+
+      # The shipped binary links FUSE-T's `@rpath` install name but sits outside
+      # the guarded workspace test leg, so the rpath its build script emits is
+      # asserted on the artifact itself.
+      - name: FUSE-T rpath reaches the shell binary
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          libdir=$(pkg-config --variable=libdir fuse-t)
+          otool -L target/release/cipherbox-desktop | grep -q '@rpath/libfuse-t.dylib'
+          otool -l target/release/cipherbox-desktop | grep -A2 LC_RPATH | grep -q "path ${libdir}"

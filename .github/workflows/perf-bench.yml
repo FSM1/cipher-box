@@ -57,7 +57,7 @@ jobs:
           # hold a dev/test-profile `target/`, `cargo bench` builds under the
           # release-derived bench profile, and sharing a primary key means this
           # job restores nothing reusable and then never saves what it built.
-          key: perf-bench-cargo-${{ hashFiles('Cargo.lock') }}
+          key: perf-bench-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: |
             perf-bench-cargo-
 

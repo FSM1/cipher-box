@@ -1,0 +1,126 @@
+# The Repo area of the PR gate (blueprint/testing.md): the checks that read the
+# whole repository and answer to no path filter. Called by ci.yml.
+name: CI Repo
+
+on:
+  workflow_call:
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
+
+permissions: {}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run linter
+        run: pnpm lint
+
+      # The Caddyfile is shipped to the VPS by scp and never compiled in CI, so
+      # a config that no longer parses — or one that quietly stops enforcing the
+      # accelerator front's egress obligations — reaches staging unnoticed.
+      # Built once with a layer cache and handed to the checker: an unchanged
+      # Dockerfile restores in seconds instead of compiling Caddy on every PR.
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: docker/caddy
+          load: true
+          tags: cipherbox-caddy:lint
+          cache-from: type=gha,scope=caddy-front
+          cache-to: type=gha,scope=caddy-front,mode=max
+
+      - name: Check the accelerator front's egress obligations
+        env:
+          CADDY_IMAGE: cipherbox-caddy:lint
+        run: pnpm lint:accelerator-front
+
+  tracker-refs:
+    name: Tracker Refs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      - name: No source comment names a tracking issue
+        run: node scripts/check-tracker-refs.mjs
+
+  # The updater refuses any release that its configured key did not sign. A
+  # pubkey that drifts from the CI signing secret thus ships an app that can
+  # never update again. This check answers to no path filter, because a key
+  # rotation touches none, and the signing key stays out of every job that runs
+  # the desktop crate build scripts. Dependabot runs receive no repository
+  # secrets, so the job skips there.
+  updater-key:
+    name: Updater Key
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # No git operation follows the checkout, and this job holds the signing
+      # secret, so the job token stays out of the workspace .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Assert the updater pubkey matches the signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is unavailable to this run, so the updater key is unverifiable"
+            exit 1
+          fi
+          WORK=$(mktemp -d)
+          # Tauri wraps both the public key and the signature file in base64;
+          # minisign wants the unwrapped bytes.
+          jq -er '.plugins.updater.pubkey' apps/desktop/src-tauri/tauri.conf.json \
+            | base64 -d > "${WORK}/updater.pub"
+          echo 'cipherbox updater key check' > "${WORK}/payload"
+          # `exec`, not the package's `tauri` script: that wrapper appends a
+          # `--config` the `signer` subcommand rejects.
+          pnpm --filter @cipherbox/desktop exec tauri signer sign "${WORK}/payload"
+          base64 -d < "${WORK}/payload.sig" > "${WORK}/payload.minisig"
+          minisign -V -p "${WORK}/updater.pub" -m "${WORK}/payload" -x "${WORK}/payload.minisig"

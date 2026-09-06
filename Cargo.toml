@@ -52,3 +52,9 @@ serde_json = "1"
 # change moves which names collide, which is a merge-visible law.
 unicode-normalization = "=0.1.25"
 zeroize = "1"
+
+# The bound tests do one signature, key derivation, or seal per item up to a
+# ceiling, so unoptimized crypto dependencies dominate their run time. Only
+# dependencies are optimized; the workspace crates stay at opt-level 0.
+[profile.dev.package."*"]
+opt-level = 3

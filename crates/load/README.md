@@ -7,7 +7,7 @@ contract.
 
 Load runs are dispatch-only, never merge-blocking — run them from
 `.github/workflows/load-test.yml`. The crate's own unit tests do block merges,
-in CI's `Cargo Check & Test (Linux)` job.
+in CI's `Rust` area's `Workspace tests (Linux)` job.
 
 ## Scenarios
 
