@@ -402,6 +402,11 @@ export interface VaultStorageDescriptor {
   /** `null` when the quota probe did not answer. */
   quota: QuotaDescriptor | null;
   pendingReclaimBytes: number;
+  /**
+   * True when `pendingReclaimBytes` is a floor on the debt rather than its
+   * total: the last reclaim pass read a bounded window of the retire ledger.
+   */
+  pendingReclaimIsPartial: boolean;
   reclaimStalls: ReclaimStallDescriptor[];
 }
 
@@ -615,7 +620,29 @@ export type CommandOutcomeDescriptor =
   | { kind: 'contactImported'; identityPublicKey: Uint8Array; encPublicKey: Uint8Array }
   /** The whole bearer capability: a host puts `fragment` in a URL and hands the
    * same characters back to `claimInviteLink`, reading none of it. */
-  | { kind: 'inviteLinkMinted'; fragment: string };
+  | { kind: 'inviteLinkMinted'; fragment: string }
+  /**
+   * The device was forgotten. `unsettledBytes` is what the settling pass ahead
+   * of the erase could not pay — pinned bytes that stay charged to the account
+   * with no device left owing them — and `null` when no pass ran at all, so the
+   * ledger was never read.
+   */
+  | ({ kind: 'forgotten' } & ForgottenResidual);
+
+/**
+ * What a forget's settling pass could not pay before the erase: pinned bytes
+ * that stay charged to the account with no device left owing them.
+ */
+export interface ForgottenResidual {
+  /** `null` when no pass ran, so the ledger was never read. */
+  unsettledBytes: number | null;
+  /**
+   * True when that figure is a floor rather than the whole debt: the pass read
+   * a bounded window of the retire ledger and left keys unattempted.
+   */
+  unsettledIsPartial: boolean;
+  stalls: number;
+}
 
 /**
  * Where a streaming write lands: a new file named `name` under `parent`, or a

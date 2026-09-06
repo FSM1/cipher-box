@@ -67,8 +67,8 @@ use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::retire::{
-    LiveRecord, OrphanHeads, ReclaimStall, StagingRetireLedger, drain_owed_retires, orphaned_head,
-    retire,
+    LiveRecord, OrphanHeads, ReclaimStall, RootSource, StagingRetireLedger, drain_owed_retires,
+    orphaned_head, retire,
 };
 use crate::net::{
     Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
@@ -88,9 +88,9 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::{
-    MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, MAX_QUARANTINE_PROOFS, Quarantined, Reclamation,
-    doomed_journal_key, journalled_keys, open_reclamation, record_matches_manifest,
-    seal_reclamation,
+    MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, MAX_QUARANTINE_PROOFS,
+    Quarantined, Reclamation, doomed_journal_key, journalled_keys, open_reclamation,
+    record_matches_manifest, seal_reclamation,
 };
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
@@ -998,6 +998,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// the facade's read surface. Replaced whole on every pass that reads the
     /// ledger, so a stall that clears stops being reported.
     pub(crate) reclaim_stalls: &'a RefCell<Vec<ReclaimStall>>,
+    /// Where each bounded bookkeeping loop stopped, shared with the facade's
+    /// read surface for the reclaim figure's own completeness bit.
+    pub(crate) bookkeeping: &'a RefCell<BookkeepingCursors>,
     /// Head blocks this session's publishes orphaned, pending retirement.
     pub(crate) orphan_heads: &'a OrphanHeads,
     /// Whether a poll tick has reconciled the record plane since this session
@@ -1124,6 +1127,32 @@ enum Verdict {
     Retry,
 }
 
+/// Where the last pass stopped in each bounded bookkeeping loop, and whether
+/// the reclaim figure it left behind prices the whole owed set.
+///
+/// Session-lived rather than durable: progress comes from rotation, so a
+/// restart costs a pass its place in the listing and nothing more.
+#[derive(Debug, Default)]
+pub struct BookkeepingCursors {
+    /// The retire-ledger key the last pass attempted
+    /// ([`OwedPage::cursor`](crate::seams::OwedPage)).
+    ledger: Option<Vec<u8>>,
+    /// Whether that read stopped short of the whole owed set, so
+    /// [`pending_reclaim_bytes`](crate::facade::Engine::pending_reclaim_bytes)
+    /// is a floor on the debt rather than its total.
+    ledger_partial: bool,
+    /// Per scope root, the doomed-journal target the last pass attempted.
+    journal: BTreeMap<[u8; 16], [u8; 16]>,
+}
+
+impl BookkeepingCursors {
+    /// Whether the last reclaim pass priced only a window of the owed set.
+    #[must_use]
+    pub fn reclaim_is_partial(&self) -> bool {
+        self.ledger_partial
+    }
+}
+
 /// What one tick's journal replay may spend across every scope it settles: the
 /// entries it replays and the quarantine proofs those entries decide against.
 /// Held by the whole tick rather than per scope, so a vault of many promoted
@@ -1142,6 +1171,10 @@ struct JournalBudget {
     /// resolve of one descendant's record, so a delete of a large subtree
     /// settles over several ticks rather than holding one open.
     proofs: usize,
+    /// Open attempts left across every scope ([`MAX_BOOKKEEPING_OPENS`]).
+    /// Charged whether or not the value opens, which is what bounds a prefix
+    /// nothing sweeps.
+    opens: usize,
 }
 
 impl JournalBudget {
@@ -1151,6 +1184,7 @@ impl JournalBudget {
             replays: MAX_JOURNAL_REPLAYS,
             per_scope: MAX_JOURNAL_REPLAYS.div_ceil(scopes.max(1)),
             proofs: MAX_QUARANTINE_PROOFS,
+            opens: MAX_BOOKKEEPING_OPENS,
         }
     }
 
@@ -1466,30 +1500,41 @@ where
         let owner = owner_tag(vault.enc_secret);
         let seal = self.bookkeeping_seal(vault);
         let mut budget = JournalBudget::new(scopes.len());
+        let mut owed_now = BTreeSet::new();
         for scope in scopes {
-            self.settle_journalled_deletes(
-                scope,
-                seal,
-                &owner,
-                &staged,
-                journalled_deletes,
-                &mut budget,
-            )
-            .await;
+            owed_now.extend(
+                self.settle_journalled_deletes(
+                    scope,
+                    seal,
+                    &owner,
+                    &staged,
+                    journalled_deletes,
+                    &mut budget,
+                )
+                .await,
+            );
         }
+        let resume = self.bookkeeping.borrow().ledger.clone();
         if let Some(pass) = drain_owed_retires(
             &StagingRetireLedger::over(self.staging, seal, &staged),
             &owner,
             self.api,
-            self.gateway,
-            self.http,
-            self.content_profile,
+            &RootSource {
+                gateway: self.gateway,
+                http: self.http,
+                profile: self.content_profile,
+            },
+            &owed_now,
+            resume.as_deref(),
             async |node, owing| self.live_owing_record(vault, node, owing).await,
         )
         .await
         {
             self.pending_reclaim.set(pass.still_owed);
             *self.reclaim_stalls.borrow_mut() = pass.stalls;
+            let mut bookkeeping = self.bookkeeping.borrow_mut();
+            bookkeeping.ledger = pass.cursor;
+            bookkeeping.ledger_partial = pass.partial;
         }
         reconcile_staging_over(
             self.staging,
@@ -2977,12 +3022,17 @@ where
     /// An entry that does not answer to the target its key names is refused
     /// rather than replayed ([`Reclamation::is_for`]).
     ///
-    /// Bounded by the entries it settles, never by the keys it lists, and by
-    /// this scope's share of the tick's slots ([`JournalBudget`]). A refused or
-    /// unreadable entry costs a local read and an HPKE open, but no slot:
-    /// nothing sweeps this prefix, so charging it one would starve every entry
-    /// sorting behind it for good. Settled entries leave, so the rest are
-    /// reached on the next pass.
+    /// Bounded twice ([`JournalBudget`]): by this scope's share of the tick's
+    /// replay slots, which only a settled entry spends, and by the tick's open
+    /// attempts, which every key it reaches spends whether or not the value
+    /// opens. Nothing sweeps this prefix, so the open ceiling is what stops a
+    /// run of entries this identity cannot read from spending the whole tick;
+    /// the resume point is what stops it starving the entries behind them.
+    ///
+    /// Answers with every node it may have journaled a debt for. Those debts
+    /// land after `staged` was taken, so the reclaim pass reading that listing
+    /// holds their tombstones rather than sweeping them
+    /// ([`drain_owed_retires`]).
     async fn settle_journalled_deletes(
         &self,
         scope: &DrainScope<'_>,
@@ -2991,18 +3041,37 @@ where
         staged: &[Vec<u8>],
         journalled_now: &[NodeId],
         budget: &mut JournalBudget,
-    ) {
+    ) -> BTreeSet<[u8; 16]> {
+        let mut owed_now = BTreeSet::new();
         let mut mine = budget.share();
-        for (key, scope_root, target) in journalled_keys(owner, staged) {
-            if mine == 0 {
+        // Another scope's entry is that scope's to settle: its names derive from
+        // a write seed this end does not hold, so every verdict here would be a
+        // retry against a record this pass never read.
+        let mut scoped: Vec<(Vec<u8>, NodeId)> = journalled_keys(owner, staged)
+            .into_iter()
+            .filter(|(_, scope_root, _)| *scope_root == scope.source.root)
+            .map(|(key, _, target)| (key, target))
+            .collect();
+        if scoped.is_empty() {
+            return owed_now;
+        }
+        // The listing is sorted, so the resume point names the same place on
+        // every host; the read wraps, so an unopenable run costs one pass its
+        // ceiling rather than starving the entries behind it for good.
+        let resume = self
+            .bookkeeping
+            .borrow()
+            .journal
+            .get(&scope.source.root.0)
+            .copied();
+        let from = resume.map_or(0, |after| {
+            scoped.partition_point(|(_, target)| target.0 <= after)
+        });
+        let count = scoped.len();
+        scoped.rotate_left(from % count);
+        for (key, target) in scoped {
+            if mine == 0 || budget.opens == 0 {
                 break;
-            }
-            // Another scope's entry is that scope's to settle: its names derive
-            // from a write seed this end does not hold, so every verdict here
-            // would be a retry against a record this pass never read. Skipped
-            // whole — no replay slot, and no attempt against its quarantine.
-            if scope_root != scope.source.root {
-                continue;
             }
             // This pass wrote and settled that entry moments ago, and its
             // quarantine is waiting on the poll tick this pass has not had. It
@@ -3010,6 +3079,11 @@ where
             if journalled_now.contains(&target) {
                 continue;
             }
+            budget.opens -= 1;
+            self.bookkeeping
+                .borrow_mut()
+                .journal
+                .insert(scope.source.root.0, target.0);
             let Ok(Some(entry)) = self.staging.staged_bytes(&key).await else {
                 continue;
             };
@@ -3023,12 +3097,15 @@ where
                 true => Settle::Decide(&mut budget.proofs),
                 false => Settle::Hold,
             };
+            owed_now.extend(reclamation.owed.iter().map(|entry| entry.node));
+            owed_now.extend(reclamation.quarantined.iter().map(|held| held.node.0));
             let residue = self
                 .settle_reclamation(scope, seal, owner, &reclamation, settle)
                 .await;
             self.update_journal(seal, &key, target, &reclamation, residue)
                 .await;
         }
+        owed_now
     }
 
     /// Every node the delete of `target` detaches, refusing the whole operation
@@ -3618,7 +3695,7 @@ where
                 .iter()
                 .filter(|version| quoted.insert(version.content_cid.as_str()))
                 .map(|version| {
-                    OwedRetire::whole_retired(
+                    OwedRetire::whole(
                         node.node.0,
                         version.content_cid.clone(),
                         version.pinned_bytes,
@@ -3669,12 +3746,7 @@ where
         };
         let mut owed = reclamation.owed.clone();
         owed.extend(proven.iter().flat_map(|entry| entry.owed.iter().cloned()));
-        if !owed.is_empty()
-            && StagingRetireLedger::new(self.staging, seal)
-                .owe(owner, &owed)
-                .await
-                .is_err()
-        {
+        if !owed.is_empty() && !self.journal_debt(seal, owner, &owed).await {
             // Leaving the bytes pinned is the lawful side of this failure: the
             // unlink is already live, and an unpin the ledger never recorded is
             // one nothing can account for. The quarantine goes back whole, so a
@@ -3742,6 +3814,28 @@ where
                 binned_at: reclamation.binned_at,
             }),
         }
+    }
+
+    /// Journal `owed` against the retire ledger, tombstoning every owing node
+    /// first. These nodes are retired by construction — the unlink that detached
+    /// them is already live — and a debt whose node reads as published waits on
+    /// a record the delete retired out from under it. Answers whether both
+    /// halves landed; the tombstone leads, so the pair can only fail toward a
+    /// classification with no debt behind it yet.
+    async fn journal_debt(
+        &self,
+        seal: BookkeepingSeal<'_>,
+        owner: &[u8; 32],
+        owed: &[OwedRetire],
+    ) -> bool {
+        let ledger = StagingRetireLedger::new(self.staging, seal);
+        let nodes: BTreeSet<[u8; 16]> = owed.iter().map(|entry| entry.node).collect();
+        for node in nodes {
+            if ledger.tombstone(owner, node).await.is_err() {
+                return false;
+            }
+        }
+        ledger.owe(owner, owed).await.is_ok()
     }
 
     /// Decide one pass's worth of quarantined descendants: those the proof
@@ -4685,9 +4779,6 @@ where
             let expansion = self.expand_version(version).await?;
             owed.push(OwedRetire {
                 node: node.0,
-                // The prune shortens this node's history and leaves the node
-                // itself published.
-                owing: OwingRecord::Published,
                 target: version.content_cid.clone(),
                 owed_bytes: expansion.minus(&charged).pinned_bytes,
                 manifest_bytes: expansion.pinned_bytes,

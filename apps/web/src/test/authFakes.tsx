@@ -199,6 +199,7 @@ export const FAKE_VAULT_STORAGE: VaultStorageDescriptor = {
   },
   quota: { usedBytes: 1024, limitBytes: 4096, advisory: false },
   pendingReclaimBytes: 0,
+  pendingReclaimIsPartial: false,
   reclaimStalls: [],
 };
 

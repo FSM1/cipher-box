@@ -53,14 +53,17 @@ impl RefreshVerdict {
 /// Owns nothing of the engine, so a host that also serves a kernel awaits the
 /// network legs off the loop it filed them from rather than freezing every
 /// callback behind them (blueprint/desktop.md "the never-block law").
-pub struct ForcedPass(oneshot::Receiver<RefreshVerdict>);
+pub struct ForcedPass {
+    verdict: oneshot::Receiver<RefreshVerdict>,
+    drained: oneshot::Receiver<()>,
+}
 
 impl ForcedPass {
     /// What the pass reconciled, in the verdicts
     /// [`Command::ManualRefresh`](crate::facade::Command::ManualRefresh)
     /// reports — this is where that mapping lives.
     pub async fn landed(self) -> Result<(), EngineError> {
-        match self.0.await {
+        match self.verdict.await {
             Ok(RefreshVerdict::Reconciled) => Ok(()),
             Ok(RefreshVerdict::Unreachable) => Err(EngineError::RefreshFailed {
                 message: "no endpoint served a record this pass could adopt".to_owned(),
@@ -75,14 +78,33 @@ impl ForcedPass {
             }),
         }
     }
+
+    /// Waits for the whole pass, drain included, rather than for its read legs
+    /// alone: [`landed`](Self::landed) answers where the read verdict settles,
+    /// which is ahead of the queue, the reclaim settle and the share legs.
+    ///
+    /// Best-effort by construction — a loop that stopped answers nothing, and
+    /// the caller carries on.
+    pub async fn drained(self) {
+        let _ = self.drained.await;
+    }
+}
+
+/// One filed request's two answers: the read verdict, and the end of the pass
+/// that carried it.
+struct Pending {
+    verdict: oneshot::Sender<RefreshVerdict>,
+    drained: oneshot::Sender<()>,
 }
 
 #[derive(Default)]
 struct Inner {
     /// Requests no pass has taken yet; the next pass answers all of them.
-    queued: Vec<oneshot::Sender<RefreshVerdict>>,
+    queued: Vec<Pending>,
     /// Requests the running manual pass answers. `Some` only while one runs.
-    running: Option<Vec<oneshot::Sender<RefreshVerdict>>>,
+    running: Option<Vec<Pending>>,
+    /// Requests whose verdict is answered and whose pass is still running.
+    draining: Vec<oneshot::Sender<()>>,
     /// The parked tick loop, woken by the first queued request.
     waker: Option<Waker>,
     /// Whether a tick loop is live to answer requests at all.
@@ -101,11 +123,13 @@ impl ManualRefresh {
         self.inner.borrow_mut().armed = true;
     }
 
-    /// Files a request, handing back the verdict channel of the pass that will
-    /// answer it. `None` when no tick loop is running — a caller must fail
-    /// rather than park on a pass that will never come.
-    pub(crate) fn request(&self) -> Option<oneshot::Receiver<RefreshVerdict>> {
-        let (sender, receiver) = oneshot::channel();
+    /// Files a request as a pass its caller can await without holding the
+    /// engine. `None` when no tick loop is running — a caller must fail rather
+    /// than park on a pass that will never come.
+    pub(crate) fn filed(&self) -> Option<ForcedPass> {
+        let (verdict, verdict_rx) = oneshot::channel();
+        let (drained, drained_rx) = oneshot::channel();
+        let pending = Pending { verdict, drained };
         let waker = {
             let mut inner = self.inner.borrow_mut();
             if !inner.armed {
@@ -115,11 +139,11 @@ impl ManualRefresh {
                 // Join the running pass rather than queueing a second: two
                 // clicks cost one network pass.
                 Some(running) => {
-                    running.push(sender);
+                    running.push(pending);
                     None
                 }
                 None => {
-                    inner.queued.push(sender);
+                    inner.queued.push(pending);
                     inner.waker.take()
                 }
             }
@@ -127,13 +151,10 @@ impl ManualRefresh {
         if let Some(waker) = waker {
             waker.wake();
         }
-        Some(receiver)
-    }
-
-    /// Files a request as a pass its caller can await without holding the
-    /// engine. `None` for the reason [`request`](Self::request) gives.
-    pub(crate) fn filed(&self) -> Option<ForcedPass> {
-        self.request().map(ForcedPass)
+        Some(ForcedPass {
+            verdict: verdict_rx,
+            drained: drained_rx,
+        })
     }
 
     /// Whether a request is waiting for a pass to start.
@@ -153,12 +174,25 @@ impl ManualRefresh {
         inner.running = Some(taken);
     }
 
-    /// Answers every request the running pass took. A no-op on a poll pass,
-    /// which never took any.
+    /// Answers the read verdict of every request the running pass took, and
+    /// holds their end-of-pass answers for [`settle_drained`](Self::settle_drained).
+    /// A no-op on a poll pass, which never took any.
     pub(crate) fn settle(&self, verdict: RefreshVerdict) {
         let running = self.inner.borrow_mut().running.take();
-        for sender in running.into_iter().flatten() {
-            let _ = sender.send(verdict);
+        let mut draining = Vec::new();
+        for pending in running.into_iter().flatten() {
+            let _ = pending.verdict.send(verdict);
+            draining.push(pending.drained);
+        }
+        self.inner.borrow_mut().draining.append(&mut draining);
+    }
+
+    /// Answers every request whose verdict this tick already settled, at the
+    /// end of the tick that carried them.
+    pub(crate) fn settle_drained(&self) {
+        let draining = core::mem::take(&mut self.inner.borrow_mut().draining);
+        for sender in draining {
+            let _ = sender.send(());
         }
     }
 
@@ -169,6 +203,7 @@ impl ManualRefresh {
         inner.armed = false;
         inner.queued.clear();
         inner.running = None;
+        inner.draining.clear();
         inner.waker = None;
     }
 }
@@ -177,7 +212,24 @@ impl ManualRefresh {
 mod tests {
     use super::*;
     use crate::testkit::block_on;
-    use core::future::poll_fn;
+    use core::future::{Future, poll_fn};
+
+    /// The verdict a filed pass reports, in the mapping the command surface
+    /// carries.
+    fn landed(pass: ForcedPass) -> Result<(), EngineError> {
+        block_on(pass.landed())
+    }
+
+    /// Whether a filed pass has been answered end-to-end.
+    fn drained(pass: ForcedPass) -> bool {
+        let mut done = false;
+        let mut pass = core::pin::pin!(pass.drained());
+        block_on(poll_fn(|cx| {
+            done = pass.as_mut().poll(cx).is_ready();
+            Poll::Ready(())
+        }));
+        done
+    }
 
     fn requested(manual: &ManualRefresh) -> bool {
         let mut ready = false;
@@ -250,17 +302,17 @@ mod tests {
     #[test]
     fn an_unarmed_trigger_refuses_a_request() {
         let manual = ManualRefresh::default();
-        assert!(manual.request().is_none());
+        assert!(manual.filed().is_none());
         manual.arm();
-        assert!(manual.request().is_some());
+        assert!(manual.filed().is_some());
     }
 
     #[test]
     fn requests_before_a_pass_share_the_one_pass_that_starts() {
         let manual = ManualRefresh::default();
         manual.arm();
-        let first = manual.request().expect("armed");
-        let second = manual.request().expect("armed");
+        let first = manual.filed().expect("armed");
+        let second = manual.filed().expect("armed");
         assert!(requested(&manual));
 
         manual.begin();
@@ -270,55 +322,95 @@ mod tests {
         );
         manual.settle(RefreshVerdict::Reconciled);
 
-        assert_eq!(block_on(first), Ok(RefreshVerdict::Reconciled));
-        assert_eq!(block_on(second), Ok(RefreshVerdict::Reconciled));
+        assert_eq!(landed(first), Ok(()));
+        assert_eq!(landed(second), Ok(()));
     }
 
     #[test]
     fn a_request_during_a_running_pass_joins_it_rather_than_queueing_another() {
         let manual = ManualRefresh::default();
         manual.arm();
-        let first = manual.request().expect("armed");
+        let first = manual.filed().expect("armed");
         manual.begin();
 
-        let second = manual.request().expect("armed");
+        let second = manual.filed().expect("armed");
         assert!(
             !requested(&manual),
             "the late request coalesced onto the running pass"
         );
 
         manual.settle(RefreshVerdict::Unreachable);
-        assert_eq!(block_on(first), Ok(RefreshVerdict::Unreachable));
-        assert_eq!(block_on(second), Ok(RefreshVerdict::Unreachable));
+        let unreachable = Err(EngineError::RefreshFailed {
+            message: "no endpoint served a record this pass could adopt".to_owned(),
+        });
+        assert_eq!(landed(first), unreachable);
+        assert_eq!(landed(second), unreachable);
     }
 
     #[test]
     fn a_request_after_a_pass_settled_waits_for_the_next_one() {
         let manual = ManualRefresh::default();
         manual.arm();
-        let first = manual.request().expect("armed");
+        let first = manual.filed().expect("armed");
         manual.begin();
         manual.settle(RefreshVerdict::Reconciled);
-        assert_eq!(block_on(first), Ok(RefreshVerdict::Reconciled));
+        assert_eq!(landed(first), Ok(()));
 
-        let second = manual.request().expect("armed");
+        let second = manual.filed().expect("armed");
         assert!(requested(&manual), "the drain window queues a fresh pass");
         manual.begin();
         manual.settle(RefreshVerdict::Reconciled);
-        assert_eq!(block_on(second), Ok(RefreshVerdict::Reconciled));
+        assert_eq!(landed(second), Ok(()));
+    }
+
+    /// The read verdict settles before the drain, so a caller that must not
+    /// erase until the queue and the reclaim settle have run waits for the
+    /// second signal rather than the first.
+    #[test]
+    fn the_drained_signal_lands_after_the_verdict_not_with_it() {
+        let manual = ManualRefresh::default();
+        manual.arm();
+        let pass = manual.filed().expect("armed");
+        manual.begin();
+
+        manual.settle(RefreshVerdict::Reconciled);
+        assert!(
+            !drained(manual.filed().expect("armed")),
+            "a pass the tick has not finished answers nothing"
+        );
+
+        manual.settle_drained();
+        assert!(drained(pass), "the end of the tick answers it");
     }
 
     #[test]
     fn close_cancels_every_outstanding_request() {
         let manual = ManualRefresh::default();
         manual.arm();
-        let queued = manual.request().expect("armed");
+        let queued = manual.filed().expect("armed");
         manual.begin();
-        let running = manual.request().expect("armed");
+        let running = manual.filed().expect("armed");
 
         manual.close();
-        assert_eq!(block_on(queued), Err(oneshot::Canceled));
-        assert_eq!(block_on(running), Err(oneshot::Canceled));
-        assert!(manual.request().is_none(), "a closed trigger is disarmed");
+        let stopped = Err(EngineError::RefreshFailed {
+            message: "the sync loop stopped before the pass ran".to_owned(),
+        });
+        assert_eq!(landed(queued), stopped);
+        assert_eq!(landed(running), stopped);
+        assert!(manual.filed().is_none(), "a closed trigger is disarmed");
+    }
+
+    /// A wait for the end of a pass must end with the loop that abandoned it,
+    /// or a forget would park past the engine it is erasing.
+    #[test]
+    fn a_drain_wait_a_closed_loop_abandoned_ends_rather_than_parking() {
+        let manual = ManualRefresh::default();
+        manual.arm();
+        let pass = manual.filed().expect("armed");
+        manual.begin();
+        manual.settle(RefreshVerdict::Reconciled);
+
+        manual.close();
+        assert!(drained(pass));
     }
 }

@@ -343,6 +343,10 @@ pub(crate) async fn run_tick_loop<Sch>(
         }
         let control = on_tick(cause).await;
         manual.settle(RefreshVerdict::Unreachable);
+        // After the whole tick, drain included: a caller that must not act
+        // until the queue and the reclaim settle have run waits for this
+        // ([`ForcedPass::drained`]).
+        manual.settle_drained();
         if control == TickControl::Stop {
             break;
         }
@@ -587,8 +591,8 @@ mod tests {
         manual.arm();
         let causes = RefCell::new(Vec::new());
 
-        let first = manual.request().expect("armed");
-        let second = manual.request().expect("armed");
+        let first = manual.filed().expect("armed");
+        let second = manual.filed().expect("armed");
 
         block_on(run_tick_loop(
             &scheduler,
@@ -607,8 +611,8 @@ mod tests {
             "two requests before the pass started cost exactly one pass"
         );
         assert_eq!(scheduler.now(), UnixMillis(0), "no timer ever elapsed");
-        assert_eq!(block_on(first), Ok(RefreshVerdict::Reconciled));
-        assert_eq!(block_on(second), Ok(RefreshVerdict::Reconciled));
+        assert_eq!(block_on(first.landed()), Ok(()));
+        assert_eq!(block_on(second.landed()), Ok(()));
     }
 
     #[test]
@@ -616,7 +620,7 @@ mod tests {
         let scheduler = VirtualScheduler::new();
         let manual = ManualRefresh::default();
         manual.arm();
-        let waiter = manual.request().expect("armed");
+        let waiter = manual.filed().expect("armed");
 
         block_on(run_tick_loop(
             &scheduler,
@@ -625,7 +629,12 @@ mod tests {
             async |_| TickControl::Stop,
         ));
 
-        assert_eq!(block_on(waiter), Ok(RefreshVerdict::Unreachable));
+        assert_eq!(
+            block_on(waiter.landed()),
+            Err(crate::facade::EngineError::RefreshFailed {
+                message: "no endpoint served a record this pass could adopt".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -642,7 +651,7 @@ mod tests {
         ));
 
         assert!(
-            manual.request().is_none(),
+            manual.filed().is_none(),
             "no loop remains to answer a request"
         );
     }

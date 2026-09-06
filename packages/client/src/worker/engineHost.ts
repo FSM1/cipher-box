@@ -132,6 +132,14 @@ function readOutcome(outcome: WasmCommandOutcome): CommandOutcomeDescriptor {
       };
     case 'inviteLinkMinted':
       return { kind: 'inviteLinkMinted', fragment: present(outcome.fragment, kind, 'fragment') };
+    case 'forgotten':
+      return {
+        kind: 'forgotten',
+        unsettledBytes:
+          outcome.unsettledBytes === undefined ? null : Number(outcome.unsettledBytes),
+        unsettledIsPartial: present(outcome.unsettledIsPartial, kind, 'unsettledIsPartial'),
+        stalls: present(outcome.unsettledStalls, kind, 'unsettledStalls'),
+      };
   }
   throw new Error(`unknown command outcome ${kind}`);
 }

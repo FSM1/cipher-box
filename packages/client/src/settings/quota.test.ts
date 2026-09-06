@@ -44,6 +44,7 @@ function storage(overrides: {
   pinMode?: PinMode;
   quota?: VaultStorageDescriptor['quota'];
   pendingReclaimBytes?: number;
+  pendingReclaimIsPartial?: boolean;
   reclaimStalls?: ReclaimStallDescriptor[];
 }): VaultStorageDescriptor {
   const pinMode = overrides.pinMode ?? 'hosted';
@@ -54,6 +55,7 @@ function storage(overrides: {
         ? { usedBytes: 512, limitBytes: 2048, advisory: pinMode !== 'hosted' }
         : overrides.quota,
     pendingReclaimBytes: overrides.pendingReclaimBytes ?? 0,
+    pendingReclaimIsPartial: overrides.pendingReclaimIsPartial ?? false,
     reclaimStalls: overrides.reclaimStalls ?? [],
   };
 }
@@ -92,6 +94,17 @@ describe('quotaChrome', () => {
     expect(chrome.reclaimStalled).toBe(true);
     expect(chrome.pendingReclaimBytes).toBe(0);
     expect(chrome.stalls).toEqual([STALL]);
+  });
+
+  // A pass that read only a window of the ledger priced only that window, so a
+  // zero it reports is not a drained ledger.
+  it('holds the figure on screen when the pass priced only a window', () => {
+    const chrome = quotaChrome(
+      storage({ pendingReclaimBytes: 0, reclaimStalls: [], pendingReclaimIsPartial: true })
+    );
+
+    expect(chrome.pendingReclaimBytes).toBe(0);
+    expect(chrome.pendingReclaimIsPartial).toBe(true);
   });
 
   it('degrades rather than throwing when the quota probe did not answer', () => {

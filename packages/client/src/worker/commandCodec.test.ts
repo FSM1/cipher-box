@@ -1443,6 +1443,7 @@ describe('readVaultStorage', () => {
     },
     quota: { usedBytes: 512n, limitBytes: 2048n, advisory: true },
     pendingReclaimBytes: 0n,
+    pendingReclaimIsPartial: true,
     reclaimStalls: [
       {
         node: new Uint8Array(16).fill(3),
@@ -1465,6 +1466,7 @@ describe('readVaultStorage', () => {
       },
       quota: { usedBytes: 512, limitBytes: 2048, advisory: true },
       pendingReclaimBytes: 0,
+      pendingReclaimIsPartial: true,
       reclaimStalls: [
         { node: new Uint8Array(16).fill(3), target: 'bafyDoomedRoot', reason: 'targetStillLive' },
       ],

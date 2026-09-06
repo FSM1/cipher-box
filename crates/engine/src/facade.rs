@@ -85,10 +85,11 @@ use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, DescendantScopeRoot, EolRenewResult, FolderRefresh,
     GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
     OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
-    PublishOutcome, RE_PUT_INTERVAL, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    ScopePointerEnrolment, ScopePointerMint, ScopeWalk, VaultProvisionNet, WalkFailure,
-    WritePlaneDark, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
-    refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
+    PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordPlane, RecordPointerFetch,
+    ResolveOutcome, RootAdopter, ScopePointerEnrolment, ScopePointerMint, ScopeWalk,
+    VaultProvisionNet, WalkFailure, WritePlaneDark, enrol_owned_scope_pointers, eol_renew_pass,
+    fanout_get_verify, keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child,
+    run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -117,8 +118,9 @@ use crate::settings::{
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
+use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
-    Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict,
+    BookkeepingCursors, Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict,
     charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
@@ -132,6 +134,7 @@ use crate::sync::provision::{
 };
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
 use crate::sync::record::{RecordClass, record_content_root_cid};
+use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
 
 pub use crate::sync::drain::{BinIndexHold, BlockedOp, SettingsHold};
@@ -660,6 +663,10 @@ pub struct VaultStorageView {
     pub quota: Option<QuotaView>,
     /// Vault-level pinned bytes a published prune still owes the registry.
     pub pending_reclaim_bytes: u64,
+    /// Whether that figure is a floor on the debt rather than its total: the
+    /// last reclaim pass opened a bounded window of the retire ledger and left
+    /// keys unattempted.
+    pub pending_reclaim_is_partial: bool,
     /// Debts the last reclaim pass could not settle, and why.
     pub reclaim_stalls: Vec<ReclaimStall>,
 }
@@ -1251,6 +1258,21 @@ pub enum CommandOutcome {
     /// ([`MintedInviteLink`]) — a host puts it in a URL fragment and nowhere
     /// durable.
     InviteLinkMinted(MintedInviteLink),
+    /// [`Command::ForgetDevice`] swept the seams, and this is what its settling
+    /// pass could not pay before the erase took the ledger with it.
+    Forgotten {
+        /// Pinned bytes that stay charged to the account with no device left
+        /// owing them. `None` when no pass ran at all — an unstarted or
+        /// logged-out engine never read the ledger, so what it held is unknown.
+        unsettled_bytes: Option<u64>,
+        /// Whether that figure is a floor rather than the whole debt: the pass
+        /// read a bounded window of the retire ledger and left keys
+        /// unattempted, so more may be abandoned than it names.
+        unsettled_is_partial: bool,
+        /// How many of those debts the pass could name a reason for
+        /// ([`ReclaimStall`]).
+        stalls: usize,
+    },
 }
 
 impl fmt::Debug for CommandOutcome {
@@ -1260,6 +1282,14 @@ impl fmt::Debug for CommandOutcome {
             CommandOutcome::Queued { op_id } => write!(f, "CommandOutcome(queued {})", op_id.0),
             CommandOutcome::ContactImported(_) => f.write_str("CommandOutcome(contactImported)"),
             CommandOutcome::InviteLinkMinted(_) => f.write_str("CommandOutcome(inviteLinkMinted)"),
+            CommandOutcome::Forgotten {
+                unsettled_bytes,
+                unsettled_is_partial,
+                stalls,
+            } => write!(
+                f,
+                "CommandOutcome(forgotten unsettled={unsettled_bytes:?} partial={unsettled_is_partial} stalls={stalls})"
+            ),
         }
     }
 }
@@ -4266,6 +4296,9 @@ pub struct Engine<T: SeamTypes> {
     /// [`pending_reclaim`](Self::pending_reclaim) is: every pass re-derives it
     /// from the retire ledger.
     reclaim_stalls: Rc<RefCell<Vec<ReclaimStall>>>,
+    /// Where each bounded bookkeeping loop stopped, and whether the reclaim
+    /// figure prices the whole owed set ([`BookkeepingCursors`]).
+    bookkeeping: Rc<RefCell<BookkeepingCursors>>,
     /// Head blocks the drain uploaded for a publish that never reached the
     /// record transport, pending retirement. Session-lived so a retire the
     /// registry refused goes out again on a later pass.
@@ -4421,6 +4454,7 @@ impl<T: SeamTypes> Engine<T> {
                 bin_index_hold: Rc::new(RefCell::new(None)),
                 pending_reclaim: Rc::new(Cell::new(0)),
                 reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
+                bookkeeping: Rc::new(RefCell::new(BookkeepingCursors::default())),
                 orphan_heads: Rc::new(OrphanHeads::default()),
                 converged_tick: Rc::new(Cell::new(false)),
                 alive: Rc::new(Cell::new(true)),
@@ -4856,8 +4890,16 @@ impl<T: SeamTypes> Engine<T> {
         self.seams.credential_store.clear_refresh_token().await
     }
 
-    /// [`Command::ForgetDevice`]: a [`log_out`](Self::log_out), then the erase
-    /// of every durable seam that a logout deliberately leaves standing.
+    /// [`Command::ForgetDevice`]: one settling pass, a [`log_out`](Self::log_out),
+    /// then the erase of every durable seam that a logout deliberately leaves
+    /// standing.
+    ///
+    /// The settle leads because the erase is the retire ledger's end of life:
+    /// [`StagingStore::clear`](crate::seams::StagingStore::clear) drops entries
+    /// that the ledger's own never-discard contract says only a settle removes,
+    /// and the debt they carry is pinned bytes no device is left owing. What one
+    /// pass cannot pay is reported rather than silently dropped
+    /// ([`CommandOutcome::Forgotten`]).
     ///
     /// The sweep is last, and `log_out` drops the session-alive latch before it:
     /// a floor raise or cache put from a pass still in flight would otherwise
@@ -4867,7 +4909,8 @@ impl<T: SeamTypes> Engine<T> {
     ///
     /// Every seam is swept even after one refuses, and the first refusal is what
     /// the caller sees.
-    async fn forget_device(&mut self) -> Result<(), EngineError> {
+    async fn forget_device(&mut self) -> Result<CommandOutcome, EngineError> {
+        let residual = self.settle_before_erase().await;
         self.forgotten = true;
 
         [
@@ -4879,7 +4922,60 @@ impl<T: SeamTypes> Engine<T> {
         .into_iter()
         .find(Result::is_err)
         .unwrap_or(Ok(()))
-        .map_err(EngineError::from_seam)
+        .map_err(EngineError::from_seam)?;
+        Ok(residual)
+    }
+
+    /// Drive one whole pass ahead of the erase and report what it left owed.
+    ///
+    /// Best-effort, and ahead of the `forgotten` latch so the settle's own
+    /// writes are not refused as this instance's own state. An offline forget
+    /// still erases: a device that cannot reach the registry is exactly the one
+    /// most likely to be forgotten, and holding the erase on the network would
+    /// be the worse failure. The doomed-name journal and the scope-exit debt
+    /// ride the same pass.
+    ///
+    /// A device holding no debt at all erases at once — the pass would settle
+    /// nothing and the erase would still be waiting on a tick.
+    async fn settle_before_erase(&self) -> CommandOutcome {
+        if !self.owes_bookkeeping().await {
+            return CommandOutcome::Forgotten {
+                unsettled_bytes: Some(0),
+                unsettled_is_partial: false,
+                stalls: 0,
+            };
+        }
+        let Ok(Some(pass)) = self.file_forced_pass() else {
+            return CommandOutcome::Forgotten {
+                unsettled_bytes: None,
+                unsettled_is_partial: false,
+                stalls: 0,
+            };
+        };
+        pass.drained().await;
+        // One pass, so the figure carries the ledger read's own completeness:
+        // a pass that opened a window of a backlog larger than its ceiling
+        // priced that window and abandons more than it names.
+        CommandOutcome::Forgotten {
+            unsettled_bytes: Some(self.pending_reclaim_bytes()),
+            unsettled_is_partial: self.pending_reclaim_is_partial(),
+            stalls: self.reclaim_stalls().len(),
+        }
+    }
+
+    /// Whether the staging store holds any durable debt the erase would take
+    /// with it: an owed retirement, a delete's doomed-name journal entry, or a
+    /// scope-exit cut. A store that will not enumerate reads as owing, so the
+    /// pass runs rather than the debt being assumed away.
+    async fn owes_bookkeeping(&self) -> bool {
+        let Ok(keys) = self.seams.staging_store.staged_keys().await else {
+            return true;
+        };
+        keys.iter().any(|key| {
+            key.starts_with(RETIRE_LEDGER_PREFIX)
+                || key.starts_with(DOOMED_JOURNAL_PREFIX)
+                || key.starts_with(SCOPE_EXIT_DEBT_PREFIX)
+        })
     }
 
     /// Run the cold-start live-session data path — the ordered chain composed on
@@ -5420,6 +5516,7 @@ where {
         let bin_index_hold = self.bin_index_hold.clone();
         let pending_reclaim = self.pending_reclaim.clone();
         let reclaim_stalls = self.reclaim_stalls.clone();
+        let bookkeeping = self.bookkeeping.clone();
         let content_profile = self.content_profile;
         let storage_policy = self.storage_policy;
         let orphan_heads = self.orphan_heads.clone();
@@ -5996,6 +6093,7 @@ where {
                             settings_hold: &settings_hold,
                             pending_reclaim: &pending_reclaim,
                             reclaim_stalls: &reclaim_stalls,
+                            bookkeeping: &bookkeeping,
                             orphan_heads: &orphan_heads,
                             converged_tick: &converged_tick,
                             cancels: &cancels,
@@ -6144,7 +6242,7 @@ where {
         // regressed floor, an unreadable cache — is exactly the device whose
         // only recovery is to be forgotten, and it never reached a session.
         if matches!(command, Command::ForgetDevice) {
-            return self.forget_device().await.map(|()| CommandOutcome::Done);
+            return self.forget_device().await;
         }
         // Ahead of it too, and for the same shape of reason: the session a
         // logout ends is gone by the time its credential drop can refuse, so
@@ -8779,6 +8877,14 @@ where {
         self.pending_reclaim.get()
     }
 
+    /// Whether that figure is a floor rather than the whole debt: the ledger
+    /// read is bounded, so a pass over a backlog larger than its ceiling prices
+    /// the window it opened and leaves the rest for the passes that follow.
+    #[must_use]
+    pub fn pending_reclaim_is_partial(&self) -> bool {
+        self.bookkeeping.borrow().reclaim_is_partial()
+    }
+
     /// Why the debts the last reclaim pass could not settle did not settle.
     ///
     /// Reclaim has no attempt budget and no dead-letter class, so a debt that
@@ -8876,6 +8982,7 @@ where {
             }),
             settings,
             pending_reclaim_bytes: self.pending_reclaim_bytes(),
+            pending_reclaim_is_partial: self.pending_reclaim_is_partial(),
             reclaim_stalls: self.reclaim_stalls(),
         })
     }
@@ -12902,7 +13009,12 @@ mod tests {
 
             assert_eq!(
                 block_on(engine.command(Command::ForgetDevice)),
-                Ok(CommandOutcome::Done)
+                Ok(CommandOutcome::Forgotten {
+                    unsettled_bytes: Some(0),
+                    unsettled_is_partial: false,
+                    stalls: 0
+                }),
+                "a device owing nothing reports a settled ledger, not an unread one"
             );
 
             block_on(async {
@@ -12981,7 +13093,11 @@ mod tests {
 
             assert_eq!(
                 block_on(engine.command(Command::ForgetDevice)),
-                Ok(CommandOutcome::Done)
+                Ok(CommandOutcome::Forgotten {
+                    unsettled_bytes: Some(0),
+                    unsettled_is_partial: false,
+                    stalls: 0
+                })
             );
 
             block_on(async {
@@ -12992,6 +13108,33 @@ mod tests {
                 assert!(device.staging_store.queued_ops().await.unwrap().is_empty());
                 assert_eq!(device.snapshot_cache.get(b"key").await.unwrap(), None);
             });
+        }
+
+        /// The erase is the retire ledger's end of life, so a debt it still
+        /// holds is reported rather than dropped in silence: those are pinned
+        /// bytes that stay charged with no device left owing them.
+        #[test]
+        fn forgetting_reports_the_debt_the_erase_takes_with_it() {
+            let (mut engine, device, _events) = loaded();
+            let owed = [RETIRE_LEDGER_PREFIX, b"an-owed-retirement"].concat();
+            block_on(device.staging_store.put_staged_bytes(&owed, b"sealed")).unwrap();
+
+            // No session ever ran, so no pass could read what the ledger held.
+            assert_eq!(
+                block_on(engine.command(Command::ForgetDevice)),
+                Ok(CommandOutcome::Forgotten {
+                    unsettled_bytes: None,
+                    unsettled_is_partial: false,
+                    stalls: 0
+                }),
+                "a forget with no pass behind it reports the ledger as unread"
+            );
+            assert!(
+                block_on(device.staging_store.staged_keys())
+                    .unwrap()
+                    .is_empty(),
+                "and the erase still runs — an offline forget must not be held on a pass"
+            );
         }
 
         /// The revoke is the only leg that needs the network, and on web the

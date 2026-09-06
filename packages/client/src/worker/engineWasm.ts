@@ -59,6 +59,9 @@ export interface WasmCommandOutcome {
   readonly sequence?: bigint;
   readonly permission?: number;
   readonly newlyAdded?: boolean;
+  readonly unsettledBytes?: bigint;
+  readonly unsettledIsPartial?: boolean;
+  readonly unsettledStalls?: number;
   free(): void;
 }
 
@@ -226,6 +229,7 @@ export interface WasmVaultStorageView {
   readonly settings: WasmVaultSettingsSummary;
   readonly quota?: WasmQuotaView;
   readonly pendingReclaimBytes: bigint;
+  readonly pendingReclaimIsPartial: boolean;
   readonly reclaimStalls: readonly WasmReclaimStall[];
 }
 

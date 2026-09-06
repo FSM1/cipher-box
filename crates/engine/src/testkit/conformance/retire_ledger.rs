@@ -6,11 +6,17 @@ use std::collections::BTreeMap;
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 
 use crate::content::DAG_ROOT_CODEC;
-use crate::seams::{OwedRetire, OwingRecord, RetireLedger};
+use crate::seams::{OwedRetire, RetireLedger};
+use crate::sync::MAX_BOOKKEEPING_OPENS;
 
 /// A distinct doomed-version root address, spelled as the ledger stores them.
 fn root(seed: u8) -> String {
-    encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &[seed]))
+    root_of(usize::from(seed))
+}
+
+/// The same, over a seed space wide enough to fill a bounded read.
+fn root_of(seed: usize) -> String {
+    encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &seed.to_be_bytes()))
 }
 
 /// The node one debt is owed against. The kit's targets all ride one file's
@@ -21,15 +27,31 @@ fn owed(target: &str, owed_bytes: u64) -> OwedRetire {
     OwedRetire::whole(NODE, target.into(), owed_bytes)
 }
 
+/// Every entry owed, read the way a pass reads them: one bounded window at a
+/// time, resuming where the last one stopped, until a window opens nothing new.
+async fn all<L: RetireLedger>(ledger: &L, owner_tag: &[u8]) -> BTreeMap<String, OwedRetire> {
+    let mut seen: BTreeMap<String, OwedRetire> = BTreeMap::new();
+    let mut cursor = None;
+    loop {
+        let page = ledger.owed(owner_tag, cursor.as_deref()).await.unwrap();
+        let before = seen.len();
+        for entry in page.entries {
+            seen.insert(entry.target.clone(), entry);
+        }
+        if !page.truncated || seen.len() == before {
+            return seen;
+        }
+        cursor = page.cursor;
+    }
+}
+
 /// The entries as a map, so a kit assertion never depends on an order the
 /// contract does not promise.
 async fn held<L: RetireLedger>(ledger: &L, owner_tag: &[u8]) -> BTreeMap<String, u64> {
-    ledger
-        .owed(owner_tag)
+    all(ledger, owner_tag)
         .await
-        .unwrap()
         .into_iter()
-        .map(|entry| (entry.target, entry.owed_bytes))
+        .map(|(target, entry)| (target, entry.owed_bytes))
         .collect()
 }
 
@@ -144,12 +166,10 @@ where
     assert_eq!(held(&reopened, alice).await.len(), 2);
 
     // The owing node is what the drain re-reads to decide what the retire may
-    // name, its class is whether that read can find anything, and the manifest
-    // total is the bound it holds a hand-framed root to. All are as durable as
-    // the owed figure, and none of the four moves under a replay.
+    // name, and the manifest total is the bound it holds a hand-framed root to.
+    // Both are as durable as the owed figure, and neither moves under a replay.
     let quoted = OwedRetire {
         node: [0x5C; 16],
-        owing: OwingRecord::Retired,
         target: root(3),
         owed_bytes: 11,
         manifest_bytes: 90,
@@ -161,41 +181,98 @@ where
         .unwrap();
     let after_reopen = open().await;
     assert_eq!(
-        after_reopen
-            .owed(alice)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry.target == quoted.target),
-        Some(quoted),
+        all(&after_reopen, alice).await.get(&quoted.target),
+        Some(&quoted),
         "every field survives a replay and a reopen"
     );
 
-    // The one field a replay moves, and only toward `Retired`: a delete retires
-    // the record out from under a debt an earlier prune journaled, and a backing
-    // that kept `Published` would leave that debt unsettleable.
-    let advanced = root(4);
-    after_reopen
-        .owe(alice, &[owed(&advanced, 64)])
-        .await
-        .unwrap();
-    after_reopen
-        .owe(
-            alice,
-            &[OwedRetire::whole_retired(NODE, advanced.clone(), 64)],
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        open()
-            .await
-            .owed(alice)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry.target == advanced)
-            .map(|entry| entry.owing),
-        Some(OwingRecord::Retired),
-        "a hard delete must advance a held entry's class, durably"
+    check_bounded_reads(&after_reopen).await;
+    check_tombstones(open).await;
+}
+
+/// The read is bounded, and rotation is what reaches the entries one window
+/// leaves out: nothing is removed for failing to open, so a backing holding
+/// more entries than the ceiling must still make progress on all of them.
+async fn check_bounded_reads<L: RetireLedger>(ledger: &L) {
+    let owner = b"ceiling-owner-tag".as_slice();
+    let over = MAX_BOOKKEEPING_OPENS + 3;
+    let entries: Vec<OwedRetire> = (0..over).map(|seed| owed(&root_of(seed), 8)).collect();
+    ledger.owe(owner, &entries).await.unwrap();
+
+    let page = ledger.owed(owner, None).await.unwrap();
+    assert!(
+        page.entries.len() <= MAX_BOOKKEEPING_OPENS,
+        "one read opens at most the ceiling"
     );
+    assert!(page.truncated, "and says the set is larger than the window");
+    assert!(
+        page.cursor.is_some(),
+        "so the next read has somewhere to go"
+    );
+
+    let reached = all(ledger, owner).await;
+    assert_eq!(
+        reached.len(),
+        over,
+        "every entry is reached by rotation, however many windows it takes"
+    );
+
+    let targets: Vec<String> = reached.into_keys().collect();
+    ledger.settle(owner, &targets).await.unwrap();
+    assert!(all(ledger, owner).await.is_empty());
+}
+
+/// The node-keyed half of the contract: which nodes a hard delete retired.
+async fn check_tombstones<L, F>(mut open: F)
+where
+    L: RetireLedger,
+    F: AsyncFnMut() -> L,
+{
+    let ledger = open().await;
+    let alice = b"alice-owner-tag".as_slice();
+    let bob = b"bob-owner-tag".as_slice();
+    let alice_prefix = b"alice".as_slice();
+    let (deleted, live) = ([0x11; 16], [0x22; 16]);
+
+    assert!(
+        !ledger.tombstoned(alice, deleted).await.unwrap(),
+        "a fresh backing tombstones nothing"
+    );
+
+    ledger.tombstone(alice, deleted).await.unwrap();
+    assert!(ledger.tombstoned(alice, deleted).await.unwrap());
+    assert!(
+        !ledger.tombstoned(alice, live).await.unwrap(),
+        "a tombstone names one node, never the store"
+    );
+
+    // Owner-scoped on the same terms the entries are: a retired node under one
+    // owner must not settle another owner's debt without a record read.
+    assert!(!ledger.tombstoned(bob, deleted).await.unwrap());
+    assert!(!ledger.tombstoned(alice_prefix, deleted).await.unwrap());
+
+    // Idempotent: the reclamation replay writes the tombstone on every pass it
+    // journals a debt on.
+    ledger.tombstone(alice, deleted).await.unwrap();
+    assert!(ledger.tombstoned(alice, deleted).await.unwrap());
+
+    // Durable: the classification outlives the pass that made it, or the debts
+    // it classifies are unsettleable after a restart.
+    let reopened = open().await;
+    assert!(reopened.tombstoned(alice, deleted).await.unwrap());
+    assert!(!reopened.tombstoned(bob, deleted).await.unwrap());
+
+    // Cleared only where it is named, and an unheld node succeeds.
+    reopened.forget_tombstones(bob, &[deleted]).await.unwrap();
+    assert!(
+        reopened.tombstoned(alice, deleted).await.unwrap(),
+        "forgetting under one owner must not clear another's"
+    );
+    reopened
+        .forget_tombstones(alice, &[deleted, live])
+        .await
+        .unwrap();
+    assert!(!open().await.tombstoned(alice, deleted).await.unwrap());
+
+    reopened.forget_tombstones(alice, &[]).await.unwrap();
 }

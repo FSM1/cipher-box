@@ -27,7 +27,7 @@ use crate::content::dag::RootManifest;
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
 use crate::grants::{CONTACTS_PREFIX, INVITE_RECORDS_PREFIX, RECEIVED_SHARES_PREFIX};
-use crate::net::RETIRE_LEDGER_PREFIX;
+use crate::net::{NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore, UnixMillis};
 use crate::storage_policy::StoragePolicy;
@@ -43,6 +43,7 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// Whether `key` is engine bookkeeping rather than upload residue: a
 /// per-identity op-id high-water mark
 /// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)), a retire-ledger entry, a
+/// retired node's tombstone, a
 /// doomed-name journal entry, a
 /// received-shares list, a contact book, the owner's invite records, or the
 /// notices of its versionless dead letters, or the scope roots that still owe a
@@ -56,6 +57,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
     key.starts_with(DRAINED_OP_MARK_PREFIX)
         || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
         || key.starts_with(RETIRE_LEDGER_PREFIX)
+        || key.starts_with(NODE_TOMBSTONE_PREFIX)
         || key.starts_with(DOOMED_JOURNAL_PREFIX)
         || key.starts_with(RECEIVED_SHARES_PREFIX)
         || key.starts_with(CONTACTS_PREFIX)

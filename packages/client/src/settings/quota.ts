@@ -19,6 +19,9 @@ export interface QuotaChrome {
   advisory: boolean;
   /** Pending reclaim, or `null` once the ledger has drained. */
   pendingReclaimBytes: number | null;
+  /** True when that figure is at least this much, rather than the whole debt. */
+  pendingReclaimIsPartial: boolean;
+
   /** True when a debt the pass could not settle prices at nothing. */
   reclaimStalled: boolean;
   stalls: ReclaimStallDescriptor[];
@@ -32,9 +35,12 @@ export function quotaChrome(view: VaultStorageDescriptor): QuotaChrome {
     // The engine decides this off the vaulted mode; re-deriving it from
     // `settings.pinMode` here would be a second copy of that rule.
     advisory: view.quota?.advisory ?? false,
-    // A stall holds the figure on screen even at zero: that pairing is what
-    // tells a drained ledger apart from one that never drains.
-    pendingReclaimBytes: owed === 0 && stalls.length === 0 ? null : owed,
+    // A stall holds the figure on screen even at zero, and so does a pass that
+    // priced only a window of the ledger: either pairing is what tells a
+    // drained ledger apart from one this pass could not read to the end.
+    pendingReclaimBytes:
+      owed === 0 && stalls.length === 0 && !view.pendingReclaimIsPartial ? null : owed,
+    pendingReclaimIsPartial: view.pendingReclaimIsPartial,
     reclaimStalled: stalls.length > 0,
     stalls,
   };

@@ -453,6 +453,40 @@ describe('EngineHost command outcomes', () => {
     expect(freed()).toBe(1);
   });
 
+  it('carries the forget residual back, and reads an unread ledger as null', async () => {
+    const paid = outcomeHandle({
+      kind: 'forgotten',
+      unsettledBytes: 4096n,
+      unsettledIsPartial: true,
+      unsettledStalls: 2,
+    });
+
+    await expect(
+      (await commandingHost(paid.outcome)).command({ kind: 'manualRefresh' })
+    ).resolves.toEqual({
+      kind: 'forgotten',
+      unsettledBytes: 4096,
+      unsettledIsPartial: true,
+      stalls: 2,
+    });
+    expect(paid.freed()).toBe(1);
+
+    const unread = outcomeHandle({
+      kind: 'forgotten',
+      unsettledIsPartial: false,
+      unsettledStalls: 0,
+    });
+
+    await expect(
+      (await commandingHost(unread.outcome)).command({ kind: 'manualRefresh' })
+    ).resolves.toEqual({
+      kind: 'forgotten',
+      unsettledBytes: null,
+      unsettledIsPartial: false,
+      stalls: 0,
+    });
+  });
+
   it('refuses an outcome kind this build does not know, still releasing it', async () => {
     const { outcome, freed } = outcomeHandle({ kind: 'teleported' });
 

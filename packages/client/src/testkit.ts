@@ -156,6 +156,7 @@ export function emptyVaultStorage(): VaultStorageDescriptor {
     },
     quota: { usedBytes: 0, limitBytes: 0, advisory: false },
     pendingReclaimBytes: 0,
+    pendingReclaimIsPartial: false,
     reclaimStalls: [],
   };
 }

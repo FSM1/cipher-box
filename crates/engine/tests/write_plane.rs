@@ -54,10 +54,10 @@ use cipherbox_engine::settings::{
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    BookkeepingSeal, DRAINED_OP_MARK_PREFIX, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS,
-    PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent, UPLOAD_MARK_PREFIX, doomed_journal_key,
-    encode_upload_mark, owner_scoped_key, owner_tag, record_content_root_cid, scope_exit_debt_key,
-    seal_owed_cuts, upload_mark_key,
+    BookkeepingSeal, DRAINED_OP_MARK_PREFIX, MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS,
+    MAX_QUARANTINE_ATTEMPTS, PUBLISHED_OP_MARK_PREFIX, ResolveMode, StagedContent,
+    UPLOAD_MARK_PREFIX, doomed_journal_key, encode_upload_mark, owner_scoped_key, owner_tag,
+    record_content_root_cid, scope_exit_debt_key, seal_owed_cuts, upload_mark_key,
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
@@ -6128,6 +6128,80 @@ fn entries_this_build_refuses_never_starve_the_deletes_sorting_behind_them() {
     assert!(
         retired_since(&alice, mark).contains(&name.as_str().to_owned()),
         "the real delete settles past the refused entries rather than queueing behind them"
+    );
+}
+
+/// A wall of planted entries exactly one ceiling wide, sorting ahead of a real
+/// delete: the first pass reaches no further than the wall, and the next
+/// resumes past it and settles the delete
+/// ([`MAX_BOOKKEEPING_OPENS`]).
+#[test]
+fn a_wall_of_planted_journal_keys_costs_a_pass_its_ceiling_and_not_the_delete() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    seed_hard_delete(&world, &alice, &blocks);
+    serve_http(&alice, &blocks, 400);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let doomed = child_id(&engine, ROOT, "notes.txt");
+    let name = write_name(doomed);
+
+    blocks.refuse_retire(true);
+    block_on(engine.command(Command::Delete { node: doomed })).unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    // More planted entries than one pass may open, every one of them sorting
+    // ahead of the real delete.
+    let owner = owner_tag(&kdf::enc_subkey(&SECRET));
+    let real_key = doomed_journal_key(&owner, ROOT, doomed);
+    for slot in 0..MAX_BOOKKEEPING_OPENS {
+        let mut id = [0u8; 16];
+        id[14..].copy_from_slice(
+            &u16::try_from(slot)
+                .expect("the wall fits two bytes")
+                .to_be_bytes(),
+        );
+        let key = doomed_journal_key(&owner, ROOT, NodeId(id));
+        assert!(
+            key < real_key,
+            "the planted entry sorts ahead of the real one"
+        );
+        block_on(
+            alice
+                .staging_store
+                .put_staged_bytes(&key, b"not a reclamation this build can decode"),
+        )
+        .expect("the staging store takes the planted entry");
+    }
+
+    let mark = retire_targets(&alice).len();
+    blocks.refuse_retire(false);
+    let settled = || retired_since(&alice, mark).contains(&name.as_str().to_owned());
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        !settled(),
+        "the wall is exactly one pass's ceiling, so the first pass reaches no further"
+    );
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        settled(),
+        "the next pass resumes past the wall and reaches the delete"
     );
 }
 
@@ -12857,6 +12931,99 @@ fn a_prune_whose_root_no_source_serves_spends_its_budget_and_dead_letters() {
         published_versions(&world.record_store, &blocks, file),
         planted_versions,
         "and leaves the history it could not expand standing, entry for entry"
+    );
+}
+
+/// One device holding an owed retirement, the registry refusing it. The debt is
+/// journaled, unsettled, and durable — the state a forget must not erase in
+/// silence.
+fn engine_owing_a_retirement(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    alice: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    let (mut engine, events, mut tasks) = boot(world, blocks, alice, 42);
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ version).collect())
+        .collect();
+    let file = file_with_history(world, &mut engine, &mut tasks, &bodies);
+
+    blocks.refuse_retire(true);
+    stage_prune(alice, world, file, 1);
+    tick(world, &engine, &mut tasks);
+    assert!(
+        engine.pending_reclaim_bytes() > 0,
+        "the prune journals a debt the refused retire leaves standing"
+    );
+    (engine, events, tasks)
+}
+
+/// The erase is the retire ledger's end of life: `clear()` drops entries the
+/// ledger's own contract says only a settle removes, and the pinned bytes behind
+/// them stay charged with no device left owing them. So the forget settles
+/// first, and the debt is paid rather than dropped.
+#[test]
+fn a_forget_settles_the_owed_retirement_before_it_erases_the_store() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = engine_owing_a_retirement(&world, &blocks, &alice);
+
+    blocks.refuse_retire(false);
+    let mark = retire_targets(&alice).len();
+    assert_eq!(
+        command_while_ticking(&mut engine, Command::ForgetDevice, &mut tasks),
+        Ok(CommandOutcome::Forgotten {
+            unsettled_bytes: Some(0),
+            unsettled_is_partial: false,
+            stalls: 0
+        }),
+        "the pass ahead of the erase pays the whole debt"
+    );
+    assert!(
+        !retired_since(&alice, mark).is_empty(),
+        "and the registry heard the retire before the store was swept"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .expect("keys")
+            .is_empty(),
+        "the erase still runs"
+    );
+}
+
+/// An offline forget still erases — a device that cannot reach the registry is
+/// the one most likely to be forgotten, and holding the erase on the network
+/// would be the worse failure. What the pass could not pay is reported instead
+/// of dropped in silence.
+#[test]
+fn a_forget_the_registry_refuses_reports_the_residual_and_still_erases() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = engine_owing_a_retirement(&world, &blocks, &alice);
+
+    let owed = engine.pending_reclaim_bytes();
+    let outcome = command_while_ticking(&mut engine, Command::ForgetDevice, &mut tasks);
+
+    let Ok(CommandOutcome::Forgotten {
+        unsettled_bytes, ..
+    }) = outcome
+    else {
+        panic!("a forget reports what it left owed: {outcome:?}");
+    };
+    assert_eq!(
+        unsettled_bytes,
+        Some(owed),
+        "the bytes that stay charged reach the host"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .expect("keys")
+            .is_empty(),
+        "and the erase runs anyway"
     );
 }
 
