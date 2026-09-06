@@ -18,6 +18,7 @@ import { shellFacade } from './auth/facade';
 import { desktopConfig } from './config';
 import { renderShell, type LoginStep, type ShellActions, type ShellModel } from './frontDoor';
 import { onVaultChanged, readVaultStatus } from './vault';
+import { setWindowVisible, windowIntent, type WindowIntent } from './window';
 
 /** Renders an unknown throw as the one line the shell shows for it. */
 function errorMessage(failure: unknown): string {
@@ -122,7 +123,16 @@ function start(root: HTMLElement): void {
     logout: () => void run('logout', () => flow.logout()).catch(ignore),
   };
 
-  const draw = (): void => renderShell(root, model, actions);
+  /** The last decision the shell was given; repeating it fights the tray. */
+  let shown: WindowIntent | null = null;
+
+  const draw = (): void => {
+    renderShell(root, model, actions);
+    const intent = windowIntent(model);
+    if (intent === null || intent === shown) return;
+    shown = intent;
+    setWindowVisible(intent === 'show');
+  };
 
   /**
    * Reads the vault the engine now holds. A read is dropped unless the session
@@ -210,7 +220,9 @@ if (root === null) throw new Error('the shell window has no mount point');
 try {
   start(root);
 } catch (failure) {
-  // A build whose login environment is unset throws before anything renders.
+  // A build whose login environment is unset throws before anything renders,
+  // and the window is where that failure is read.
+  setWindowVisible(true);
   root.replaceChildren();
   const failed = document.createElement('p');
   failed.className = 'error';
