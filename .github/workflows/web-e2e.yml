@@ -130,7 +130,6 @@ jobs:
         if: inputs.wasm-artifact == ''
         with:
           shared-key: wasm-engine
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: ./.github/actions/wasm-bindgen-cli
         if: inputs.wasm-artifact == ''

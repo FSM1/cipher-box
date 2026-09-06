@@ -27,7 +27,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: workspace
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cargo fmt
         run: cargo fmt --all --check
@@ -53,7 +52,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: workspace
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The engine is excluded: the engine simulation job owns its binaries, and
       # they are the two slowest suites in the matrix. The contract crate's
@@ -86,7 +84,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: workspace
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Engine KAT vectors fresh (committed generator is the only writer)
         run: |
@@ -114,7 +111,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: workspace
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: FUSE operation-core suite
         run: cargo test -p cipherbox-fuse
@@ -145,7 +141,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: core-kats
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # wasm-bindgen-test-runner drives the wasm32-unknown-unknown legs in Node.
       - uses: ./.github/actions/wasm-bindgen-cli
@@ -243,7 +238,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: adapters
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The macOS host adapter links FUSE-T's libfuse ABI, so this leg is where
       # it compiles at all (blueprint/desktop.md "Backends").
