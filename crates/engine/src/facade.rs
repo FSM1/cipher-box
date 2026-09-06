@@ -84,13 +84,13 @@ use crate::net::rotation::scope_name;
 use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, DescendantScopeRoot, EolRenewResult, FolderRefresh,
-    GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, OwnerRotationKeys,
-    OwnerRotationNet, PointerConsult, PointerConsultArm, PointerConsultError, PublishError,
-    PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX, RecordPlane, RecordPointerFetch,
-    ResolveOutcome, RootAdopter, ScopePointerEnrolment, ScopePointerMint, ScopeWalk,
-    VaultProvisionNet, WalkFailure, WritePlaneDark, enrol_owned_scope_pointers, eol_renew_pass,
-    fanout_get_verify, keyless_re_put, refresh_base_from_resolved, resolve_and_hold, resolve_child,
-    run_liveness_loop,
+    FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords,
+    LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult, PointerConsultArm,
+    PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX,
+    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
+    ScopePointerMint, ScopeWalk, VaultProvisionNet, WalkFailure, WritePlaneDark,
+    enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
@@ -6531,10 +6531,7 @@ where {
                 // refresh the newly-focused chain now rather than waiting out a
                 // poll cadence, and only past the staleness threshold — a repeat
                 // visit renders the state already held.
-                let changed = self.refresh_focus_on_access(authored_at, node).await;
-                if changed {
-                    let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                }
+                self.refresh_focus_on_access(authored_at, node).await;
                 Ok(CommandOutcome::Done)
             }
             Command::ImportContact { contact_code } => {
@@ -8502,6 +8499,17 @@ where {
             })
     }
 
+    /// Settle one on-access read leg: hold what it saw depart, stamp what it
+    /// attempted, and announce a base that moved. Each leg announces its own, so
+    /// a listing paints while the leg after it is still awaited.
+    fn settle_focus_leg(&self, nodes: &[NodeId], report: FolderRefreshReport, now: UnixMillis) {
+        hold_captures(&self.observed_unlinks, report.departed);
+        stamp_focus_refreshed(&self.focus_refreshed, nodes, now);
+        if report.changed {
+            let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        }
+    }
+
     /// The subset of `nodes` this vault's own scope root seals.
     ///
     /// One leg holds one scope's read material, so a node in a shared scope this
@@ -8517,13 +8525,12 @@ where {
     }
 
     /// Refresh the focus window's folders that are past the on-access staleness
-    /// threshold, then the files `folder` lists no size for, returning whether
-    /// the base changed.
+    /// threshold, then the files `folder` lists no size for.
     ///
     /// The folder leg runs first, so a row it lists joins the file leg of the
     /// same navigation and paints its size within one resolve round trip rather
     /// than a poll cadence later.
-    async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) -> bool {
+    async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) {
         let due = self.own_scope_only(focus_folders_due(
             &self.snapshot.borrow(),
             &self.focus.borrow(),
@@ -8551,14 +8558,10 @@ where {
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
             });
-        let mut changed = false;
         if let Some(leg) = &leg
             && !due.is_empty()
         {
-            let report = leg.run(&due).await;
-            hold_captures(&self.observed_unlinks, report.departed);
-            stamp_focus_refreshed(&self.focus_refreshed, &due, now);
-            changed |= report.changed;
+            self.settle_focus_leg(&due, leg.run(&due).await, now);
         }
         if let Some(folder) = folder {
             self.queue_focus_file_children(folder);
@@ -8566,19 +8569,15 @@ where {
         if let Some(leg) = &leg {
             let files = self.own_scope_only(self.queued_focus_files());
             if !files.is_empty() {
-                let report = leg.run_files(&files).await;
-                hold_captures(&self.observed_unlinks, report.departed);
-                stamp_focus_refreshed(&self.focus_refreshed, &files, now);
+                self.settle_focus_leg(&files, leg.run_files(&files).await, now);
                 // Take only what this pass attempted, as the tick's leg does: a
                 // row queued while the legs above were awaited has not been.
                 self.focus
                     .borrow_mut()
                     .open_files
                     .retain(|node| !files.contains(node));
-                changed |= report.changed;
             }
         }
-        changed
     }
 
     // -----------------------------------------------------------------------

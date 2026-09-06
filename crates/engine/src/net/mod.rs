@@ -43,7 +43,7 @@ pub use child::ChildAdopter;
 pub(crate) use child::{ChildResolveError, resolve_child};
 pub(crate) use fanout::fanout_get_verify;
 pub use fanout::{FanoutRecord, MAX_RECORD_BYTES};
-pub(crate) use focus::{FolderRefresh, GraftedLeg};
+pub(crate) use focus::{FolderRefresh, FolderRefreshReport, GraftedLeg};
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
     EolRenewResult, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, RE_PUT_INTERVAL,
