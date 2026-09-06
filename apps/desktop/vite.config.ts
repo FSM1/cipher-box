@@ -1,8 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { desktopPlatformOf } from './scripts/buildEnv.mjs';
 
 /** Fixed so `devUrl` in `tauri.conf.json` names one port, and not web's 5173. */
 const DEV_PORT = 5174;
+
+// Applied here as well as in `scripts/tauri.mjs`, so a bare `vite build` and
+// the test run resolve the same value the packaged build does.
+process.env.VITE_DESKTOP_PLATFORM = desktopPlatformOf(process.env);
 
 export default defineConfig({
   resolve: {

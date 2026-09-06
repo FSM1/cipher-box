@@ -20,8 +20,8 @@ combined work with them: it is distributed under GPLv3, with WinFsp's
 [commercial licence](https://winfsp.dev/) as the alternative for a distribution
 that cannot be made under GPLv3.
 
-The notice above is shown to the user as well as stated here — the desktop
-shell carries it and the project address on every screen
+The notice above is shown to the user as well as stated here — the Windows
+desktop shell carries it and the project address on every screen
 (`apps/desktop/src/frontDoor.tsx`).
 
 CipherBox bundles no proprietary software alongside WinFsp.
@@ -56,3 +56,7 @@ The Linux app speaks the FUSE wire through a vendored copy of `fuser`
 macOS backend shares with it, a two-lifetime entry patch, and a name-redaction
 patch that keeps user plaintext out of the crate's own log records. Its own
 licence and notices travel with the vendored tree.
+
+The macOS and Linux desktop shells carry its two copyright lines and the
+project address on every screen (`apps/desktop/src/frontDoor.tsx`), because MIT
+asks for the notice in every copy and a shipped bundle is one.

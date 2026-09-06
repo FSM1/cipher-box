@@ -50,7 +50,8 @@ fn main() {
             session::vault_status,
             session::core_kit_get_item,
             session::core_kit_set_item,
-            session::core_kit_purge
+            session::core_kit_purge,
+            set_main_window_visible
         ])
         .setup(move |app| {
             // Menu-bar app: no Dock icon on macOS.
@@ -68,10 +69,12 @@ fn main() {
             // Built here rather than declared in `tauri.conf.json`: the
             // webview's web process waits on a session bus a headless runner
             // has not got, and a configured window is built before this hook.
+            // It is built hidden, and the webview asks for it (`../../src/window.ts`).
             WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::default())
                 .title("CipherBox")
                 .inner_size(960.0, 640.0)
                 .min_inner_size(480.0, 360.0)
+                .visible(false)
                 .build()?;
 
             tray::build(app.handle())?;
@@ -104,6 +107,18 @@ fn main() {
             RunEvent::Exit => app.state::<engine::EngineHost>().stop(),
             _ => {}
         });
+}
+
+/// Show or hide the login chrome, as the session the webview drives asks.
+#[tauri::command]
+fn set_main_window_visible(app: AppHandle, visible: bool) {
+    if visible {
+        show_main_window(&app);
+    } else if let Some(window) = app.get_webview_window(MAIN_WINDOW)
+        && let Err(error) = window.hide()
+    {
+        eprintln!("failed to hide the main window: {error}");
+    }
 }
 
 /// Show and focus the main window from the tray.

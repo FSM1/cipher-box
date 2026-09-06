@@ -282,20 +282,68 @@ function Warning({ warning: { kind, detail } }: { warning: VaultWarning }) {
   );
 }
 
+const PLATFORMS = ['windows', 'macos', 'linux'] as const;
+
+/** Which build this bundle is, and so which notices its licences ask for. */
+type DesktopPlatform = (typeof PLATFORMS)[number];
+
+/**
+ * Fixed at build time by `vite.config.ts` rather than read off `navigator`, so
+ * each arm belongs to one build. `null` is a build that named none.
+ */
+function builtFor(): DesktopPlatform | null {
+  const named: unknown = import.meta.env.VITE_DESKTOP_PLATFORM;
+  const trimmed = typeof named === 'string' ? named.trim() : named;
+  return PLATFORMS.find((platform) => platform === trimmed) ?? null;
+}
+
 /** Shown verbatim on every screen — the licence condition, see `docs/ATTRIBUTION.md`. */
 const WINFSP_NOTICE = 'WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos';
 const WINFSP_HOME = 'https://github.com/winfsp/winfsp';
 
 /**
- * The attribution footer. The address is text, not an anchor: this shell has no
- * opener plugin and its CSP admits nothing but itself, so a live link would
- * navigate the only window away from a signed-in session.
+ * The vendored crate the macOS and Linux builds compile in. MIT asks for these
+ * lines in every copy of the software, and a shipped bundle is one, so they
+ * travel in the window rather than in the source tree alone.
+ */
+const FUSER_NOTICE = [
+  'Copyright (c) 2020-present Christopher Berner',
+  'Copyright © 2013-2019 Andreas Neuhaus https://zargony.com/',
+];
+const FUSER_HOME = 'https://github.com/cberner/fuser';
+
+/** A courtesy: FUSE-T is the member's own install, and asks for no notice. */
+const FUSE_T_LINE = 'Your vault mounts through FUSE-T — https://github.com/macos-fuse-t/fuse-t';
+
+/**
+ * The attribution footer for the mount backend this build ships. Each notice is
+ * withheld only from a build known not to need it, so a bundle that named no
+ * platform carries them all: naming one backend too many is cosmetic, and
+ * dropping a licence condition is not.
+ *
+ * An address is text, not an anchor: this shell has no opener plugin and its
+ * CSP admits nothing but itself, so a live link would navigate the only window
+ * away from a signed-in session.
  */
 function Attribution() {
+  const platform = builtFor();
   return (
-    <footer className="attribution" data-attribution="winfsp">
-      <Note>{WINFSP_NOTICE}</Note>
-      <Note>{WINFSP_HOME}</Note>
+    <footer className="attribution" data-attribution={platform ?? 'unnamed'}>
+      {platform !== 'macos' && platform !== 'linux' && (
+        <>
+          <Note>{WINFSP_NOTICE}</Note>
+          <Note>{WINFSP_HOME}</Note>
+        </>
+      )}
+      {platform !== 'windows' && (
+        <>
+          {FUSER_NOTICE.map((line) => (
+            <Note key={line}>{line}</Note>
+          ))}
+          <Note>{FUSER_HOME}</Note>
+        </>
+      )}
+      {platform !== 'windows' && platform !== 'linux' && <Note>{FUSE_T_LINE}</Note>}
     </footer>
   );
 }

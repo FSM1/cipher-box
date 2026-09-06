@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ShellActions, ShellModel } from './frontDoor';
+import type { VaultStatus } from './vault';
 
 /** One snapshot per redraw; the shell mutates a single model in place. */
 interface Redraw {
@@ -35,7 +36,10 @@ const shell = vi.hoisted(() => {
     recoverWithPhrase: vi.fn((): Promise<void> => Promise.resolve()),
     /** Whether the Core Kit session still holds a login at the factor policy. */
     awaitsRecovery: vi.fn((): boolean => true),
-    readVaultStatus: vi.fn(() => Promise.reject(new Error('no session is live'))),
+    readVaultStatus: vi.fn(
+      (): Promise<VaultStatus> => Promise.reject(new Error('no session is live'))
+    ),
+    invoke: vi.fn((): Promise<void> => Promise.resolve()),
     onVaultChanged: vi.fn((changed: () => void) => {
       vaultListeners.push(changed);
       return Promise.resolve(() => {});
@@ -72,6 +76,9 @@ vi.mock('./vault', () => ({
   onVaultChanged: shell.onVaultChanged,
   readVaultStatus: shell.readVaultStatus,
 }));
+// `./window` stays real, so this file drives the visibility rule the shell
+// runs rather than a stand-in for it.
+vi.mock('@tauri-apps/api/core', () => ({ invoke: shell.invoke }));
 vi.mock('./frontDoor', () => ({
   renderShell: (_root: HTMLElement, model: ShellModel, actions: ShellActions) => {
     shell.actions = actions;
@@ -88,6 +95,9 @@ describe('the shell bootstrap', () => {
   it('says the session is being restored while the restore is in flight', () => {
     expect(shell.restore).toHaveBeenCalled();
     expect(shell.redraws.at(-1)).toEqual({ phase: 'starting', busy: true, step: 'restore' });
+    // A device with a session to resume is owed the menu bar, so nothing asks
+    // for the window until the restore has said whether there is one.
+    expect(shell.invoke).not.toHaveBeenCalled();
   });
 
   it('lands at the front door once the restore settles', async () => {
@@ -110,6 +120,28 @@ describe('the shell bootstrap', () => {
 
     shell.vaultListeners.forEach((emitted) => emitted());
     await vi.waitFor(() => expect(shell.readVaultStatus).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * The shell lives in the menu bar: the window is chrome the member is shown
+   * while the session needs them, and taken away once the vault is mounted.
+   */
+  it('shows the window at the front door and hides it once the vault mounted', async () => {
+    expect(shell.invoke).toHaveBeenCalledWith('set_main_window_visible', { visible: true });
+
+    shell.readVaultStatus.mockResolvedValue({
+      items: 0,
+      staleness: 'fresh',
+      deadLetters: 0,
+      provisioned: true,
+      warnings: [],
+      mount: { state: 'mounted', path: '/home/member/CipherBox' },
+    });
+    shell.vaultListeners.forEach((emitted) => emitted());
+
+    await vi.waitFor(() =>
+      expect(shell.invoke).toHaveBeenCalledWith('set_main_window_visible', { visible: false })
+    );
   });
 
   /**

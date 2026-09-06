@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engineBuildEnv } from '../scripts/buildEnv.mjs';
+import { desktopPlatform, desktopPlatformOf, engineBuildEnv } from '../scripts/buildEnv.mjs';
 import { contentSecurityPolicy, DEFAULT_API_URL as CSP_DEFAULT_API_URL } from '../scripts/csp.mjs';
 import { DEFAULT_API_URL, desktopConfig } from './config';
 import tauriConf from '../src-tauri/tauri.conf.json';
@@ -84,6 +84,32 @@ describe('the environment handed to the compiled shell', () => {
     expect(engineBuildEnv({ ...BUILD, VITE_ROUTING_ENDPOINTS: ' https://someguy.test ' })).toEqual(
       expect.objectContaining({ VITE_ROUTING_ENDPOINTS: 'https://someguy.test' })
     );
+  });
+
+  /**
+   * The footer picks its licence arm from this value, so a wrong mapping drops
+   * a notice a licence asks for rather than a cosmetic line.
+   */
+  it('names the mount backend each host build ships', () => {
+    expect(desktopPlatform('win32')).toBe('windows');
+    expect(desktopPlatform('darwin')).toBe('macos');
+    expect(desktopPlatform('linux')).toBe('linux');
+    expect(engineBuildEnv({ ...BUILD, VITE_DESKTOP_PLATFORM: ' macos ' })).toEqual(
+      expect.objectContaining({ VITE_DESKTOP_PLATFORM: 'macos' })
+    );
+  });
+
+  /**
+   * Every spelling this cannot read would resolve to one arm and drop the
+   * notices of the others, so a cross build states a token it knows or fails.
+   */
+  it('refuses a platform token the footer has no arm for', () => {
+    for (const named of ['win32', 'Windows', 'darwin']) {
+      expect(() => desktopPlatformOf({ VITE_DESKTOP_PLATFORM: named })).toThrow(
+        /VITE_DESKTOP_PLATFORM/
+      );
+    }
+    expect(desktopPlatformOf({ VITE_DESKTOP_PLATFORM: '  ' })).toBe(desktopPlatform());
   });
 });
 
