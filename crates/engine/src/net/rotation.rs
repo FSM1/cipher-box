@@ -239,8 +239,9 @@ struct RepublishBase {
     epoch_tag_unknown: PreservedFields,
     /// `None` when the root is held keyless — no seed to sign a republish under.
     write_scope_seed: Option<Zeroizing<[u8; SECRET_LEN]>>,
-    /// The CAS lower bound the republish must land above, `Some` only where the
-    /// body is not the one the record plane serves
+    /// The CAS lower bound the republish must land above: the sequence a landed
+    /// publish at this name already spent ([`RootPublish::run`]), or the one the
+    /// record plane's own refused copy sits at
     /// ([`OwnerRotationNet::last_known_good_root`]).
     min_current_sequence: Option<u64>,
 }
