@@ -2,7 +2,7 @@
 # Never a PR gate: it is a load generator, and the only thing it can be pointed
 # at is a loopback stack this job stands up, or staging behind the `staging`
 # environment's approval. The harness crate's own unit tests block merges in
-# CI's `Rust Lint + Workspace Tests (Linux)` job.
+# CI's `Rust` area's `Workspace tests (Linux)` job.
 name: Load Tests
 
 on:

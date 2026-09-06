@@ -61,9 +61,9 @@ shell going away returns a call the kernel holds.
 
 - `pnpm --filter @cipherbox/desktop-e2e run test` — the vitest unit suite over
   the pure helpers. It needs no stack, no binary and no network, so it runs
-  under the merge-blocking workspace `Test` gate.
+  under the merge-blocking `Desktop` area.
 - `pnpm --filter @cipherbox/desktop-e2e run test:e2e` — the live orchestrator.
-  The workspace-wide `Test` gate runs no suite that needs a live stack, so this
+  The area unit-test gates run no suite that needs a live stack, so this
   one is deliberately not called `test`.
 
 ## Run it locally

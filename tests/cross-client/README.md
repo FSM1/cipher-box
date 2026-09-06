@@ -105,4 +105,4 @@ up, and both the desktop binary and the web bundle must be built.
    `--list` names the scenarios and `--scenario <name>` runs one of them.
 
 The `test` script is the unit suite over the pure helpers, which the
-workspace-wide `Test` gate runs. It needs no stack.
+`Desktop` area runs. It needs no stack.

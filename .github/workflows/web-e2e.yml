@@ -191,7 +191,7 @@ jobs:
           package: '@cipherbox/web-e2e'
           working-directory: tests/web-e2e
 
-      # Named `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
+      # Named `test:e2e`, not `test`: the area unit-test gates run no
       # suite that needs a live stack. The step timeout is the slice's test-time
       # budget, so a smoke slice that outgrows the PR gate trips here.
       - name: Run the web e2e suite

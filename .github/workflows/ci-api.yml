@@ -1,0 +1,203 @@
+# The API area of the PR gate (blueprint/testing.md): everything that reads
+# `apps/api`. Called by ci.yml. The live contract suite stays in the caller —
+# it spans the Rust client and the TypeScript API and belongs to neither area.
+name: CI API
+
+on:
+  workflow_call:
+    inputs:
+      ts:
+        description: The TypeScript path filter matched.
+        required: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  typecheck:
+    name: Typecheck (TypeScript)
+    if: inputs.ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the type checker
+        run: pnpm --filter @cipherbox/api typecheck
+
+  unit:
+    name: Unit tests
+    if: inputs.ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the API unit suite
+        run: pnpm --filter @cipherbox/api test
+
+  # The first-class API integration suite (blueprint/testing.md law 1): the
+  # real-Postgres concurrency and interleaving tests — registry
+  # register-vs-retire phantom and duplicate-insert, mailbox pending-cap, and
+  # the advisory-lock lock_timeout DoS guard. They are named `*.itest.ts`; this
+  # job owns them. Each test provisions its own randomized throwaway database
+  # and drops only that one.
+  integration:
+    name: Integration tests (real Postgres)
+    if: inputs.ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cipherbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: cipherbox_test
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the API integration suite
+        run: pnpm --filter @cipherbox/api test:integration
+
+  migration-drift:
+    name: Migration drift
+    if: inputs.ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cipherbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: cipherbox_test
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run committed migrations against a fresh database
+        run: pnpm --filter @cipherbox/api migration:run
+
+      - name: Assert entities and migrations agree
+        working-directory: apps/api
+        run: |
+          set +e
+          OUTPUT="$(pnpm migration:generate src/migrations/DriftCheck 2>&1)"
+          set -e
+
+          if echo "$OUTPUT" | grep -q "No changes in database schema were found"; then
+            echo "No entity/migration drift detected."
+            exit 0
+          fi
+
+          echo "::error::Entity/migration drift detected - entities define schema not covered by committed migrations."
+          echo "$OUTPUT"
+          if ls src/migrations/*DriftCheck*.ts 1>/dev/null 2>&1; then
+            echo ""
+            echo "Generated drift migration:"
+            cat src/migrations/*DriftCheck*.ts
+          fi
+          echo ""
+          echo "Fix: pnpm --filter @cipherbox/api migration:generate src/migrations/<Name> and commit the result."
+          exit 1
+
+  openapi-freshness:
+    name: OpenAPI freshness
+    if: inputs.ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Regenerate the OpenAPI document
+        run: pnpm --filter @cipherbox/api openapi:generate
+
+      - name: Assert the committed artifact is fresh
+        run: |
+          if ! git diff --exit-code -- apps/api/openapi.json; then
+            echo "::error::apps/api/openapi.json is stale - run 'pnpm --filter @cipherbox/api openapi:generate' and commit the result."
+            exit 1
+          fi

@@ -120,7 +120,7 @@ them.
    pnpm --filter @cipherbox/web-e2e test:e2e
    ```
 
-   The script is `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
+   The script is `test:e2e`, not `test`: the area unit-test gates run no
    suite that needs a live stack.
 
 Rebuild the bundle after any `apps/web` change — the suite serves `dist/`, not

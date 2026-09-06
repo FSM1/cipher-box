@@ -12,7 +12,12 @@ rules:
   artipacked:
     # checkout persist-credentials hygiene — broad pre-existing finding (e.g. release-please.yml needs persist-credentials to push). Deferred: not in Phase 53 scope (supply-chain pinning + least-privilege only).
     ignore:
+      - ci-api.yml
+      - ci-desktop.yml
       - ci-e2e.yml
+      - ci-repo.yml
+      - ci-rust.yml
+      - ci-web.yml
       - ci.yml
       - codecov-base.yml
       - deploy-landing.yml
@@ -27,7 +32,12 @@ rules:
   template-injection:
     # github-context expansion in run: blocks — pre-existing across e2e/deploy workflows. Deferred: not Phase 53 scope.
     ignore:
+      - ci-api.yml
+      - ci-desktop.yml
       - ci-e2e.yml
+      - ci-repo.yml
+      - ci-rust.yml
+      - ci-web.yml
       - ci.yml
       - codecov-base.yml
       - deploy-landing.yml
@@ -43,7 +53,12 @@ rules:
   cache-poisoning:
     # actions/cache restore-key hygiene — pre-existing. Deferred: not Phase 53 scope.
     ignore:
+      - ci-api.yml
+      - ci-desktop.yml
       - ci-e2e.yml
+      - ci-repo.yml
+      - ci-rust.yml
+      - ci-web.yml
       - ci.yml
       - codecov-base.yml
       - deploy-landing.yml
@@ -59,7 +74,12 @@ rules:
   secrets-inherit:
     # reusable-workflow secrets: inherit — intentional for internal callers. Deferred: not Phase 53 scope.
     ignore:
+      - ci-api.yml
+      - ci-desktop.yml
       - ci-e2e.yml
+      - ci-repo.yml
+      - ci-rust.yml
+      - ci-web.yml
       - ci.yml
       - codecov-base.yml
       - deploy-landing.yml
@@ -75,7 +95,12 @@ rules:
   github-app:
     # create-github-app-token blanket install perms in release-please.yml — inherent to the release bot design. Deferred: not Phase 53 scope.
     ignore:
+      - ci-api.yml
+      - ci-desktop.yml
       - ci-e2e.yml
+      - ci-repo.yml
+      - ci-rust.yml
+      - ci-web.yml
       - ci.yml
       - codecov-base.yml
       - deploy-landing.yml

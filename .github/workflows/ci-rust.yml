@@ -1,0 +1,316 @@
+# The Rust area of the PR gate (blueprint/testing.md): the cargo workspace on
+# every platform the workspace targets. Called by ci.yml. The desktop shell and
+# the contract crate are gated elsewhere — the Desktop area owns the shell, and
+# the caller's Contract Suite owns the crate whose tests need the live stack.
+name: CI Rust
+
+on:
+  workflow_call:
+    inputs:
+      rust:
+        description: The Rust path filter matched.
+        required: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  lint:
+    name: Fmt + clippy (Linux)
+    if: inputs.rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
+
+      - name: Cargo fmt
+        run: cargo fmt --all --check
+
+      # The desktop shell is excluded from the workspace-wide jobs: compiling
+      # Tauri needs webkit2gtk system deps on Linux, and the Desktop area owns
+      # its check/clippy/build on all three platforms. The contract crate is
+      # excluded and owns its own lint in the Contract Suite job. The vendored
+      # fuser is linted here and nowhere else — this is the only job on a target
+      # its build script accepts.
+      - name: Cargo clippy
+        run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets -- -D warnings
+
+  workspace-tests:
+    name: Workspace tests (Linux)
+    if: inputs.rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
+
+      # The engine is excluded: the engine simulation job owns its binaries, and
+      # they are the two slowest suites in the matrix. The contract crate's
+      # tests need the live API stack, and the vendored fuser's one upstream
+      # test mounts a real filesystem — FUSE Op Core runs the rest.
+      - name: Cargo test (workspace)
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --exclude cipherbox-engine
+
+      # The Secret Service ships on Linux desktops but is absent from a bare
+      # runner: gnome-keyring provides it, and an empty password unlocks the
+      # throwaway login keyring the daemon creates.
+      - name: Real OS keyring credential seam
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnome-keyring dbus-x11
+          dbus-run-session -- bash -c '
+            printf "\n" | gnome-keyring-daemon --unlock --components=secrets
+            cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
+          '
+
+  engine:
+    name: Engine simulation tests
+    if: inputs.rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
+
+      - name: Engine KAT vectors fresh (committed generator is the only writer)
+        run: |
+          cargo run -p cipherbox-engine --example kat_gen
+          git diff --exit-code -- crates/engine/kat
+          test -z "$(git status --porcelain -- crates/engine/kat)"
+
+      # Engine unit tests, the content-DAG KAT suite, plus every seam
+      # conformance kit executed against its in-memory fake (the test-kit
+      # feature activates via the crate's self dev-dependency).
+      - name: Engine tests and seam conformance kits
+        run: cargo test -p cipherbox-engine
+
+  # The `fuse-op-core` suite: every vfs operation driven against a real engine
+  # on the in-memory seam fakes — no kernel, so it runs on any runner.
+  fuse-op-core:
+    name: FUSE Op Core
+    if: inputs.rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            linux-cargo-
+            main-cargo-
+
+      - name: FUSE operation-core suite
+        run: cargo test -p cipherbox-fuse
+
+      # The vendored fuser's patches travel with the regression tests
+      # blueprint/desktop.md commits to, and this is where those tests fire. The
+      # general cargo jobs exclude the crate, so this is its only gate. The one
+      # upstream test that mounts a real filesystem is skipped: this job is
+      # kernel-free by design.
+      - name: Vendored fuser patches
+        run: cargo test -p fuser -- --skip mnt::test::mount_unmount
+
+  # The WASM parity gate. Runs the core KAT + property suite in three shapes —
+  # native, wasm32-wasip1 (libtest under wasmtime), and the browser-shaped
+  # wasm32-unknown-unknown (wasm-bindgen-test → Node) that exercises the
+  # residual u64/BigInt and getrandom-`crypto.getRandomValues` boundary risks
+  # (blueprint/core.md, blueprint/web-client.md) — plus the crates/wasm facade
+  # boundary tests and the single ES-module artifact build.
+  core-kats:
+    name: Core KATs (native + WASM)
+    if: inputs.rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: core-kats-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            core-kats-cargo-
+            main-cargo-
+
+      # wasm-bindgen-test-runner drives the wasm32-unknown-unknown legs in Node.
+      - uses: ./.github/actions/wasm-bindgen-cli
+        with:
+          targets: wasm32-wasip1 wasm32-unknown-unknown
+
+      - uses: bytecodealliance/actions/wasmtime/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      - name: KAT vectors fresh (committed generator is the only writer)
+        run: |
+          cargo run -p cipherbox-core --example kat_gen
+          git diff --exit-code -- crates/core/kat
+          test -z "$(git status --porcelain -- crates/core/kat)"
+
+      - name: Core suite (native)
+        run: cargo test -p cipherbox-core
+
+      - name: Core suite (WASM, wasm32-wasip1 under wasmtime)
+        run: cargo test -p cipherbox-core --target wasm32-wasip1
+
+      # Browser-shaped leg: the KAT + property suite under Node via
+      # wasm-bindgen-test. Count parity with the native run is the anti-vacuity
+      # backstop (the test-file `#[test]` shadow routes both to this harness).
+      - name: Core KAT + property suite (WASM, wasm32-unknown-unknown)
+        run: cargo test -p cipherbox-core --target wasm32-unknown-unknown --test kat_manifest --test codec_props --test ipns_props --test seal_props
+
+      # The crates/wasm facade boundary tests (u64/BigInt, getrandom wiring,
+      # command/event shapes) run under the same Node harness.
+      - name: WASM facade boundary tests (wasm32-unknown-unknown)
+        run: cargo test -p cipherbox-wasm --target wasm32-unknown-unknown
+
+      # getrandom tripwire: core is pure — entropy is injected, never
+      # sourced in-tree (blueprint/core.md "Doctrine"). The global
+      # getrandom_backend cfg in .cargo/config.toml defeats getrandom-0.3's
+      # no-backend compile error, so a getrandom that sneaked into core's
+      # production graph would silently link a live crypto.getRandomValues
+      # backend. Fail closed: core's normal-edge wasm graph must pull no
+      # getrandom (its dev-only proptest RNG is fine). Capture first so a
+      # cargo-tree failure fails the step rather than skipping the check.
+      - name: getrandom stays out of core's production graph (wasm)
+        run: |
+          graph=$(cargo tree -p cipherbox-core --target wasm32-unknown-unknown --edges normal)
+          if echo "$graph" | grep -qi getrandom; then
+            echo "::error::getrandom entered cipherbox-core's production graph — core must source no entropy (blueprint/core.md)."
+            exit 1
+          fi
+
+      # The single wasm-bindgen ES module and its generated .d.ts contract must
+      # build (blueprint/web-client.md) on any crate change, including one that
+      # touches no TS; `Web Bundle` is what ships it.
+      - name: Build the wasm-bindgen ES module and .d.ts
+        run: |
+          cargo build -p cipherbox-wasm --release --target wasm32-unknown-unknown
+          wasm-bindgen --target web --out-dir target/wasm-pkg --out-name cipherbox_wasm \
+            target/wasm32-unknown-unknown/release/cipherbox_wasm.wasm
+          test -f target/wasm-pkg/cipherbox_wasm.d.ts
+          test -f target/wasm-pkg/cipherbox_wasm.js
+
+  # The two operating-system adapter legs. Each keeps the workspace check, so a
+  # platform-specific compile break still fails here, and tests only the crates
+  # with an operating-system conditional: `crates/fuse` (FUSE-T, libfuse3,
+  # WinFsp), `crates/win-security` (a body on Windows alone) and
+  # `crates/desktop-seams` (the per-platform keyring). Every other crate is
+  # platform-neutral and the Linux jobs own its tests. blueprint/testing.md
+  # names the Windows leg "cargo check + adapter tests".
+  adapters:
+    name: Adapter tests (${{ matrix.label }})
+    if: inputs.rust
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            cache-prefix: macos-cargo
+          - os: windows-latest
+            label: Windows
+            cache-prefix: windows-cargo
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The authoritative leg for the WinFsp host adapter: it is the only one
+      # that compiles `crates/fuse`'s Windows target, and `winfsp-sys` builds
+      # its bindings against the headers and import library the MSI installs.
+      # Ahead of the cache restore, because the bindings it generates are
+      # cached under `target`.
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.cache-prefix }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: ${{ matrix.cache-prefix }}-
+
+      # The macOS host adapter links FUSE-T's libfuse ABI, so this leg is where
+      # it compiles at all (blueprint/desktop.md "Backends").
+      - uses: ./.github/actions/setup-fuse-t
+        if: runner.os == 'macOS'
+
+      - name: Cargo check (workspace)
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
+
+      # The `Fmt + clippy` job runs on Linux, where the WinFsp adapter does not
+      # exist, so this is the only leg that can lint it at all. Same flags as
+      # that job, narrowed to the crates whose Windows target this leg is
+      # authoritative for — widening it is a separate change, because the rest
+      # of the workspace has never been linted on this platform.
+      - name: Cargo clippy (the Windows host adapters)
+        if: runner.os == 'Windows'
+        run: cargo clippy -p cipherbox-fuse -p cipherbox-win-security --all-targets -- -D warnings
+
+      # Cargo hands a test run an explicit DYLD_FALLBACK_LIBRARY_PATH with the
+      # macOS default `/usr/local/lib` spliced in, which resolves
+      # `@rpath/libfuse-t.dylib` even when nothing linked an `LC_RPATH` — so a
+      # broken adapter link would surface only as an unlaunchable bundle. A
+      # sentinel replaces that tail and makes this leg prove the rpath. Inline
+      # rather than `env:`: SIP strips `DYLD_*` before bash execs.
+      - name: Cargo test (the macOS host adapters)
+        if: runner.os == 'macOS'
+        run: DYLD_FALLBACK_LIBRARY_PATH=/nonexistent cargo test -p cipherbox-fuse -p cipherbox-desktop-seams
+
+      - name: Cargo test (the Windows host adapters)
+        if: runner.os == 'Windows'
+        run: cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-win-security
+
+      - name: Real OS keyring credential seam
+        run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
