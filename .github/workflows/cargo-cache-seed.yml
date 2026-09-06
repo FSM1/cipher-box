@@ -1,24 +1,20 @@
-# `ci.yml` runs on `pull_request` only, and GitHub scopes a cache entry to the
-# ref that wrote it — a PR writes under `refs/pull/N/merge`, invisible to every
-# other PR, so each PR's first cargo run is cold. A run can also read entries
-# scoped to the default branch, which is what this workflow writes.
+# The one writer of the cargo caches. `ci.yml` runs on `pull_request` only, and
+# GitHub scopes a cache entry to the ref that wrote it: a pull request writes
+# under `refs/pull/N/merge`, which no other pull request can read. A run can
+# also read entries scoped to the default branch, so this workflow writes them
+# on every push to main and the pull-request jobs only restore.
 #
-# Two entries, not one per cargo job: the per-job keys stay each PR's own save
-# key and gain a trailing `main-cargo-` / `main-wasm-cargo-` restore-key that
-# reaches these. The keys hash `Cargo.lock` and the toolchain — the two inputs
-# that invalidate a dependency tree — so a merge that changes neither hits its
-# own key and writes nothing. The repo's cache budget is already tight, and
-# these entries have to earn their bytes against the PR-scoped ones LRU evicts.
+# Each leg warms the same `rust-cache` `shared-key` its pull-request jobs use
+# and compiles what they compile. `rust-cache` keys on the operating system,
+# the compiler version, `Cargo.lock` and `Cargo.toml`, and it stores the
+# dependency artifacts alone, so an entry stays small enough that the repository
+# cache budget holds all of them at once.
 name: Cargo Cache Seed
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - '.github/workflows/cargo-cache-seed.yml'
-  # An entry LRU evicted between lockfile changes has no push to recreate it.
+  # An entry LRU evicted between pushes has no push to recreate it.
   schedule:
     - cron: '0 5 * * 1'
   workflow_dispatch:
@@ -30,10 +26,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Serves every job keyed `linux-cargo-`, `core-kats-cargo-` and
-  # `client-browser-cargo-`: one host `target` tree and one registry.
-  native:
-    name: Seed the native Linux cargo cache
+  # The Linux legs: the Rust area's fmt, clippy, workspace tests, engine
+  # simulation and FUSE operation core, plus the contract suite.
+  workspace:
+    name: Seed the workspace cache
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -43,25 +39,100 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: main-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
-          restore-keys: main-cargo-
+          shared-key: workspace
 
-      # Compiled, not run: what a PR restores this for is the dependency tree.
-      # The desktop shell stays out — Tauri needs webkit2gtk system deps, and
-      # its own jobs cache under their own keys.
-      - name: Build the test targets the PR cargo jobs compile
-        run: cargo test --workspace --exclude cipherbox-desktop --no-run
+      - name: Compile what the workspace jobs compile
+        run: |
+          cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
+          cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --no-run
 
-  # Serves the `wasm-engine-cargo-` and `web-e2e-cargo-` jobs, whose path set is
-  # the host build tree plus the browser target rather than the whole of `target`.
-  wasm:
-    name: Seed the wasm cargo cache
+  # The macOS and Windows adapter legs. `rust-cache` puts the operating system
+  # in the key, so one shared key serves both.
+  adapters:
+    name: Seed the adapter cache
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: adapters
+
+      - uses: ./.github/actions/setup-fuse-t
+        if: runner.os == 'macOS'
+
+      - name: Compile what the adapter legs compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
+          if [ "${RUNNER_OS}" = 'Windows' ]; then
+            cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-win-security --no-run
+          else
+            cargo test -p cipherbox-fuse -p cipherbox-desktop-seams --no-run
+          fi
+
+  # The desktop shell matrix, whose release build is the slowest leg of the gate.
+  desktop:
+    name: Seed the desktop cache
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            pkg-config \
+            build-essential
+
+      - uses: ./.github/actions/setup-fuse-t
+        if: runner.os == 'macOS'
+
+      - uses: ./.github/actions/setup-winfsp
+        if: runner.os == 'Windows'
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: desktop
+
+      # The release build is what `tauri build --no-bundle` compiles.
+      - name: Compile what the desktop matrix compiles
+        run: |
+          cargo test -p cipherbox-desktop --no-run
+          cargo build -p cipherbox-desktop --release
+
+  core-kats:
+    name: Seed the core KAT cache
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -71,15 +142,60 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/release
-            target/wasm32-unknown-unknown
-          key: main-wasm-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
-          restore-keys: main-wasm-cargo-
+          shared-key: core-kats
+
+      - uses: ./.github/actions/wasm-bindgen-cli
+        with:
+          targets: wasm32-wasip1 wasm32-unknown-unknown
+
+      - name: Compile what the core KAT job compiles
+        run: |
+          cargo test -p cipherbox-core --no-run
+          cargo test -p cipherbox-core --target wasm32-wasip1 --no-run
+          cargo build -p cipherbox-wasm --release --target wasm32-unknown-unknown
+
+  client-browser:
+    name: Seed the browser suite cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: client-browser
+
+      - uses: ./.github/actions/wasm-bindgen-cli
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      - name: Compile the conformance module the browser suite builds
+        run: pnpm --filter @cipherbox/client run build:wasm-conformance
+
+  wasm-engine:
+    name: Seed the engine WASM cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: wasm-engine
 
       - uses: ./.github/actions/wasm-bindgen-cli
 

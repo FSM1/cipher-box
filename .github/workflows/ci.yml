@@ -192,22 +192,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # `target/release` is the host tree: under `--target wasm32-…` cargo puts
-      # proc macros and build scripts there, so omitting it recompiles them on
-      # every run. The native `target/<triple>` subtrees the cargo jobs cache
-      # stay out — dead weight here, and a fourth full copy would push the
-      # repo's other cargo caches out under LRU.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/release
-            target/wasm32-unknown-unknown
-          key: wasm-engine-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            wasm-engine-cargo-
-            main-wasm-cargo-
+          shared-key: wasm-engine
 
       - uses: ./.github/actions/wasm-bindgen-cli
 
@@ -371,16 +358,9 @@ jobs:
           node-version-file: 'package.json'
           cache: 'pnpm'
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            linux-cargo-
-            main-cargo-
+          shared-key: workspace
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

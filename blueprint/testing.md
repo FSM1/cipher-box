@@ -231,6 +231,9 @@ crates stay at opt-level 0 and debuggable. The bound tests do one signature,
 key derivation, or seal per item up to a ceiling, so the dependency graph, not
 the code under test, sets their run time. Every cargo cache key hashes
 `Cargo.toml` next to `Cargo.lock`, so a profile change invalidates the caches.
+A push to main is the only writer of those caches; a pull-request run restores
+one and never saves, because a cache a pull request writes is scoped to that
+pull request alone and no other run can read it.
 
 The CI stack: Postgres, Kubo, the API under test, and a local `/routing/v1`
 record store — v1's `mock-ipns-routing` tool **promoted, not deleted**: a

@@ -24,16 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            linux-cargo-
-            main-cargo-
+          shared-key: workspace
 
       - name: Cargo fmt
         run: cargo fmt --all --check
@@ -56,16 +49,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            linux-cargo-
-            main-cargo-
+          shared-key: workspace
 
       # The engine is excluded: the engine simulation job owns its binaries, and
       # they are the two slowest suites in the matrix. The contract crate's
@@ -95,16 +81,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            linux-cargo-
-            main-cargo-
+          shared-key: workspace
 
       - name: Engine KAT vectors fresh (committed generator is the only writer)
         run: |
@@ -129,16 +108,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            linux-cargo-
-            main-cargo-
+          shared-key: workspace
 
       - name: FUSE operation-core suite
         run: cargo test -p cipherbox-fuse
@@ -166,16 +138,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: core-kats-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            core-kats-cargo-
-            main-cargo-
+          shared-key: core-kats
 
       # wasm-bindgen-test-runner drives the wasm32-unknown-unknown legs in Node.
       - uses: ./.github/actions/wasm-bindgen-cli
@@ -254,10 +219,8 @@ jobs:
         include:
           - os: macos-latest
             label: macOS
-            cache-prefix: macos-cargo
           - os: windows-latest
             label: Windows
-            cache-prefix: windows-cargo
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -267,19 +230,14 @@ jobs:
       # The authoritative leg for the WinFsp host adapter: it is the only one
       # that compiles `crates/fuse`'s Windows target, and `winfsp-sys` builds
       # its bindings against the headers and import library the MSI installs.
-      # Ahead of the cache restore, because the bindings it generates are
-      # cached under `target`.
+      # Ahead of the cache restore, because the bindings it generates are a
+      # dependency artifact the cache carries.
       - uses: ./.github/actions/setup-winfsp
         if: runner.os == 'Windows'
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.cache-prefix }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
-          restore-keys: ${{ matrix.cache-prefix }}-
+          shared-key: adapters
 
       # The macOS host adapter links FUSE-T's libfuse ABI, so this leg is where
       # it compiles at all (blueprint/desktop.md "Backends").
