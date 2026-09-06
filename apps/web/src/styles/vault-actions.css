@@ -123,7 +123,6 @@
 
 .file-list-item-menu {
   flex-shrink: 0;
-  margin-left: auto;
   padding: 0 4px;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);

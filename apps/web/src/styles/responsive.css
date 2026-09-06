@@ -56,22 +56,23 @@
     text-overflow: ellipsis;
   }
 
-  /* Rows become two lines: name on top, size and date beneath it. */
+  /* Rows become two lines: name and action button on top, size and date beneath. */
   .file-list-header {
     grid-template-columns: 1fr;
   }
 
   .file-list-header-size,
-  .file-list-header-date {
+  .file-list-header-date,
+  .file-list-header-menu {
     display: none;
   }
 
   .file-list-item {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr max-content;
     grid-template-areas:
-      'name'
-      'meta';
-    gap: 4px;
+      'name menu'
+      'meta meta';
+    gap: 4px var(--spacing-sm);
   }
 
   .file-list-item-row-bottom {

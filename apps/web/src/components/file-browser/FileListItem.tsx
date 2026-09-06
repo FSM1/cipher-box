@@ -53,6 +53,16 @@ export function FileListItem({ row, selected, onToggle, onOpen, onRowMenu }: Fil
         </span>
         <span className="file-list-item-name">{row.name}</span>
         <ItemStatus row={row} />
+      </div>
+      <div className="file-list-item-row-bottom">
+        <span className="file-list-item-size" role="gridcell">
+          {row.size}
+        </span>
+        <span className="file-list-item-date" role="gridcell">
+          {row.modified}
+        </span>
+      </div>
+      <div className="file-list-item-actions" role="gridcell">
         <button
           type="button"
           className="file-list-item-menu"
@@ -65,14 +75,6 @@ export function FileListItem({ row, selected, onToggle, onOpen, onRowMenu }: Fil
         >
           [...]
         </button>
-      </div>
-      <div className="file-list-item-row-bottom">
-        <span className="file-list-item-size" role="gridcell">
-          {row.size}
-        </span>
-        <span className="file-list-item-date" role="gridcell">
-          {row.modified}
-        </span>
       </div>
     </div>
   );
