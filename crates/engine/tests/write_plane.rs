@@ -12163,6 +12163,123 @@ fn a_repeat_set_focus_inside_the_threshold_resolves_no_file_again() {
     );
 }
 
+/// A folder stays painted while it stays open: a file another device adds to it
+/// resolves on this device's next tick, with no navigation and no access check
+/// in between. The tick's folder leg is what lists the new row, so the same pass
+/// has to queue it for the file leg.
+#[test]
+fn a_tick_paints_a_file_another_device_added_to_the_open_folder() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "docs".to_owned(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the folder create commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let docs = child_id(&engine_a, ROOT, "docs");
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+    // The whole scenario: this device opens the folder once and never navigates
+    // again.
+    block_on(engine_b.command(Command::SetFocus { node: Some(docs) })).expect("the window opens");
+
+    let served: Vec<u8> = (0..96u8).collect();
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: docs,
+            name: "added.bin".to_owned(),
+        },
+        &served,
+    )
+    .expect("the write commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+
+    tick(&world, &engine_b, &mut tasks_b);
+
+    let added = child_id(&engine_b, docs, "added.bin");
+    let painted = block_on(engine_b.view()).unwrap().attrs(added).unwrap();
+    assert_eq!(
+        painted.size,
+        Some(served.len() as u64),
+        "the pass that listed the row also resolved it"
+    );
+    assert!(painted.mtime.is_some(), "the mtime rides the same head");
+}
+
+/// The queue the tick fills is damped by the same staleness stamp every other
+/// on-access refresh runs against. A row that has published no version projects
+/// no size however often a pass resolves it, so an undamped tick would spend a
+/// resolve on it forever.
+#[test]
+fn a_tick_resolves_an_unwritten_row_once_per_staleness_window() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "docs".to_owned(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the folder create commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let docs = child_id(&engine_a, ROOT, "docs");
+    block_on(engine_a.command(Command::Create {
+        parent: docs,
+        name: "unwritten.bin".to_owned(),
+        kind: NodeKind::File,
+    }))
+    .expect("the file create commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let node = child_id(&engine_a, docs, "unwritten.bin");
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+    // A cache-first file resolve reads the row's own record name, so the reads
+    // under that name count the resolves the file leg spent.
+    let file_name = write_name(node).as_str().as_bytes().to_vec();
+    let resolves = || {
+        bob.snapshot_cache
+            .reads()
+            .into_iter()
+            .filter(|key| *key == file_name)
+            .count()
+    };
+    block_on(engine_b.command(Command::SetFocus { node: Some(docs) })).expect("the window opens");
+    let after_navigation = resolves();
+    assert!(
+        after_navigation > 0,
+        "the navigation resolved the row it listed"
+    );
+
+    // Two ticks inside the threshold: the profile polls every second and holds a
+    // row fresh for three.
+    tick(&world, &engine_b, &mut tasks_b);
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        resolves(),
+        after_navigation,
+        "the stamp keeps the row off the record plane for the whole window"
+    );
+
+    tick(&world, &engine_b, &mut tasks_b);
+    assert!(
+        resolves() > after_navigation,
+        "past the window the row is due again"
+    );
+}
+
 /// A version another device published between the commit and the drain is not
 /// superseded: the queued edit dead-letters with its own bytes preserved, and
 /// the concurrent version stays the head every reader sees.

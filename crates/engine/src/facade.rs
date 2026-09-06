@@ -3338,6 +3338,58 @@ fn stamp_focus_refreshed(
     }
 }
 
+/// Queue every direct file child of `folder` the base projects no size for, in
+/// child order.
+///
+/// A `ChildRef` mirrors no size or mtime, so a listing paints those rows off
+/// nothing until each child's own record resolves. Queueing them from the focus
+/// window serves every host, so a host that stats no row of its own still paints
+/// a length without a download.
+fn queue_unprojected_children(
+    base: &Snapshot,
+    focus: &RefCell<FocusWindow>,
+    focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    profile: &SyncTimingProfile,
+    now: UnixMillis,
+    folder: NodeId,
+) {
+    let unprojected: Vec<NodeId> = base
+        .children(folder)
+        .into_iter()
+        .filter(|child| child.kind == NodeKind::File && child.size.is_none())
+        .map(|child| child.id)
+        .collect();
+    for child in unprojected {
+        queue_focus_file(focus, focus_refreshed, profile, now, child);
+    }
+}
+
+/// Put `node` on the on-access file queue, newest last and bounded by
+/// [`MAX_FOCUS_FILES`]. The focus window and the refresh hint do not move.
+///
+/// Damped by the same staleness threshold every other on-access refresh runs
+/// against. A file that has published no version projects no size however often
+/// a pass resolves it, so an undamped caller keyed on the absent size would
+/// spend a resolve on that node every pass, forever.
+fn queue_focus_file(
+    focus: &RefCell<FocusWindow>,
+    focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    profile: &SyncTimingProfile,
+    now: UnixMillis,
+    node: NodeId,
+) {
+    let resolved = focus_refreshed.borrow().get(&node).copied();
+    if resolved.is_some_and(|last| !on_access_refresh_due(now, last, profile)) {
+        return;
+    }
+    let mut focus = focus.borrow_mut();
+    focus.open_files.retain(|held| *held != node);
+    focus.open_files.push(node);
+    if focus.open_files.len() > MAX_FOCUS_FILES {
+        focus.open_files.remove(0);
+    }
+}
+
 /// Settle one focus read leg and report the verdict it earned: hold what it saw
 /// depart, stamp what it attempted, and announce a base it moved.
 fn settle_focus_leg(
@@ -5985,7 +6037,7 @@ where {
                     let by_scope =
                         focus_by_scope(&base.borrow(), &focus.borrow(), &proved_scope_ids);
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
-                    for (scope_root, targets) in by_scope {
+                    for (scope_root, mut targets) in by_scope {
                         let own = is_own_scope(&root_id, &proved_scope_ids, &scope_root.0);
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
@@ -6011,7 +6063,6 @@ where {
                         ) else {
                             continue;
                         };
-                        attempted_files.extend(targets.files.iter().copied());
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
@@ -6029,13 +6080,7 @@ where {
                             mode,
                             observed_at: now.0,
                         };
-                        for (nodes, report) in [
-                            (&targets.folders, refresh.run(&targets.folders).await),
-                            (&targets.files, refresh.run_files(&targets.files).await),
-                        ] {
-                            if nodes.is_empty() {
-                                continue;
-                            }
+                        let mut settle = |nodes: &[NodeId], report| {
                             folder_verdict = folder_verdict.worst(settle_focus_leg(
                                 &observed_unlinks,
                                 &focus_refreshed,
@@ -6044,6 +6089,44 @@ where {
                                 report,
                                 scheduler.now(),
                             ));
+                        };
+                        if !targets.folders.is_empty() {
+                            settle(&targets.folders, refresh.run(&targets.folders).await);
+                        }
+                        // This pass has just listed the folders in view — the
+                        // scope root on its pointer leg, the rest on the folder
+                        // leg above — so a row another device added joins the
+                        // file leg below. Only the folders in view queue, and
+                        // the open folder queues last: the bound drops the
+                        // oldest entry, and an ancestor walked for the gate must
+                        // not evict the rows the user is looking at.
+                        targets.files = {
+                            let base_now = base.borrow();
+                            let in_view: Vec<NodeId> = focus
+                                .borrow()
+                                .folders_in_view()
+                                .filter(|node| {
+                                    scope_root_of(&base_now, *node, &proved_scope_ids) == scope_root
+                                })
+                                .collect();
+                            for folder in in_view.into_iter().rev() {
+                                queue_unprojected_children(
+                                    &base_now,
+                                    &focus,
+                                    &focus_refreshed,
+                                    &profile,
+                                    scheduler.now(),
+                                    folder,
+                                );
+                            }
+                            focus_by_scope(&base_now, &focus.borrow(), &proved_scope_ids)
+                                .remove(&scope_root)
+                                .map(|scope| scope.files)
+                                .unwrap_or_default()
+                        };
+                        attempted_files.extend(targets.files.iter().copied());
+                        if !targets.files.is_empty() {
+                            settle(&targets.files, refresh.run_files(&targets.files).await);
                         }
                     }
                     // Take only what this pass attempted. A lookup queues a file
@@ -10612,47 +10695,29 @@ where {
         }
     }
 
-    /// Queue every direct file child of `folder` the base projects no size for,
-    /// in child order.
-    ///
-    /// A `ChildRef` mirrors no size or mtime, so a listing paints those rows off
-    /// nothing until each child's own record resolves. Queueing them here serves
-    /// every host from the focus window, so a host that stats no row of its own
-    /// still paints a length without a download. The bound and the staleness
-    /// damping are [`note_focus_file`](Self::note_focus_file)'s.
+    /// Queue every direct file child of `folder` the base projects no size for
+    /// ([`queue_unprojected_children`]). The tick's own legs queue through that
+    /// function directly.
     fn queue_focus_file_children(&self, folder: NodeId) {
-        let unprojected: Vec<NodeId> = self
-            .snapshot
-            .borrow()
-            .children(folder)
-            .into_iter()
-            .filter(|child| child.kind == NodeKind::File && child.size.is_none())
-            .map(|child| child.id)
-            .collect();
-        for child in unprojected {
-            self.note_focus_file(child);
-        }
+        queue_unprojected_children(
+            &self.snapshot.borrow(),
+            &self.focus,
+            &self.focus_refreshed,
+            &self.profile,
+            self.seams.scheduler.now(),
+            folder,
+        );
     }
 
-    /// Put `node` on the on-access file queue, newest last and bounded by
-    /// [`MAX_FOCUS_FILES`]. The focus window and the refresh hint do not move.
-    ///
-    /// Damped by the same staleness threshold every other on-access refresh
-    /// runs against. A file that has published no version projects no size
-    /// however often a pass resolves it, so an undamped caller keyed on the
-    /// absent size would spend a resolve on that node every tick, forever.
+    /// Put `node` on the on-access file queue ([`queue_focus_file`]).
     pub fn note_focus_file(&self, node: NodeId) {
-        let now = self.seams.scheduler.now();
-        let resolved = self.focus_refreshed.borrow().get(&node).copied();
-        if resolved.is_some_and(|last| !on_access_refresh_due(now, last, &self.profile)) {
-            return;
-        }
-        let mut focus = self.focus.borrow_mut();
-        focus.open_files.retain(|held| *held != node);
-        focus.open_files.push(node);
-        if focus.open_files.len() > MAX_FOCUS_FILES {
-            focus.open_files.remove(0);
-        }
+        queue_focus_file(
+            &self.focus,
+            &self.focus_refreshed,
+            &self.profile,
+            self.seams.scheduler.now(),
+            node,
+        );
     }
 
     /// The files the tick's file leg will resolve next, oldest first.
