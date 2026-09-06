@@ -108,9 +108,8 @@ jobs:
       - name: Cargo fmt (desktop shell)
         run: cargo fmt -p cipherbox-desktop --check
 
-      - name: Cargo check (desktop shell)
-        run: cargo check -p cipherbox-desktop --all-targets
-
+      # Clippy is a superset of `cargo check` over the same targets, so a
+      # separate check step only compiles the crate twice.
       - name: Cargo clippy (desktop shell)
         run: cargo clippy -p cipherbox-desktop --all-targets -- -D warnings
 
