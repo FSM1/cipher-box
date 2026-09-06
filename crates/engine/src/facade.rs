@@ -27,9 +27,9 @@ use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    BinIndex, ChildScopeRef, GrantLedgerEntry, GrantSection, MAX_READ_SEALED_BYTES,
-    Permission as CommittedPermission, ReadBody, Version, open_content_key, seal_content_key,
-    sign_grant_set,
+    BinIndex, ChildScopeRef, GrantLedgerEntry, GrantSection, GrantSetCommitment,
+    MAX_READ_SEALED_BYTES, Permission as CommittedPermission, ReadBody, Version, open_content_key,
+    seal_content_key, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -69,10 +69,10 @@ use crate::grants::{
     InviteStoreError, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
     PendingInviteLink, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
     ResolutionClass, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, convert_invite_claim, create_grant,
-    enforce_committed_ledger, import_contact, insert_child, link_budget_full, locate_invite_link,
-    mint_invite_link, partition_scope_links, post_invite_claim, post_share_pointer,
-    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, commits_write_grant, convert_invite_claim,
+    create_grant, enforce_committed_ledger, import_contact, insert_child, link_budget_full,
+    locate_invite_link, mint_invite_link, partition_scope_links, post_invite_claim,
+    post_share_pointer, recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::mailbox::{poll_verified, post_sealed};
 use crate::name::{NameError, is_emittable, validate_name};
@@ -3377,9 +3377,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
     }
 }
 
-/// Surface a fail-closed resolve rejection as [`Event::AttributableAbuse`]: a
-/// trust violation is never mere staleness (AGENTS.md rule 6), so it must not
-/// poll silently.
+/// Surface a fail-closed trust verdict as [`Event::AttributableAbuse`]: a trust
+/// violation is never mere staleness (AGENTS.md rule 6), so it must not pass
+/// silently.
 ///
 /// `routing_key` is the record's `ipnsName`, and this description crosses to a
 /// host verbatim rather than through a rendering policy — so the name renders as
@@ -3393,6 +3393,33 @@ pub(crate) fn emit_trust_violation(
     let _ = events.unbounded_send(Event::AttributableAbuse {
         description: format!("{:?}: {detail}", RedactedText::of(routing_key)),
     });
+}
+
+/// Report one grant row whose recipient binding the owner never signed.
+///
+/// Any committed write grantee authors the write body a ledger rides in, so a
+/// rewritten row is an attributable abuse event and never staleness (AGENTS.md
+/// rule 6). `writer` is the committed pseudonym that structure-signed that body,
+/// and the tag is what a revoke acts on; both are already public in the scope
+/// root, and no key material crosses to the host.
+pub(crate) fn report_unattested_row(
+    events: &mpsc::UnboundedSender<Event>,
+    scope_id: &[u8; 16],
+    writer: Option<&[u8; 32]>,
+    tag: &[u8; 32],
+) {
+    let writer = writer.map_or_else(
+        || "an unidentified committed writer".to_owned(),
+        |writer| format!("committed writer pseudonym {}", hex_lower(writer)),
+    );
+    emit_trust_violation(
+        events,
+        &hex_lower(scope_id),
+        format!(
+            "grant row {} carries no owner binding signature: {writer} rewrote it",
+            hex_lower(tag)
+        ),
+    );
 }
 
 /// Hold the host-visible settings summary, and report the adoption when it is
@@ -3504,6 +3531,64 @@ fn bin_retention_days(summary: &RefCell<Option<VaultSettingsSummary>>) -> u32 {
         })
 }
 
+/// One contact as the sharing read names a grantee by: the identity key a host
+/// renders and a cut resolves the recipient from, and the encryption subkey the
+/// owner's own commitment names the same party by.
+struct ContactKeys {
+    identity_pk: Vec<u8>,
+    enc_subkey: [u8; SECRET_LEN],
+}
+
+/// The owner-held inputs a grant row's recipient label is resolved from.
+struct GrantLabels<'a> {
+    /// The stage-2 anchor for each row's own binding signature.
+    owner_identity: &'a EcdsaVerifier,
+    /// The name the row's binding signature is stamped at.
+    scope_root_ipns_name: &'a [u8],
+    /// The owner-signed committed set — the only owner authority over which
+    /// encryption subkey each tag was granted to.
+    commitment: &'a GrantSetCommitment,
+    /// Unmasks a committed entry's `recipientEncPk`.
+    pointer_read_key: &'a [u8; SECRET_LEN],
+    /// The contact book this session opened.
+    contacts: &'a [ContactKeys],
+}
+
+impl GrantLabels<'_> {
+    /// The contact the owner's own commitment names under `tag`, or `None` when
+    /// no committed entry carries the tag and no contact holds that encryption
+    /// subkey. Both keys are public, so the comparison needs no constant time.
+    ///
+    /// One contact or none: a contact code binds an encryption subkey under its
+    /// own holder's signature, so a second holder may bind a subkey that is
+    /// already another contact's. Naming either of two would put a party the
+    /// owner never granted on the surface they revoke from, and the label is
+    /// what a host renders, so an ambiguous match reads as unattested.
+    fn committed_contact(&self, tag: &[u8; 32]) -> Option<Vec<u8>> {
+        let recipient_enc_pk = self
+            .commitment
+            .entries
+            .iter()
+            .find(|entry| entry.tag == *tag)?
+            .recipient_enc_pk(self.pointer_read_key);
+        let mut named = self
+            .contacts
+            .iter()
+            .filter(|contact| contact.enc_subkey == recipient_enc_pk);
+        let contact = named.next()?;
+        named.next().is_none().then(|| contact.identity_pk.clone())
+    }
+}
+
+/// A scope root's grant ledger as a host reads it, and the rows whose recipient
+/// binding the owner never signed.
+struct ProjectedGrants {
+    grants: Vec<SharingGrant>,
+    /// The blinded tag of every row that failed [`row_is_owner_attested`] — a
+    /// write grantee rewrote it, which is an abuse event, never staleness.
+    unattested: Vec<[u8; 32]>,
+}
+
 /// Project a scope root's grant ledger for a host: the recipient label and the
 /// committed permission, and nothing the ledger's sealed half carries.
 ///
@@ -3511,28 +3596,41 @@ fn bin_retention_days(summary: &RefCell<Option<VaultSettingsSummary>>) -> u32 {
 /// (`cipherbox_core::seal::write_body`), so neither the row count nor the
 /// recipient bytes are owner truth on their own. The caller has already held the
 /// ledger to the owner-signed commitment; this holds each row's recipient label
-/// to the owner's own binding signature, filing one it cannot vouch for under
-/// [`UNATTESTED_IDENTITY_PK`] rather than naming a party the owner never signed.
+/// to the owner's own binding signature.
+///
+/// A label the owner cannot vouch for is resolved from the owner-signed
+/// commitment instead: the committed `recipientEncPk` matched against the
+/// contact book names the party a cut of that tag would reach, so a rewritten
+/// `recipientIdentityPk` no longer renders a row no revoke command can name.
+/// [`UNATTESTED_IDENTITY_PK`] is what is left when no contact holds that key.
 fn project_grant_ledger<'a>(
-    owner_identity: &EcdsaVerifier,
-    scope_root_ipns_name: &[u8],
+    labels: &GrantLabels<'_>,
     ledger: impl IntoIterator<Item = &'a GrantLedgerEntry>,
-) -> Vec<SharingGrant> {
-    ledger
-        .into_iter()
-        .map(|entry| SharingGrant {
-            recipient_identity_public_key: if row_is_owner_attested(
-                owner_identity,
-                entry,
-                scope_root_ipns_name,
-            ) {
-                entry.recipient_identity_pk.to_vec()
-            } else {
-                UNATTESTED_IDENTITY_PK.to_vec()
-            },
+) -> ProjectedGrants {
+    let mut projected = ProjectedGrants {
+        grants: Vec::new(),
+        unattested: Vec::new(),
+    };
+    for entry in ledger {
+        let attested =
+            row_is_owner_attested(labels.owner_identity, entry, labels.scope_root_ipns_name);
+        if !attested {
+            projected.unattested.push(entry.tag);
+        }
+        // An owner-attested label still reads as unresolved when it is the
+        // placeholder a re-mint files (`mint_grant_row`): the owner signed that
+        // it could not vouch for the bytes, not that the row names nobody.
+        let recipient_identity_public_key = Some(entry.recipient_identity_pk)
+            .filter(|label| attested && *label != UNATTESTED_IDENTITY_PK)
+            .map(|label| label.to_vec())
+            .or_else(|| labels.committed_contact(&entry.tag))
+            .unwrap_or_else(|| UNATTESTED_IDENTITY_PK.to_vec());
+        projected.grants.push(SharingGrant {
+            recipient_identity_public_key,
             permission: entry.permission.into(),
-        })
-        .collect()
+        });
+    }
+    projected
 }
 
 /// The record bytes already held for `name` under `node`, when the scope seeds
@@ -7245,11 +7343,21 @@ where {
             .await?;
         let parent = &parent_scope.scope;
 
-        if let Some(check) = checks.refusal(record_share_standing(
-            node,
-            current.v,
-            &current.direct_child_scope_index,
-        )) {
+        let standing = record_share_standing(node, current.v, &current.direct_child_scope_index);
+        // A write share whose name wave failed leaves the scope minted and the
+        // parent index naming it, which the standing reads as a live scope. The
+        // retry then has only the wave and the delivery left to run, so that one
+        // shape is finished rather than refused
+        // ([`Self::cut_granted_write_scope`]).
+        let resumed_write_scope_seed = match (&share, permission, standing) {
+            (ScopeShare::Contact(contact), Permission::Write, ShareStanding::AlreadyAScope) => {
+                self.resumable_write_share(node, &current, contact, api, owner_keys())
+                    .await
+            }
+            _ => None,
+        };
+        let resuming = resumed_write_scope_seed.is_some();
+        if !resuming && let Some(check) = checks.refusal(standing) {
             return Err(EngineError::UnsupportedTarget { check });
         }
 
@@ -7268,9 +7376,13 @@ where {
         // its own, because the mint seals this value into the grantee's blob and
         // the inherited seed derives every name in the scope the node is
         // leaving.
-        let granted_write_scope_seed = match permission {
-            Permission::Read => None,
-            Permission::Write => Some(
+        let granted_write_scope_seed = match (permission, resumed_write_scope_seed) {
+            (Permission::Read, _) => None,
+            // The seed the stalled mint sealed that scope under, read back off
+            // its own published root, so the plan describes the scope that
+            // stands rather than one this call would have minted.
+            (Permission::Write, Some(seed)) => Some(seed),
+            (Permission::Write, None) => Some(
                 fresh_seed(&mut SharedEntropy(&self.entropy)).map_err(EngineError::from_entropy)?,
             ),
         };
@@ -7343,17 +7455,21 @@ where {
                     contact,
                     display_name,
                 };
-                create_grant(
-                    &mut SharedEntropy(&self.entropy),
-                    &net,
-                    &voucher,
-                    &grantee,
-                    &recipient,
-                    &owner,
-                    &parent_plan,
-                )
-                .await
-                .map_err(|e| EngineError::from_share_mint(e, checks))?;
+                // A resume finishes a scope the mint already published; minting
+                // again would replace the seed every published blob carries.
+                if !resuming {
+                    create_grant(
+                        &mut SharedEntropy(&self.entropy),
+                        &net,
+                        &voucher,
+                        &grantee,
+                        &recipient,
+                        &owner,
+                        &parent_plan,
+                    )
+                    .await
+                    .map_err(|e| EngineError::from_share_mint(e, checks))?;
+                }
                 PendingShare::SharePointer(recipient)
             }
             ScopeShare::InviteLink { expires_at } => PendingShare::Fragment(
@@ -7484,6 +7600,64 @@ where {
         }
     }
 
+    /// The granted scope's own write-scope seed, when the scope root `node`'s
+    /// parent index names is a write share to `contact` whose name wave never
+    /// ran — the one state a re-share finishes instead of refusing.
+    ///
+    /// Two proofs, both owner authority. The index still names the root at the
+    /// name the **parent's** write scope seed derives, which every completed
+    /// wave moves off; and that root's owner-signed commitment commits exactly
+    /// the entry a write grant to this recipient mints
+    /// ([`commits_write_grant`]). Anything else is a second share of a live
+    /// scope, which the standing refuses.
+    ///
+    /// `None` on either proof failing and on a root this pass could not resolve,
+    /// so an unproven resume falls back to that refusal.
+    async fn resumable_write_share(
+        &self,
+        node: NodeId,
+        parent: &CascadeTarget,
+        contact: &Contact,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: OwnerRotationKeys<'_>,
+    ) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
+        let session = self.session.as_ref()?;
+        let indexed = parent
+            .direct_child_scope_index
+            .iter()
+            .find(|child| child.scope_id == node.0)?;
+        // Every completed wave moves the root off the name the parent's own
+        // write seed derives, and the pre-wave record lingers there, so only the
+        // index still naming it says the wave is owed rather than done.
+        let parent_derived = derive_write_name(&parent.write_scope_seed, &node.0);
+        if indexed.ipns_name != parent_derived.as_str().as_bytes() {
+            return None;
+        }
+        let target = OwnerScope {
+            scope: ChildScopeRef::new(node.0, parent_derived.as_str().as_bytes().to_vec()),
+            parent_node_seed: Some(Zeroizing::new(
+                *kdf::node_seed(&parent.override_seed, &node.0).as_bytes(),
+            )),
+            vouched: true,
+        };
+        let granted = self
+            .owner_rotation_net(api, keys, target.ancestry(), PointerConsultArm::Refused)
+            .resolve_anchored(&target.scope)
+            .await
+            .ok()?;
+        let pointer_read_key = session.pointer_read_key(&node.0);
+        commits_write_grant(
+            &granted.commitment,
+            session.identity(),
+            session.enc_subkey(),
+            pointer_read_key.as_bytes(),
+            contact,
+            &node.0,
+            &parent_derived,
+        )
+        .then_some(granted.write_scope_seed)
+    }
+
     /// The write-scope cut a write grant owes, over the scope the mint just
     /// published (blueprint/engine.md "Grant creation").
     ///
@@ -7506,8 +7680,8 @@ where {
     /// [`CreateGrantError`](crate::grants::CreateGrantError) documents, but ahead
     /// of the delivery: the grantee root is published and the parent index names
     /// it. A failure therefore leaves a scope the recipient was never told
-    /// about, and no command re-drives the owed wave — the owner revokes the
-    /// grantee and grants again.
+    /// about, which the same share re-driven finishes
+    /// ([`Self::resumable_write_share`]).
     async fn cut_granted_write_scope(
         &self,
         node: NodeId,
@@ -9225,17 +9399,26 @@ where {
             .await
             .map_err(EngineError::from_contact_store)?;
         let sources: Vec<Option<[u8; 32]>> = book.iter().map(|(_, source)| *source).collect();
-        let contacts = book
-            .into_iter()
-            .map(|(contact, _)| SharingContact {
-                identity_public_key: contact.identity_pk().to_sec1().to_vec(),
+        let keys: Vec<ContactKeys> = book
+            .iter()
+            .map(|(contact, _)| ContactKeys {
+                identity_pk: contact.identity_pk().to_sec1().to_vec(),
+                enc_subkey: contact.enc_subkey().to_bytes(),
+            })
+            .collect();
+        let contacts = keys
+            .iter()
+            .map(|contact| SharingContact {
+                identity_public_key: contact.identity_pk.clone(),
             })
             .collect();
         Ok(SharingView {
             scope: scope_root,
             contacts,
             own_contact_code: session.contact_code(),
-            state: self.scope_sharing(session, scope_root, &sources).await,
+            state: self
+                .scope_sharing(session, scope_root, &sources, &keys)
+                .await,
         })
     }
 
@@ -9258,6 +9441,7 @@ where {
         session: &SessionIdentity,
         scope_root: NodeId,
         sources: &[Option<[u8; 32]>],
+        contacts: &[ContactKeys],
     ) -> Option<ScopeSharing> {
         let api = self.api.as_ref()?;
         let owner_identity = session.owner_identity();
@@ -9345,18 +9529,33 @@ where {
             spent: u32::try_from(split.spent.len()).unwrap_or(u32::MAX),
         });
 
-        Some(ScopeSharing {
+        let projected = project_grant_ledger(
+            &GrantLabels {
+                owner_identity: &owner_identity,
+                scope_root_ipns_name: &target.scope.ipns_name,
+                commitment: &current.commitment,
+                pointer_read_key: &current.pointer_read_key,
+                contacts,
+            },
             // A link renders as a link, never as a grant row keyed by the
             // ephemeral identity only the fragment holder answers for.
-            grants: project_grant_ledger(
-                &owner_identity,
-                &target.scope.ipns_name,
-                current.grant_ledger.iter().filter(|entry| {
-                    split.as_ref().is_none_or(|split| {
-                        !split.committed.iter().any(|link| link.tag == entry.tag)
-                    })
-                }),
-            ),
+            current.grant_ledger.iter().filter(|entry| {
+                split
+                    .as_ref()
+                    .is_none_or(|split| !split.committed.iter().any(|link| link.tag == entry.tag))
+            }),
+        );
+        for tag in &projected.unattested {
+            report_unattested_row(
+                &self.events,
+                &scope_root.0,
+                current.write_body_signer.as_ref(),
+                tag,
+            );
+        }
+
+        Some(ScopeSharing {
+            grants: projected.grants,
             grant_refusal,
             invite_link_refusal,
             invite_links,

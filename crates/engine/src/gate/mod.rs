@@ -28,6 +28,7 @@ pub(crate) use adoption::{read_cut_epoch_floor, verify_commitment_in_force};
 pub(crate) use adoption::CUT_EPOCH_SUFFIX;
 // `#[doc(hidden)]` at their definitions: `pub` only for the gate KAT generator
 // and suite, which are external crates. Stage 3 alone is a partial verdict.
+pub(crate) use adoption::write_body_signer;
 pub use adoption::{
     authenticate_section_structures, committed_write_pseudonyms, for_each_structure,
     is_committed_write_pseudonym,

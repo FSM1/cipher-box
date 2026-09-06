@@ -41,6 +41,7 @@ pub use contact_store::{
     MAX_LINK_CONTACT_SCOPES, MAX_LINK_CONTACTS, StagingContactStore, link_budget_full,
     resolve_recipient,
 };
+pub(crate) use create::commits_write_grant;
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GrantResumeResolver,
     GranteeScopePlan, InteriorRecord, InteriorResealer, MintNet, OwnerGrantKeys, ParentScopePlan,

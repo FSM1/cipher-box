@@ -63,9 +63,11 @@ use crate::content::read::{ContentPlane, read_block};
 use crate::content::retention::{RootPlacement, version_cids};
 use crate::content::root_block_cid;
 use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
-use crate::facade::{Event, NodeId, emit_trust_violation, seed_names};
+use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row, seed_names};
 use crate::gate::floor::PointerPlane;
-use crate::gate::{Adopted, GateError, RejectionReason, floor, read_cut_epoch_floor};
+use crate::gate::{
+    Adopted, GateError, RejectionReason, floor, read_cut_epoch_floor, write_body_signer,
+};
 use crate::grants::child_index::canonicalize;
 use crate::grants::create::ScopePointerVoucher;
 use crate::grants::{
@@ -1653,11 +1655,13 @@ where
             return Err(ResolveFailure::Unavailable);
         };
 
+        let signer = write_body_signer(&section, &envelope);
         let target = CascadeTarget {
             v: envelope.v,
             current_read_epoch: envelope.epoch,
             owner_enc_pub: self.keys.enc_secret.public(),
             pseudonym_signer: self.keys.scope_keys.writer_pseudonym(&scope.scope_id),
+            write_body_signer: signer,
             override_seed: read_scope_seed,
             write_scope_seed: write_scope_seed.clone(),
             pointer_read_key: self.keys.scope_keys.pointer_read_key(&scope.scope_id),
@@ -3226,6 +3230,9 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub profile: &'a SyncTimingProfile,
     /// Injected entropy — the per-seal nonce source (determinism law).
     pub entropy: &'a RefCell<E>,
+    /// The host's event channel, for the abuse the re-mint meets in the ledger
+    /// it walks ([`report_unattested_row`]).
+    pub events: &'a mpsc::UnboundedSender<Event>,
     /// The scope under rotation; every record the wave touches must claim it.
     pub scope_id: [u8; 16],
     /// The scope's read override seed. A write rotation cuts no read key, so the
@@ -3412,6 +3419,10 @@ struct WaveSource {
 #[derive(Clone)]
 struct RootPlane {
     section: GrantSection,
+    /// The committed pseudonym that structure-signed the write body below — the
+    /// author of the grant ledger the re-mint walks, and so the party an abuse
+    /// event over a row it cannot vouch for names.
+    write_body_signer: Option<[u8; 32]>,
     read_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
     write_body: WriteBody,
     /// The write scope seed the root's own owner-write blob yielded — the one the
@@ -3644,6 +3655,7 @@ where
             write_epoch,
         )
         .map_err(wave_read_verdict)?;
+        let signer = write_body_signer(&gated.section, &envelope);
         Ok(WaveSource {
             read_body: gated.read_body,
             read_epoch: envelope.epoch,
@@ -3651,6 +3663,7 @@ where
             unknown: envelope.unknown,
             epoch_tag_unknown: envelope.epoch_tag_unknown,
             root: Some(RootPlane {
+                write_body_signer: signer,
                 section: gated.section,
                 read_scope_seed,
                 write_body,
@@ -3878,6 +3891,12 @@ where
             let recipient_identity_pk = if row_is_owner_attested(&owner_identity, row, old_name) {
                 row.recipient_identity_pk
             } else {
+                report_unattested_row(
+                    self.events,
+                    &self.scope_id,
+                    plane.write_body_signer.as_ref(),
+                    &row.tag,
+                );
                 UNATTESTED_IDENTITY_PK
             };
             let minted = mint_grant_row(
@@ -8647,6 +8666,7 @@ mod tests {
             scheduler: &harness.world.scheduler,
             profile: &harness.profile,
             entropy,
+            events: &harness.events,
             scope_id: SCOPE,
             read_scope_seed: &OWNER_ROOT_SCOPE_SEED,
             parent_node_seed: None,

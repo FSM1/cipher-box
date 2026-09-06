@@ -433,6 +433,37 @@ pub fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<[u8; 3
         .collect()
 }
 
+/// The committed pseudonym whose signature authenticates `section`'s write body
+/// — the author of the grant ledger that body carries, and so the party an abuse
+/// event over a rewritten row names.
+///
+/// Takes the same `(section, envelope)` pair [`authenticate_section_structures`]
+/// does, and recomputes the same preimage from the same authenticated envelope,
+/// so the two cannot disagree about which key signed the section. A structure
+/// signature binds the envelope's epoch whatever epoch its own AAD seals under
+/// (`rotation/reseal.rs`), so the write epoch is not this input.
+///
+/// One trial verification over the very set stage 3 pins its single signer from,
+/// so this can only ever name a pseudonym the owner committed. `None` where none
+/// of them verifies, which is a record stage 3 refuses outright.
+pub(crate) fn write_body_signer(section: &GrantSection, envelope: &Envelope) -> Option<[u8; 32]> {
+    let body = &section.write_body;
+    let input = StructureSigInput::over_ciphertext(
+        envelope.scope,
+        envelope.epoch,
+        STRUCT_TAG_WRITE_BODY,
+        None,
+        &body.sealed,
+    );
+    let signature = Ed25519Signature::from_bytes(body.signature);
+    committed_write_pseudonyms(&section.commitment)
+        .into_iter()
+        .find(|pseudonym| {
+            Ed25519Verifier::from_bytes(*pseudonym)
+                .is_some_and(|key| verify_structure(&key, &input, &signature).is_ok())
+        })
+}
+
 /// Whether `pseudonym_pk` is one of a scope root's committed write-capable
 /// pseudonyms — [`committed_write_pseudonyms`]'s membership test, without
 /// materialising the set. The set the gate authenticates a section against, so a
