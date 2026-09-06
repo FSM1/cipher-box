@@ -312,12 +312,14 @@ jobs:
   # test-login is hard-blocked) — then runs the engine's hand-written API
   # client against it. Contract drift fails a test run, not a grep. It spans the
   # Rust client and the TypeScript API, so it belongs to neither area and keeps
-  # its own stable result context.
+  # its own stable result context. It also answers to `e2e`, because the record
+  # store it boots lives outside both `rust` and `ts`.
   contract-suite:
     name: Contract Suite
     needs: changes
     if: |
-      needs.changes.outputs.rust == 'true' || needs.changes.outputs.ts == 'true'
+      needs.changes.outputs.rust == 'true' || needs.changes.outputs.ts == 'true' ||
+      needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
