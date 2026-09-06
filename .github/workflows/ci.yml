@@ -304,7 +304,7 @@ jobs:
             ~/.cargo/git
             target/release
             target/wasm32-unknown-unknown
-          key: wasm-engine-cargo-${{ hashFiles('Cargo.lock') }}
+          key: wasm-engine-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             wasm-engine-cargo-
             main-wasm-cargo-
@@ -542,7 +542,7 @@ jobs:
           fi
 
   cargo-linux:
-    name: Cargo Check & Test (Linux)
+    name: Rust Lint + Workspace Tests (Linux)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
@@ -559,7 +559,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             linux-cargo-
             main-cargo-
@@ -579,8 +579,10 @@ jobs:
       - name: Cargo clippy
         run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets -- -D warnings
 
+      # The engine is excluded: the Engine Simulation Tests job owns its
+      # binaries, and they are the two slowest suites in the matrix.
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --exclude cipherbox-engine
 
       # The Secret Service ships on Linux desktops but is absent from a bare
       # runner: gnome-keyring provides it, and an empty password unlocks the
@@ -595,7 +597,7 @@ jobs:
           '
 
   engine:
-    name: Engine Tests
+    name: Engine Simulation Tests
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
@@ -612,7 +614,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             linux-cargo-
             main-cargo-
@@ -649,7 +651,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             linux-cargo-
             main-cargo-
@@ -689,7 +691,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: core-kats-cargo-${{ hashFiles('Cargo.lock') }}
+          key: core-kats-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             core-kats-cargo-
             main-cargo-
@@ -780,7 +782,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: client-browser-cargo-${{ hashFiles('Cargo.lock') }}
+          key: client-browser-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             client-browser-cargo-
             main-cargo-
@@ -809,7 +811,7 @@ jobs:
         run: pnpm --filter @cipherbox/client test:browser
 
   cargo-macos:
-    name: Cargo Check & Test (macOS)
+    name: Rust Check + Adapter Tests (macOS)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
@@ -826,7 +828,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: macos-cargo-${{ hashFiles('Cargo.lock') }}
+          key: macos-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: macos-cargo-
 
       # The macOS host adapter links FUSE-T's libfuse ABI, so this leg is where
@@ -836,20 +838,24 @@ jobs:
       - name: Cargo check (workspace)
         run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser --all-targets
 
+      # Only the host adapter crates: every other crate is platform-neutral,
+      # and the Linux legs own its tests. The check step above still compiles
+      # every test target on this platform.
+      #
       # Cargo hands a test run an explicit DYLD_FALLBACK_LIBRARY_PATH with the
       # macOS default `/usr/local/lib` spliced in, which resolves
       # `@rpath/libfuse-t.dylib` even when nothing linked an `LC_RPATH` — so a
       # broken adapter link would surface only as an unlaunchable bundle. A
       # sentinel replaces that tail and makes this leg prove the rpath. Inline
       # rather than `env:`: SIP strips `DYLD_*` before bash execs.
-      - name: Cargo test (workspace)
-        run: DYLD_FALLBACK_LIBRARY_PATH=/nonexistent cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
+      - name: Cargo test (the macOS host adapters)
+        run: DYLD_FALLBACK_LIBRARY_PATH=/nonexistent cargo test -p cipherbox-fuse -p cipherbox-desktop-seams
 
       - name: Real OS keyring credential seam
         run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
 
   cargo-windows:
-    name: Cargo Check & Test (Windows)
+    name: Rust Check + Adapter Tests (Windows)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
@@ -873,7 +879,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
+          key: windows-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: windows-cargo-
 
       - name: Cargo check (workspace)
@@ -887,8 +893,11 @@ jobs:
       - name: Cargo clippy (the Windows host adapter)
         run: cargo clippy -p cipherbox-fuse -p cipherbox-win-security --all-targets -- -D warnings
 
-      - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude fuser
+      # Only the host adapter crates, for the same reason the clippy step is
+      # narrow: this leg is authoritative for the Windows targets and nothing
+      # else. blueprint/testing.md names it "cargo check + adapter tests".
+      - name: Cargo test (the Windows host adapters)
+        run: cargo test -p cipherbox-fuse -p cipherbox-desktop-seams -p cipherbox-win-security
 
       - name: Real OS keyring credential seam
         run: cargo test -p cipherbox-desktop-seams --test conformance -- --ignored
@@ -975,7 +984,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             linux-cargo-
             main-cargo-
@@ -1126,7 +1135,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-desktop-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-desktop-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: ${{ runner.os }}-desktop-cargo-
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10

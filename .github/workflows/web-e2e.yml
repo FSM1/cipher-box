@@ -133,7 +133,7 @@ jobs:
             ~/.cargo/git
             target/release
             target/wasm32-unknown-unknown
-          key: web-e2e-cargo-${{ hashFiles('Cargo.lock') }}
+          key: web-e2e-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             web-e2e-cargo-
             main-wasm-cargo-

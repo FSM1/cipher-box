@@ -49,7 +49,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: main-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: main-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: main-cargo-
 
       # Compiled, not run: what a PR restores this for is the dependency tree.
@@ -78,7 +78,7 @@ jobs:
             ~/.cargo/git
             target/release
             target/wasm32-unknown-unknown
-          key: main-wasm-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: main-wasm-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: main-wasm-cargo-
 
       - uses: ./.github/actions/wasm-bindgen-cli
