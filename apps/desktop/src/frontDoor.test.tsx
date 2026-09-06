@@ -1,5 +1,5 @@
 import { act, fireEvent, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdentityMethod } from '@cipherbox/login';
 import { renderShell, type ShellActions, type ShellModel } from './frontDoor';
 import type { VaultStatus, VaultWarningKind } from './vault';
@@ -352,19 +352,59 @@ describe('the front door', () => {
     expect(security?.querySelector('a')).toBeNull();
   });
 
-  // A screen that stopped showing this is a licence condition dropped, not a
-  // cosmetic regression.
-  it.each(['starting', 'signedOut', 'signedIn', 'recovery'] as const)(
-    'shows the WinFsp notice and its project address while %s',
-    (phase) => {
+  // A screen that stopped showing one of these is a licence condition dropped,
+  // not a cosmetic regression.
+  describe('the attribution footer', () => {
+    const SCREENS = ['starting', 'signedOut', 'signedIn', 'recovery'] as const;
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    /** Renders one screen of one build and returns what its footer says. */
+    const footerOn = (platform: string, phase: ShellModel['phase']): string => {
+      vi.stubEnv('VITE_DESKTOP_PLATFORM', platform);
       draw(model({ phase, vault: vaultStatus() }), actions());
-      const footer = root.querySelector('[data-attribution="winfsp"]');
-      expect(footer?.textContent).toContain(
+      return root.querySelector('[data-attribution]')?.textContent ?? '';
+    };
+
+    const expectFuserNotice = (footer: string): void => {
+      expect(footer).toContain('Copyright (c) 2020-present Christopher Berner');
+      expect(footer).toContain('Copyright © 2013-2019 Andreas Neuhaus');
+      expect(footer).toContain('https://github.com/cberner/fuser');
+    };
+
+    it.each(SCREENS)('shows the WinFsp notice on a Windows build while %s', (phase) => {
+      const footer = footerOn('windows', phase);
+      expect(footer).toContain(
         'WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos'
       );
-      expect(footer?.textContent).toContain('https://github.com/winfsp/winfsp');
-    }
-  );
+      expect(footer).toContain('https://github.com/winfsp/winfsp');
+    });
+
+    it.each(SCREENS)('shows the fuser notice and names FUSE-T on macOS while %s', (phase) => {
+      expectFuserNotice(footerOn('macos', phase));
+      expect(root.textContent).toContain('FUSE-T');
+      expect(root.textContent).toContain('https://github.com/macos-fuse-t/fuse-t');
+      // This build ships no WinFsp, so its GPLv3 notice would claim a combined
+      // work that is not there.
+      expect(root.textContent).not.toContain('WinFsp');
+    });
+
+    it.each(SCREENS)('shows the fuser notice alone on Linux while %s', (phase) => {
+      expectFuserNotice(footerOn('linux', phase));
+      expect(root.textContent).not.toContain('FUSE-T');
+      expect(root.textContent).not.toContain('WinFsp');
+    });
+
+    // Withholding a notice needs a build that is known not to owe it.
+    it('carries every notice when the build named no platform', () => {
+      const footer = footerOn('', 'signedOut');
+      expectFuserNotice(footer);
+      expect(footer).toContain('WinFsp - Windows File System Proxy');
+      expect(footer).toContain('FUSE-T');
+    });
+  });
 
   it('offers the recovery phrase when a sign-in stops at the factor policy', () => {
     draw(model({ phase: 'recovery' }), actions());
