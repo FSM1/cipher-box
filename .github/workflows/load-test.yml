@@ -116,7 +116,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          key: linux-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: linux-cargo-
 
       - name: Install dependencies

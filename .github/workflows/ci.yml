@@ -2,7 +2,9 @@
 # what changed and hands each area to its own reusable workflow, so a check
 # reads "Area / job". Every area ends in one stable `<Area> Result` context,
 # which is what branch protection requires — an area skipped by its path filter
-# still reports, and a real failure inside it still fails.
+# still reports, and a real failure inside it still fails. A gate also fails
+# when change detection failed, which skips its area and would otherwise report
+# a pass on a required context.
 name: CI
 
 on:
@@ -132,7 +134,7 @@ jobs:
 
   api-result:
     name: API Result
-    needs: api
+    needs: [changes, api]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -140,9 +142,14 @@ jobs:
     steps:
       - name: Require the API area to pass or be skipped
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           AREA_RESULT: ${{ needs.api.result }}
         run: |
-          echo "api result: ${AREA_RESULT}"
+          echo "changes result: ${CHANGES_RESULT}; api result: ${AREA_RESULT}"
+          if [ "${CHANGES_RESULT}" != 'success' ]; then
+            echo "::error::change detection ${CHANGES_RESULT}, so the API area never ran"
+            exit 1
+          fi
           if [ "${AREA_RESULT}" = 'failure' ] || [ "${AREA_RESULT}" = 'cancelled' ]; then
             echo "::error::the API area ${AREA_RESULT}"
             exit 1
@@ -160,7 +167,7 @@ jobs:
 
   rust-result:
     name: Rust Result
-    needs: rust
+    needs: [changes, rust]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -168,9 +175,14 @@ jobs:
     steps:
       - name: Require the Rust area to pass or be skipped
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           AREA_RESULT: ${{ needs.rust.result }}
         run: |
-          echo "rust result: ${AREA_RESULT}"
+          echo "changes result: ${CHANGES_RESULT}; rust result: ${AREA_RESULT}"
+          if [ "${CHANGES_RESULT}" != 'success' ]; then
+            echo "::error::change detection ${CHANGES_RESULT}, so the Rust area never ran"
+            exit 1
+          fi
           if [ "${AREA_RESULT}" = 'failure' ] || [ "${AREA_RESULT}" = 'cancelled' ]; then
             echo "::error::the Rust area ${AREA_RESULT}"
             exit 1
@@ -234,7 +246,7 @@ jobs:
 
   web-result:
     name: Web Result
-    needs: [wasm-engine, web]
+    needs: [changes, wasm-engine, web]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -242,10 +254,15 @@ jobs:
     steps:
       - name: Require the Web area to pass or be skipped
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           WASM_RESULT: ${{ needs.wasm-engine.result }}
           AREA_RESULT: ${{ needs.web.result }}
         run: |
-          echo "wasm-engine result: ${WASM_RESULT}; web result: ${AREA_RESULT}"
+          echo "changes result: ${CHANGES_RESULT}; wasm-engine result: ${WASM_RESULT}; web result: ${AREA_RESULT}"
+          if [ "${CHANGES_RESULT}" != 'success' ]; then
+            echo "::error::change detection ${CHANGES_RESULT}, so the Web area never ran"
+            exit 1
+          fi
           for r in "${WASM_RESULT}" "${AREA_RESULT}"; do
             if [ "$r" = 'failure' ] || [ "$r" = 'cancelled' ]; then
               echo "::error::the Web area $r"
@@ -267,7 +284,7 @@ jobs:
 
   desktop-result:
     name: Desktop Result
-    needs: desktop
+    needs: [changes, desktop]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -275,9 +292,14 @@ jobs:
     steps:
       - name: Require the Desktop area to pass or be skipped
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           AREA_RESULT: ${{ needs.desktop.result }}
         run: |
-          echo "desktop result: ${AREA_RESULT}"
+          echo "changes result: ${CHANGES_RESULT}; desktop result: ${AREA_RESULT}"
+          if [ "${CHANGES_RESULT}" != 'success' ]; then
+            echo "::error::change detection ${CHANGES_RESULT}, so the Desktop area never ran"
+            exit 1
+          fi
           if [ "${AREA_RESULT}" = 'failure' ] || [ "${AREA_RESULT}" = 'cancelled' ]; then
             echo "::error::the Desktop area ${AREA_RESULT}"
             exit 1
@@ -406,7 +428,7 @@ jobs:
 
   contract-suite-result:
     name: Contract Suite Result
-    needs: contract-suite
+    needs: [changes, contract-suite]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -414,9 +436,14 @@ jobs:
     steps:
       - name: Require the contract suite to pass or be skipped
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           CONTRACT_SUITE_RESULT: ${{ needs.contract-suite.result }}
         run: |
-          echo "contract-suite result: ${CONTRACT_SUITE_RESULT}"
+          echo "changes result: ${CHANGES_RESULT}; contract-suite result: ${CONTRACT_SUITE_RESULT}"
+          if [ "${CHANGES_RESULT}" != 'success' ]; then
+            echo "::error::change detection ${CHANGES_RESULT}, so the contract suite never ran"
+            exit 1
+          fi
           if [ "${CONTRACT_SUITE_RESULT}" = 'failure' ] || [ "${CONTRACT_SUITE_RESULT}" = 'cancelled' ]; then
             echo "::error::contract-suite ${CONTRACT_SUITE_RESULT}"
             exit 1
@@ -440,7 +467,7 @@ jobs:
 
   web-e2e-result:
     name: Web E2E Smoke Result
-    needs: web-e2e
+    needs: [changes, web-e2e]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -448,9 +475,14 @@ jobs:
     steps:
       - name: Require the smoke slice to pass or be skipped
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           WEB_E2E_RESULT: ${{ needs.web-e2e.result }}
         run: |
-          echo "web-e2e result: ${WEB_E2E_RESULT}"
+          echo "changes result: ${CHANGES_RESULT}; web-e2e result: ${WEB_E2E_RESULT}"
+          if [ "${CHANGES_RESULT}" != 'success' ]; then
+            echo "::error::change detection ${CHANGES_RESULT}, so the smoke slice never ran"
+            exit 1
+          fi
           if [ "${WEB_E2E_RESULT}" = 'failure' ] || [ "${WEB_E2E_RESULT}" = 'cancelled' ]; then
             echo "::error::web-e2e ${WEB_E2E_RESULT}"
             exit 1
