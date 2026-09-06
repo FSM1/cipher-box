@@ -67,6 +67,10 @@ export function buildServer(
   // answers a rollback 400 rather than accepting it. An equal sequence is the
   // keyless re-PUT keep-alive that the API republisher and the engine's hourly
   // pass both send, and a real endpoint acks it, so it stays a 200.
+  //
+  // The route is unauthenticated and reads the sequence from unsigned bytes, so
+  // one bogus PUT raises the ceiling for a name until /forget/:name, /reset, or
+  // a restart clears it. That is the price of the rule inside a hermetic store.
   fastify.put<{ Params: { name: string } }>('/routing/v1/ipns/:name', async (request, reply) => {
     const { name } = request.params;
 

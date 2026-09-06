@@ -63,14 +63,17 @@ describe('PUT /routing/v1/ipns/:name', () => {
   });
 
   // The API republisher and the engine's hourly pass both re-PUT the record they
-  // already hold, so an equal sequence is a keep-alive, not a rollback.
-  it('accepts a record whose sequence equals the stored one', async () => {
+  // already hold, so an equal sequence is a keep-alive, not a rollback. The last
+  // writer at a sequence wins, which is what the engine's own endpoint fake does
+  // (crates/engine/src/testkit/fakes/record_store.rs keeps the held record only
+  // when its sequence is strictly higher).
+  it('accepts a record whose sequence equals the stored one, and the last writer wins', async () => {
     expect((await put(record(4n, 'four'))).statusCode).toBe(200);
 
-    const again = record(4n, 'four');
-    expect((await put(again)).statusCode).toBe(200);
+    const sameSequence = record(4n, 'a different body at four');
+    expect((await put(sameSequence)).statusCode).toBe(200);
 
-    expect((await stored()).rawPayload).toEqual(again);
+    expect((await stored()).rawPayload).toEqual(sameSequence);
   });
 
   it('refuses a record whose sequence is lower than the stored one and keeps the stored record', async () => {
