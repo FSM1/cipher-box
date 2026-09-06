@@ -152,8 +152,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
-    expire_touched_folders, focus_by_scope, focus_folders_due, on_access_refresh_due, resolve_mode,
-    run_tick_loop, scope_root_of,
+    expire_touched_folders, focus_by_scope, focus_files, focus_folders_due, on_access_refresh_due,
+    resolve_mode, run_tick_loop, scope_root_of,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -3338,6 +3338,23 @@ fn stamp_focus_refreshed(
     }
 }
 
+/// The subset of `nodes` the scope rooted at `root` seals.
+///
+/// One leg holds one scope's read material, so a node in a shared scope this
+/// vault accepted refreshes on that scope's own leg, never under another
+/// scope's seed.
+fn nodes_in_scope(
+    base: &Snapshot,
+    scope_roots: &BTreeSet<NodeId>,
+    root: NodeId,
+    nodes: Vec<NodeId>,
+) -> Vec<NodeId> {
+    nodes
+        .into_iter()
+        .filter(|node| scope_root_of(base, *node, scope_roots) == root)
+        .collect()
+}
+
 /// Queue every direct file child of `folder` the base projects no size for, in
 /// child order.
 ///
@@ -6034,10 +6051,19 @@ where {
                     let mut folder_verdict = RefreshVerdict::Reconciled;
                     let mut attempted_files: Vec<NodeId> = Vec::new();
                     let proved_scope_ids = descendant_roots.borrow().clone();
-                    let by_scope =
+                    let mut by_scope =
                         focus_by_scope(&base.borrow(), &focus.borrow(), &proved_scope_ids);
+                    // A window whose only folder in view is a scope root groups
+                    // no folder target of its own, because that root resolves on
+                    // its pointer leg. Its scope still needs a pass, so the rows
+                    // it lists reach the file leg below.
+                    for folder in focus.borrow().folders_in_view() {
+                        by_scope
+                            .entry(scope_root_of(&base.borrow(), folder, &proved_scope_ids))
+                            .or_default();
+                    }
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
-                    for (scope_root, mut targets) in by_scope {
+                    for (scope_root, targets) in by_scope {
                         let own = is_own_scope(&root_id, &proved_scope_ids, &scope_root.0);
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
@@ -6093,22 +6119,20 @@ where {
                         if !targets.folders.is_empty() {
                             settle(&targets.folders, refresh.run(&targets.folders).await);
                         }
-                        // This pass has just listed the folders in view — the
-                        // scope root on its pointer leg, the rest on the folder
-                        // leg above — so a row another device added joins the
-                        // file leg below. Only the folders in view queue, and
-                        // the open folder queues last: the bound drops the
-                        // oldest entry, and an ancestor walked for the gate must
-                        // not evict the rows the user is looking at.
-                        targets.files = {
+                        // The pass has just listed the folders in view, so a row
+                        // another device added joins the file leg below. Only
+                        // folders in view queue: an ancestor rides the folder
+                        // leg to walk the gate, not to be painted. The open
+                        // folder queues last, since the bound drops the oldest
+                        // entry and a merely touched folder must not evict it.
+                        let files = {
                             let base_now = base.borrow();
-                            let in_view: Vec<NodeId> = focus
-                                .borrow()
-                                .folders_in_view()
-                                .filter(|node| {
-                                    scope_root_of(&base_now, *node, &proved_scope_ids) == scope_root
-                                })
-                                .collect();
+                            let in_view = nodes_in_scope(
+                                &base_now,
+                                &proved_scope_ids,
+                                scope_root,
+                                focus.borrow().folders_in_view().collect(),
+                            );
                             for folder in in_view.into_iter().rev() {
                                 queue_unprojected_children(
                                     &base_now,
@@ -6119,14 +6143,16 @@ where {
                                     folder,
                                 );
                             }
-                            focus_by_scope(&base_now, &focus.borrow(), &proved_scope_ids)
-                                .remove(&scope_root)
-                                .map(|scope| scope.files)
-                                .unwrap_or_default()
+                            nodes_in_scope(
+                                &base_now,
+                                &proved_scope_ids,
+                                scope_root,
+                                focus_files(&base_now, &focus.borrow()),
+                            )
                         };
-                        attempted_files.extend(targets.files.iter().copied());
-                        if !targets.files.is_empty() {
-                            settle(&targets.files, refresh.run_files(&targets.files).await);
+                        attempted_files.extend(files.iter().copied());
+                        if !files.is_empty() {
+                            settle(&files, refresh.run_files(&files).await);
                         }
                     }
                     // Take only what this pass attempted. A lookup queues a file
@@ -8606,18 +8632,15 @@ where {
             })
     }
 
-    /// The subset of `nodes` the scope rooted at `root` seals.
-    ///
-    /// One leg holds one scope's read material, so a node in a shared scope this
-    /// vault accepted refreshes on the tick's own leg for that scope, never on
-    /// the navigation path under the vault's seed.
+    /// The subset of `nodes` the scope rooted at `root` seals
+    /// ([`nodes_in_scope`]).
     fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
-        let base = self.snapshot.borrow();
-        let descendants = self.descendant_scope_roots.borrow();
-        nodes
-            .into_iter()
-            .filter(|node| scope_root_of(&base, *node, &descendants) == root)
-            .collect()
+        nodes_in_scope(
+            &self.snapshot.borrow(),
+            &self.descendant_scope_roots.borrow(),
+            root,
+            nodes,
+        )
     }
 
     /// Refresh the focus window's folders that are past the on-access staleness
@@ -10696,8 +10719,7 @@ where {
     }
 
     /// Queue every direct file child of `folder` the base projects no size for
-    /// ([`queue_unprojected_children`]). The tick's own legs queue through that
-    /// function directly.
+    /// ([`queue_unprojected_children`]).
     fn queue_focus_file_children(&self, folder: NodeId) {
         queue_unprojected_children(
             &self.snapshot.borrow(),

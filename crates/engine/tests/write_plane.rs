@@ -328,6 +328,18 @@ fn read_key_of(node: NodeId) -> [u8; 32] {
     read_key_under(&READ_SCOPE_SEED, node)
 }
 
+/// How many cache-first resolves this device spent on `node`'s own record: a
+/// resolve reads the snapshot cache under the record's write-plane name.
+fn record_resolves(device: &FakeDevice, node: NodeId) -> usize {
+    let name = write_name(node).as_str().as_bytes().to_vec();
+    device
+        .snapshot_cache
+        .reads()
+        .into_iter()
+        .filter(|key| *key == name)
+        .count()
+}
+
 /// The `(sequence, headCid)` of the record currently published under `node`'s
 /// write-plane name, verified under that name.
 fn published(records: &InMemoryRecordStore, node: NodeId) -> (u64, String) {
@@ -12128,19 +12140,9 @@ fn a_repeat_set_focus_inside_the_threshold_resolves_no_file_again() {
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
     tick(&world, &engine_b, &mut tasks_b);
 
-    // A cache-first file resolve reads the row's own record name, so the reads
-    // under that name count the resolves the file leg spent.
-    let file_name = write_name(node).as_str().as_bytes().to_vec();
-    let resolves = || {
-        bob.snapshot_cache
-            .reads()
-            .into_iter()
-            .filter(|key| *key == file_name)
-            .count()
-    };
-    let before = resolves();
+    let before = record_resolves(&bob, node);
     block_on(engine_b.command(Command::SetFocus { node: Some(ROOT) })).expect("the window opens");
-    let after_first = resolves();
+    let after_first = record_resolves(&bob, node);
     assert!(
         after_first > before,
         "the first navigation resolved the row it listed"
@@ -12157,7 +12159,7 @@ fn a_repeat_set_focus_inside_the_threshold_resolves_no_file_again() {
     block_on(engine_b.command(Command::SetFocus { node: Some(ROOT) })).expect("the window reopens");
 
     assert_eq!(
-        resolves(),
+        record_resolves(&bob, node),
         after_first,
         "the stamp the first pass left keeps the repeat visit off the record plane"
     );
@@ -12186,8 +12188,6 @@ fn a_tick_paints_a_file_another_device_added_to_the_open_folder() {
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
     tick(&world, &engine_b, &mut tasks_b);
-    // The whole scenario: this device opens the folder once and never navigates
-    // again.
     block_on(engine_b.command(Command::SetFocus { node: Some(docs) })).expect("the window opens");
 
     let served: Vec<u8> = (0..96u8).collect();
@@ -12215,10 +12215,52 @@ fn a_tick_paints_a_file_another_device_added_to_the_open_folder() {
     assert!(painted.mtime.is_some(), "the mtime rides the same head");
 }
 
-/// The queue the tick fills is damped by the same staleness stamp every other
-/// on-access refresh runs against. A row that has published no version projects
-/// no size however often a pass resolves it, so an undamped tick would spend a
-/// resolve on it forever.
+/// The vault root in view is the same case: it groups no folder target of its
+/// own, because its record resolves on the pointer leg, so the pass has to give
+/// its scope a leg all the same.
+#[test]
+fn a_tick_paints_a_file_another_device_added_to_the_open_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+    block_on(engine_b.command(Command::SetFocus { node: Some(ROOT) })).expect("the window opens");
+
+    let served: Vec<u8> = (0..72u8).collect();
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "added.bin".to_owned(),
+        },
+        &served,
+    )
+    .expect("the write commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    tick(&world, &engine_a, &mut tasks_a);
+
+    tick(&world, &engine_b, &mut tasks_b);
+
+    let added = child_id(&engine_b, ROOT, "added.bin");
+    assert_eq!(
+        block_on(engine_b.view())
+            .unwrap()
+            .attrs(added)
+            .unwrap()
+            .size,
+        Some(served.len() as u64),
+        "the pass that listed the row also resolved it"
+    );
+}
+
+/// The queue the tick fills is damped by the stamp the pass leaves, so a row
+/// that has published no version costs one resolve per staleness window rather
+/// than one per tick. The damping rule itself lives on `queue_focus_file`.
 #[test]
 fn a_tick_resolves_an_unwritten_row_once_per_staleness_window() {
     let world = FakeWorld::new();
@@ -12246,18 +12288,8 @@ fn a_tick_resolves_an_unwritten_row_once_per_staleness_window() {
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
     tick(&world, &engine_b, &mut tasks_b);
-    // A cache-first file resolve reads the row's own record name, so the reads
-    // under that name count the resolves the file leg spent.
-    let file_name = write_name(node).as_str().as_bytes().to_vec();
-    let resolves = || {
-        bob.snapshot_cache
-            .reads()
-            .into_iter()
-            .filter(|key| *key == file_name)
-            .count()
-    };
     block_on(engine_b.command(Command::SetFocus { node: Some(docs) })).expect("the window opens");
-    let after_navigation = resolves();
+    let after_navigation = record_resolves(&bob, node);
     assert!(
         after_navigation > 0,
         "the navigation resolved the row it listed"
@@ -12268,14 +12300,14 @@ fn a_tick_resolves_an_unwritten_row_once_per_staleness_window() {
     tick(&world, &engine_b, &mut tasks_b);
     tick(&world, &engine_b, &mut tasks_b);
     assert_eq!(
-        resolves(),
+        record_resolves(&bob, node),
         after_navigation,
         "the stamp keeps the row off the record plane for the whole window"
     );
 
     tick(&world, &engine_b, &mut tasks_b);
     assert!(
-        resolves() > after_navigation,
+        record_resolves(&bob, node) > after_navigation,
         "past the window the row is due again"
     );
 }
