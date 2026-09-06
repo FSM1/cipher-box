@@ -3338,6 +3338,24 @@ fn stamp_focus_refreshed(
     }
 }
 
+/// Settle one focus read leg and report the verdict it earned: hold what it saw
+/// depart, stamp what it attempted, and announce a base it moved.
+fn settle_focus_leg(
+    observed_unlinks: &RefCell<Vec<UnlinkedChild>>,
+    focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    events: &mpsc::UnboundedSender<Event>,
+    nodes: &[NodeId],
+    report: FolderRefreshReport,
+    now: UnixMillis,
+) -> RefreshVerdict {
+    hold_captures(observed_unlinks, report.departed);
+    stamp_focus_refreshed(focus_refreshed, nodes, now);
+    if report.changed {
+        let _ = events.unbounded_send(Event::SnapshotUpdated);
+    }
+    report.verdict
+}
+
 /// Emit an [`Event::RenewalFailed`] for every sub-EOL renewal that did not land
 /// (a lost CAS race or a fail-closed publish failure). A comfortably-ahead or
 /// republished record emits nothing. Best-effort over the in-process channel: a
@@ -6014,12 +6032,14 @@ where {
                             if nodes.is_empty() {
                                 continue;
                             }
-                            stamp_focus_refreshed(&focus_refreshed, nodes, scheduler.now());
-                            if report.changed {
-                                let _ = events.unbounded_send(Event::SnapshotUpdated);
-                            }
-                            hold_captures(&observed_unlinks, report.departed);
-                            folder_verdict = folder_verdict.worst(report.verdict);
+                            folder_verdict = folder_verdict.worst(settle_focus_leg(
+                                &observed_unlinks,
+                                &focus_refreshed,
+                                &events,
+                                nodes,
+                                report,
+                                scheduler.now(),
+                            ));
                         }
                     }
                     // Take only what this pass attempted. A lookup queues a file
@@ -8499,28 +8519,17 @@ where {
             })
     }
 
-    /// Settle one on-access read leg: hold what it saw depart, stamp what it
-    /// attempted, and announce a base that moved. Each leg announces its own, so
-    /// a listing paints while the leg after it is still awaited.
-    fn settle_focus_leg(&self, nodes: &[NodeId], report: FolderRefreshReport, now: UnixMillis) {
-        hold_captures(&self.observed_unlinks, report.departed);
-        stamp_focus_refreshed(&self.focus_refreshed, nodes, now);
-        if report.changed {
-            let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-        }
-    }
-
-    /// The subset of `nodes` this vault's own scope root seals.
+    /// The subset of `nodes` the scope rooted at `root` seals.
     ///
     /// One leg holds one scope's read material, so a node in a shared scope this
     /// vault accepted refreshes on the tick's own leg for that scope, never on
     /// the navigation path under the vault's seed.
-    fn own_scope_only(&self, nodes: Vec<NodeId>) -> Vec<NodeId> {
+    fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
         let base = self.snapshot.borrow();
         let descendants = self.descendant_scope_roots.borrow();
         nodes
             .into_iter()
-            .filter(|node| scope_root_of(&base, *node, &descendants) == base.root)
+            .filter(|node| scope_root_of(&base, *node, &descendants) == root)
             .collect()
     }
 
@@ -8531,17 +8540,20 @@ where {
     /// same navigation and paints its size within one resolve round trip rather
     /// than a poll cadence later.
     async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) {
-        let due = self.own_scope_only(focus_folders_due(
-            &self.snapshot.borrow(),
-            &self.focus.borrow(),
-            &self.focus_refreshed.borrow(),
-            now,
-            &self.profile,
-        ));
-        let scope_id = self.snapshot.borrow().root.0;
-        // A scope this session holds no read material for serves neither leg,
-        // and its rows stay queued for the pass that can.
-        let scope_read_seed = self.scope_read_seed(&scope_id).await;
+        // One root read: the seed the legs run under and the scope they filter
+        // to must name the same scope across the await below.
+        let root = self.snapshot.borrow().root;
+        let due = self.scoped_to(
+            root,
+            focus_folders_due(
+                &self.snapshot.borrow(),
+                &self.focus.borrow(),
+                &self.focus_refreshed.borrow(),
+                now,
+                &self.profile,
+            ),
+        );
+        let scope_read_seed = self.scope_read_seed(&root.0).await;
         let leg = scope_read_seed
             .as_ref()
             .map(|scope_read_seed| FolderRefresh {
@@ -8552,26 +8564,36 @@ where {
                 gateway: &self.gateway,
                 base: &self.snapshot,
                 events: &self.events,
-                scope_id,
+                scope_id: root.0,
                 scope_read_seed,
                 plane: None,
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
             });
+        let settle = |nodes: &[NodeId], report| {
+            settle_focus_leg(
+                &self.observed_unlinks,
+                &self.focus_refreshed,
+                &self.events,
+                nodes,
+                report,
+                now,
+            );
+        };
         if let Some(leg) = &leg
             && !due.is_empty()
         {
-            self.settle_focus_leg(&due, leg.run(&due).await, now);
+            settle(&due, leg.run(&due).await);
         }
         if let Some(folder) = folder {
             self.queue_focus_file_children(folder);
         }
         if let Some(leg) = &leg {
-            let files = self.own_scope_only(self.queued_focus_files());
+            let files = self.scoped_to(root, self.queued_focus_files());
             if !files.is_empty() {
-                self.settle_focus_leg(&files, leg.run_files(&files).await, now);
-                // Take only what this pass attempted, as the tick's leg does: a
-                // row queued while the legs above were awaited has not been.
+                settle(&files, leg.run_files(&files).await);
+                // The tick leg's rule: a row leaves the queue only once a pass
+                // has attempted it.
                 self.focus
                     .borrow_mut()
                     .open_files
@@ -16964,17 +16986,7 @@ mod focus_access_tests {
     /// and its own scope's read material. An offline start reaches no API to
     /// mint against, so the seed is deposited rather than recovered.
     fn started_engine() -> Engine<FakeSeamTypes> {
-        let world = FakeWorld::new();
-        let device = world.device(b"alice-pk");
-        let (mut engine, _events) = Engine::new(
-            device.seam_set(),
-            Box::new(SeededEntropy::new(42)),
-            SyncTimingProfile::CI,
-            ContentProfile::CI,
-            StoragePolicy::CI,
-            ApiBaseUrl::offline(),
-            GatewayConfig::disabled(),
-        );
+        let (mut engine, _clock) = engine();
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
         let scope_id = engine.snapshot.borrow().root.0;
         deposit_seed(
