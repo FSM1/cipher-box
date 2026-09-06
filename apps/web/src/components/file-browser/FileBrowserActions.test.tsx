@@ -736,7 +736,7 @@ describe('the vault browser read path over the facade', () => {
     await waitFor(() => expect(revoked).toEqual(['blob:fake/1']));
   });
 
-  it('embeds a pdf under a sandbox that grants it nothing', async () => {
+  it('embeds a pdf in a frame that carries no sandbox', async () => {
     const engine = fakeEngine(() => Promise.resolve(bytes('%PDF-')));
     renderBrowser(engine);
     await landSnapshot(engine, folderView({ children: [file(PICTURE, 'deed.pdf')] }));
@@ -745,7 +745,7 @@ describe('the vault browser read path over the facade', () => {
     chooseMenuItem('preview');
 
     const frame = await screen.findByTestId('preview-pdf');
-    expect(frame.getAttribute('sandbox')).toBe('');
+    expect(frame.hasAttribute('sandbox')).toBe(false);
     expect(created[0].type).toBe('application/pdf');
   });
 
