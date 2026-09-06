@@ -3355,6 +3355,22 @@ fn nodes_in_scope(
         .collect()
 }
 
+/// The share of the focus file queue one leg of a pass may spend: `queued` less
+/// what the pass attempted on an earlier leg, and no more than the budget
+/// [`MAX_FOCUS_FILES`] leaves.
+///
+/// The bound is per pass, not per leg (blueprint/desktop.md "Freshness"). Each
+/// leg refills the queue with its own scope's rows, so the budget is charged
+/// across the legs, and the newest rows take what is left of it.
+fn leg_file_share(mut queued: Vec<NodeId>, attempted: &[NodeId]) -> Vec<NodeId> {
+    queued.retain(|node| !attempted.contains(node));
+    let over = queued
+        .len()
+        .saturating_sub(MAX_FOCUS_FILES.saturating_sub(attempted.len()));
+    queued.drain(..over);
+    queued
+}
+
 /// Queue every direct file child of `folder` the base projects no size for, in
 /// child order.
 ///
@@ -6143,11 +6159,14 @@ where {
                                     folder,
                                 );
                             }
-                            nodes_in_scope(
-                                &base_now,
-                                &proved_scope_ids,
-                                scope_root,
-                                focus_files(&base_now, &focus.borrow()),
+                            leg_file_share(
+                                nodes_in_scope(
+                                    &base_now,
+                                    &proved_scope_ids,
+                                    scope_root,
+                                    focus_files(&base_now, &focus.borrow()),
+                                ),
+                                &attempted_files,
                             )
                         };
                         attempted_files.extend(files.iter().copied());
@@ -10829,6 +10848,46 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pass, not the leg, is what `MAX_FOCUS_FILES` bounds: a second leg
+    /// takes only the budget the first one left, and the newest rows take it.
+    #[test]
+    fn a_legs_file_share_stays_inside_the_passes_own_budget() {
+        let node = |n: u8| NodeId([n; 16]);
+        let queued: Vec<NodeId> = (0..MAX_FOCUS_FILES as u8 + 4).map(node).collect();
+
+        assert_eq!(
+            leg_file_share(queued.clone(), &[]),
+            queued[4..],
+            "the first leg takes the newest rows the bound admits"
+        );
+
+        let attempted: Vec<NodeId> = (100..100 + MAX_FOCUS_FILES as u8 - 2).map(node).collect();
+        assert_eq!(
+            leg_file_share(queued.clone(), &attempted),
+            queued[queued.len() - 2..],
+            "a later leg takes only what the earlier legs left"
+        );
+        let spent: Vec<NodeId> = (100..100 + MAX_FOCUS_FILES as u8).map(node).collect();
+        assert!(
+            leg_file_share(queued, &spent).is_empty(),
+            "a spent budget admits nothing more"
+        );
+    }
+
+    /// A row an earlier leg attempted does not ride a second leg of the same
+    /// pass: the queue drains once, after every leg.
+    #[test]
+    fn a_legs_file_share_drops_what_the_pass_already_attempted() {
+        let node = |n: u8| NodeId([n; 16]);
+        let queued = vec![node(1), node(2), node(3)];
+
+        assert_eq!(
+            leg_file_share(queued, &[node(2)]),
+            vec![node(1), node(3)],
+            "the attempted row is gone, the rest keeps its order"
+        );
+    }
 
     /// A vault root holding two granted folders, one file in each, and one
     /// target the caller links where the case needs it.
