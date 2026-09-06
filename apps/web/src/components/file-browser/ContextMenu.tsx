@@ -43,13 +43,10 @@ export function ContextMenu({ right, top, label, items, onClose }: ContextMenuPr
     const menu = menuRef.current;
     if (menu === null) return;
     const { width, height } = menu.getBoundingClientRect();
-    const nextLeft = clamp(right - width, window.innerWidth - width);
-    const nextTop = clamp(top, window.innerHeight - height);
-    setPosition((current) =>
-      current.left === nextLeft && current.top === nextTop
-        ? current
-        : { left: nextLeft, top: nextTop }
-    );
+    setPosition({
+      left: clamp(right - width, window.innerWidth, width),
+      top: clamp(top, window.innerHeight, height),
+    });
   }, [right, top]);
 
   useEffect(() => {
@@ -111,9 +108,8 @@ export function ContextMenu({ right, top, label, items, onClose }: ContextMenuPr
   );
 }
 
-/** Holds one axis inside the viewport, `limit` being the largest fitting start. */
-function clamp(at: number, limit: number): number {
-  return Math.max(EDGE_GAP, Math.min(at, limit - EDGE_GAP));
+function clamp(at: number, viewport: number, size: number): number {
+  return Math.max(EDGE_GAP, Math.min(at, viewport - size - EDGE_GAP));
 }
 
 /** The menu roving-focus model: where a key moves focus, or `null` to ignore it. */

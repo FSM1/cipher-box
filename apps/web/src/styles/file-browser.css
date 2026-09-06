@@ -74,9 +74,9 @@
   flex: 1;
   min-height: 0;
   border: var(--border-thickness) solid var(--color-green-primary);
-  /* The header's action column is empty, so a fixed width is what keeps the
-     size and date headers over their cells. */
-  --file-list-menu-column: 3rem;
+  /* The header's action column is empty, so only a fixed width in the same unit
+     as the other columns keeps the size and date headers over their cells. */
+  --file-list-menu-column: 48px;
 }
 
 .file-list-header {
@@ -180,9 +180,7 @@
 
 .file-list-item-actions {
   grid-area: menu;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
+  place-self: center end;
 }
 
 /* Queue marker after the name: [~] unpublished, [!] dead-lettered. */

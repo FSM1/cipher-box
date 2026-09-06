@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { ListingRow } from '../vault/listing';
 
-/** The row the menu acts on, and the row edges it hangs from: right and bottom. */
+/** The row the menu acts on, and the viewport point its top-right corner takes. */
 export interface ContextMenuState {
   row: ListingRow;
   right: number;
@@ -22,9 +22,10 @@ export function useContextMenu(): ContextMenu {
     state,
     open: useCallback((event: MouseEvent<HTMLElement>, row: ListingRow) => {
       event.preventDefault();
-      const target = event.currentTarget;
-      const anchor = (target.closest('[role="row"]') ?? target).getBoundingClientRect();
-      setState({ row, right: anchor.right, top: anchor.bottom });
+      const anchor = event.currentTarget.closest('[role="row"]');
+      if (anchor === null) return;
+      const box = anchor.getBoundingClientRect();
+      setState({ row, right: box.right, top: box.bottom });
     }, []),
     close: useCallback(() => setState(null), []),
   };

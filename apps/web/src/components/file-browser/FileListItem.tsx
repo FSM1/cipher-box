@@ -7,7 +7,7 @@ interface FileListItemProps {
   onToggle: (key: string) => void;
   /** Opens a folder. */
   onOpen: (node: Uint8Array) => void;
-  /** Raises the row's action menu, anchored on the event that asked for it. */
+  /** Raises the row's action menu, wherever on the row the request came from. */
   onRowMenu: (event: React.MouseEvent<HTMLElement>, row: ListingRow) => void;
 }
 

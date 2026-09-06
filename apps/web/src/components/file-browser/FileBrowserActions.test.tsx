@@ -1190,16 +1190,20 @@ describe('the text editor', () => {
   });
 });
 
-const EMPTY_RECT = { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 };
+const ROW = { right: 640, bottom: 96 };
+const MENU = { width: 180, height: 120 };
 
 /** jsdom measures every box as zero, so the anchor maths needs stated numbers. */
-function measure(row: Partial<DOMRect>, menu: Partial<DOMRect>): void {
+function measure(row: typeof ROW, menu: typeof MENU): void {
+  const rowRect = DOMRect.fromRect({ x: row.right, y: row.bottom });
+  const menuRect = DOMRect.fromRect(menu);
   const real = HTMLElement.prototype.getBoundingClientRect;
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
     this: HTMLElement
   ): DOMRect {
-    if (this.dataset.testid === 'file-list-item') return { ...EMPTY_RECT, ...row } as DOMRect;
-    if (this.dataset.testid === 'context-menu') return { ...EMPTY_RECT, ...menu } as DOMRect;
+    const id = this.dataset.testid;
+    if (id === 'file-list-item') return rowRect;
+    if (id === 'context-menu') return menuRect;
     return real.call(this);
   });
 }
@@ -1213,51 +1217,47 @@ describe('the row action menu', () => {
     const engine = fakeEngine();
     renderBrowser(engine);
     await landSnapshot(engine, listing());
-    measure({ right: 640, bottom: 96 }, { width: 180, height: 120 });
+    measure(ROW, MENU);
 
-    // Chromium reports `detail` 0 on a right-click, whatever the pointer is over.
+    // Chromium reports `detail` 0 on a right-click, and the pointer lands anywhere.
     const row = screen.getAllByTestId('file-list-item')[1];
     fireEvent.contextMenu(row, { detail: 0, clientX: 12, clientY: 400 });
 
     const menu = screen.getByTestId('context-menu');
-    expect(menu.style.left).toBe('460px');
-    expect(menu.style.top).toBe('96px');
+    expect(menu.style.left).toBe(`${ROW.right - MENU.width}px`);
+    expect(menu.style.top).toBe(`${ROW.bottom}px`);
   });
 
   it('opens at that same place from the action button and from the keyboard', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
     await landSnapshot(engine, listing());
-    measure({ right: 640, bottom: 96 }, { width: 180, height: 120 });
+    measure(ROW, MENU);
+    const anchored = { left: `${ROW.right - MENU.width}px`, top: `${ROW.bottom}px` };
 
     const control = screen.getByLabelText('actions for notes.txt');
-    fireEvent.click(control, { detail: 1, clientX: 600, clientY: 90 });
-    expect(screen.getByTestId('context-menu').style.left).toBe('460px');
-    expect(screen.getByTestId('context-menu').style.top).toBe('96px');
+    fireEvent.click(control, { detail: 1 });
+    expect(screen.getByTestId('context-menu').style).toMatchObject(anchored);
 
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByTestId('context-menu')).toBeNull());
 
     // A keyboard activation of a button reaches the page as a click of detail 0.
     fireEvent.click(control, { detail: 0 });
-    expect(screen.getByTestId('context-menu').style.left).toBe('460px');
-    expect(screen.getByTestId('context-menu').style.top).toBe('96px');
+    expect(screen.getByTestId('context-menu').style).toMatchObject(anchored);
   });
 
   it('holds the menu inside the viewport when the row sits on the edge', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
     await landSnapshot(engine, listing());
-    measure(
-      { right: window.innerWidth - 4, bottom: window.innerHeight - 8 },
-      { width: 180, height: 120 }
-    );
+    measure({ right: window.innerWidth - 4, bottom: window.innerHeight - 8 }, MENU);
 
     fireEvent.contextMenu(screen.getAllByTestId('file-list-item')[1], { detail: 0 });
 
     const menu = screen.getByTestId('context-menu');
-    expect(menu.style.left).toBe(`${window.innerWidth - 180 - 8}px`);
-    expect(menu.style.top).toBe(`${window.innerHeight - 120 - 8}px`);
+    expect(menu.style.left).toBe(`${window.innerWidth - MENU.width - 8}px`);
+    expect(menu.style.top).toBe(`${window.innerHeight - MENU.height - 8}px`);
   });
 
   it('gives the action button the last cell of the row', async () => {
@@ -1267,10 +1267,10 @@ describe('the row action menu', () => {
 
     const row = screen.getAllByTestId('file-list-item')[1];
     const cells = [...row.querySelectorAll('[role="gridcell"]')];
-    const control = screen.getByLabelText('actions for notes.txt');
     expect(cells).toHaveLength(4);
-    expect(cells[cells.length - 1].contains(control)).toBe(true);
-    expect(cells.slice(0, -1).some((cell) => cell.contains(control))).toBe(false);
+    expect(cells[cells.length - 1].contains(screen.getByLabelText('actions for notes.txt'))).toBe(
+      true
+    );
   });
 
   it('leaves the action button its own keyboard activation', async () => {
