@@ -6531,12 +6531,7 @@ where {
                 // refresh the newly-focused chain now rather than waiting out a
                 // poll cadence, and only past the staleness threshold — a repeat
                 // visit renders the state already held.
-                let changed = self.refresh_focus_on_access(authored_at).await;
-                // After the folder leg, so a child it has just listed is queued
-                // with the ones the base already held.
-                if let Some(folder) = node {
-                    self.queue_focus_file_children(folder);
-                }
+                let changed = self.refresh_focus_on_access(authored_at, node).await;
                 if changed {
                     let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 }
@@ -8507,53 +8502,83 @@ where {
             })
     }
 
+    /// The subset of `nodes` this vault's own scope root seals.
+    ///
+    /// One leg holds one scope's read material, so a node in a shared scope this
+    /// vault accepted refreshes on the tick's own leg for that scope, never on
+    /// the navigation path under the vault's seed.
+    fn own_scope_only(&self, nodes: Vec<NodeId>) -> Vec<NodeId> {
+        let base = self.snapshot.borrow();
+        let descendants = self.descendant_scope_roots.borrow();
+        nodes
+            .into_iter()
+            .filter(|node| scope_root_of(&base, *node, &descendants) == base.root)
+            .collect()
+    }
+
     /// Refresh the focus window's folders that are past the on-access staleness
-    /// threshold, returning whether the base changed.
-    async fn refresh_focus_on_access(&self, now: UnixMillis) -> bool {
-        let due = focus_folders_due(
+    /// threshold, then the files `folder` lists no size for, returning whether
+    /// the base changed.
+    ///
+    /// The folder leg runs first, so a row it lists joins the file leg of the
+    /// same navigation and paints its size within one resolve round trip rather
+    /// than a poll cadence later.
+    async fn refresh_focus_on_access(&self, now: UnixMillis, folder: Option<NodeId>) -> bool {
+        let due = self.own_scope_only(focus_folders_due(
             &self.snapshot.borrow(),
             &self.focus.borrow(),
             &self.focus_refreshed.borrow(),
             now,
             &self.profile,
-        );
-        // One leg holds one scope's read material, so a folder in a shared scope
-        // this vault accepted refreshes on the tick's own leg for that scope,
-        // never here under the vault's seed.
-        let (scope_id, due) = {
-            let base = self.snapshot.borrow();
-            let descendants = self.descendant_scope_roots.borrow();
-            let mine = due
-                .into_iter()
-                .filter(|node| scope_root_of(&base, *node, &descendants) == base.root)
-                .collect::<Vec<_>>();
-            (base.root.0, mine)
-        };
-        if due.is_empty() {
-            return false;
+        ));
+        let scope_id = self.snapshot.borrow().root.0;
+        // A scope this session holds no read material for serves neither leg,
+        // and its rows stay queued for the pass that can.
+        let scope_read_seed = self.scope_read_seed(&scope_id).await;
+        let leg = scope_read_seed
+            .as_ref()
+            .map(|scope_read_seed| FolderRefresh {
+                transport: &self.seams.record_transport,
+                snapshot_cache: &self.seams.snapshot_cache,
+                http: &self.seams.http,
+                floors: &self.seams.floor_store,
+                gateway: &self.gateway,
+                base: &self.snapshot,
+                events: &self.events,
+                scope_id,
+                scope_read_seed,
+                plane: None,
+                mode: ResolveMode::CacheFirst,
+                observed_at: now.0,
+            });
+        let mut changed = false;
+        if let Some(leg) = &leg
+            && !due.is_empty()
+        {
+            let report = leg.run(&due).await;
+            hold_captures(&self.observed_unlinks, report.departed);
+            stamp_focus_refreshed(&self.focus_refreshed, &due, now);
+            changed |= report.changed;
         }
-        let Some(scope_read_seed) = self.scope_read_seed(&scope_id).await else {
-            return false;
-        };
-        let report = FolderRefresh {
-            transport: &self.seams.record_transport,
-            snapshot_cache: &self.seams.snapshot_cache,
-            http: &self.seams.http,
-            floors: &self.seams.floor_store,
-            gateway: &self.gateway,
-            base: &self.snapshot,
-            events: &self.events,
-            scope_id,
-            scope_read_seed: &scope_read_seed,
-            plane: None,
-            mode: ResolveMode::CacheFirst,
-            observed_at: now.0,
+        if let Some(folder) = folder {
+            self.queue_focus_file_children(folder);
         }
-        .run(&due)
-        .await;
-        hold_captures(&self.observed_unlinks, report.departed);
-        stamp_focus_refreshed(&self.focus_refreshed, &due, now);
-        report.changed
+        if let Some(leg) = &leg {
+            let files = self.own_scope_only(self.queued_focus_files());
+            if !files.is_empty() {
+                let report = leg.run_files(&files).await;
+                hold_captures(&self.observed_unlinks, report.departed);
+                stamp_focus_refreshed(&self.focus_refreshed, &files, now);
+                // Take only what this pass attempted, as the tick's leg does: a
+                // row queued while the legs above were awaited has not been.
+                self.focus
+                    .borrow_mut()
+                    .open_files
+                    .retain(|node| !files.contains(node));
+                changed |= report.changed;
+            }
+        }
+        changed
     }
 
     // -----------------------------------------------------------------------
@@ -16885,7 +16910,7 @@ mod focus_access_tests {
     use super::*;
     use crate::sync::model::NodeMeta;
     use crate::testkit::fakes::VirtualScheduler;
-    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy};
+    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
     const FOLDER: NodeId = NodeId([3; 16]);
     const OTHER: NodeId = NodeId([4; 16]);
@@ -16934,6 +16959,32 @@ mod focus_access_tests {
             GatewayConfig::disabled(),
         );
         (engine, scheduler)
+    }
+
+    /// The same engine holding what a navigation leg runs under: a live session
+    /// and its own scope's read material. An offline start reaches no API to
+    /// mint against, so the seed is deposited rather than recovered.
+    fn started_engine() -> Engine<FakeSeamTypes> {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice-pk");
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig::disabled(),
+        );
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the offline start logs in");
+        let scope_id = engine.snapshot.borrow().root.0;
+        deposit_seed(
+            &engine.scope_read_seeds,
+            scope_id,
+            Zeroizing::new([5u8; 32]),
+            Some(0),
+        );
+        engine
     }
 
     #[test]
@@ -17056,6 +17107,51 @@ mod focus_access_tests {
         assert!(
             !engine.queued_focus_files().is_empty(),
             "past the threshold the rows are due again"
+        );
+    }
+
+    /// A record in a shared scope unseals only under that scope's own read
+    /// material, so the navigation leg leaves it to the tick's leg for that
+    /// scope. The row beside it in the vault's own scope proves the leg ran.
+    #[test]
+    fn the_navigation_file_leg_leaves_a_shared_scopes_rows_to_that_scope() {
+        let engine = started_engine();
+        let shared_root = NodeId([9; 16]);
+        let shared_file = file_id(1);
+        let own_file = file_id(2);
+        {
+            let mut base = engine.snapshot.borrow_mut();
+            let root = base.root;
+            base.upsert_node(NodeMeta::new(shared_root, "shared", NodeKind::Folder));
+            base.link(root, shared_root, 1);
+            base.upsert_node(NodeMeta::new(shared_file, "theirs.bin", NodeKind::File));
+            base.link(shared_root, shared_file, 1);
+            base.upsert_node(NodeMeta::new(own_file, "mine.bin", NodeKind::File));
+            base.link(root, own_file, 1);
+        }
+        engine
+            .descendant_scope_roots
+            .borrow_mut()
+            .insert(shared_root);
+        engine.note_focus_file(shared_file);
+        engine.note_focus_file(own_file);
+
+        let now = engine.seams.scheduler.now();
+        block_on(engine.refresh_focus_on_access(now, Some(shared_root)));
+
+        let stamped = engine.focus_refreshed.borrow();
+        assert!(
+            stamped.contains_key(&own_file),
+            "the vault's own row was attempted under the vault's seed"
+        );
+        assert!(
+            !stamped.contains_key(&shared_file),
+            "the shared scope's row was not resolved under the vault's seed"
+        );
+        assert_eq!(
+            engine.queued_focus_files(),
+            vec![shared_file],
+            "it stays queued for the tick's leg for that scope"
         );
     }
 }
