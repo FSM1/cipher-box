@@ -869,28 +869,30 @@ fn a_stale_hit_answers_from_the_render_without_yielding() {
 /// operation that never arrives cannot close anything.
 #[test]
 fn fuse_traffic_puts_a_folder_in_the_focus_set() {
-    let (mut core, root, _clock, _events) = mount_clocked(
+    let (mut core, _root, _clock, _events) = mount_clocked(
         RecordingAdapter::push_capable(),
         &[("notes.txt", NodeKind::File), ("sub", NodeKind::Folder)],
     );
     assert!(core.engine_mut().focus_folders().is_empty());
 
     let sub = block_on(core.lookup(ROOT_INO, "sub")).expect("lookup");
-    assert_eq!(
-        core.engine_mut().focus_folders(),
-        vec![root],
-        "a lookup puts the folder it searched in view"
+    assert!(
+        core.engine_mut().focus_folders().is_empty(),
+        "the vault root rides the pointer leg of every pass, so it takes no slot"
     );
 
     listing(&mut core, sub.ino);
-    let held = core.engine_mut().focus_folders();
-    assert!(
-        held.contains(&sub.node),
+    assert_eq!(
+        core.engine_mut().focus_folders(),
+        vec![sub.node],
         "the window follows the op stream into the folder it descends into"
     );
-    assert!(
-        held.contains(&root),
-        "and a stat of the folder it came from does not evict it"
+
+    block_on(core.getattr(ROOT_INO)).expect("the root stats");
+    assert_eq!(
+        core.engine_mut().focus_folders(),
+        vec![sub.node],
+        "and a stat of the folder it came from does not take it out of view"
     );
 }
 
@@ -3355,8 +3357,8 @@ mod published {
              that projects a length"
         );
         assert!(
-            mount.core.engine_mut().focus_folders().contains(&ROOT),
-            "the window holds the folder the lookup searched"
+            mount.core.engine_mut().focus_folders().is_empty(),
+            "the vault root the lookup searched rides the pointer leg, not the window"
         );
     }
 

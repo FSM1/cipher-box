@@ -10590,7 +10590,14 @@ where {
     /// it is already held under. Bounded by [`MAX_FOCUS_FOLDERS`], dropping the
     /// least recently touched folder rather than refusing the folder the host
     /// just read.
+    ///
+    /// The vault root is not admitted: it rides the vault-pointer leg of every
+    /// pass, so a slot spent on it serves no resolve and evicts a folder that
+    /// would have had one.
     fn note_touched_folder(&self, folder: NodeId, now: UnixMillis) {
+        if folder == self.snapshot.borrow().root {
+            return;
+        }
         let mut focus = self.focus.borrow_mut();
         focus.touched_folders.insert(folder, now);
         if focus.touched_folders.len() > MAX_FOCUS_FOLDERS {
@@ -17101,6 +17108,19 @@ mod focus_access_tests {
 
         let held = engine.focus_folders();
         assert!(held.contains(&FOLDER) && held.contains(&OTHER));
+    }
+
+    /// Every operation under the root reports the root, and the root resolves on
+    /// the vault-pointer leg of every pass. A slot spent on it would buy no
+    /// resolve and cost the folder it evicted one.
+    #[test]
+    fn the_vault_root_takes_no_slot_in_the_window() {
+        let (engine, _clock) = engine();
+        let root = engine.snapshot.borrow().root;
+
+        assert!(engine.note_focus_access(Some(root)), "the root still hints");
+
+        assert!(engine.focus_folders().is_empty());
     }
 
     /// The window admits what is in view now, never a whole tree walk.
