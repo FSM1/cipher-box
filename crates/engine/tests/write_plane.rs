@@ -11918,10 +11918,11 @@ fn a_folder_open_paints_the_rows_it_lists_and_refuses_a_bent_one() {
 
 /// A host with no kernel to answer opens a folder with `SetFocus` rather than
 /// with the FUSE-op TTL check, so that arm queues the listing's unprojected rows
-/// as well. This is the path the web takes, and the one the blank listing was
-/// reported on.
+/// and runs the file leg over them. This is the path the web takes, and the one
+/// the blank listing was reported on: a row paints within one resolve round trip
+/// rather than a poll cadence later.
 #[test]
-fn a_set_focus_command_queues_the_folders_unprojected_rows() {
+fn a_set_focus_command_paints_the_folders_unprojected_rows() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -11938,13 +11939,76 @@ fn a_set_focus_command_queues_the_folders_unprojected_rows() {
     );
 
     block_on(engine_b.command(Command::SetFocus { node: Some(ROOT) })).expect("the window opens");
-    assert_eq!(engine_b.queued_focus_files(), vec![node]);
 
-    tick(&world, &engine_b, &mut tasks_b);
     assert_eq!(
         block_on(engine_b.view()).unwrap().attrs(node).unwrap().size,
         Some(served.len() as u64),
-        "the command a non-FUSE host issues paints the row too"
+        "the navigation itself paints the row, before any tick runs"
+    );
+    assert!(
+        engine_b.queued_focus_files().is_empty(),
+        "the pass attempted the row, so it leaves the queue"
+    );
+}
+
+/// Re-opening a folder inside the staleness threshold renders the state already
+/// held, so a host that navigates in a loop costs the record plane nothing.
+///
+/// The row here has published no version, so it projects no size however often a
+/// pass resolves it. Only the staleness stamp the pass leaves can keep the
+/// repeat visit off the record plane.
+#[test]
+fn a_repeat_set_focus_inside_the_threshold_resolves_no_file_again() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "unwritten.bin".to_owned(),
+        kind: NodeKind::File,
+    }))
+    .expect("the create commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    let node = child_id(&engine_a, ROOT, "unwritten.bin");
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    // A cache-first file resolve reads the row's own record name, so the reads
+    // under that name count the resolves the file leg spent.
+    let file_name = write_name(node).as_str().as_bytes().to_vec();
+    let resolves = || {
+        bob.snapshot_cache
+            .reads()
+            .into_iter()
+            .filter(|key| *key == file_name)
+            .count()
+    };
+    let before = resolves();
+    block_on(engine_b.command(Command::SetFocus { node: Some(ROOT) })).expect("the window opens");
+    let after_first = resolves();
+    assert!(
+        after_first > before,
+        "the first navigation resolved the row it listed"
+    );
+    assert_eq!(
+        block_on(engine_b.view()).unwrap().attrs(node).unwrap().size,
+        None,
+        "an unwritten row projects no size, so no size filter holds it back"
+    );
+
+    world
+        .scheduler
+        .advance(SyncTimingProfile::CI.stale_after / 2);
+    block_on(engine_b.command(Command::SetFocus { node: Some(ROOT) })).expect("the window reopens");
+
+    assert_eq!(
+        resolves(),
+        after_first,
+        "the stamp the first pass left keeps the repeat visit off the record plane"
     );
 }
 
