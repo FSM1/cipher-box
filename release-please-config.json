@@ -59,6 +59,7 @@
     ".": {
       "release-type": "node",
       "include-component-in-tag": false,
+      "package-name": "",
       "extra-files": [
         {
           "type": "json",
