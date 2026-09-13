@@ -30,7 +30,7 @@ where
     for endpoint in &endpoints {
         assert_eq!(
             transport
-                .get_record(endpoint, routing_key, GENEROUS_CAP)
+                .get_record(endpoint, routing_key, GENEROUS_CAP, None)
                 .await
                 .unwrap(),
             None,
@@ -50,7 +50,7 @@ where
     for endpoint in &endpoints {
         assert_eq!(
             transport
-                .get_record(endpoint, routing_key, record.len())
+                .get_record(endpoint, routing_key, record.len(), None)
                 .await
                 .unwrap()
                 .as_deref(),
@@ -65,7 +65,7 @@ where
         for endpoint in &endpoints {
             assert!(
                 transport
-                    .get_record(endpoint, routing_key, cap)
+                    .get_record(endpoint, routing_key, cap, None)
                     .await
                     .is_err(),
                 "a record over `max_bytes` must fail closed, never be truncated or admitted"

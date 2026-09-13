@@ -1027,6 +1027,7 @@ fn simulation_n_engines_one_record_store_adversarial() {
             &endpoint,
             &routing_key,
             MAX_RECORD_BYTES,
+            None,
         ))
         .unwrap()
         .expect("record present on the shared store");
@@ -1048,6 +1049,7 @@ fn simulation_n_engines_one_record_store_adversarial() {
         &endpoint,
         &routing_key,
         MAX_RECORD_BYTES,
+        None,
     ))
     .unwrap()
     .unwrap();
@@ -1065,6 +1067,7 @@ fn simulation_n_engines_one_record_store_adversarial() {
         &endpoint,
         &routing_key,
         MAX_RECORD_BYTES,
+        None,
     ))
     .unwrap()
     .unwrap();

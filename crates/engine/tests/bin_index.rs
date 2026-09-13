@@ -493,6 +493,7 @@ fn an_unconfirmed_publish_advances_neither_the_sequence_floor_nor_the_readers_ba
             _endpoint: &EndpointId,
             _routing_key: &str,
             _max_bytes: usize,
+            _bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
             Ok(None)
         }
@@ -846,6 +847,7 @@ fn a_publish_that_fails_behind_its_mint_reads_as_a_stranded_mint() {
             _endpoint: &EndpointId,
             _routing_key: &str,
             _max_bytes: usize,
+            _bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
             Ok(None)
         }
@@ -949,10 +951,11 @@ impl RecordTransport for PublishesAcrossTheLoad {
         endpoint: &EndpointId,
         routing_key: &str,
         max_bytes: usize,
+        bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
         *self.slot.borrow_mut() = Some(self.published.clone());
         self.inner
-            .get_record(endpoint, routing_key, max_bytes)
+            .get_record(endpoint, routing_key, max_bytes, bearer)
             .await
     }
 

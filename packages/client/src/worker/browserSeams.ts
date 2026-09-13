@@ -25,6 +25,8 @@ import {
 export interface BrowserSeamsConfig extends AccountStoreNaming {
   /** Delegated-routing endpoint set for `RecordTransport` (someguy + public). */
   recordEndpoints: string[];
+  /** The gated CipherBox `/routing/v1` endpoint, added to the set when configured. */
+  recordAcceleratorUrl?: string;
 }
 
 /** The seam bag the WASM `EngineHandle` constructor reads. */
@@ -49,7 +51,7 @@ export function makeBrowserSeams(config: BrowserSeamsConfig, accountId: string):
   const prefix = `${config.dbPrefix ?? DEFAULT_DB_PREFIX}-${accountId}`;
   return {
     floorStore: new IdbFloorStore(`${prefix}-${FLOORS}`),
-    recordTransport: new FetchRecordTransport(config.recordEndpoints),
+    recordTransport: new FetchRecordTransport(config.recordEndpoints, config.recordAcceleratorUrl),
     http: new FetchHttp(),
     scheduler: new WorkerScheduler(),
     stagingStore: new OpfsStagingStore(`${prefix}-${STAGING}`),

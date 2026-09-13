@@ -57,7 +57,10 @@ pub fn seam_set(
 ) -> SeamResult<SeamSet<DesktopSeamTypes>> {
     Ok(SeamSet::<DesktopSeamTypes> {
         floor_store: OwnerScopedFloorStore::new(FileFloorStore::open(account_dir.join("floors"))?),
-        record_transport: ReqwestRecordTransport::new(config.record_endpoints.clone())?,
+        record_transport: ReqwestRecordTransport::new(
+            config.record_endpoints.clone(),
+            config.record_accelerator_url.clone(),
+        )?,
         http: ReqwestHttp::new()?,
         scheduler: TokioScheduler::new(),
         staging_store: QueueGenerationStore::new(FileStagingStore::open(

@@ -51,26 +51,42 @@ function servesRecordBytes(response: Response): boolean {
 
 export class FetchRecordTransport implements RecordTransportSeam {
   private readonly endpointList: readonly string[];
+  private readonly acceleratorUrl: string | undefined;
 
-  constructor(endpoints: string[]) {
-    if (endpoints.length === 0) {
+  constructor(endpoints: string[], acceleratorUrl?: string) {
+    const list =
+      acceleratorUrl !== undefined && !endpoints.includes(acceleratorUrl)
+        ? [acceleratorUrl, ...endpoints]
+        : [...endpoints];
+    if (list.length === 0) {
       throw new Error('RecordTransport endpoint set must never be empty');
     }
-    this.endpointList = [...endpoints];
+    this.endpointList = list;
+    this.acceleratorUrl = acceleratorUrl;
   }
 
   endpoints(): string[] {
     return [...this.endpointList];
   }
 
+  accelerator(): string | undefined {
+    return this.acceleratorUrl;
+  }
+
+  /** The engine decides which endpoint may be shown `bearer`; this seam only sets the header. */
   async getRecord(
     endpoint: string,
     routingKey: string,
-    maxBytes: number
+    maxBytes: number,
+    bearer?: string
   ): Promise<CappedRecordResult> {
+    const headers: Record<string, string> = { Accept: IPNS_RECORD_MEDIA_TYPE };
+    if (bearer !== undefined && bearer !== '') {
+      headers.Authorization = `Bearer ${bearer}`;
+    }
     const response = await fetch(this.recordUrl(endpoint, routingKey), {
       method: 'GET',
-      headers: { Accept: IPNS_RECORD_MEDIA_TYPE },
+      headers,
       ...endpointPolicy(),
     });
     if (response.status === 404) {

@@ -122,3 +122,75 @@ describe('FetchRecordTransport.getRecord', () => {
     expect(inits[0].signal).not.toBe(inits[1].signal);
   });
 });
+
+/** The header the gated CipherBox resolve leg reads, of the request `init`. */
+function authorizationOf(init: RequestInit): string | undefined {
+  return (init.headers as Record<string, string>).Authorization;
+}
+
+describe('FetchRecordTransport bearer presentation', () => {
+  function recordingFetch(): RequestInit[] {
+    const inits: RequestInit[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => {
+        inits.push(init);
+        return Promise.resolve(new Response(new Uint8Array([1]), { status: 200 }));
+      })
+    );
+    return inits;
+  }
+
+  it('sends the bearer a GET is given as an Authorization header', async () => {
+    const inits = recordingFetch();
+
+    await transport().getRecord(ENDPOINT, KEY, 1000, 'a-pseudonym');
+
+    expect(authorizationOf(inits[0])).toBe('Bearer a-pseudonym');
+  });
+
+  it('sends no Authorization header on a GET given no bearer', async () => {
+    const inits = recordingFetch();
+
+    await transport().getRecord(ENDPOINT, KEY, 1000);
+
+    expect(authorizationOf(inits[0])).toBeUndefined();
+  });
+
+  it('never sends an Authorization header on a PUT', async () => {
+    const inits = recordingFetch();
+
+    await transport().putRecord(ENDPOINT, KEY, new Uint8Array([1]));
+
+    expect(authorizationOf(inits[0])).toBeUndefined();
+  });
+});
+
+describe('FetchRecordTransport.accelerator', () => {
+  const ACCELERATOR = 'https://accelerator.example';
+
+  it('reports the configured accelerator and carries it in the endpoint set', () => {
+    const configured = new FetchRecordTransport([ENDPOINT], ACCELERATOR);
+
+    expect(configured.accelerator()).toBe(ACCELERATOR);
+    expect(configured.endpoints()).toEqual([ACCELERATOR, ENDPOINT]);
+  });
+
+  it('keeps one entry for an accelerator the endpoint list already names', () => {
+    const configured = new FetchRecordTransport([ENDPOINT, ACCELERATOR], ACCELERATOR);
+
+    expect(configured.endpoints()).toEqual([ENDPOINT, ACCELERATOR]);
+  });
+
+  it('reports no accelerator when the host configured none', () => {
+    expect(transport().accelerator()).toBeUndefined();
+  });
+
+  it('accepts an accelerator as the whole endpoint set', () => {
+    expect(new FetchRecordTransport([], ACCELERATOR).endpoints()).toEqual([ACCELERATOR]);
+  });
+
+  it('still refuses an empty endpoint set', () => {
+    expect(() => new FetchRecordTransport([])).toThrow('must never be empty');
+  });
+});

@@ -5,6 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_API_URL?: string;
   /** Comma-separated `/routing/v1` origins: someguy plus a public endpoint. */
   readonly VITE_ROUTING_ENDPOINTS?: string;
+  /** The gated CipherBox `/routing/v1` endpoint, shown the session read pseudonym on GET. */
+  readonly VITE_ROUTING_ACCELERATOR_URL?: string;
   /** Base URL of the token-authed read accelerator; unset leaves reads dormant. */
   readonly VITE_READ_ACCELERATOR_URL?: string;
   /** Comma-separated public trustless-gateway origins, tried after the accelerator. */

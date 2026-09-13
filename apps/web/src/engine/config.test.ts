@@ -41,6 +41,26 @@ describe('engineHostConfig', () => {
     );
   });
 
+  it('carries the routing accelerator through, and leaves it unset when none is named', () => {
+    expect(
+      engineHostConfig({ VITE_ROUTING_ACCELERATOR_URL: ' https://routing.example.test ' }, artifact)
+        .recordAcceleratorUrl
+    ).toBe('https://routing.example.test');
+    expect(engineHostConfig({}, artifact).recordAcceleratorUrl).toBeUndefined();
+  });
+
+  it('accepts a build whose only routing endpoint is the accelerator', () => {
+    const config = engineHostConfig(
+      {
+        VITE_ROUTING_ENDPOINTS: ' , ',
+        VITE_ROUTING_ACCELERATOR_URL: 'https://routing.example.test',
+      },
+      artifact
+    );
+    expect(config.recordEndpoints).toEqual([]);
+    expect(config.recordAcceleratorUrl).toBe('https://routing.example.test');
+  });
+
   it('falls back to defaults for an unconfigured environment', () => {
     const config = engineHostConfig({}, artifact);
     expect(config.apiBaseUrl).toBe('http://localhost:3000');

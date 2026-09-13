@@ -87,6 +87,17 @@ describe('the environment handed to the compiled shell', () => {
   });
 
   /**
+   * The compiled shell reads this name, so a build that does not forward it
+   * resolves records against the gated endpoint with no credential.
+   */
+  it('forwards the routing accelerator only when the build names one', () => {
+    expect(engineBuildEnv(BUILD).VITE_ROUTING_ACCELERATOR_URL).toBeUndefined();
+    expect(
+      engineBuildEnv({ ...BUILD, VITE_ROUTING_ACCELERATOR_URL: ' https://routing.test ' })
+    ).toEqual(expect.objectContaining({ VITE_ROUTING_ACCELERATOR_URL: 'https://routing.test' }));
+  });
+
+  /**
    * The footer picks its licence arm from this value, so a wrong mapping drops
    * a notice a licence asks for rather than a cosmetic line.
    */

@@ -185,7 +185,7 @@ impl Gateway {
 ///
 /// The prefix is deliberate rather than a URL parse: a parser accepts `HTTPS://`
 /// as TLS, and every divergence between the two must fall on the denying side.
-fn carries_credentials_safely(base_url: &str) -> bool {
+pub(crate) fn carries_credentials_safely(base_url: &str) -> bool {
     let Some(rest) = base_url.strip_prefix("https://") else {
         return false;
     };

@@ -122,9 +122,15 @@ where
             return Err(VaultPointerProbe::Indeterminate);
         }
         for endpoint in endpoints {
+            let credential = self.transport.read_credential(&endpoint);
             match self
                 .transport
-                .get_record(&endpoint, name.as_str(), MAX_RECORD_BYTES)
+                .get_record(
+                    &endpoint,
+                    name.as_str(),
+                    MAX_RECORD_BYTES,
+                    credential.as_ref().map(|token| token.as_str()),
+                )
                 .await
             {
                 // Only bytes that verify at this name prove a publication. The
@@ -531,6 +537,7 @@ mod tests {
                 _endpoint: &EndpointId,
                 _routing_key: &str,
                 _max_bytes: usize,
+                _bearer: Option<&str>,
             ) -> crate::seams::SeamResult<Option<Vec<u8>>> {
                 unreachable!("no endpoint to ask")
             }

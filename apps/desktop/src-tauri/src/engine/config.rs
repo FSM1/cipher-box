@@ -15,8 +15,10 @@ use cipherbox_engine::{GatewayConfig, StoragePolicy, SyncTimingProfile};
 pub struct BuildEnv {
     /// The API origin, shared with the identity exchange (`src/config.ts`).
     pub api_base_url: Option<&'static str>,
-    /// Comma-separated `/routing/v1` base URLs.
+    /// Comma-separated public `/routing/v1` base URLs.
     pub routing_endpoints: Option<&'static str>,
+    /// The gated CipherBox `/routing/v1` endpoint, if this deployment has one.
+    pub routing_accelerator_url: Option<&'static str>,
     /// The member read accelerator, if this deployment has one.
     pub read_accelerator_url: Option<&'static str>,
     /// Comma-separated trustless-gateway fallbacks.
@@ -33,6 +35,7 @@ impl BuildEnv {
         Self {
             api_base_url: option_env!("VITE_API_URL"),
             routing_endpoints: option_env!("VITE_ROUTING_ENDPOINTS"),
+            routing_accelerator_url: option_env!("VITE_ROUTING_ACCELERATOR_URL"),
             read_accelerator_url: option_env!("VITE_READ_ACCELERATOR_URL"),
             public_gateways: option_env!("VITE_PUBLIC_GATEWAYS"),
             environment: option_env!("VITE_ENVIRONMENT"),
@@ -47,6 +50,9 @@ pub struct EngineConfig {
     pub api_base_url: ApiBaseUrl,
     /// `/routing/v1` endpoints the record transport fans out over.
     pub record_endpoints: Vec<String>,
+    /// The one endpoint of that set whose GET leg is shown the session read
+    /// pseudonym (blueprint/api.md "The front covers both read legs").
+    pub record_accelerator_url: Option<String>,
     /// Content read sources.
     pub gateway: GatewayConfig,
     /// Sync cadences.
@@ -75,7 +81,9 @@ impl EngineConfig {
             .map_err(|error| error.to_string())?;
 
         let record_endpoints = list(env.routing_endpoints);
-        if record_endpoints.is_empty() {
+        let record_accelerator_url = configured(env.routing_accelerator_url).map(str::to_owned);
+        // The accelerator joins the endpoint set, so it alone is a legal build.
+        if record_endpoints.is_empty() && record_accelerator_url.is_none() {
             return Err(
                 "VITE_ROUTING_ENDPOINTS must list at least one routing endpoint".to_owned(),
             );
@@ -85,6 +93,7 @@ impl EngineConfig {
         Ok(Self {
             api_base_url,
             record_endpoints,
+            record_accelerator_url,
             // Dormant until configured: reads then fail closed as unavailable
             // rather than reaching for an endpoint nobody chose.
             gateway: GatewayConfig {
@@ -129,6 +138,7 @@ mod tests {
         BuildEnv {
             api_base_url: Some("https://api.example.test"),
             routing_endpoints: Some("https://someguy.example.test"),
+            routing_accelerator_url: None,
             read_accelerator_url: None,
             public_gateways: None,
             environment: None,
