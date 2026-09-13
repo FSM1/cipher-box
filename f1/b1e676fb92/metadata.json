@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f1b1e676fb92",
+  "strategy": "manual-commit",
+  "branch": "feat/1390-api-image",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f1/b1e676fb92/0/metadata.json",
+      "transcript": "/f1/b1e676fb92/0/full.jsonl",
+      "compact_transcript": "/f1/b1e676fb92/0/transcript.jsonl",
+      "content_hash": "/f1/b1e676fb92/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 3963,
+    "cache_read_tokens": 262036,
+    "output_tokens": 4241,
+    "api_call_count": 2
+  }
+}
