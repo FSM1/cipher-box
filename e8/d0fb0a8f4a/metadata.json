@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e8d0fb0a8f4a",
+  "strategy": "manual-commit",
+  "branch": "feat/1390-api-image",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".dockerignore",
+    ".github/workflows/ci-api.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/deploy-staging.yml",
+    "apps/api/Dockerfile",
+    "apps/api/src/run-migrations.ts",
+    "apps/api/tsconfig.build.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e8/d0fb0a8f4a/0/metadata.json",
+      "transcript": "/e8/d0fb0a8f4a/0/full.jsonl",
+      "compact_transcript": "/e8/d0fb0a8f4a/0/transcript.jsonl",
+      "content_hash": "/e8/d0fb0a8f4a/0/content_hash.txt",
+      "prompt": "/e8/d0fb0a8f4a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 194,
+    "cache_creation_tokens": 12203,
+    "cache_read_tokens": 979622,
+    "output_tokens": 7254,
+    "api_call_count": 7
+  }
+}
