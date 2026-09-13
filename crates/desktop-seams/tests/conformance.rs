@@ -522,6 +522,52 @@ async fn reqwest_record_transport_passes_the_record_transport_kit() {
     .await;
 }
 
+/// The read pseudonym rides the GET the engine hands a bearer, and no PUT ever
+/// carries one (blueprint/api.md "The front covers both read legs").
+#[tokio::test]
+async fn reqwest_record_transport_presents_a_bearer_on_get_alone() {
+    let server = MockServer::start();
+    let transport =
+        ReqwestRecordTransport::new(vec![server.base_url()], None).expect("client builds");
+    let endpoint = transport.endpoints().remove(0);
+
+    transport
+        .get_record(&endpoint, "k51-bearer-name", 1024, Some("a-pseudonym"))
+        .await
+        .expect("the endpoint answers");
+    assert_eq!(
+        authorization(&server).as_deref(),
+        Some("Bearer a-pseudonym")
+    );
+
+    transport
+        .get_record(&endpoint, "k51-bearer-name", 1024, None)
+        .await
+        .expect("the endpoint answers");
+    assert_eq!(authorization(&server), None, "no bearer, no header");
+
+    transport
+        .put_record(&endpoint, "k51-bearer-name", b"opaque-record")
+        .await
+        .expect("the endpoint accepts the record");
+    assert_eq!(
+        authorization(&server),
+        None,
+        "a write never presents the read pseudonym"
+    );
+}
+
+/// The `Authorization` header of the server's most recent request.
+fn authorization(server: &MockServer) -> Option<String> {
+    server
+        .last_request()
+        .expect("the server saw a request")
+        .headers
+        .into_iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value)
+}
+
 #[tokio::test]
 async fn reqwest_record_transport_reads_a_200_text_answer_as_no_record() {
     let server = MockServer::start();

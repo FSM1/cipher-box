@@ -9,10 +9,10 @@ use crate::seams::{EndpointId, RecordTransport, SeamResult, check_bearer};
 
 /// The host's [`RecordTransport`] with the read pseudonym armed on one endpoint.
 ///
-/// The engine wraps the seam once at construction, so every fan-out reads
-/// through this and a public endpoint cannot be handed the credential by a
-/// caller that forgot the rule. The accelerator names itself
-/// ([`RecordTransport::accelerator`]); the engine decides what it may be shown.
+/// The engine wraps the seam once at construction and splices the credential
+/// here, so no caller decides which endpoint is shown one. The accelerator
+/// names itself ([`RecordTransport::accelerator`]); the engine decides what it
+/// may be shown.
 #[derive(Clone)]
 pub struct RecordAccelerator<T> {
     inner: T,
@@ -36,6 +36,19 @@ impl<T: RecordTransport> RecordAccelerator<T> {
             bearer,
         }
     }
+
+    /// The credential `endpoint` may be shown, read from the shared cell at
+    /// request time. A token that cannot be a header value is withheld rather
+    /// than sent: the leg then reads unauthenticated, and fan-out treats its
+    /// refusal as availability.
+    fn credential(&self, endpoint: &EndpointId) -> Option<Zeroizing<String>> {
+        if self.armed.as_ref() != Some(endpoint) {
+            return None;
+        }
+        self.bearer
+            .peek()
+            .filter(|token| check_bearer(token).is_ok())
+    }
 }
 
 impl<T: RecordTransport> RecordTransport for RecordAccelerator<T> {
@@ -43,31 +56,29 @@ impl<T: RecordTransport> RecordTransport for RecordAccelerator<T> {
         self.inner.endpoints()
     }
 
+    /// The endpoint this wrapper armed: the inner accelerator when it can keep
+    /// a credential, and nothing otherwise.
     fn accelerator(&self) -> Option<EndpointId> {
         self.armed.clone()
     }
 
-    fn read_credential(&self, endpoint: &EndpointId) -> Option<Zeroizing<String>> {
-        if self.armed.as_ref() != Some(endpoint) {
-            return None;
-        }
-        // A token that cannot be a header value is withheld rather than sent:
-        // the leg then reads unauthenticated, and fan-out treats its refusal as
-        // availability.
-        self.bearer
-            .peek()
-            .filter(|token| check_bearer(token).is_ok())
-    }
-
+    /// The credential is this wrapper's decision, so `_bearer` is discarded: a
+    /// caller cannot name the endpoint that sees the pseudonym.
     async fn get_record(
         &self,
         endpoint: &EndpointId,
         routing_key: &str,
         max_bytes: usize,
-        bearer: Option<&str>,
+        _bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
+        let credential = self.credential(endpoint);
         self.inner
-            .get_record(endpoint, routing_key, max_bytes, bearer)
+            .get_record(
+                endpoint,
+                routing_key,
+                max_bytes,
+                credential.as_ref().map(|token| token.as_str()),
+            )
             .await
     }
 
@@ -112,12 +123,22 @@ mod tests {
             }
         }
 
+        /// The credential the endpoint's most recent GET carried.
         fn shown_to(&self, endpoint: &str) -> Option<String> {
             self.shown
                 .borrow()
                 .iter()
+                .rev()
                 .find(|(seen, _)| seen == endpoint)
                 .and_then(|(_, bearer)| bearer.clone())
+        }
+
+        fn asked(&self, endpoint: &str) -> usize {
+            self.shown
+                .borrow()
+                .iter()
+                .filter(|(seen, _)| seen == endpoint)
+                .count()
         }
     }
 
@@ -156,10 +177,17 @@ mod tests {
         }
     }
 
+    fn armed_with(
+        inner: RefusesTheGatedLeg,
+        bearer: SessionBearer,
+    ) -> RecordAccelerator<RefusesTheGatedLeg> {
+        RecordAccelerator::new(inner, bearer)
+    }
+
     fn armed(inner: RefusesTheGatedLeg) -> RecordAccelerator<RefusesTheGatedLeg> {
         let bearer = SessionBearer::default();
         bearer.set(PSEUDONYM);
-        RecordAccelerator::new(inner, bearer)
+        armed_with(inner, bearer)
     }
 
     fn name() -> IpnsName {
@@ -185,15 +213,69 @@ mod tests {
 
     #[test]
     fn a_cleartext_accelerator_is_never_armed() {
-        let transport = armed(RefusesTheGatedLeg::new(Some(
-            "http://routing.cipherbox.test",
-        )));
+        const CLEARTEXT: &str = "http://routing.cipherbox.test";
+        let transport = armed(RefusesTheGatedLeg::new(Some(CLEARTEXT)));
 
-        assert_eq!(
-            transport.read_credential(&EndpointId::new(ACCELERATOR)),
-            None
-        );
+        assert_eq!(transport.credential(&EndpointId::new(CLEARTEXT)), None);
         assert_eq!(transport.accelerator(), None);
+    }
+
+    /// The splice is the wrapper's alone: a caller naming a public endpoint and
+    /// a token of its own gets neither through.
+    #[test]
+    fn a_caller_supplied_bearer_never_reaches_the_transport() {
+        let transport = armed(RefusesTheGatedLeg::new(Some(ACCELERATOR)));
+
+        block_on(transport.get_record(
+            &EndpointId::new(PUBLIC),
+            "a-name",
+            1024,
+            Some("a-caller-token"),
+        ))
+        .expect("the public leg answers");
+
+        assert_eq!(transport.inner.shown_to(PUBLIC), None);
+    }
+
+    /// A token that cannot be a header value is withheld, and the leg is still
+    /// read — availability, never a request the host must reject.
+    #[test]
+    fn a_token_that_cannot_be_a_header_value_is_withheld() {
+        let bearer = SessionBearer::default();
+        bearer.set("token with\na newline");
+        let transport = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer);
+
+        block_on(fanout_get_classified(&transport, &name()));
+
+        assert_eq!(transport.inner.asked(ACCELERATOR), 1);
+        assert_eq!(transport.inner.shown_to(ACCELERATOR), None);
+    }
+
+    /// Logout seals the one cell every clone shares, so a background task that
+    /// cloned the transport stops presenting the pseudonym too.
+    #[test]
+    fn a_sealed_cell_disarms_the_leg() {
+        let bearer = SessionBearer::default();
+        bearer.set(PSEUDONYM);
+        let transport = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer.clone());
+
+        bearer.clear();
+        block_on(fanout_get_classified(&transport, &name()));
+        assert_eq!(transport.inner.shown_to(ACCELERATOR), None);
+
+        bearer.set(PSEUDONYM);
+        block_on(fanout_get_classified(&transport, &name()));
+        assert_eq!(
+            transport.inner.shown_to(ACCELERATOR).as_deref(),
+            Some(PSEUDONYM),
+            "a cleared cell is re-armable; the token is read at request time"
+        );
+
+        bearer.seal();
+        bearer.set(PSEUDONYM);
+        let sealed = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer);
+        block_on(fanout_get_classified(&sealed, &name()));
+        assert_eq!(sealed.inner.shown_to(ACCELERATOR), None);
     }
 
     #[test]

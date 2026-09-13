@@ -49,16 +49,16 @@ describe('engineHostConfig', () => {
     expect(engineHostConfig({}, artifact).recordAcceleratorUrl).toBeUndefined();
   });
 
-  it('accepts a build whose only routing endpoint is the accelerator', () => {
-    const config = engineHostConfig(
-      {
-        VITE_ROUTING_ENDPOINTS: ' , ',
-        VITE_ROUTING_ACCELERATOR_URL: 'https://routing.example.test',
-      },
-      artifact
-    );
-    expect(config.recordEndpoints).toEqual([]);
-    expect(config.recordAcceleratorUrl).toBe('https://routing.example.test');
+  it('still demands a public endpoint beside the accelerator', () => {
+    expect(() =>
+      engineHostConfig(
+        {
+          VITE_ROUTING_ENDPOINTS: ' , ',
+          VITE_ROUTING_ACCELERATOR_URL: 'https://routing.example.test',
+        },
+        artifact
+      )
+    ).toThrow('at least one routing endpoint');
   });
 
   it('falls back to defaults for an unconfigured environment', () => {

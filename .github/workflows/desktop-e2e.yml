@@ -73,8 +73,6 @@ jobs:
       # the cargo build rather than for the run.
       VITE_API_URL: http://localhost:3000
       VITE_ROUTING_ENDPOINTS: http://localhost:3001
-      # VITE_ROUTING_ACCELERATOR_URL stays unset: the hermetic record store is
-      # ungated, so the bundle has no endpoint to present a pseudonym to.
       # Kubo's gateway by address: it serves `localhost` as a subdomain gateway
       # and redirects every path request to a name that resolves nowhere.
       VITE_READ_ACCELERATOR_URL: http://127.0.0.1:8080

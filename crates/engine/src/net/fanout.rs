@@ -146,16 +146,8 @@ pub async fn fanout_get_classified<T: RecordTransport>(
     let mut asked = 0usize;
     for endpoint in transport.endpoints() {
         asked += 1;
-        // The engine decides what each endpoint may be shown; the accelerator's
-        // leg is the only one the read pseudonym reaches.
-        let credential = transport.read_credential(&endpoint);
         let bytes = match transport
-            .get_record(
-                &endpoint,
-                key,
-                MAX_RECORD_BYTES,
-                credential.as_ref().map(|token| token.as_str()),
-            )
+            .get_record(&endpoint, key, MAX_RECORD_BYTES, None)
             .await
         {
             Ok(Some(bytes)) => bytes,

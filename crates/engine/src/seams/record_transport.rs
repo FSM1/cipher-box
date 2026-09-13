@@ -1,7 +1,5 @@
 //! `RecordTransport` — dumb `/routing/v1` byte mover (blueprint/engine.md).
 
-use zeroize::Zeroizing;
-
 use super::SeamResult;
 
 /// Identifies one configured `/routing/v1` endpoint.
@@ -42,14 +40,6 @@ pub trait RecordTransport {
         None
     }
 
-    /// The credential `endpoint` may be shown on a GET. Engine policy rather
-    /// than a host contract — [`RecordAccelerator`](crate::net::RecordAccelerator)
-    /// is the only implementation that answers `Some`, and a host seam leaves
-    /// this default: a transport presents what it is handed and mints nothing.
-    fn read_credential(&self, _endpoint: &EndpointId) -> Option<Zeroizing<String>> {
-        None
-    }
-
     /// GET the signed record bytes stored for `routing_key` at one endpoint;
     /// `None` when the endpoint holds no record for that key.
     ///
@@ -62,11 +52,12 @@ pub trait RecordTransport {
     /// record above the cap is adoptable, and fan-out treats the endpoint as
     /// having served nothing.
     ///
-    /// `bearer` is the credential the engine decided this endpoint may see
-    /// ([`read_credential`](Self::read_credential)): present it as
+    /// `bearer` is the credential this endpoint may see: present it as
     /// `Authorization: Bearer …`, and send no `Authorization` header when it is
-    /// `None`. A transport never carries it on [`put_record`](Self::put_record):
-    /// the read pseudonym authorizes reads alone.
+    /// `None`. Only [`RecordAccelerator`](crate::net::RecordAccelerator) fills
+    /// it — every caller below that wrapper passes `None`. A transport never
+    /// carries it on [`put_record`](Self::put_record): the read pseudonym
+    /// authorizes reads alone.
     async fn get_record(
         &self,
         endpoint: &EndpointId,

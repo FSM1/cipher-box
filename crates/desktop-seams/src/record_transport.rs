@@ -24,6 +24,11 @@ fn serves_record_bytes(response: &reqwest::Response) -> bool {
     }
 }
 
+/// One spelling of an endpoint URL, so two configured forms compare equal.
+fn trim_slashes(base_url: String) -> EndpointId {
+    EndpointId::new(base_url.trim_end_matches('/'))
+}
+
 fn over_cap(observed: usize, limit: usize) -> SeamError {
     SeamError::new(format!(
         "record_transport get body: {observed} bytes exceeds the {limit}-byte cap"
@@ -59,14 +64,15 @@ impl ReqwestRecordTransport {
         base_urls: impl IntoIterator<Item = String>,
         accelerator_url: Option<String>,
     ) -> SeamResult<Self> {
-        let mut endpoints: Vec<EndpointId> = base_urls.into_iter().map(EndpointId::new).collect();
-        let accelerator = accelerator_url.map(EndpointId::new);
-        // The accelerator is one of the endpoints fan-out reads, so a set that
-        // does not already name it gains it at the front.
-        if let Some(accelerator) = accelerator.clone() {
-            if !endpoints.contains(&accelerator) {
-                endpoints.insert(0, accelerator);
-            }
+        let mut endpoints: Vec<EndpointId> = base_urls.into_iter().map(trim_slashes).collect();
+        let accelerator = accelerator_url.map(trim_slashes);
+        // The accelerator is one of the endpoints fan-out reads, and one
+        // spelling per endpoint: a trailing-slash twin of the gated leg would be
+        // read a second time with no credential.
+        if let Some(accelerator) = &accelerator
+            && !endpoints.contains(accelerator)
+        {
+            endpoints.insert(0, accelerator.clone());
         }
         if endpoints.is_empty() {
             return Err(SeamError::new(
@@ -92,10 +98,7 @@ impl ReqwestRecordTransport {
     }
 
     fn record_url(endpoint: &EndpointId, routing_key: &str) -> String {
-        format!(
-            "{}/routing/v1/ipns/{routing_key}",
-            endpoint.0.trim_end_matches('/')
-        )
+        format!("{}/routing/v1/ipns/{routing_key}", endpoint.0)
     }
 }
 

@@ -49,20 +49,28 @@ function servesRecordBytes(response: Response): boolean {
   return contentType.split(';')[0].trim().toLowerCase() === IPNS_RECORD_MEDIA_TYPE;
 }
 
+/** One spelling of an endpoint URL, so two configured forms compare equal. */
+function trimSlashes(endpoint: string): string {
+  return endpoint.replace(/\/+$/, '');
+}
+
 export class FetchRecordTransport implements RecordTransportSeam {
   private readonly endpointList: readonly string[];
   private readonly acceleratorUrl: string | undefined;
 
   constructor(endpoints: string[], acceleratorUrl?: string) {
-    const list =
-      acceleratorUrl !== undefined && !endpoints.includes(acceleratorUrl)
-        ? [acceleratorUrl, ...endpoints]
-        : [...endpoints];
+    // One spelling per endpoint: a trailing-slash twin of the accelerator would
+    // read the gated leg a second time with no credential.
+    const accelerator = acceleratorUrl === undefined ? undefined : trimSlashes(acceleratorUrl);
+    const list = endpoints.map(trimSlashes);
+    if (accelerator !== undefined && !list.includes(accelerator)) {
+      list.unshift(accelerator);
+    }
     if (list.length === 0) {
       throw new Error('RecordTransport endpoint set must never be empty');
     }
     this.endpointList = list;
-    this.acceleratorUrl = acceleratorUrl;
+    this.acceleratorUrl = accelerator;
   }
 
   endpoints(): string[] {
@@ -81,7 +89,7 @@ export class FetchRecordTransport implements RecordTransportSeam {
     bearer?: string
   ): Promise<CappedRecordResult> {
     const headers: Record<string, string> = { Accept: IPNS_RECORD_MEDIA_TYPE };
-    if (bearer !== undefined && bearer !== '') {
+    if (bearer !== undefined) {
       headers.Authorization = `Bearer ${bearer}`;
     }
     const response = await fetch(this.recordUrl(endpoint, routingKey), {
@@ -121,7 +129,6 @@ export class FetchRecordTransport implements RecordTransportSeam {
   }
 
   private recordUrl(endpoint: string, routingKey: string): string {
-    const base = endpoint.replace(/\/+$/, '');
-    return `${base}/routing/v1/ipns/${encodeURIComponent(routingKey)}`;
+    return `${endpoint}/routing/v1/ipns/${encodeURIComponent(routingKey)}`;
   }
 }

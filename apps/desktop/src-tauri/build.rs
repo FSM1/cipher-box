@@ -6,6 +6,7 @@ fn main() {
     for variable in [
         "VITE_API_URL",
         "VITE_ROUTING_ENDPOINTS",
+        "VITE_ROUTING_ACCELERATOR_URL",
         "VITE_READ_ACCELERATOR_URL",
         "VITE_PUBLIC_GATEWAYS",
         "VITE_ENVIRONMENT",

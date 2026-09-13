@@ -122,15 +122,9 @@ where
             return Err(VaultPointerProbe::Indeterminate);
         }
         for endpoint in endpoints {
-            let credential = self.transport.read_credential(&endpoint);
             match self
                 .transport
-                .get_record(
-                    &endpoint,
-                    name.as_str(),
-                    MAX_RECORD_BYTES,
-                    credential.as_ref().map(|token| token.as_str()),
-                )
+                .get_record(&endpoint, name.as_str(), MAX_RECORD_BYTES, None)
                 .await
             {
                 // Only bytes that verify at this name prove a publication. The

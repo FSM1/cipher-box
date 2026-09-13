@@ -4355,8 +4355,7 @@ pub struct Engine<T: SeamTypes> {
     /// shared by that same client, the gateway leg, and the record leg.
     accelerator_bearer: SessionBearer,
     /// The host's record transport with the pseudonym armed on the routing
-    /// accelerator alone. Every record read and publish goes through this, not
-    /// through `seams.record_transport`.
+    /// accelerator alone. Every record read and publish goes through this.
     record_transport: RecordAccelerator<T::RecordTransport>,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left

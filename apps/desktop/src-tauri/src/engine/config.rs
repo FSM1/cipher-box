@@ -81,9 +81,10 @@ impl EngineConfig {
             .map_err(|error| error.to_string())?;
 
         let record_endpoints = list(env.routing_endpoints);
+        // The gated CipherBox endpoint joins the set; the public list stays
+        // mandatory, so one operator never holds the whole record plane.
         let record_accelerator_url = configured(env.routing_accelerator_url).map(str::to_owned);
-        // The accelerator joins the endpoint set, so it alone is a legal build.
-        if record_endpoints.is_empty() && record_accelerator_url.is_none() {
+        if record_endpoints.is_empty() {
             return Err(
                 "VITE_ROUTING_ENDPOINTS must list at least one routing endpoint".to_owned(),
             );

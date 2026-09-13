@@ -105,8 +105,6 @@ jobs:
       # The hermetic record store, in place of the public default — a merge gate
       # must not resolve vault pointers over the internet.
       VITE_ROUTING_ENDPOINTS: http://localhost:3001
-      # VITE_ROUTING_ACCELERATOR_URL stays unset: the hermetic record store is
-      # ungated, so the bundle has no endpoint to present a pseudonym to.
       # The same stack's gateway, so a read pulls its blocks back from where the
       # upload pinned them rather than from the tab that wrote them. By address,
       # not by name: Kubo serves `localhost` as a *subdomain* gateway and 301s

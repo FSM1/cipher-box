@@ -113,10 +113,10 @@ export function engineHostConfig(
   artifact: Pick<EngineHostConfig, 'wasmModuleUrl' | 'wasmBinaryUrl'>
 ): EngineHostConfig {
   const recordEndpoints = list(env.VITE_ROUTING_ENDPOINTS ?? DEFAULT_ROUTING_ENDPOINTS);
+  // The gated CipherBox endpoint joins the set; the public list stays
+  // mandatory, so one operator never holds the whole record plane.
   const recordAcceleratorUrl = configured(env.VITE_ROUTING_ACCELERATOR_URL);
-  // Config-edge mirror of the `FetchRecordTransport` empty-endpoint-set rejection.
-  // The accelerator joins the set, so it alone is a legal configuration.
-  if (recordAcceleratorUrl === undefined && recordEndpoints.length === 0) {
+  if (recordEndpoints.length === 0) {
     throw new Error('VITE_ROUTING_ENDPOINTS must list at least one routing endpoint');
   }
 
