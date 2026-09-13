@@ -48,10 +48,14 @@ export function buildServer(
 
     const stored = ipnsRecords.get(name);
     if (!stored) {
-      return reply.status(404).send({
-        error: 'record not found',
-        name,
-      });
+      // Byte for byte the answer someguy and the Kubo gateway give for a name
+      // with no record: Delegated Routing V1
+      // (https://specs.ipfs.tech/routing/http-routing-v1/) reads a 2xx whose
+      // media type is not the record type as "no record".
+      return reply
+        .status(200)
+        .header('Content-Type', 'text/plain; charset=utf-8')
+        .send('delegate error: routing: not found');
     }
 
     fastify.log.info({ name, size: stored.record.length }, 'Retrieved IPNS record');

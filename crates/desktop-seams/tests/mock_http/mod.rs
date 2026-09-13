@@ -6,6 +6,9 @@
 //! - `PUT|GET /routing/v1/ipns/<key>` — an in-memory `/routing/v1` record
 //!   store (PUT stores the body, GET returns it or 404), matching the shape
 //!   the [`RecordTransport`] kit drives.
+//! - `GET /vacant/routing/v1/ipns/<key>` — the answer someguy and the Kubo
+//!   gateway give for a missing name: 200 `text/plain` with a
+//!   `delegate error: routing: not found` body.
 //! - `POST /echo` — echoes the request body and adds an `x-echo: yes`
 //!   header; records the request for assertions.
 //! - `GET /teapot` — returns 418, to prove a non-2xx status is a response,
@@ -164,6 +167,16 @@ fn handle_conn(
         headers,
         body: body.clone(),
     });
+
+    if path.starts_with("/vacant/routing/v1/ipns/") {
+        return write_response(
+            &mut stream,
+            200,
+            "OK",
+            &[("content-type", "text/plain; charset=utf-8")],
+            b"delegate error: routing: not found",
+        );
+    }
 
     if let Some(size) = path.strip_prefix("/stream/") {
         let size = size.parse().unwrap_or(0);

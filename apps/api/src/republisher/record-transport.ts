@@ -15,6 +15,21 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RECORD_BYTES = 64 * 1024;
 
 /**
+ * Delegated Routing V1 (https://specs.ipfs.tech/routing/http-routing-v1/): a 2xx
+ * answer whose media type is not the record type carries no record. someguy and
+ * the Kubo gateway answer a missing name that way — a 200 with a `text/plain`
+ * `delegate error: routing: not found` body. An unlabelled body is still read as
+ * a record, since only the client that resolves it can verify the bytes.
+ */
+function servesRecordBytes(response: Response): boolean {
+  const contentType = response.headers.get('content-type');
+  if (contentType === null) {
+    return true;
+  }
+  return contentType.split(';')[0].trim().toLowerCase() === IPNS_RECORD_MEDIA_TYPE;
+}
+
+/**
  * The republisher's `/routing/v1` byte mover (blueprint/api.md: resolve from the
  * network, re-PUT the same bytes keyless). A dumb transport, mirroring the
  * client seam's doctrine: it never inspects, decodes, verifies, or reorders
@@ -84,6 +99,10 @@ export class RoutingV1RecordTransport extends RecordTransport {
     }
     if (!response.ok) {
       throw new Error(`routing GET ${response.status} for ${ipnsName}`);
+    }
+    if (!servesRecordBytes(response)) {
+      await response.body?.cancel();
+      return null;
     }
     // Reject an honestly-declared oversized body before reading any of it.
     const declared = response.headers.get('content-length');

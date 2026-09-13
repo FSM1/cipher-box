@@ -7,6 +7,25 @@ use cipherbox_engine::seams::{EndpointId, RecordTransport, SeamError, SeamResult
 /// IPFS delegated-routing content type for a signed IPNS record.
 const IPNS_RECORD_CONTENT_TYPE: &str = "application/vnd.ipfs.ipns-record";
 
+/// Delegated Routing V1 <https://specs.ipfs.tech/routing/http-routing-v1/>: a
+/// 2xx answer whose media type is not the record type carries no record.
+/// someguy and the Kubo gateway answer a missing name that way — a 200 with a
+/// `text/plain` `delegate error: routing: not found` body. An unlabelled body
+/// is still passed up, since the engine verifies the bytes it receives.
+fn serves_record_bytes(response: &reqwest::Response) -> bool {
+    match response.headers().get(reqwest::header::CONTENT_TYPE) {
+        Some(value) => value.to_str().is_ok_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case(IPNS_RECORD_CONTENT_TYPE)
+        }),
+        None => true,
+    }
+}
+
 fn over_cap(observed: usize, limit: usize) -> SeamError {
     SeamError::new(format!(
         "record_transport get body: {observed} bytes exceeds the {limit}-byte cap"
@@ -21,7 +40,8 @@ fn over_cap(observed: usize, limit: usize) -> SeamError {
 /// signs and verifies, fan-out, CAS, and every trust decision live above
 /// this seam). Each [`EndpointId`] is the endpoint's base URL; a record for
 /// `routing_key` is addressed at `<base>/routing/v1/ipns/<routing_key>`. An
-/// absent record GETs as `None` (HTTP 404), never an error.
+/// absent record GETs as `None`, never an error — see `serves_record_bytes`
+/// for the two answers that mean absence.
 #[derive(Debug, Clone)]
 pub struct ReqwestRecordTransport {
     client: reqwest::Client,
@@ -93,6 +113,9 @@ impl RecordTransport for ReqwestRecordTransport {
                 "record_transport get: status {}",
                 status.as_u16()
             )));
+        }
+        if !serves_record_bytes(&response) {
+            return Ok(None);
         }
 
         // Reject a body that declares itself over the cap before reading a byte;
