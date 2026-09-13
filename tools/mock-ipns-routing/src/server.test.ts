@@ -90,6 +90,10 @@ describe('PUT /routing/v1/ipns/:name', () => {
   it.each([
     ['no sequence field', Buffer.from([(1 << 3) | 2, 0x03, 0x61, 0x62, 0x63])],
     ['a truncated sequence varint', Buffer.from([(5 << 3) | 0, 0x80, 0x80])],
+    [
+      'a sequence varint above the uint64 range',
+      Buffer.from([(5 << 3) | 0, ...Array<number>(9).fill(0x80), 0x02]),
+    ],
   ])('refuses a record with %s and keeps the stored record', async (_case, body) => {
     const newer = record(7n, 'seven');
     expect((await put(newer)).statusCode).toBe(200);
@@ -99,6 +103,13 @@ describe('PUT /routing/v1/ipns/:name', () => {
     expect(refused.json()).toMatchObject({ error: 'record sequence is unreadable' });
 
     expect((await stored()).rawPayload).toEqual(newer);
+  });
+
+  it('stores a record at the highest sequence field 5 can hold', async () => {
+    const maxUint64 = record(2n ** 64n - 1n, 'the ceiling');
+
+    expect((await put(maxUint64)).statusCode).toBe(200);
+    expect((await stored()).rawPayload).toEqual(maxUint64);
   });
 
   it('stores nothing when the first record for a name has no readable sequence', async () => {

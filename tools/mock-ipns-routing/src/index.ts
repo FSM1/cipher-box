@@ -3,7 +3,10 @@ import { buildServer } from './server.js';
 const fastify = buildServer();
 
 const start = async () => {
-  const host = process.env.HOST ?? '0.0.0.0';
+  // Loopback by default: the store is unauthenticated and keeps a sequence
+  // ceiling per name, so a reachable PUT can starve a name. The container sets
+  // HOST explicitly, because it needs the bridge address.
+  const host = process.env.HOST ?? '127.0.0.1';
   const port = parseInt(process.env.PORT ?? '3001', 10);
 
   try {

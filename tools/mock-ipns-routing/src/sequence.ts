@@ -65,6 +65,11 @@ function readVarint(record: Buffer, offset: number): { value: bigint; next: numb
   let index = offset;
   for (let count = 0; count < MAX_VARINT_BYTES && index < record.length; count += 1) {
     const byte = record[index];
+    // Field 5 is a `uint64`, so the tenth byte carries one payload bit. A larger
+    // one decodes above 2^64-1 and would raise the store's ceiling out of range.
+    if (count === MAX_VARINT_BYTES - 1 && (byte & 0x7f) > 0x01) {
+      return null;
+    }
     value |= BigInt(byte & 0x7f) << shift;
     index += 1;
     if ((byte & 0x80) === 0) {
