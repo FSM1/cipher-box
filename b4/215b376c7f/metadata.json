@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b4215b376c7f",
+  "strategy": "manual-commit",
+  "branch": "chore/design-sync-v1-web",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".design-sync/DsFrame.tsx",
+    ".design-sync/NOTES.md",
+    ".design-sync/conventions.md",
+    ".design-sync/emit-types.mjs",
+    ".design-sync/previews/FileList.tsx",
+    ".design-sync/previews/NavItem.tsx",
+    ".design-sync/previews/RecoveryPhraseGrid.tsx",
+    ".design-sync/stores.ts",
+    ".design-sync/tsconfig.dts.json",
+    ".gitignore"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b4/215b376c7f/0/metadata.json",
+      "transcript": "/b4/215b376c7f/0/full.jsonl",
+      "compact_transcript": "/b4/215b376c7f/0/transcript.jsonl",
+      "content_hash": "/b4/215b376c7f/0/content_hash.txt",
+      "prompt": "/b4/215b376c7f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2328,
+    "cache_creation_tokens": 292424,
+    "cache_read_tokens": 13718172,
+    "output_tokens": 90952,
+    "api_call_count": 80
+  }
+}

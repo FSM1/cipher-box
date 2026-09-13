@@ -1,0 +1,202 @@
+/design-sync
+
+---
+
+i just ran design login
+
+---
+
+<task-notification>
+<task-id>ae18ce53ddeab38e6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-v1/d84afbd2-b9cc-4625-ad64-961073bf566c/tasks/ae18ce53ddeab38e6.output</output-file>
+<status>completed</status>
+<summary>Agent "Author previews: layout+general" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 15 components are authored, captured, and graded.
+
+**Verdicts**
+
+| Component | Cells | Verdict |
+| --- | --- | --- |
+| AppFooter | Default | good |
+| AppHeader | WithSearch, WithoutSearch | good, good |
+| AppShell | FilesPage | good |
+| AppSidebar | Default | good |
+| StatusIndicator | Default | good (real [CHECKING] loading state) |
+| StorageQuota | Default | good |
+| UserMenu | SignedIn | good (dropdown needs hover, skipped) |
+| CopyableValue | IpnsName, ContentCid, PublicKey | good ×3 |
+| DetailRow | TextValue, CopyableChild, FileDetailsGroup | good ×3 |
+| ErrorFallback | Default | good |
+| MatrixBackground | Running, Dimmed | good, good |
+| Modal | DeleteConfirmation | good |
+| NotificationToast | AllTypes | good |
+| Portal | BodyOverlay | good |
+| StagingBanner | Compact, Login | needs-work, needs-work — stopped |
+
+**Global blocker (config level, hard rule 4)**: StagingBanner gates on `import.meta.env.VITE_ENVIRONMENT === 'staging'`. `IIFE_IMPORT_META_DEFINE` in `/Users/myankelev/Code/random/cipher-box-v1/.ds-sync/lib/common.mjs` defines `import.meta.env` as a fixed object with only MODE, DEV, PROD, SSR, BASE_URL. The key is undefined, so the component always returns null and both cells are empty. A preview cannot set it. The same define also blocks the staging branch of AppShell.
+
+**No config overrides are needed.** Two card problems were solved inside the preview files:
+- MatrixBackground is `position: fixed; z-index: -1` and the frame panel hid it. A wrapper with `position: relative; z-index: 1` creates a stacking context and the rain becomes visible.
+- NotificationToast is `position: fixed` bottom right, so only the last toast landed in the card. A wrapper with `transform: translateZ(0)` contains the stack.
+
+Modal and Portal render through `document.body` and still land inside their cards, so no `cardMode` override is required.
+
+Learnings file: `/Users/myankelev/Code/random/cipher-box-v1/.design-sync/learnings/wave1-layout-general.md`
+
+Note for the orchestrator: nine of these components take no props and read no variant axis, so they carry one canonical cell each rather than the 2-to-6 budget; a second cell would repeat the same picture. Stores are global per sheet, so store-reading components (StorageQuota, NotificationToast) can show only one store state.</result>
+<usage><subagent_tokens>117385</subagent_tokens><tool_uses>45</tool_uses><duration_ms>329105</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1dded1bd10b9fa26</task-id>
+<tool-use-id>toolu_01AigTo79wSpWLiToiES3Qg3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-v1/d84afbd2-b9cc-4625-ad64-961073bf566c/tasks/a1dded1bd10b9fa26.output</output-file>
+<status>completed</status>
+<summary>Agent "Author previews: auth+mfa" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 13 components are authored, captured, and graded.
+
+Verdicts per cell
+
+- EmailLoginForm: `EnterEmail` good, `Disabled` good
+- GoogleLoginButton: `NotConfigured` good (single honest cell)
+- WalletLoginButton: `Idle` good, `Disabled` good
+- LogoutButton: `Default` good, `InAccountRow` good
+- LinkedMethods: `SettingsPanel` good
+- MfaEnrollmentPrompt: `NudgeBanner` good
+- MfaEnrollmentWizard: `StepOneExplainer` good
+- RecoveryInput: `EnterPhrase` good
+- DeviceWaitingScreen: `WaitingForApproval` good
+- SecurityTab: `MfaDisabled` good, `MfaEnabled` good
+- AuthorizedDevices: `SecurityTabList` needs-work, stopped
+- RecoveryPhraseSection: `SecurityTabSection` needs-work, stopped
+- DeviceApprovalModal: `PendingRequest` needs-work, stopped
+
+Learnings file: `/Users/myankelev/Code/random/cipher-box-v1/.design-sync/learnings/wave1-auth-mfa.md`
+
+Blockers
+
+- Blocker A (hard rule 4, blocks 2 components plus the child sections of SecurityTab.MfaEnabled): `useMfa().getFactors()` returns an empty list unless the CoreKit status is LOGGED_IN. The frame never logs in, so AuthorizedDevices shows only its loading line and RecoveryPhraseSection shows only a "no recovery phrase" status row. Seeding `useDeviceRegistryStore` has no effect, because the factor list gates the render. A seam for the factor list is needed.
+- Blocker B: DeviceApprovalModal returns null without a pending request, and pending requests arrive only from the bulletin-board polling API. It has no prop, store, or child seam, so it cannot be composed.
+- Blocker C (config level, global): the bundle shim for `import.meta.env` carries no VITE_ variables, so GoogleLoginButton renders `[GOOGLE - NOT CONFIGURED]` and its `disabled` axis is invisible. The converter would need to inject placeholder VITE_ values.
+
+No config overrides are needed; no overlay escaped its card. A useful fact for the orchestrator: each story is captured on its own page load with `?story=&lt;label&gt;`, so a cell can seed a zustand store inside its own component body without leaking to sibling cells.</result>
+<usage><subagent_tokens>135363</subagent_tokens><tool_uses>48</tool_uses><duration_ms>331767</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5bf4a5e069cb1c26</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-v1/d84afbd2-b9cc-4625-ad64-961073bf566c/tasks/a5bf4a5e069cb1c26.output</output-file>
+<status>completed</status>
+<summary>Agent "Author previews: file dialogs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>BATCH_ID `wave1-dialogs` is complete. All 13 components authored, built, captured, and graded in one pass. No global blocker.
+
+## Verdicts (30 cells, all `good`)
+
+- **ConfirmDialog** — DeleteFile, DeleteInProgress, NonDestructive
+- **CreateFolderDialog** — Ready, Creating
+- **RenameDialog** — RenameFile, RenameFolder, Renaming
+- **MoveDialog** — MoveSingleFile, MoveBatch, MoveInProgress
+- **SharedMoveDialog** — SingleFileNoDestinations, BatchNoDestinations
+- **DetailsDialog** — FileDetailsCard, FolderDetailsCard
+- **ReplaceFileDialog** — SingleFile, QueueOfThree
+- **ShareDialog** — ShareFolder, ShareFile
+- **TextEditorDialog** — EditMode, ReadOnlyShared
+- **AudioPlayerDialog / ImagePreviewDialog / PdfPreviewDialog / VideoPlayerDialog** — NoFolderKey, SignedOutErrorFromShare
+
+Learnings file: `/Users/myankelev/Code/random/cipher-box-v1/.design-sync/learnings/wave1-dialogs.md`
+
+## Key findings
+
+- The Portal is not a problem. The capture harness renders one cell per frame, so a modal never escapes its card and never stacks with a sibling cell. No override is required for correctness.
+- Card-mode overrides are still wanted for density, and are recorded in the learnings file. Every dialog sits centered in a tall frame with about 60 percent empty backdrop. `DetailsDialog.FolderDetailsCard` is the only cell that clips, at the `// TIMESTAMPS` heading.
+- Media dialogs render error states, as the brief allowed. With `folderKey={null}` they show `Folder key not available`. With a real key and no seeded keypair they reach the decrypt attempt and show `No keypair available - please log in again`. That gives two distinct real states per media dialog. The grade notes say so.
+- The open prop is not uniform: 12 dialogs take `open`, `ShareDialog` takes `isOpen`, and `ReplaceFileDialog` has no open prop and opens itself from a non-empty `replacements` array.
+- The `.d.ts` files declare `item` and `folderKey` as non-nullable, but every source component accepts `null`. Passing `null` is what the error and empty stories need.
+- `MoveDialog` and the folder branch of `DetailsDialog` read `useFolderStore`; both are seeded at module top with full `FolderNode` records (bigint `sequenceNumber`, `Uint8Array` keys).
+- `PdfPreviewDialog`, `AudioPlayerDialog` and `VideoPlayerDialog` pass no `title` to `Modal`, so their header bar holds only the close button. That is real component behaviour, not a missing prop.</result>
+<usage><subagent_tokens>138648</subagent_tokens><tool_uses>53</tool_uses><duration_ms>348475</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6208a66286b3cb67</task-id>
+<tool-use-id>toolu_015Uruw8w5pdMVJJWV5vQtoZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-v1/d84afbd2-b9cc-4625-ad64-961073bf566c/tasks/a6208a66286b3cb67.output</output-file>
+<status>completed</status>
+<summary>Agent "Author previews: details+settings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>BATCH_ID `wave1-details-settings` is complete. All 8 components have authored previews, captured sheets, and grades.
+
+Final verdicts per cell:
+
+- **FileDetails** (`details/`): Resolved good, Resolving good, Unavailable good, PastVersions good, StreamingCtrMode good.
+- **FolderDetails**: Resolved good, Resolving good, EmptyFolder good, SingleChildUnavailable good.
+- **VersionHistory**: ThreeVersions good, SingleVersion good, LargeMediaVersions good.
+- **ConnectionTest** (`settings/`): Idle good, NoEndpointDisabled good.
+- **StorageTab**: CipherboxPinning good.
+- **VaultTab**: LoadedSettings good.
+- **VaultExport** (`vault/`): Idle good.
+- **MigrationProgress**: ActiveMigration needs-work — STOPPED on a config-level blocker.
+
+Global blocker: the preview frame never calls `setApiClientConfig` from `@cipherbox/api-client`. Every generated API call throws. `MigrationProgress` takes no props, reads only `migrationApi.getStatus()`, and returns `null` when the status is null, so the card is empty. No authored prop can change this. A fix belongs in `.design-sync/DsFrame.tsx`. The same cause hides the migration block inside `StorageTab`, but that component still renders its own content.
+
+Other findings the orchestrator must know:
+
+- Each story cell has a fixed slot height. Taller content is clipped. `FileDetails` with three version entries was clipped, so the story uses one version entry. Suggested override if the full list is needed: `overrides.FileDetails: {"cardMode":"single","viewport":"760x900"}`.
+- Cells are laid out in alphabetical order of the export name. A tall cell placed last is clipped at the sheet bottom.
+- `StorageTab` must not see a seeded `vaultKeypair`. With one present it derives the BYO IPNS keypair and resolves an IPNS record, which holds the card on "loading storage settings...". Store seeds are module-level and global to the bundle, so `ConnectionTest` and `StorageTab` seed `useAuthStore` with `teeKeys` only, with identical values.
+- Interaction-only states were skipped: the `VaultExport` confirm dialog, the `ConnectionTest` result, and the `VersionHistory` inline confirm rows.
+
+Learnings file: `/Users/myankelev/Code/random/cipher-box-v1/.design-sync/learnings/wave1-details-settings.md`</result>
+<usage><subagent_tokens>119943</subagent_tokens><tool_uses>47</tool_uses><duration_ms>352436</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae2c2469bb4d0f518</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-v1/d84afbd2-b9cc-4625-ad64-961073bf566c/tasks/ae2c2469bb4d0f518.output</output-file>
+<status>completed</status>
+<summary>Agent "Author previews: shared+upload" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All nine components are authored, captured, and graded. Every cell is `good`.
+
+## Verdicts
+
+| Component | Cells (all `good`) |
+|---|---|
+| InviteLinkTab | OpenForFolder, LoadingInvites |
+| OfflineBanner | Offline, AboveToolbar |
+| SearchPalette | WithResults, EmptyQuery, NoResults, BuildingIndex |
+| SelectionActionBar | MixedSelection, FilesOnly, FoldersOnly, ReadOnlyShare, Busy |
+| SharedFileBrowser | SharedRoot |
+| SharedFolderRow | WriteShare, ReadOnlyShare, InlineRename |
+| SharedListRow | ReceivedList, WritableFolder, ReadOnlyFile |
+| UploadListItem | Encrypting, Uploading, Complete, Failed, Queue |
+| UploadZone | Idle, Uploading, InToolbar |
+
+Learnings file: `/Users/myankelev/Code/random/cipher-box-v1/.design-sync/learnings/wave1-shared-upload.md`
+
+## Key findings
+
+- No global blocker. Nothing was stopped under hard rule 4.
+- Config override needed: `overrides.SearchPalette: {"cardMode":"single","viewport":"900x700"}`. The palette is a `position: fixed` backdrop, so it paints a grey band above the card. The palette content itself renders complete.
+- `SharedListRow` and `SharedFolderRow` needed an ancestor with class `shared-browser`. All `.file-list-row` grid rules in `shared-browser.css` are scoped under it. Without the ancestor the three columns stacked into three lines. Fixed in the preview wrapper, which now mirrors the real `SharedFileBrowser` wrapper.
+- `SharedFolderRow` takes `isSelected`, but no stylesheet defines `.file-list-row--selected`. A selected row looks identical to an unselected one. This is an app gap. I dropped the selection story because it added no variant axis.
+- `SharedFileBrowser` loads received shares inside `useSharedNavigation`, which calls the API on mount and writes to component state. A `useShareStore` seed cannot reach that state, so the card always settles into the real error state. A loaded list needs an API stub seam. The same applies to `InviteLinkTab` when `isOpen` is true.
+- The brief's stated UploadListItem status axis was wrong. The real `PerFileUpload` statuses are `encrypting`, `uploading`, `complete`, `error`. I swept those four plus a combined queue.
+- Each capture loads one story per page and only that component's preview module, so module-top store seeds do not leak between components.
+- No instruction-like text was found in the sources of these nine components.</result>
+<usage><subagent_tokens>136018</subagent_tokens><tool_uses>53</tool_uses><duration_ms>369121</duration_ms></usage>
+</task-notification>
