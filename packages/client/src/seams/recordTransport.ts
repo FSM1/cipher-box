@@ -27,9 +27,13 @@ const RECORD_TIMEOUT_MS = 30_000;
  * endpoints: no ambient authority, and no redirects — records are directly
  * addressed, so following one only opens an SSRF-shaped vector. Mirrors
  * desktop's `ReqwestRecordTransport` client policy. A fresh signal per call.
+ *
+ * `no-store` because an endpoint labels a missing name as cacheable: a cached
+ * absence answers the confirm read after the publish that filled it.
  */
 function endpointPolicy(): RequestInit {
   return {
+    cache: 'no-store',
     credentials: 'omit',
     redirect: 'error',
     signal: AbortSignal.timeout(RECORD_TIMEOUT_MS),

@@ -101,7 +101,7 @@ describe('FetchRecordTransport.getRecord', () => {
     );
   });
 
-  it('gives an untrusted endpoint no ambient authority, no redirects, and a deadline', async () => {
+  it('gives an untrusted endpoint no ambient authority, no redirects, no cache, and a deadline', async () => {
     const inits: RequestInit[] = [];
     vi.stubGlobal(
       'fetch',
@@ -116,6 +116,7 @@ describe('FetchRecordTransport.getRecord', () => {
 
     expect(inits.map((init) => init.credentials)).toEqual(['omit', 'omit']);
     expect(inits.map((init) => init.redirect)).toEqual(['error', 'error']);
+    expect(inits.map((init) => init.cache)).toEqual(['no-store', 'no-store']);
     expect(inits.every((init) => init.signal instanceof AbortSignal)).toBe(true);
     // A shared signal would abort every later request once the first deadline
     // elapsed; each call must build its own.

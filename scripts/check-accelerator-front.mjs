@@ -61,6 +61,10 @@ const CALLER_NAMING_HEADERS = [
 const PUBLISH_LEG = { method: 'PUT', path: '/routing/v1/ipns/*' };
 /** Reads present the pseudonym, writes never do — so the gate admits nothing else. */
 const READ_METHODS = ['GET', 'HEAD'];
+/** A record PUT carries a media type the browser does not safelist, so it preflights it. */
+const PUBLISH_REQUEST_HEADER = 'Content-Type';
+/** someguy labels a missing name as cacheable for two days; a record is mutable. */
+const READ_CACHE_CONTROL = 'no-store';
 const CLIENT_IP = '{http.vars.client_ip}';
 /** The /64 the caller was delegated, not its chosen /128 (docker/Caddyfile). */
 const PUBLISH_IPV6_PREFIX = 64;
@@ -177,6 +181,9 @@ function* precursors(chain) {
   }
 }
 const dials = (h) => (h.upstreams ?? []).map((u) => u.dial);
+/** A response field a handler SETS, read case-insensitively: HTTP field names are. */
+const setValues = (set, field) =>
+  Object.entries(set ?? {}).find(([name]) => name.toLowerCase() === field.toLowerCase())?.[1] ?? [];
 
 // Matcher sets in one `match` are OR-ed, as are the values inside a `method` or
 // `path` array, so a route narrows a request only when EVERY set narrows it: a
@@ -185,6 +192,7 @@ const narrowedBy = (holds) => (route) =>
   Array.isArray(route.match) && route.match.length > 0 && route.match.every(holds);
 const readOnly = (m) =>
   (m.method ?? []).length > 0 && m.method.every((v) => READ_METHODS.includes(v));
+const preflightOnly = (m) => (m.method ?? []).length === 1 && m.method[0] === 'OPTIONS';
 const publishOnly = (m) =>
   (m.method ?? []).length === 1 &&
   m.method[0] === PUBLISH_LEG.method &&
@@ -194,6 +202,7 @@ const publishOnly = (m) =>
 const hostOf = (ancestors) =>
   ancestors.flatMap((a) => (a.match ?? []).flatMap((m) => m.host ?? []))[0] ?? 'an unnamed vhost';
 
+const publishVhosts = new Set();
 const gates = nodes.filter(({ node }) => isGate(node));
 check(gates.length > 0, 'no gated route in the adapted config');
 
@@ -287,11 +296,19 @@ for (const { node, ancestors } of nodes) {
       ancestors.some(narrowedBy(readOnly)),
       `${vhost}: gated proxy to ${target} is not held to ${READ_METHODS.join('/')}`
     );
+    check(
+      setValues(node.headers?.response?.set, 'Cache-Control').some(
+        (value) => value.toLowerCase() === READ_CACHE_CONTROL
+      ),
+      `${vhost}: gated proxy to ${target} does not replace the upstream Cache-Control with ${READ_CACHE_CONTROL}`
+    );
     continue;
   }
 
+  const isPublishLeg = ancestors.some(narrowedBy(publishOnly));
+  if (isPublishLeg) publishVhosts.add(vhost);
   check(
-    ancestors.some(narrowedBy(publishOnly)),
+    isPublishLeg,
     `${vhost}: proxy to ${target} reaches an accelerator ungated, and is not the ${PUBLISH_LEG.method} ${PUBLISH_LEG.path} publish leg`
   );
 
@@ -314,6 +331,25 @@ for (const { node, ancestors } of nodes) {
   check(
     !limiters.some((h) => h.log_key),
     `${vhost}: the publish rate limiter logs its key, putting a member address in a sink that ships offsite`
+  );
+}
+
+// The browser asks for the record media type in its preflight, so an allow list
+// that omits the field blocks the PUT before it leaves the browser.
+const preflightAllows = new Set();
+for (const { node, ancestors } of nodes) {
+  if (node.handler !== 'headers') continue;
+  const vhost = hostOf(ancestors);
+  if (!publishVhosts.has(vhost) || !ancestors.some(narrowedBy(preflightOnly))) continue;
+  const allowed = setValues(node.response?.set, 'Access-Control-Allow-Headers')
+    .flatMap((value) => value.split(','))
+    .map((field) => field.trim().toLowerCase());
+  if (allowed.includes(PUBLISH_REQUEST_HEADER.toLowerCase())) preflightAllows.add(vhost);
+}
+for (const vhost of publishVhosts) {
+  check(
+    preflightAllows.has(vhost),
+    `${vhost}: the preflight allow list omits ${PUBLISH_REQUEST_HEADER}, so a browser cannot reach the ${PUBLISH_LEG.method} ${PUBLISH_LEG.path} publish leg`
   );
 }
 
