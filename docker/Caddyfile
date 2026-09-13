@@ -53,6 +53,18 @@
 	header_up -Forwarded
 }
 
+# Kubo and someguy answer CORS for themselves with `*`. Beside the front's own
+# origin that is two `Access-Control-Allow-Origin` values, which a browser
+# refuses as a CORS failure, so the front's answer must be the only one.
+(strip_upstream_cors) {
+	header_down -Access-Control-Allow-Origin
+	header_down -Access-Control-Allow-Methods
+	header_down -Access-Control-Allow-Headers
+	header_down -Access-Control-Expose-Headers
+	header_down -Access-Control-Max-Age
+	header_down -Access-Control-Allow-Credentials
+}
+
 # The ranges above are Cloudflare's, not this zone's: any tenant can point a
 # proxied record at the origin address and arrive from inside a trusted range.
 # The zone's own origin-pull certificate is what closes that; the shared
@@ -161,6 +173,7 @@ app-staging.cipherbox.cc {
 			header_up -Authorization
 			header_up -X-Forwarded-For
 			import strip_caller
+			import strip_upstream_cors
 		}
 	}
 
@@ -208,6 +221,7 @@ routing-staging.cipherbox.cc {
 			header_up -Authorization
 			header_up -X-Forwarded-For
 			import strip_caller
+			import strip_upstream_cors
 		}
 	}
 
