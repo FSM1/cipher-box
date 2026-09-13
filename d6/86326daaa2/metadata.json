@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d686326daaa2",
+  "strategy": "manual-commit",
+  "branch": "fix/api-log-mail-delivery-failure",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d6/86326daaa2/0/metadata.json",
+      "transcript": "/d6/86326daaa2/0/full.jsonl",
+      "compact_transcript": "/d6/86326daaa2/0/transcript.jsonl",
+      "content_hash": "/d6/86326daaa2/0/content_hash.txt",
+      "prompt": "/d6/86326daaa2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6458,
+    "cache_creation_tokens": 608123,
+    "cache_read_tokens": 52774497,
+    "output_tokens": 191790,
+    "api_call_count": 241
+  }
+}
