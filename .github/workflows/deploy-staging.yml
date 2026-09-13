@@ -385,7 +385,7 @@ jobs:
               api node dist/run-migrations.js
 
             # Start/restart services
-            docker compose -f docker-compose.staging.yml up -d --remove-orphans
+            docker compose -f docker-compose.staging.yml up -d
 
             # Restart Caddy to pick up refreshed web files bind mount
             # (scp rm:true recreates the host dir, breaking the old mount inode)

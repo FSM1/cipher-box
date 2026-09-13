@@ -21,8 +21,7 @@ designs
 blueprint
 docs
 *.md
-.env*
-!.env.example
+**/.env*
 .DS_Store
 .vscode
 .idea

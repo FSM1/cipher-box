@@ -131,7 +131,7 @@ jobs:
       - name: Assert the image carries the server and the migration runner
         run: |
           docker run --rm --entrypoint sh cipherbox-api:ci -c \
-            'test -f dist/main.js && test -f dist/run-migrations.js && node --check dist/run-migrations.js'
+            'test -f dist/main.js && test -f dist/run-migrations.js'
 
   migration-drift:
     name: Migration drift

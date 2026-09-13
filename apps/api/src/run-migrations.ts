@@ -6,22 +6,16 @@ import dataSource from './data-source';
 
 async function run(): Promise<void> {
   await dataSource.initialize();
-  try {
-    const applied = await dataSource.runMigrations();
-    if (applied.length === 0) {
-      console.log('No pending migrations.');
-    } else {
-      console.log(
-        `Applied ${applied.length} migration(s): ${applied.map((m) => m.name).join(', ')}`
-      );
-    }
-  } finally {
-    await dataSource.destroy();
-  }
+  const applied = await dataSource.runMigrations();
+  console.log(
+    applied.length === 0
+      ? 'No pending migrations.'
+      : `Applied ${applied.length} migration(s): ${applied.map((m) => m.name).join(', ')}`
+  );
+  await dataSource.destroy();
 }
 
 run().catch((error: unknown) => {
-  const err = error instanceof Error ? error : new Error(String(error));
-  console.error(`Migration failed: ${err.name}: ${err.message}`);
+  console.error(`Migration failed: ${String(error)}`);
   process.exit(1);
 });
