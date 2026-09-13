@@ -116,6 +116,44 @@ describe('PUT /routing/v1/ipns/:name', () => {
     const refused = await put(Buffer.from([(1 << 3) | 2, 0x01, 0x61]));
     expect(refused.statusCode).toBe(400);
 
-    expect((await stored()).statusCode).toBe(404);
+    const miss = await stored();
+    expect(miss.statusCode).toBe(200);
+    expect(miss.body).toBe('delegate error: routing: not found');
+  });
+});
+
+describe('GET /routing/v1/ipns/:name', () => {
+  let app: FastifyInstance;
+
+  beforeEach(() => {
+    app = buildServer(false);
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('answers a name with no record the way someguy and the Kubo gateway do', async () => {
+    const miss = await app.inject({ method: 'GET', url: `/routing/v1/ipns/${NAME}` });
+
+    expect(miss.statusCode).toBe(200);
+    expect(miss.headers['content-type']).toBe('text/plain; charset=utf-8');
+    expect(miss.body).toBe('delegate error: routing: not found');
+  });
+
+  it('serves a stored record under the record media type', async () => {
+    const bytes = record(1n, 'one');
+    await app.inject({
+      method: 'PUT',
+      url: `/routing/v1/ipns/${NAME}`,
+      headers: { 'content-type': 'application/vnd.ipfs.ipns-record' },
+      payload: bytes,
+    });
+
+    const hit = await app.inject({ method: 'GET', url: `/routing/v1/ipns/${NAME}` });
+
+    expect(hit.statusCode).toBe(200);
+    expect(hit.headers['content-type']).toBe('application/vnd.ipfs.ipns-record');
+    expect(hit.rawPayload).toEqual(bytes);
   });
 });

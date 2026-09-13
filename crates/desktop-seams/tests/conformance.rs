@@ -21,7 +21,7 @@ use cipherbox_desktop_seams::{
 };
 use cipherbox_engine::seams::{
     CappedFetchError, CredentialStore, FloorStore, Http, HttpCredentials, HttpMethod, HttpRequest,
-    SeamResult, StagingStore,
+    RecordTransport, SeamResult, StagingStore,
 };
 use cipherbox_engine::sync::BookkeepingSeal;
 use cipherbox_engine::testkit::conformance::staging_store::Backing;
@@ -519,6 +519,61 @@ async fn reqwest_record_transport_passes_the_record_transport_kit() {
         b"opaque-signed-record-bytes",
     )
     .await;
+}
+
+#[tokio::test]
+async fn reqwest_record_transport_reads_a_200_text_answer_as_no_record() {
+    let server = MockServer::start();
+    // The /vacant prefix serves the answer someguy gives for a missing name.
+    let transport = ReqwestRecordTransport::new(vec![format!("{}/vacant", server.base_url())])
+        .expect("client builds");
+    let endpoint = transport.endpoints().remove(0);
+
+    let record = transport
+        .get_record(&endpoint, "k51-missing-name", 1024)
+        .await
+        .expect("a missing name is absence, not an error");
+
+    assert_eq!(record, None);
+}
+
+#[tokio::test]
+async fn reqwest_record_transport_returns_the_bytes_of_a_record_typed_answer() {
+    let server = MockServer::start();
+    let transport = ReqwestRecordTransport::new(vec![server.base_url()]).expect("client builds");
+    let endpoint = transport.endpoints().remove(0);
+    transport
+        .put_record(&endpoint, "k51-stored-name", b"opaque-signed-record-bytes")
+        .await
+        .expect("the store accepts the record");
+
+    let record = transport
+        .get_record(&endpoint, "k51-stored-name", 1024)
+        .await
+        .expect("transport-level success");
+
+    assert_eq!(
+        record.as_deref(),
+        Some(b"opaque-signed-record-bytes".as_slice())
+    );
+}
+
+#[tokio::test]
+async fn reqwest_record_transport_accepts_a_mixed_case_record_media_type() {
+    let server = MockServer::start();
+    let transport = ReqwestRecordTransport::new(vec![format!("{}/mixed-type", server.base_url())])
+        .expect("client builds");
+    let endpoint = transport.endpoints().remove(0);
+
+    let record = transport
+        .get_record(&endpoint, "k51-mixed-case", 1024)
+        .await
+        .expect("transport-level success");
+
+    assert_eq!(
+        record.as_deref(),
+        Some(b"opaque-signed-record-bytes".as_slice())
+    );
 }
 
 #[tokio::test]

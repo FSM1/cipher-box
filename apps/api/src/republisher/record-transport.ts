@@ -15,6 +15,19 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RECORD_BYTES = 64 * 1024;
 
 /**
+ * Delegated Routing V1 (https://specs.ipfs.tech/routing/http-routing-v1/): a 2xx
+ * whose media type is not the record type carries no record; an unlabelled body
+ * is read as a record, since only the resolving client can verify the bytes.
+ */
+function servesRecordBytes(response: Response): boolean {
+  const contentType = response.headers.get('content-type');
+  if (contentType === null) {
+    return true;
+  }
+  return contentType.split(';')[0].trim().toLowerCase() === IPNS_RECORD_MEDIA_TYPE;
+}
+
+/**
  * The republisher's `/routing/v1` byte mover (blueprint/api.md: resolve from the
  * network, re-PUT the same bytes keyless). A dumb transport, mirroring the
  * client seam's doctrine: it never inspects, decodes, verifies, or reorders
@@ -80,10 +93,15 @@ export class RoutingV1RecordTransport extends RecordTransport {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (response.status === 404) {
+      await response.body?.cancel();
       return null;
     }
     if (!response.ok) {
       throw new Error(`routing GET ${response.status} for ${ipnsName}`);
+    }
+    if (!servesRecordBytes(response)) {
+      await response.body?.cancel();
+      return null;
     }
     // Reject an honestly-declared oversized body before reading any of it.
     const declared = response.headers.get('content-length');

@@ -16,6 +16,7 @@ function fakeResponse(opts: {
   status?: number;
   body?: Buffer;
   contentLength?: string | null;
+  contentType?: string;
   chunkSize?: number;
 }): {
   response: Response;
@@ -46,7 +47,13 @@ function fakeResponse(opts: {
     status,
     ok: status >= 200 && status < 300,
     headers: {
-      get: (name: string) => (name.toLowerCase() === 'content-length' ? contentLength : null),
+      get: (name: string) => {
+        const values: Record<string, string | null> = {
+          'content-length': contentLength,
+          'content-type': opts.contentType ?? null,
+        };
+        return values[name.toLowerCase()] ?? null;
+      },
     },
     body: {
       getReader: () => ({ read, cancel: readerCancel }),
@@ -84,6 +91,46 @@ describe('RoutingV1RecordTransport response-size cap', () => {
 
     const result = await transport().resolve('k51-chunked');
     expect(result?.equals(body)).toBe(true);
+  });
+
+  it('resolves a 200 text answer to null, the way a real endpoint reports a missing name', async () => {
+    const { response, read } = fakeResponse({
+      body: Buffer.from('delegate error: routing: not found'),
+      contentType: 'text/plain; charset=utf-8',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response)
+    );
+
+    expect(await transport().resolve('k51-vacant')).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('resolves the bytes of a 200 that declares the record media type', async () => {
+    const body = Buffer.from('signed-ipns-record-bytes');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () => fakeResponse({ body, contentType: 'application/vnd.ipfs.ipns-record' }).response
+      )
+    );
+
+    expect((await transport().resolve('k51-typed'))?.equals(body)).toBe(true);
+  });
+
+  it('resolves the bytes when the record media type arrives in mixed case', async () => {
+    const body = Buffer.from('signed-ipns-record-bytes');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          fakeResponse({ body, contentType: 'Application/VND.IPFS.IPNS-RECORD; charset=x' })
+            .response
+      )
+    );
+
+    expect((await transport().resolve('k51-mixed-case'))?.equals(body)).toBe(true);
   });
 
   it('rejects an honestly-declared oversized body before reading it', async () => {

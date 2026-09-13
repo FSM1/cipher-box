@@ -51,6 +51,48 @@ describe('FetchRecordTransport.getRecord', () => {
     });
   });
 
+  it('reads a 200 text answer as absence, the way a real endpoint reports a missing name', async () => {
+    stubFetch(
+      new Response('delegate error: routing: not found', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      })
+    );
+
+    expect(await transport().getRecord(ENDPOINT, KEY, 1000)).toEqual({
+      kind: 'record',
+      record: null,
+    });
+  });
+
+  it('returns the bytes of a 200 that declares the record media type', async () => {
+    stubFetch(
+      new Response(new Uint8Array([7, 8, 9]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/vnd.ipfs.ipns-record' },
+      })
+    );
+
+    expect(await transport().getRecord(ENDPOINT, KEY, 1000)).toEqual({
+      kind: 'record',
+      record: new Uint8Array([7, 8, 9]),
+    });
+  });
+
+  it('returns the bytes when the record media type arrives in mixed case', async () => {
+    stubFetch(
+      new Response(new Uint8Array([1, 2]), {
+        status: 200,
+        headers: { 'Content-Type': 'Application/VND.IPFS.IPNS-RECORD; charset=x' },
+      })
+    );
+
+    expect(await transport().getRecord(ENDPOINT, KEY, 1000)).toEqual({
+      kind: 'record',
+      record: new Uint8Array([1, 2]),
+    });
+  });
+
   it('throws on a non-404 failure status', async () => {
     stubFetch(new Response(null, { status: 503 }));
 

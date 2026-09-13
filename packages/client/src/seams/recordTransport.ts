@@ -36,6 +36,19 @@ function endpointPolicy(): RequestInit {
   };
 }
 
+/**
+ * Delegated Routing V1 (https://specs.ipfs.tech/routing/http-routing-v1/): a 2xx
+ * whose media type is not the record type carries no record; an unlabelled body
+ * is passed up, since the engine verifies the bytes it receives.
+ */
+function servesRecordBytes(response: Response): boolean {
+  const contentType = response.headers.get('Content-Type');
+  if (contentType === null) {
+    return true;
+  }
+  return contentType.split(';')[0].trim().toLowerCase() === IPNS_RECORD_MEDIA_TYPE;
+}
+
 export class FetchRecordTransport implements RecordTransportSeam {
   private readonly endpointList: readonly string[];
 
@@ -67,6 +80,10 @@ export class FetchRecordTransport implements RecordTransportSeam {
     if (!response.ok) {
       await response.body?.cancel();
       throw new Error(`RecordTransport GET ${response.status} at ${endpoint}`);
+    }
+    if (!servesRecordBytes(response)) {
+      await response.body?.cancel();
+      return { kind: 'record', record: null };
     }
     const drained = await drainCapped(response, maxBytes);
     return drained.kind === 'tooLarge' ? drained : { kind: 'record', record: drained.body };
