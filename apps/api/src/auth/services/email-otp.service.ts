@@ -2,6 +2,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -56,6 +57,7 @@ interface AddressEntry {
  */
 @Injectable()
 export class EmailOtpService {
+  private readonly logger = new Logger(EmailOtpService.name);
   private readonly tracked = new Map<string, AddressEntry>();
   private readonly ttlMs: number;
 
@@ -87,9 +89,13 @@ export class EmailOtpService {
 
     try {
       await this.mail.sendVerificationCode(address, code);
-    } catch {
+    } catch (error: unknown) {
       // Undeliverable is not "issued": leaving it live would let a member sit
-      // waiting on a code that is never coming.
+      // waiting on a code that is never coming. The provider's reason carries
+      // no address and no code, and the operator has no other trace of it.
+      this.logger.error(
+        `verification code delivery failed: ${error instanceof Error ? error.message : String(error)}`
+      );
       entry.code = null;
       throw new ServiceUnavailableException('The verification code could not be delivered');
     }
