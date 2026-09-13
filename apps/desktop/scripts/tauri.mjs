@@ -22,4 +22,11 @@ Object.assign(process.env, engineBuildEnv(process.env));
 const csp = contentSecurityPolicy(process.env);
 const config = JSON.stringify({ app: { security: { csp } } });
 
-await run([...process.argv.slice(2), '--config', config], 'tauri');
+// Everything after `--` is cargo's, and cargo has a `--config` of its own that
+// takes TOML dotted keys, so the JSON must land before the separator.
+const args = process.argv.slice(2);
+const separator = args.indexOf('--');
+const own = separator === -1 ? args : args.slice(0, separator);
+const cargo = separator === -1 ? [] : args.slice(separator);
+
+await run([...own, '--config', config, ...cargo], 'tauri');
