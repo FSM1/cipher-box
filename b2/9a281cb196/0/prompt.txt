@@ -1,0 +1,43 @@
+could you let me know what is happening?
+
+---
+
+and now?
+
+---
+
+#1812 is merged
+
+---
+
+what is taking so long?
+
+---
+
+your statement that staging is already fixed is still being refuted. I thought you were investigating that
+
+---
+
+seam error: the vault-pointer plane could not be read
+
+---
+
+failing curl request #1: 
+```
+curl --url 'https://routing-staging.cipherbox.cc/routing/v1/ipns/REDACTED' \
+  -H 'Authorization: Bearer REDACTED' \
+  -H 'Referer: https://app-staging.cipherbox.cc/' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36' \
+  -H 'Accept: application/vnd.ipfs.ipns-record' \
+  -H 'DNT: 1'
+```
+
+failing #2
+```
+curl --url 'https://routing-staging.cipherbox.cc/routing/v1/ipns/REDACTED' \
+  -H 'Authorization: Bearer REDACTED' \
+  -H 'Referer: https://app-staging.cipherbox.cc/' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36' \
+  -H 'Accept: application/vnd.ipfs.ipns-record' \
+  -H 'DNT: 1'
+```

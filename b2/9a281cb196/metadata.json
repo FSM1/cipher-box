@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b29a281cb196",
+  "strategy": "manual-commit",
+  "branch": "fix/front-strip-upstream-cors",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/b2/9a281cb196/0/metadata.json",
+      "transcript": "/b2/9a281cb196/0/full.jsonl",
+      "compact_transcript": "/b2/9a281cb196/0/transcript.jsonl",
+      "content_hash": "/b2/9a281cb196/0/content_hash.txt",
+      "prompt": "/b2/9a281cb196/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5780,
+    "cache_creation_tokens": 577106,
+    "cache_read_tokens": 43102219,
+    "output_tokens": 178055,
+    "api_call_count": 217
+  }
+}
