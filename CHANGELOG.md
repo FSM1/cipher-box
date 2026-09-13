@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/FSM1/cipher-box/compare/v2.0.1...v2.0.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **deploy:** strip the upstream CORS headers on every accelerator front leg ([#1815](https://github.com/FSM1/cipher-box/issues/1815)) ([a0ae78a](https://github.com/FSM1/cipher-box/commit/a0ae78a6c69370aa10fc82828c405e9bf6893963))
+
 ## [2.0.1](https://github.com/FSM1/cipher-box/compare/v2.0.0...v2.0.1) (2026-09-13)
 
 
