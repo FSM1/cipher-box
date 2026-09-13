@@ -1,0 +1,109 @@
+ok which 3 hitl tasks were necessary for the release?
+
+---
+
+can you retry the adr flip?
+
+---
+
+ok pr is merged.
+
+---
+
+Can you remind me what's 1797 is about?
+
+---
+
+ok promote it and start work immediately.
+
+---
+
+only thing to change there is to let me handle the merge myself. just ping me when the review is done.
+
+---
+
+<task-notification>
+<task-id>a9518e0aead7bd615</task-id>
+<tool-use-id>toolu_01ABfyTu99G7CNiu4YG9D8z2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/6ef4137f-78e9-4698-8c2c-5e2eec904d53/tasks/a9518e0aead7bd615.output</output-file>
+<status>completed</status>
+<summary>Agent "Lane 1797 resolve-before-re-PUT" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #1805 is ready for the user to merge. Not merged, per the updated brief.
+
+## PR
+
+**#1805** — `fix: resolve each held record before the hourly keyless re-PUT`, branch `fix/1797-resolve-before-re-put`, head `2d2b59fec3c4b33363cad4d69173c004d733fcc3`. State: OPEN, ready (not draft), `mergeable: MERGEABLE`, `mergeStateStatus: CLEAN`, already on top of `origin/main` (`bfe2fabaf`), so no rebase was needed. `closingIssuesReferences` resolves to #1797. No tool-attribution line in the body or the commit.
+
+## Change
+
+`crates/engine/src/net/liveness.rs::keyless_re_put` now resolves each held name through `fanout_get_classified` before it re-PUTs, and re-PUTs the freshest record: the network copy when its sequence is strictly higher, else the held copy. `Absent` and `Unavailable` both keep the held record. A held record whose signature does not chain to its own routing key is skipped rather than re-PUT, which is the produce-side mirror of what the resolve side rejects. Signature unchanged; the facade needed no wiring change.
+
+On the adoption gate: the pass adopts nothing, touches no snapshot, and raises no floor, so no adopter is reachable or needed at that layer. The record-plane verify (core's Ed25519 chain from the name) is enforced on every candidate, and every record that reaches the snapshot still passes the full gate on the resolve tick. A party who can sign a higher-sequence record under a name can PUT it to every endpoint directly, so the pass amplifies nothing.
+
+## The held-set rule, as stated at `HeldRecords`
+
+A record enters the set only where the session proved it current: the vault root from the resolve tick's gate-passing resolve (the only record a resolve holds, so a child the session did not publish itself never enters); any node the session published, from the drain's confirmed publish; an owned scope pointer from a confirmed mint or re-point flip and from the hourly re-enrolment (a grantee derives neither that name nor its signer). The set is session memory: it starts empty, is never persisted, and is cleared at teardown. The duplicate restatement on the `Engine::held_records` field was reduced to a cross-reference.
+
+This also answers the issue's question 1: the web's publishes did enter the set, but the set lives in the leader tab's worker heap and dies with it, and a resolve only ever re-holds the vault root, so a published child is never re-held after that worker goes away.
+
+## Tests added
+
+`crates/engine/tests/net.rs`: `a_stale_held_record_is_refreshed_from_the_network_before_its_re_put`, `a_lower_sequence_network_answer_does_not_replace_the_held_record`, `a_lower_sequence_re_put_is_rejected_and_the_name_keeps_the_higher_record`, `a_held_record_that_does_not_verify_under_its_routing_key_is_not_re_put`.
+
+`crates/engine/tests/write_plane.rs`: `a_child_the_session_published_is_kept_alive_by_the_hourly_pass` — the drain publish path had no held-set coverage at all. I mutation-checked it: shortening the clock advance makes it fail, so it is not vacuous.
+
+## Real-Kubo receiver case
+
+No CI lane resolves or publishes IPNS through a real Kubo or someguy. Kubo runs in CI only as a block store and gateway; every suite points `/routing/v1` at `tools/mock-ipns-routing`. I built no new CI infrastructure. The receiver rule is covered in two PR-gating places: `tools/mock-ipns-routing/src/server.test.ts` already asserts a lower-sequence PUT returns 400 and the name keeps the stored record (Mock Routing Store job), and the new engine case above runs over `InMemoryRecordStore`, whose `supersedes` keeps the highest sequence at a routing key the way Kubo and someguy do.
+
+## Issues filed
+
+None. Nothing outside scope surfaced.
+
+## CodeRabbit
+
+Requested at 13:58:32 UTC on 2026-09-13, one request, one slot. Clean verdict: status comment updated 14:04:08 UTC, "No actionable comments were generated in the recent review", no review object, no inline threads, no Nitpick or Outside-diff-range sections. **The slot floor for the next request is 15:04 UTC** — the comment states "Your plan provides up to 1 included review per hour; 0 remain after this review." A disposition comment is posted recording the clean verdict and the three inline self-review gates.
+
+## Required checks
+
+All 38 rollup entries are terminal: 29 SUCCESS, 9 SKIPPED, 0 failing, 0 pending. Includes Rust Fmt + clippy, Workspace tests, Engine simulation tests, Core KATs (native + WASM), Contract Suite, Web E2E Smoke, Client Browser Suite, Mock Routing Store, Tracker Refs. No re-runs were needed. Locally I also ran `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, the full `cargo test -p cipherbox-engine`, and a `wasm32-unknown-unknown` check of `cipherbox-wasm`, all clean, with a worktree-local `CARGO_TARGET_DIR`.</result>
+<usage><subagent_tokens>201837</subagent_tokens><tool_uses>114</tool_uses><duration_ms>1374018</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9518e0aead7bd615</worktreePath><worktreeBranch>worktree-agent-a9518e0aead7bd615</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+ok with that out the way, its only really the cloudflare setup left right?
+
+---
+
+ok lets handle #1507
+
+---
+
+can we run the cloudflare dashboard check quickly?
+
+---
+
+any idea why I am unable to paste into a control in the integrated browser?
+
+---
+
+right click also doesnt work in the integrated browser.
+
+---
+
+[User attached one or more files without additional text. Respond using the conversation context and the attached files.]
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/1af38e1e-b4ef-416f-a854-8d83d9d05a90-73a3139e-9e06-45ff-869a-db6418b6eed7.png]
+
+---
+
+[User attached one or more files without additional text. Respond using the conversation context and the attached files.]
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/1af38e1e-b4ef-416f-a854-8d83d9d05a90-9ed9400f-e267-4a56-a4ea-77bd2ed3a2c7.png]
+
+---
+
+/implement #1390

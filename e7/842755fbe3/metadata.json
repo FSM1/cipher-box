@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e7842755fbe3",
+  "strategy": "manual-commit",
+  "branch": "feat/1390-api-image",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".dockerignore",
+    ".github/workflows/ci-api.yml",
+    ".github/workflows/deploy-staging.yml",
+    "apps/api/Dockerfile",
+    "apps/api/src/data-source.ts",
+    "apps/api/src/run-migrations.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e7/842755fbe3/0/metadata.json",
+      "transcript": "/e7/842755fbe3/0/full.jsonl",
+      "compact_transcript": "/e7/842755fbe3/0/transcript.jsonl",
+      "content_hash": "/e7/842755fbe3/0/content_hash.txt",
+      "prompt": "/e7/842755fbe3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1984,
+    "cache_creation_tokens": 318166,
+    "cache_read_tokens": 5462682,
+    "output_tokens": 53601,
+    "api_call_count": 76
+  }
+}
