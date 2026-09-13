@@ -6,9 +6,10 @@
 //! #24 D3):
 //!
 //! - **Keyless re-PUT** ([`keyless_re_put`]): an ~hourly Scheduler job that
-//!   re-PUTs every record the session holds, byte-for-byte with no key material
-//!   (core's keyless marshal, blueprint/core.md), so actively used vaults keep
-//!   themselves alive on endpoints that may have dropped the record.
+//!   resolves every record the session holds and re-PUTs the freshest of the
+//!   held and the live copy, byte-for-byte with no key material (core's keyless
+//!   marshal, blueprint/core.md), so actively used vaults keep themselves alive
+//!   on endpoints that may have dropped the record.
 //! - **Sub-EOL renewal** ([`eol_republish`]): on session start and periodically,
 //!   a name with below-threshold EOL remaining is republished at seq+1 through
 //!   the normal CAS path with a fresh 90-day EOL.
@@ -24,7 +25,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
-use super::fanout::{fanout_get_verify, fanout_put};
+use super::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_put};
 use super::publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishRequest, publish, publish_inline,
 };
@@ -175,12 +176,24 @@ impl HeldKey {
     }
 }
 
-/// The session's live held-record set, keyed by [`HeldKey`]: the resolve path
-/// inserts each gate-passing record and the liveness loop re-PUTs the map's
-/// values. Keyed so a re-resolve replaces in place and an eviction removes in
-/// O(1) — the loop never re-PUTs a stale record (blueprint/engine.md
-/// "Liveness"). `BTreeMap` for a deterministic iteration order across
-/// platforms.
+/// The session's live held-record set, keyed by [`HeldKey`]: the liveness loop
+/// re-PUTs the map's values on the hourly cadence (blueprint/engine.md
+/// "Liveness"). `BTreeMap` for a deterministic iteration order across platforms.
+///
+/// **What enters the set**, and nothing else does:
+///
+/// - the **vault root**, from the resolve tick's gate-passing resolve
+///   (`resolve::resolve_and_hold`) — the only record a resolve ever holds, so a
+///   child this session did not itself publish never enters;
+/// - **any node this session published**, from the drain's confirmed publish
+///   (`sync::drain`);
+/// - an **owned scope pointer**, from a confirmed mint or re-point flip and from
+///   the hourly re-enrolment (`net::rotation`) — a grantee derives neither that
+///   name nor its signer, so it holds no pointer.
+///
+/// The set is session memory: it starts empty, is never persisted, and is
+/// cleared at teardown, so a session keeps alive only what it proved current
+/// itself.
 pub type HeldRecords = BTreeMap<HeldKey, HeldRecord>;
 
 /// The result of re-PUTting one held record.
@@ -193,9 +206,21 @@ pub struct RePutResult {
 }
 
 /// Run one pass of the keyless re-PUT job over the records the session holds:
-/// re-PUT each byte-for-byte to the endpoint set. Keyless — no signing key is
-/// touched; a malformed held record (which cannot round-trip core's byte-stable
-/// marshal) is skipped rather than re-PUT.
+/// resolve each name, then re-PUT the freshest record of the two — the network
+/// copy when its sequence is strictly higher than the held one, else the held
+/// copy. Keyless throughout: no signing key is touched and the bytes go back
+/// byte-for-byte through core's marshal (blueprint/core.md).
+///
+/// A held record ages between the pass that installed it and this one, so
+/// without the resolve a device that has not re-resolved the name re-PUTs a
+/// sequence below the live one — which a validating endpoint refuses and a
+/// non-validating endpoint accepts as a rollback.
+///
+/// Both non-`Found` answers keep the held record: neither an absent name nor an
+/// unavailable endpoint set is evidence that the held record is stale
+/// ([`FanoutRecord`]). A record that does not verify under its own routing key
+/// is skipped rather than re-PUT — the produce side refuses what the resolve
+/// side rejects (security rule 8).
 ///
 /// This is the job **body**; the ~hourly [`Scheduler`] loop that drives it at
 /// [`RE_PUT_INTERVAL`] is wired by the facade.
@@ -205,17 +230,28 @@ pub async fn keyless_re_put<T: RecordTransport>(
 ) -> Vec<RePutResult> {
     let mut results = Vec::with_capacity(held.len());
     for record in held {
-        // Byte-stable keyless marshal (blueprint/core.md).
-        let bytes = match IpnsRecord::unmarshal(&record.record_bytes) {
-            Ok(parsed) => parsed.marshal(),
-            Err(_) => {
-                results.push(RePutResult {
-                    routing_key: record.routing_key.clone(),
-                    kept_alive: false,
-                });
-                continue;
-            }
+        let unusable = RePutResult {
+            routing_key: record.routing_key.clone(),
+            kept_alive: false,
         };
+        let (Ok(name), Ok(parsed)) = (
+            IpnsName::parse(&record.routing_key),
+            IpnsRecord::unmarshal(&record.record_bytes),
+        ) else {
+            results.push(unusable);
+            continue;
+        };
+        let Ok(mine) = parsed.verify(&name) else {
+            results.push(unusable);
+            continue;
+        };
+        let mut bytes = parsed.marshal();
+        if let FanoutRecord::Found(live, live_bytes) = fanout_get_classified(transport, &name).await
+        {
+            if live.sequence > mine.sequence {
+                bytes = live_bytes;
+            }
+        }
         let fanout = fanout_put(transport, &record.routing_key, &bytes).await;
         results.push(RePutResult {
             routing_key: record.routing_key.clone(),

@@ -4368,10 +4368,9 @@ pub struct Engine<T: SeamTypes> {
     /// the tick loop: a pass reads the base itself, and the two generations the
     /// memo keys on already carry whatever it repaints.
     render_memo: RefCell<RenderMemo>,
-    /// The session's live held-record set, keyed by node id: the resolve path
-    /// ([`resolve_and_hold`](crate::net::resolve_and_hold)) inserts each
-    /// gate-passing record here, and the cold-start liveness loop keyless
-    /// re-PUTs the map's values on the hourly cadence.
+    /// The session's live held-record set — see [`HeldRecords`] for what enters
+    /// it. The liveness loop this session spawns keyless re-PUTs its values on
+    /// the hourly cadence.
     held_records: Rc<RefCell<HeldRecords>>,
     /// The vault settings record this session published or read
     /// ([`SettingsRead::enrol`]), in its own slot rather than in
