@@ -41,8 +41,8 @@ use cipherbox_engine::net::author::{
     author_scope_root_with_section,
 };
 use cipherbox_engine::net::{
-    ChildAdopter, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason, ResolveOutcome,
-    StagingRetireLedger, resolve,
+    ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason,
+    ResolveOutcome, StagingRetireLedger, resolve,
 };
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
@@ -920,6 +920,46 @@ fn a_manual_refresh_reports_an_unreachable_focus_folder_as_a_failure() {
         command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks),
         Err(EngineError::RefreshFailed { .. })
     ));
+}
+
+/// The publish half of the held-set rule ([`cipherbox_engine::net::HeldRecords`]):
+/// the resolve tick holds the owner root, and a confirmed publish holds every
+/// other node, so the hourly pass keeps a published child alive too.
+#[test]
+fn a_child_the_session_published_is_kept_alive_by_the_hourly_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages");
+    tick(&world, &engine, &mut tasks);
+    let photos = write_name(child_id(&engine, ROOT, "photos"));
+    let endpoints = world.record_store.endpoints();
+    let published = world
+        .record_store
+        .record_at(&endpoints[0], photos.as_str())
+        .expect("the create published the child's record");
+
+    // The second endpoint loses the child's record: only the keyless re-PUT
+    // writes that name again this pass.
+    world
+        .record_store
+        .seed_record(&endpoints[1], photos.as_str(), Vec::new());
+    world.scheduler.advance(RE_PUT_INTERVAL);
+    poll_tasks_until_parked(&mut tasks);
+
+    assert_eq!(
+        world.record_store.record_at(&endpoints[1], photos.as_str()),
+        Some(published),
+        "the hourly pass re-PUT the child the drain held"
+    );
 }
 
 #[test]

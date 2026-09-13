@@ -887,6 +887,87 @@ fn an_evicted_record_is_not_re_put() {
 }
 
 #[test]
+fn a_stale_held_record_is_refreshed_from_the_network_before_its_re_put() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(36);
+    let name = name_of(&s);
+    let endpoints = world.record_store.endpoints();
+    // Another device moved the name to sequence 7 while this session sat on the
+    // sequence 4 it adopted; one endpoint dropped the record altogether, so the
+    // re-PUT is the only write that reaches it this pass.
+    world
+        .record_store
+        .seed_record(&endpoints[1], name.as_str(), record(&s, VALUE, 7, 0));
+    let held = vec![held_record(&name, record(&s, VALUE, 4, 0))];
+
+    let results = block_on(keyless_re_put(&device.record_store, &held));
+
+    assert!(results[0].kept_alive);
+    assert_all_endpoints_at(&world.record_store, &name, 7);
+}
+
+#[test]
+fn a_lower_sequence_network_answer_does_not_replace_the_held_record() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(37);
+    let name = name_of(&s);
+    let endpoints = world.record_store.endpoints();
+    // One endpoint is behind at sequence 2; the session holds 5.
+    world
+        .record_store
+        .seed_record(&endpoints[1], name.as_str(), record(&s, VALUE, 2, 0));
+    let held = vec![held_record(&name, record(&s, VALUE, 5, 0))];
+
+    block_on(keyless_re_put(&device.record_store, &held));
+
+    assert_all_endpoints_at(&world.record_store, &name, 5);
+}
+
+/// The receiver half of the sequence rule, over a store that keeps the highest
+/// sequence at a routing key as Kubo and someguy do.
+#[test]
+fn a_lower_sequence_re_put_is_rejected_and_the_name_keeps_the_higher_record() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(38);
+    let name = name_of(&s);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record(&s, VALUE, 7, 0));
+    }
+    // No endpoint will answer a GET, so the pass falls back to the sequence 4 it
+    // holds and the endpoints decide the outcome.
+    world.record_store.fail_get_for(name.as_str());
+    let held = vec![held_record(&name, record(&s, VALUE, 4, 0))];
+
+    let results = block_on(keyless_re_put(&device.record_store, &held));
+
+    assert!(
+        results[0].kept_alive,
+        "an endpoint acknowledges a stale PUT rather than erroring"
+    );
+    assert_all_endpoints_at(&world.record_store, &name, 7);
+}
+
+#[test]
+fn a_held_record_that_does_not_verify_under_its_routing_key_is_not_re_put() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let name = name_of(&signer(39));
+    // Well-formed bytes signed by another key: the routing key's own Ed25519
+    // chain refuses them, so the pass must not put them under that name.
+    let held = vec![held_record(&name, record(&signer(40), VALUE, 1, 0))];
+
+    let results = block_on(keyless_re_put(&device.record_store, &held));
+
+    assert!(!results[0].kept_alive);
+    assert_no_endpoint_holds(&world.record_store, &name);
+}
+
+#[test]
 fn held_record_debug_redacts_the_signer() {
     let s = signer(35);
     let name = name_of(&s);
