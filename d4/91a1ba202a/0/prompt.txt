@@ -1,0 +1,96 @@
+<task-notification>
+<task-id>bs0z962tt</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c1cc8e41-7db1-485f-b3cc-a27eb8059c6e/tasks/bs0z962tt.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on the pushed review fixes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+the phala keys can also be removed - was the env not normally rebuilt during the deploy github action?
+
+---
+
+ok I merged that PR
+
+---
+
+is there no more tagging of staging releases?
+
+---
+
+why does the actual staging deploy have a wipe step?
+
+---
+
+ok sound good - fire off the workflow dispatch.
+
+---
+
+error signing in - and exactly the error we just fixed
+
+[Attached image "image.png" is saved at: /Users/myankelev/.t3/userdata/attachments/1af38e1e-b4ef-416f-a854-8d83d9d05a90-b46bbab0-290c-4549-a0cb-5ffd9da9d2c0.png]
+
+---
+
+so by plain deploy you mean merging the release branch and firing a full tag-staging deploy?
+
+---
+
+<task-notification>
+<task-id>a93d850a1a58c30f0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c1cc8e41-7db1-485f-b3cc-a27eb8059c6e/tasks/a93d850a1a58c30f0.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix lane for #1808" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done.
+
+## PR
+
+**#1809 — https://github.com/FSM1/cipher-box/pull/1809** (draft, `closingIssuesReferences` lists 1808, no attribution line in the body or commits). Branch `fix/1808-routing-resolve-bearer`, two commits.
+
+## Config variable names
+
+- `VITE_ROUTING_ACCELERATOR_URL` — the gated CipherBox `/routing/v1` endpoint. New.
+- `VITE_ROUTING_ENDPOINTS` — unchanged meaning: the public list. It stays mandatory, so one operator never holds the whole record plane.
+
+Wired in `apps/web/src/engine/config.ts`, `apps/web/src/vite-env.d.ts`, `apps/web/.env.example`, `apps/desktop/scripts/buildEnv.mjs`, `apps/desktop/src-tauri/build.rs`, `apps/desktop/src-tauri/src/engine/config.rs`, and the `build-web` env of `deploy-staging.yml`. The two e2e workflows leave it unset, because the mock routing store is ungated.
+
+**Your step:** staging currently sets `VITE_ROUTING_ENDPOINTS = https://routing-staging.cipherbox.cc,https://delegated-ipfs.dev`. Set `VITE_ROUTING_ACCELERATOR_URL = https://routing-staging.cipherbox.cc`. The gated endpoint may stay in the public list; the sets are deduplicated on one spelling.
+
+## Header splice
+
+Option (a), with the splice pulled into the engine's wrapper. The host transport names its accelerator through `RecordTransport::accelerator()`; the engine wraps the seam once in `RecordAccelerator`, whose `get_record` fills the credential for the armed endpoint and discards whatever a caller passed. So no call site can name the endpoint that sees the pseudonym, and `put_record` takes no credential at all. Option (b) would have moved the endpoint set, the media type, and the timeout policy out of the host transports for no gain.
+
+## Suites
+
+`cargo test -p cipherbox-engine` 1752 unit plus 20 integration binaries green; `cargo test -p cipherbox-desktop-seams --test conformance` 38 passed; `@cipherbox/client` 710 passed; `@cipherbox/web` 700 passed; `@cipherbox/desktop` 111 passed; `cargo clippy --workspace --all-targets` clean; `cargo fmt --all` clean; `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` clean.
+
+## CI and review
+
+All 39 checks pass; the 5 Macroscope checks report "skipping". `/simplify`, `/security-review`, and `/crypto-privacy-review` all ran on `git diff main...HEAD`; their findings are folded into the second commit (wrapper-only splice, mandatory public list, one URL spelling, fallible WASM import, four new engine tests, one new desktop transport test, `build.rs` rebuild trigger). Three findings are rejected with reasons in the PR body. CodeRabbit was requested once, after CI went green. The PR stays a draft.
+
+## Not verified
+
+- The staging fix itself. Sign-in on `app-staging` can only be confirmed after the variable is set and the bundle deploys.
+- The CORS preflight on the gated leg. `Authorization` is not safelisted, so a browser now sends `OPTIONS` to `routing-staging`. Confirm the front answers it with `Access-Control-Allow-Headers: Authorization`. A denied preflight degrades to the public endpoint, so it is not a wrong-trust risk, but the accelerator would serve nothing.
+- The browser conformance worker runs the transport through the WASM bridge in CI only; it passed there, not locally.</result>
+<usage><subagent_tokens>276334</subagent_tokens><tool_uses>140</tool_uses><duration_ms>2892778</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a93d850a1a58c30f0</worktreePath><worktreeBranch>worktree-agent-a93d850a1a58c30f0</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b38f392b3</task-id>
+<tool-use-id>toolu_01RpxoaUtBsTkHjAkvBTHbkL</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c1cc8e41-7db1-485f-b3cc-a27eb8059c6e/tasks/b38f392b3.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the CodeRabbit verdict on the fix PR" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+#1758 is merged but the tag staging release failed to validate the main sha had been tagged by release please.
