@@ -79,6 +79,20 @@ describe('FetchRecordTransport.getRecord', () => {
     });
   });
 
+  it('returns the bytes when the record media type arrives in mixed case', async () => {
+    stubFetch(
+      new Response(new Uint8Array([1, 2]), {
+        status: 200,
+        headers: { 'Content-Type': 'Application/VND.IPFS.IPNS-RECORD; charset=x' },
+      })
+    );
+
+    expect(await transport().getRecord(ENDPOINT, KEY, 1000)).toEqual({
+      kind: 'record',
+      record: new Uint8Array([1, 2]),
+    });
+  });
+
   it('throws on a non-404 failure status', async () => {
     stubFetch(new Response(null, { status: 503 }));
 

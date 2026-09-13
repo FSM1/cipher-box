@@ -48,10 +48,11 @@ function fakeResponse(opts: {
     ok: status >= 200 && status < 300,
     headers: {
       get: (name: string) => {
-        if (name.toLowerCase() === 'content-length') {
-          return contentLength;
-        }
-        return name.toLowerCase() === 'content-type' ? (opts.contentType ?? null) : null;
+        const values: Record<string, string | null> = {
+          'content-length': contentLength,
+          'content-type': opts.contentType ?? null,
+        };
+        return values[name.toLowerCase()] ?? null;
       },
     },
     body: {
@@ -116,6 +117,20 @@ describe('RoutingV1RecordTransport response-size cap', () => {
     );
 
     expect((await transport().resolve('k51-typed'))?.equals(body)).toBe(true);
+  });
+
+  it('resolves the bytes when the record media type arrives in mixed case', async () => {
+    const body = Buffer.from('signed-ipns-record-bytes');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          fakeResponse({ body, contentType: 'Application/VND.IPFS.IPNS-RECORD; charset=x' })
+            .response
+      )
+    );
+
+    expect((await transport().resolve('k51-mixed-case'))?.equals(body)).toBe(true);
   });
 
   it('rejects an honestly-declared oversized body before reading it', async () => {

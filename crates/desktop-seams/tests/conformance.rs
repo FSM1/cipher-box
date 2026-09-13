@@ -559,6 +559,24 @@ async fn reqwest_record_transport_returns_the_bytes_of_a_record_typed_answer() {
 }
 
 #[tokio::test]
+async fn reqwest_record_transport_accepts_a_mixed_case_record_media_type() {
+    let server = MockServer::start();
+    let transport = ReqwestRecordTransport::new(vec![format!("{}/mixed-type", server.base_url())])
+        .expect("client builds");
+    let endpoint = transport.endpoints().remove(0);
+
+    let record = transport
+        .get_record(&endpoint, "k51-mixed-case", 1024)
+        .await
+        .expect("transport-level success");
+
+    assert_eq!(
+        record.as_deref(),
+        Some(b"opaque-signed-record-bytes".as_slice())
+    );
+}
+
+#[tokio::test]
 async fn reqwest_http_round_trips_request_and_response() {
     let server = MockServer::start();
     let http = ReqwestHttp::new().expect("client builds");

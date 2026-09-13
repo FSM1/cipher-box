@@ -16,10 +16,8 @@ const MAX_RECORD_BYTES = 64 * 1024;
 
 /**
  * Delegated Routing V1 (https://specs.ipfs.tech/routing/http-routing-v1/): a 2xx
- * answer whose media type is not the record type carries no record. someguy and
- * the Kubo gateway answer a missing name that way — a 200 with a `text/plain`
- * `delegate error: routing: not found` body. An unlabelled body is still read as
- * a record, since only the client that resolves it can verify the bytes.
+ * whose media type is not the record type carries no record; an unlabelled body
+ * is read as a record, since only the resolving client can verify the bytes.
  */
 function servesRecordBytes(response: Response): boolean {
   const contentType = response.headers.get('content-type');
@@ -95,6 +93,7 @@ export class RoutingV1RecordTransport extends RecordTransport {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (response.status === 404) {
+      await response.body?.cancel();
       return null;
     }
     if (!response.ok) {

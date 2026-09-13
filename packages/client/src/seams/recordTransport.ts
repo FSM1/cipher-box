@@ -38,10 +38,8 @@ function endpointPolicy(): RequestInit {
 
 /**
  * Delegated Routing V1 (https://specs.ipfs.tech/routing/http-routing-v1/): a 2xx
- * answer whose media type is not the record type carries no record. someguy and
- * the Kubo gateway answer a missing name that way — a 200 with a
- * `text/plain` `delegate error: routing: not found` body. An unlabelled body is
- * still passed up, since the engine verifies the bytes it receives.
+ * whose media type is not the record type carries no record; an unlabelled body
+ * is passed up, since the engine verifies the bytes it receives.
  */
 function servesRecordBytes(response: Response): boolean {
   const contentType = response.headers.get('Content-Type');

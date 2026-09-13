@@ -28,8 +28,11 @@ function mockNetwork(): Plugin {
           if (req.method === 'GET') {
             const record = records.get(key);
             if (!record) {
-              res.statusCode = 404;
-              res.end();
+              // Mirror someguy and the Kubo gateway for a missing name, the
+              // same answer `tools/mock-ipns-routing` gives.
+              res.statusCode = 200;
+              res.setHeader('content-type', 'text/plain; charset=utf-8');
+              res.end('delegate error: routing: not found');
               return;
             }
             res.statusCode = 200;

@@ -8,10 +8,8 @@ use cipherbox_engine::seams::{EndpointId, RecordTransport, SeamError, SeamResult
 const IPNS_RECORD_CONTENT_TYPE: &str = "application/vnd.ipfs.ipns-record";
 
 /// Delegated Routing V1 <https://specs.ipfs.tech/routing/http-routing-v1/>: a
-/// 2xx answer whose media type is not the record type carries no record.
-/// someguy and the Kubo gateway answer a missing name that way — a 200 with a
-/// `text/plain` `delegate error: routing: not found` body. An unlabelled body
-/// is still passed up, since the engine verifies the bytes it receives.
+/// 2xx whose media type is not the record type carries no record; an unlabelled
+/// body is passed up, since the engine verifies the bytes it receives.
 fn serves_record_bytes(response: &reqwest::Response) -> bool {
     match response.headers().get(reqwest::header::CONTENT_TYPE) {
         Some(value) => value.to_str().is_ok_and(|value| {
