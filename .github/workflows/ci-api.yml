@@ -107,6 +107,32 @@ jobs:
       - name: Run the API integration suite
         run: pnpm --filter @cipherbox/api test:integration
 
+  # The staging deploy builds this image, so a Dockerfile that no longer builds
+  # would otherwise first show at the deploy dispatch.
+  image:
+    name: API image
+    if: inputs.ts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          load: true
+          tags: cipherbox-api:ci
+
+      - name: Assert the image carries the server and the migration runner
+        run: |
+          docker run --rm --entrypoint sh cipherbox-api:ci -c \
+            'test -f dist/main.js && test -f dist/run-migrations.js && node --check dist/run-migrations.js'
+
   migration-drift:
     name: Migration drift
     if: inputs.ts

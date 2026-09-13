@@ -1,6 +1,5 @@
 # Edited for v2 (blueprint/deploy.md). SendGrid stays, reached through the API's
-# MAIL_PROVIDER seam. The gateway forward_auth wiring is the one v2 edit still
-# outstanding.
+# MAIL_PROVIDER seam.
 name: Deploy Staging
 
 on:
