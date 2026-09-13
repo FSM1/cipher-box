@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.3](https://github.com/FSM1/cipher-box/compare/v2.0.2...v2.0.3) (2026-09-13)
+
+
+### Bug Fixes
+
+* **api:** log the mail provider's reason when a verification code cannot be delivered ([#1817](https://github.com/FSM1/cipher-box/issues/1817)) ([6a929ca](https://github.com/FSM1/cipher-box/commit/6a929ca48b10ef950cdd05bbb454213eebdf1a28))
+* **deploy:** allow the record content type on the publish preflight and stop caching accelerator reads ([#1819](https://github.com/FSM1/cipher-box/issues/1819)) ([966c315](https://github.com/FSM1/cipher-box/commit/966c315c6f22c6696cecd7b23d71befc4cd2bbe0))
+
 ## [2.0.2](https://github.com/FSM1/cipher-box/compare/v2.0.1...v2.0.2) (2026-09-13)
 
 
