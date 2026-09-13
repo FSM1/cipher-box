@@ -329,7 +329,8 @@ jobs:
       # `workflow_call` caller may only pass the inputs that trigger declares,
       # and `github.event_name` is the *caller's* event on that path, which
       # makes it useless as a second gate here. Caddy's volumes are left alone:
-      # they hold the issued TLS certificates.
+      # they hold the issued TLS certificates. The v1 stack ran services this
+      # compose file no longer declares, so `down` must take the orphans too.
       - name: Wipe the staging data volumes
         if: inputs.wipe_volumes
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
@@ -341,10 +342,11 @@ jobs:
           script: |
             set -euo pipefail
             cd /opt/cipherbox/docker
-            docker compose -f docker-compose.staging.yml down
-            # `down --volumes` would take Caddy's with it, so select the two
-            # declared names out of this project by compose's own labels.
-            for declared in postgres_staging ipfs_staging; do
+            docker compose -f docker-compose.staging.yml down --remove-orphans
+            # `down --volumes` would take Caddy's with it, so select the data
+            # volumes out of this project by compose's own labels. The redis
+            # volume is v1 residue: nothing in v2 declares it.
+            for declared in postgres_staging ipfs_staging redis_staging; do
               vols=$(docker volume ls -q \
                 --filter "label=com.docker.compose.project=cipherbox-staging" \
                 --filter "label=com.docker.compose.volume=${declared}")
@@ -383,7 +385,7 @@ jobs:
               api node dist/run-migrations.js
 
             # Start/restart services
-            docker compose -f docker-compose.staging.yml up -d
+            docker compose -f docker-compose.staging.yml up -d --remove-orphans
 
             # Restart Caddy to pick up refreshed web files bind mount
             # (scp rm:true recreates the host dir, breaking the old mount inode)
