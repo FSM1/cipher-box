@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/FSM1/cipher-box/compare/v2.0.0...v2.0.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **desktop:** keep the tauri config ahead of the cargo separator and drop the v1 feature flags from the release build ([#1812](https://github.com/FSM1/cipher-box/issues/1812)) ([9598784](https://github.com/FSM1/cipher-box/commit/9598784730d5d1d7b7c02799b5cc1c8b084d711d))
+
 ## [2.0.0](https://github.com/FSM1/cipher-box/compare/v1.0.0...v2.0.0) (2026-09-13)
 
 
