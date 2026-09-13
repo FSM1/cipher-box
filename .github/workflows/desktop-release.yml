@@ -159,7 +159,6 @@ jobs:
           tauriScript: pnpm tauri
           releaseId: ${{ needs.resolve-release.outputs.release_id }}
           uploadUpdaterJson: true
-          args: -- --no-default-features --features winfsp
 
   build-desktop-linux:
     name: Build Desktop (Linux)
@@ -231,4 +230,3 @@ jobs:
           tauriScript: pnpm tauri
           releaseId: ${{ needs.resolve-release.outputs.release_id }}
           uploadUpdaterJson: true
-          args: -- --no-default-features --features fuse
