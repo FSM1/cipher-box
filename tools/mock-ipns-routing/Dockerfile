@@ -7,9 +7,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
-RUN npm run build
+# The build needs the dev tree; the runtime needs only fastify and pino-pretty.
+RUN npm run build && npm prune --omit=dev
 
 ENV HOST=0.0.0.0 \
     PORT=3001 \

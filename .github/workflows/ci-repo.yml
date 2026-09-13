@@ -124,3 +124,38 @@ jobs:
           pnpm --filter @cipherbox/desktop exec tauri signer sign "${WORK}/payload"
           base64 -d < "${WORK}/payload.sig" > "${WORK}/payload.minisig"
           minisign -V -p "${WORK}/updater.pub" -m "${WORK}/payload" -x "${WORK}/payload.minisig"
+
+  # The mock /routing/v1 record store holds the monotonic-sequence rule that a
+  # real routing endpoint holds, so a rollback cannot reach a client. The suite
+  # runs here, under no path filter, because the Repo area is the only gate that
+  # blocks every merge. The tool is not a pnpm workspace member: it installs,
+  # builds and tests with its own npm, sharing the cache key the composite
+  # action at .github/actions/mock-ipns-routing uses.
+  mock-routing-store:
+    name: Mock Routing Store
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # No git operation follows the checkout, and the steps below run npm and
+      # vitest over third-party code, so the job token stays out of .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: mock-ipns-routing-npm-${{ runner.os }}-${{ hashFiles('tools/mock-ipns-routing/package-lock.json') }}
+
+      - name: Install, typecheck, build and test the record store
+        working-directory: tools/mock-ipns-routing
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+          npm test
