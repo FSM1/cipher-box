@@ -1,0 +1,13 @@
+its likely because the commit landed as a `chore:` and therefore didnt warrant a release.
+
+---
+
+no, it ran: https://github.com/FSM1/cipher-box/actions/runs/34783738828/job/103795317159
+
+---
+
+#1811 is merged
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/34784459069/job/103797286630
