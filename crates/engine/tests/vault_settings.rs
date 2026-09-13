@@ -318,6 +318,7 @@ impl RecordTransport for AcksNothingBack {
         _endpoint: &EndpointId,
         _routing_key: &str,
         _max_bytes: usize,
+        _bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
         Ok(None)
     }
@@ -499,6 +500,7 @@ impl RecordTransport for NeverAnswers {
         _endpoint: &EndpointId,
         _routing_key: &str,
         _max_bytes: usize,
+        _bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
         poll_fn(|_| Poll::<SeamResult<Option<Vec<u8>>>>::Pending).await
     }
@@ -656,10 +658,11 @@ impl RecordTransport for SavesAcrossTheLoad {
         endpoint: &EndpointId,
         routing_key: &str,
         max_bytes: usize,
+        bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
         *self.slot.borrow_mut() = Some(self.saved.clone());
         self.inner
-            .get_record(endpoint, routing_key, max_bytes)
+            .get_record(endpoint, routing_key, max_bytes, bearer)
             .await
     }
 
@@ -2034,6 +2037,7 @@ impl RecordTransport for AcksNoPut {
         _endpoint: &EndpointId,
         _routing_key: &str,
         _max_bytes: usize,
+        _bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
         Ok(None)
     }

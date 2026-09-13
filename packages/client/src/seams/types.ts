@@ -98,7 +98,14 @@ export type CappedRecordResult = { kind: 'record'; record: Uint8Array | null } |
  */
 export interface RecordTransportSeam {
   endpoints(): string[];
-  getRecord(endpoint: string, routingKey: string, maxBytes: number): Promise<CappedRecordResult>;
+  /** The CipherBox routing accelerator in the endpoint set, or undefined when the host configured none. */
+  accelerator(): string | undefined;
+  getRecord(
+    endpoint: string,
+    routingKey: string,
+    maxBytes: number,
+    bearer?: string
+  ): Promise<CappedRecordResult>;
   putRecord(endpoint: string, routingKey: string, record: Uint8Array): Promise<void>;
 }
 

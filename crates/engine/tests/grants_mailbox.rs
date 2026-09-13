@@ -463,6 +463,7 @@ fn two_instance_share_accept_end_to_end() {
         &endpoint,
         fx.name.as_str(),
         MAX_RECORD_BYTES,
+        None,
     ))
     .unwrap()
     .expect("record present");
@@ -1682,6 +1683,7 @@ fn revocation_classification_triple() {
         &endpoint,
         fx.name.as_str(),
         MAX_RECORD_BYTES,
+        None,
     ))
     .unwrap();
     let unresolvable = classify(&ResolutionFacts {

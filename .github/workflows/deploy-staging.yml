@@ -170,6 +170,10 @@ jobs:
           # Unset falls back to the public endpoint, so the self-hosted resolve
           # leg behind the member front is only reached once this names it.
           VITE_ROUTING_ENDPOINTS: ${{ vars.VITE_ROUTING_ENDPOINTS }}
+          # The gated CipherBox resolve leg. The bundle presents the session
+          # read pseudonym on GET to this endpoint only; the public ones above
+          # are shown nothing.
+          VITE_ROUTING_ACCELERATOR_URL: ${{ vars.VITE_ROUTING_ACCELERATOR_URL }}
           VITE_PUBLIC_GATEWAYS: ${{ vars.VITE_PUBLIC_GATEWAYS }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}

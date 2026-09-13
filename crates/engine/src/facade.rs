@@ -87,9 +87,9 @@ use crate::net::{
     FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords,
     LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult, PointerConsultArm,
     PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX,
-    RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
-    ScopePointerMint, ScopeWalk, VaultProvisionNet, WalkFailure, WritePlaneDark,
-    enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    RecordAccelerator, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    ScopePointerEnrolment, ScopePointerMint, ScopeWalk, VaultProvisionNet, WalkFailure,
+    WritePlaneDark, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
     refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
@@ -2851,7 +2851,7 @@ struct FlatCut<'a, S: Fn() -> BoxedTask> {
 /// The owner rotation arm over one engine's seam family.
 type OwnerNet<'a, T> = OwnerRotationNet<
     'a,
-    <T as SeamTypes>::RecordTransport,
+    RecordAccelerator<<T as SeamTypes>::RecordTransport>,
     <T as SeamTypes>::Http,
     <T as SeamTypes>::CredentialStore,
     OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>,
@@ -4352,8 +4352,11 @@ pub struct Engine<T: SeamTypes> {
     /// [`start`](Self::start) builds so teardown here reaches it.
     session_bearer: SessionBearer,
     /// The read accelerator's opaque pseudonym (CONTEXT.md, Accelerator token),
-    /// shared by that same client and the gateway leg.
+    /// shared by that same client, the gateway leg, and the record leg.
     accelerator_bearer: SessionBearer,
+    /// The host's record transport with the pseudonym armed on the routing
+    /// accelerator alone. Every record read and publish goes through this.
+    record_transport: RecordAccelerator<T::RecordTransport>,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left
     /// operand). Seeded at the anchored root; cold-start/resolve replace it
@@ -4615,6 +4618,7 @@ impl<T: SeamTypes> Engine<T> {
         let (events, receiver) = mpsc::unbounded();
         let session_bearer = SessionBearer::default();
         let accelerator_bearer = SessionBearer::default();
+        let seams_record_transport = seams.record_transport.clone();
         (
             Self {
                 seams,
@@ -4629,6 +4633,10 @@ impl<T: SeamTypes> Engine<T> {
                 api_base_url,
                 gateway: gateway.into_gateway(accelerator_bearer.clone()),
                 session_bearer,
+                record_transport: RecordAccelerator::new(
+                    seams_record_transport,
+                    accelerator_bearer.clone(),
+                ),
                 accelerator_bearer,
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
@@ -4756,7 +4764,7 @@ impl<T: SeamTypes> Engine<T> {
             .as_ref()
             .map(|held| held.record_bytes.clone());
         let settings = load_settings(
-            &self.seams.record_transport,
+            &self.record_transport,
             &self.gateway,
             &self.seams.http,
             &self.seams.floor_store,
@@ -5326,7 +5334,7 @@ impl<T: SeamTypes> Engine<T> {
             pointer_fetch,
             adopter,
             &self.seams.floor_store,
-            &self.seams.record_transport,
+            &self.record_transport,
             &self.seams.snapshot_cache,
             &params,
             &mut |event: Event| {
@@ -5354,7 +5362,7 @@ impl<T: SeamTypes> Engine<T> {
     async fn run_cold_start(&self, root: NodeId) -> Result<ColdStartOutcome, ColdStartError> {
         let session = self.session.as_ref().ok_or(ColdStartError::NotStarted)?;
         let owner_identity = session.owner_identity();
-        let pointer_fetch = RecordPointerFetch::new(&self.seams.record_transport);
+        let pointer_fetch = RecordPointerFetch::new(&self.record_transport);
         let adopter = self.root_adopter(session, &owner_identity, root.0);
         self.cold_start_data_path(
             &pointer_fetch,
@@ -5422,7 +5430,7 @@ where {
         let session = self.session.as_ref().expect("session set by start");
         let owner_identity = session.owner_identity();
         let publisher = VaultProvisionNet {
-            transport: &self.seams.record_transport,
+            transport: &self.record_transport,
             adopter: &self.root_adopter(session, &owner_identity, root_scope_id),
             api,
             floors: &self.seams.floor_store,
@@ -5433,7 +5441,7 @@ where {
             &self.entropy,
             &OwnerSessionKeys::new(session),
             &publisher,
-            &RecordPointerFetch::new(&self.seams.record_transport),
+            &RecordPointerFetch::new(&self.record_transport),
             &self.seams.floor_store,
             &ProvisionPlan {
                 scope_id: root_scope_id,
@@ -5477,7 +5485,7 @@ where {
             .as_ref()
             .map(|held| held.record_bytes.clone());
         let load = load_bin_index(
-            &self.seams.record_transport,
+            &self.record_transport,
             &self.gateway,
             &self.seams.http,
             &self.seams.floor_store,
@@ -5492,7 +5500,7 @@ where {
             return;
         }
         if let Ok(held) = publish_bin_index(
-            &self.seams.record_transport,
+            &self.record_transport,
             api,
             &self.seams.floor_store,
             &self.seams.snapshot_cache,
@@ -5533,7 +5541,7 @@ where {
             scope_keys: OwnerSeedKeys::of(session),
         }));
         let held = self.sweep_keys.clone();
-        let transport = self.seams.record_transport.clone();
+        let transport = self.record_transport.clone();
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
         let events = self.events.clone();
@@ -5621,7 +5629,7 @@ where {
         T::SnapshotCache: Clone + 'static,
     {
         let scheduler = self.seams.scheduler.clone();
-        let transport = self.seams.record_transport.clone();
+        let transport = self.record_transport.clone();
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
         let profile = self.profile;
@@ -5737,7 +5745,7 @@ where {
         let converged_tick = self.converged_tick.clone();
         let cancels = self.cancels.clone();
         let live_blocks = self.live_blocks.clone();
-        let transport = self.seams.record_transport.clone();
+        let transport = self.record_transport.clone();
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
         let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
         let http = self.seams.http.clone();
@@ -7055,7 +7063,7 @@ where {
         pointer_consult: PointerConsultArm,
     ) -> OwnerNet<'a, T> {
         OwnerRotationNet {
-            transport: &self.seams.record_transport,
+            transport: &self.record_transport,
             api: api.as_ref(),
             gateway: &self.gateway,
             http: &self.seams.http,
@@ -7355,7 +7363,7 @@ where {
             .get()
             .map(|index| session.vault_pointer_signer(index));
         let rotator = OwnerCutNet {
-            transport: &self.seams.record_transport,
+            transport: &self.record_transport,
             api: api.as_ref(),
             gateway: &self.gateway,
             http: &self.seams.http,
@@ -7597,7 +7605,7 @@ where {
 
         let scope_root_name = grantee.ipns_name();
         let voucher = ScopePointerMint {
-            transport: &self.seams.record_transport,
+            transport: &self.record_transport,
             api,
             floors: &self.seams.floor_store,
             scheduler: &self.seams.scheduler,
@@ -8504,7 +8512,7 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let held = publish_settings(
-            &self.seams.record_transport,
+            &self.record_transport,
             api,
             &self.seams.floor_store,
             &self.seams.snapshot_cache,
@@ -8685,7 +8693,7 @@ where {
         let leg = scope_read_seed
             .as_ref()
             .map(|scope_read_seed| FolderRefresh {
-                transport: &self.seams.record_transport,
+                transport: &self.record_transport,
                 snapshot_cache: &self.seams.snapshot_cache,
                 http: &self.seams.http,
                 floors: &self.seams.floor_store,
@@ -10034,7 +10042,7 @@ where {
             node.0,
         );
         let adopted = resolve_child(
-            &self.seams.record_transport,
+            &self.record_transport,
             &self.seams.snapshot_cache,
             &adopter,
             &name,
@@ -10566,7 +10574,7 @@ where {
             .as_ref()
             .map(|held| held.record_bytes.clone());
         let load = load_bin_index(
-            &self.seams.record_transport,
+            &self.record_transport,
             &self.gateway,
             &self.seams.http,
             &self.seams.floor_store,
@@ -11556,10 +11564,11 @@ mod tests {
             endpoint: &EndpointId,
             routing_key: &str,
             max_bytes: usize,
+            bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
             *self.slot.borrow_mut() = Some(self.saved.clone());
             self.inner
-                .get_record(endpoint, routing_key, max_bytes)
+                .get_record(endpoint, routing_key, max_bytes, bearer)
                 .await
         }
 

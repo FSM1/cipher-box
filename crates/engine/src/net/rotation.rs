@@ -5173,6 +5173,7 @@ mod tests {
             endpoint: &EndpointId,
             routing_key: &str,
             max_bytes: usize,
+            bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
             if routing_key == self.key {
                 let mut dark = self.dark.lock().expect("lock");
@@ -5182,7 +5183,7 @@ mod tests {
                 }
             }
             self.inner
-                .get_record(endpoint, routing_key, max_bytes)
+                .get_record(endpoint, routing_key, max_bytes, bearer)
                 .await
         }
 
@@ -5217,9 +5218,10 @@ mod tests {
             endpoint: &EndpointId,
             routing_key: &str,
             max_bytes: usize,
+            bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
             self.inner
-                .get_record(endpoint, routing_key, max_bytes)
+                .get_record(endpoint, routing_key, max_bytes, bearer)
                 .await
         }
 
@@ -8445,9 +8447,10 @@ mod tests {
             endpoint: &EndpointId,
             routing_key: &str,
             max_bytes: usize,
+            bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
             self.inner
-                .get_record(endpoint, routing_key, max_bytes)
+                .get_record(endpoint, routing_key, max_bytes, bearer)
                 .await
         }
 

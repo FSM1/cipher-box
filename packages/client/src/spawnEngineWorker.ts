@@ -20,6 +20,11 @@ export interface EngineHostConfig extends AccountStoreNaming {
   /** `/routing/v1` origins: someguy plus at least one public endpoint. */
   recordEndpoints: string[];
   /**
+   * The gated CipherBox `/routing/v1` endpoint, which presents the session read
+   * pseudonym on GET. The other endpoints are public and present nothing.
+   */
+  recordAcceleratorUrl?: string;
+  /**
    * Base URL of the read accelerator (CONTEXT.md "Read accelerator"). Absent
    * leaves the content gateway dormant: reads fail closed as unavailable rather
    * than falling back to an endpoint nobody configured.

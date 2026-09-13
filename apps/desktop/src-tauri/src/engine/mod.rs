@@ -768,6 +768,7 @@ mod tests {
             config: EngineConfig::parse(&config::BuildEnv {
                 api_base_url: Some("http://127.0.0.1:1/api"),
                 routing_endpoints: Some("http://127.0.0.1:1"),
+                routing_accelerator_url: None,
                 read_accelerator_url: None,
                 public_gateways: None,
                 environment: Some("ci"),

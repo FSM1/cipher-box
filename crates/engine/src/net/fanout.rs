@@ -146,7 +146,10 @@ pub async fn fanout_get_classified<T: RecordTransport>(
     let mut asked = 0usize;
     for endpoint in transport.endpoints() {
         asked += 1;
-        let bytes = match transport.get_record(&endpoint, key, MAX_RECORD_BYTES).await {
+        let bytes = match transport
+            .get_record(&endpoint, key, MAX_RECORD_BYTES, None)
+            .await
+        {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
                 vacant += 1;
@@ -207,6 +210,7 @@ mod tests {
             _endpoint: &EndpointId,
             _routing_key: &str,
             max_bytes: usize,
+            _bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
             self.seen_cap.set(Some(max_bytes));
             Ok(Some(self.bytes.clone()))

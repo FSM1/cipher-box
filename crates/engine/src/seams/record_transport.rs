@@ -32,6 +32,14 @@ pub trait RecordTransport {
     /// The configured endpoint set. Never empty; order is not significant.
     fn endpoints(&self) -> Vec<EndpointId>;
 
+    /// The CipherBox routing accelerator in that set, when the host configured
+    /// one: the single endpoint whose GET leg the API's front gates on the
+    /// session read pseudonym (blueprint/api.md "The front covers both read
+    /// legs"). Every other endpoint is public and is shown no credential.
+    fn accelerator(&self) -> Option<EndpointId> {
+        None
+    }
+
     /// GET the signed record bytes stored for `routing_key` at one endpoint;
     /// `None` when the endpoint holds no record for that key.
     ///
@@ -43,11 +51,19 @@ pub trait RecordTransport {
     /// [`super::Http::send_capped`] does. An over-cap body is an `Err`: no
     /// record above the cap is adoptable, and fan-out treats the endpoint as
     /// having served nothing.
+    ///
+    /// `bearer` is the credential this endpoint may see: present it as
+    /// `Authorization: Bearer …`, and send no `Authorization` header when it is
+    /// `None`. Only [`RecordAccelerator`](crate::net::RecordAccelerator) fills
+    /// it — every caller below that wrapper passes `None`. A transport never
+    /// carries it on [`put_record`](Self::put_record): the read pseudonym
+    /// authorizes reads alone.
     async fn get_record(
         &self,
         endpoint: &EndpointId,
         routing_key: &str,
         max_bytes: usize,
+        bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>>;
 
     /// PUT opaque signed record bytes for `routing_key` at one endpoint.

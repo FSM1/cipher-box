@@ -427,12 +427,15 @@ extern "C" {
 
     #[wasm_bindgen(method, js_name = endpoints)]
     fn endpoints(this: &JsRecordTransportSeam) -> Vec<String>;
+    #[wasm_bindgen(method, catch, js_name = accelerator)]
+    fn accelerator(this: &JsRecordTransportSeam) -> Result<Option<String>, JsValue>;
     #[wasm_bindgen(method, catch, js_name = getRecord)]
     async fn get_record(
         this: &JsRecordTransportSeam,
         endpoint: &str,
         routing_key: &str,
         max_bytes: f64,
+        bearer: Option<&str>,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch, js_name = putRecord)]
     async fn put_record(
@@ -453,15 +456,22 @@ impl RecordTransport for RecordTransportAdapter {
         self.js.endpoints().into_iter().map(EndpointId).collect()
     }
 
+    fn accelerator(&self) -> Option<EndpointId> {
+        // A seam that names no accelerator leaves every leg unauthenticated
+        // rather than trapping the worker on the first read.
+        self.js.accelerator().ok().flatten().map(EndpointId)
+    }
+
     async fn get_record(
         &self,
         endpoint: &EndpointId,
         routing_key: &str,
         max_bytes: usize,
+        bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
         let result = self
             .js
-            .get_record(&endpoint.0, routing_key, max_bytes as f64)
+            .get_record(&endpoint.0, routing_key, max_bytes as f64, bearer)
             .await
             .map_err(seam_error)?;
         match Reflect::get(&result, &JsValue::from_str("kind"))

@@ -57,9 +57,13 @@ export function desktopPlatformOf(env) {
  * @returns {Record<string, string>}
  */
 export function engineBuildEnv(env) {
+  // The gated CipherBox routing endpoint has no default: only a deployment
+  // runs a front that asks for the session read pseudonym.
+  const routingAccelerator = env.VITE_ROUTING_ACCELERATOR_URL?.trim();
   return {
     VITE_API_URL: env.VITE_API_URL?.trim() || DEFAULT_API_URL,
     VITE_ROUTING_ENDPOINTS: env.VITE_ROUTING_ENDPOINTS?.trim() || DEFAULT_ROUTING_ENDPOINTS,
+    ...(routingAccelerator ? { VITE_ROUTING_ACCELERATOR_URL: routingAccelerator } : {}),
     VITE_DESKTOP_PLATFORM: desktopPlatformOf(env),
   };
 }

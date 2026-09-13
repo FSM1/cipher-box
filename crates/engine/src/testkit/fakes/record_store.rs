@@ -198,6 +198,7 @@ impl RecordTransport for InMemoryRecordStore {
         endpoint: &EndpointId,
         routing_key: &str,
         max_bytes: usize,
+        _bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
         *self
             .gets
@@ -305,7 +306,7 @@ mod tests {
     fn unknown_endpoint_is_a_seam_error() {
         let store = InMemoryRecordStore::new(vec![EndpointId::new("a")]);
         let missing = EndpointId::new("nope");
-        assert!(block_on(store.get_record(&missing, "k", 1024)).is_err());
+        assert!(block_on(store.get_record(&missing, "k", 1024, None)).is_err());
         assert!(block_on(store.put_record(&missing, "k", b"r")).is_err());
     }
 
@@ -315,7 +316,7 @@ mod tests {
         let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
         store.seed_record(&endpoint, "name", b"forged".to_vec());
         assert_eq!(
-            block_on(store.get_record(&endpoint, "name", 1024)).unwrap(),
+            block_on(store.get_record(&endpoint, "name", 1024, None)).unwrap(),
             Some(b"forged".to_vec())
         );
         block_on(store.put_record(&endpoint, "name", b"published")).unwrap();
@@ -378,10 +379,10 @@ mod tests {
         store.seed_record(&endpoint, "served", b"r".to_vec());
 
         store.fail_get_for("hidden");
-        assert!(block_on(store.get_record(&endpoint, "hidden", 1024)).is_err());
-        assert!(block_on(store.get_record(&endpoint, "served", 1024)).is_ok());
+        assert!(block_on(store.get_record(&endpoint, "hidden", 1024, None)).is_err());
+        assert!(block_on(store.get_record(&endpoint, "served", 1024, None)).is_ok());
 
         store.heal_get_for("hidden");
-        assert!(block_on(store.get_record(&endpoint, "hidden", 1024)).is_ok());
+        assert!(block_on(store.get_record(&endpoint, "hidden", 1024, None)).is_ok());
     }
 }

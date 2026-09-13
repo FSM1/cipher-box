@@ -17,6 +17,7 @@ mod child;
 mod fanout;
 mod focus;
 mod pointer_fetch;
+mod record_accelerator;
 
 /// The registry's batch cap: the server refuses a larger array — and a larger
 /// per-entry `contentCids` array — fail-closed with a `400` (blueprint/api.md
@@ -56,6 +57,7 @@ pub use publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish,
     publish_inline,
 };
+pub use record_accelerator::RecordAccelerator;
 pub use record_publish::{PreflightError, RecordPublishError};
 pub use register::register;
 pub use resolve::{

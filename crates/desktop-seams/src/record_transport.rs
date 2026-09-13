@@ -2,7 +2,7 @@
 
 use core::time::Duration;
 
-use cipherbox_engine::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
+use cipherbox_engine::seams::{EndpointId, RecordTransport, SeamError, SeamResult, bearer_header};
 
 /// IPFS delegated-routing content type for a signed IPNS record.
 const IPNS_RECORD_CONTENT_TYPE: &str = "application/vnd.ipfs.ipns-record";
@@ -22,6 +22,11 @@ fn serves_record_bytes(response: &reqwest::Response) -> bool {
         }),
         None => true,
     }
+}
+
+/// One spelling of an endpoint URL, so two configured forms compare equal.
+fn trim_slashes(base_url: String) -> EndpointId {
+    EndpointId::new(base_url.trim_end_matches('/'))
 }
 
 fn over_cap(observed: usize, limit: usize) -> SeamError {
@@ -44,6 +49,7 @@ fn over_cap(observed: usize, limit: usize) -> SeamError {
 pub struct ReqwestRecordTransport {
     client: reqwest::Client,
     endpoints: Vec<EndpointId>,
+    accelerator: Option<EndpointId>,
 }
 
 impl ReqwestRecordTransport {
@@ -54,8 +60,20 @@ impl ReqwestRecordTransport {
     /// An empty endpoint set is refused: fan-out over no endpoint resolves
     /// nothing, and a host that configured none must hear about it at
     /// construction rather than on the first read.
-    pub fn new(base_urls: impl IntoIterator<Item = String>) -> SeamResult<Self> {
-        let endpoints: Vec<EndpointId> = base_urls.into_iter().map(EndpointId::new).collect();
+    pub fn new(
+        base_urls: impl IntoIterator<Item = String>,
+        accelerator_url: Option<String>,
+    ) -> SeamResult<Self> {
+        let mut endpoints: Vec<EndpointId> = base_urls.into_iter().map(trim_slashes).collect();
+        let accelerator = accelerator_url.map(trim_slashes);
+        // The accelerator is one of the endpoints fan-out reads, and one
+        // spelling per endpoint: a trailing-slash twin of the gated leg would be
+        // read a second time with no credential.
+        if let Some(accelerator) = &accelerator
+            && !endpoints.contains(accelerator)
+        {
+            endpoints.insert(0, accelerator.clone());
+        }
         if endpoints.is_empty() {
             return Err(SeamError::new(
                 "record_transport: endpoint set must not be empty",
@@ -72,14 +90,15 @@ impl ReqwestRecordTransport {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| SeamError::new(format!("record_transport client build: {err}")))?;
-        Ok(Self { client, endpoints })
+        Ok(Self {
+            client,
+            endpoints,
+            accelerator,
+        })
     }
 
     fn record_url(endpoint: &EndpointId, routing_key: &str) -> String {
-        format!(
-            "{}/routing/v1/ipns/{routing_key}",
-            endpoint.0.trim_end_matches('/')
-        )
+        format!("{}/routing/v1/ipns/{routing_key}", endpoint.0)
     }
 }
 
@@ -88,16 +107,27 @@ impl RecordTransport for ReqwestRecordTransport {
         self.endpoints.clone()
     }
 
+    fn accelerator(&self) -> Option<EndpointId> {
+        self.accelerator.clone()
+    }
+
     async fn get_record(
         &self,
         endpoint: &EndpointId,
         routing_key: &str,
         max_bytes: usize,
+        bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
-        let mut response = self
+        let mut request = self
             .client
             .get(Self::record_url(endpoint, routing_key))
-            .header(reqwest::header::ACCEPT, IPNS_RECORD_CONTENT_TYPE)
+            .header(reqwest::header::ACCEPT, IPNS_RECORD_CONTENT_TYPE);
+        if let Some(bearer) = bearer {
+            let (name, value) = bearer_header(bearer)
+                .map_err(|_| SeamError::new("record_transport get: bearer is unusable"))?;
+            request = request.header(name, value);
+        }
+        let mut response = request
             .send()
             .await
             .map_err(|err| SeamError::new(format!("record_transport get: {err}")))?;
