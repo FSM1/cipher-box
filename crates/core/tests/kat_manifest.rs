@@ -21,7 +21,7 @@ use cipherbox_core::content::{
     CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, decode_content_cid_str,
     encode_content_cid_str, open_chunk, seal_chunk, verify_cid,
 };
-use cipherbox_core::error::{Malformed, TrustViolation};
+use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{
@@ -351,6 +351,32 @@ struct Manifest {
     content_key: ContentKeyManifest,
     owner_local: OwnerLocalManifest,
     bin_index: BinIndexManifest,
+    bounds: BoundsManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BoundsManifest {
+    bases: BTreeMap<String, String>,
+    entries: Vec<ChargedBoundManifest>,
+}
+
+/// One frozen byte bound and the at-the-bound artifact that proves what it
+/// charges: the `artifact` base decoded, top-level key `pad_field` set to
+/// `pad_len` bytes of `pad_byte`, re-encoded canonically.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChargedBoundManifest {
+    name: String,
+    charged_measure: String,
+    max_bytes: usize,
+    collection: String,
+    artifact: String,
+    pad_field: String,
+    pad_byte: u8,
+    pad_len: usize,
+    encoded_len: usize,
+    blake3: String,
 }
 
 #[derive(Deserialize)]
@@ -4080,6 +4106,112 @@ fn the_envelope_size_bounds_are_frozen_in_the_manifest() {
         m.seal.read_sealed_envelope_headroom_bytes,
         READ_SEALED_ENVELOPE_HEADROOM_BYTES
     );
+}
+
+/// `base` with its top-level `pad_field` set to `pad_len` bytes of `pad_byte` —
+/// the recipe every `bounds` entry states.
+fn pad_artifact(base: &[u8], pad_field: &str, pad_byte: u8, pad_len: usize) -> Vec<u8> {
+    let mut m = decode(base)
+        .expect("a bound base decodes")
+        .as_map()
+        .expect("a bound base is a map")
+        .clone();
+    m.insert(pad_field, Value::Bytes(vec![pad_byte; pad_len]));
+    encode(&Value::Map(m)).expect("a padded bound artifact encodes")
+}
+
+/// Decode under the artifact's own codec and re-encode: an artifact a bound
+/// admits must survive the encode side at the same size (AGENTS.md rule 8).
+fn artifact_round_trip(artifact: &str, bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
+    match artifact {
+        "envelope" => decode_envelope(bytes).and_then(|v| encode_envelope(&v)),
+        "writeBody" => decode_write_body(bytes).and_then(|v| encode_write_body(&v)),
+        "grantSection" => decode_grant_section(bytes).and_then(|v| encode_grant_section(&v)),
+        other => panic!("unknown bound artifact {other}"),
+    }
+}
+
+/// The charging convention, frozen structurally rather than in prose. The value
+/// alone does not say which bytes it charges, and the measures differ per
+/// bound, so an implementation that reads only the numbers can refuse at a byte
+/// this one accepts. Each entry rebuilds an at-the-bound artifact from its own
+/// recipe: the bound must admit it at `padLen`, refuse it at `padLen + 1` under
+/// the named collection, and the encoding must hash to the frozen digest.
+#[test]
+fn the_charged_measure_of_every_byte_bound_is_frozen_in_the_manifest() {
+    let m = manifest();
+    let expected: BTreeMap<&str, usize> = BTreeMap::from([
+        ("seal.envelopeMaxBytes", MAX_BLOCK_BYTES),
+        ("seal.readSealedMaxBytes", MAX_READ_SEALED_BYTES),
+        ("seal.criticalCarriedMaxBytes", MAX_CRITICAL_CARRIED_BYTES),
+        ("grant.writeBodyMaxBytes", MAX_WRITE_BODY_BYTES),
+        ("grant.grantSectionMaxBytes", MAX_GRANT_SECTION_BYTES),
+    ]);
+    assert_eq!(
+        m.bounds
+            .entries
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect::<BTreeSet<_>>(),
+        expected.keys().copied().collect::<BTreeSet<_>>(),
+        "every frozen byte bound names its charged measure"
+    );
+
+    for b in &m.bounds.entries {
+        let name = b.name.as_str();
+        assert_eq!(
+            b.max_bytes, expected[name],
+            "{name}: the entry must measure the frozen value"
+        );
+        let base = unhex(
+            name,
+            m.bounds
+                .bases
+                .get(&b.artifact)
+                .unwrap_or_else(|| panic!("{name}: no base for {}", b.artifact)),
+        );
+
+        let at_bound = pad_artifact(&base, &b.pad_field, b.pad_byte, b.pad_len);
+        assert_eq!(at_bound.len(), b.encoded_len, "{name}: encoded length");
+        assert_eq!(hex::encode(hash(&at_bound)), b.blake3, "{name}: digest");
+        assert_eq!(
+            artifact_round_trip(&b.artifact, &at_bound).as_deref(),
+            Ok(at_bound.as_slice()),
+            "{name}: the bound must admit its at-the-bound artifact"
+        );
+
+        let over = pad_artifact(&base, &b.pad_field, b.pad_byte, b.pad_len + 1);
+        match artifact_round_trip(&b.artifact, &over) {
+            Err(CodecError::Malformed(Malformed::TooManyStructures {
+                collection, limit, ..
+            })) => {
+                assert_eq!(collection, b.collection, "{name}: refusal collection");
+                assert_eq!(limit, b.max_bytes, "{name}: refusal limit");
+            }
+            other => panic!("{name}: one byte past the bound: {other:?}"),
+        }
+
+        // What the label claims, checked against the artifact it labels: the
+        // gap between the charge and the whole encoding is the measure.
+        match b.charged_measure.as_str() {
+            "whole-encoding" => assert_eq!(b.encoded_len, b.max_bytes, "{name}: charges the whole"),
+            "byte-string-payload" => {
+                assert_eq!(b.pad_len, b.max_bytes, "{name}: charges the payload");
+                assert!(b.encoded_len > b.max_bytes, "{name}: the head is uncharged");
+            }
+            "entry-value-plus-key" => {
+                assert!(b.pad_len < b.max_bytes, "{name}: the key is charged");
+                assert!(b.encoded_len > b.max_bytes, "{name}: charges entries only");
+            }
+            "whole-encoding-history-link-at-max" => {
+                assert!(
+                    b.encoded_len < b.max_bytes,
+                    "{name}: the link is charged at its maximum"
+                );
+            }
+            other => panic!("{name}: unknown charged measure {other}"),
+        }
+    }
 }
 
 #[test]

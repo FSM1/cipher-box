@@ -698,6 +698,18 @@ dependency majors, WASM-target divergence) and pin the acceptance domain.
   codecs, the structure-tag registry — and the vector files that lock each.
   Tests and CI consume the manifest; "what is KAT-locked" is never folklore
   (the v1 lesson).
+- **Every byte bound names its charged measure.** The measures differ per bound
+  — the whole encoding, a byte-string payload with its det-CBOR head excluded,
+  an entry's value plus its key, or a whole encoding with `writeHistoryLink`
+  charged at its maximum — so the number alone does not say which bytes it
+  charges, and a reader that honours the number without the measure refuses at
+  a byte this implementation accepts. The manifest's `bounds` table carries,
+  per bound, the measure's label, the wire key the refusal reports, and an
+  at-the-bound artifact as a recipe rather than as a megabyte-long vector: a
+  base encoding, the top-level field to pad, the largest pad the bound admits,
+  the length that pads to, and its BLAKE3. The bound must admit the rebuilt
+  artifact, on both the decode and the encode side, and refuse it one byte
+  larger.
 - **Accept and reject vectors for every codec**: malformed-input verdicts are
   part of the frozen contract from day one — duplicate keys, non-canonical
   encodings, wrong types, truncations, AAD transplants, bad signatures.
