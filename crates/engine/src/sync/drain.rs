@@ -6233,7 +6233,10 @@ fn provider_failure(error: &ProviderError) -> &'static str {
         ProviderError::InvalidEndpoint
         | ProviderError::InsecureTransport
         | ProviderError::BlockedAddress
-        | ProviderError::InvalidCredential => "your own IPFS provider settings were refused",
+        | ProviderError::InvalidCredential
+        | ProviderError::UnresolvedCredential
+        | ProviderError::NoStoredCredential
+        | ProviderError::RepointedCredential => "your own IPFS provider settings were refused",
         ProviderError::MalformedBlockAddress => {
             "the block's address is not one any provider can be told to store"
         }
@@ -6966,7 +6969,7 @@ mod tests {
         crate::content::ByoIpfsConfig {
             endpoint: endpoint.to_owned(),
             kind: crate::content::ByoKind::Kubo,
-            access_token: None,
+            access_token: crate::content::ByoBearer::None,
         }
     }
 

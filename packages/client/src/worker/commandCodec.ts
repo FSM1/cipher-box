@@ -7,7 +7,12 @@
  * No interpretation, no crypto — the engine below the facade owns all of that.
  */
 
-import { BIN_INDEX_HOLD_CHECKS, MAX_FRAGMENT_CHARS, SETTINGS_HOLD_CHECKS } from './protocol.js';
+import {
+  BIN_INDEX_HOLD_CHECKS,
+  KEEP_STORED_BEARER,
+  MAX_FRAGMENT_CHARS,
+  SETTINGS_HOLD_CHECKS,
+} from './protocol.js';
 import type {
   AuthMethodDescriptor,
   AuthMethodKind,
@@ -205,27 +210,32 @@ function binRetentionDays(value: unknown, field: string): number {
   return days;
 }
 
-function byoConfig(
-  wasm: EngineWasm,
-  value: unknown,
-  token: Uint8Array | undefined
-): WasmByoIpfsConfig {
+function byoConfig(wasm: EngineWasm, value: unknown, bearer: BearerIntent): WasmByoIpfsConfig {
   const config = record(value, 'settings.byo');
   return new wasm.ByoIpfsConfig(
     text(config.endpoint, 'settings.byo.endpoint'),
     byoKind(wasm, config.kind),
-    token
+    bearer.token,
+    bearer.keep
   );
 }
 
-/** The bearer a settings descriptor carries, checked but not yet spent. */
-function byoToken(value: unknown): Uint8Array | undefined {
+/** The bearer intent a settings descriptor carries, checked but not yet spent. */
+interface BearerIntent {
+  token: Uint8Array | undefined;
+  keep: boolean;
+}
+
+function byoBearer(value: unknown): BearerIntent {
   const byo = record(value, 'settings').byo ?? undefined;
-  if (byo === undefined) return undefined;
+  if (byo === undefined) return { token: undefined, keep: false };
   const raw = record(byo, 'settings.byo').accessToken ?? undefined;
+  if (raw === KEEP_STORED_BEARER) return { token: undefined, keep: true };
   // A view over the transferred buffer, not a copy: scrubbing it scrubs the
   // only copy that crossed into this realm.
-  return raw === undefined ? undefined : new Uint8Array(buffer(raw, 'settings.byo.accessToken'));
+  const token =
+    raw === undefined ? undefined : new Uint8Array(buffer(raw, 'settings.byo.accessToken'));
+  return { token, keep: false };
 }
 
 /**
@@ -238,7 +248,7 @@ function byoToken(value: unknown): Uint8Array | undefined {
  * builder copies what it keeps.
  */
 function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
-  const token = byoToken(value);
+  const bearer = byoBearer(value);
   try {
     const settings = record(value, 'settings');
     const mode = pinMode(wasm, settings.pinMode);
@@ -251,12 +261,12 @@ function vaultSettings(wasm: EngineWasm, value: unknown): WasmVaultSettings {
     const byo = settings.byo ?? undefined;
     return new wasm.VaultSettings(
       mode,
-      byo === undefined ? undefined : byoConfig(wasm, byo, token),
+      byo === undefined ? undefined : byoConfig(wasm, byo, bearer),
       keep,
       bin
     );
   } finally {
-    token?.fill(0);
+    bearer.token?.fill(0);
   }
 }
 

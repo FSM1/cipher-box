@@ -28,7 +28,7 @@ pub use dag::{
 pub use profile::ContentProfile;
 pub(crate) use provider::place_block;
 pub use provider::{
-    ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_byo_config,
+    ByoBearer, ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_byo_config,
 };
 pub use read::{
     ContentPlane, Gateway, GatewayConfig, GatewayOnly, GatewaySource, LocalBlocks, ReadError,

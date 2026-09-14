@@ -392,7 +392,8 @@ export interface EngineWasm {
   ByoIpfsConfig: new (
     endpoint: string,
     kind: number,
-    accessToken?: Uint8Array
+    accessToken: Uint8Array | undefined,
+    keepAccessToken: boolean
   ) => WasmByoIpfsConfig;
   VaultSettings: new (
     pinMode: number,

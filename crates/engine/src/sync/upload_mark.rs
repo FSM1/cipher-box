@@ -100,7 +100,7 @@ pub(crate) fn resume_from(stored: &[u8], here: &Destinations, leaves: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::ByoIpfsConfig;
+    use crate::content::{ByoBearer, ByoIpfsConfig};
     use crate::settings::Placement;
 
     const ROOT: &[u8] = b"root-cid";
@@ -109,7 +109,7 @@ mod tests {
         ByoIpfsConfig {
             endpoint: endpoint.to_owned(),
             kind: crate::content::ByoKind::Kubo,
-            access_token: None,
+            access_token: ByoBearer::None,
         }
     }
 

@@ -19,7 +19,7 @@ use cipherbox_core::seal::{open_settings_record, seal_settings_record};
 use zeroize::Zeroizing;
 
 use cipherbox_engine::api::ApiClient;
-use cipherbox_engine::content::{ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
+use cipherbox_engine::content::{ByoBearer, ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{
     BoxedTask, EndpointId, FloorStore, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
@@ -61,7 +61,7 @@ fn configured() -> VaultSettings {
         byo: Some(ByoIpfsConfig {
             endpoint: "https://kubo.example".to_owned(),
             kind: ByoKind::Kubo,
-            access_token: Some(Zeroizing::new("s3cret".to_owned())),
+            access_token: ByoBearer::Set(Zeroizing::new("s3cret".to_owned())),
         }),
         retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
         bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
@@ -223,7 +223,7 @@ fn a_second_publish_from_the_same_device_supersedes_the_first() {
         byo: Some(ByoIpfsConfig {
             endpoint: "https://kubo.example".to_owned(),
             kind: ByoKind::Kubo,
-            access_token: Some(Zeroizing::new("rotated".to_owned())),
+            access_token: ByoBearer::Set(Zeroizing::new("rotated".to_owned())),
         }),
         ..configured()
     };
@@ -839,7 +839,7 @@ fn external_only() -> VaultSettings {
         byo: Some(ByoIpfsConfig {
             endpoint: "https://kubo.example".to_owned(),
             kind: ByoKind::Kubo,
-            access_token: None,
+            access_token: ByoBearer::None,
         }),
         retention: RetentionPolicy::KeepAll,
         bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
@@ -1208,7 +1208,7 @@ fn settings_the_reader_would_refuse_are_never_published() {
             byo: Some(ByoIpfsConfig {
                 endpoint: endpoint.to_owned(),
                 kind: ByoKind::Kubo,
-                access_token: None,
+                access_token: ByoBearer::None,
             }),
             ..VaultSettings::default()
         };
@@ -1325,7 +1325,7 @@ fn hand_encoded_settings(endpoint: &str) -> VaultSettings {
         byo: Some(ByoIpfsConfig {
             endpoint: endpoint.to_owned(),
             kind: ByoKind::Kubo,
-            access_token: None,
+            access_token: ByoBearer::None,
         }),
         retention: RetentionPolicy::KeepAll,
         bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
@@ -2008,6 +2008,133 @@ fn saving_vault_settings_through_the_facade_publishes_the_record() {
             "the settings record published to every endpoint",
         );
     }
+}
+
+/// The keep intent's whole point: a member who changes an unrelated field does
+/// not retype the one field no read can show them, and the record still carries
+/// a provider that authenticates.
+#[test]
+fn a_save_that_keeps_the_bearer_republishes_the_stored_one() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the first save publishes the bearer");
+
+    let mut kept = configured();
+    kept.retention = RetentionPolicy::KeepLatest(NonZeroU64::new(9).expect("nonzero"));
+    kept.byo.as_mut().expect("a provider").access_token = ByoBearer::Keep;
+    block_on(engine.command(Command::SaveVaultSettings { settings: kept }))
+        .expect("the keeping save publishes");
+
+    let mut expected = configured();
+    expected.retention = RetentionPolicy::KeepLatest(NonZeroU64::new(9).expect("nonzero"));
+    let reader = world.device(b"second-device");
+    assert_eq!(
+        load(&world, &reader, &blocks, &SECRET),
+        SettingsLoad::Resolved(expected),
+        "the published record kept the provider bearer and took the new retention",
+    );
+}
+
+/// Fail-closed: keeping nothing publishes a credential-free provider, which
+/// breaks the authentication the save asked to preserve.
+#[test]
+fn a_save_that_keeps_a_bearer_this_session_does_not_hold_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    let mut kept = configured();
+    kept.byo.as_mut().expect("a provider").access_token = ByoBearer::Keep;
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings { settings: kept })),
+        Err(EngineError::MalformedInput {
+            check: "byo-credential-not-stored",
+        }),
+    );
+    let name = settings_name(&SECRET);
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "nothing was published",
+        );
+    }
+}
+
+/// A bearer is kept for the provider it was stored for. Carrying it on to an
+/// endpoint the caller chose would present the member's credential to that
+/// endpoint, which is the exfiltration the write-only boundary denies.
+#[test]
+fn a_save_that_keeps_a_bearer_on_to_another_provider_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the first save publishes the bearer");
+
+    let mut repointed = configured();
+    let byo = repointed.byo.as_mut().expect("a provider");
+    byo.endpoint = "https://elsewhere.example".to_owned();
+    byo.access_token = ByoBearer::Keep;
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: repointed,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "byo-credential-repointed",
+        }),
+    );
+
+    let reader = world.device(b"second-device");
+    assert_eq!(
+        load(&world, &reader, &blocks, &SECRET),
+        SettingsLoad::Resolved(configured()),
+        "the published record still names the provider the first save set",
+    );
+}
+
+/// The same binding on the other axis: a kind change is a different provider
+/// API, so the stored bearer does not travel to it either.
+#[test]
+fn a_save_that_keeps_a_bearer_on_to_another_provider_kind_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let (mut engine, _events, _tasks) = boot(&world, &device, &blocks);
+
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: configured(),
+    }))
+    .expect("the first save publishes the bearer");
+
+    let mut repointed = configured();
+    let byo = repointed.byo.as_mut().expect("a provider");
+    byo.kind = ByoKind::Pinata;
+    byo.access_token = ByoBearer::Keep;
+
+    assert_eq!(
+        block_on(engine.command(Command::SaveVaultSettings {
+            settings: repointed,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "byo-credential-repointed",
+        }),
+    );
 }
 
 #[test]

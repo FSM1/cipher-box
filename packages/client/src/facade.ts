@@ -13,7 +13,7 @@
 import { type AccountStoreNaming, eraseAccountStores } from './accountStores.js';
 import { isBuffer, wipeBytes } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
-import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
+import { KEEP_STORED_BEARER, MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
   ApprovalDecision,
   AuthMethodDescriptor,
@@ -400,7 +400,7 @@ export class EngineFacade {
    */
   saveVaultSettings(settings: VaultSettingsDescriptor): Promise<CommandOutcomeDescriptor> {
     const token = settings.byo?.accessToken;
-    if (token != null && !isBuffer(token)) {
+    if (token != null && token !== KEEP_STORED_BEARER && !isBuffer(token)) {
       wipeBytes(token);
       return Promise.reject(new Error('accessToken must be a transferable buffer'));
     }

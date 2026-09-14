@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { KEEP_STORED_BEARER } from '@cipherbox/client';
 import {
   buildVaultSettings,
   DEFAULT_VAULT_SETTINGS_FORM,
@@ -42,9 +43,28 @@ describe('the vault settings a save publishes', () => {
       buildVaultSettings(form({ byoEndpoint: 'https://kubo.example', byoAccessToken: 'opaque' }))
     );
 
-    const carried = built.byo?.accessToken;
-    expect(carried?.byteLength).toBe('opaque'.length);
-    expect(new TextDecoder().decode(new Uint8Array(carried!))).toBe('opaque');
+    const carried = built.byo?.accessToken as ArrayBuffer;
+    expect(carried.byteLength).toBe('opaque'.length);
+    expect(new TextDecoder().decode(new Uint8Array(carried))).toBe('opaque');
+  });
+
+  it('spells a kept credential as the keep intent, never as bytes', () => {
+    const built = settings(buildVaultSettings(form({ byoEndpoint: 'https://kubo.example' }), true));
+
+    expect(built.byo?.accessToken).toBe(KEEP_STORED_BEARER);
+  });
+
+  // The keep intent must not smuggle a typed bearer past the engine's
+  // same-provider binding: the form sends one or the other, never both.
+  it('drops a typed bearer when the save keeps the stored one', () => {
+    const built = settings(
+      buildVaultSettings(
+        form({ byoEndpoint: 'https://kubo.example', byoAccessToken: 'opaque' }),
+        true
+      )
+    );
+
+    expect(built.byo?.accessToken).toBe(KEEP_STORED_BEARER);
   });
 
   it('mints a fresh bearer buffer per build, because the send detaches it', () => {

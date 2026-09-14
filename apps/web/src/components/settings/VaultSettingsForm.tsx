@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import { originNotice, prefillFromSummary, settingsSaveVerdict } from '@cipherbox/client';
+import {
+  KEEP_STORED_BEARER,
+  originNotice,
+  prefillFromSummary,
+  settingsSaveVerdict,
+} from '@cipherbox/client';
 import type { ByoKind, PinMode, VaultSettingsSummaryDescriptor } from '@cipherbox/client';
 import { useCommandRunner } from '../../hooks/useCommandRunner';
 import {
@@ -39,7 +44,7 @@ const BYO_KINDS: { value: ByoKind; label: string }[] = [
  * credential is not: it is the one field the wasm boundary keeps write-only, so
  * a stored bearer never crosses into JS (`crates/wasm/src/lib.rs`). A save
  * replaces the whole record with what is on the form, so `settingsSaveVerdict`
- * refuses the two shapes that destroy a choice the member did not edit.
+ * decides how the one field the form cannot show is spelled.
  */
 export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) {
   const [fields, setFields] = useState<VaultSettingsFields>(DEFAULT_VAULT_SETTINGS_FORM);
@@ -85,7 +90,10 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
       origin,
       credentialStored,
       byoEndpoint: fields.byoEndpoint,
+      byoKind: fields.byoKind,
       byoAccessToken: fields.byoAccessToken,
+      storedEndpoint: summary.byoEndpoint,
+      storedKind: summary.byoKind,
       clearCredential,
       loadAcknowledged,
     });
@@ -93,7 +101,7 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
       setProblem(verdict.problem);
       return;
     }
-    const draft = buildVaultSettings(fields);
+    const draft = buildVaultSettings(fields, verdict.keepStoredCredential);
     setProblem(draft.ok ? null : draft.problem);
     if (!draft.ok) return;
     void run('saveVaultSettings', (facade) => facade.saveVaultSettings(draft.settings)).then(
@@ -101,7 +109,9 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
         // The form is the bearer's terminal owner: a send transfers the buffer
         // out and detaches it, so a still-readable one never left this realm.
         const bearer = draft.settings.byo?.accessToken;
-        if (bearer && bearer.byteLength > 0) new Uint8Array(bearer).fill(0);
+        if (bearer != null && bearer !== KEEP_STORED_BEARER && bearer.byteLength > 0) {
+          new Uint8Array(bearer).fill(0);
+        }
         setSaved(accepted);
         // The bearer is spent by the send that carried it; a retry types it
         // again rather than re-sending a buffer this realm no longer owns.
@@ -228,7 +238,7 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
             : '// the engine never reads a provider credential back out,'}
           <br />
           {credentialStored
-            ? '// so keeping the provider means typing it again — or clearing it outright.'
+            ? '// so leave this blank to keep it. it is kept only for the provider above.'
             : '// so this field is the only place one can be set.'}
         </p>
       )}
@@ -270,8 +280,7 @@ export function VaultSettingsForm({ summary, onSaved }: VaultSettingsFormProps) 
           onChange={(event) => setAcknowledged(event.target.checked)}
         />
         <span>
-          i understand saving replaces every stored setting with exactly what is on this form,
-          including the provider credential this form cannot show me
+          i understand saving replaces every stored setting with exactly what is on this form
         </span>
       </label>
 

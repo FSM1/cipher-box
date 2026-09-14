@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { KEEP_STORED_BEARER } from '@cipherbox/client';
 import type { VaultSettingsSummaryDescriptor } from '@cipherbox/client';
 import { describe, expect, it } from 'vitest';
 import { VaultSettingsForm } from './VaultSettingsForm';
@@ -123,8 +124,8 @@ describe('the vault settings form', () => {
 
     // The fake takes the descriptor in-process rather than transferring it, so
     // the buffer is still this realm's to scrub — as a refused dispatch leaves it.
-    const carried = taking.saves[0].byo?.accessToken;
-    expect(new Uint8Array(carried!)).toEqual(new Uint8Array('opaque'.length));
+    const carried = taking.saves[0].byo?.accessToken as ArrayBuffer;
+    expect(new Uint8Array(carried)).toEqual(new Uint8Array('opaque'.length));
   });
 
   it('scrubs the bearer the engine refused rather than leaving it in memory', async () => {
@@ -134,8 +135,8 @@ describe('the vault settings form', () => {
     type('provider access token', 'opaque');
     await save();
 
-    const carried = taking.saves[0].byo?.accessToken;
-    expect(new Uint8Array(carried!)).toEqual(new Uint8Array('opaque'.length));
+    const carried = taking.saves[0].byo?.accessToken as ArrayBuffer;
+    expect(new Uint8Array(carried)).toEqual(new Uint8Array('opaque'.length));
   });
 
   it('sends nothing until the member takes on replacing the whole record', () => {
@@ -225,14 +226,27 @@ describe('the vault settings form', () => {
 });
 
 describe('a save over a credential the form cannot show', () => {
-  it('refuses to blank a stored credential as a side effect of an unrelated edit', async () => {
+  it('keeps a stored credential through an unrelated edit', async () => {
     const taking = renderForm(engineTaking(), WITH_CREDENTIAL);
 
     type('keep newest versions', '5');
     await save();
 
+    expect(taking.saves).toHaveLength(1);
+    expect(taking.saves[0].byo?.accessToken).toBe(KEEP_STORED_BEARER);
+    expect(taking.saves[0].keepLatestVersions).toBe(5);
+  });
+
+  // The stored bearer belongs to the provider it was stored for. A form that
+  // kept it on to another endpoint would hand the credential to that endpoint.
+  it('refuses to keep a stored credential on to a repointed provider', async () => {
+    const taking = renderForm(engineTaking(), WITH_CREDENTIAL);
+
+    type('your ipfs provider', 'https://elsewhere.example');
+    await save();
+
     expect(taking.saves).toEqual([]);
-    expect(screen.getByTestId('settings-error').textContent).toMatch(/credential/i);
+    expect(screen.getByTestId('settings-error').textContent).toMatch(/different provider/i);
   });
 
   it('clears the stored credential where the member asks for exactly that', async () => {

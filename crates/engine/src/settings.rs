@@ -34,7 +34,9 @@ use zeroize::Zeroizing;
 
 use crate::api::ApiClient;
 use crate::content::validate_byo_config;
-use crate::content::{ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy};
+use crate::content::{
+    ByoBearer, ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy,
+};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
@@ -104,12 +106,42 @@ impl VaultSettings {
             byo_credential_stored: self
                 .byo
                 .as_ref()
-                .is_some_and(|byo| byo.access_token.is_some()),
+                .is_some_and(|byo| byo.access_token.token().is_some()),
             retention: self.retention,
             bin_retention_days: self.bin_retention_days,
             origin,
         }
     }
+}
+
+/// Settle a save's bearer intent against `held`, the provider config this
+/// session already holds, so [`ByoBearer::Keep`] publishes the stored bearer
+/// rather than the blank the host can never fill.
+///
+/// The keep is bound to the same endpoint and kind, and that binding is the
+/// whole security of the intent: without it a host could carry a credential it
+/// cannot read on to an endpoint it chose, and the next placement would present
+/// the member's bearer there (security rule 3). Keeping with nothing to keep is
+/// refused rather than publishing a credential-free provider.
+pub fn resolve_kept_bearer(
+    settings: &VaultSettings,
+    held: Option<&ByoIpfsConfig>,
+) -> Result<VaultSettings, ProviderError> {
+    let mut settings = settings.clone();
+    if let Some(byo) = settings.byo.as_mut()
+        && byo.access_token == ByoBearer::Keep
+    {
+        let held = held.ok_or(ProviderError::NoStoredCredential)?;
+        if held.endpoint != byo.endpoint || held.kind != byo.kind {
+            return Err(ProviderError::RepointedCredential);
+        }
+        let kept = held
+            .access_token
+            .token()
+            .ok_or(ProviderError::NoStoredCredential)?;
+        byo.access_token = ByoBearer::Set(kept.clone());
+    }
+    Ok(settings)
 }
 
 /// The member's settings as a host may see them: everything but the provider
@@ -943,7 +975,7 @@ fn encode_settings_body(
                 "accessToken",
                 config
                     .access_token
-                    .as_ref()
+                    .token()
                     .map_or(Value::Null, |token| Value::Text(token.to_string())),
             );
             byo.insert("endpoint", Value::Text(config.endpoint.clone()));
@@ -1057,8 +1089,8 @@ fn read_byo(value: Option<&mut Value>) -> Result<Option<ByoIpfsConfig>, BodyErro
             }
             .into());
         }
-        Some(Value::Null) => None,
-        Some(Value::Text(token)) => Some(Zeroizing::new(token)),
+        Some(Value::Null) => ByoBearer::None,
+        Some(Value::Text(token)) => ByoBearer::Set(Zeroizing::new(token)),
         Some(other) => return Err(other.as_text().unwrap_err().into()),
     };
     Ok(Some(ByoIpfsConfig {
@@ -1112,11 +1144,17 @@ mod tests {
         RetentionPolicy::KeepLatest(NonZeroU64::new(n).expect("nonzero"))
     }
 
+    fn bearer(token: Option<&str>) -> ByoBearer {
+        token.map_or(ByoBearer::None, |t| {
+            ByoBearer::Set(Zeroizing::new(t.to_owned()))
+        })
+    }
+
     fn byo(endpoint: &str, kind: ByoKind, token: Option<&str>) -> ByoIpfsConfig {
         ByoIpfsConfig {
             endpoint: endpoint.to_owned(),
             kind,
-            access_token: token.map(|t| Zeroizing::new(t.to_owned())),
+            access_token: bearer(token),
         }
     }
 
@@ -1129,6 +1167,94 @@ mod tests {
             .expect("decode");
         assert_eq!(body.revision, REVISION, "the revision round-trips");
         body.settings
+    }
+
+    fn keeping(endpoint: &str, kind: ByoKind) -> VaultSettings {
+        VaultSettings {
+            pin_mode: PinMode::Dual,
+            byo: Some(ByoIpfsConfig {
+                endpoint: endpoint.to_owned(),
+                kind,
+                access_token: ByoBearer::Keep,
+            }),
+            ..VaultSettings::default()
+        }
+    }
+
+    /// The decode path has no spelling for a keep intent, so the encode path
+    /// must refuse one — release-active, never an assertion (AGENTS.md rule 8).
+    #[test]
+    fn the_seal_path_refuses_an_unresolved_keep_intent() {
+        assert_eq!(
+            validate(&keeping("https://node.example", ByoKind::Kubo)),
+            Err(ProviderError::UnresolvedCredential),
+        );
+    }
+
+    #[test]
+    fn a_kept_bearer_takes_the_one_the_session_holds() {
+        let held = byo("https://node.example", ByoKind::Kubo, Some("tok"));
+        let resolved =
+            resolve_kept_bearer(&keeping("https://node.example", ByoKind::Kubo), Some(&held))
+                .expect("the keep resolves");
+
+        assert_eq!(
+            resolved.byo.expect("a provider").access_token,
+            held.access_token
+        );
+    }
+
+    #[test]
+    fn a_kept_bearer_does_not_travel_to_another_provider() {
+        let held = byo("https://node.example", ByoKind::Kubo, Some("tok"));
+
+        assert_eq!(
+            resolve_kept_bearer(
+                &keeping("https://elsewhere.example", ByoKind::Kubo),
+                Some(&held)
+            ),
+            Err(ProviderError::RepointedCredential),
+        );
+        assert_eq!(
+            resolve_kept_bearer(
+                &keeping("https://node.example", ByoKind::Pinata),
+                Some(&held)
+            ),
+            Err(ProviderError::RepointedCredential),
+        );
+    }
+
+    #[test]
+    fn keeping_a_bearer_the_session_does_not_hold_is_refused() {
+        let tokenless = byo("https://node.example", ByoKind::Kubo, None);
+
+        assert_eq!(
+            resolve_kept_bearer(&keeping("https://node.example", ByoKind::Kubo), None),
+            Err(ProviderError::NoStoredCredential),
+        );
+        assert_eq!(
+            resolve_kept_bearer(
+                &keeping("https://node.example", ByoKind::Kubo),
+                Some(&tokenless)
+            ),
+            Err(ProviderError::NoStoredCredential),
+        );
+    }
+
+    /// A save that names its own bearer is untouched by the resolve, whatever
+    /// the session holds.
+    #[test]
+    fn a_supplied_bearer_is_left_alone() {
+        let held = byo("https://node.example", ByoKind::Kubo, Some("stored"));
+        let supplied = VaultSettings {
+            byo: Some(byo("https://node.example", ByoKind::Kubo, Some("typed"))),
+            ..VaultSettings::default()
+        };
+
+        assert_eq!(
+            resolve_kept_bearer(&supplied, Some(&held)).expect("nothing to resolve"),
+            supplied,
+        );
     }
 
     #[test]

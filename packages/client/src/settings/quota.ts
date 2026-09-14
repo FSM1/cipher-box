@@ -104,7 +104,16 @@ export function originNotice(origin: SettingsOrigin): OriginNotice {
   return ORIGIN_NOTICES[origin];
 }
 
-export type SettingsSaveVerdict = { ok: true } | { ok: false; problem: string };
+export type SettingsSaveVerdict =
+  | {
+      ok: true;
+      /**
+       * Whether the save must ask the engine to keep the bearer it already
+       * holds rather than publish one off the form.
+       */
+      keepStoredCredential: boolean;
+    }
+  | { ok: false; problem: string };
 
 /** The settings form as it stands, against the summary it was prefilled from. */
 export interface SettingsSaveIntent {
@@ -112,7 +121,11 @@ export interface SettingsSaveIntent {
   /** Whether the vault holds a provider bearer, which no read can show. */
   credentialStored: boolean;
   byoEndpoint: string;
+  byoKind: ByoKind;
   byoAccessToken: string;
+  /** The provider the summary reported, which is the one the bearer is stored for. */
+  storedEndpoint: string | null;
+  storedKind: ByoKind | null;
   /** The member asked outright for the stored credential to go. */
   clearCredential: boolean;
   /** The member took on publishing over a record this session never read. */
@@ -120,10 +133,14 @@ export interface SettingsSaveIntent {
 }
 
 /**
- * Whether the form may be published as it stands. A save replaces the whole
- * record, so both refusals here are destructive edits the member did not ask
- * for: publishing defaults over an unread record, and blanking a bearer the
- * form cannot show back.
+ * Whether the form may be published as it stands, and how it spells the
+ * provider bearer. A save replaces the whole record, so a blank credential
+ * field over a stored bearer keeps it rather than clearing it — but only while
+ * the form still names the provider it was stored for. A repointed provider is
+ * unlikely to authenticate against the old credential, so it asks for one.
+ *
+ * The same binding is enforced in the engine, which is where it is load-bearing
+ * (`resolve_kept_bearer`). Here it is what turns a refusal into a keep.
  */
 export function settingsSaveVerdict(intent: SettingsSaveIntent): SettingsSaveVerdict {
   if (originNotice(intent.origin).unread && !intent.loadAcknowledged) {
@@ -133,19 +150,19 @@ export function settingsSaveVerdict(intent: SettingsSaveIntent): SettingsSaveVer
         'no settings record loaded, so saving would publish these defaults over whatever the vault holds. take that on to save anyway.',
     };
   }
-  if (
-    intent.credentialStored &&
-    intent.byoEndpoint.trim() !== '' &&
-    intent.byoAccessToken === '' &&
-    !intent.clearCredential
-  ) {
+  const endpoint = intent.byoEndpoint.trim();
+  if (!intent.credentialStored || endpoint === '' || intent.byoAccessToken !== '') {
+    return { ok: true, keepStoredCredential: false };
+  }
+  if (intent.clearCredential) return { ok: true, keepStoredCredential: false };
+  if (endpoint !== (intent.storedEndpoint ?? '').trim() || intent.byoKind !== intent.storedKind) {
     return {
       ok: false,
       problem:
-        'a provider credential is stored and this field is blank, which would clear it. re-enter it, or clear it outright.',
+        'this names a different provider from the one the stored credential belongs to. enter a credential for it, or clear the stored one.',
     };
   }
-  return { ok: true };
+  return { ok: true, keepStoredCredential: true };
 }
 
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const;
