@@ -50,16 +50,37 @@ function origin() {
   };
   const liveWorkers = (): number => workers.filter((w) => !w.terminated).length;
 
-  const tab = (overrides?: Partial<EngineClientConfig>): EngineClient =>
-    new EngineClient({
+  // Each tab's courier address, in creation order, so a test can dial one.
+  const addresses: string[] = [];
+
+  const tab = (overrides?: Partial<EngineClientConfig>): EngineClient => {
+    const address = `tab${(tabs += 1)}`;
+    addresses.push(address);
+    return new EngineClient({
       locks,
       createChannel: () => bus.channel(),
       spawnWorker,
-      courier: ports.courier(`tab${(tabs += 1)}`),
+      courier: ports.courier(address),
       ...overrides,
     });
+  };
 
-  return { tab, workers, liveWorkers };
+  return { tab, workers, liveWorkers, ports, addresses };
+}
+
+/**
+ * A same-origin context with no session of its own, dialing a leader's courier
+ * and greeting under an account it invented. Nothing authenticates a greeting,
+ * so this is the untrusted input an engine-less leader stands down for.
+ */
+async function greetUnderInventedAccount(
+  ports: FakeCourierNetwork,
+  leaderAddress: string,
+  clientId: string
+): Promise<void> {
+  const port = await ports.courier(`hostile-${clientId}`).connect(leaderAddress);
+  port.start?.();
+  port.postMessage({ type: 'cb:portHello', clientId, accountId: 'acct99' });
 }
 
 /** The origin's engine holds one account, so every tab in a test starts on it. */
@@ -669,6 +690,61 @@ describe('EngineClient leadership + transport swap', () => {
     expect((leader === a ? b : a).currentRole()).toBe('follower');
     await a.dispose();
     await b.dispose();
+  });
+
+  it('spawns one worker for a greeting flood against an engine-less leader', async () => {
+    const { tab, workers, ports, addresses } = origin();
+    const idle = tab();
+    await tick();
+    expect(idle.currentRole()).toBe('leader');
+    const spawned = workers.length;
+
+    for (let i = 0; i < 20; i += 1) {
+      await greetUnderInventedAccount(ports, addresses[0], `hostile${i}`);
+      await tick();
+    }
+
+    // This is the only tab of the origin, so every stand-down re-elects it and
+    // cold-starts a fresh worker: the worker count is the amplification a
+    // greeting buys. One hand-off per cooldown window, not one per message.
+    expect(workers.length).toBe(spawned + 1);
+    expect(idle.currentRole()).toBe('leader');
+
+    await idle.dispose();
+  });
+
+  it('still steps aside for a sign-in that arrives inside the flood cooldown', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { tab, ports, addresses } = origin();
+      const secretSource = {
+        provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret([5])),
+      };
+      const idle = tab();
+      const signingIn = tab({ secretSource });
+      await tick();
+      expect(idle.currentRole()).toBe('leader');
+
+      // A flood opens the cooldown; the tab stands down once and is elected again.
+      await greetUnderInventedAccount(ports, addresses[0], 'hostile');
+      for (let i = 0; i < 6; i += 1) await tick();
+
+      // The throttle defers a stand-down rather than dropping it, so a real tab
+      // greeting inside the window is still served — well inside the deadline
+      // its parked start waits out.
+      const started = startTab(signingIn);
+      await tick();
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(started).resolves.toBeUndefined();
+      expect(signingIn.currentRole()).toBe('leader');
+      expect(signingIn.signedInAccount()).toBe(TEST_ACCOUNT_ID);
+
+      await signingIn.dispose();
+      await idle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a refusal that names another account, engine-less or not', async () => {
