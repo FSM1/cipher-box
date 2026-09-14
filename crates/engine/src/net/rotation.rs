@@ -5394,6 +5394,38 @@ mod tests {
         );
     }
 
+    /// Another device rotated the enclosing scope and the sweep re-sealed this
+    /// descendant's ascent link to the keypair the new parent override seed
+    /// derives. This walk still holds the previous seed, so it can open the link
+    /// under no key it holds: availability, never a verdict against the owner's
+    /// own honest device.
+    #[test]
+    fn a_descendant_resealed_under_a_rotated_parent_seed_is_unavailable_not_rejected() {
+        const ROTATED_PARENT_SCOPE_SEED: [u8; 32] = [0x9c; 32];
+        let child = interior(CHILD_SCOPE, &ROTATED_PARENT_SCOPE_SEED, Vec::new());
+        let root = vault_root(SCOPE, vec![child_ref(CHILD_SCOPE, &child)]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let cache = InMemorySnapshotCache::default();
+
+        let walked = harness
+            .walk_boundaries(&cache, &root)
+            .expect("the vault root gates");
+
+        assert!(walked.proved.is_empty());
+        assert_eq!(
+            walked.failure,
+            Some(WalkFailure::Unavailable),
+            "a parent seed this walk has not refreshed accuses nobody"
+        );
+        assert_eq!(
+            block_on(cache.get(child.name.as_str().as_bytes())).expect("cache read"),
+            None,
+            "and the unproved record still reaches nothing durable"
+        );
+    }
+
     /// A scope root another owner signed is that owner's, wherever an index
     /// names it. The gate anchors on this vault's own contact-anchored owner
     /// identity, so a bookmarked sharer's root cannot enter the proved set.
@@ -7309,7 +7341,7 @@ mod tests {
     /// retry that reused the plan's own `current_override_seed` would fall into,
     /// which would fail closed at the gate and strand the descendant again.
     #[test]
-    fn a_descendant_gated_under_the_post_cut_root_seed_is_rejected() {
+    fn a_descendant_gated_under_the_post_cut_root_seed_does_not_gate() {
         let (_, child, child_ref) = owner_tree();
         let harness = Harness::plain();
         harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
@@ -7317,7 +7349,7 @@ mod tests {
 
         assert_eq!(
             block_on(harness.net_under(&[0xab; 32], &index).resolve(&child_ref)).err(),
-            Some(ResolveFailure::Rejected),
+            Some(ResolveFailure::Unavailable),
             "a post-cut root seed derives the wrong ascent authority",
         );
         assert!(
