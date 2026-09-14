@@ -478,6 +478,25 @@ struct GatedWritePlane {
     over_sequence: Option<u64>,
 }
 
+/// One record head as this pass read it: the name it was read at, the verified
+/// record, and the head block the gate re-assembles from.
+struct RecordHead {
+    name: IpnsName,
+    /// The verified IPNS record the head came out of.
+    record_bytes: Vec<u8>,
+    /// The record's own IPNS sequence, as the fetch authenticated it.
+    sequence: u64,
+    block: Vec<u8>,
+}
+
+impl RecordHead {
+    /// The envelope this head carries. A head block that does not decode is a
+    /// fail-closed rejection, never an availability stall.
+    fn envelope(&self) -> Result<Envelope, ResolveFailure> {
+        decode_envelope(&self.block).map_err(|_| ResolveFailure::Rejected)
+    }
+}
+
 /// Parse a `ChildScopeRef`'s opaque `ipnsName` bytes. A name that is not a
 /// canonical IPNS name has no verifying key to gate against, so it is a
 /// fail-closed rejection rather than an availability stall.
@@ -1455,8 +1474,8 @@ where
 /// Unseal a gated scope root's write-body under the write scope seed the reader
 /// recovered, at the durable write-epoch floor, and report that floor — the AAD
 /// epoch the seed's own recovery already bound, and the write epoch a re-seal of
-/// this root must republish at. A root held keyless has no readable write-body —
-/// availability, not a trust verdict.
+/// this root must republish at. A scope with no durable write-epoch floor has
+/// nothing to open the body under — availability, not a trust verdict.
 async fn write_plane_of<F: FloorStore>(
     floors: &F,
     envelope: &Envelope,
@@ -1474,12 +1493,67 @@ async fn write_plane_of<F: FloorStore>(
     Ok((body, write_epoch))
 }
 
+/// A gated scope root's write plane, plus the seed it opened under for a caller
+/// that carries that seed on.
+struct GatedWriteBody {
+    write_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    body: WriteBody,
+    epoch: u64,
+}
+
+/// [`write_plane_of`] under the seed a gated root itself recovered. A root held
+/// keyless has no readable write-body — availability, not a trust verdict.
+async fn write_plane_of_gated<F: FloorStore>(
+    floors: &F,
+    gated: &GatedScopeRoot,
+    scope_id: [u8; 16],
+) -> Result<GatedWriteBody, ResolveFailure> {
+    let Some(write_scope_seed) = gated.write_scope_seed.clone() else {
+        return Err(ResolveFailure::Unavailable);
+    };
+    let (body, epoch) = write_plane_of(
+        floors,
+        &gated.envelope,
+        &gated.section,
+        &write_scope_seed,
+        scope_id,
+    )
+    .await?;
+    Ok(GatedWriteBody {
+        write_scope_seed,
+        body,
+        epoch,
+    })
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
     S: SnapshotCache,
 {
+    /// The head of the record at `ipns_name`: the name parsed, the record
+    /// fan-out verified, and the head block re-assembled from it. Every read
+    /// edge that gates a record itself, rather than through
+    /// [`Self::resealable_root`], starts here, so one rule governs what a head
+    /// read refuses and on which axis.
+    async fn head_at(&self, ipns_name: &[u8]) -> Result<RecordHead, ResolveFailure> {
+        let name = scope_name(ipns_name)?;
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let (sequence, block) =
+            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
+                .await
+                .map_err(resolve_verdict)?;
+        Ok(RecordHead {
+            name,
+            record_bytes,
+            sequence,
+            block,
+        })
+    }
+
     /// The freshest verified record at `name` run through the adoption gate
     /// under `scope_id` — the caller's own trusted label, imposed on the gate so
     /// a record claiming another scope is a transplant it rejects
@@ -1649,19 +1723,11 @@ where
             .resealable_root(scope.scope_id, &name, anchor)
             .await
             .map_err(ResolveFailure::from)?;
-        // A root held keyless has no readable write-body — availability, not a
-        // trust verdict.
-        let Some(write_scope_seed) = root.write_scope_seed.as_deref() else {
-            return Err(ResolveFailure::Unavailable);
-        };
-        let (write_body, write_epoch) = write_plane_of(
-            self.floors,
-            &root.envelope,
-            &root.section,
-            write_scope_seed,
-            scope.scope_id,
-        )
-        .await?;
+        let GatedWriteBody {
+            body: write_body,
+            epoch: write_epoch,
+            ..
+        } = write_plane_of_gated(self.floors, &root, scope.scope_id).await?;
         self.ancestry.record(
             scope.scope_id,
             &root.read_scope_seed,
@@ -2579,13 +2645,18 @@ impl SweptScopeState {
     }
 }
 
-/// Carry a gate error into the sweep's read arm on rule 6's axis: a rejection
-/// is a fail-closed trust violation, a seam failure is availability.
-fn read_verdict(error: GateError) -> SweepResolveFailure {
+/// Carry a gate error onto rule 6's axis: a rejection is a fail-closed trust
+/// violation, a seam failure is availability.
+fn resolve_verdict(error: GateError) -> ResolveFailure {
     match error {
-        GateError::Seam(_) => SweepResolveFailure::Unavailable,
-        GateError::Rejected(_) => SweepResolveFailure::Rejected,
+        GateError::Seam(_) => ResolveFailure::Unavailable,
+        GateError::Rejected(_) => ResolveFailure::Rejected,
     }
+}
+
+/// [`resolve_verdict`] in the sweep's read arm.
+fn read_verdict(error: GateError) -> SweepResolveFailure {
+    resolve_verdict(error).into()
 }
 
 /// Carry a re-seal refusal into the sweep's publish arm on rule 6's axis: every
@@ -2813,26 +2884,21 @@ where
         if root.envelope.v != ENVELOPE_V {
             return Err(SweepResolveFailure::VersionSkew);
         }
+        let GatedWriteBody {
+            write_scope_seed,
+            body: write_body,
+            epoch: write_epoch,
+        } = write_plane_of_gated(self.floors, &root, scope.scope_id)
+            .await
+            .map_err(SweepResolveFailure::from)?;
         let GatedScopeRoot {
             envelope,
             section,
             read_body,
             sequence: _,
             read_scope_seed,
-            write_scope_seed,
+            write_scope_seed: _,
         } = root;
-        // A root held keyless has no readable write-body — availability, not a
-        // trust verdict.
-        let write_scope_seed = write_scope_seed.ok_or(SweepResolveFailure::Unavailable)?;
-        let (write_body, write_epoch) = write_plane_of(
-            self.floors,
-            &envelope,
-            &section,
-            &write_scope_seed,
-            scope.scope_id,
-        )
-        .await
-        .map_err(SweepResolveFailure::from)?;
         let children = body_children(&read_body);
         let read_epoch = envelope.epoch;
         self.swept.park(SweptScopeSource {
@@ -2898,18 +2964,20 @@ where
         child: &NodeRef,
     ) -> Result<SweptChild, SweepResolveFailure> {
         let source = self.swept_scope(scope)?;
-        let name = scope_name(&child.ipns_name).map_err(SweepResolveFailure::from)?;
-        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
-            return Err(SweepResolveFailure::Unavailable);
-        };
-        let (sequence, block) =
-            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
-                .await
-                .map_err(read_verdict)?;
-        let envelope = decode_envelope(&block).map_err(|_| SweepResolveFailure::Rejected)?;
+        let head = self
+            .head_at(&child.ipns_name)
+            .await
+            .map_err(SweepResolveFailure::from)?;
+        let envelope = head.envelope().map_err(SweepResolveFailure::from)?;
         if has_grant_section(&envelope) {
             // The root gate re-assembles the head; hand it the block this read
             // already paid for.
+            let RecordHead {
+                name,
+                record_bytes,
+                block,
+                ..
+            } = head;
             return self
                 .gated_child_scope_root(
                     &source,
@@ -2923,7 +2991,7 @@ where
                 )
                 .await;
         }
-        self.interior_node(&source, child, &name, sequence, envelope)
+        self.interior_node(&source, child, &head.name, head.sequence, envelope)
             .await
             .map(SweptChild::Interior)
     }
@@ -3181,32 +3249,19 @@ where
         let source = self
             .swept_scope(parent)
             .map_err(|_| ResolveFailure::Rejected)?;
-        let name = scope_name(&node.ipns_name)?;
-        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
-            return Err(ResolveFailure::Unavailable);
-        };
-        let (sequence, block) =
-            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
-                .await
-                .map_err(|error| match error {
-                    GateError::Seam(_) => ResolveFailure::Unavailable,
-                    GateError::Rejected(_) => ResolveFailure::Rejected,
-                })?;
+        let head = self.head_at(&node.ipns_name).await?;
         // Ahead of the "not promoted" answer, so a rolled-back record cannot
         // withdraw a promotion this device has already seen and send the caller
         // on to mint a second scope over it.
         floor::check_sequence(
             self.floors,
-            name.as_str().as_bytes(),
-            sequence,
+            head.name.as_str().as_bytes(),
+            head.sequence,
             floor::Strictness::AtOrAboveFloor,
         )
         .await
-        .map_err(|error| match error {
-            GateError::Seam(_) => ResolveFailure::Unavailable,
-            GateError::Rejected(_) => ResolveFailure::Rejected,
-        })?;
-        let envelope = decode_envelope(&block).map_err(|_| ResolveFailure::Rejected)?;
+        .map_err(resolve_verdict)?;
+        let envelope = head.envelope()?;
         // Still an ordinary child of the parent scope, so no promotion of this
         // folder's stands to resume. Past this point the record claims to be a
         // scope root, and a gate that refuses it is a trust verdict rather than
@@ -3215,6 +3270,12 @@ where
             return Ok(None);
         }
         let adopter = self.descendant_adopter(&source, node.node_id);
+        let RecordHead {
+            name,
+            record_bytes,
+            block,
+            ..
+        } = head;
         adopter.hold_local_head(LocalHead {
             cid: root_block_cid(&block),
             block,
@@ -3225,20 +3286,11 @@ where
         if gated.envelope.v != ENVELOPE_V {
             return Err(ResolveFailure::Rejected);
         }
-        // A root held keyless has no readable write body, so the index it
-        // reparented cannot be read — availability, not a trust verdict.
-        let write_scope_seed = gated
-            .write_scope_seed
-            .as_deref()
-            .ok_or(ResolveFailure::Unavailable)?;
-        let (write_body, write_epoch) = write_plane_of(
-            self.floors,
-            &gated.envelope,
-            &gated.section,
-            write_scope_seed,
-            node.node_id,
-        )
-        .await?;
+        let GatedWriteBody {
+            body: write_body,
+            epoch: write_epoch,
+            ..
+        } = write_plane_of_gated(self.floors, &gated, node.node_id).await?;
         Ok(Some(PromotedScopeRoot {
             record: ResealedScopeRoot {
                 scope_id: node.node_id,
@@ -3267,16 +3319,18 @@ where
         node: &NodeRef,
     ) -> Result<MovingChild, SweepResolveFailure> {
         let source = self.swept_scope(source)?;
-        let name = scope_name(&node.ipns_name).map_err(SweepResolveFailure::from)?;
-        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
-            return Err(SweepResolveFailure::Unavailable);
-        };
-        let (sequence, block) =
-            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
-                .await
-                .map_err(read_verdict)?;
-        let envelope = decode_envelope(&block).map_err(|_| SweepResolveFailure::Rejected)?;
+        let head = self
+            .head_at(&node.ipns_name)
+            .await
+            .map_err(SweepResolveFailure::from)?;
+        let envelope = head.envelope().map_err(SweepResolveFailure::from)?;
         if has_grant_section(&envelope) {
+            let RecordHead {
+                name,
+                record_bytes,
+                block,
+                ..
+            } = head;
             self.gated_child_scope_root(
                 &source,
                 node,
@@ -3292,11 +3346,11 @@ where
         }
         if envelope.scope == root.scope_id {
             return self
-                .moved_interior_node(root, node, &name, sequence, &envelope)
+                .moved_interior_node(root, node, &head.name, head.sequence, &envelope)
                 .await
                 .map(MovingChild::Moved);
         }
-        self.interior_node(&source, node, &name, sequence, envelope)
+        self.interior_node(&source, node, &head.name, head.sequence, envelope)
             .await
             .map(MovingChild::Pending)
     }
