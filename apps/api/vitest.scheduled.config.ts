@@ -5,7 +5,7 @@ import { swcPlugin } from './vitest.swc';
 // liveness soaks — the republisher walk against a compressed-EOL profile — run
 // here, NOT in the per-PR gate. Two profiles: an in-process one over virtual
 // time, and a stack one over HTTP against the booted CI stack. Triggered by
-// cron/dispatch (`.github/workflows/scheduled-liveness.yml`), which boots that
+// cron/dispatch (`.github/workflows/nightly.yml`), which boots that
 // stack; the unit config excludes these `*.scheduled.test.ts` files.
 //
 // Serialized: the stack profile asserts on process-wide gauges of the one API
