@@ -71,9 +71,9 @@ use crate::gate::{
 use crate::grants::child_index::canonicalize;
 use crate::grants::create::ScopePointerVoucher;
 use crate::grants::{
-    GrantResumeResolver, InteriorRecord, InteriorResealer, PromotedScopeRoot, ScopeRootPromoter,
-    UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row, recipient_self_location,
-    row_is_owner_attested, self_locate_signed,
+    GrantResumeResolver, InteriorRecord, InteriorResealer, MovingChild, PromotedScopeRoot,
+    ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
+    recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
 use crate::net::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify};
 use crate::net::resolve::Adopter;
@@ -200,6 +200,9 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// The scope the sweep is walking, held from the scope-root read that
     /// proved it (see [`SweptScopeState`]). One sweep pass per net.
     pub swept: SweptScopeState,
+    /// The override seed of the scope a grant's interior move is publishing
+    /// into (see [`MovedScopeSeed`]). One move per net.
+    pub moved_seed: MovedScopeSeed,
 }
 
 /// The one scope root this pass gated and has not yet republished.
@@ -229,6 +232,62 @@ impl GatedRoots {
             Some((parked_name, _)) if parked_name == name => parked.take().map(|(_, base)| base),
             _ => None,
         }
+    }
+}
+
+/// The override seed of the scope a grant's interior move publishes into,
+/// recovered from that root's own owner blob and held for the length of the
+/// move.
+///
+/// Every node of one move seals under the same seed, and recovering it is an
+/// X25519 operation plus an owner-blob open, so without this the move pays both
+/// once per node. One slot keyed on the root's own identity, as [`GatedRoots`]
+/// is keyed on a name: a second root evicts the first rather than aliasing onto
+/// it. Held behind an [`Rc`] so the seed has one live copy that zeroizes when
+/// the slot is replaced or dropped.
+#[derive(Default)]
+pub struct MovedScopeSeed {
+    inner: RefCell<Option<HeldMovedSeed>>,
+}
+
+/// One recovered override seed under the root identity it belongs to: a record
+/// naming any other root re-recovers rather than reading under this seed.
+struct HeldMovedSeed {
+    key: MovedScopeKey,
+    seed: Rc<Zeroizing<[u8; SECRET_LEN]>>,
+}
+
+/// The root identity a recovered override seed is held under.
+#[derive(PartialEq, Eq)]
+struct MovedScopeKey {
+    scope_id: [u8; 16],
+    ipns_name: Vec<u8>,
+    read_epoch: u64,
+}
+
+impl MovedScopeSeed {
+    fn recover(
+        &self,
+        enc_secret: &X25519Secret,
+        record: &ResealedScopeRoot,
+    ) -> Result<Rc<Zeroizing<[u8; SECRET_LEN]>>, RotationPublishError> {
+        let key = MovedScopeKey {
+            scope_id: record.scope_id,
+            ipns_name: record.ipns_name.clone(),
+            read_epoch: record.read_epoch,
+        };
+        let mut held = self.inner.borrow_mut();
+        if let Some(parked) = held.as_ref()
+            && parked.key == key
+        {
+            return Ok(Rc::clone(&parked.seed));
+        }
+        let seed = Rc::new(new_override_seed(enc_secret, record)?);
+        *held = Some(HeldMovedSeed {
+            key,
+            seed: Rc::clone(&seed),
+        });
+        Ok(seed)
     }
 }
 
@@ -1952,7 +2011,8 @@ where
         record: &ResealedScopeRoot,
     ) -> Result<Vec<NodeRef>, RotationPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
-        let override_seed = new_override_seed(self.keys.enc_secret, record)?;
+        // The interior move this promotion heads seals under the same seed.
+        let override_seed = self.moved_seed.recover(self.keys.enc_secret, record)?;
         let source = self
             .swept_scope(parent)
             .map_err(|_| RotationPublishError::Rejected)?;
@@ -2584,7 +2644,7 @@ where
         name: &IpnsName,
         sequence: u64,
         envelope: Envelope,
-    ) -> Result<SweptChild, SweepResolveFailure> {
+    ) -> Result<SweptNode, SweepResolveFailure> {
         if envelope.v != ENVELOPE_V {
             return Err(SweepResolveFailure::VersionSkew);
         }
@@ -2604,13 +2664,49 @@ where
                 &envelope,
             )
             .await?;
-        Ok(SweptChild::Interior(SweptNode {
+        Ok(SweptNode {
             current_read_epoch: envelope.epoch,
             sequence,
             read_body,
             carried_unknown: envelope.unknown,
             carried_epoch_tag_unknown: envelope.epoch_tag_unknown,
-        }))
+        })
+    }
+
+    /// Open a node a stalled move already published into `root`.
+    ///
+    /// Authenticity comes from `root`'s own derivation: the override seed out of
+    /// its section's owner blob, at the epoch the record claims.
+    async fn moved_interior_node(
+        &self,
+        root: &ResealedScopeRoot,
+        node: &NodeRef,
+        name: &IpnsName,
+        sequence: u64,
+        envelope: &Envelope,
+    ) -> Result<ReadBody, SweepResolveFailure> {
+        if envelope.v != ENVELOPE_V {
+            return Err(SweepResolveFailure::VersionSkew);
+        }
+        if envelope.id != node.node_id {
+            return Err(SweepResolveFailure::Rejected);
+        }
+        let override_seed = self
+            .moved_seed
+            .recover(self.keys.enc_secret, root)
+            .map_err(|_| SweepResolveFailure::Rejected)?;
+        self.open_interior_record(
+            &InteriorReadScope {
+                scope_id: root.scope_id,
+                read_epoch: root.read_epoch,
+                read_scope_seed: &override_seed,
+                history_links: &root.section.history_links,
+            },
+            name,
+            sequence,
+            envelope,
+        )
+        .await
     }
 
     /// The interior read rule itself, over whichever scope's derivation the
@@ -2808,6 +2904,7 @@ where
         }
         self.interior_node(&source, child, &name, sequence, envelope)
             .await
+            .map(SweptChild::Interior)
     }
 }
 
@@ -3027,7 +3124,7 @@ where
         }
         // Recovered from the owner blob the minted section wraps, so the seam
         // carries no seed ([`new_override_seed`]).
-        let override_seed = new_override_seed(self.keys.enc_secret, root)?;
+        let override_seed = self.moved_seed.recover(self.keys.enc_secret, root)?;
         let read_key = read_key_for(&override_seed, &node.node_id);
         self.publish_interior_head(
             &name,
@@ -3140,11 +3237,13 @@ where
             .is_some())
     }
 
-    async fn moved_interior_node(
+    async fn resolve_moving_child(
         &self,
+        source: &ChildScopeRef,
         root: &ResealedScopeRoot,
         node: &NodeRef,
-    ) -> Result<Option<ReadBody>, SweepResolveFailure> {
+    ) -> Result<MovingChild, SweepResolveFailure> {
+        let source = self.swept_scope(source)?;
         let name = scope_name(&node.ipns_name).map_err(SweepResolveFailure::from)?;
         let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
             return Err(SweepResolveFailure::Unavailable);
@@ -3154,34 +3253,29 @@ where
                 .await
                 .map_err(read_verdict)?;
         let envelope = decode_envelope(&block).map_err(|_| SweepResolveFailure::Rejected)?;
-        if envelope.v != ENVELOPE_V {
-            return Err(SweepResolveFailure::VersionSkew);
+        if has_grant_section(&envelope) {
+            self.gated_child_scope_root(
+                &source,
+                node,
+                &name,
+                &record_bytes,
+                LocalHead {
+                    cid: root_block_cid(&block),
+                    block,
+                },
+            )
+            .await?;
+            return Ok(MovingChild::ScopeRoot);
         }
-        if envelope.id != node.node_id || has_grant_section(&envelope) {
-            return Err(SweepResolveFailure::Rejected);
+        if envelope.scope == root.scope_id {
+            return self
+                .moved_interior_node(root, node, &name, sequence, &envelope)
+                .await
+                .map(MovingChild::Moved);
         }
-        // The move still owes this node: the caller re-seals it out of the scope
-        // it is leaving.
-        if envelope.scope != root.scope_id {
-            return Ok(None);
-        }
-        // The seed the move sealed under is the one this root's own owner blob
-        // yields, never a value the walk carries.
-        let override_seed = new_override_seed(self.keys.enc_secret, root)
-            .map_err(|_| SweepResolveFailure::Rejected)?;
-        self.open_interior_record(
-            &InteriorReadScope {
-                scope_id: root.scope_id,
-                read_epoch: root.read_epoch,
-                read_scope_seed: &override_seed,
-                history_links: &root.section.history_links,
-            },
-            &name,
-            sequence,
-            &envelope,
-        )
-        .await
-        .map(Some)
+        self.interior_node(&source, node, &name, sequence, envelope)
+            .await
+            .map(MovingChild::Pending)
     }
 }
 
@@ -4643,6 +4737,7 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         payload_version: pass.payload_version,
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
+        moved_seed: MovedScopeSeed::default(),
     };
     let Ok(root) = net.resolve_vault_root(&vault_root).await else {
         return;
@@ -5122,6 +5217,7 @@ mod tests {
                 payload_version: PAYLOAD_VERSION,
                 gated: GatedRoots::default(),
                 swept: SweptScopeState::default(),
+                moved_seed: MovedScopeSeed::default(),
             }
         }
     }
@@ -6431,6 +6527,36 @@ mod tests {
             write_epoch: OWNER_ROOT_EPOCH,
             section,
         }
+    }
+
+    #[test]
+    fn one_override_seed_recovery_serves_a_whole_interior_move() {
+        // The seed is an X25519 operation plus an owner-blob open, and a move
+        // seals every node of the subtree under the same one.
+        let root = vault_root(SCOPE, Vec::new());
+        let first_root = cut(&root, SCOPE, OWNER_ROOT_EPOCH + 1);
+        let enc_secret = owner_enc();
+        let memo = MovedScopeSeed::default();
+
+        let first = memo
+            .recover(&enc_secret, &first_root)
+            .expect("the owner blob yields the seed");
+        let again = memo
+            .recover(&enc_secret, &first_root)
+            .expect("the owner blob yields the seed");
+        assert!(
+            Rc::ptr_eq(&first, &again),
+            "the same root is recovered once for the whole move",
+        );
+
+        let second_root = cut(&root, SCOPE, OWNER_ROOT_EPOCH + 2);
+        let evicted = memo
+            .recover(&enc_secret, &second_root)
+            .expect("the owner blob yields the seed");
+        assert!(
+            !Rc::ptr_eq(&first, &evicted),
+            "another root recovers its own seed rather than aliasing onto the held one",
+        );
     }
 
     /// `SCOPE`'s root staged at the fixture epoch on a plain harness, plus the

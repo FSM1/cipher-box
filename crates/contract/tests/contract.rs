@@ -33,8 +33,8 @@ use cipherbox_engine::api::{
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::grants::{
     GrantRecipient, GrantResumeResolver, GranteeScopePlan, InteriorRecord, InteriorResealer,
-    OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, ScopePointerVoucher, ScopeRootPromoter,
-    SharePointer, create_grant, import_contact, post_share_pointer,
+    MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, ScopePointerVoucher,
+    ScopeRootPromoter, SharePointer, create_grant, import_contact, post_share_pointer,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
@@ -1387,12 +1387,16 @@ impl GrantResumeResolver for LocalNet {
         Ok(None)
     }
 
-    async fn moved_interior_node(
+    async fn resolve_moving_child(
         &self,
+        source: &ChildScopeRef,
         _root: &ResealedScopeRoot,
-        _node: &NodeRef,
-    ) -> Result<Option<ReadBody>, SweepResolveFailure> {
-        Ok(None)
+        node: &NodeRef,
+    ) -> Result<MovingChild, SweepResolveFailure> {
+        match self.resolve_child(source, node).await? {
+            SweptChild::Interior(swept) => Ok(MovingChild::Pending(swept)),
+            SweptChild::ScopeRoot(_) => Ok(MovingChild::ScopeRoot),
+        }
     }
 
     async fn holds_a_scope_root_floor(&self, _node: &NodeRef) -> Result<bool, ResolveFailure> {

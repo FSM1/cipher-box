@@ -59,7 +59,7 @@ use crate::rotation::sweep::{body_children, canonicalize_frontier, resolve_scope
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
     ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
-    SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, WriteHistory,
+    SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptNode, WriteHistory,
     converge_subtree, derive_write_name, reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
@@ -487,17 +487,21 @@ pub trait GrantResumeResolver {
         node: &NodeRef,
     ) -> Result<Option<PromotedScopeRoot>, ResolveFailure>;
 
-    /// Read `node` as a record a stalled move already published into `root`, or
-    /// `None` when the record at its name claims another scope.
+    /// Read `node` once and classify it against both scopes the move admits:
+    /// `source`, the scope the folder is leaving, and `root`, the scope it is
+    /// moving into.
     ///
-    /// Authenticity comes from `root`'s own derivation — the override seed out
-    /// of its section's owner blob, at the epoch the record claims — so `None`
-    /// never widens what a walk admits.
-    async fn moved_interior_node(
+    /// Each arm authenticates the record under the derivation of the scope it
+    /// claims — `source`'s gated read seed, or the override seed out of
+    /// `root`'s own section's owner blob — so admitting either scope for the
+    /// duration of the move widens nothing. A record claiming neither is a
+    /// fail-closed [`SweepResolveFailure::Rejected`].
+    async fn resolve_moving_child(
         &self,
+        source: &ChildScopeRef,
         root: &ResealedScopeRoot,
         node: &NodeRef,
-    ) -> Result<Option<ReadBody>, SweepResolveFailure>;
+    ) -> Result<MovingChild, SweepResolveFailure>;
 
     /// Whether this device holds a read-epoch floor at `node`'s own scope id.
     ///
@@ -507,6 +511,19 @@ pub trait GrantResumeResolver {
     /// grant may resume carries the same floor, and refusing ahead of the probe
     /// makes a grant that stalls twice unshareable for ever.
     async fn holds_a_scope_root_floor(&self, node: &NodeRef) -> Result<bool, ResolveFailure>;
+}
+
+/// Which of the two scopes a grant's interior move admits the one record at a
+/// node's name claims ([`GrantResumeResolver::resolve_moving_child`]).
+pub enum MovingChild {
+    /// Still in the scope the folder is leaving, so the move owes it the
+    /// re-seal.
+    Pending(SweptNode),
+    /// Already in the grantee scope, published by a stalled attempt. The walk
+    /// carries on through its children and publishes nothing.
+    Moved(ReadBody),
+    /// A scope root, which the move never walks through.
+    ScopeRoot,
 }
 
 /// The scope root a stalled grant already published over the granted folder, as
@@ -835,7 +852,9 @@ where
     {
         return Err(CreateGrantError::TargetAlreadyNamesAScope);
     }
-    let swept = converge_subtree(resolver, publisher, &parent_ref, &folder)
+    // The pass runs on the scope this command already proved current, so the
+    // parent name is resolved once here and not again inside the pass.
+    let swept = converge_subtree(resolver, publisher, &parent_ref, parent_scope, &folder)
         .await
         .map_err(CreateGrantError::Converge)?;
     // A node the pass could not read is as unproven as one whose convergence
@@ -1314,10 +1333,11 @@ pub(crate) fn commits_write_grant(
 /// Re-seal every interior node under the granted folder into `root`, the scope
 /// published over that folder.
 ///
-/// The walk descends from `frontier` — `root`'s own body — reading each node in
-/// `source`, the scope it is leaving, and falling through to `root` for a node a
-/// stalled attempt already moved there. Admitting either scope id for the
-/// duration of the move is what makes the leg re-drivable ([`GrantResumeResolver`]).
+/// The walk descends from `frontier` — `root`'s own body — reading each node
+/// once under whichever of `source`, the scope it is leaving, and `root`, the
+/// scope it is moving into, the record claims. Admitting either scope id for the
+/// duration of the move is what makes the leg re-drivable
+/// ([`GrantResumeResolver::resolve_moving_child`]).
 ///
 /// [`InteriorBounds::stop_at`] is skipped, because a scope root is re-keyed as
 /// one and its own interior stays in the scope it already belongs to. A node
@@ -1358,8 +1378,8 @@ where
                     node_id: child.node_id,
                 });
             }
-            match resolver.resolve_child(source, child).await {
-                Ok(SweptChild::Interior(node)) => {
+            match resolver.resolve_moving_child(source, root, child).await {
+                Ok(MovingChild::Pending(node)) => {
                     // Release-active (security rule 8). The read admits any
                     // record at or below the scope's epoch, so a record that
                     // regressed since the pass would travel into the grantee's
@@ -1389,26 +1409,12 @@ where
                             error,
                         })?;
                 }
-                Ok(SweptChild::ScopeRoot(_)) => {
+                Ok(MovingChild::ScopeRoot) => {
                     return Err(CreateGrantError::InteriorNotConverged {
                         node_id: child.node_id,
                     });
                 }
-                // The scope the folder is leaving does not authenticate the
-                // record, so either this move already published it into `root`
-                // or nothing here opens it.
-                Err(SweepResolveFailure::Rejected) => {
-                    let moved = resolver
-                        .moved_interior_node(root, child)
-                        .await
-                        .map_err(|reason| CreateGrantError::InteriorResolve {
-                            node_id: child.node_id,
-                            reason,
-                        })?
-                        .ok_or(CreateGrantError::InteriorResolve {
-                            node_id: child.node_id,
-                            reason: SweepResolveFailure::Rejected,
-                        })?;
+                Ok(MovingChild::Moved(moved)) => {
                     next.extend(body_children(&moved));
                 }
                 Err(reason) => {
@@ -1427,6 +1433,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// Records what the mint vouched for, and can be told to refuse — the
     /// pointer plane's half of the mint, without a network.
@@ -1601,6 +1608,12 @@ mod tests {
         /// cascade re-seal resolve. A refusal that must land before the
         /// convergence gate leaves this at zero.
         resolve_calls: Rc<RefCell<usize>>,
+        /// Scope-root resolves alone, so a test can hold one command to one
+        /// resolve of the parent name.
+        scope_resolves: Rc<RefCell<usize>>,
+        /// Read-seam entries per node id, so a test can hold the interior move
+        /// to one read of each node it walks.
+        node_reads: Rc<RefCell<BTreeMap<[u8; 16], usize>>>,
         fail_after: Option<(usize, RotationPublishError)>,
         /// Interior nodes **inside** the granted folder: id → published epoch.
         interior: Rc<RefCell<Vec<InteriorNodeState>>>,
@@ -1644,8 +1657,8 @@ mod tests {
         /// The direct-child-scope index that root reparented.
         promoted_boundaries: Vec<ChildScopeRef>,
         /// Interior nodes already re-sealed into the granted scope. The scope
-        /// the folder left no longer authenticates them, so `resolve_child`
-        /// refuses them and `moved_interior_node` answers instead.
+        /// the folder left no longer authenticates them, so the move's read
+        /// answers them out of the granted scope instead.
         moved: Rc<RefCell<BTreeSet<[u8; 16]>>>,
         /// One node whose re-seal publish stalls, so a test can strand the tail
         /// of a subtree and then let it through.
@@ -1661,6 +1674,8 @@ mod tests {
                 publish_result,
                 publish_calls: Rc::new(RefCell::new(0)),
                 resolve_calls: Rc::new(RefCell::new(0)),
+                scope_resolves: Rc::new(RefCell::new(0)),
+                node_reads: Rc::new(RefCell::new(BTreeMap::new())),
                 fail_after: None,
                 interior: Rc::new(RefCell::new(Vec::new())),
                 outside: Rc::new(RefCell::new(Vec::new())),
@@ -1829,6 +1844,19 @@ mod tests {
         fn resolve_calls(&self) -> usize {
             *self.resolve_calls.borrow()
         }
+
+        fn scope_resolves(&self) -> usize {
+            *self.scope_resolves.borrow()
+        }
+
+        fn count_node_read(&self, node_id: [u8; 16]) {
+            self.count_resolve();
+            *self.node_reads.borrow_mut().entry(node_id).or_default() += 1;
+        }
+
+        fn node_reads(&self, node_id: [u8; 16]) -> usize {
+            self.node_reads.borrow().get(&node_id).copied().unwrap_or(0)
+        }
     }
 
     impl SweepResolver for FakeNet {
@@ -1837,6 +1865,7 @@ mod tests {
             scope: &ChildScopeRef,
         ) -> Result<SweptScope, SweepResolveFailure> {
             self.count_resolve();
+            *self.scope_resolves.borrow_mut() += 1;
             if scope.scope_id != PARENT_SCOPE {
                 return Err(SweepResolveFailure::Rejected);
             }
@@ -1868,7 +1897,7 @@ mod tests {
             _scope: &ChildScopeRef,
             child: &NodeRef,
         ) -> Result<SweptChild, SweepResolveFailure> {
-            self.count_resolve();
+            self.count_node_read(child.node_id);
             if self.unresolvable == Some(child.node_id) {
                 return Err(SweepResolveFailure::Unavailable);
             }
@@ -2063,26 +2092,31 @@ mod tests {
             Ok(self.floored.borrow().contains(&node.node_id))
         }
 
-        async fn moved_interior_node(
+        async fn resolve_moving_child(
             &self,
+            source: &ChildScopeRef,
             _root: &ResealedScopeRoot,
             node: &NodeRef,
-        ) -> Result<Option<ReadBody>, SweepResolveFailure> {
-            if !self.moved.borrow().contains(&node.node_id) {
-                return Ok(None);
+        ) -> Result<MovingChild, SweepResolveFailure> {
+            if self.moved.borrow().contains(&node.node_id) {
+                self.count_node_read(node.node_id);
+                return Ok(MovingChild::Moved(ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: child_refs(
+                        self.nested
+                            .borrow()
+                            .iter()
+                            .filter(|(parent, _, _)| *parent == node.node_id)
+                            .map(|(_, node_id, _)| *node_id),
+                    ),
+                    unknown: PreservedFields::new(),
+                }));
             }
-            Ok(Some(ReadBody::Folder {
-                created_at: 0,
-                modified_at: 0,
-                children: child_refs(
-                    self.nested
-                        .borrow()
-                        .iter()
-                        .filter(|(parent, _, _)| *parent == node.node_id)
-                        .map(|(_, node_id, _)| *node_id),
-                ),
-                unknown: PreservedFields::new(),
-            }))
+            match self.resolve_child(source, node).await? {
+                SweptChild::Interior(swept) => Ok(MovingChild::Pending(swept)),
+                SweptChild::ScopeRoot(_) => Ok(MovingChild::ScopeRoot),
+            }
         }
     }
 
@@ -2888,6 +2922,44 @@ mod tests {
                 .count(),
             1,
             "one scope root over the folder, so one override seed",
+        );
+    }
+
+    #[test]
+    fn a_grant_resolves_the_parent_scope_root_once() {
+        // The convergence pass runs on the scope the resume probe already proved
+        // current, so the parent name costs one resolve for the whole command.
+        let net = FakeNet::new(Ok(())).with_interior(INTERIOR_NODE, PARENT_EPOCH);
+        let (outcome, _published, _hub) = run(9, &[], net.clone(), &[]);
+        outcome.expect("the grant completes");
+        assert_eq!(net.scope_resolves(), 1);
+    }
+
+    #[test]
+    fn a_resumed_walk_reads_each_already_moved_node_once() {
+        // A re-drive meets the first attempt's nodes in the scope it published
+        // them into. Classifying that one read against both scopes is what keeps
+        // the re-drive from paying the subtree's reads twice.
+        let net = FakeNet::new(Ok(()))
+            .with_interior(INTERIOR_NODE, PARENT_EPOCH)
+            .with_interior(SECOND_NODE, PARENT_EPOCH)
+            .stalling_reseal_at(SECOND_NODE);
+        stall_grant(&net);
+        let moved_reads = net.node_reads(INTERIOR_NODE);
+        let scope_resolves = net.scope_resolves();
+
+        let (resumed, _published, _hub) = run(8, &[], net.clone(), &[]);
+        resumed.expect("the re-drive finishes the owed move");
+
+        assert_eq!(
+            net.node_reads(INTERIOR_NODE) - moved_reads,
+            1,
+            "the node the first attempt moved is read once on the re-drive",
+        );
+        assert_eq!(
+            net.scope_resolves() - scope_resolves,
+            1,
+            "the re-drive resolves the parent name once",
         );
     }
 
