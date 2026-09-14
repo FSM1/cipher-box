@@ -12,6 +12,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      force-all:
+        description: >-
+          Run every suite instead of the change filter. The nightly surveillance
+          slot sets it: a night with no push to main must still exercise the
+          whole matrix.
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -24,21 +34,23 @@ jobs:
     outputs:
       web: ${{ steps.manual.outputs.web || steps.filter.outputs.web }}
       desktop: ${{ steps.manual.outputs.desktop || steps.filter.outputs.desktop }}
+    env:
+      FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' || inputs.force-all }}
     steps:
-      - name: Force all changes on manual dispatch
-        if: github.event_name == 'workflow_dispatch'
+      - name: Force every suite
+        if: env.FORCE_ALL == 'true'
         id: manual
         run: |
           echo "web=true" >> "$GITHUB_OUTPUT"
           echo "desktop=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name != 'workflow_dispatch'
+        if: env.FORCE_ALL != 'true'
         with:
           fetch-depth: 0
 
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        if: github.event_name != 'workflow_dispatch'
+        if: env.FORCE_ALL != 'true'
         id: filter
         with:
           base: ${{ (github.event.before != '' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'HEAD~1' }}

@@ -301,15 +301,21 @@ workflow.
 
 ### Scheduled tier
 
-One new `nightly.yml` (cron) owns the scheduled slots testing.md defined:
+One `nightly.yml` (cron) owns the scheduled slots testing.md defined:
 
 - **Long-horizon liveness**: the compressed-EOL profile run — lease
   renewal at seq+1, the republisher inventory walk, >24 h-no-re-PUT
   alerting — nightly against the CI stack.
 - **Full-matrix flake surveillance**: the main-gate e2e matrix re-run on
-  `main` HEAD nightly. With `retries: 0` as policy, this distinguishes
+  `main` HEAD nightly. It calls `ci-e2e.yml` rather than restating its
+  suites, and passes `force-all` because a night with no push has no
+  change filter to apply. With `retries: 0` as policy, this distinguishes
   "main broke" (revert) from "environment drifted" (fix the harness)
   before it blocks a release.
+  Every slot reports through one job: a failure opens, or comments on, a
+  single `comp:ci` tracking issue, so a scheduled red is never a square
+  nobody reads. GitHub reads `schedule` and `workflow_dispatch` from the
+  default branch alone, so the file is inert until it lands on `main`.
 
 Dispatch-only (unscheduled): the load harness against local or staging
 (`load-test.yml` re-engaged over `crates/load`; the BYO scenario covers the

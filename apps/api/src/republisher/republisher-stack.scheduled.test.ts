@@ -9,7 +9,7 @@ import { MinimalIpnsSequenceReader } from './record-sequence-reader';
 /**
  * The stack profile of the scheduled liveness tier (see vitest.scheduled.config.ts
  * for the tier). It talks only HTTP to the API process
- * `.github/workflows/scheduled-liveness.yml` boots, so the wiring, the SQL, and
+ * `.github/workflows/nightly.yml` boots, so the wiring, the SQL, and
  * the Prometheus counters an operator pages on are the shipped ones.
  */
 
