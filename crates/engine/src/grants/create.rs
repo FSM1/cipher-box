@@ -40,7 +40,9 @@ use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission,
     PreservedFields, ReadBody, SignedSealed, sign_grant_set,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::ecdsa::{
+    EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
+};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -1277,19 +1279,23 @@ fn committed_as(published: &GrantSetEntry, minted: &GrantSetEntry) -> bool {
         && published.masked_recipient_enc_pk() == minted.masked_recipient_enc_pk()
 }
 
-/// Whether `commitment` already commits the row a `Permission::Write` grant of
-/// `scope_id` at `scope_root_name` to `contact` would mint.
+/// Whether `commitment` already commits the row a `Permission::Write` share of
+/// `scope_id` at `scope_root_name` to this recipient would mint. The recipient
+/// is a contact on the grant path and an invite link's throwaway invitee on the
+/// link path; both are one keypair to the row.
 ///
 /// The whole-entry rule of [`resume_grantee_scope`] ([`committed_as`]),
 /// for a caller deciding whether a published scope root is the one its own
-/// stalled write grant left behind. The row is re-minted here rather than
+/// stalled write share left behind. The row is re-minted here rather than
 /// compared field by field, so the proof cannot drift from the mint it proves.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn commits_write_grant(
     commitment: &GrantSetCommitment,
     owner_identity_signer: &EcdsaSigner,
     owner_enc_secret: &X25519Secret,
     pointer_read_key: &[u8; SECRET_LEN],
-    contact: &Contact,
+    recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
+    recipient_enc_pub: &X25519Public,
     scope_id: &[u8; 16],
     scope_root_name: &IpnsName,
 ) -> bool {
@@ -1297,8 +1303,8 @@ pub(crate) fn commits_write_grant(
         owner_identity_signer,
         owner_enc_secret,
         pointer_read_key,
-        contact.identity_pk().to_sec1(),
-        &contact.enc_subkey(),
+        recipient_identity_pk,
+        recipient_enc_pub,
         scope_id,
         scope_root_name.as_str().as_bytes(),
         Permission::Write,

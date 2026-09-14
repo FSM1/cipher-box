@@ -579,15 +579,34 @@ impl GrantScenario {
     /// cut-epoch bar is spent by the time the cut's own resolve makes the next
     /// one — which is the read this fails.
     fn strand_the_owed_wave(&mut self) {
+        self.with_a_failing_cut(|fx| {
+            assert!(
+                fx.grant_folder_at(Permission::Write).is_err(),
+                "the write-scope cut fails, so the share never reaches its delivery"
+            );
+        });
+    }
+
+    /// The same stranded state on the invite-link path: the link's scope is
+    /// live at the parent-derived name, its row is recorded, and no bearer
+    /// capability ever reached the host.
+    fn strand_the_owed_link_wave(&mut self) {
+        self.with_a_failing_cut(|fx| {
+            assert!(
+                fx.try_mint_link_at(Permission::Write).is_err(),
+                "the write-scope cut fails, so the mint hands out no capability"
+            );
+        });
+    }
+
+    /// Run `share` with this folder's cut-epoch bar unreadable, then heal it.
+    fn with_a_failing_cut(&mut self, share: impl FnOnce(&mut Self)) {
         let mut cut_epoch_floor = self.folder.0.to_vec();
         cut_epoch_floor.extend_from_slice(b"/cut-epoch");
         self.owner_device
             .floor_store
             .fail_epoch_floor_reads_after(&cut_epoch_floor, 1);
-        assert!(
-            self.grant_folder_at(Permission::Write).is_err(),
-            "the write-scope cut fails, so the share never reaches its delivery"
-        );
+        share(self);
         self.owner_device.floor_store.heal_floors();
     }
 
@@ -692,16 +711,19 @@ impl GrantScenario {
     }
 
     fn mint_link_at(&mut self, permission: Permission) -> Zeroizing<String> {
-        let outcome = block_on(self.engine.command(Command::CreateInviteLink {
-            node: self.folder,
-            permission,
-            expires_at: None,
-        }))
-        .expect("the link mints");
+        let outcome = self.try_mint_link_at(permission).expect("the link mints");
         let CommandOutcome::InviteLinkMinted(link) = outcome else {
             panic!("minting a link answers with the link");
         };
         link.fragment
+    }
+
+    fn try_mint_link_at(&mut self, permission: Permission) -> Result<CommandOutcome, EngineError> {
+        block_on(self.engine.command(Command::CreateInviteLink {
+            node: self.folder,
+            permission,
+            expires_at: None,
+        }))
     }
 
     /// The bearer's own session, holding nothing but what the fragment carries.
@@ -4732,6 +4754,117 @@ fn a_write_invite_link_is_revoked_after_its_cut() {
             .entries
             .is_empty(),
         "and the link's row is no longer committed, so a claim on it is refused"
+    );
+}
+
+/// A write link runs the same owed name wave a write grant does. A cut that
+/// fails there leaves the link's scope published at the name the parent's own
+/// write seed derives, the link's row recorded, and no bearer capability in any
+/// hand. The same command re-driven finishes that wave and hands out the link,
+/// rather than making the owner revoke a link nobody holds.
+#[test]
+fn a_write_invite_link_whose_cut_failed_is_finished_by_the_same_command() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_link_wave();
+    let stalled = write_name(fx.folder);
+    let minted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the link's scope is live at the parent-derived name");
+    assert_eq!(recorded_links(&fx.owner_device).len(), 1);
+
+    let fragment = fx.mint_link_at(Permission::Write);
+
+    let moved = fx.granted_scope_repoint().current_root;
+    assert_ne!(moved, stalled, "the re-drive ran the owed wave");
+    assert_eq!(
+        InviteFragment::decode(&fragment)
+            .expect("the mint's own fragment")
+            .scope_root_name,
+        moved.as_str().as_bytes(),
+        "and the capability names the root the wave moved to"
+    );
+    let resumed = published_grant_section_at(&fx.world, &fx.blocks, &moved)
+        .expect("the moved root answers as a scope root");
+    // A write cut leaves the read plane alone, so the seed the mint sealed is
+    // the same one at the moved root.
+    assert!(
+        stranded_override_seed(&resumed, fx.folder) == stranded_override_seed(&minted, fx.folder),
+        "against the scope the first attempt minted, not a second one"
+    );
+    assert_eq!(
+        recorded_links(&fx.owner_device).len(),
+        1,
+        "and the re-drive recorded no second link at one node"
+    );
+
+    let bearer_pk = recipient_identity().verifying_key().to_sec1().to_vec();
+    let (mut bearer, _bearer_events) = fx.bearer();
+    assert_eq!(
+        block_on(bearer.command(Command::ClaimInviteLink { fragment })),
+        Ok(CommandOutcome::Done),
+    );
+    assert_eq!(
+        block_on(
+            fx.engine
+                .command(Command::ConvertInviteClaims { node: fx.folder })
+        ),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(
+        fx.granted_to().contains(&bearer_pk),
+        "and the re-driven link converts a claim on the moved scope"
+    );
+}
+
+/// The invitee a link commits its row to is drawn fresh per mint and nothing
+/// durable keeps it — the record holds only its public halves, because the
+/// secret is the whole bearer capability. A device that did not run the stalled
+/// mint therefore has no row to prove and refuses, which leaves the revoke the
+/// remedy there.
+#[test]
+fn a_write_invite_link_whose_cut_failed_is_refused_on_a_device_that_missed_the_mint() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_link_wave();
+    let stalled = write_name(fx.folder);
+
+    let second = fx.world.device(b"the owner's second device");
+    let (mut engine, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &second);
+
+    assert_eq!(
+        block_on(engine.command(Command::CreateInviteLink {
+            node: fx.folder,
+            permission: Permission::Write,
+            expires_at: None,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "invite-target-already-names-a-scope"
+        }),
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        stalled,
+        "and the owed wave is still owed"
+    );
+}
+
+/// The re-drive is the unfinished share, never another share of the same
+/// folder. A stalled link's scope commits one throwaway invitee's row, so a
+/// write grant to a contact over it is refused rather than resumed.
+#[test]
+fn a_write_grant_over_a_stalled_invite_link_scope_is_refused() {
+    let mut fx = GrantScenario::new();
+    fx.strand_the_owed_link_wave();
+    let stalled = write_name(fx.folder);
+
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Err(EngineError::UnsupportedTarget {
+            check: "grant-target-already-names-a-scope"
+        }),
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        stalled,
+        "and the owed wave is still owed"
     );
 }
 
