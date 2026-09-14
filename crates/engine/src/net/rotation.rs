@@ -12,7 +12,7 @@
 //! adoption gate stays the only judge of a resolved record, and the publish
 //! pipeline stays the only path to the transport.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -4801,6 +4801,10 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
     pub held: &'a RefCell<HeldRecords>,
     /// The vault root's node id, which is also its scope id.
     pub root_id: [u8; 16],
+    /// Latches once one pass walks the whole owned scope tree with no retryable
+    /// failure, which stops the walk for the rest of the session
+    /// ([`enrol_owned_scope_pointers`]).
+    pub walked: &'a Cell<bool>,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
 }
@@ -4821,9 +4825,22 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
 /// no record, and an omitted one only leaves the lapse this pass repairs. Each
 /// scope runs through [`PointerConsult`] before it is held, which keeps the
 /// pointer plane's trust rules in one place.
+///
+/// The walk runs at most once per session. It exists to find the pointers
+/// earlier sessions flipped, and this session's own flip enrols the pointer it
+/// moves, so a walk that reached every owned root with no retryable failure has
+/// nothing left for a later pass to find: a writer-sized fan-out per hour buys
+/// nothing after it. A retryable failure leaves the latch open, and the next
+/// tick walks again.
+///
+/// Returns the scopes this pass consulted. A consult can raise a scope's durable
+/// write-epoch floor, which retires a seed a cache cell still holds, so the
+/// caller pairs the pass with the same floor refresh the focus tick pairs its
+/// own consult with.
 pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
     pass: ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E, S>,
-) where
+) -> Vec<[u8; 16]>
+where
     K: OwnerScopeKeys + OwnerPointerSign,
     T: RecordTransport,
     H: Http,
@@ -4833,6 +4850,9 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
     E: Entropy,
     S: SnapshotCache,
 {
+    if pass.walked.get() {
+        return Vec::new();
+    }
     // The tick replaces the vault root's held record in place, so its routing
     // key is the name this session last adopted the root at.
     let Some(root_name) = pass
@@ -4841,7 +4861,7 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         .get(&HeldKey::node(pass.root_id))
         .map(|record| record.routing_key.as_bytes().to_vec())
     else {
-        return;
+        return Vec::new();
     };
     let vault_root = ChildScopeRef::new(pass.root_id, root_name);
     let net = OwnerRotationNet {
@@ -4868,7 +4888,7 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         moved_seed: MovedScopeSeed::default(),
     };
     let Ok(root) = net.resolve_vault_root(&vault_root).await else {
-        return;
+        return Vec::new();
     };
     let consult = PointerConsult {
         scope_keys: pass.keys,
@@ -4880,18 +4900,21 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
     // pointer. The visited set pre-seeded with the root also ends a cycle.
     let mut scopes: BTreeSet<[u8; 16]> = BTreeSet::from([pass.root_id]);
     let mut frontier = root.direct_child_scope_index;
+    let mut complete = true;
     while !frontier.is_empty() {
         let mut next = Vec::new();
         for child in frontier {
             if !scopes.insert(child.scope_id) {
                 continue;
             }
-            if let Ok(grandchildren) = net.direct_child_index(&child).await {
-                next.extend(grandchildren);
+            match net.direct_child_index(&child).await {
+                Ok(grandchildren) => next.extend(grandchildren),
+                Err(_) => complete = false,
             }
         }
         frontier = next;
     }
+    let mut consulted_scopes = Vec::new();
     for scope_id in scopes {
         // The flip's own entry is the fresher one, and the liveness pass drops a
         // superseded entry before this runs rather than replaces it here.
@@ -4902,10 +4925,18 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         {
             continue;
         }
-        if let Ok(Some(consulted)) = consult.run(pass.transport, pass.floors, &scope_id).await {
-            enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
+        match consult.run(pass.transport, pass.floors, &scope_id).await {
+            Ok(consulted) => {
+                consulted_scopes.push(scope_id);
+                if let Some(consulted) = consulted {
+                    enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
+                }
+            }
+            Err(_) => complete = false,
         }
     }
+    pass.walked.set(complete);
+    consulted_scopes
 }
 
 /// Hold the pointer record `consulted` authenticated, under the same
@@ -13201,7 +13232,17 @@ mod tests {
     fn run_enrolment<K: OwnerScopeKeys + OwnerPointerSign>(
         harness: &Harness<InMemoryRecordStore>,
         keys: &K,
-    ) {
+    ) -> Vec<[u8; 16]> {
+        run_enrolment_walking(harness, keys, &Cell::new(false))
+    }
+
+    /// [`run_enrolment`] over a latch the caller keeps across passes, which is
+    /// how the liveness loop holds one session's walk.
+    fn run_enrolment_walking<K: OwnerScopeKeys + OwnerPointerSign>(
+        harness: &Harness<InMemoryRecordStore>,
+        keys: &K,
+        walked: &Cell<bool>,
+    ) -> Vec<[u8; 16]> {
         block_on(enrol_owned_scope_pointers(ScopePointerEnrolment {
             api: &harness.api,
             transport: &harness.transport,
@@ -13219,7 +13260,88 @@ mod tests {
             held: &harness.held,
             root_id: SCOPE,
             payload_version: PAYLOAD_VERSION,
+            walked,
         }))
+    }
+
+    /// One owned tree, every root and pointer of it resolvable: the state a
+    /// clean pass needs.
+    fn owner_session_over_a_clean_tree() -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
+        let (child, child_ref, grandchild) = one_level();
+        let (harness, _) = owner_session_at_root(vec![child_ref]);
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
+        for scope_id in [SCOPE, CHILD_SCOPE, grandchild.scope_id] {
+            stage_pointer_at(&harness, scope_id, &repoint_at(scope_id, OWNER_ROOT_EPOCH));
+        }
+        (harness, child)
+    }
+
+    /// The walk exists to find the pointers earlier sessions flipped, and a flip
+    /// this session makes enrols at the flip, so a pass that reached every owned
+    /// root leaves a later pass of the same session nothing to find. Re-walking
+    /// every hour would spend a writer-sized fan-out on the whole owned tree for
+    /// the life of the session.
+    #[test]
+    fn a_clean_enrolment_pass_stops_the_walk_for_the_rest_of_the_session() {
+        let (harness, child) = owner_session_over_a_clean_tree();
+        let walked = Cell::new(false);
+
+        assert_eq!(
+            run_enrolment_walking(&harness, &OwnerSeeds, &walked),
+            vec![SCOPE, CHILD_SCOPE, GRANDCHILD_SCOPE],
+            "the first pass consults every owned scope"
+        );
+        let spent = harness.store.get_count(child.name.as_str());
+        assert!(spent > 0, "the first pass walked the owned tree");
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert_eq!(
+            harness.store.get_count(child.name.as_str()),
+            spent,
+            "a later pass of the same session spends no fan-out on the owned tree"
+        );
+    }
+
+    /// A pass that could not consult every owned scope has proved nothing about
+    /// what is left to find, so the walk stays armed until one pass reaches all
+    /// of it.
+    #[test]
+    fn a_retryable_enrolment_failure_re_arms_the_walk() {
+        let (harness, child) = owner_session_over_a_clean_tree();
+        let child_pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        harness.store.fail_get_for(child_pointer.as_str());
+        let walked = Cell::new(false);
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert!(
+            !harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::scope_pointer(CHILD_SCOPE)),
+            "the refused consult enrolled nothing"
+        );
+
+        harness.store.heal_get_for(child_pointer.as_str());
+        assert!(
+            run_enrolment_walking(&harness, &OwnerSeeds, &walked).contains(&CHILD_SCOPE),
+            "the refusal left the walk armed, so the next pass consults the scope again"
+        );
+        assert!(
+            harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::scope_pointer(CHILD_SCOPE)),
+            "and the re-armed pass enrols the pointer the refusal cost"
+        );
+        let spent = harness.store.get_count(child.name.as_str());
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert_eq!(
+            harness.store.get_count(child.name.as_str()),
+            spent,
+            "the pass that reached every scope stops the walk"
+        );
     }
 
     /// The flip enrols only the pointer it moves, so a later session that runs
