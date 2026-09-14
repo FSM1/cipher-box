@@ -536,13 +536,21 @@ struct InteriorBounds {
     source_read_epoch: u64,
     /// The descendant scope roots the walk stops at.
     stop_at: BTreeSet<[u8; 16]>,
-    /// The interior the convergence pass measured, which bounds what the walk
-    /// may move. `None` on a resume, which runs no pass and so admits every
-    /// node the gate authenticates in one of the two scopes. That widens the
-    /// splice window a committed writer of the leaving scope already holds,
-    /// from "between the pass and the mint" to "between the two attempts"; the
-    /// bound the resume owes is not landed.
-    measured: Option<BTreeSet<[u8; 16]>>,
+    /// Which of the nodes the walk meets it may move.
+    admits: InteriorAdmission,
+}
+
+/// Which interior nodes a grant's walk may move into the granted scope.
+enum InteriorAdmission {
+    /// Only the nodes the convergence pass measured against the epoch of the
+    /// scope the folder is leaving, so a body re-authored between the pass and
+    /// the mint cannot hand the grantee's scope a node the gate never proved.
+    Measured(BTreeSet<[u8; 16]>),
+    /// Every node the gate authenticates in one of the two scopes. A resume
+    /// runs no pass, so it widens the splice window a committed writer of the
+    /// leaving scope already holds, from "between the pass and the mint" to
+    /// "between the two attempts"; the bound a resume owes is not landed.
+    Unmeasured,
 }
 
 /// One interior node's record, as the read that hands it to a publish found it.
@@ -602,9 +610,11 @@ pub(crate) const MINT_EPOCH: u64 = 1;
 
 /// Mint a grant for one recipient over `grantee`'s folder at `permission`.
 ///
-/// The recipient's row over [`mint_grantee_scope`]. Fail-closed **through the
-/// grantee publish**; past that point the sequence is not atomic — see
-/// [`CreateGrantError`] for what each post-publish variant leaves committed.
+/// The recipient's row over [`mint_grantee_scope`], or over
+/// [`resume_grantee_scope`] when a stalled attempt already promoted the folder.
+/// Fail-closed **through the grantee publish**; past that point the sequence is
+/// not atomic — see [`CreateGrantError`] for what each post-publish variant
+/// leaves committed.
 ///
 /// The permission comes from [`GranteeScopePlan::permission`], so a write grant
 /// owes [`GranteeScopePlan::write_cut`] by construction. It additionally owes
@@ -643,8 +653,14 @@ where
         permission,
     )
     .ok_or(CreateGrantError::UnusableRecipientKey)?;
-    let converged = converge_grant_subtree(net, net, grantee, parent).await?;
-    mint_grantee_scope(entropy, net, voucher, converged, &row, owner).await
+    match converge_grant_subtree(net, net, grantee, parent).await? {
+        GrantSubtree::Converged(converged) => {
+            mint_grantee_scope(entropy, net, voucher, converged, &row, owner).await
+        }
+        GrantSubtree::Promoted(promoted) => {
+            resume_grantee_scope(entropy, net, promoted, &row, owner).await
+        }
+    }
 }
 
 /// Post the sealed share pointer that tells `recipient` where the scope they
@@ -698,8 +714,19 @@ where
     .map_err(CreateGrantError::Mailbox)
 }
 
+/// What [`converge_grant_subtree`] found over the granted folder, and therefore
+/// which entry the folder still owes.
+pub enum GrantSubtree<'a> {
+    /// An ordinary child folder the pass proved converged.
+    /// [`mint_grantee_scope`] owes it a scope root.
+    Converged(ConvergedSubtree<'a>),
+    /// A scope root a stalled attempt already promoted.
+    /// [`resume_grantee_scope`] owes it the interior move alone.
+    Promoted(PromotedSubtree<'a>),
+}
+
 /// A subtree [`converge_grant_subtree`] proved converged, carrying the two plans
-/// it proved it for.
+/// it proved it for and what the pass measured.
 ///
 /// [`mint_grantee_scope`] reads both plans only out of this, so neither skipping
 /// the pass nor minting against plans other than the ones it swept is
@@ -712,37 +739,29 @@ pub struct ConvergedSubtree<'a> {
     /// resolve that proved the scope current is also the one the walk measures
     /// against.
     source_read_epoch: u64,
-    root: SubtreeRoot,
+    /// Every interior node the pass measured against the scope's epoch. The
+    /// re-seal walks only these.
+    interior: BTreeSet<[u8; 16]>,
+    /// Every descendant scope root the pass stopped at. The re-seal stops at
+    /// the same set: a scope root is re-keyed as one, and its own interior
+    /// stays in the scope it already belongs to.
+    boundaries: BTreeSet<[u8; 16]>,
 }
 
-impl ConvergedSubtree<'_> {
-    /// Whether the folder already answers as a scope root a previous attempt
-    /// promoted. A caller that cannot resume — one whose row is minted fresh
-    /// per call — refuses on this rather than paying for a mint that
-    /// [`CreateGrantError::ResumeNotThisGrant`] will refuse.
-    pub(super) fn resumes_a_promotion(&self) -> bool {
-        matches!(self.root, SubtreeRoot::Promoted(_))
-    }
-}
-
-/// What [`mint_grantee_scope`] still owes the granted folder.
-enum SubtreeRoot {
-    /// The folder is an ordinary child, so the mint owes it a scope root.
-    Measured {
-        /// Every interior node the pass measured against the scope's epoch. The
-        /// re-seal walks only these, so a body re-authored between the pass and
-        /// the mint cannot hand the grantee's scope a node the gate never
-        /// proved.
-        interior: BTreeSet<[u8; 16]>,
-        /// Every descendant scope root the pass stopped at. The re-seal stops
-        /// at the same set: a scope root is re-keyed as one, and its own
-        /// interior stays in the scope it already belongs to.
-        boundaries: BTreeSet<[u8; 16]>,
-    },
-    /// A stalled attempt already promoted the folder, so only the interior move
-    /// is owed ([`GrantResumeResolver`]). Boxed: it carries a whole published
-    /// section, and the measured arm is the common one.
-    Promoted(Box<PromotedScopeRoot>),
+/// The granted folder as the scope root a stalled attempt already promoted,
+/// carrying the two plans the resume probe ran against.
+///
+/// [`resume_grantee_scope`] reads both plans only out of this, the way
+/// [`ConvergedSubtree`] serves the mint.
+pub struct PromotedSubtree<'a> {
+    grantee: &'a GranteeScopePlan<'a>,
+    parent: &'a ParentScopePlan<'a>,
+    /// The read epoch the resume probe gated the parent scope at, which the
+    /// interior walk re-asserts on every node it seals.
+    source_read_epoch: u64,
+    /// Boxed: it carries a whole published section, and the converged arm is
+    /// the common one.
+    promoted: Box<PromotedScopeRoot>,
 }
 
 /// Prove the granted folder's subtree epoch-converged inside the scope it still
@@ -763,7 +782,7 @@ pub async fn converge_grant_subtree<'a, R, P>(
     publisher: &P,
     grantee: &'a GranteeScopePlan<'a>,
     parent: &'a ParentScopePlan<'a>,
-) -> Result<ConvergedSubtree<'a>, CreateGrantError>
+) -> Result<GrantSubtree<'a>, CreateGrantError>
 where
     R: SweepResolver + GrantResumeResolver,
     P: SweepPublisher,
@@ -794,12 +813,12 @@ where
         .await
         .map_err(CreateGrantError::Resume)?
     {
-        return Ok(ConvergedSubtree {
+        return Ok(GrantSubtree::Promoted(PromotedSubtree {
             grantee,
             parent,
             source_read_epoch: parent_scope.current_read_epoch,
-            root: SubtreeRoot::Promoted(Box::new(promoted)),
-        });
+            promoted: Box::new(promoted),
+        }));
     }
     if resolver
         .holds_a_scope_root_floor(&folder)
@@ -842,21 +861,18 @@ where
             met_not_planned: boundaries.difference(&planned).copied().collect(),
         });
     }
-    Ok(ConvergedSubtree {
+    Ok(GrantSubtree::Converged(ConvergedSubtree {
         grantee,
         parent,
         source_read_epoch: swept.scope_read_epoch,
-        root: SubtreeRoot::Measured {
-            interior,
-            boundaries,
-        },
-    })
+        interior,
+        boundaries,
+    }))
 }
 
-/// Mint the grantee scope `row` is committed at, and hand the granted folder to
-/// it: mint (epoch 1) → publish (grantee first) → re-seal the folder's interior
-/// nodes into the new scope → re-key the reparented descendants under the fresh
-/// grantee derivation → parent index update.
+/// Mint the grantee scope `row` is committed at over the converged folder, then
+/// hand the folder to it: mint (epoch 1) → vouch → publish (grantee first) →
+/// the shared tail ([`hand_over_granted_folder`]).
 ///
 /// The scope it mints commits exactly `row` and carries no history links, so
 /// whoever holds that row's grant blob reaches this scope's first epoch and
@@ -864,11 +880,9 @@ where
 /// appended to a scope the owner has already been rotating (#25 D6). `row` must
 /// be minted at [`GranteeScopePlan::ipns_name`]; the mint binds the same bytes.
 ///
-/// A [`ConvergedSubtree`] that carries a promoted root skips the mint and
-/// finishes that root's owed interior move instead
-/// ([`GrantResumeResolver`]).
-///
-/// Fail-closed **through the grantee publish**.
+/// Fail-closed **through the grantee publish**. A folder a stalled attempt
+/// already promoted is [`resume_grantee_scope`]'s to finish, and
+/// [`converge_grant_subtree`] is what tells the two apart.
 pub async fn mint_grantee_scope<E, N, V>(
     entropy: &mut E,
     net: &N,
@@ -882,18 +896,16 @@ where
     N: MintNet,
     V: ScopePointerVoucher,
 {
-    let (resolver, publisher) = (net, net);
     let ConvergedSubtree {
         grantee,
         parent,
         source_read_epoch,
-        root: subtree_root,
+        interior,
+        boundaries,
     } = converged;
     // 1) The scope root's ipnsName, derived from the folder's write material.
     let ipns_name = grantee.ipns_name();
     let name_bytes = ipns_name.as_str().as_bytes();
-
-    let tag = row.tag;
     let parent_ref =
         ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec());
     let folder = NodeRef {
@@ -901,191 +913,239 @@ where
         ipns_name: name_bytes.to_vec(),
     };
 
-    // The index the mint commits the granted scope to, and the one a resume
-    // proves the published root already committed.
+    // 2) Build the committed set around the row — one entry, so the scope's
+    // whole grant set is the one this mint authorises.
+    let commitment = GrantSetCommitment {
+        ipns_name: name_bytes.to_vec(),
+        owner_pseudonym_pk: owner.pseudonym_signer.verifying_key().to_bytes(),
+        cut_epoch: 0,
+        entries: vec![row.commitment_entry.clone()],
+        unknown: PreservedFields::new(),
+    };
+    let commitment_sig = sign_grant_set(owner.identity_signer, &commitment)
+        .map_err(CreateGrantError::CommitmentEncode)?
+        .to_compact();
+    let ledger = vec![row.ledger_entry.clone()];
+
+    // 3) Mint at read and write epoch 1 with a FRESH RANDOM override seed
+    // (never KDF-derived). Both planes start with the mint: an empty
+    // `writeHistoryLink` is exactly write epoch 1
+    // (`cipherbox_core::seal::write_body`), so the parent's epoch here would
+    // advertise a walk-back this root holds no link for. The new scope adopts
+    // the folder's descendant scope roots as its direct-child-scope index (they
+    // now live inside the granted scope).
+    let override_seed = fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
+    // The index the mint commits the granted scope to.
     let planned_index = canonicalize(grantee.subtree_child_index);
-    // The scope root the interior move runs against, and the two bounds the
-    // walk runs under: a stalled attempt's own published root when there is
-    // one, a fresh mint otherwise.
-    let root = match subtree_root {
-        SubtreeRoot::Promoted(promoted) => {
-            // Release-active, both halves. A root that commits a different row,
-            // or that reparented a different set of descendant scope roots, is
-            // not the one this plan minted: moving this folder's interior into
-            // it would seal the subtree under a scope whose published authority
-            // is not the one this call reports.
-            //
-            // The whole entry, never the tag alone: a blinded tag binds the
-            // recipient and the scope root's name, and neither moves with the
-            // permission (`kdf::blinded_tag`). Matching on it would let a
-            // stalled write grant finish as a read grant over a root that still
-            // commits write.
-            let commits_row = promoted
-                .record
-                .section
-                .commitment
-                .entries
-                .iter()
-                .any(|entry| committed_as(entry, &row.commitment_entry));
-            if !commits_row || canonicalize(&promoted.boundaries) != planned_index {
-                return Err(CreateGrantError::ResumeNotThisGrant);
-            }
-            GrantedRoot {
-                record: promoted.record,
-                override_seed: promoted.override_seed,
-                frontier: promoted.children,
-                bounds: InteriorBounds {
-                    source_read_epoch,
-                    stop_at: promoted
-                        .boundaries
-                        .into_iter()
-                        .map(|child| child.scope_id)
-                        .collect(),
-                    measured: None,
-                },
-            }
-        }
-        SubtreeRoot::Measured {
-            interior,
-            boundaries,
-        } => {
-            // 2) Build the committed set around the row — one entry, so the
-            // scope's whole grant set is the one this mint authorises.
-            let commitment = GrantSetCommitment {
-                ipns_name: name_bytes.to_vec(),
-                owner_pseudonym_pk: owner.pseudonym_signer.verifying_key().to_bytes(),
-                cut_epoch: 0,
-                entries: vec![row.commitment_entry.clone()],
-                unknown: PreservedFields::new(),
-            };
-            let commitment_sig = sign_grant_set(owner.identity_signer, &commitment)
-                .map_err(CreateGrantError::CommitmentEncode)?
-                .to_compact();
-            let ledger = vec![row.ledger_entry.clone()];
-
-            // 3) Mint at read and write epoch 1 with a FRESH RANDOM override
-            // seed (never KDF-derived). Both planes start with the mint: an
-            // empty `writeHistoryLink` is exactly write epoch 1
-            // (`cipherbox_core::seal::write_body`), so the parent's epoch here
-            // would advertise a walk-back this root holds no link for. The new
-            // scope adopts the folder's descendant scope roots as its
-            // direct-child-scope index (they now live inside the granted scope).
-            let override_seed = fresh_seed(entropy).map_err(CreateGrantError::Entropy)?;
-            let grantee_section = {
-                let identity = ScopeRootIdentity {
-                    v: grantee.v,
-                    scope_id: grantee.scope_id,
-                    ipns_name: name_bytes,
-                    owner_enc_pub: grantee.owner_enc_pub,
-                    owner_enc_secret: Some(owner.enc_secret),
-                    ascent: Some(AscentAuthority::ParentSeed(grantee.parent_node_seed)),
-                    // A grant on an interior folder anchors a scope under its
-                    // parent.
-                    owes_ascent_link: true,
-                    pseudonym_signer: owner.pseudonym_signer,
-                };
-                let seeds = ResealSeeds {
-                    override_seed: &override_seed,
-                    read_epoch: MINT_EPOCH,
-                    prev: None,
-                    write_scope_seed: grantee.sealed_write_scope_seed(),
-                    write_epoch: MINT_EPOCH,
-                    write_history: WriteHistory::Genesis,
-                    pointer_read_key: grantee.pointer_read_key,
-                };
-                // Mint-canonical: the adopted index carries the same
-                // canonicalization the sweep's self-heal enforces (sweep.rs), so
-                // the grantee root never lands a shape the convergence pass
-                // would later have to repair.
-                let committed = CommittedSet {
-                    commitment: &commitment,
-                    commitment_sig: &commitment_sig,
-                    grant_ledger: &ledger,
-                    direct_child_scope_index: &planned_index,
-                    revoked_recipients: &[],
-                };
-                reseal_scope_root(entropy, &identity, &seeds, &committed, &[])
-                    .map_err(CreateGrantError::Mint)?
-            };
-            let grantee_record = ResealedScopeRoot {
-                scope_id: grantee.scope_id,
-                ipns_name: name_bytes.to_vec(),
-                read_epoch: MINT_EPOCH,
-                write_epoch: MINT_EPOCH,
-                section: grantee_section,
-            };
-
-            // 4) Vouch for the scope on the pointer plane before the root
-            // exists.
-            //
-            // It leads the publishes because a signed record cannot be
-            // unpublished (AGENTS.md rule 8), which is what
-            // [`CreateGrantError::VouchScope`] rests on. A re-point naming a
-            // root not yet on the network costs a reader one waited pass, and a
-            // retry re-publishes at the same scope id, so nothing is orphaned
-            // either way. A resume enters through `SubtreeRoot::Promoted`
-            // instead, where the vouch that led that promotion already stands.
-            voucher
-                .vouch_scope(&RepointObject {
-                    scope_id: grantee.scope_id,
-                    current_root: ipns_name.clone(),
-                    write_epoch: MINT_EPOCH,
-                    min_read_epoch: MINT_EPOCH,
-                    prev_root: None,
-                })
-                .await
-                .map_err(CreateGrantError::VouchScope)?;
-
-            // 5) Publish the grantee scope root FIRST: it exists before the
-            // parent references it (register-first / never-orphan), and its
-            // index carries the reparented descendants before they are removed
-            // from the parent (dest-first). A folder becoming a scope root is a
-            // promotion, not a republish ([`ScopeRootPromoter`]).
-            let promoted_children = publisher
-                .promote_scope_root(&parent_ref, &folder, &grantee_record)
-                .await
-                .map_err(CreateGrantError::Publish)?;
-            GrantedRoot {
-                record: grantee_record,
-                override_seed,
-                frontier: promoted_children,
-                bounds: InteriorBounds {
-                    source_read_epoch,
-                    stop_at: boundaries,
-                    measured: Some(interior),
-                },
-            }
-        }
+    let grantee_section = {
+        let identity = ScopeRootIdentity {
+            v: grantee.v,
+            scope_id: grantee.scope_id,
+            ipns_name: name_bytes,
+            owner_enc_pub: grantee.owner_enc_pub,
+            owner_enc_secret: Some(owner.enc_secret),
+            ascent: Some(AscentAuthority::ParentSeed(grantee.parent_node_seed)),
+            // A grant on an interior folder anchors a scope under its parent.
+            owes_ascent_link: true,
+            pseudonym_signer: owner.pseudonym_signer,
+        };
+        let seeds = ResealSeeds {
+            override_seed: &override_seed,
+            read_epoch: MINT_EPOCH,
+            prev: None,
+            write_scope_seed: grantee.sealed_write_scope_seed(),
+            write_epoch: MINT_EPOCH,
+            write_history: WriteHistory::Genesis,
+            pointer_read_key: grantee.pointer_read_key,
+        };
+        // Mint-canonical: the adopted index carries the same canonicalization
+        // the sweep's self-heal enforces (sweep.rs), so the grantee root never
+        // lands a shape the convergence pass would later have to repair.
+        let committed = CommittedSet {
+            commitment: &commitment,
+            commitment_sig: &commitment_sig,
+            grant_ledger: &ledger,
+            direct_child_scope_index: &planned_index,
+            revoked_recipients: &[],
+        };
+        reseal_scope_root(entropy, &identity, &seeds, &committed, &[])
+            .map_err(CreateGrantError::Mint)?
+    };
+    let grantee_record = ResealedScopeRoot {
+        scope_id: grantee.scope_id,
+        ipns_name: name_bytes.to_vec(),
+        read_epoch: MINT_EPOCH,
+        write_epoch: MINT_EPOCH,
+        section: grantee_section,
     };
 
-    // 5b) Re-seal the folder's interior nodes into the scope that now owns them.
-    // Their records still seal under the read key of the scope the folder left,
-    // which no reader of the fresh scope derives and no epoch-1 history link
-    // walks back to (blueprint/engine.md "subtree swept in").
+    // 4) Vouch for the scope on the pointer plane before the root exists.
+    //
+    // It leads the publishes because a signed record cannot be unpublished
+    // (AGENTS.md rule 8), which is what [`CreateGrantError::VouchScope`] rests
+    // on. A re-point naming a root not yet on the network costs a reader one
+    // waited pass, and a retry re-publishes at the same scope id, so nothing is
+    // orphaned either way.
+    voucher
+        .vouch_scope(&RepointObject {
+            scope_id: grantee.scope_id,
+            current_root: ipns_name.clone(),
+            write_epoch: MINT_EPOCH,
+            min_read_epoch: MINT_EPOCH,
+            prev_root: None,
+        })
+        .await
+        .map_err(CreateGrantError::VouchScope)?;
+
+    // 5) Publish the grantee scope root FIRST: it exists before the parent
+    // references it (register-first / never-orphan), and its index carries the
+    // reparented descendants before they are removed from the parent
+    // (dest-first). A folder becoming a scope root is a promotion, not a
+    // republish ([`ScopeRootPromoter`]).
+    let promoted_children = net
+        .promote_scope_root(&parent_ref, &folder, &grantee_record)
+        .await
+        .map_err(CreateGrantError::Publish)?;
+
+    hand_over_granted_folder(
+        entropy,
+        net,
+        grantee,
+        parent,
+        owner,
+        GrantedRoot {
+            record: grantee_record,
+            override_seed,
+            frontier: promoted_children,
+            bounds: InteriorBounds {
+                source_read_epoch,
+                stop_at: boundaries,
+                admits: InteriorAdmission::Measured(interior),
+            },
+        },
+        row.tag,
+    )
+    .await
+}
+
+/// Finish the interior move a stalled attempt over the granted folder still
+/// owes, against the scope root that attempt already published.
+///
+/// The counterpart of [`mint_grantee_scope`] for a folder that already answers
+/// as a scope root ([`GrantResumeResolver`]). Nothing is minted and nothing is
+/// vouched for: a second mint over the same folder would draw a second override
+/// seed and strand every node the first attempt already moved.
+///
+/// The published root must be the one `row`'s own plan minted. Both halves of
+/// that proof are release-active, ahead of everything the shared tail publishes.
+pub async fn resume_grantee_scope<E, N>(
+    entropy: &mut E,
+    net: &N,
+    subtree: PromotedSubtree<'_>,
+    row: &GrantRow,
+    owner: &OwnerGrantKeys<'_>,
+) -> Result<CreateGrantOutcome, CreateGrantError>
+where
+    E: Entropy,
+    N: MintNet,
+{
+    let PromotedSubtree {
+        grantee,
+        parent,
+        source_read_epoch,
+        promoted,
+    } = subtree;
+    // A root that commits a different row, or that reparented a different set
+    // of descendant scope roots, is not the one this plan minted: moving this
+    // folder's interior into it would seal the subtree under a scope whose
+    // published authority is not the one this call reports.
+    //
+    // The whole entry, never the tag alone: a blinded tag binds the recipient
+    // and the scope root's name, and neither moves with the permission
+    // (`kdf::blinded_tag`). Matching on it would let a stalled write grant
+    // finish as a read grant over a root that still commits write.
+    let commits_row = promoted
+        .record
+        .section
+        .commitment
+        .entries
+        .iter()
+        .any(|entry| committed_as(entry, &row.commitment_entry));
+    let planned_index = canonicalize(grantee.subtree_child_index);
+    if !commits_row || canonicalize(&promoted.boundaries) != planned_index {
+        return Err(CreateGrantError::ResumeNotThisGrant);
+    }
+
+    hand_over_granted_folder(
+        entropy,
+        net,
+        grantee,
+        parent,
+        owner,
+        GrantedRoot {
+            record: promoted.record,
+            override_seed: promoted.override_seed,
+            frontier: promoted.children,
+            bounds: InteriorBounds {
+                source_read_epoch,
+                stop_at: promoted
+                    .boundaries
+                    .into_iter()
+                    .map(|child| child.scope_id)
+                    .collect(),
+                admits: InteriorAdmission::Unmeasured,
+            },
+        },
+        row.tag,
+    )
+    .await
+}
+
+/// Hand the granted folder to `root`, the scope root now published over it:
+/// re-seal the folder's interior nodes into that scope, re-key the reparented
+/// descendants under its derivation, then publish the parent index.
+///
+/// The tail both [`mint_grantee_scope`] and [`resume_grantee_scope`] end in.
+/// Every leg here runs past the grantee root's own publish, so this is the
+/// non-atomic stretch [`CreateGrantError`]'s post-publish variants describe.
+async fn hand_over_granted_folder<E, N>(
+    entropy: &mut E,
+    net: &N,
+    grantee: &GranteeScopePlan<'_>,
+    parent: &ParentScopePlan<'_>,
+    owner: &OwnerGrantKeys<'_>,
+    root: GrantedRoot,
+    tag: [u8; 32],
+) -> Result<CreateGrantOutcome, CreateGrantError>
+where
+    E: Entropy,
+    N: MintNet,
+{
+    let ipns_name = grantee.ipns_name();
+    let name_bytes = ipns_name.as_str().as_bytes();
+    let parent_ref =
+        ChildScopeRef::new(parent.identity.scope_id, parent.identity.ipns_name.to_vec());
     let GrantedRoot {
         record: grantee_record,
         override_seed,
         frontier,
         bounds,
     } = root;
-    reseal_granted_interior(
-        resolver,
-        publisher,
-        &parent_ref,
-        &grantee_record,
-        frontier,
-        &bounds,
-    )
-    .await?;
 
-    // 5c) Re-key the reparented direct children so each ascent link re-seals under
+    // Re-seal the folder's interior nodes into the scope that now owns them.
+    // Their records still seal under the read key of the scope the folder left,
+    // which no reader of the fresh scope derives and no epoch-1 history link
+    // walks back to (blueprint/engine.md "subtree swept in").
+    reseal_granted_interior(net, net, &parent_ref, &grantee_record, frontier, &bounds).await?;
+
+    // Re-key the reparented direct children so each ascent link re-seals under
     // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
     // blueprint/engine.md "subtree swept in"). Metadata-only (existing seed,
     // current epoch, `prev = None`), threaded top-down as the eager cascade does
     // (rotation/cascade.rs). Register-first: the grantee root published above
     // already lists these descendants, so each points back at a parent that exists.
     for descendant in grantee.subtree_child_index {
-        let target = resolver.resolve(descendant).await.map_err(|reason| {
+        let target = net.resolve(descendant).await.map_err(|reason| {
             CreateGrantError::DescendantResolve {
                 scope_id: descendant.scope_id,
                 reason,
@@ -1138,16 +1198,15 @@ where
             write_epoch: target.write_epoch,
             section,
         };
-        publisher
-            .publish_scope_root(&record)
-            .await
-            .map_err(|error| CreateGrantError::DescendantPublish {
+        net.publish_scope_root(&record).await.map_err(|error| {
+            CreateGrantError::DescendantPublish {
                 scope_id: descendant.scope_id,
                 error,
-            })?;
+            }
+        })?;
     }
 
-    // 6) Parent index update — a metadata-only re-seal at the same epoch.
+    // Parent index update — a metadata-only re-seal at the same epoch.
     let mut parent_index = parent.current_child_index.to_vec();
     for descendant in grantee.subtree_child_index {
         parent_index = remove_child(&parent_index, &descendant.scope_id);
@@ -1188,8 +1247,7 @@ where
         write_epoch: parent.seeds.write_epoch,
         section: parent_section,
     };
-    publisher
-        .publish_scope_root(&parent_record)
+    net.publish_scope_root(&parent_record)
         .await
         .map_err(CreateGrantError::ParentPublish)?;
 
@@ -1214,7 +1272,7 @@ fn committed_as(published: &GrantSetEntry, minted: &GrantSetEntry) -> bool {
 /// Whether `commitment` already commits the row a `Permission::Write` grant of
 /// `scope_id` at `scope_root_name` to `contact` would mint.
 ///
-/// The whole-entry rule of [`mint_grantee_scope`]'s resume arm ([`committed_as`]),
+/// The whole-entry rule of [`resume_grantee_scope`] ([`committed_as`]),
 /// for a caller deciding whether a published scope root is the one its own
 /// stalled write grant left behind. The row is re-minted here rather than
 /// compared field by field, so the proof cannot drift from the mint it proves.
@@ -1255,7 +1313,7 @@ pub(crate) fn commits_write_grant(
 ///
 /// [`InteriorBounds::stop_at`] is skipped, because a scope root is re-keyed as
 /// one and its own interior stays in the scope it already belongs to. A node
-/// outside [`InteriorBounds::measured`] is refused, so a body re-authored
+/// outside [`InteriorAdmission::Measured`] is refused, so a body re-authored
 /// between the convergence pass and the mint cannot move a record the gate
 /// never proved into the grantee's scope. The walk also re-asserts the
 /// convergence proof itself at every level it seals: the pass is stale by the
@@ -1285,10 +1343,8 @@ where
             if !visited.insert(child.node_id) || bounds.stop_at.contains(&child.node_id) {
                 continue;
             }
-            if bounds
-                .measured
-                .as_ref()
-                .is_some_and(|measured| !measured.contains(&child.node_id))
+            if let InteriorAdmission::Measured(measured) = &bounds.admits
+                && !measured.contains(&child.node_id)
             {
                 return Err(CreateGrantError::InteriorNotConverged {
                     node_id: child.node_id,

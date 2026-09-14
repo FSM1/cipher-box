@@ -34,8 +34,8 @@ use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher,
 use crate::seams::UnixMillis;
 
 use super::create::{
-    CreateGrantError, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, converge_grant_subtree,
-    mint_grantee_scope,
+    CreateGrantError, GrantSubtree, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan,
+    converge_grant_subtree, mint_grantee_scope,
 };
 use super::invite::{EphemeralInvitee, InviteError, InviteFragment, mint_invite_grant};
 use super::invite_store::{InviteStore, InviteStoreError};
@@ -190,17 +190,17 @@ where
 
     // Ahead of the record, so a subtree the gate cannot prove converged costs no
     // durable slot.
-    let converged = converge_grant_subtree(net, net, plan.grantee, plan.parent)
+    let subtree = converge_grant_subtree(net, net, plan.grantee, plan.parent)
         .await
         .map_err(InviteMintError::Create)?;
     // An invitee is drawn fresh per call, so its row can never be the one a
     // promoted root committed. Refused here, ahead of the durable slot the
     // record below would take.
-    if converged.resumes_a_promotion() {
+    let GrantSubtree::Converged(converged) = subtree else {
         return Err(InviteMintError::Create(
             CreateGrantError::ResumeNotThisGrant,
         ));
-    }
+    };
 
     // Whole-set replacement, so the load is what keeps the links already
     // recorded.
