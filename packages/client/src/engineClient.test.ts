@@ -18,6 +18,9 @@ import type { EventDescriptor } from './worker/protocol.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** `tick` on virtual time: one turn that leaves a fake clock where it stands. */
+const turn = (): Promise<void> => vi.advanceTimersByTimeAsync(0).then(() => undefined);
+
 /**
  * Pins a tab as a follower: the engine lock is never granted, so it is never
  * promoted. The request still settles on abort, so `dispose()` can await its
@@ -693,24 +696,32 @@ describe('EngineClient leadership + transport swap', () => {
   });
 
   it('spawns one worker for a greeting flood against an engine-less leader', async () => {
-    const { tab, workers, ports, addresses } = origin();
-    const idle = tab();
-    await tick();
-    expect(idle.currentRole()).toBe('leader');
-    const spawned = workers.length;
+    // The flood runs on virtual time that never moves: the cooldown is a wall
+    // clock window, so a slow worker must not be able to expire it mid-flood and
+    // fail this assertion for correct code.
+    vi.useFakeTimers();
+    try {
+      const { tab, workers, ports, addresses } = origin();
+      const idle = tab();
+      await turn();
+      expect(idle.currentRole()).toBe('leader');
+      const spawned = workers.length;
 
-    for (let i = 0; i < 20; i += 1) {
-      await greetUnderInventedAccount(ports, addresses[0], `hostile${i}`);
-      await tick();
+      for (let i = 0; i < 20; i += 1) {
+        await greetUnderInventedAccount(ports, addresses[0], `hostile${i}`);
+        await turn();
+      }
+
+      // This is the only tab of the origin, so every stand-down re-elects it and
+      // cold-starts a fresh worker: the worker count is the amplification a
+      // greeting buys. One hand-off per cooldown window, not one per message.
+      expect(workers.length).toBe(spawned + 1);
+      expect(idle.currentRole()).toBe('leader');
+
+      await idle.dispose();
+    } finally {
+      vi.useRealTimers();
     }
-
-    // This is the only tab of the origin, so every stand-down re-elects it and
-    // cold-starts a fresh worker: the worker count is the amplification a
-    // greeting buys. One hand-off per cooldown window, not one per message.
-    expect(workers.length).toBe(spawned + 1);
-    expect(idle.currentRole()).toBe('leader');
-
-    await idle.dispose();
   });
 
   it('still steps aside for a sign-in that arrives inside the flood cooldown', async () => {
