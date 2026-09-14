@@ -195,7 +195,6 @@ pub fn mint_grant_row(
     );
     ledger_entry.owner_sig =
         sign_recipient_binding(owner_identity_signer, scope_root_ipns_name, &ledger_entry)
-            .ok()?
             .to_compact();
     Some(GrantRow {
         tag,

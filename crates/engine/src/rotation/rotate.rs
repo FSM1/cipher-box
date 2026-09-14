@@ -496,9 +496,8 @@ mod tests {
                 [0xa1; 32],
                 [0u8; 64],
             );
-            row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, b"scope-root", &row)
-                .unwrap()
-                .to_compact();
+            row.owner_sig =
+                sign_recipient_binding(&self.owner_ecdsa, b"scope-root", &row).to_compact();
             let ledger = vec![row];
             (commitment, sig, ledger)
         }

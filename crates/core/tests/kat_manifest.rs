@@ -2817,7 +2817,7 @@ fn identity_signed_preimages() -> Vec<(&'static str, Vec<Vec<u8>>)> {
         ),
         (
             "recipient-binding",
-            vec![encode_recipient_binding(&scope_root, &ledger_entry).expect("a binding encodes")],
+            vec![encode_recipient_binding(&scope_root, &ledger_entry)],
         ),
     ]
 }
@@ -4313,9 +4313,7 @@ fn recipient_binding_accept_vectors_reencode_and_verify() {
             unhex_n::<64>(&v.name, &v.signature),
         );
         assert_eq!(
-            hex::encode(
-                encode_recipient_binding(&ipns_name, &entry).expect("accept vector re-encodes")
-            ),
+            hex::encode(encode_recipient_binding(&ipns_name, &entry)),
             v.preimage,
             "recipient-binding accept {}: re-encode must be byte-identical",
             v.name

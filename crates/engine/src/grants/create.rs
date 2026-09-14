@@ -3570,9 +3570,7 @@ mod tests {
         let mut row = parent_row(&victim.public());
         row.ledger_entry.recipient_enc_pk = attacker.public().to_bytes();
         row.ledger_entry.owner_sig =
-            sign_recipient_binding(&owner_identity(), PARENT_NAME, &row.ledger_entry)
-                .expect("the owner attests the row")
-                .to_compact();
+            sign_recipient_binding(&owner_identity(), PARENT_NAME, &row.ledger_entry).to_compact();
         let tag = row.tag;
 
         let (outcome, published, _hub) = run(7, &[], FakeNet::new(Ok(())), &[row]);

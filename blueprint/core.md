@@ -183,6 +183,13 @@ node UUID.
   lives, because a marked field is carried verbatim by every later re-author and
   only a fresh node id sheds it. Whether a re-author may drop a marked field it
   has never seen adopted is open, and has to be settled before a `!` field ships.
+  Preservation also moves a field **across a scope change**, wherever an
+  authoring path re-seals a carried record under another scope's AAD. Every new
+  envelope-level or `epochTag`-level structure is therefore either
+  **scope-transplant-safe** — binding no scope id, no AAD and no per-scope key,
+  so the move claims nothing in the destination — or refused by name at that
+  authoring path, the way the grant section already is. The duty falls on the
+  structure's author, because the client that preserves the field cannot type it.
 - **Envelope size bounds**: the decoder refuses on the **raw length before it
   walks anything**, at the same 2 MiB block ceiling every read enforces
   (`seal.envelopeMaxBytes`). The input is attacker-supplied and the carried set
