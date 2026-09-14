@@ -117,18 +117,7 @@ fn engine_with(
 /// Publish the account's initial state: an owner root at sequence 1 carrying
 /// `grants` as its committed set, and the vault pointer naming it.
 fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> IpnsName {
-    seed_vault_naming(world, blocks, grants, Vec::new())
-}
-
-/// [`seed_vault`] over a root whose read body already names `children` — the
-/// state a session boots into, rather than one it authored.
-fn seed_vault_naming(
-    world: &FakeWorld,
-    blocks: &Blocks,
-    grants: Vec<GrantRow>,
-    children: Vec<ChildRef>,
-) -> IpnsName {
-    seed_account_with(world, blocks, grants, children)
+    seed_account_with(world, blocks, grants, Vec::new())
 }
 
 /// Re-seal `node`'s record under `scope_id`'s derivation at `epoch` and publish
@@ -2277,7 +2266,7 @@ fn a_child_the_scopes_write_seed_does_not_name_is_a_boundary_no_index_states() {
     ] {
         let world = FakeWorld::new();
         let blocks = Blocks::default();
-        seed_vault_naming(
+        seed_account_with(
             &world,
             &blocks,
             Vec::new(),

@@ -81,7 +81,6 @@ pub fn owner_pseudonym() -> Ed25519Signer {
 
 /// The per-scope pointer read key the owner's own session derives for
 /// [`SCOPE`], and that it seals that scope's pointer under.
-#[must_use]
 pub fn owner_pointer_read_key() -> [u8; 32] {
     *kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes()
 }
@@ -547,6 +546,65 @@ pub fn seed_account_with(
     grants: Vec<GrantRow>,
     children: Vec<ChildRef>,
 ) -> IpnsName {
+    let account = author_account(blocks, grants, children, 1);
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.seed_record(
+            &endpoint,
+            account.name.as_str(),
+            account.root_record.clone(),
+        );
+        world.record_store.seed_record(
+            &endpoint,
+            account.pointer_name.as_str(),
+            account.pointer_record.clone(),
+        );
+    }
+    account.name
+}
+
+/// [`seed_account`] with the vault pointer held back until a PUT lands at
+/// `revealed_by`: the account published from another device while this session
+/// was mid-mint. The pointer name is vacant when the mint probes it, and names a
+/// root the mint did not derive by the time the mint reads it back
+/// (`ProvisionOutcome::MovedOn`). It publishes past the sequence this run's own
+/// pointer PUT carries, so the mint cannot overwrite it.
+pub fn seed_account_published_after_put(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    revealed_by: &IpnsName,
+) -> IpnsName {
+    let account = author_account(blocks, Vec::new(), Vec::new(), 2);
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.seed_record(
+            &endpoint,
+            account.name.as_str(),
+            account.root_record.clone(),
+        );
+    }
+    world.record_store.seed_record_after_put(
+        revealed_by.as_str(),
+        account.pointer_name.as_str(),
+        account.pointer_record,
+    );
+    account.name
+}
+
+/// The account's published state, authored but not yet served.
+struct AuthoredAccount {
+    name: IpnsName,
+    root_record: Vec<u8>,
+    pointer_name: IpnsName,
+    pointer_record: Vec<u8>,
+}
+
+/// Author the owner root and the re-point naming it, and put the root's head
+/// block on the block plane. The pointer publishes at `pointer_sequence`.
+fn author_account(
+    blocks: &Blocks,
+    grants: Vec<GrantRow>,
+    children: Vec<ChildRef>,
+    pointer_sequence: u64,
+) -> AuthoredAccount {
     let fixture = owner_root_fixture(OwnerRootSpec {
         writer_pseudonym: &owner_pseudonym(),
         pointer_read_key: owner_pointer_read_key(),
@@ -597,20 +655,16 @@ pub fn seed_account_with(
     let pointer_record = IpnsRecord::create_v2(
         &kdf::vault_pointer_index(&SECRET, 0),
         &pointer_block,
-        1,
+        pointer_sequence,
         TTL_NANOS,
         EOL,
     )
     .marshal();
-    let pointer_name = vault_pointer_name(&SECRET, 0);
 
-    for endpoint in world.record_store.endpoints() {
-        world
-            .record_store
-            .seed_record(&endpoint, fixture.name.as_str(), root_record.clone());
-        world
-            .record_store
-            .seed_record(&endpoint, pointer_name.as_str(), pointer_record.clone());
+    AuthoredAccount {
+        name: fixture.name,
+        root_record,
+        pointer_name: vault_pointer_name(&SECRET, 0),
+        pointer_record,
     }
-    fixture.name
 }

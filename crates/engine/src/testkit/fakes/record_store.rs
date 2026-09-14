@@ -10,6 +10,10 @@ use crate::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
 /// Records held by one endpoint, keyed by routing key.
 type EndpointRecords = HashMap<String, Vec<u8>>;
 
+/// Records waiting on a PUT at the routing key they are filed under, each with
+/// the routing key it is to be served at.
+type DeferredRecords = HashMap<String, Vec<(String, Vec<u8>)>>;
+
 /// In-memory fake of the `/routing/v1` endpoint set: one map of opaque
 /// record bytes per configured endpoint, holding the **highest sequence** at
 /// each routing key as a real endpoint does ([`supersedes`]).
@@ -44,6 +48,9 @@ pub struct InMemoryRecordStore {
     /// GETs served per routing key, so a test can count what a pass spends on
     /// one name rather than inferring it from what the pass published.
     gets: Arc<Mutex<HashMap<String, usize>>>,
+    /// Records held back until a PUT lands
+    /// ([`seed_record_after_put`](InMemoryRecordStore::seed_record_after_put)).
+    deferred: Arc<Mutex<DeferredRecords>>,
 }
 
 impl InMemoryRecordStore {
@@ -67,6 +74,7 @@ impl InMemoryRecordStore {
             put_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             gets: Arc::new(Mutex::new(HashMap::new())),
+            deferred: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -78,6 +86,29 @@ impl InMemoryRecordStore {
             .get_mut(endpoint)
             .expect("known endpoint")
             .insert(routing_key.to_owned(), record);
+    }
+
+    /// Serve `record` at `routing_key` from every endpoint once a PUT lands at
+    /// `after_put_at`, and not before — another device that published while the
+    /// pass under test was mid-flight, staged without a wall clock.
+    pub fn seed_record_after_put(&self, after_put_at: &str, routing_key: &str, record: Vec<u8>) {
+        self.deferred
+            .lock()
+            .expect("lock")
+            .entry(after_put_at.to_owned())
+            .or_default()
+            .push((routing_key.to_owned(), record));
+    }
+
+    /// Install whatever [`seed_record_after_put`](Self::seed_record_after_put)
+    /// filed under `routing_key`, at every endpoint.
+    fn release_deferred(&self, routing_key: &str) {
+        let released = self.deferred.lock().expect("lock").remove(routing_key);
+        for (key, record) in released.unwrap_or_default() {
+            for endpoint in &self.endpoints {
+                self.seed_record(endpoint, &key, record.clone());
+            }
+        }
     }
 
     /// Test-side read, bypassing the seam (publish observation).
@@ -246,7 +277,8 @@ impl RecordTransport for InMemoryRecordStore {
         if self.put_failing_key(routing_key) {
             return Err(SeamError::new(format!("put refused for {routing_key}")));
         }
-        self.inner
+        let known = self
+            .inner
             .lock()
             .expect("lock")
             .get_mut(endpoint)
@@ -258,7 +290,12 @@ impl RecordTransport for InMemoryRecordStore {
                 }
                 records.insert(routing_key.to_owned(), record.to_vec());
             })
-            .ok_or_else(|| SeamError::new(format!("unknown endpoint: {}", endpoint.0)))
+            .is_some();
+        if !known {
+            return Err(SeamError::new(format!("unknown endpoint: {}", endpoint.0)));
+        }
+        self.release_deferred(routing_key);
+        Ok(())
     }
 }
 

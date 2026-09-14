@@ -44,6 +44,7 @@ use cipherbox_engine::net::{
     ChildAdopter, RE_PUT_INTERVAL, REGISTRY_BATCH_MAX, ReclaimStall, ReclaimStallReason,
     ResolveOutcome, StagingRetireLedger, resolve,
 };
+use cipherbox_engine::rotation::derive_write_name;
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     SnapshotCache, StagingStore, UnixMillis,
@@ -62,7 +63,7 @@ use cipherbox_engine::sync::{
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
     owner_identity, owner_pointer_read_key, owner_pseudonym, registry_batch_refused, seed_account,
-    sequence_floor_label, serve_http,
+    seed_account_published_after_put, sequence_floor_label, serve_http,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
@@ -533,6 +534,67 @@ fn a_first_run_account_provisions_its_vault_and_publishes_a_write() {
     assert_eq!(children.len(), 1, "device B resolves the provisioned write");
     assert_eq!(children[0].name, "photos");
     assert_eq!(children[0].id, view.children[0].id);
+}
+
+/// The account published from another device between this mint's vacancy probe
+/// and the pointer it reads back, under a write scope seed no first run derives
+/// — the `MovedOn` arm. The session adopts that root rather than minting a
+/// second vault over it, and its write path opens on the adopted root.
+#[test]
+fn a_vault_published_mid_mint_is_adopted_rather_than_minted_over() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 64);
+    // This run's own genesis root publish is what reveals the other device's
+    // pointer, so the vacancy probe reads a vacant name and the read-back at the
+    // end of the mint does not.
+    let genesis_name =
+        derive_write_name(kdf::genesis_write_scope_seed(&SECRET).as_bytes(), &ROOT.0);
+    let moved_on = seed_account_published_after_put(&world, &blocks, &genesis_name);
+    let (mut engine, mut events) = engine_on_api(&alice, 42);
+
+    block_on(engine.start(secret())).expect("a moved-on account is not a failed start");
+
+    assert_ne!(
+        moved_on, genesis_name,
+        "the published root is one no first run derives"
+    );
+    assert_eq!(
+        vault_root_name(&world),
+        moved_on,
+        "the account's own pointer stands: nothing of this run's was published over it"
+    );
+    assert!(
+        engine.is_provisioned(),
+        "the session adopted the published vault rather than going dark"
+    );
+    assert!(
+        !core::iter::from_fn(|| events.try_next())
+            .any(|event| matches!(event, Event::VaultUnprovisioned { .. })),
+        "adopting another device's vault is not an unprovisioned session"
+    );
+
+    // The write path runs on the adopted root: the create publishes over the
+    // record the other device seeded, never over the name this run derived.
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages against the adopted vault");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).unwrap();
+    assert_eq!(view.children.len(), 1, "the create published");
+    assert_eq!(view.children[0].name, "photos");
+    assert_eq!(
+        sequence_at(&world, &moved_on),
+        2,
+        "the adopted root advanced past the sequence it was adopted at"
+    );
 }
 
 /// A mint that did not land must not cost the session its write path. The
