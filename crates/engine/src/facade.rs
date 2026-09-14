@@ -15063,7 +15063,7 @@ mod tests {
             FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_POINTER_READ_KEY,
             OWNER_ROOT_SCOPE_SEED as SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
             OwnerRootFixture, OwnerRootSpec, owner_root_fixture, owner_root_fixture_at,
-            poll_tasks_once,
+            owner_root_pseudonym, poll_tasks_once,
         };
 
         const CAP_SECRET: [u8; 32] = [7u8; 32];
@@ -15091,6 +15091,8 @@ mod tests {
         /// scope binding matches.
         fn owner_root() -> (Vec<u8>, String, IpnsName) {
             let fx = owner_root_fixture(OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
                 owner_identity: &owner_identity(),
                 owner_enc: &kdf::enc_subkey(&CAP_SECRET).public(),
                 scope_id: SCOPE,
@@ -16029,6 +16031,8 @@ mod tests {
             .expect("a contributory recipient key");
             owner_root_fixture_at(
                 OwnerRootSpec {
+                    writer_pseudonym: &owner_root_pseudonym(),
+                    pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
                     owner_identity: &sharer_identity(),
                     owner_enc: &sharer_enc.public(),
                     scope_id: SHARED_SCOPE_ROOT,

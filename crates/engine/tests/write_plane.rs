@@ -61,11 +61,12 @@ use cipherbox_engine::sync::{
 };
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, MEMBER_NODE, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS,
-    owner_identity, registry_batch_refused, seed_account, sequence_floor_label, serve_http,
+    owner_identity, owner_pointer_read_key, owner_pseudonym, registry_batch_refused, seed_account,
+    sequence_floor_label, serve_http,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{
-    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_PSEUDONYM_SEED,
+    FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
     poll_tasks_once, poll_tasks_until_parked,
@@ -2228,6 +2229,8 @@ fn the_second_handle_over_the_last_free_place_is_refused_at_its_commit() {
 /// the gate would have refused reaches the authoring path at all.
 fn cache_a_root_committed_to_another_name(device: &FakeDevice, blocks: &Blocks) {
     let fixture = owner_root_fixture(OwnerRootSpec {
+        writer_pseudonym: &owner_pseudonym(),
+        pointer_read_key: owner_pointer_read_key(),
         owner_identity: &owner_identity(),
         owner_enc: &kdf::enc_subkey(&SECRET).public(),
         scope_id: SCOPE,
@@ -6925,7 +6928,7 @@ fn a_planted_focus_record_never_renders() {
 fn rotate_read_epoch(records: &InMemoryRecordStore, blocks: &Blocks) {
     let owner_identity = owner_identity();
     let owner_verifier = owner_identity.verifying_key();
-    let owner_pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
+    let owner_pseudonym = owner_pseudonym();
     let owner_enc = kdf::enc_subkey(&SECRET);
     let owner_enc_pub = owner_enc.public();
     let name = write_name(ROOT);
@@ -10679,6 +10682,8 @@ fn concurrent_root_extend(records: &InMemoryRecordStore, blocks: &Blocks, extra:
     let mut children = published_children(records, blocks, ROOT);
     children.extend(extra);
     let fixture = owner_root_fixture(OwnerRootSpec {
+        writer_pseudonym: &owner_pseudonym(),
+        pointer_read_key: owner_pointer_read_key(),
         owner_identity: &owner_identity(),
         owner_enc: &kdf::enc_subkey(&SECRET).public(),
         scope_id: SCOPE,

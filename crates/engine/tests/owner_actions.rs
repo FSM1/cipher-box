@@ -13,15 +13,14 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, BinEntry, ChildRef, GrantSection, GrantSetCommitment,
-    NodeKind as CoreNodeKind, Permission as CorePermission, PreservedFields, ReadBody,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, decode_envelope,
-    decode_grant_section, decode_write_body, grant_section_bytes, open_ascent_link,
-    open_grant_blob, open_read_body, sign_grant_set, unseal,
+    AadContext, AscentLink, BinEntry, ChildRef, GrantSection, NodeKind as CoreNodeKind,
+    Permission as CorePermission, PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, decode_envelope, decode_grant_section,
+    decode_write_body, grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body,
+    unseal,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
-use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::ct_eq;
 
 use zeroize::Zeroizing;
@@ -32,9 +31,7 @@ use cipherbox_engine::grants::{
     InviteFragment, InviteRecords, InviteStore, MintedInvite, RecordedInvite, StagingInviteStore,
     import_contact, mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
 };
-use cipherbox_engine::net::author::{
-    ENVELOPE_V, EnvelopeAuthoring, author_child_envelope, author_scope_root_with_section,
-};
+use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::rotation::{
     MAX_ROTATION_ATTEMPTS, derive_write_name, published_override_seed,
 };
@@ -44,14 +41,12 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::settings::VaultSettings;
 use cipherbox_engine::sync::MAX_QUARANTINE_ATTEMPTS;
-use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::op::ScopeCrossing;
-use cipherbox_engine::sync::pointer::{
-    open_repoint, scope_pointer_name, seal_repoint, vault_pointer_name,
-};
+use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
-    retire_targets, sequence_floor_label, serve_http,
+    owner_pointer_read_key, owner_pseudonym, retire_targets, seed_account_with,
+    sequence_floor_label, serve_http,
 };
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -59,11 +54,10 @@ use cipherbox_engine::testkit::{
     SeededEntropy, block_on, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, CommittedSet, ContentProfile,
+    ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
     DeadLetterReason, Engine, EngineError, Event, EventStream, GatewayConfig, LoginSecret, NodeId,
-    NodeKind, Permission, RecordReader, ResealSeeds, ScopeRootIdentity, SessionBearer,
-    SharePointer, SharingInviteLinks, StoragePolicy, SyncTimingProfile, WriteHistory, decode_queue,
-    load_bin_index, poll_verified, post_sealed, reseal_scope_root,
+    NodeKind, Permission, RecordReader, SessionBearer, SharePointer, SharingInviteLinks,
+    StoragePolicy, SyncTimingProfile, decode_queue, load_bin_index, poll_verified, post_sealed,
 };
 
 /// The recipient account's login secret — every key their engine derives, and
@@ -77,15 +71,6 @@ const BYSTANDER_SECRET: [u8; 32] = [0x7C; 32];
 /// key doubles as a seal ephemeral.
 const CLAIMANT_SCALAR_BASE: u8 = 0x90;
 const CLAIM_EPHEMERAL_BASE: u8 = 0x10;
-/// The entropy seed the seeded vault pointer's re-point seal draws its nonce
-/// from, and the one the seeded root's grant section draws its HPKE ephemerals
-/// from. Named apart because a single (key, nonce) pair must never cover two
-/// plaintexts (blueprint/core.md "Crypto suite").
-const POINTER_SEAL_ENTROPY_SEED: u64 = 0;
-const ROOT_SEAL_ENTROPY_SEED: u64 = 1;
-/// The seeded root body's seal nonce and the share pointer's HPKE ephemeral,
-/// held apart for the same reason.
-const ROOT_BODY_NONCE: [u8; 24] = [0x31; 24];
 /// Two folders of a seeded vault root: one a boundary walk must name a scope
 /// root, one an ordinary folder of the vault's own scope.
 const SHARED: NodeId = NodeId([0xa1; 16]);
@@ -129,18 +114,6 @@ fn engine_with(
     )
 }
 
-/// The owner's writer pseudonym for `SCOPE`. Every re-seal this session authors
-/// signs under it, and a re-seal by a signer the set does not commit is refused
-/// — so the seeded root must commit exactly this key.
-fn owner_pseudonym() -> Ed25519Signer {
-    kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &SCOPE)
-}
-
-/// The per-scope pointer read key the owner's own session derives.
-fn owner_pointer_read_key() -> [u8; 32] {
-    *kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes()
-}
-
 /// Publish the account's initial state: an owner root at sequence 1 carrying
 /// `grants` as its committed set, and the vault pointer naming it.
 fn seed_vault(world: &FakeWorld, blocks: &Blocks, grants: Vec<GrantRow>) -> IpnsName {
@@ -155,126 +128,7 @@ fn seed_vault_naming(
     grants: Vec<GrantRow>,
     children: Vec<ChildRef>,
 ) -> IpnsName {
-    let owner_identity = owner_identity();
-    let pseudonym = owner_pseudonym();
-    let owner_enc = kdf::enc_subkey(&SECRET);
-    let owner_enc_pub = owner_enc.public();
-    let name = write_name(ROOT);
-
-    let commitment = GrantSetCommitment {
-        ipns_name: name.as_str().as_bytes().to_vec(),
-        owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
-        cut_epoch: 0,
-        entries: grants
-            .iter()
-            .map(|row| row.commitment_entry.clone())
-            .collect(),
-        unknown: PreservedFields::new(),
-    };
-    let commitment_sig = sign_grant_set(&owner_identity, &commitment)
-        .expect("the owner signs its own grant set")
-        .to_compact();
-    let ledger: Vec<_> = grants.iter().map(|row| row.ledger_entry.clone()).collect();
-    let pointer_read_key = owner_pointer_read_key();
-    let section = reseal_scope_root(
-        &mut SeededEntropy::new(ROOT_SEAL_ENTROPY_SEED + grants.len() as u64),
-        &ScopeRootIdentity {
-            v: ENVELOPE_V,
-            scope_id: SCOPE,
-            ipns_name: name.as_str().as_bytes(),
-            owner_enc_pub: &owner_enc_pub,
-            owner_enc_secret: Some(&owner_enc),
-            ascent: None,
-            owes_ascent_link: false,
-            pseudonym_signer: &pseudonym,
-        },
-        &ResealSeeds {
-            override_seed: &READ_SCOPE_SEED,
-            read_epoch: EPOCH,
-            prev: None,
-            write_scope_seed: &WRITE_SCOPE_SEED,
-            write_epoch: EPOCH,
-            write_history: WriteHistory::Carried(&[]),
-            pointer_read_key: &pointer_read_key,
-        },
-        &CommittedSet {
-            commitment: &commitment,
-            commitment_sig: &commitment_sig,
-            grant_ledger: &ledger,
-            direct_child_scope_index: &[],
-            revoked_recipients: &[],
-        },
-        &[],
-    )
-    .expect("the seeded root seals");
-
-    let head = author_scope_root_with_section(
-        EnvelopeAuthoring {
-            node_id: ROOT.0,
-            scope_id: SCOPE,
-            epoch: EPOCH,
-            read_key: &read_key_of(ROOT),
-            nonce: &ROOT_BODY_NONCE,
-            body: &ReadBody::Folder {
-                created_at: 0,
-                modified_at: 0,
-                children,
-                unknown: PreservedFields::new(),
-            },
-            carried_unknown: PreservedFields::new(),
-            carried_epoch_tag_unknown: PreservedFields::new(),
-        },
-        &name,
-        &section,
-        &owner_identity.verifying_key(),
-    )
-    .expect("the seeded root authors");
-    blocks.put(head.block.clone());
-
-    let root_signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
-    let root_record = IpnsRecord::create_v2(
-        &root_signer,
-        format!("/ipfs/{}", head.cid).as_bytes(),
-        1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-
-    let pointer_block = seal_repoint(
-        SessionRole::Owner,
-        &mut SeededEntropy::new(POINTER_SEAL_ENTROPY_SEED),
-        &pointer_read_key,
-        POINTER_PAYLOAD_VERSION,
-        &owner_identity,
-        &RepointObject {
-            scope_id: SCOPE,
-            current_root: name.clone(),
-            write_epoch: EPOCH,
-            min_read_epoch: EPOCH,
-            prev_root: None,
-        },
-    )
-    .expect("seal the re-point");
-    let pointer_name = vault_pointer_name(&SECRET, 0);
-    let pointer_record = IpnsRecord::create_v2(
-        &kdf::vault_pointer_index(&SECRET, 0),
-        &pointer_block,
-        1,
-        TTL_NANOS,
-        EOL,
-    )
-    .marshal();
-
-    for endpoint in world.record_store.endpoints() {
-        world
-            .record_store
-            .seed_record(&endpoint, name.as_str(), root_record.clone());
-        world
-            .record_store
-            .seed_record(&endpoint, pointer_name.as_str(), pointer_record.clone());
-    }
-    name
+    seed_account_with(world, blocks, grants, children)
 }
 
 /// Re-seal `node`'s record under `scope_id`'s derivation at `epoch` and publish

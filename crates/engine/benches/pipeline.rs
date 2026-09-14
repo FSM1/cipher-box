@@ -29,8 +29,9 @@ use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemorySnapshotCache, ScriptedHttp,
 };
 use cipherbox_engine::testkit::{
-    FakeDevice, FakeWorld, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
-    OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
+    FakeDevice, FakeWorld, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_SCOPE_SEED,
+    OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on,
+    owner_root_fixture, owner_root_pseudonym,
 };
 use cipherbox_engine::{
     ApiClient, ContentKey, ContentProfile, IdentityChallengeSigner, NameRegistration,
@@ -313,6 +314,8 @@ fn bench_adoption_gate(c: &mut Criterion) {
         head_cid_str,
         ..
     } = owner_root_fixture(OwnerRootSpec {
+        writer_pseudonym: &owner_root_pseudonym(),
+        pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
         owner_identity: &owner,
         owner_enc: &owner_enc.public(),
         scope_id: SCOPE_ID,

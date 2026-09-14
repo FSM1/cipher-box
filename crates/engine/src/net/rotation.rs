@@ -4761,7 +4761,8 @@ mod tests {
     use crate::testkit::{
         FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_PSEUDONYM_SEED,
         OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
-        SeededEntropy, SilentEntropy, block_on, owner_root_fixture, requested_cid,
+        SeededEntropy, SilentEntropy, block_on, owner_root_fixture, owner_root_pseudonym,
+        requested_cid,
     };
 
     const SCOPE: [u8; 16] = [0x44; 16];
@@ -4842,6 +4843,8 @@ mod tests {
         parent_override_seed: &[u8; 32],
     ) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id,
@@ -4861,6 +4864,8 @@ mod tests {
         parent_node_seed: Option<[u8; 32]>,
     ) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id,
@@ -5401,6 +5406,8 @@ mod tests {
     fn a_root_another_owner_signed_cannot_enter_the_proved_set() {
         let sharer = EcdsaSigner::from_scalar(&[0x21; 32]).expect("valid scalar");
         let theirs = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &sharer,
             owner_enc: &owner_enc().public(),
             scope_id: CHILD_SCOPE,
@@ -5453,6 +5460,8 @@ mod tests {
     /// an index entry.
     fn vault_root_naming(children: Vec<ChildRef>) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -5619,6 +5628,8 @@ mod tests {
         let promoted = [0xba; 16];
         let name = derive_write_name(&[0x5A; 32], &promoted);
         let root = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -6473,6 +6484,8 @@ mod tests {
             })
             .collect();
         let fixture = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id,
@@ -6524,6 +6537,8 @@ mod tests {
         parent_node_seed: Option<[u8; 32]>,
     ) -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
         let good = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id,
@@ -7189,6 +7204,8 @@ mod tests {
     #[test]
     fn a_vault_root_record_claiming_another_node_yields_no_reseal_material() {
         let planted = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -7839,6 +7856,8 @@ mod tests {
         child_scope_index: Vec<ChildScopeRef>,
     ) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: GRANTEE_SCOPE,
@@ -9214,6 +9233,8 @@ mod tests {
         let mid_id = [0x0d; 16];
         let mid_old = stage_node(&harness, mid_id, &folder(vec![ref_to(leaf_id, &leaf_old)]));
         let root = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -9267,6 +9288,8 @@ mod tests {
         let leaf_id = [0x0e; 16];
         let leaf_old = stage_node(&harness, leaf_id, &folder(Vec::new()));
         let root = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -9385,6 +9408,8 @@ mod tests {
 
     fn granted_root_with(grants: Vec<GrantRow>, children: Vec<ChildRef>) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -10241,6 +10266,8 @@ mod tests {
     /// A childless scope-root fixture, staged at the fixture epoch.
     fn staged_childless_root(harness: &Harness<InMemoryRecordStore>) -> OwnerRootFixture {
         let root = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -10919,6 +10946,8 @@ mod tests {
         write_history_link: Vec<u8>,
     ) -> OwnerRootFixture {
         let root = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &owner_identity(),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,
@@ -12010,6 +12039,8 @@ mod tests {
         // reclassified as a stale name and no consult path is offered one.
         let (harness, scope, _) = staged_swept_scope(OWNER_ROOT_EPOCH);
         let impostor = owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &EcdsaSigner::from_scalar(&[0x4d; 32]).expect("valid scalar"),
             owner_enc: &owner_enc().public(),
             scope_id: SCOPE,

@@ -16,7 +16,9 @@ use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
+use cipherbox_core::seal::ChildRef;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::{
     FakeDevice, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
@@ -25,6 +27,7 @@ use super::{
 use crate::NodeId;
 use crate::api::{REGISTRY_BATCH_REFUSED, RetireEntry};
 use crate::content::DAG_ROOT_CODEC;
+use crate::grants::GrantRow;
 use crate::net::REGISTRY_BATCH_MAX;
 use crate::seams::{HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult};
 use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
@@ -66,6 +69,21 @@ pub fn sequence_floor_label(name: &[u8]) -> [u8; 32] {
 /// The account owner's identity signer.
 pub fn owner_identity() -> EcdsaSigner {
     EcdsaSigner::from_scalar(&SECRET).expect("valid scalar")
+}
+
+/// The owner's writer pseudonym for [`SCOPE`] — the key a session started on
+/// [`SECRET`] signs every re-seal under
+/// (`SessionIdentity::owner_writer_pseudonym_signer`), so the seeded root must
+/// commit it or every rotation of that root refuses.
+pub fn owner_pseudonym() -> Ed25519Signer {
+    kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &SCOPE)
+}
+
+/// The per-scope pointer read key the owner's own session derives for
+/// [`SCOPE`], and that it seals that scope's pointer under.
+#[must_use]
+pub fn owner_pointer_read_key() -> [u8; 32] {
+    *kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes()
 }
 
 /// A test hook on the upload path: given a head block about to be stored,
@@ -517,12 +535,26 @@ pub fn serve_http(device: &FakeDevice, blocks: &Blocks, calls: usize) {
 /// root at sequence 1 and the vault pointer naming it. Returns the root's
 /// write-plane name.
 pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
+    seed_account_with(world, blocks, Vec::new(), Vec::new())
+}
+
+/// [`seed_account`] over a root that already commits `grants` and whose read
+/// body already names `children` — the state a session boots into, rather than
+/// one it authored.
+pub fn seed_account_with(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    grants: Vec<GrantRow>,
+    children: Vec<ChildRef>,
+) -> IpnsName {
     let fixture = owner_root_fixture(OwnerRootSpec {
+        writer_pseudonym: &owner_pseudonym(),
+        pointer_read_key: owner_pointer_read_key(),
         owner_identity: &owner_identity(),
         owner_enc: &kdf::enc_subkey(&SECRET).public(),
         scope_id: SCOPE,
         root_id: ROOT.0,
-        children: Vec::new(),
+        children,
         child_scope_index: Vec::new(),
         parent_node_seed: None,
         // At the read epoch, so the cold-seeded write floor opens the
@@ -530,7 +562,7 @@ pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
         // seed the drain derives every new node's name and signer from.
         owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
         write_history_link: Vec::new(),
-        grants: Vec::new(),
+        grants,
     });
     blocks.put(fixture.head_block.clone());
 
@@ -550,7 +582,7 @@ pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
     let pointer_block = seal_repoint(
         SessionRole::Owner,
         &mut SeededEntropy::new(POINTER_SEAL_ENTROPY_SEED),
-        kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes(),
+        &owner_pointer_read_key(),
         POINTER_PAYLOAD_VERSION,
         &owner_identity(),
         &RepointObject {

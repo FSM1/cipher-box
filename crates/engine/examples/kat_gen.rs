@@ -40,6 +40,7 @@ use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::gate::authenticate_section_structures;
 use cipherbox_engine::testkit::{
     OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OwnerRootSpec, owner_root_fixture,
+    owner_root_pseudonym,
 };
 use serde::Serialize;
 
@@ -317,6 +318,8 @@ fn build_section_signer_vectors() -> (Vec<SectionSignerVector>, Vec<SectionSigne
     let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar");
     let owner_enc = kdf::enc_subkey(&GATE_KAT_OWNER_ENC_SEED).public();
     let fixture = owner_root_fixture(OwnerRootSpec {
+        writer_pseudonym: &owner_root_pseudonym(),
+        pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
         owner_identity: &owner_identity,
         owner_enc: &owner_enc,
         scope_id: GATE_KAT_SCOPE,

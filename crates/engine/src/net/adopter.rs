@@ -839,8 +839,9 @@ mod tests {
         InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, ScriptedHttp,
     };
     use crate::testkit::{
-        OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
-        OwnerRootSpec, block_on, owner_root_fixture, padding,
+        OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_SCOPE_SEED,
+        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, block_on, owner_root_fixture,
+        owner_root_pseudonym, padding,
     };
 
     const TTL_NANOS: u64 = 2_000_000_000;
@@ -888,6 +889,8 @@ mod tests {
                 head_block,
                 head_cid_str,
             } = owner_root_fixture(OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
                 owner_identity: &owner_identity,
                 owner_enc: &owner_enc.public(),
                 scope_id,
