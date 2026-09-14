@@ -127,6 +127,31 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('hosts an engine for a device rendezvous, which needs no session behind it', async () => {
+    const { tab, workers } = origin();
+    const idle = tab();
+    await tick();
+    expect(idle.currentRole()).toBe('leader');
+
+    // ADR 0009: the requester runs the exchange before it can reconstruct a key,
+    // so this read is what brings the worker up on a leadership with no session.
+    void idle.facade.deviceRendezvous({
+      kind: 'open',
+      devicePublicKey: 'ed25519hex',
+      scalar: new Uint8Array(32).fill(5),
+    });
+    await tick();
+
+    expect(workers.length).toBe(1);
+    expect(
+      workers[0].posted.some(
+        (m) => (m as { type?: string; read?: { kind?: string } }).read?.kind === 'deviceRendezvous'
+      )
+    ).toBe(true);
+
+    await idle.dispose();
+  });
+
   it('refuses a read against an engine-less leader as the engine refuses one', async () => {
     const { tab, workers } = origin();
     const idle = tab();
@@ -424,18 +449,19 @@ describe('EngineClient leadership + transport swap', () => {
     await tick();
     await tick();
 
-    // Promotion has spawned the fresh worker but is stalled on the secret.
-    expect(workers.length).toBe(2);
-    const promoted = workers[workers.length - 1];
-    // Leadership is not yet advertised and the worker has not been cold-started:
-    // a command in this window cannot reach an uninitialized worker.
+    // Promotion is stalled on the secret, so the engine comes up with the cold
+    // start rather than ahead of it: leadership is not advertised, and there is
+    // no uninitialized worker for a command in this window to reach.
+    expect(workers.length).toBe(1);
     expect(follower.currentRole()).not.toBe('leader');
-    expect(promoted.posted.some((m) => (m as { type?: string }).type === 'start')).toBe(false);
 
-    // The secret resolves → the worker cold-starts → only now is leadership live.
+    // The secret resolves → the worker spawns and cold-starts → only now is
+    // leadership live.
     releaseSecret();
     await tick();
     await tick();
+    expect(workers.length).toBe(2);
+    const promoted = workers[workers.length - 1];
     expect(follower.currentRole()).toBe('leader');
     expect(promoted.posted.some((m) => (m as { type?: string }).type === 'start')).toBe(true);
 
