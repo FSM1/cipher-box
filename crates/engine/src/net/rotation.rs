@@ -43,7 +43,7 @@ use zeroize::Zeroizing;
 use super::adopter::{LocalHead, RootAdopter, fetch_head_block, open_write_scope_seed_at};
 use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
-    author_scope_root_with_section,
+    author_scope_root_with_section, report_carried_cut,
 };
 use super::child::ChildAdopter;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
@@ -1728,6 +1728,8 @@ struct RootPublish<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     scheduler: &'a Sch,
     profile: &'a SyncTimingProfile,
     entropy: &'a RefCell<E>,
+    /// The one-way stream out ([`report_carried_cut`]).
+    events: &'a mpsc::UnboundedSender<Event>,
     /// The contact-anchored owner identity the authored root must verify under
     /// (`author_scope_root_with_section`'s pre-publish mirror of gate stage 2).
     owner_identity: &'a EcdsaVerifier,
@@ -1824,6 +1826,7 @@ where
             self.owner_identity,
         )
         .map_err(author_verdict)?;
+        report_carried_cut(self.events, name, &head.cut);
 
         let write_scope_seed = current
             .write_scope_seed
@@ -1888,6 +1891,7 @@ where
             scheduler: self.scheduler,
             profile: self.profile,
             entropy: self.entropy,
+            events: self.events,
             owner_identity: self.keys.identity,
         }
     }
@@ -1989,6 +1993,7 @@ fn promote_verdict(failure: SweepResolveFailure) -> RotationPublishError {
         SweepResolveFailure::Rejected
         | SweepResolveFailure::Superseded
         | SweepResolveFailure::Unreadable
+        | SweepResolveFailure::VersionSkew
         | SweepResolveFailure::ConflictingChildLabel => RotationPublishError::Rejected,
     }
 }
@@ -2070,6 +2075,8 @@ pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub profile: &'a SyncTimingProfile,
     /// Injected entropy — the per-seal nonce source (determinism law).
     pub entropy: &'a RefCell<E>,
+    /// The one-way stream out ([`report_carried_cut`]).
+    pub events: &'a mpsc::UnboundedSender<Event>,
     /// The grantee material.
     pub keys: GranteeRotationKeys<'a>,
     /// The granted scope roots this device can rotate. A trigger naming a scope
@@ -2322,6 +2329,7 @@ where
             scheduler: self.scheduler,
             profile: self.profile,
             entropy: self.entropy,
+            events: self.events,
             owner_identity: self.keys.owner_identity,
         }
     }
@@ -2577,10 +2585,10 @@ where
         sequence: u64,
         envelope: Envelope,
     ) -> Result<SweptChild, SweepResolveFailure> {
-        if envelope.v != ENVELOPE_V
-            || envelope.id != child.node_id
-            || envelope.scope != source.scope_id
-        {
+        if envelope.v != ENVELOPE_V {
+            return Err(SweepResolveFailure::VersionSkew);
+        }
+        if envelope.id != child.node_id || envelope.scope != source.scope_id {
             return Err(SweepResolveFailure::Rejected);
         }
         let read_body = self
@@ -2686,7 +2694,7 @@ where
             .await
             .map_err(SweepResolveFailure::from)?;
         if root.envelope.v != ENVELOPE_V {
-            return Err(SweepResolveFailure::Rejected);
+            return Err(SweepResolveFailure::VersionSkew);
         }
         let GatedScopeRoot {
             envelope,
@@ -2843,6 +2851,7 @@ where
             carried_epoch_tag_unknown: node.carried_epoch_tag_unknown.clone(),
         })
         .map_err(author_verdict)?;
+        report_carried_cut(self.events, name, &head.cut);
 
         let binding = HeadBinding {
             node_id: node.node_id,
@@ -3145,7 +3154,10 @@ where
                 .await
                 .map_err(read_verdict)?;
         let envelope = decode_envelope(&block).map_err(|_| SweepResolveFailure::Rejected)?;
-        if envelope.v != ENVELOPE_V || envelope.id != node.node_id || has_grant_section(&envelope) {
+        if envelope.v != ENVELOPE_V {
+            return Err(SweepResolveFailure::VersionSkew);
+        }
+        if envelope.id != node.node_id || has_grant_section(&envelope) {
             return Err(SweepResolveFailure::Rejected);
         }
         // The move still owes this node: the caller re-seals it out of the scope
@@ -4165,6 +4177,7 @@ where
                 WritePublishError::NotLanded
             }
         })?;
+        report_carried_cut(self.events, &node.new_name, &head.cut);
 
         let binding = HeadBinding {
             node_id: node.node_id,
@@ -7964,6 +7977,7 @@ mod tests {
                 scheduler: &self.harness.world.scheduler,
                 profile: &self.harness.profile,
                 entropy: &self.harness.entropy,
+                events: &self.harness.events,
                 keys: GranteeRotationKeys {
                     enc_secret: &self.enc_secret,
                     owner_enc_pub: &self.owner_enc_pub,
@@ -11658,6 +11672,17 @@ mod tests {
         epoch: u64,
         children: Vec<ChildRef>,
     ) -> (IpnsName, Vec<u8>) {
+        interior_record_at_version(ENVELOPE_V, node_id, epoch, children)
+    }
+
+    /// [`interior_record`] at a chosen envelope version, for the skew a newer
+    /// client's record presents.
+    fn interior_record_at_version(
+        v: u64,
+        node_id: [u8; 16],
+        epoch: u64,
+        children: Vec<ChildRef>,
+    ) -> (IpnsName, Vec<u8>) {
         let name = interior_name(node_id);
         let read_key = read_key_for(&seed_at(epoch), &node_id);
         let body = ReadBody::Folder {
@@ -11666,16 +11691,8 @@ mod tests {
             children,
             unknown: PreservedFields::new(),
         };
-        let envelope = seal_read_body(
-            &read_key,
-            &[0x4d; 24],
-            ENVELOPE_V,
-            node_id,
-            SCOPE,
-            epoch,
-            &body,
-        )
-        .expect("seal the interior body");
+        let envelope = seal_read_body(&read_key, &[0x4d; 24], v, node_id, SCOPE, epoch, &body)
+            .expect("seal the interior body");
         (
             name,
             encode_envelope(&envelope).expect("encode the envelope"),
@@ -11818,6 +11835,103 @@ mod tests {
         assert_eq!(
             block_on(net.resolve_child(&scope, &swept.children[0])),
             Err(SweepResolveFailure::Unreadable),
+        );
+    }
+
+    /// A carried set the re-seal has to cut destroys data under pressure another
+    /// writer applied at that name, so the sweep's publish names it on the event
+    /// stream the way the drain does. A set that fits says nothing.
+    #[test]
+    fn a_sweep_re_seal_that_cuts_a_carried_set_reports_it() {
+        for (carried, reported) in [(MAX_RESOLVED_RECORD_BYTES, true), (16, false)] {
+            let node_id = [0x01; 16];
+            let harness = Harness::plain();
+            let net = harness.net(&[]);
+            let name = interior_name(node_id);
+            let read_key = read_key_for(&SWEPT_SEED, &node_id);
+            let carried_unknown = PreservedFields::from_iter([(
+                "zzPad".to_string(),
+                cipherbox_core::codec::Value::Bytes(vec![0xab; carried]),
+            )]);
+
+            let _ = block_on(net.publish_interior_head(
+                &name,
+                &InteriorSeal {
+                    scope_id: SCOPE,
+                    read_epoch: SWEPT_EPOCH,
+                    read_key: &read_key,
+                },
+                &OWNER_ROOT_WRITE_SCOPE_SEED,
+                &InteriorRecord {
+                    node_id,
+                    ipns_name: name.as_str().as_bytes(),
+                    sequence: 1,
+                    read_body: &interior_body(),
+                    carried_unknown: &carried_unknown,
+                    carried_epoch_tag_unknown: &PreservedFields::new(),
+                },
+            ));
+
+            let cut_reports: Vec<_> = harness
+                .events()
+                .into_iter()
+                .filter(|event| match event {
+                    Event::AttributableAbuse { description } => description.contains("zzPad"),
+                    _ => false,
+                })
+                .collect();
+            assert_eq!(
+                !cut_reports.is_empty(),
+                reported,
+                "a {carried}-byte carried field",
+            );
+        }
+    }
+
+    /// A node a newer client build last wrote is version skew, not an
+    /// attributable rejection: the operator reads it as a fleet-upgrade problem.
+    /// The node is still isolated, because no pass of this build converges it.
+    #[test]
+    fn a_node_at_an_unsupported_envelope_version_is_version_skew() {
+        let node_id = [0x01; 16];
+        let (node_name, node_block) =
+            interior_record_at_version(ENVELOPE_V + 1, node_id, OWNER_ROOT_EPOCH, Vec::new());
+        let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage_node(node_id, &node_name, &node_block);
+        let net = harness.net(&[]);
+        let scope = child_ref(SCOPE, &root);
+        let swept = block_on(net.resolve_scope(&scope)).expect("gates");
+
+        assert_eq!(
+            block_on(net.resolve_child(&scope, &swept.children[0])),
+            Err(SweepResolveFailure::VersionSkew),
+        );
+    }
+
+    /// The same skew at the scope root itself. Nothing below a root this build
+    /// cannot re-author is sweepable, so the pass still fails closed — but it
+    /// names skew rather than a trust violation.
+    #[test]
+    fn a_scope_root_at_an_unsupported_envelope_version_is_version_skew() {
+        let root = owner_scope_root_at(
+            ENVELOPE_V + 1,
+            SCOPE,
+            &SWEPT_SEED,
+            SWEPT_EPOCH,
+            None,
+            &[],
+            Vec::new(),
+            None,
+        );
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        let net = harness.net(&[]);
+
+        assert_eq!(
+            block_on(net.resolve_scope(&child_ref(SCOPE, &root))),
+            Err(SweepResolveFailure::VersionSkew),
         );
     }
 

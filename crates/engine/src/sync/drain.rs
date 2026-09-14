@@ -60,7 +60,7 @@ use crate::gate::{Adopted, GateError, RejectionReason, floor};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
     AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
-    author_scope_root_envelope, new_child,
+    author_scope_root_envelope, new_child, report_carried_cut,
 };
 use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
@@ -4926,24 +4926,6 @@ where
         classify_author(error)
     }
 
-    /// Name a carried set this authoring had to cut. The cut only fires where
-    /// the record resolved at this name already ran to the block ceiling, so
-    /// what it reports is that someone's bytes at that name are costing this
-    /// node its forward-compatible fields.
-    fn report_carried_cut(&self, name: &IpnsName, cut: &[String]) {
-        if cut.is_empty() {
-            return;
-        }
-        emit_trust_violation(
-            self.events,
-            name.as_str(),
-            format_args!(
-                "carried fields dropped to fit the block ceiling: {}",
-                cut.join(", ")
-            ),
-        );
-    }
-
     /// Tell the member their mirror is short of this version — after the record
     /// published, because [`OpPhase::ExternalPinFailed`] promises the content is
     /// retrievable, which is only true once the record naming it is live.
@@ -5397,7 +5379,7 @@ where
             author_child_envelope(authoring)
         }
         .map_err(|error| PublishHalt::before_the_put(self.report_author_refusal(name, error)))?;
-        self.report_carried_cut(name, &head.cut);
+        report_carried_cut(self.events, name, &head.cut);
 
         let record_bytes = self
             .publish_head(plane, name, &node.0, &head, content_cids.clone())
