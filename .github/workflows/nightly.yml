@@ -1,8 +1,8 @@
 # The scheduled tier (blueprint/deploy.md "Scheduled tier"): one cron surface
 # owning every slot that runs off a schedule and never blocks a pull request —
-# long-horizon liveness and full-matrix flake surveillance. A failure in either
-# opens or updates one tracking issue, so a scheduled red is never a square
-# nobody reads.
+# long-horizon liveness, full-matrix flake surveillance, and the Cloudflare
+# range watch. A failure in any of them opens or updates one tracking issue, so
+# a scheduled red is never a square nobody reads.
 #
 # The liveness slot runs two profiles: the in-process one drives months of
 # virtual time through the republisher walk, and the stack one runs the shipped
@@ -109,9 +109,29 @@ jobs:
     with:
       force-all: true
 
+  cloudflare-ranges:
+    name: Cloudflare Range Watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      # Node builtins and the committed snapshot only, so an upstream range
+      # change is never reported as a dependency failure.
+      - name: Diff the trusted ranges against Cloudflare
+        run: node scripts/check-cloudflare-ranges.mjs
+
   report:
     name: Report A Nightly Failure
-    needs: [api-liveness, flake-surveillance]
+    needs: [api-liveness, flake-surveillance, cloudflare-ranges]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -127,6 +147,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LIVENESS: ${{ needs.api-liveness.result }}
           SURVEILLANCE: ${{ needs.flake-surveillance.result }}
+          RANGES: ${{ needs.cloudflare-ranges.result }}
           TITLE: 'ci: a nightly run failed'
         run: |
           set -euo pipefail
@@ -137,6 +158,7 @@ jobs:
             echo "| --- | --- |"
             echo "| API Long-Horizon Liveness | ${LIVENESS} |"
             echo "| Full-Matrix Flake Surveillance | ${SURVEILLANCE} |"
+            echo "| Cloudflare Range Watch | ${RANGES} |"
           } > "${RUNNER_TEMP}/nightly-report.md"
           number=$(gh issue list --state open --label comp:ci --limit 500 --json number,title \
             --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
