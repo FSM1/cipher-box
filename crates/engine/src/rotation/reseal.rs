@@ -87,8 +87,10 @@ pub enum AscentAuthority<'a> {
     /// (blueprint/core.md "Structure signatures"), so a bare `writeScopeSeed`
     /// holder cannot plant one — the gate refuses a swap it cannot sign for.
     /// The residual is a **committed** writer planting and signing its own key,
-    /// which stays attributable and which an owner cut overwrites: that arm
-    /// derives the public from the parent seed rather than carrying it.
+    /// which an ancestor reports unreachable rather than attributable (the
+    /// ascent-link arm of [`crate::gate::adopt_deferred`]) and which an owner
+    /// cut overwrites: that arm derives the public from the parent seed rather
+    /// than carrying it.
     CarriedPublic(&'a [u8; 32]),
 }
 

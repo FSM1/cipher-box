@@ -738,8 +738,21 @@ pub async fn adopt_deferred<F: FloorStore>(
         // carries is this scope root's current override seed (CONTEXT.md "Ascent
         // link"/"Override seed"), so it must belong to this epoch and derive this
         // node's read key — the ascent-link half of engine.md:406-408.
-        let payload = open_ascent_link(parent_node_seed, &aad, &link)
-            .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
+        //
+        // A published public half this parent seed does not derive is a link no
+        // key this device holds opens, so the failure names no author:
+        // availability, as on the child leg above the read-epoch floor. It costs
+        // the accusation a committed writer escapes by planting its own ascent
+        // public, for an effect withholding the record already buys it.
+        let payload = open_ascent_link(parent_node_seed, &aad, &link).map_err(|e| {
+            if matches!(e, CodecError::Trust(TrustViolation::AscentLinkMismatch)) {
+                GateError::Seam(SeamError::new(
+                    "ascent link is sealed to an ascent keypair this parent node seed does not derive",
+                ))
+            } else {
+                reject(GateStage::GrantSection, RejectionReason::Trust(e))
+            }
+        })?;
         let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
         if payload.epoch != candidate.envelope.epoch

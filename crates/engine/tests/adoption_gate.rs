@@ -599,11 +599,18 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
             candidate.grant_section.owner_blob.signature[0] ^= 0xFF;
         }
         "grant-section:ascent-link-mismatch" => {
-            // The link is sealed under one parent seed; the reader supplies a
-            // DIFFERENT real ancestor seed, so the reader-derived keypair
-            // mismatches the link's public half — a natural ascent-link-mismatch.
-            candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xA1; 32]));
-            reader_parent_seed = Some([0xB2; 32]);
+            // The link is sealed to the keypair the reader's own ancestor seed
+            // derives, so the reader can open it — and it carries a rogue
+            // override seed that does not derive this root's read key. A
+            // published public half the reader cannot derive is availability
+            // instead (`an_ascent_public_this_parent_seed_cannot_derive_is_availability`).
+            let parent_seed = [0xA1; 32];
+            candidate.grant_section.ascent_link = Some(fx.ascent_link_full(
+                &parent_seed,
+                fx.ascent_aad(),
+                OverrideSeedPayload::new([0xEE; 32], fx.epoch),
+            ));
+            reader_parent_seed = Some(parent_seed);
         }
         "sequence:sequence-not-newer" => {
             block_on(floors.raise_sequence_floor(fx.name.as_str().as_bytes(), 5)).unwrap();
@@ -1224,11 +1231,12 @@ fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn ascent_authority_is_reader_derived_not_candidate_supplied() {
-    // The attacker seals a well-formed ascent link from a seed IT chose; the
-    // reader's real ancestor seed is different. The gate re-derives the expected
-    // keypair from reader state (not the candidate), so the check mismatches —
-    // the vacuous "producer picks its own seed and passes" is closed.
+fn an_ascent_public_this_parent_seed_cannot_derive_is_availability() {
+    // The expected keypair is re-derived from reader state, never from the
+    // candidate, so a link sealed under a seed the producer chose never opens —
+    // the vacuous "producer picks its own seed and passes" is closed. That is
+    // also the shape a parent rotation leaves for a device still holding the
+    // previous parent seed, so the refusal accuses nobody.
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let mut candidate = fx.candidate(1);
@@ -1236,10 +1244,18 @@ fn ascent_authority_is_reader_derived_not_candidate_supplied() {
     let mut reader = fx.reader();
     let wrong_seed = [0xCD; 32];
     reader.parent_node_seed = Some(&wrong_seed);
+
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
-    let rej = err.rejection().unwrap();
-    assert_eq!(rej.stage, GateStage::GrantSection);
-    assert_eq!(rej.check(), "ascent-link-mismatch");
+
+    assert!(
+        err.rejection().is_none(),
+        "a link sealed to a keypair this device cannot derive accuses nobody"
+    );
+    assert_eq!(
+        block_on(read_epoch_floor(&floors, &fx.scope_id)).unwrap(),
+        None,
+        "and neither arm moves a floor"
+    );
 }
 
 #[test]
@@ -1296,10 +1312,7 @@ fn a_grantee_that_does_hold_an_ancestor_seed_still_verifies_the_ascent_link() {
         seed_blob: Some(fx.grantee_seed_blob(&grantee)),
     };
 
-    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
-    let rej = err.rejection().unwrap();
-    assert_eq!(rej.stage, GateStage::GrantSection);
-    assert_eq!(rej.check(), "ascent-link-mismatch");
+    assert!(block_on(adopt(&floors, &reader, &candidate)).is_err());
 }
 
 #[test]
