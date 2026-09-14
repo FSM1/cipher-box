@@ -916,14 +916,21 @@ pub struct ScopeLinks {
 /// Split this owner's records for the scope `scope_id`, against the set
 /// `commitment` commits at the scope root it names.
 ///
+/// The owner-authority rule every invite-store path holds, held once here: a
+/// record set is read and destroyed only against a commitment this caller's own
+/// identity key signed. Attributing a record to an owner rests on that
+/// signature, so a set that does not carry it answers nothing about the records.
+///
 /// A record the commitment still carries whose tag its own key material does not
 /// re-derive is in neither half: it names a row that is not this link's, so it
 /// is neither cuttable nor spent.
 pub fn partition_scope_links(
-    owner_enc_secret: &X25519Secret,
+    owner: &OwnerAuthority<'_>,
     links: &[RecordedInvite],
     scope: &CommittedScope<'_>,
-) -> ScopeLinks {
+) -> Result<ScopeLinks, InviteError> {
+    owner.authorise(scope)?;
+    let owner_enc_secret = owner.enc_secret;
     let name = scope.commitment.ipns_name.as_slice();
     let carried: BTreeSet<[u8; 32]> = scope
         .commitment
@@ -952,7 +959,7 @@ pub fn partition_scope_links(
             }
         }
     }
-    split
+    Ok(split)
 }
 
 /// The one live link the owner recorded at `scope` — the link a revoke cuts.
@@ -967,8 +974,7 @@ pub fn locate_invite_link(
     scope: &CommittedScope<'_>,
     links: &[RecordedInvite],
 ) -> Result<CommittedLink, InviteError> {
-    owner.authorise(scope)?;
-    let live = partition_scope_links(owner.enc_secret, links, scope).committed;
+    let live = partition_scope_links(owner, links, scope)?.committed;
     match live.as_slice() {
         [link] => Ok(*link),
         _ => Err(InviteError::LinkNotCommitted),
@@ -1975,7 +1981,7 @@ mod tests {
     }
 
     #[test]
-    fn a_non_owner_can_neither_convert_nor_revoke() {
+    fn a_non_owner_can_neither_convert_nor_revoke_nor_prune() {
         let l = link(0x4e, Permission::Read, None);
         let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let scope = committed_scope(&commitment, &sig, &ledger);
@@ -2005,6 +2011,14 @@ mod tests {
         );
         assert_eq!(
             locate_invite_link(&rogue, &scope, &[l.link])
+                .unwrap_err()
+                .check(),
+            "not-owner",
+        );
+        // The prune path reads its spent set from here, so the same rule must
+        // refuse rather than report a live record as dropped.
+        assert_eq!(
+            partition_scope_links(&rogue, &[l.link], &scope)
                 .unwrap_err()
                 .check(),
             "not-owner",
@@ -2124,7 +2138,7 @@ mod tests {
             ..l.link
         };
 
-        let split = partition_scope_links(owner.enc_secret, &[elsewhere], &scope);
+        let split = partition_scope_links(&owner, &[elsewhere], &scope).expect("the owner signed");
         assert!(split.committed.is_empty() && split.spent.is_empty());
         assert_eq!(
             locate_invite_link(&owner, &scope, &[elsewhere])
@@ -2134,7 +2148,7 @@ mod tests {
         );
 
         // Only the recorded id differs, so it is what decided the refusal.
-        let split = partition_scope_links(owner.enc_secret, &[l.link], &scope);
+        let split = partition_scope_links(&owner, &[l.link], &scope).expect("the owner signed");
         assert_eq!(committed_records(&split), vec![l.link]);
     }
 
@@ -2147,7 +2161,9 @@ mod tests {
         let (commitment, sig, ledger) = committed(&[live.row.clone()]);
         let scope = committed_scope(&commitment, &sig, &ledger);
 
-        let split = partition_scope_links(&owner_enc(), &[live.link, dropped.link], &scope);
+        let keys = Owner::new();
+        let split = partition_scope_links(&keys.authority(), &[live.link, dropped.link], &scope)
+            .expect("the owner signed");
         assert_eq!(split.spent, BTreeSet::from([dropped.link.tag]));
         assert_eq!(committed_records(&split), vec![live.link]);
     }
@@ -2175,7 +2191,9 @@ mod tests {
         let moved_ref = ChildScopeRef::new(SCOPE, moved);
         let scope = committed_scope_at(&moved_ref, &commitment, &sig, &ledger);
 
-        let split = partition_scope_links(&owner_enc(), &[before.link], &scope);
+        let keys = Owner::new();
+        let split =
+            partition_scope_links(&keys.authority(), &[before.link], &scope).expect("owner signed");
         assert!(
             split.spent.is_empty(),
             "the link's row is live at the moved name"

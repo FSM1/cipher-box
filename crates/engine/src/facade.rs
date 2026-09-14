@@ -34,7 +34,7 @@ use cipherbox_core::seal::{
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
@@ -3022,6 +3022,15 @@ fn parsed_commitment_sig(compact: &[u8; 64]) -> Result<EcdsaSignature, EngineErr
     })
 }
 
+/// This session's authority over a scope's grant set — the pair every
+/// invite-store path acts under ([`OwnerAuthority`]).
+fn owner_authority(session: &SessionIdentity) -> OwnerAuthority<'_> {
+    OwnerAuthority {
+        identity_signer: session.identity(),
+        enc_secret: session.enc_subkey(),
+    }
+}
+
 /// The resolved set at `target` with its scope id bound to the commitment
 /// ([`CommittedScope::bind`]).
 fn bound_scope<'a>(
@@ -3154,7 +3163,7 @@ enum PendingShare<'a> {
     /// The sealed mailbox pointer a personal grant's recipient reads.
     SharePointer(GrantRecipient<'a>),
     /// The bearer capability an invite link hands its host, still to be sealed.
-    Fragment(PendingInviteLink),
+    Fragment(Rc<PendingInviteLink>),
 }
 
 /// The host-facing names a scope mint's refusals carry. One rule, one name per
@@ -4529,6 +4538,13 @@ pub struct Engine<T: SeamTypes> {
     /// the only writer; read by
     /// [`relocation_scope_roots`](Self::relocation_scope_roots).
     minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
+    /// The invite links this session minted whose write-scope cut has not
+    /// landed, so the same command re-driven finishes one
+    /// ([`share_scope`](Self::share_scope)). In memory only, and cleared with
+    /// the session: the invitee secret is the bearer capability, and the durable
+    /// record deliberately keeps none of it
+    /// ([`RecordedInvite`](crate::grants::RecordedInvite)).
+    pending_invite_links: Rc<RefCell<BTreeMap<NodeId, Rc<PendingInviteLink>>>>,
     /// The folder the FUSE-op TTL check last fired a hint for, and when. One
     /// slot: the check only ever asks about the folder in view, and a hint is
     /// not the refresh stamp a completed pass earns
@@ -4716,6 +4732,7 @@ impl<T: SeamTypes> Engine<T> {
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
                 grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
                 minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
+                pending_invite_links: Rc::new(RefCell::new(BTreeMap::new())),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
@@ -5097,6 +5114,11 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut roots) = self.minted_scope_roots.try_borrow_mut() {
             roots.clear();
+        }
+        // A bearer capability the prior account drew must not outlive its
+        // session.
+        if let Ok(mut links) = self.pending_invite_links.try_borrow_mut() {
+            links.clear();
         }
     }
 
@@ -7573,12 +7595,34 @@ where {
         // retry then has only the wave and the delivery left to run, so that one
         // shape is finished rather than refused
         // ([`Self::cut_granted_write_scope`]).
-        let resumed_write_scope_seed = match (&share, permission, standing) {
-            (ScopeShare::Contact(contact), Permission::Write, ShareStanding::AlreadyAScope) => {
-                self.resumable_write_share(node, &current, contact, api, owner_keys())
+        // The recipient a resume proves the stalled scope's committed row
+        // against is this share's own. A link's is the invitee the stalled mint
+        // drew, still held from it: nothing durable rebuilds one, because the
+        // record keeps no part of the bearer capability, so a link resumes only
+        // in the session that minted it ([`Self::pending_invite_links`]).
+        let (held_link, resume_recipient) = match (&share, permission, standing) {
+            (ScopeShare::Contact(contact), Permission::Write, ShareStanding::AlreadyAScope) => (
+                None,
+                Some((contact.identity_pk().to_sec1(), contact.enc_subkey())),
+            ),
+            (ScopeShare::InviteLink { .. }, Permission::Write, ShareStanding::AlreadyAScope) => {
+                let held = self.pending_invite_links.borrow().get(&node).cloned();
+                let recipient = held.as_ref().map(|link| {
+                    (
+                        link.invitee().identity_pk().to_sec1(),
+                        link.invitee().enc_public(),
+                    )
+                });
+                (held, recipient)
+            }
+            _ => (None, None),
+        };
+        let resumed_write_scope_seed = match resume_recipient {
+            Some((identity_pk, enc_pub)) => {
+                self.resumable_write_share(node, &current, identity_pk, &enc_pub, api, owner_keys())
                     .await
             }
-            _ => None,
+            None => None,
         };
         let resuming = resumed_write_scope_seed.is_some();
         if !resuming && let Some(check) = checks.refusal(standing) {
@@ -7696,29 +7740,46 @@ where {
                 }
                 PendingShare::SharePointer(recipient)
             }
-            ScopeShare::InviteLink { expires_at } => PendingShare::Fragment(
-                mint_invite_link(
-                    &mut SharedEntropy(&self.entropy),
-                    &net,
-                    &voucher,
-                    &StagingInviteStore::new(
-                        &self.seams.staging_store,
-                        session.enc_subkey(),
-                        &self.entropy,
-                    ),
-                    &owner,
-                    &InviteMintPlan {
-                        grantee: &grantee,
-                        parent: &parent_plan,
-                        expires_at: *expires_at,
-                    },
-                )
-                .await
-                .map_err(|e| match e {
-                    InviteMintError::Create(create) => EngineError::from_share_mint(create, checks),
-                    other => EngineError::from_invite_mint(other),
-                })?,
-            ),
+            ScopeShare::InviteLink { expires_at } => {
+                PendingShare::Fragment(match held_link.filter(|_| resuming) {
+                    // A resume finishes the scope the stalled mint published, on
+                    // the terms that mint recorded. Minting again would draw an
+                    // invitee that scope commits no row for, and record a second
+                    // link at one node.
+                    Some(link) => link,
+                    None => {
+                        let link = Rc::new(
+                            mint_invite_link(
+                                &mut SharedEntropy(&self.entropy),
+                                &net,
+                                &voucher,
+                                &StagingInviteStore::new(
+                                    &self.seams.staging_store,
+                                    session.enc_subkey(),
+                                    &self.entropy,
+                                ),
+                                &owner,
+                                &InviteMintPlan {
+                                    grantee: &grantee,
+                                    parent: &parent_plan,
+                                    expires_at: *expires_at,
+                                },
+                            )
+                            .await
+                            .map_err(|e| match e {
+                                InviteMintError::Create(create) => {
+                                    EngineError::from_share_mint(create, checks)
+                                }
+                                other => EngineError::from_invite_mint(other),
+                            })?,
+                        );
+                        self.pending_invite_links
+                            .borrow_mut()
+                            .insert(node, link.clone());
+                        link
+                    }
+                })
+            }
         };
 
         self.minted_scope_roots.borrow_mut().insert(node);
@@ -7754,7 +7815,12 @@ where {
             .map_err(EngineError::from_create_grant),
             PendingShare::Fragment(link) => link
                 .seal(&scope_root_name)
-                .map(CommandOutcome::InviteLinkMinted)
+                .map(|minted| {
+                    // The capability is in the host's hands, so this node owes
+                    // no re-drive and holds no invitee.
+                    self.pending_invite_links.borrow_mut().remove(&node);
+                    CommandOutcome::InviteLinkMinted(minted)
+                })
                 .map_err(EngineError::from_invite_mint),
         }
     }
@@ -7825,13 +7891,15 @@ where {
     }
 
     /// The granted scope's own write-scope seed, when the scope root `node`'s
-    /// parent index names is a write share to `contact` whose name wave never
-    /// ran — the one state a re-share finishes instead of refusing.
+    /// parent index names is a write share to this recipient whose name wave
+    /// never ran — the one state a re-share finishes instead of refusing. The
+    /// recipient is a contact on the grant path and the link's throwaway
+    /// invitee on the invite-link path.
     ///
     /// Two proofs, both owner authority. The index still names the root at the
     /// name the **parent's** write scope seed derives, which every completed
     /// wave moves off; and that root's owner-signed commitment commits exactly
-    /// the entry a write grant to this recipient mints
+    /// the entry a write share to this recipient mints
     /// ([`commits_write_grant`]). Anything else is a second share of a live
     /// scope, which the standing refuses.
     ///
@@ -7841,7 +7909,8 @@ where {
         &self,
         node: NodeId,
         parent: &CascadeTarget,
-        contact: &Contact,
+        recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
+        recipient_enc_pub: &X25519Public,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         keys: OwnerRotationKeys<'_>,
     ) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
@@ -7875,7 +7944,8 @@ where {
             session.identity(),
             session.enc_subkey(),
             pointer_read_key.as_bytes(),
-            contact,
+            recipient_identity_pk,
+            recipient_enc_pub,
             &node.0,
             &parent_derived,
         )
@@ -8063,15 +8133,8 @@ where {
             async |target: &OwnerScope, current: &CascadeTarget| {
                 let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
                 let scope = bound_scope(target, current, &commitment_sig)?;
-                let link = locate_invite_link(
-                    &OwnerAuthority {
-                        identity_signer: session.identity(),
-                        enc_secret: session.enc_subkey(),
-                    },
-                    &scope,
-                    &links,
-                )
-                .map_err(EngineError::from_invite)?;
+                let link = locate_invite_link(&owner_authority(session), &scope, &links)
+                    .map_err(EngineError::from_invite)?;
                 recorded_tag = Some(link.record.tag);
                 Ok(link.tag)
             },
@@ -8130,10 +8193,11 @@ where {
         // caller assembled.
         let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
         let dead = partition_scope_links(
-            session.enc_subkey(),
+            &owner_authority(session),
             &records.links,
             &bound_scope(&target, &current, &commitment_sig)?,
         )
+        .map_err(EngineError::from_invite)?
         .spent;
         if dead.is_empty() {
             return Ok(());
@@ -8259,10 +8323,7 @@ where {
             .map_err(|e| target.resolve_error(check, e))?;
         let mut commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
 
-        let authority = OwnerAuthority {
-            identity_signer: session.identity(),
-            enc_secret: session.enc_subkey(),
-        };
+        let authority = owner_authority(session);
         // Both are verdicts on the record this pass resolved rather than on any
         // one item, so they fail the pass closed instead of reading as every
         // item merely skipped (AGENTS.md rule 6).
@@ -9734,24 +9795,20 @@ where {
         if enforce_committed_ledger(&current.commitment, &current.grant_ledger).is_err() {
             return None;
         }
-        // Attributing a record to this owner rests on the owner's own signature
-        // over the set it is read against, so an unheld commitment reads as
-        // unreachable rather than as a scope with no links.
         let commitment_sig = parsed_commitment_sig(&current.commitment_sig).ok()?;
-        OwnerAuthority {
-            identity_signer: session.identity(),
-            enc_secret: session.enc_subkey(),
-        }
-        .authorise(&bound_scope(&target, &current, &commitment_sig).ok()?)
-        .ok()?;
-
-        // A link store this could not open is absence, not "no links": the grant
-        // half of the read still stands.
-        let records = self.invite_store(session).load().await.ok();
         let scope = bound_scope(&target, &current, &commitment_sig).ok()?;
-        let split = records
-            .as_ref()
-            .map(|records| partition_scope_links(session.enc_subkey(), &records.links, &scope));
+        // A link store this could not open is absence, not "no links": the grant
+        // half of the read still stands. The partition still runs, over no
+        // records, because a set this owner's identity did not sign reads as
+        // unreachable rather than as a scope with no links.
+        let records = self.invite_store(session).load().await.ok();
+        let partitioned = partition_scope_links(
+            &owner_authority(session),
+            records.as_ref().map_or(&[][..], |records| &records.links),
+            &scope,
+        )
+        .ok()?;
+        let split = records.is_some().then_some(partitioned);
         // One committed record is the live link; two have no defined cut, so the
         // read reports none — the same rule `locate_invite_link` revokes under.
         let live = split

@@ -74,6 +74,14 @@ impl fmt::Debug for PendingInviteLink {
 }
 
 impl PendingInviteLink {
+    /// The throwaway recipient this link's committed row was minted to, for a
+    /// caller proving that a published scope root is the one this link's own
+    /// stalled mint left behind
+    /// ([`commits_write_grant`](super::commits_write_grant)).
+    pub fn invitee(&self) -> &EphemeralInvitee {
+        &self.invitee
+    }
+
     /// Seal the bearer capability over the name the scope root answers at
     /// **now**: the name wave's own outcome after a cut, and the plan's derived
     /// name where the mint ran none. A claim compares that name against the
