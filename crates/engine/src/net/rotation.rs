@@ -82,12 +82,13 @@ use crate::rotation::eager_set::bind_child_labels;
 use crate::rotation::sweep::body_children;
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet,
-    LaggingNode, NodeRef, PrevEpochSeed, RepointChannel, RepublishedNode, ResealError, ResealSeeds,
-    ResealedScopeRoot, ResolveFailure, ResumedRoot, ResumedWriteWave, RotateError, RotateScopePlan,
-    RotationOutcome, RotationPublishError, ScopeExitRotator, ScopeRootIdentity, ScopeRootPublisher,
-    SweepPublisher, SweepResolveFailure, SweepResolver, SweptChild, SweptNode, SweptScope,
-    WriteHistory, WritePublishError, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
-    derive_write_name, published_override_seed, reseal_scope_root, rotate_scope, seed_at_epoch,
+    LaggingNode, NodeRef, PrevEpochSeed, RecoveredWave, RepointChannel, RepublishedNode,
+    ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ResumedRoot, ResumedWriteWave,
+    RotateError, RotateScopePlan, RotationOutcome, RotationPublishError, ScopeExitRotator,
+    ScopeRootIdentity, ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver,
+    SweptChild, SweptNode, SweptScope, WriteHistory, WritePublishError, WriteScopeNode,
+    WriteSubtreeResolver, WriteWavePublisher, derive_write_name, published_override_seed,
+    reseal_scope_root, rotate_scope, seed_at_epoch,
 };
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
@@ -3737,14 +3738,16 @@ where
         open_write_scope_seed_at(self.owner_enc_secret, envelope, owb, write_epoch)
     }
 
-    /// The **pre-wave** write scope seed the moved root's write history link
-    /// carries, and only when it derives the root name this plan is moving off.
+    /// The write scope seed the root's own write history link supersedes, and
+    /// only when it derives `superseded_root_name` — the name that root
+    /// succeeded, as the owner-signed re-point states it.
     ///
     /// The link is HPKE auth-mode, owner as sender and recipient, so no
     /// committed writer can mint one. The name check is what additionally pins
-    /// it to *this* wave rather than an earlier rotation of the same scope.
+    /// it to the epoch directly below this root rather than an earlier rotation
+    /// of the same scope.
     ///
-    /// `None` on anything unreadable: without it the resume tombstones nothing,
+    /// `None` on anything unreadable: without it the wave tombstones nothing,
     /// which leaks a registration instead of retiring a live name.
     fn superseded_write_scope_seed(
         &self,
@@ -3752,6 +3755,7 @@ where
         section: &GrantSection,
         write_scope_seed: &[u8; SECRET_LEN],
         write_epoch: u64,
+        superseded_root_name: &IpnsName,
     ) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
         let body = open_write_body(
             envelope,
@@ -3771,7 +3775,64 @@ where
         let payload =
             open_owner_history_link(self.owner_enc_secret, &ctx, &body.write_history_link).ok()?;
         let prev = Zeroizing::new(*payload.prev_seed());
-        (derive_write_name(&prev, &self.scope_id) == *self.current_root_name).then_some(prev)
+        (derive_write_name(&prev, &self.scope_id) == *superseded_root_name).then_some(prev)
+    }
+
+    /// Fetch and adoption-gate this scope's root at `name`, refusing an envelope
+    /// that is not this scope's own at this build's version.
+    async fn gated_root_at(&self, name: &IpnsName) -> Result<GatedScopeRoot, ResolveFailure> {
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, name).await else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let identity = self.owner.verifying_key();
+        let gated = gated_scope_root(&self.root_adopter(&identity), name, &record_bytes)
+            .await
+            .map_err(ResolveFailure::from)?;
+        if gated.envelope.v != ENVELOPE_V || gated.envelope.id != self.scope_id {
+            return Err(ResolveFailure::Rejected);
+        }
+        Ok(gated)
+    }
+
+    /// No wave is in flight, so read what the live root supersedes: its own
+    /// write history link names the epoch below it, whose interior names a wave
+    /// that crashed past its pointer flip left registered.
+    ///
+    /// The re-point must still name the root this plan rotates. Anything else
+    /// means another device moved the scope on, and this pass can prove nothing
+    /// about what the pointer's own predecessor was.
+    async fn fresh_wave(&self, repoint: &RepointObject) -> Result<RecoveredWave, ResolveFailure> {
+        let Some(superseded_root) = repoint.prev_root.as_ref() else {
+            return Ok(RecoveredWave::nothing());
+        };
+        if repoint.current_root != *self.current_root_name {
+            return Ok(RecoveredWave::nothing());
+        }
+        if floor::write_epoch_regression(self.floors, &self.scope_id, repoint.write_epoch)
+            .await
+            .map_err(|_| ResolveFailure::Unavailable)?
+            .is_some()
+        {
+            return Err(ResolveFailure::Rejected);
+        }
+        let gated = self.gated_root_at(&repoint.current_root).await?;
+        let Some(seed) =
+            self.write_scope_seed_at(&gated.envelope, &gated.section, repoint.write_epoch)
+        else {
+            return Ok(RecoveredWave::nothing());
+        };
+        Ok(RecoveredWave {
+            in_flight: None,
+            superseded_write_scope_seed: self
+                .superseded_write_scope_seed(
+                    &gated.envelope,
+                    &gated.section,
+                    &seed,
+                    repoint.write_epoch,
+                    superseded_root,
+                )
+                .map(|prev| SecretBytes::new(*prev)),
+        })
     }
 
     /// The adopter every root read of this scope runs through, under the
@@ -4331,13 +4392,15 @@ where
         })
     }
 
-    /// Recover an in-flight wave from the canonical scope pointer.
+    /// Read this scope's write plane off the canonical scope pointer: the wave
+    /// to resume when the pointer moved off the root this plan holds, and
+    /// otherwise what that root itself supersedes ([`Self::fresh_wave`]).
     ///
     /// The moved root's name derives from the very seed a resume needs, so the
     /// owner-signed pointer is the one published anchor that breaks that circle;
     /// the seed itself still comes from the moved root's own blob through the
     /// gate, never from the pointer.
-    async fn recover_wave(&self) -> Result<Option<ResumedWriteWave>, ResolveFailure> {
+    async fn recover_wave(&self) -> Result<RecoveredWave, ResolveFailure> {
         let pointer = self.scope_keys.pointer_name(&self.scope_id);
         let block = match RecordPointerFetch::new(self.transport)
             .fetch(&pointer)
@@ -4345,10 +4408,11 @@ where
         {
             Ok(PointerRecord::Found(block)) => block,
             // No pointer record: this scope has never been re-pointed, so there is
-            // no wave to pick up. An unreadable plane is not that answer —
-            // reporting it as one mints a second seed for a wave already in
-            // flight and orphans every name the first one registered.
-            Ok(PointerRecord::Absent) => return Ok(None),
+            // no wave to pick up and no epoch below the live one. An unreadable
+            // plane is not that answer — reporting it as one mints a second seed
+            // for a wave already in flight and orphans every name the first one
+            // registered.
+            Ok(PointerRecord::Absent) => return Ok(RecoveredWave::nothing()),
             Ok(PointerRecord::Unavailable) | Err(_) => return Err(ResolveFailure::Unavailable),
         };
         let pointer_read_key = self.scope_keys.pointer_read_key(&self.scope_id);
@@ -4361,7 +4425,7 @@ where
         )
         .map_err(|_| ResolveFailure::Rejected)?;
         if repoint.prev_root.as_ref() != Some(self.current_root_name) {
-            return Ok(None);
+            return self.fresh_wave(&repoint).await;
         }
         // The owner-write blob is opened at the re-point's *own* claimed epoch,
         // not at the durable floor, so this is the one path the floor's
@@ -4374,39 +4438,27 @@ where
         {
             return Err(ResolveFailure::Rejected);
         }
-        let Some((_, record_bytes)) =
-            fanout_get_verify(self.transport, &repoint.current_root).await
-        else {
-            return Err(ResolveFailure::Unavailable);
-        };
-        let identity = self.owner.verifying_key();
-        let gated = gated_scope_root(
-            &self.root_adopter(&identity),
-            &repoint.current_root,
-            &record_bytes,
-        )
-        .await
-        .map_err(ResolveFailure::from)?;
-        if gated.envelope.v != ENVELOPE_V || gated.envelope.id != self.scope_id {
-            return Err(ResolveFailure::Rejected);
-        }
+        let gated = self.gated_root_at(&repoint.current_root).await?;
         let seed = self
             .write_scope_seed_at(&gated.envelope, &gated.section, repoint.write_epoch)
             .ok_or(ResolveFailure::Rejected)?;
-        let prev_write_scope_seed = self
+        let superseded_write_scope_seed = self
             .superseded_write_scope_seed(
                 &gated.envelope,
                 &gated.section,
                 &seed,
                 repoint.write_epoch,
+                self.current_root_name,
             )
             .map(|prev| SecretBytes::new(*prev));
-        Ok(Some(ResumedWriteWave {
-            write_scope_seed: SecretBytes::new(*seed),
-            root_name: repoint.current_root,
-            write_epoch: repoint.write_epoch,
-            prev_write_scope_seed,
-        }))
+        Ok(RecoveredWave {
+            in_flight: Some(ResumedWriteWave {
+                write_scope_seed: SecretBytes::new(*seed),
+                root_name: repoint.current_root,
+                write_epoch: repoint.write_epoch,
+            }),
+            superseded_write_scope_seed,
+        })
     }
 }
 
@@ -11469,6 +11521,7 @@ mod tests {
         );
         let recovered = block_on(resumed.recover_wave())
             .expect("the recovery reads published state")
+            .in_flight
             .expect("a flipped pointer names an in-flight wave");
         assert_eq!(recovered.root_name, outcome.new_root_name);
         assert!(
@@ -11580,11 +11633,65 @@ mod tests {
             &elsewhere,
             &staged.root.grant_section.commitment,
         );
+        let recovered = block_on(other.recover_wave()).expect("the recovery reads published state");
         assert!(
-            block_on(other.recover_wave())
-                .expect("the recovery reads published state")
-                .is_none(),
+            recovered.in_flight.is_none(),
             "a re-point off another predecessor is not this wave's to resume"
+        );
+        assert!(
+            recovered.superseded_write_scope_seed.is_none(),
+            "a root the pointer does not name proves nothing about what it superseded"
+        );
+    }
+
+    #[test]
+    fn a_fresh_wave_recovers_the_seed_the_live_root_superseded() {
+        // A wave that crashed past its pointer flip left its interior old names
+        // registered and can no longer be resumed. The next rotation reclaims
+        // them from the live root's own write history link, checked against the
+        // name the owner-signed re-point says that root succeeded.
+        let harness = Harness::plain();
+        let staged = staged_scope(&harness);
+        let owner = owner_identity();
+        let outcome = {
+            let net = wave(
+                &harness,
+                &owner,
+                &staged.root.name,
+                &staged.root.grant_section.commitment,
+            );
+            let mut entropy = SeededEntropy::new(67);
+            block_on(rotate_scope_write(
+                &mut entropy,
+                &net,
+                &net,
+                &write_plan(&staged.root, &owner),
+            ))
+            .expect("the wave completes")
+        };
+
+        let next = wave(
+            &harness,
+            &owner,
+            &outcome.new_root_name,
+            &staged.root.grant_section.commitment,
+        );
+        let recovered = block_on(next.recover_wave()).expect("the recovery reads published state");
+        assert!(
+            recovered.in_flight.is_none(),
+            "the pointer already names this root, so no wave is in flight"
+        );
+        let superseded = recovered
+            .superseded_write_scope_seed
+            .expect("the live root's history link names the epoch below it");
+        assert!(
+            ct_eq(superseded.as_bytes(), &OWNER_ROOT_WRITE_SCOPE_SEED),
+            "the seed comes back off the live root's own history link"
+        );
+        assert_eq!(
+            derive_write_name(superseded.as_bytes(), &SCOPE),
+            staged.root.name,
+            "the recovered seed derives the name this root succeeded"
         );
     }
 
@@ -11622,6 +11729,7 @@ mod tests {
         assert!(
             block_on(resumed.recover_wave())
                 .expect("the recovery reads published state")
+                .in_flight
                 .is_some(),
             "at the floor the wave itself left, the re-point still resumes"
         );
