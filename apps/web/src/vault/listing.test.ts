@@ -29,11 +29,12 @@ describe('listingRows', () => {
     expect(rows.map((row) => row.name)).toEqual(['archive', 'zeta', 'Alpha.txt', 'beta.txt']);
   });
 
-  it('neutralises a name for display, and keeps the stored one beside it', () => {
-    const [row] = listingRows([child({ name: 'report\u202Efdp.exe' })]);
+  it('clamps a very long name for display, and keeps the whole one beside it', () => {
+    const long = 'a'.repeat(200);
+    const [row] = listingRows([child({ name: long })]);
 
-    expect(row.name).toBe('reportfdp.exe');
-    expect(row.storedName).toBe('report\u202Efdp.exe');
+    expect(row.name).toBe('a'.repeat(96) + '…');
+    expect(row.storedName).toBe(long);
   });
 
   it('renders name and kind before the projection lands', () => {

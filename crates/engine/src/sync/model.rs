@@ -580,21 +580,27 @@ fn shown<'a>(meta: &'a NodeMeta, rendered: &'a Option<Zeroizing<String>>) -> &'a
         .map_or_else(|| meta.name(), |name| name.as_str())
 }
 
-/// The name a child enters the render under: its stored name, or a neutralised
-/// spelling when the stored name holds a character the law refuses as deceptive
-/// ([`crate::name::strip_deceptive`]).
+/// The name `id` shows under, given the spelling a peer stored for it: that
+/// name, or a neutralised one when it holds a character the law refuses as
+/// deceptive ([`crate::name::strip_deceptive`]). `None` when nothing is
+/// stripped.
 ///
 /// The strip can leave a name no kernel carries — one built of nothing else —
-/// and a listing drops such a name, so that child falls back to its node id and
+/// and a listing drops such a name, so that node falls back to its node id and
 /// stays removable, the way a share label the law refuses does
 /// ([`crate::grants::received_status::grafted_root_name`]).
-fn neutralised(meta: &NodeMeta) -> Option<Zeroizing<String>> {
-    let stripped = strip_deceptive(meta.name())?;
+pub(crate) fn neutralised_name(name: &str, id: NodeId) -> Option<Zeroizing<String>> {
+    let stripped = strip_deceptive(name)?;
     Some(if is_emittable(&stripped) {
         stripped
     } else {
-        Zeroizing::new(node_id_label(meta.id))
+        Zeroizing::new(node_id_label(id))
     })
+}
+
+/// The name a child enters the render under.
+fn neutralised(meta: &NodeMeta) -> Option<Zeroizing<String>> {
+    neutralised_name(meta.name(), meta.id)
 }
 
 /// The children of `parent` as a read plane shows them, ordered by node id: a

@@ -165,10 +165,10 @@ describe('the shared route', () => {
     expect(screen.queryByTestId('shared-unread')).toBeNull();
   });
 
-  it('renders a name the sharing vault chose in the order it stores it', async () => {
-    await renderShared(() => Promise.resolve([share(1, 'granted', 'report\u202Efdp.exe')]));
+  it('clamps a label the sharing vault chose, so a row cannot outgrow its pane', async () => {
+    await renderShared(() => Promise.resolve([share(1, 'granted', 'a'.repeat(200))]));
 
-    expect(screen.getByTestId('shared-name').textContent).toBe('reportfdp.exe');
+    expect(screen.getByTestId('shared-name').textContent).toBe('a'.repeat(96) + '…');
   });
 
   it('re-reads on demand, so a standing moves without a reload', async () => {

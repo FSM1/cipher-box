@@ -151,6 +151,31 @@
       "emittable": true
     },
     {
+      "name": "a\u00adb",
+      "verdict": "deceptive-character",
+      "emittable": true
+    },
+    {
+      "name": "a\u061cb",
+      "verdict": "deceptive-character",
+      "emittable": true
+    },
+    {
+      "name": "a\u2028b",
+      "verdict": "deceptive-character",
+      "emittable": true
+    },
+    {
+      "name": "a\u2029b",
+      "verdict": "deceptive-character",
+      "emittable": true
+    },
+    {
+      "name": "a\u2060b",
+      "verdict": "deceptive-character",
+      "emittable": true
+    },
+    {
       "name": "a<b",
       "verdict": "reserved-character",
       "emittable": true
@@ -244,6 +269,10 @@
     {
       "names": ["invoice‮cod.exe"],
       "rendered": ["invoicecod.exe"]
+    },
+    {
+      "names": ["so\u00adft\u2060no\u061cte\u2028s\u2029.txt"],
+      "rendered": ["softnotes.txt"]
     },
     {
       "names": ["report.pdf", "report​.pdf"],

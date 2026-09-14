@@ -15,10 +15,10 @@ describe('the bin rows', () => {
     expect(row.key).toBe('07'.repeat(16));
   });
 
-  it('neutralises the name a purge dialog reads back', () => {
-    const [row] = binRows([entry({ originName: 'report\u202Efdp.exe' })], 30);
+  it('clamps the name a purge dialog reads back, so a row cannot outgrow it', () => {
+    const [row] = binRows([entry({ originName: 'a'.repeat(200) })], 30);
 
-    expect(row.name).toBe('reportfdp.exe');
+    expect(row.name).toBe('a'.repeat(96) + '…');
   });
 
   it('marks a folder apart from a file', () => {
@@ -90,23 +90,16 @@ describe('the bin rows', () => {
 
     expect(originOf({ originFolder: { kind: 'root' } })).toBe('root');
     expect(originOf({ originFolder: { kind: 'gone' } })).toBe('a folder that is gone');
-    // A name that neutralises away entirely would otherwise render as nothing.
-    expect(originOf({ originFolder: { kind: 'folder', name: '\u202E' } })).toBe(
+    // A folder carrying no name at all would otherwise render as nothing.
+    expect(originOf({ originFolder: { kind: 'folder', name: '' } })).toBe(
       'a folder with no readable name'
     );
   });
 
-  it('neutralises the origin folder name, which another vault may have authored', () => {
-    const [row] = binRows([entry({ originFolder: { kind: 'folder', name: 'we\u202Elrok' } })], 30);
-
-    expect(row.origin).toBe('welrok');
-  });
-
-  it('ties by the name it shows, so a stripped control cannot move a row', () => {
-    // A leading tab sorts ahead of every letter but renders as nothing.
+  it('ties by the name it shows, so two rows of one deletion time read in a set order', () => {
     const rows = binRows(
       [
-        entry({ originName: '\tzebra', deletedAt: NEW_YEAR }),
+        entry({ originName: 'zebra', deletedAt: NEW_YEAR }),
         entry({ originName: 'apple', deletedAt: NEW_YEAR }),
       ],
       30

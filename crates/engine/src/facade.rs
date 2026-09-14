@@ -2697,6 +2697,17 @@ fn refuse_outside_vault(rendered: &Snapshot, node: NodeId) -> Result<(), EngineE
     Ok(())
 }
 
+/// The name a bin row carries for the unlinked node.
+///
+/// A peer authored the stored name and no layer below validates one, so it is
+/// neutralised here the same way the render neutralises a child
+/// ([`crate::sync::model::neutralised_name`]): the bin is the one listing that
+/// draws a name the render tree no longer holds.
+fn bin_origin_name(entry: &cipherbox_core::seal::BinEntry) -> String {
+    crate::sync::model::neutralised_name(entry.origin_name(), NodeId(entry.node_id))
+        .map_or_else(|| entry.origin_name().to_owned(), |name| name.to_string())
+}
+
 /// Where a bin row's origin folder stands in `rendered`.
 fn origin_folder(rendered: &Snapshot, parent: NodeId) -> BinOrigin {
     if parent == rendered.root {
@@ -9664,7 +9675,7 @@ where {
                     node: NodeId(entry.node_id),
                     kind: map_kind(entry.kind),
                     origin_parent: NodeId(entry.origin_parent),
-                    origin_name: entry.origin_name().to_owned(),
+                    origin_name: bin_origin_name(entry),
                     origin_folder: origin_folder(&rendered, NodeId(entry.origin_parent)),
                     deleted_at: entry.deleted_at,
                     scope: NodeId(entry.scope_id),
@@ -10973,6 +10984,42 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn binned(origin_name: &str) -> cipherbox_core::seal::BinEntry {
+        cipherbox_core::seal::BinEntry::new(
+            [7u8; 16],
+            Vec::new(),
+            cipherbox_core::seal::NodeKind::File,
+            [0u8; 16],
+            origin_name.to_owned(),
+            0,
+            [0u8; 16],
+            None,
+        )
+    }
+
+    /// A peer authored the name a bin row draws and no layer below validates
+    /// one, so the bin neutralises it exactly as the render tree does.
+    #[test]
+    fn a_bin_row_draws_a_peer_authored_name_neutralised() {
+        assert_eq!(bin_origin_name(&binned("notes.txt")), "notes.txt");
+        assert_eq!(
+            bin_origin_name(&binned("invoice\u{202E}cod.exe")),
+            "invoicecod.exe",
+            "an override reorders every name drawn around it"
+        );
+        assert_eq!(
+            bin_origin_name(&binned(
+                "so\u{00AD}ft\u{2060}no\u{061C}te\u{2028}s\u{2029}.txt"
+            )),
+            "softnotes.txt"
+        );
+        assert_eq!(
+            bin_origin_name(&binned("\u{200B}\u{FEFF}")),
+            crate::sync::model::node_id_label(NodeId([7u8; 16])),
+            "a name built of nothing else falls back to the node id and stays purgeable"
+        );
+    }
 
     /// The pass, not the leg, is what `MAX_FOCUS_FILES` bounds: a second leg
     /// takes only the budget the first one left, and the newest rows take it.

@@ -80,9 +80,9 @@ const RESERVED_CHARACTERS: &[char] = &['<', '>', ':', '"', '|', '?', '*'];
 /// Windows device names, reserved with or without an extension.
 const RESERVED_DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
 
-/// Whether the character reorders or hides the rest of the name when a file
-/// manager draws it. `char::is_control` is category `Cc` only and misses all
-/// of these; the strict comparator folds case but not format characters, so
+/// Whether the character reorders, hides or breaks the rest of the name when a
+/// file manager draws it. `char::is_control` is category `Cc` only and misses
+/// all of these; the strict comparator folds case but not format characters, so
 /// nothing downstream catches them either.
 ///
 /// U+200C and U+200D sit between the refused code points and are admitted:
@@ -92,9 +92,13 @@ const RESERVED_DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
 fn is_deceptive(c: char) -> bool {
     matches!(
         c,
-        '\u{200B}' // zero-width space
+        '\u{00AD}' // soft hyphen
+            | '\u{061C}' // arabic letter mark
+            | '\u{200B}' // zero-width space
             | '\u{200E}' | '\u{200F}' // LRM/RLM
+            | '\u{2028}' | '\u{2029}' // line and paragraph separators
             | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
+            | '\u{2060}' // word joiner
             | '\u{2066}'..='\u{2069}' // bidi isolates
             | '\u{FEFF}' // zero-width no-break space
     )
@@ -202,10 +206,13 @@ mod tests {
     /// can drop one of them and leave no vector row to notice.
     #[test]
     fn every_reordering_or_hiding_character_stays_refused() {
-        let refused = ['\u{200B}', '\u{200E}', '\u{200F}', '\u{FEFF}']
-            .into_iter()
-            .chain('\u{202A}'..='\u{202E}')
-            .chain('\u{2066}'..='\u{2069}');
+        let refused = [
+            '\u{00AD}', '\u{061C}', '\u{200B}', '\u{200E}', '\u{200F}', '\u{2028}', '\u{2029}',
+            '\u{2060}', '\u{FEFF}',
+        ]
+        .into_iter()
+        .chain('\u{202A}'..='\u{202E}')
+        .chain('\u{2066}'..='\u{2069}');
         for character in refused {
             assert_eq!(
                 validate_name(&format!("a{character}b")),
