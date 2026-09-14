@@ -7382,4 +7382,312 @@ mod tests {
             Err(Halt::UploadAttempt),
         ));
     }
+
+    // -----------------------------------------------------------------------
+    // The drain harness: one real `Drain` over the test kit's seam fakes, so
+    // the pass's own reject arms are drivable from where they live.
+    // -----------------------------------------------------------------------
+
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::seal::{encode_envelope, set_grant_section};
+
+    use crate::content::DAG_ROOT_CODEC;
+    use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
+    use crate::testkit::fakes::{
+        InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
+        InMemoryStagingStore, ScriptedHttp, VirtualScheduler,
+    };
+    use crate::testkit::{
+        OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
+        SeededEntropy, block_on, gateway, owner_root_fixture, serve,
+    };
+
+    /// The login secret the harness's owner identity, enc secret and bin keys
+    /// derive from.
+    const HARNESS_SECRET: [u8; 32] = [7u8; 32];
+    /// The scope and root node ids [`owner_root_fixture`] seals the vault root
+    /// under.
+    const HARNESS_SCOPE: [u8; 16] = [0u8; 16];
+    const HARNESS_ROOT: NodeId = NodeId([0u8; 16]);
+    /// The sequence the cached root record carries. `Strictness::AtFloor`
+    /// admits the floor exactly, so the harness raises the floor to match.
+    const HARNESS_SEQUENCE: u64 = 1;
+    const HARNESS_TTL_NANOS: u64 = 2_000_000_000;
+    const HARNESS_EOL: &str = "2099-01-01T00:00:00Z";
+
+    type FakeDrain<'a> = Drain<
+        'a,
+        InMemoryRecordStore,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        OwnerScopedFloorStore<InMemoryFloorStore>,
+        InMemorySnapshotCache,
+        QueueGenerationStore<InMemoryStagingStore>,
+        VirtualScheduler,
+    >;
+
+    /// Every value a [`Drain`] borrows, owned in one place so a test can hand
+    /// out a pass and still drive the seams behind it.
+    struct DrainHarness {
+        transport: InMemoryRecordStore,
+        api: ApiClient<ScriptedHttp, InMemoryCredentialStore>,
+        floors: OwnerScopedFloorStore<InMemoryFloorStore>,
+        snapshot_cache: InMemorySnapshotCache,
+        staging: QueueGenerationStore<InMemoryStagingStore>,
+        scheduler: VirtualScheduler,
+        http: ScriptedHttp,
+        gateway: Gateway,
+        deadlines: DeadlinePolicy,
+        placement: PlacementDecision,
+        profile: SyncTimingProfile,
+        storage_policy: StoragePolicy,
+        content_profile: ContentProfile,
+        live_blocks: RefCell<LiveBlocks>,
+        entropy: RefCell<Box<dyn Entropy>>,
+        base: BaseSnapshot,
+        held: RefCell<HeldRecords>,
+        blocked: RefCell<Option<BlockedOp>>,
+        settings_hold: RefCell<Option<SettingsHold>>,
+        pending_reclaim: Cell<u64>,
+        reclaim_stalls: RefCell<Vec<ReclaimStall>>,
+        bookkeeping: RefCell<BookkeepingCursors>,
+        orphan_heads: OrphanHeads,
+        converged_tick: Cell<bool>,
+        cancels: RefCell<UploadCancels>,
+        events: mpsc::UnboundedSender<Event>,
+        /// Held open: an events channel whose receiver dropped refuses sends.
+        _event_stream: mpsc::UnboundedReceiver<Event>,
+        bin_keys: BinIndexKeys,
+        dead_letters: RefCell<RetainedDeadLetters>,
+        observed_unlinks: RefCell<Vec<UnlinkedChild>>,
+        bin_index_record: RefCell<Option<HeldRecord>>,
+        bin_index_hold: RefCell<Option<BinIndexHold>>,
+        pending_scope_exits: RefCell<BTreeSet<NodeId>>,
+        root_name: IpnsName,
+        read_scope_seed: Zeroizing<[u8; 32]>,
+        write_scope_seed: Zeroizing<[u8; 32]>,
+        scope_roots: Vec<NodeId>,
+        keyless_roots: Vec<NodeId>,
+        enc_secret: X25519Secret,
+        owner_identity: EcdsaVerifier,
+    }
+
+    impl DrainHarness {
+        fn drain(&self) -> FakeDrain<'_> {
+            Drain {
+                transport: &self.transport,
+                api: &self.api,
+                floors: &self.floors,
+                snapshot_cache: &self.snapshot_cache,
+                staging: &self.staging,
+                scheduler: &self.scheduler,
+                http: &self.http,
+                gateway: &self.gateway,
+                deadlines: &self.deadlines,
+                placement: &self.placement,
+                profile: &self.profile,
+                storage_policy: &self.storage_policy,
+                live_blocks: &self.live_blocks,
+                content_profile: &self.content_profile,
+                entropy: &self.entropy,
+                base: &self.base,
+                held: &self.held,
+                blocked: &self.blocked,
+                settings_hold: &self.settings_hold,
+                pending_reclaim: &self.pending_reclaim,
+                reclaim_stalls: &self.reclaim_stalls,
+                bookkeeping: &self.bookkeeping,
+                orphan_heads: &self.orphan_heads,
+                converged_tick: &self.converged_tick,
+                cancels: &self.cancels,
+                events: &self.events,
+                bin_keys: &self.bin_keys,
+                bin_retention_days: None,
+                dead_letters: &self.dead_letters,
+                bin_index_record: &self.bin_index_record,
+                bin_index_hold: &self.bin_index_hold,
+                established_bin_index: RefCell::new(None),
+                observed_unlinks: &self.observed_unlinks,
+                pending_scope_exits: &self.pending_scope_exits,
+            }
+        }
+
+        fn scope(&self) -> DrainScope<'_> {
+            DrainScope {
+                source: ScopeEnd {
+                    root: HARNESS_ROOT,
+                    root_name: &self.root_name,
+                    read_scope_seed: &self.read_scope_seed,
+                    write_scope_seed: &self.write_scope_seed,
+                    ascent_node_seed: None,
+                },
+                destination: None,
+                scope_roots: &self.scope_roots,
+                keyless_roots: &self.keyless_roots,
+                charges_the_identity: false,
+                enc_secret: &self.enc_secret,
+                owner_identity: &self.owner_identity,
+            }
+        }
+    }
+
+    /// The vault root this harness anchors on, as the fixture authors it.
+    fn harness_root_envelope() -> Envelope {
+        owner_root_fixture(OwnerRootSpec {
+            owner_identity: &EcdsaSigner::from_scalar(&HARNESS_SECRET).expect("valid scalar"),
+            owner_enc: &kdf::enc_subkey(&HARNESS_SECRET).public(),
+            scope_id: HARNESS_SCOPE,
+            root_id: HARNESS_ROOT.0,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+            write_history_link: Vec::new(),
+            grants: Vec::new(),
+        })
+        .envelope
+    }
+
+    /// A harness whose snapshot cache holds `cached_root` at the scope-root
+    /// name, with the head block that record anchors served over the gateway.
+    ///
+    /// `None` leaves the cache empty, which is the third arm of
+    /// [`Drain::load_scope_root`]'s refusal.
+    fn drain_harness(cached_root: Option<Envelope>) -> DrainHarness {
+        let write_scope_seed = Zeroizing::new(OWNER_ROOT_WRITE_SCOPE_SEED);
+        let root_name = derive_write_name(&write_scope_seed, &HARNESS_ROOT.0);
+        let enc_secret = kdf::enc_subkey(&HARNESS_SECRET);
+
+        let floors = OwnerScopedFloorStore::new(InMemoryFloorStore::default());
+        floors.bind(&enc_secret, &kdf::contact_label_seed(&HARNESS_SECRET));
+        let snapshot_cache = InMemorySnapshotCache::default();
+        let mut blocks = BTreeMap::new();
+        if let Some(envelope) = cached_root {
+            let head_block = encode_envelope(&envelope).expect("the fixture encodes");
+            let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+            let signer = kdf::ipns_keypair(
+                kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &HARNESS_ROOT.0).as_bytes(),
+            );
+            let record = IpnsRecord::create_v2(
+                &signer,
+                format!("/ipfs/{head_cid}").as_bytes(),
+                HARNESS_SEQUENCE,
+                HARNESS_TTL_NANOS,
+                HARNESS_EOL,
+            )
+            .marshal();
+            block_on(snapshot_cache.put(root_name.as_str().as_bytes(), &record))
+                .expect("the record caches");
+            block_on(floor::advance_on_unseal(
+                &floors,
+                &HARNESS_ROOT.0,
+                root_name.as_str().as_bytes(),
+                HARNESS_SEQUENCE,
+                OWNER_ROOT_EPOCH,
+            ))
+            .expect("the floors seed");
+            blocks.insert(head_cid, head_block);
+        }
+
+        let (events, _event_stream) = mpsc::unbounded();
+        DrainHarness {
+            transport: InMemoryRecordStore::new(vec![EndpointId::new("fake:someguy")]),
+            api: ApiClient::new(
+                ScriptedHttp::default(),
+                InMemoryCredentialStore::default(),
+                "",
+            ),
+            floors,
+            snapshot_cache,
+            staging: QueueGenerationStore::new(InMemoryStagingStore::default()),
+            scheduler: VirtualScheduler::new(),
+            http: serve(&blocks),
+            gateway: gateway(),
+            deadlines: DeadlinePolicy::default(),
+            placement: Ok(Placement::Hosted),
+            profile: SyncTimingProfile::CI,
+            storage_policy: StoragePolicy::CI,
+            content_profile: ContentProfile::CI,
+            live_blocks: RefCell::new(LiveBlocks::default()),
+            entropy: RefCell::new(Box::new(SeededEntropy::new(42))),
+            base: BaseSnapshot::new(Snapshot::new(HARNESS_ROOT)),
+            held: RefCell::new(HeldRecords::new()),
+            blocked: RefCell::new(None),
+            settings_hold: RefCell::new(None),
+            pending_reclaim: Cell::new(0),
+            reclaim_stalls: RefCell::new(Vec::new()),
+            bookkeeping: RefCell::new(BookkeepingCursors::default()),
+            orphan_heads: OrphanHeads::default(),
+            converged_tick: Cell::new(false),
+            cancels: RefCell::new(UploadCancels::default()),
+            events,
+            _event_stream,
+            bin_keys: BinIndexKeys::derive(&HARNESS_SECRET),
+            dead_letters: RefCell::new(RetainedDeadLetters::new()),
+            observed_unlinks: RefCell::new(Vec::new()),
+            bin_index_record: RefCell::new(None),
+            bin_index_hold: RefCell::new(None),
+            pending_scope_exits: RefCell::new(BTreeSet::new()),
+            root_name,
+            read_scope_seed: Zeroizing::new(OWNER_ROOT_SCOPE_SEED),
+            write_scope_seed,
+            scope_roots: vec![HARNESS_ROOT],
+            keyless_roots: Vec::new(),
+            enc_secret,
+            owner_identity: EcdsaSigner::from_scalar(&HARNESS_SECRET)
+                .expect("valid scalar")
+                .verifying_key(),
+        }
+    }
+
+    /// The control the two reject arms are read against: the intact fixture
+    /// reaches the grant-section read and comes back with the ratchet, so a
+    /// refusal below is the section and not an earlier stage of the load.
+    #[test]
+    fn an_intact_scope_root_anchors_the_pass_on_its_carried_ratchet() {
+        let harness = drain_harness(Some(harness_root_envelope()));
+        let drain = harness.drain();
+        let scope = harness.scope();
+
+        let loaded = block_on(drain.load_scope_root(&scope.source)).expect("the root loads");
+
+        assert_eq!(loaded.epoch, OWNER_ROOT_EPOCH);
+        assert!(loaded.state.is_scope_root);
+    }
+
+    /// A scope root whose grant section is absent or will not decode carries no
+    /// backward ratchet, and a pass anchored on it would downgrade every
+    /// lagging node of the scope to the uncharged epoch-lag hold instead of
+    /// refusing. An absent cache entry is the same refusal for the same reason:
+    /// there is no root to anchor on.
+    #[test]
+    fn a_scope_root_this_pass_cannot_anchor_a_ratchet_on_is_refused() {
+        let mut undecodable = harness_root_envelope();
+        set_grant_section(&mut undecodable, vec![0xFF; 8]);
+        let mut absent = harness_root_envelope();
+        let without_section: PreservedFields = absent
+            .unknown
+            .entries()
+            .iter()
+            .filter(|(key, _)| key != "grantSection")
+            .cloned()
+            .collect();
+        absent.unknown = without_section;
+
+        for (case, cached) in [
+            ("a grant section that does not decode", Some(undecodable)),
+            ("no grant section at all", Some(absent)),
+            ("no cached record at the root name", None),
+        ] {
+            let harness = drain_harness(cached);
+            let drain = harness.drain();
+            let scope = harness.scope();
+
+            assert_eq!(
+                block_on(drain.load_scope_root(&scope.source)).err(),
+                Some(Halt::Unclassified),
+                "{case}",
+            );
+        }
+    }
 }
