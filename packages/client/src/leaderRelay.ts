@@ -28,7 +28,6 @@ import {
   type LeaderMessage,
   type PortRequest,
   type PortResponse,
-  type WireRead,
   type WireStream,
   type WireWrite,
 } from './broadcast.js';
@@ -37,21 +36,14 @@ import { EngineRequestError, unknownHandle, type HandleKind } from './correlated
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import { commandTransfer, rendezvousTransfer } from './worker/protocol.js';
+import { commandTransfer, READ_KINDS, rendezvousTransfer } from './worker/protocol.js';
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
   EventDescriptor,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResultValue,
   StreamHandle,
-  VaultStorageDescriptor,
   WriteHandle,
 } from './worker/protocol.js';
 import { WriteQueue } from './writeQueue.js';
@@ -126,6 +118,12 @@ function wipeDropped(message: unknown): void {
  */
 function hasKind(payload: unknown): boolean {
   return typeof (payload as { kind?: unknown } | null | undefined)?.kind === 'string';
+}
+
+/** Whether an unvalidated port payload names a read this build serves. */
+function isServedRead(read: unknown): read is ReadDescriptor {
+  const kind = (read as { kind?: unknown } | null | undefined)?.kind;
+  return typeof kind === 'string' && READ_KINDS.has(kind);
 }
 
 /**
@@ -210,7 +208,7 @@ export class LeaderRelay {
   private readonly onEngineWanted: () => void;
   // The account this leadership's engine holds; `null` until it cold-starts.
   private account: string | null = null;
-  private readonly unsubscribe: () => void;
+  private unsubscribe: () => void;
   private readonly unsubscribePorts: () => void;
   private closed = false;
   // Focus-driven refresh collapse: at most one pass in flight, at most one
@@ -224,7 +222,7 @@ export class LeaderRelay {
 
   constructor(
     private readonly channel: BroadcastChannelLike,
-    private readonly transport: EngineTransport,
+    private transport: EngineTransport,
     private readonly courier: PortCourier,
     private readonly locks: LockManagerLike,
     options: LeaderRelayOptions = {}
@@ -236,6 +234,17 @@ export class LeaderRelay {
     this.unsubscribe = this.transport.subscribe((event) => this.fanOut(event));
     // Announce leadership so followers (existing or newly-elected-away) reconnect.
     this.post({ type: 'cb:leader', token: this.token });
+  }
+
+  /**
+   * Points this relay at the engine its leadership now hosts. An engine-less
+   * leadership serves nothing, so no follower can hold a handle minted by the
+   * transport this replaces.
+   */
+  useEngine(transport: EngineTransport): void {
+    this.unsubscribe();
+    this.transport = transport;
+    this.unsubscribe = this.transport.subscribe((event) => this.fanOut(event));
   }
 
   /**
@@ -432,7 +441,7 @@ export class LeaderRelay {
     switch (message.type) {
       case 'cb:portRead': {
         const { read } = message as Extract<PortRequest, { type: 'cb:portRead' }>;
-        if (!hasKind(read)) return this.refuse(entry, requestId, message);
+        if (!isServedRead(read)) return this.refuse(entry, requestId, message);
         void this.answerPort(entry, requestId, () => this.readValue(read));
         return true;
       }
@@ -470,22 +479,7 @@ export class LeaderRelay {
     entry: PortEntry,
     requestId: number,
     step: () => Promise<
-      | SnapshotDescriptor
-      | SharingDescriptor
-      | ReceivedShareDescriptor[]
-      | BinDescriptor
-      | VaultStorageDescriptor
-      | AuthMethodDescriptor[]
-      | RegisteredDeviceDescriptor[]
-      | PendingApprovalDescriptor[]
-      | DeviceRendezvousResult
-      | CommandOutcomeDescriptor
-      | ArrayBuffer
-      | Uint8Array
-      | string
-      | bigint
-      | OpenedStream
-      | undefined
+      ReadResultValue | CommandOutcomeDescriptor | bigint | OpenedStream | undefined
     >
   ): Promise<void> {
     try {
@@ -516,54 +510,16 @@ export class LeaderRelay {
     }
   }
 
-  private readValue(
-    read: WireRead
-  ): Promise<
-    | SnapshotDescriptor
-    | SharingDescriptor
-    | ReceivedShareDescriptor[]
-    | BinDescriptor
-    | VaultStorageDescriptor
-    | AuthMethodDescriptor[]
-    | RegisteredDeviceDescriptor[]
-    | PendingApprovalDescriptor[]
-    | DeviceRendezvousResult
-    | ArrayBuffer
-    | Uint8Array
-    | string
-  > {
-    switch (read.kind) {
-      case 'snapshot':
-        return this.transport.snapshot(read.folder);
-      case 'sharing':
-        return this.transport.sharing(read.scope);
-      case 'receivedShares':
-        return this.transport.receivedShares();
-      case 'bin':
-        return this.transport.bin();
-      case 'vaultStorage':
-        return this.transport.vaultStorage();
-      case 'authMethods':
-        return this.transport.authMethods();
-      case 'devices':
-        return this.transport.devices();
-      case 'deviceRegistrationChallenge':
-        return this.transport.deviceRegistrationChallenge(read.devicePublicKey);
-      case 'pendingApprovals':
-        return this.transport.pendingApprovals();
-      case 'deviceRendezvous':
-        // The step arrived by structured clone, so this realm owns a copy of
-        // its secrets. The leg below transfers most of them on, but an `open`
-        // step's scalar stays the caller's and is never detached here, so this
-        // realm erases whatever it still holds once the step has run.
-        return this.transport.deviceRendezvous(read.step).finally(() => wipeStep(read.step));
-      case 'siweChallenge':
-        return this.transport.siweChallenge(read.intent);
-      case 'download':
-        return this.transport.download(read.node);
-      default:
-        return Promise.reject(unknownKind(read));
-    }
+  /**
+   * Serves one follower read against the leader's engine. A rendezvous step
+   * arrived by structured clone, so this realm owns a copy of its secrets. The
+   * leg below transfers most of them on, but an `open` step's scalar stays the
+   * caller's and is never detached here, so this realm erases whatever it still
+   * holds once the step has run.
+   */
+  private readValue(read: ReadDescriptor): Promise<ReadResultValue> {
+    if (read.kind !== 'deviceRendezvous') return this.transport.read(read);
+    return this.transport.read(read).finally(() => wipeStep(read.step));
   }
 
   private postPort(port: MessagePortLike, message: PortResponse, transfer?: Transferable[]): void {

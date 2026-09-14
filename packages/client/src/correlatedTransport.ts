@@ -14,22 +14,13 @@
 import { wipeTransfer } from './buffers.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResult,
   StreamHandle,
-  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -147,18 +138,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
   abstract commitWrite(handle: WriteHandle): Promise<bigint>;
   abstract abortWrite(handle: WriteHandle): Promise<void>;
-  abstract snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
-  abstract sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
-  abstract receivedShares(): Promise<ReceivedShareDescriptor[]>;
-  abstract bin(): Promise<BinDescriptor>;
-  abstract vaultStorage(): Promise<VaultStorageDescriptor>;
-  abstract authMethods(): Promise<AuthMethodDescriptor[]>;
-  abstract devices(): Promise<RegisteredDeviceDescriptor[]>;
-  abstract deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
-  abstract pendingApprovals(): Promise<PendingApprovalDescriptor[]>;
-  abstract deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult>;
-  abstract siweChallenge(intent: SiweIntent): Promise<string>;
-  abstract download(node: Uint8Array): Promise<ArrayBuffer>;
+  abstract read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>>;
   abstract openContentStream(node: Uint8Array): Promise<OpenedStream>;
   abstract readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
   abstract closeStream(handle: StreamHandle): Promise<void>;

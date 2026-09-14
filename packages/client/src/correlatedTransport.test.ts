@@ -48,6 +48,10 @@ class ProbeTransport extends CorrelatedTransport {
     return this.dispatch(this.gate, (id) => this.onSend(id), [chunk]);
   }
 
+  read(): Promise<never> {
+    return unsupported();
+  }
+
   open(): void {
     this.resolveGate();
   }

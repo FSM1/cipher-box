@@ -132,7 +132,9 @@ describe('one engine per origin is one account per origin', () => {
       EngineHeldElsewhereError
     );
 
-    await expect(follower.snapshot(null)).rejects.toBeInstanceOf(EngineHeldElsewhereError);
+    await expect(follower.read({ kind: 'snapshot', folder: null })).rejects.toBeInstanceOf(
+      EngineHeldElsewhereError
+    );
     await expect(follower.command({ kind: 'manualRefresh' })).rejects.toBeInstanceOf(
       EngineHeldElsewhereError
     );
@@ -156,7 +158,9 @@ describe('one engine per origin is one account per origin', () => {
     const { engine, relay, follower } = wire();
     await startFollower(relay, follower);
 
-    await expect(follower.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
+    await expect(follower.read({ kind: 'snapshot', folder: null })).resolves.toMatchObject({
+      staleness: 'fresh',
+    });
     expect(engine.snapshots).toEqual([null]);
   });
 
@@ -175,13 +179,15 @@ describe('one engine per origin is one account per origin', () => {
     const { engine, relay, follower } = wire();
     // Adopted while neither side had an account, which is the one pairing that
     // matches without naming one.
-    await follower.snapshot(null);
+    await follower.read({ kind: 'snapshot', folder: null });
     expect(engine.snapshots).toHaveLength(1);
 
     relay.serves(TEST_ACCOUNT_ID);
     await tick();
 
-    await expect(follower.snapshot(null)).rejects.toBeInstanceOf(EngineHeldElsewhereError);
+    await expect(follower.read({ kind: 'snapshot', folder: null })).rejects.toBeInstanceOf(
+      EngineHeldElsewhereError
+    );
     expect(engine.snapshots).toHaveLength(1);
   });
 
@@ -229,7 +235,9 @@ describe('a follower no leadership serves', () => {
 
     // No relay ever beacons: an origin every tab has retired from leading. The
     // read must fail rather than park the tab for the rest of its life.
-    await expect(follower.snapshot(null)).rejects.toThrow('no tab of this origin leads it');
+    await expect(follower.read({ kind: 'snapshot', folder: null })).rejects.toThrow(
+      'no tab of this origin leads it'
+    );
     follower.close();
   });
 
@@ -246,7 +254,9 @@ describe('a follower no leadership serves', () => {
 
     relay.serves(OTHER_ACCOUNT_ID);
     await tick();
-    await expect(follower.snapshot(null)).rejects.toBeInstanceOf(EngineHeldElsewhereError);
+    await expect(follower.read({ kind: 'snapshot', folder: null })).rejects.toBeInstanceOf(
+      EngineHeldElsewhereError
+    );
 
     // Every re-brokerage reports it, so the owner sees the same verdict once or
     // many times — never a different account.
@@ -625,7 +635,7 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const folder = new Uint8Array(16).fill(2);
     // Structured clone across the bus must preserve bytes and bigints intact.
-    await expect(follower.snapshot(folder)).resolves.toEqual(view);
+    await expect(follower.read({ kind: 'snapshot', folder })).resolves.toEqual(view);
     expect(engine.snapshots).toEqual([folder]);
   });
 
@@ -633,7 +643,9 @@ describe('broadcast transport ↔ leader relay', () => {
     const { engine, follower } = wire();
     // A follower that has not named a folder asks for the vault root; `null`
     // must survive the structured clone rather than arrive as a seeded id.
-    await expect(follower.snapshot(null)).resolves.toEqual(emptySnapshot());
+    await expect(follower.read({ kind: 'snapshot', folder: null })).resolves.toEqual(
+      emptySnapshot()
+    );
     expect(engine.snapshots).toEqual([null]);
   });
 
@@ -656,7 +668,7 @@ describe('broadcast transport ↔ leader relay', () => {
     engine.respondBin = () => Promise.resolve(view);
 
     // Structured clone across the bus must preserve bytes and bigints intact.
-    await expect(follower.bin()).resolves.toEqual(view);
+    await expect(follower.read({ kind: 'bin' })).resolves.toEqual(view);
     expect(engine.binReads).toBe(1);
   });
 
@@ -666,7 +678,7 @@ describe('broadcast transport ↔ leader relay', () => {
     engine.respondDownload = () => Promise.resolve(plaintext.buffer.slice(0));
 
     const node = new Uint8Array(16).fill(6);
-    const content = await follower.download(node);
+    const content = await follower.read({ kind: 'download', node });
     expect([...new Uint8Array(content)]).toEqual([...plaintext]);
     expect(engine.downloads).toEqual([node]);
     // The buffer moves rather than being cloned: the leader's copy is detached,
@@ -680,7 +692,9 @@ describe('broadcast transport ↔ leader relay', () => {
     const { engine, follower } = wire();
     engine.respondSiweChallenge = () => Promise.resolve('leaderNonce12345');
 
-    await expect(follower.siweChallenge('link')).resolves.toBe('leaderNonce12345');
+    await expect(follower.read({ kind: 'siweChallenge', intent: 'link' })).resolves.toBe(
+      'leaderNonce12345'
+    );
     expect(engine.siweChallenges).toBe(1);
     expect(engine.siweChallengeIntents).toEqual(['link']);
   });
@@ -697,11 +711,11 @@ describe('broadcast transport ↔ leader relay', () => {
     engine.respondDevices = () => Promise.resolve([row]);
     engine.respondRegistrationChallenge = () => Promise.resolve(Uint8Array.of(9, 9));
 
-    await expect(follower.devices()).resolves.toEqual([row]);
-    await expect(follower.pendingApprovals()).resolves.toEqual([]);
-    await expect(follower.deviceRegistrationChallenge('ed25519hex')).resolves.toEqual(
-      Uint8Array.of(9, 9)
-    );
+    await expect(follower.read({ kind: 'devices' })).resolves.toEqual([row]);
+    await expect(follower.read({ kind: 'pendingApprovals' })).resolves.toEqual([]);
+    await expect(
+      follower.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' })
+    ).resolves.toEqual(Uint8Array.of(9, 9));
 
     expect(engine.deviceReads).toBe(1);
     expect(engine.pendingApprovalReads).toBe(1);
@@ -724,7 +738,10 @@ describe('broadcast transport ↔ leader relay', () => {
     };
 
     await expect(
-      follower.deviceRendezvous({ kind: 'open', devicePublicKey: 'ed25519hex', scalar })
+      follower.read({
+        kind: 'deviceRendezvous',
+        step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar },
+      })
     ).resolves.toEqual({
       kind: 'opened',
       ephemeralPublicKey: '02beef',
@@ -748,14 +765,17 @@ describe('broadcast transport ↔ leader relay', () => {
     const backing = factorKey.buffer;
     engine.respondRendezvous = () => Promise.resolve({ kind: 'factor', factorKey });
 
-    const result = await follower.deviceRendezvous({
-      kind: 'openFactor',
-      sealedFactor: 'c2VhbA==',
-      requestId: 'req-1',
-      requesterDevicePublicKey: 'reqhex',
-      responderDevicePublicKey: 'apprhex',
-      responseSignature: 'sighex',
-      scalar: new Uint8Array(32).fill(5),
+    const result = await follower.read({
+      kind: 'deviceRendezvous',
+      step: {
+        kind: 'openFactor',
+        sealedFactor: 'c2VhbA==',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        responderDevicePublicKey: 'apprhex',
+        responseSignature: 'sighex',
+        scalar: new Uint8Array(32).fill(5),
+      },
     });
 
     expect(result.kind).toBe('factor');
@@ -835,11 +855,15 @@ describe('broadcast transport ↔ leader relay', () => {
       Promise.reject(new EngineRequestError('content unavailable: pending', 'contentUnavailable'));
 
     // The code crosses the broadcast wire alongside the human-readable message.
-    await expect(follower.snapshot(new Uint8Array(16))).rejects.toMatchObject({
+    await expect(
+      follower.read({ kind: 'snapshot', folder: new Uint8Array(16) })
+    ).rejects.toMatchObject({
       code: 'unknownNode',
       message: 'unknown node',
     });
-    await expect(follower.download(new Uint8Array(16))).rejects.toMatchObject({
+    await expect(
+      follower.read({ kind: 'download', node: new Uint8Array(16) })
+    ).rejects.toMatchObject({
       code: 'contentUnavailable',
     });
   });
@@ -860,7 +884,7 @@ describe('broadcast transport ↔ leader relay', () => {
     eavesdropper.addEventListener('message', (event) => observed.push(event.data));
 
     const follower = followerOn(bus, 'f', ports.courier('f'));
-    await follower.snapshot(new Uint8Array(16));
+    await follower.read({ kind: 'snapshot', folder: new Uint8Array(16) });
     const { handle } = await follower.openContentStream(new Uint8Array(16).fill(6));
     for (let offset = 0; offset < 96; offset += 32) {
       await follower.readStream(handle, offset, 32);
@@ -923,7 +947,9 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // The forged host is ignored, so the read reaches the real leader's engine,
     // and the forged results settled nothing on the way.
-    await expect(follower.snapshot(new Uint8Array(16))).resolves.toMatchObject({
+    await expect(
+      follower.read({ kind: 'snapshot', folder: new Uint8Array(16) })
+    ).resolves.toMatchObject({
       folder: new Uint8Array(16).fill(2),
     });
     expect(commandSettled).toBe(false);
@@ -965,7 +991,9 @@ describe('broadcast transport ↔ leader relay', () => {
     });
     await startFollower(relay, follower);
 
-    await expect(follower.snapshot(new Uint8Array(16))).resolves.toMatchObject({
+    await expect(
+      follower.read({ kind: 'snapshot', folder: new Uint8Array(16) })
+    ).resolves.toMatchObject({
       folder: new Uint8Array(16).fill(9),
     });
   });
@@ -976,10 +1004,10 @@ describe('broadcast transport ↔ leader relay', () => {
     const engine = new FakeEngineTransport();
     relayOn(bus, engine, ports.courier('leader'));
     const follower = followerOn(bus, 'f', ports.courier('f'));
-    await follower.snapshot(null); // brokers and adopts the port
+    await follower.read({ kind: 'snapshot', folder: null }); // brokers and adopts the port
 
     engine.respondSnapshot = () => new Promise(() => undefined); // never answers
-    const inFlight = follower.snapshot(null);
+    const inFlight = follower.read({ kind: 'snapshot', folder: null });
     await tick();
     // The tab re-brokers, so the leader retires the port this read is parked on.
     // Without a closing notice the read would wait on a wire that is gone.
@@ -988,7 +1016,9 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // The next read re-brokers against the same live leader.
     engine.respondSnapshot = (folder) => Promise.resolve(emptySnapshot(folder ?? undefined));
-    await expect(follower.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
+    await expect(follower.read({ kind: 'snapshot', folder: null })).resolves.toMatchObject({
+      staleness: 'fresh',
+    });
   });
 
   it('wipes a read window nobody can receive rather than leaving the plaintext behind', async () => {
@@ -997,7 +1027,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const engine = new FakeEngineTransport();
     relayOn(bus, engine, ports.courier('leader'));
     const follower = followerOn(bus, 'f', ports.courier('f'));
-    await follower.snapshot(null); // brokers and adopts the port
+    await follower.read({ kind: 'snapshot', folder: null }); // brokers and adopts the port
 
     const plaintext = Uint8Array.of(1, 2, 3, 4);
     let release!: () => void;
@@ -1007,7 +1037,9 @@ describe('broadcast transport ↔ leader relay', () => {
     };
 
     // Awaited only after the wipe, so the rejection is handled from the outset.
-    const settled = expect(follower.download(new Uint8Array(16).fill(1))).rejects.toThrow(/retry/);
+    const settled = expect(
+      follower.read({ kind: 'download', node: new Uint8Array(16).fill(1) })
+    ).rejects.toThrow(/retry/);
     await tick();
     // The tab's presence ends mid-read, so the leader drops the port the window
     // was going to be transferred down.
@@ -1046,7 +1078,9 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // No port means no adoption, so the start that brokers it fails closed too.
     await expect(startFollower(relay, follower)).rejects.toThrow(/no port host/);
-    await expect(follower.snapshot(new Uint8Array(16))).rejects.toThrow(/no port host/);
+    await expect(follower.read({ kind: 'snapshot', folder: new Uint8Array(16) })).rejects.toThrow(
+      /no port host/
+    );
     expect(engine.snapshots).toEqual([]);
   });
 
@@ -1056,12 +1090,14 @@ describe('broadcast transport ↔ leader relay', () => {
     const engine = new FakeEngineTransport();
     relayOn(bus, engine, ports.courier('leader'));
     const first = followerOn(bus, 'f', ports.courier('f'));
-    await first.snapshot(null);
+    await first.read({ kind: 'snapshot', folder: null });
     first.close(); // releases its presence, so the leader reclaims that port
     await tick();
 
     const second = followerOn(bus, 'f', ports.courier('f'));
-    await expect(second.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
+    await expect(second.read({ kind: 'snapshot', folder: null })).resolves.toMatchObject({
+      staleness: 'fresh',
+    });
     expect(engine.snapshots).toHaveLength(2);
   });
 
@@ -1074,13 +1110,13 @@ describe('broadcast transport ↔ leader relay', () => {
     const follower = followerOn(bus, 'f', ports.courier('f'));
     await startFollower(relayA, follower);
 
-    const inFlight = follower.snapshot(new Uint8Array(16));
+    const inFlight = follower.read({ kind: 'snapshot', folder: new Uint8Array(16) });
     await tick();
     relayA.close();
     await expect(inFlight).rejects.toThrow(/retry/);
 
     // A read issued with no leader parks, then resolves against the next leader.
-    const queued = follower.snapshot(new Uint8Array(16).fill(4));
+    const queued = follower.read({ kind: 'snapshot', folder: new Uint8Array(16).fill(4) });
     const engineB = new FakeEngineTransport();
     relayOn(bus, engineB, ports.courier('leaderB')).serves(TEST_ACCOUNT_ID);
     await expect(queued).resolves.toMatchObject({ staleness: 'fresh' });
@@ -1096,7 +1132,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const follower = followerOn(bus, 'f', ports.courier('f'));
     await startFollower(relay, follower);
 
-    const inFlight = follower.snapshot(new Uint8Array(16));
+    const inFlight = follower.read({ kind: 'snapshot', folder: new Uint8Array(16) });
     await tick();
     // The port is closed at this end, so no notice from the leader can settle
     // what was riding it.
@@ -1183,7 +1219,7 @@ describe('broadcast transport ↔ leader relay', () => {
     relayOn(bus, engine, ports.courier('leader'));
     const follower = followerOn(bus, 'f', ports.courier('f'), { portTimeoutMs: 200 });
 
-    const read = follower.snapshot(null);
+    const read = follower.read({ kind: 'snapshot', folder: null });
     await after(20);
     // Greeting here would have the leader watch a name this tab does not hold,
     // and be granted at once against a live tab.
@@ -1275,7 +1311,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const follower = followerOn(bus, 'f', ports.courier('f'));
     const events: EventDescriptor[] = [];
     follower.subscribe((event) => events.push(event));
-    await follower.snapshot(null);
+    await follower.read({ kind: 'snapshot', folder: null });
 
     // The tab re-brokers, so the leader retires the port it held before. The
     // event stream is one-way, so nothing else would re-dial: this tab would
@@ -1294,7 +1330,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const engine = new FakeEngineTransport();
     relayOn(bus, engine, ports.courier('leader'));
     const follower = followerOn(bus, 'f', ports.courier('f'), { portTimeoutMs: 50 });
-    await follower.snapshot(null);
+    await follower.read({ kind: 'snapshot', folder: null });
     const greetings = (): number =>
       ports.messages.filter((m) => (m as { type?: string }).type === 'cb:portHello').length;
     expect(greetings()).toBe(1);
@@ -1306,7 +1342,7 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // Greeting on a name it no longer holds would invite the leader's watch to
     // reclaim it live, over and over; it fails closed instead.
-    await expect(follower.snapshot(null)).rejects.toThrow();
+    await expect(follower.read({ kind: 'snapshot', folder: null })).rejects.toThrow();
     expect(greetings()).toBe(1);
   });
 

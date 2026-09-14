@@ -14,13 +14,13 @@ import type {
   BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
   DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
-  PendingApprovalDescriptor,
+  ReadDescriptor,
+  ReadResult,
+  ReadResultValue,
   RegisteredDeviceDescriptor,
-  SiweIntent,
   SnapshotDescriptor,
   WorkerMessage,
   WorkerRequest,
@@ -112,41 +112,41 @@ class ReadHost extends StubEngineHost {
     Promise.resolve(new Uint8Array([9, 8, 7]).buffer);
   respondReadStream: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([5, 4]).buffer);
-  siweChallenges = 0;
-  siweChallengeIntents: SiweIntent[] = [];
-  binReads = 0;
-  deviceReads = 0;
-  pendingApprovalReads = 0;
-  readonly registrationChallenges: string[] = [];
-  readonly rendezvousSteps: DeviceRendezvousStep[] = [];
+  /** Every read this host was asked to serve, in arrival order. */
+  readonly readIntents: ReadDescriptor[] = [];
 
   start(): Promise<void> {
     return Promise.resolve();
   }
 
-  bin(): Promise<BinDescriptor> {
-    this.binReads += 1;
-    return Promise.resolve(BIN);
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    this.readIntents.push(read);
+    return this.serveRead(read) as Promise<ReadResult<D>>;
   }
 
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    this.deviceReads += 1;
-    return Promise.resolve([DEVICE_ROW]);
-  }
-
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    this.pendingApprovalReads += 1;
-    return Promise.resolve([]);
-  }
-
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    this.registrationChallenges.push(devicePublicKey);
-    return Promise.resolve(Uint8Array.of(9, 9));
-  }
-
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    this.rendezvousSteps.push(step);
-    return Promise.resolve({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
+  private serveRead(read: ReadDescriptor): Promise<ReadResultValue> {
+    switch (read.kind) {
+      case 'snapshot':
+        this.snapshots.push(read.folder as Uint8Array);
+        return this.respondSnapshot();
+      case 'bin':
+        return Promise.resolve(BIN);
+      case 'devices':
+        return Promise.resolve([DEVICE_ROW]);
+      case 'pendingApprovals':
+        return Promise.resolve([]);
+      case 'deviceRegistrationChallenge':
+        return Promise.resolve(Uint8Array.of(9, 9));
+      case 'deviceRendezvous':
+        return Promise.resolve({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
+      case 'siweChallenge':
+        return Promise.resolve(FAKE_SIWE_NONCE);
+      case 'download':
+        this.downloads.push(read.node);
+        return this.respondDownload();
+      default:
+        return Promise.reject(new Error(`read ${read.kind} not stubbed`));
+    }
   }
 
   /** What the next `command` resolves with; a queued op answers with its id. */
@@ -177,22 +177,6 @@ class ReadHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
-    this.snapshots.push(folder);
-    return this.respondSnapshot();
-  }
-
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    this.siweChallenges += 1;
-    this.siweChallengeIntents.push(intent);
-    return Promise.resolve(FAKE_SIWE_NONCE);
-  }
-
-  download(node: Uint8Array): Promise<ArrayBuffer> {
-    this.downloads.push(node);
-    return this.respondDownload();
-  }
-
   openContentStream(node: Uint8Array): Promise<OpenedStream> {
     this.opened.push(node);
     return Promise.resolve({ handle: 11n, size: 0 });
@@ -221,9 +205,9 @@ describe('serveEngine read requests', () => {
     const transport = new LocalTransport(worker);
 
     const folder = new Uint8Array(16).fill(2);
-    const view = await transport.snapshot(folder);
+    const view = await transport.read({ kind: 'snapshot', folder });
     expect(view).toEqual(SNAPSHOT);
-    expect(host.snapshots).toEqual([folder]);
+    expect(host.readIntents).toEqual([{ kind: 'snapshot', folder }]);
   });
 
   it('serves a bin read end to end over the transport', async () => {
@@ -233,8 +217,8 @@ describe('serveEngine read requests', () => {
     const transport = new LocalTransport(worker);
 
     // The structured clone must carry the deletion time back as a bigint.
-    await expect(transport.bin()).resolves.toEqual(BIN);
-    expect(host.binReads).toBe(1);
+    await expect(transport.read({ kind: 'bin' })).resolves.toEqual(BIN);
+    expect(host.readIntents).toEqual([{ kind: 'bin' }]);
   });
 
   it('serves a download with the plaintext buffer in the transfer list', async () => {
@@ -242,7 +226,7 @@ describe('serveEngine read requests', () => {
     serveEngine(scope, new ReadHost());
     const transport = new LocalTransport(worker);
 
-    const content = await transport.download(new Uint8Array(16).fill(4));
+    const content = await transport.read({ kind: 'download', node: new Uint8Array(16).fill(4) });
     expect([...new Uint8Array(content)]).toEqual([9, 8, 7]);
 
     const response = toUi.find(
@@ -281,15 +265,17 @@ describe('serveEngine read requests', () => {
     serveEngine(scope, host);
     const transport = new LocalTransport(worker);
 
-    await expect(transport.devices()).resolves.toEqual([DEVICE_ROW]);
-    await expect(transport.pendingApprovals()).resolves.toEqual([]);
-    await expect(transport.deviceRegistrationChallenge('ed25519hex')).resolves.toEqual(
-      Uint8Array.of(9, 9)
-    );
+    await expect(transport.read({ kind: 'devices' })).resolves.toEqual([DEVICE_ROW]);
+    await expect(transport.read({ kind: 'pendingApprovals' })).resolves.toEqual([]);
+    await expect(
+      transport.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' })
+    ).resolves.toEqual(Uint8Array.of(9, 9));
 
-    expect(host.deviceReads).toBe(1);
-    expect(host.pendingApprovalReads).toBe(1);
-    expect(host.registrationChallenges).toEqual(['ed25519hex']);
+    expect(host.readIntents).toEqual([
+      { kind: 'devices' },
+      { kind: 'pendingApprovals' },
+      { kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' },
+    ]);
   });
 
   it('serves a rendezvous step end to end, carrying the step it was given', async () => {
@@ -308,11 +294,11 @@ describe('serveEngine read requests', () => {
       scalar,
     };
 
-    await expect(transport.deviceRendezvous(step)).resolves.toEqual({
+    await expect(transport.read({ kind: 'deviceRendezvous', step })).resolves.toEqual({
       kind: 'factor',
       factorKey: Uint8Array.of(7, 7),
     });
-    expect(host.rendezvousSteps).toHaveLength(1);
+    expect(host.readIntents).toHaveLength(1);
   });
 
   it('serves a SIWE challenge end to end over the transport', async () => {
@@ -321,9 +307,10 @@ describe('serveEngine read requests', () => {
     serveEngine(scope, host);
     const transport = new LocalTransport(worker);
 
-    await expect(transport.siweChallenge('link')).resolves.toBe(FAKE_SIWE_NONCE);
-    expect(host.siweChallenges).toBe(1);
-    expect(host.siweChallengeIntents).toEqual(['link']);
+    await expect(transport.read({ kind: 'siweChallenge', intent: 'link' })).resolves.toBe(
+      FAKE_SIWE_NONCE
+    );
+    expect(host.readIntents).toEqual([{ kind: 'siweChallenge', intent: 'link' }]);
   });
 
   it('maps a rejected read to a correlated error response with the stable code', async () => {
@@ -342,11 +329,15 @@ describe('serveEngine read requests', () => {
     const transport = new LocalTransport(worker);
 
     // The code crosses intact alongside the human-readable message.
-    await expect(transport.snapshot(new Uint8Array(16))).rejects.toMatchObject({
+    await expect(
+      transport.read({ kind: 'snapshot', folder: new Uint8Array(16) })
+    ).rejects.toMatchObject({
       code: 'unknownNode',
       message: 'unknown node',
     });
-    await expect(transport.download(new Uint8Array(16))).rejects.toMatchObject({
+    await expect(
+      transport.read({ kind: 'download', node: new Uint8Array(16) })
+    ).rejects.toMatchObject({
       code: 'contentUnavailable',
     });
     // The failures were per-request, never fatal: the next read still answers.
@@ -367,14 +358,18 @@ describe('serveEngine read requests', () => {
     const transport = new LocalTransport(worker);
 
     const settled: string[] = [];
-    const snapshot = transport.snapshot(new Uint8Array(16)).then((view) => {
-      settled.push('snapshot');
-      return view;
-    });
-    const download = transport.download(new Uint8Array(16)).then((bytes) => {
-      settled.push('download');
-      return bytes;
-    });
+    const snapshot = transport
+      .read({ kind: 'snapshot', folder: new Uint8Array(16) })
+      .then((view) => {
+        settled.push('snapshot');
+        return view;
+      });
+    const download = transport
+      .read({ kind: 'download', node: new Uint8Array(16) })
+      .then((bytes) => {
+        settled.push('download');
+        return bytes;
+      });
     const command = transport.command({ kind: 'manualRefresh' }).then(() => {
       settled.push('command');
     });

@@ -711,26 +711,87 @@ export type EventDescriptor =
  */
 export type SiweIntent = 'login' | 'link';
 
+/**
+ * One read intent, as data. Every read the engine serves is one member of this
+ * union, so a new read costs one member and one [`ReadResults`] entry rather
+ * than a hand-threaded method at each layer of the rail.
+ */
+export type ReadDescriptor =
+  | { kind: 'snapshot'; folder: Uint8Array | null }
+  | { kind: 'sharing'; scope: Uint8Array | null }
+  | { kind: 'receivedShares' }
+  | { kind: 'bin' }
+  | { kind: 'vaultStorage' }
+  | { kind: 'authMethods' }
+  | { kind: 'devices' }
+  | { kind: 'deviceRegistrationChallenge'; devicePublicKey: string }
+  | { kind: 'pendingApprovals' }
+  | { kind: 'deviceRendezvous'; step: DeviceRendezvousStep }
+  | { kind: 'siweChallenge'; intent: SiweIntent }
+  | { kind: 'download'; node: Uint8Array };
+
+/** What each read kind answers with. */
+export interface ReadResults {
+  snapshot: SnapshotDescriptor;
+  sharing: SharingDescriptor;
+  receivedShares: ReceivedShareDescriptor[];
+  bin: BinDescriptor;
+  vaultStorage: VaultStorageDescriptor;
+  authMethods: AuthMethodDescriptor[];
+  devices: RegisteredDeviceDescriptor[];
+  deviceRegistrationChallenge: Uint8Array;
+  pendingApprovals: PendingApprovalDescriptor[];
+  deviceRendezvous: DeviceRendezvousResult;
+  siweChallenge: string;
+  download: ArrayBuffer;
+}
+
+/** The answer a given read descriptor resolves with. */
+export type ReadResult<D extends ReadDescriptor> = ReadResults[D['kind']];
+
+/** Any read answer, for the layers that carry one without naming its kind. */
+export type ReadResultValue = ReadResults[ReadDescriptor['kind']];
+
+/**
+ * Every read kind this build serves. A relay reads a descriptor off an
+ * untrusted port, so it refuses an unknown kind here rather than passing it
+ * down the rail.
+ */
+export const READ_KINDS: ReadonlySet<string> = new Set<ReadDescriptor['kind']>([
+  'snapshot',
+  'sharing',
+  'receivedShares',
+  'bin',
+  'vaultStorage',
+  'authMethods',
+  'devices',
+  'deviceRegistrationChallenge',
+  'pendingApprovals',
+  'deviceRendezvous',
+  'siweChallenge',
+  'download',
+]);
+
+/**
+ * The secret buffers a read descriptor hands over for good, for the transfer
+ * list of the send that carries it — a rendezvous step's scalars and factor key
+ * ([`rendezvousTransfer`]). Takes the value unvalidated: a relay reads one off
+ * an untrusted port.
+ */
+export function readTransfer(read: unknown): Transferable[] {
+  const held = read as { kind?: unknown; step?: unknown } | null;
+  return held?.kind === 'deviceRendezvous' ? rendezvousTransfer(held.step) : [];
+}
+
 /** A UI → worker request. `id` correlates the eventual response. */
 export type WorkerRequest =
   | { type: 'start'; id: number; secret: ArrayBuffer; accountId: string }
   | { type: 'command'; id: number; command: CommandDescriptor }
+  | { type: 'read'; id: number; read: ReadDescriptor }
   | { type: 'beginWrite'; id: number; target: WriteTarget; size: number }
   | { type: 'pushChunk'; id: number; handle: WriteHandle; chunk: ArrayBuffer }
   | { type: 'commitWrite'; id: number; handle: WriteHandle }
   | { type: 'abortWrite'; id: number; handle: WriteHandle }
-  | { type: 'snapshot'; id: number; folder: Uint8Array | null }
-  | { type: 'sharing'; id: number; scope: Uint8Array | null }
-  | { type: 'receivedShares'; id: number }
-  | { type: 'bin'; id: number }
-  | { type: 'vaultStorage'; id: number }
-  | { type: 'authMethods'; id: number }
-  | { type: 'devices'; id: number }
-  | { type: 'deviceRegistrationChallenge'; id: number; devicePublicKey: string }
-  | { type: 'pendingApprovals'; id: number }
-  | { type: 'deviceRendezvous'; id: number; step: DeviceRendezvousStep }
-  | { type: 'siweChallenge'; id: number; intent: SiweIntent }
-  | { type: 'download'; id: number; node: Uint8Array }
   | { type: 'openContentStream'; id: number; node: Uint8Array }
   | { type: 'readStream'; id: number; handle: StreamHandle; offset: number; length: number }
   | { type: 'closeStream'; id: number; handle: StreamHandle };
@@ -741,37 +802,16 @@ export type WorkerMessage =
   | { type: 'ready' }
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
-   * a `SnapshotDescriptor` for `snapshot`, a `SharingDescriptor` for `sharing`,
-   * the rows for `receivedShares`, the bin read for `bin`, the storage read for
-   * `vaultStorage`, the rows for `authMethods`, the rows for
-   * `devices`/`pendingApprovals`, the challenge bytes for
-   * `deviceRegistrationChallenge`, the step result for `deviceRendezvous`, the
-   * plaintext `ArrayBuffer`
-   * (transferred, not copied) for `download`/`readStream`, the nonce string
-   * for `siweChallenge`, the write handle for `beginWrite`, the `OpenedStream`
-   * for `openContentStream`, the durable op id for `commitWrite`, the outcome
-   * for `command`.
+   * the matching [`ReadResults`] entry for a `read`, the outcome for `command`,
+   * the write handle for `beginWrite`, the durable op id for `commitWrite`, the
+   * `OpenedStream` for `openContentStream`, and the plaintext `ArrayBuffer`
+   * (transferred, not copied) for `readStream`.
    */
   | {
       type: 'response';
       id: number;
       ok: true;
-      result?:
-        | SnapshotDescriptor
-        | SharingDescriptor
-        | ReceivedShareDescriptor[]
-        | BinDescriptor
-        | VaultStorageDescriptor
-        | AuthMethodDescriptor[]
-        | RegisteredDeviceDescriptor[]
-        | PendingApprovalDescriptor[]
-        | DeviceRendezvousResult
-        | CommandOutcomeDescriptor
-        | ArrayBuffer
-        | Uint8Array
-        | bigint
-        | string
-        | OpenedStream;
+      result?: ReadResultValue | CommandOutcomeDescriptor | bigint | OpenedStream;
     }
   /**
    * A failed request. `error` is the human-readable diagnostic; `code` is the

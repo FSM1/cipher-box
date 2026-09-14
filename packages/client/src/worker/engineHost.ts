@@ -7,22 +7,16 @@
 import { wipeTransfer } from '../buffers.js';
 import { commandTransfer } from './protocol.js';
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
   DeviceRendezvousResult,
   DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResult,
+  ReadResultValue,
   StreamHandle,
-  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
@@ -71,25 +65,8 @@ export interface EngineHostLike {
   /** Closes the handle and journals its op; resolves with the durable op id. */
   commitWrite(handle: WriteHandle): Promise<bigint>;
   abortWrite(handle: WriteHandle): Promise<void>;
-  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
-  /** Reads the contact book and `scope`'s committed grants, or the root's. */
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
-  /** Reads this vault's accepted shares and the engine's verdict on each. */
-  receivedShares(): Promise<ReceivedShareDescriptor[]>;
-  /** Reads the owner's bin: one key-free row per soft-deleted node. */
-  bin(): Promise<BinDescriptor>;
-  vaultStorage(): Promise<VaultStorageDescriptor>;
-  authMethods(): Promise<AuthMethodDescriptor[]>;
-  /** Reads the device identity keys registered to this account. */
-  devices(): Promise<RegisteredDeviceDescriptor[]>;
-  /** The bytes this device signs to join the account registry. */
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
-  /** Reads the rendezvous rows this account is asked to approve. */
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]>;
-  /** Runs one pure rendezvous step (ADR 0009); the engine holds no state for it. */
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult>;
-  siweChallenge(intent: SiweIntent): Promise<string>;
-  download(node: Uint8Array): Promise<ArrayBuffer>;
+  /** Serves one read, resolving with what that kind answers ([`ReadResults`]). */
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>>;
   /**
    * Opens a read stream pinned to the node's current head content version,
    * reporting that version's plaintext size with the handle.
@@ -160,6 +137,11 @@ function readApproval(answer: WasmDeviceApprovalResponse): DeviceRendezvousResul
  */
 function unknownStep(step: never): Error {
   return new Error(`unknown rendezvous step kind: ${String((step as DeviceRendezvousStep).kind)}`);
+}
+
+/** The same bound for read kinds: an off-union kind is refused, not run. */
+function unknownRead(read: never): Error {
+  return new Error(`unknown read kind: ${String((read as ReadDescriptor).kind)}`);
 }
 
 /**
@@ -381,59 +363,52 @@ export class EngineHost implements EngineHostLike {
     await this.handle.abortWrite(minted(handle, 'handle'));
   }
 
-  async snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    const view = await this.handle.snapshot(
-      folder === null ? undefined : nodeId(this.wasm, folder, 'folder')
-    );
-    return readSnapshot(this.wasm, view);
+  /** The one place a read kind maps onto the wasm handle's own read methods. */
+  async read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    return (await this.serveRead(read)) as ReadResult<D>;
   }
 
-  async sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    const view = await this.handle.sharing(
-      scope === null ? undefined : nodeId(this.wasm, scope, 'scope')
-    );
-    return readSharing(this.wasm, view);
-  }
-
-  async receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    const rows = await this.handle.receivedShares();
-    return rows.map((row) => readReceivedShare(this.wasm, row));
-  }
-
-  async bin(): Promise<BinDescriptor> {
-    return readBin(this.wasm, await this.handle.bin());
-  }
-
-  async vaultStorage(): Promise<VaultStorageDescriptor> {
-    return readVaultStorage(this.wasm, await this.handle.vaultStorage());
-  }
-
-  async authMethods(): Promise<AuthMethodDescriptor[]> {
-    return readAuthMethods(this.wasm, await this.handle.authMethods());
-  }
-
-  async devices(): Promise<RegisteredDeviceDescriptor[]> {
-    return readDevices(await this.handle.devices());
-  }
-
-  async deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    return this.handle.deviceRegistrationChallenge(text(devicePublicKey, 'devicePublicKey'));
-  }
-
-  async pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    return readPendingApprovals(await this.handle.pendingApprovals());
-  }
-
-  async deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    return runRendezvous(this.wasm, step);
-  }
-
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    return this.handle.siweChallenge(intent);
-  }
-
-  async download(node: Uint8Array): Promise<ArrayBuffer> {
-    return ownedBuffer(await this.handle.download(nodeId(this.wasm, node, 'node')));
+  private async serveRead(read: ReadDescriptor): Promise<ReadResultValue> {
+    switch (read.kind) {
+      case 'snapshot':
+        return readSnapshot(
+          this.wasm,
+          await this.handle.snapshot(
+            read.folder === null ? undefined : nodeId(this.wasm, read.folder, 'folder')
+          )
+        );
+      case 'sharing':
+        return readSharing(
+          this.wasm,
+          await this.handle.sharing(
+            read.scope === null ? undefined : nodeId(this.wasm, read.scope, 'scope')
+          )
+        );
+      case 'receivedShares':
+        return (await this.handle.receivedShares()).map((row) => readReceivedShare(this.wasm, row));
+      case 'bin':
+        return readBin(this.wasm, await this.handle.bin());
+      case 'vaultStorage':
+        return readVaultStorage(this.wasm, await this.handle.vaultStorage());
+      case 'authMethods':
+        return readAuthMethods(this.wasm, await this.handle.authMethods());
+      case 'devices':
+        return readDevices(await this.handle.devices());
+      case 'deviceRegistrationChallenge':
+        return this.handle.deviceRegistrationChallenge(
+          text(read.devicePublicKey, 'devicePublicKey')
+        );
+      case 'pendingApprovals':
+        return readPendingApprovals(await this.handle.pendingApprovals());
+      case 'deviceRendezvous':
+        return runRendezvous(this.wasm, read.step);
+      case 'siweChallenge':
+        return this.handle.siweChallenge(read.intent);
+      case 'download':
+        return ownedBuffer(await this.handle.download(nodeId(this.wasm, read.node, 'node')));
+      default:
+        throw unknownRead(read);
+    }
   }
 
   async openContentStream(node: Uint8Array): Promise<OpenedStream> {

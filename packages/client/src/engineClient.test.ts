@@ -6,6 +6,7 @@ import { LeaderRelay } from './leaderRelay.js';
 import type { LockManagerLike } from './leadership.js';
 import {
   abortError,
+  byoSettings,
   FakeBus,
   FakeCourierNetwork,
   FakeEngineTransport,
@@ -91,7 +92,7 @@ const startTab = (client: EngineClient, secret: number[] = [1]): Promise<void> =
   client.facade.start(Uint8Array.from(secret).buffer, TEST_ACCOUNT_ID);
 
 describe('EngineClient leadership + transport swap', () => {
-  it('elects the first tab leader and spawns exactly one worker', async () => {
+  it('elects the first tab leader, which hosts a worker only once a session needs one', async () => {
     const { tab, liveWorkers } = origin();
     const a = tab();
     const b = tab();
@@ -99,7 +100,13 @@ describe('EngineClient leadership + transport swap', () => {
 
     expect(a.currentRole()).toBe('leader');
     expect(b.currentRole()).toBe('follower');
+    // A leadership with no session hosts nothing: there is no engine to tear
+    // down, so a greeting cannot buy a cold start.
+    expect(liveWorkers()).toBe(0);
+
+    await startTab(a);
     expect(liveWorkers()).toBe(1); // the single writer per origin
+
     await a.dispose();
     await b.dispose();
   });
@@ -120,14 +127,44 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('refuses a read against an engine-less leader as the engine refuses one', async () => {
+    const { tab, workers } = origin();
+    const idle = tab();
+    await tick();
+    expect(idle.currentRole()).toBe('leader');
+
+    // The engine's own not-started code: nothing below the transport answered,
+    // and no worker was spawned to answer.
+    await expect(idle.facade.bin()).rejects.toMatchObject({ code: 'notStarted' });
+    expect(workers.length).toBe(0);
+
+    await idle.dispose();
+  });
+
+  it('scrubs a provider credential a command carries to an engine-less leader', async () => {
+    const { tab } = origin();
+    const idle = tab();
+    await tick();
+    const accessToken = Uint8Array.of(7, 7, 7, 7).buffer;
+
+    await expect(idle.facade.saveVaultSettings(byoSettings(accessToken))).rejects.toMatchObject({
+      code: 'notStarted',
+    });
+    // Nothing took the buffer, so the refusing frame is its terminal owner.
+    expect([...new Uint8Array(accessToken)]).toEqual([0, 0, 0, 0]);
+
+    await idle.dispose();
+  });
+
   it('never spawns a worker on a follower tab', async () => {
     const { tab, workers } = origin();
     const leader = tab();
     const follower = tab();
     await tick();
+    await startTab(leader);
+    await startTab(follower);
 
     expect(workers.length).toBe(1); // only the leader spawned one
-    void leader;
     await follower.dispose();
     await leader.dispose();
   });
@@ -405,21 +442,29 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
-  it('releases the election lock and surfaces onError when the worker spawn throws synchronously (P1-5)', async () => {
+  it('releases the election lock and surfaces onError when a failover worker spawn throws synchronously (P1-5)', async () => {
     const { tab } = origin();
     const errors: Error[] = [];
     const spawnFailure = new Error('worker spawn failed');
 
-    // This tab wins the lock first but its worker spawn throws synchronously
-    // during promotion: it must not sit on a dead-leader lock. It releases the
-    // lock, falls back to a follower, and surfaces the fault via onError.
+    // This tab wins the lock with a session to cold-start for, and its worker
+    // spawn throws synchronously during promotion: it must not sit on a
+    // dead-leader lock. It releases the lock, falls back to a follower, and
+    // surfaces the fault via onError.
     const doomed = tab({
+      secretSource: {
+        provideSecret: (): Promise<LoginSecret> => Promise.resolve(fakeLoginSecret()),
+      },
       spawnWorker: (): never => {
         throw spawnFailure;
       },
       onError: (error) => errors.push(error),
     });
     const healthy = tab();
+    await tick();
+    await tick();
+    // The claim is what makes the promotion cold-start rather than stay dormant.
+    void startTab(doomed).catch(() => undefined);
     await tick();
     await tick();
 
@@ -695,27 +740,26 @@ describe('EngineClient leadership + transport swap', () => {
     await b.dispose();
   });
 
-  it('spawns one worker for a greeting flood against an engine-less leader', async () => {
-    // The flood runs on virtual time that never moves: the cooldown is a wall
-    // clock window, so a slow worker must not be able to expire it mid-flood and
-    // fail this assertion for correct code.
+  it('spawns no worker for a greeting flood against an engine-less leader', async () => {
+    // The flood runs on virtual time that never moves: the stand-down cooldown
+    // is a wall clock window, so a slow turn must not expire it mid-flood.
     vi.useFakeTimers();
     try {
       const { tab, workers, ports, addresses } = origin();
       const idle = tab();
       await turn();
       expect(idle.currentRole()).toBe('leader');
-      const spawned = workers.length;
 
       for (let i = 0; i < 20; i += 1) {
         await greetUnderInventedAccount(ports, addresses[0], `hostile${i}`);
         await turn();
       }
 
-      // This is the only tab of the origin, so every stand-down re-elects it and
-      // cold-starts a fresh worker: the worker count is the amplification a
-      // greeting buys. One hand-off per cooldown window, not one per message.
-      expect(workers.length).toBe(spawned + 1);
+      // This is the only tab of the origin, so every stand-down re-elects it.
+      // A leadership with no session hosts no worker, so there is nothing for a
+      // re-election to tear down and nothing to cold-start: the amplification a
+      // greeting buys is zero WASM starts, not one per cooldown window.
+      expect(workers.length).toBe(0);
       expect(idle.currentRole()).toBe('leader');
 
       await idle.dispose();
