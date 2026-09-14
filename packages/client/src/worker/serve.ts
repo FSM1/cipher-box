@@ -10,6 +10,7 @@
  * order with no drops.
  */
 
+import { isBuffer } from '../buffers.js';
 import { errorMessage } from '../errorMessage.js';
 import { WriteQueue } from '../writeQueue.js';
 import type { EngineHostLike } from './engineHost.js';
@@ -77,7 +78,7 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           // A plaintext download and an opened factor key are transferred, not
           // cloned: a copy left in this realm would outlive the call with no
           // owner to erase it.
-          if (result instanceof ArrayBuffer) {
+          if (isBuffer(result)) {
             postOwned(request.id, result);
             return;
           }

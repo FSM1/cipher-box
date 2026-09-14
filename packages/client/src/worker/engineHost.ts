@@ -159,8 +159,11 @@ function runRendezvous(wasm: EngineWasm, step: DeviceRendezvousStep): DeviceRend
   }
 }
 
-/** Erases every secret a step carried into this realm. */
-function scrubStep(step: DeviceRendezvousStep): void {
+/**
+ * Erases every secret a step carried into this realm. Takes the step
+ * unvalidated: an off-shape one carries none.
+ */
+function scrubStep(step: unknown): void {
   if (typeof step !== 'object' || step === null) return;
   for (const held of [
     (step as { scalar?: unknown }).scalar,
@@ -407,6 +410,9 @@ export class EngineHost implements EngineHostLike {
       case 'download':
         return ownedBuffer(await this.handle.download(nodeId(this.wasm, read.node, 'node')));
       default:
+        // A descriptor reaches this realm by transfer, so this frame is the
+        // last owner of whatever it carried (AGENTS.md 7).
+        scrubStep((read as { step?: unknown }).step);
         throw unknownRead(read);
     }
   }
