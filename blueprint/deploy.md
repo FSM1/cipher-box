@@ -212,9 +212,13 @@ around with a forged `Host`, and Caddy writes that fallback itself when a config
 leaves it out. The **Lint** gate holds every adapted connection policy to the
 mode and to that one CA path.
 
-One residual assumption stays open: the range list is a hand-mirrored snapshot —
-the Lint gate pins the set against edits but cannot see Cloudflare changing it,
-where a departed range would make its new owner a trusted proxy.
+The range list is a hand-mirrored snapshot, watched daily rather than assumed:
+the **Lint** gate pins the set against edits, and the nightly **Cloudflare Range
+Watch** diffs it against Cloudflare's published list, so an upstream change is
+visible within a day. A departed range is not a trust hole on its own — its new
+owner still cannot complete the origin-pull handshake above — but a range
+Cloudflare adds collapses every member behind the new POP into one rate-limit
+bucket, and that degradation is silent without the watch.
 
 The open `/routing/v1` **PUT** publish leg (api.md, Egress) carries no token, so
 a size cap and a per-caller rate are its whole abuse budget; both are asserted in
@@ -312,10 +316,13 @@ One `nightly.yml` (cron) owns the scheduled slots testing.md defined:
   change filter to apply. With `retries: 0` as policy, this distinguishes
   "main broke" (revert) from "environment drifted" (fix the harness)
   before it blocks a release.
-  Every slot reports through one job: a failure opens, or comments on, a
-  single `comp:ci` tracking issue, so a scheduled red is never a square
-  nobody reads. GitHub reads `schedule` and `workflow_dispatch` from the
-  default branch alone, so the file is inert until it lands on `main`.
+- **Cloudflare Range Watch**: the trusted-proxy snapshot diffed against
+  Cloudflare's published list, so the mirror above cannot go stale unseen.
+
+Every slot reports through one job: a failure opens, or comments on, a
+single `comp:ci` tracking issue, so a scheduled red is never a square
+nobody reads. GitHub reads `schedule` and `workflow_dispatch` from the
+default branch alone, so the file is inert until it lands on `main`.
 
 Dispatch-only (unscheduled): the load harness against local or staging
 (`load-test.yml` re-engaged over `crates/load`; the BYO scenario covers the

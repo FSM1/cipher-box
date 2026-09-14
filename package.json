@@ -16,6 +16,7 @@
     "lint:md:fix": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**' --fix",
     "lint:tracker-refs": "node scripts/check-tracker-refs.mjs",
     "lint:accelerator-front": "node scripts/check-accelerator-front.mjs",
+    "check:cloudflare-ranges": "node scripts/check-cloudflare-ranges.mjs",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r --if-present run test",
     "prepare": "husky"
