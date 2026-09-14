@@ -22,6 +22,7 @@ import { MEDIA_WINDOW_BYTES } from '../../src/media/protocol.js';
 
 interface MediaHarness {
   cbMediaEngine(options: { lockName: string; channelName: string }): Promise<string>;
+  cbMediaSignIn(): Promise<void>;
   cbMediaStart(options: { reader: 'local' | 'engine'; seed?: number }): Promise<boolean>;
   cbMediaAwaitControl(): Promise<boolean>;
   cbMediaTicket(size: number, mimeType: string): string;
@@ -51,6 +52,7 @@ function names(): { lockName: string; channelName: string } {
 interface Tab {
   page: Page;
   engine(lockName: string, channelName: string): Promise<string>;
+  signIn(): Promise<void>;
   start(reader: 'local' | 'engine', seed?: number): Promise<boolean>;
   awaitControl(): Promise<boolean>;
   ticket(size: number): Promise<string>;
@@ -75,6 +77,7 @@ async function openTab(context: BrowserContext): Promise<Tab> {
         lockName,
         channelName,
       }),
+    signIn: () => page.evaluate(() => (window as unknown as MediaHarness).cbMediaSignIn()),
     start: (reader, seed) =>
       page.evaluate((opts) => (window as unknown as MediaHarness).cbMediaStart(opts), {
         reader,
@@ -247,9 +250,15 @@ test.describe('Service Worker media brokerage over a real byte pipe', () => {
     expect(await b.engine(lockName, channelName)).toBe('follower');
 
     // Only the follower brokers a port, so the pipe answers from its reader —
-    // the broadcast wire to the leader's engine worker.
+    // the broadcast wire to the leader's engine worker. The Service Worker is
+    // that port's courier, so it comes up before either tab signs in.
     expect(await b.start('engine')).toBe(true);
     expect(await b.awaitControl()).toBe(true);
+
+    // The leader hosts a worker only once a session needs one, and the follower
+    // is served only by a leadership holding its own account.
+    await a.signIn();
+    await b.signIn();
 
     const size = LEADER_CONTENT_BYTES;
     const result = await b.fetch(await b.ticket(size));

@@ -28,7 +28,7 @@ export interface ListingRow {
   /**
    * The engine's word for the name. Only a caller that parses it, or writes it
    * back, reads this one — a rename prefilled with the shown name would publish
-   * the neutralisation as the member's own edit.
+   * the display clamp as the member's own edit.
    */
   storedName: string;
   kind: NodeKind;

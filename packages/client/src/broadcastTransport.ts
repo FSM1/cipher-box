@@ -35,7 +35,6 @@ import {
   type LeaderMessage,
   type PortRequest,
   type PortResponse,
-  type WireRead,
   type WireStream,
   type WireWrite,
 } from './broadcast.js';
@@ -43,23 +42,14 @@ import { CorrelatedTransport, EngineRequestError } from './correlatedTransport.j
 import { asError } from './errorMessage.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
-import { commandTransfer } from './worker/protocol.js';
+import { commandTransfer, readTransfer } from './worker/protocol.js';
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResult,
   StreamHandle,
-  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -252,52 +242,15 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.write<void>({ kind: 'abortWrite', handle });
   }
 
-  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    return this.read<SnapshotDescriptor>({ kind: 'snapshot', folder });
-  }
-
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    return this.read<SharingDescriptor>({ kind: 'sharing', scope });
-  }
-
-  receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    return this.read<ReceivedShareDescriptor[]>({ kind: 'receivedShares' });
-  }
-
-  bin(): Promise<BinDescriptor> {
-    return this.read<BinDescriptor>({ kind: 'bin' });
-  }
-
-  vaultStorage(): Promise<VaultStorageDescriptor> {
-    return this.read<VaultStorageDescriptor>({ kind: 'vaultStorage' });
-  }
-
-  authMethods(): Promise<AuthMethodDescriptor[]> {
-    return this.read<AuthMethodDescriptor[]>({ kind: 'authMethods' });
-  }
-
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    return this.read<RegisteredDeviceDescriptor[]>({ kind: 'devices' });
-  }
-
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    return this.read<Uint8Array>({ kind: 'deviceRegistrationChallenge', devicePublicKey });
-  }
-
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    return this.read<PendingApprovalDescriptor[]>({ kind: 'pendingApprovals' });
-  }
-
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    return this.read<DeviceRendezvousResult>({ kind: 'deviceRendezvous', step });
-  }
-
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    return this.read<string>({ kind: 'siweChallenge', intent });
-  }
-
-  download(node: Uint8Array): Promise<ArrayBuffer> {
-    return this.read<ArrayBuffer>({ kind: 'download', node });
+  /**
+   * A rendezvous step's secrets are moved rather than cloned, so they leave this
+   * tab's heap for the leader's instead of being copied at the hop.
+   */
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    return this.overPort<ReadResult<D>>(
+      (requestId) => ({ type: 'cb:portRead', requestId, read }),
+      readTransfer(read)
+    );
   }
 
   openContentStream(node: Uint8Array): Promise<OpenedStream> {
@@ -310,10 +263,6 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   closeStream(handle: StreamHandle): Promise<void> {
     return this.stream<void>({ kind: 'closeStream', handle });
-  }
-
-  private read<T>(read: WireRead): Promise<T> {
-    return this.overPort<T>((requestId) => ({ type: 'cb:portRead', requestId, read }));
   }
 
   private stream<T>(stream: WireStream): Promise<T> {

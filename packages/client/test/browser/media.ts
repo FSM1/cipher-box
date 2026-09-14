@@ -13,6 +13,9 @@ import { hex } from './hexUtil.js';
 import { fixtureBuffer, TAB_SEED } from './mediaFixture.js';
 import { awaitServiceWorkerControl, SW_SCRIPT } from './serviceWorker.js';
 
+/** The one account every tab of a media test signs in as. */
+const MEDIA_ACCOUNT_ID = 'media-account';
+
 /** Bodies above this are asserted by digest; hex would blow up the page bridge. */
 const HEX_BODY_LIMIT = 64 * 1024;
 
@@ -44,6 +47,7 @@ export interface MediaFetchResult {
 declare global {
   interface Window {
     cbMediaEngine(options: MediaEngineOptions): Promise<string>;
+    cbMediaSignIn(): Promise<void>;
     cbMediaStart(options: MediaStartOptions): Promise<boolean>;
     cbMediaAwaitControl(): Promise<boolean>;
     cbMediaTicket(size: number, mimeType: string): string;
@@ -107,6 +111,12 @@ window.cbMediaEngine = ({ lockName, channelName }: MediaEngineOptions): Promise<
   });
   return awaitElection(client, lockName);
 };
+
+/**
+ * Opens this tab's session, which is what makes the origin's leader host an
+ * engine at all: a leadership with no session spawns no worker.
+ */
+window.cbMediaSignIn = (): Promise<void> => client!.start(new ArrayBuffer(32), MEDIA_ACCOUNT_ID);
 
 window.cbMediaStart = async ({ reader, seed }: MediaStartOptions): Promise<boolean> => {
   service = new MediaService({

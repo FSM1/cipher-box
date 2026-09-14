@@ -14,6 +14,9 @@ import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './t
 import type { EngineHostLike } from './worker/engineHost.js';
 import { commandTransfer } from './worker/protocol.js';
 import type {
+  ReadDescriptor,
+  ReadResult,
+  ReadResultValue,
   AuthMethodDescriptor,
   BinDescriptor,
   CommandDescriptor,
@@ -194,52 +197,8 @@ export class StubEngineHost implements EngineHostLike {
     return notStubbed('abortWrite');
   }
 
-  snapshot(_folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    return notStubbed('snapshot');
-  }
-
-  sharing(_scope: Uint8Array | null): Promise<SharingDescriptor> {
-    return notStubbed('sharing');
-  }
-
-  receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    return notStubbed('receivedShares');
-  }
-
-  bin(): Promise<BinDescriptor> {
-    return notStubbed('bin');
-  }
-
-  vaultStorage(): Promise<VaultStorageDescriptor> {
-    return notStubbed('vaultStorage');
-  }
-
-  authMethods(): Promise<AuthMethodDescriptor[]> {
-    return notStubbed('authMethods');
-  }
-
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    return notStubbed('devices');
-  }
-
-  deviceRegistrationChallenge(_devicePublicKey: string): Promise<Uint8Array> {
-    return notStubbed('deviceRegistrationChallenge');
-  }
-
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    return notStubbed('pendingApprovals');
-  }
-
-  deviceRendezvous(_step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    return notStubbed('deviceRendezvous');
-  }
-
-  siweChallenge(_intent: SiweIntent): Promise<string> {
-    return notStubbed('siweChallenge');
-  }
-
-  download(_node: Uint8Array): Promise<ArrayBuffer> {
-    return notStubbed('download');
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    return notStubbed(`read ${read.kind}`);
   }
 
   openContentStream(_node: Uint8Array): Promise<OpenedStream> {
@@ -653,65 +612,54 @@ export class FakeEngineTransport implements EngineTransport {
     return Promise.resolve();
   }
 
-  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    this.snapshots.push(folder);
-    return this.respondSnapshot(folder);
+  /**
+   * Records the read and answers from the per-kind responder, so a test names
+   * the read it is driving rather than the rail that carries it.
+   */
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    return this.serveRead(read) as Promise<ReadResult<D>>;
   }
 
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    this.sharingReads.push(scope);
-    return this.respondSharing(scope);
-  }
-
-  receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    this.receivedShareReads += 1;
-    return this.respondReceivedShares();
-  }
-
-  bin(): Promise<BinDescriptor> {
-    this.binReads += 1;
-    return this.respondBin();
-  }
-
-  vaultStorage(): Promise<VaultStorageDescriptor> {
-    this.vaultStorageReads += 1;
-    return this.respondVaultStorage();
-  }
-
-  authMethods(): Promise<AuthMethodDescriptor[]> {
-    this.authMethodReads += 1;
-    return this.respondAuthMethods();
-  }
-
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    this.deviceReads += 1;
-    return this.respondDevices();
-  }
-
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    this.registrationChallenges.push(devicePublicKey);
-    return this.respondRegistrationChallenge();
-  }
-
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    this.pendingApprovalReads += 1;
-    return this.respondPendingApprovals();
-  }
-
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    this.rendezvousSteps.push(snapshotStep(step));
-    return this.respondRendezvous(step);
-  }
-
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    this.siweChallenges += 1;
-    this.siweChallengeIntents.push(intent);
-    return this.respondSiweChallenge();
-  }
-
-  download(node: Uint8Array): Promise<ArrayBuffer> {
-    this.downloads.push(node);
-    return this.respondDownload(node);
+  private serveRead(read: ReadDescriptor): Promise<ReadResultValue> {
+    switch (read.kind) {
+      case 'snapshot':
+        this.snapshots.push(read.folder);
+        return this.respondSnapshot(read.folder);
+      case 'sharing':
+        this.sharingReads.push(read.scope);
+        return this.respondSharing(read.scope);
+      case 'receivedShares':
+        this.receivedShareReads += 1;
+        return this.respondReceivedShares();
+      case 'bin':
+        this.binReads += 1;
+        return this.respondBin();
+      case 'vaultStorage':
+        this.vaultStorageReads += 1;
+        return this.respondVaultStorage();
+      case 'authMethods':
+        this.authMethodReads += 1;
+        return this.respondAuthMethods();
+      case 'devices':
+        this.deviceReads += 1;
+        return this.respondDevices();
+      case 'deviceRegistrationChallenge':
+        this.registrationChallenges.push(read.devicePublicKey);
+        return this.respondRegistrationChallenge();
+      case 'pendingApprovals':
+        this.pendingApprovalReads += 1;
+        return this.respondPendingApprovals();
+      case 'deviceRendezvous':
+        this.rendezvousSteps.push(snapshotStep(read.step));
+        return this.respondRendezvous(read.step);
+      case 'siweChallenge':
+        this.siweChallenges += 1;
+        this.siweChallengeIntents.push(read.intent);
+        return this.respondSiweChallenge();
+      case 'download':
+        this.downloads.push(read.node);
+        return this.respondDownload(read.node);
+    }
   }
 
   openContentStream(node: Uint8Array): Promise<OpenedStream> {
@@ -748,6 +696,7 @@ export class FakeEngineWorker implements EngineWorkerLike {
   readonly posted: unknown[] = [];
   terminated = false;
   private messageListeners: Array<(event: MessageEvent<WorkerMessage>) => void> = [];
+  private errorListeners: Array<(event: ErrorEvent) => void> = [];
 
   /** What the handle-minting requests answer with — every engine's counters start at 1. */
   streamHandle: StreamHandle = 1n;
@@ -774,6 +723,7 @@ export class FakeEngineWorker implements EngineWorkerLike {
   addEventListener(type: 'message' | 'error', listener: unknown): void {
     if (type === 'message')
       this.messageListeners.push(listener as (e: MessageEvent<WorkerMessage>) => void);
+    else this.errorListeners.push(listener as (e: ErrorEvent) => void);
   }
 
   terminate(): void {
@@ -787,5 +737,10 @@ export class FakeEngineWorker implements EngineWorkerLike {
 
   ready(): void {
     this.emit({ type: 'ready' });
+  }
+
+  /** The thread itself failed, which a worker reports outside the protocol. */
+  fail(message: string): void {
+    for (const listener of this.errorListeners) listener({ message } as ErrorEvent);
   }
 }

@@ -10,24 +10,15 @@
  */
 
 import { CorrelatedTransport } from './correlatedTransport.js';
-import { commandTransfer, rendezvousTransfer } from './worker/protocol.js';
+import { commandTransfer, readTransfer } from './worker/protocol.js';
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResult,
   StreamHandle,
-  VaultStorageDescriptor,
   WorkerMessage,
   WorkerRequest,
   WriteHandle,
@@ -67,30 +58,13 @@ export interface EngineTransport {
   commitWrite(handle: WriteHandle): Promise<bigint>;
   /** Abandons the handle, releasing its reservation and staged blocks. */
   abortWrite(handle: WriteHandle): Promise<void>;
-  /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
-  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   /**
-   * Reads the vault's contact book and the grants `scope`'s own record commits,
-   * or the vault root's for `null`.
+   * Serves one read and resolves with what that kind answers ([`ReadResults`]).
+   * Any buffer the descriptor owns is moved rather than copied
+   * ([`readTransfer`]), so a rendezvous secret exists in a single realm at a
+   * time.
    */
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor>;
-  receivedShares(): Promise<ReceivedShareDescriptor[]>;
-  bin(): Promise<BinDescriptor>;
-  vaultStorage(): Promise<VaultStorageDescriptor>;
-  /** Reads the login methods on this account, in the display form the API serves. */
-  authMethods(): Promise<AuthMethodDescriptor[]>;
-  /** Reads the device identity keys registered to this account. */
-  devices(): Promise<RegisteredDeviceDescriptor[]>;
-  /** The bytes this device signs to join the account registry. */
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array>;
-  /** Reads the rendezvous rows this account is asked to approve. */
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]>;
-  /** Runs one pure rendezvous step (ADR 0009); the engine holds no state for it. */
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult>;
-  /** Issues the single-use nonce an EIP-4361 message must embed. */
-  siweChallenge(intent: SiweIntent): Promise<string>;
-  /** Downloads one file node's plaintext through the verified read pipeline. */
-  download(node: Uint8Array): Promise<ArrayBuffer>;
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>>;
   /**
    * Opens a read stream over one file node, pinned to the head content version
    * for the handle's life so no window can come from a different one.
@@ -205,78 +179,12 @@ export class LocalTransport extends CorrelatedTransport {
     );
   }
 
-  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    return this.request<SnapshotDescriptor>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'snapshot', id, folder }, [])
-    );
-  }
-
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    return this.request<SharingDescriptor>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'sharing', id, scope }, [])
-    );
-  }
-
-  receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    return this.request<ReceivedShareDescriptor[]>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'receivedShares', id }, [])
-    );
-  }
-
-  bin(): Promise<BinDescriptor> {
-    return this.request<BinDescriptor>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'bin', id }, [])
-    );
-  }
-
-  vaultStorage(): Promise<VaultStorageDescriptor> {
-    return this.request<VaultStorageDescriptor>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'vaultStorage', id }, [])
-    );
-  }
-
-  authMethods(): Promise<AuthMethodDescriptor[]> {
-    return this.request<AuthMethodDescriptor[]>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'authMethods', id }, [])
-    );
-  }
-
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    return this.request<RegisteredDeviceDescriptor[]>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'devices', id }, [])
-    );
-  }
-
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    return this.request<Uint8Array>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'deviceRegistrationChallenge', id, devicePublicKey }, [])
-    );
-  }
-
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    return this.request<PendingApprovalDescriptor[]>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'pendingApprovals', id }, [])
-    );
-  }
-
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    const transfer = rendezvousTransfer(step);
-    return this.request<DeviceRendezvousResult>(
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    const transfer = readTransfer(read);
+    return this.request<ReadResult<D>>(
       this.ready,
-      (id) => this.worker.postMessage({ type: 'deviceRendezvous', id, step }, transfer),
+      (id) => this.worker.postMessage({ type: 'read', id, read }, transfer),
       transfer
-    );
-  }
-
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    return this.request<string>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'siweChallenge', id, intent }, [])
-    );
-  }
-
-  download(node: Uint8Array): Promise<ArrayBuffer> {
-    return this.request<ArrayBuffer>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'download', id, node }, [])
     );
   }
 

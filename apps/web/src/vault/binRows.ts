@@ -68,7 +68,7 @@ function toRow(entry: BinRowDescriptor, retentionDays: number | null): BinRow {
   };
 }
 
-/** A folder name is peer-authored text, so it is neutralised as a row name is. */
+/** The folder a restore puts the node back into, in the words a member reads. */
 function originOf(origin: BinOriginDescriptor): string {
   switch (origin.kind) {
     case 'root':
@@ -90,10 +90,8 @@ function expiryOf(deletedAt: bigint, retentionDays: number | null): string | nul
 }
 
 /**
- * The tie-break reads the shown name, not the stored one. A leading tab or line
- * break sorts ahead of every letter but renders as nothing, so a stored-name
- * order puts a row where its own name says it does not belong. Rows of one name
- * then order by the origin the page shows, so the pair reads in a set order.
+ * Newest first, then by the name the row shows. Rows of one name then order by
+ * the origin the page shows, so the pair reads in a set order.
  */
 function byDeletedThenName(a: SortedRow, b: SortedRow): number {
   if (a.deletedAt !== b.deletedAt) return a.deletedAt > b.deletedAt ? -1 : 1;

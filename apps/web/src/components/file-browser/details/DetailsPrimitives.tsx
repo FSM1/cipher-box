@@ -65,7 +65,7 @@ export function CopyableValue({
   label,
 }: {
   value: string;
-  /** What the copy hands over, where the shown text is neutralised. */
+  /** What the copy hands over, where the shown text is clamped. */
   copyValue?: string;
   label: string;
 }) {

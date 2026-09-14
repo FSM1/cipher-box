@@ -16,7 +16,7 @@
  *   on it is cloned into every same-origin context that opened it. The port
  *   moves upload buffers instead, so a chunk's plaintext leaves the follower's
  *   heap rather than being copied to every bystander. A device-approval step
- *   ([`WireRead`] `deviceRendezvous`) carries key bytes on that port for the
+ *   ([`ReadDescriptor`] `deviceRendezvous`) carries key bytes on that port for the
  *   same reason and under the same rule: it is transferred, and the realm it
  *   lands in erases what it holds.
  * - What a bystanding same-origin context sees on the channel, stated exactly:
@@ -29,22 +29,13 @@
  */
 
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   EventDescriptor,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResultValue,
   StreamHandle,
-  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -56,21 +47,6 @@ export interface BroadcastChannelLike {
   removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
   close(): void;
 }
-
-/** A follower read intent: served by the leader's engine, answered by value. */
-export type WireRead =
-  | { kind: 'snapshot'; folder: Uint8Array | null }
-  | { kind: 'sharing'; scope: Uint8Array | null }
-  | { kind: 'receivedShares' }
-  | { kind: 'bin' }
-  | { kind: 'vaultStorage' }
-  | { kind: 'authMethods' }
-  | { kind: 'devices' }
-  | { kind: 'deviceRegistrationChallenge'; devicePublicKey: string }
-  | { kind: 'pendingApprovals' }
-  | { kind: 'deviceRendezvous'; step: DeviceRendezvousStep }
-  | { kind: 'siweChallenge'; intent: SiweIntent }
-  | { kind: 'download'; node: Uint8Array };
 
 /** A follower ranged-read step, driven against the leader's engine stream. */
 export type WireStream =
@@ -104,7 +80,7 @@ export type PortRequest =
   /** This tab's currently open folder (for the leader's focus-window union). */
   | { type: 'cb:portFocus'; node: Uint8Array | null }
   /** A correlated read; the leader answers with a matching `cb:portResult`. */
-  | { type: 'cb:portRead'; requestId: number; read: WireRead }
+  | { type: 'cb:portRead'; requestId: number; read: ReadDescriptor }
   /** A correlated ranged-read step, run against the leader's engine stream. */
   | { type: 'cb:portStream'; requestId: number; stream: WireStream }
   /** A correlated command, run against the leader's engine. */
@@ -146,19 +122,8 @@ export type PortResponse =
       requestId: number;
       ok: true;
       result?:
-        | SnapshotDescriptor
-        | SharingDescriptor
-        | ReceivedShareDescriptor[]
-        | BinDescriptor
-        | VaultStorageDescriptor
-        | AuthMethodDescriptor[]
-        | RegisteredDeviceDescriptor[]
-        | PendingApprovalDescriptor[]
-        | DeviceRendezvousResult
+        | ReadResultValue
         | CommandOutcomeDescriptor
-        | ArrayBuffer
-        | Uint8Array
-        | string
         | OpenedStream
         | StreamHandle
         | WriteHandle;

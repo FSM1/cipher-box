@@ -134,7 +134,7 @@ export class EngineFacade {
 
   /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    return this.transport.snapshot(folder);
+    return this.transport.read({ kind: 'snapshot', folder });
   }
 
   /**
@@ -142,41 +142,41 @@ export class EngineFacade {
    * commits — the vault root's for `null`.
    */
   sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    return this.transport.sharing(scope);
+    return this.transport.read({ kind: 'sharing', scope });
   }
 
   receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    return this.transport.receivedShares();
+    return this.transport.read({ kind: 'receivedShares' });
   }
 
   /** The `/bin` route's whole read; an `origin` of `'defaults'` is the fallback, not a read. */
   bin(): Promise<BinDescriptor> {
-    return this.transport.bin();
+    return this.transport.read({ kind: 'bin' });
   }
 
   /** The storage pane's whole read. */
   vaultStorage(): Promise<VaultStorageDescriptor> {
-    return this.transport.vaultStorage();
+    return this.transport.read({ kind: 'vaultStorage' });
   }
 
   /** The login methods on this account, in the display form the API serves. */
   authMethods(): Promise<AuthMethodDescriptor[]> {
-    return this.transport.authMethods();
+    return this.transport.read({ kind: 'authMethods' });
   }
 
   /** The device identity keys registered to this account (ADR 0009 D4). */
   devices(): Promise<RegisteredDeviceDescriptor[]> {
-    return this.transport.devices();
+    return this.transport.read({ kind: 'devices' });
   }
 
   /** The bytes `devicePublicKey` signs to join this account's device registry. */
   deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    return this.transport.deviceRegistrationChallenge(devicePublicKey);
+    return this.transport.read({ kind: 'deviceRegistrationChallenge', devicePublicKey });
   }
 
   /** The rendezvous rows this account is asked to approve, each with its digits. */
   pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    return this.transport.pendingApprovals();
+    return this.transport.read({ kind: 'pendingApprovals' });
   }
 
   /**
@@ -184,12 +184,12 @@ export class EngineFacade {
    * pure function of the transcript, so the caller drives the exchange itself.
    */
   deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    return this.transport.deviceRendezvous(step);
+    return this.transport.read({ kind: 'deviceRendezvous', step });
   }
 
   /** Downloads one file node's plaintext through the verified read pipeline. */
   download(node: Uint8Array): Promise<ArrayBuffer> {
-    return this.transport.download(node);
+    return this.transport.read({ kind: 'download', node });
   }
 
   /**
@@ -409,7 +409,7 @@ export class EngineFacade {
 
   /** Issues the single-use nonce an EIP-4361 message must embed, for `intent`. */
   siweChallenge(intent: SiweIntent): Promise<string> {
-    return this.transport.siweChallenge(intent);
+    return this.transport.read({ kind: 'siweChallenge', intent });
   }
 
   /** Links a signed EIP-4361 message to the account this session already holds. */

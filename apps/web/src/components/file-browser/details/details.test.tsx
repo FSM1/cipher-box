@@ -108,17 +108,18 @@ describe('the details panel', () => {
     );
   });
 
-  it('shows a neutralised name and copies the one the engine holds', async () => {
+  it('shows a clamped name and copies the one the engine holds', async () => {
     const writeText = vi.fn(() => Promise.resolve());
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
-    const row = fileRow({ name: 'reportfdp.exe', storedName: 'report\u202Efdp.exe' });
+    const held = 'a'.repeat(200);
+    const row = fileRow({ name: 'a'.repeat(96) + '…', storedName: held });
 
     render(<DetailsDialog row={row} onClose={() => undefined} />);
 
-    expect(rowText('name')).toContain('reportfdp.exe');
+    expect(rowText('name')).toContain('…');
     fireEvent.click(screen.getByLabelText('copy name'));
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('report\u202Efdp.exe'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(held));
   });
 
   it('never confirms a copy the browser refused', async () => {

@@ -25,6 +25,9 @@ vi.mock('../../engine/createMediaService', () => ({
 const ROOT = new Uint8Array(16).fill(0);
 const DOCS = new Uint8Array(16).fill(7);
 const NOTE = new Uint8Array(16).fill(3);
+/** A name past the row clamp, so what a row shows differs from what it holds. */
+const LONG_NAME = 'a'.repeat(200);
+const SHOWN_LONG_NAME = 'a'.repeat(96) + '…';
 const PICTURE = new Uint8Array(16).fill(5);
 
 type Child = SnapshotDescriptor['children'][number];
@@ -217,28 +220,26 @@ describe('the vault browser write path', () => {
     await waitFor(() => expect(engine.facade.delete).toHaveBeenCalledWith(DOCS));
   });
 
-  it('names a row the confirmation destroys in the order the vault stores it', async () => {
+  it('names a row the confirmation destroys in the words the row shows', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
-    await landSnapshot(engine, folderView({ children: [file(NOTE, 'report\u202Efdp.exe')] }));
+    await landSnapshot(engine, folderView({ children: [file(NOTE, LONG_NAME)] }));
 
-    openRowMenu('reportfdp.exe');
+    openRowMenu(SHOWN_LONG_NAME);
     chooseMenuItem('delete');
 
-    expect(screen.getByTestId('delete-dialog').textContent).toContain('"reportfdp.exe"');
+    expect(screen.getByTestId('delete-dialog').textContent).toContain(`"${SHOWN_LONG_NAME}"`);
   });
 
   it('prefills a rename with the name the engine holds, not the shown one', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
-    await landSnapshot(engine, folderView({ children: [file(NOTE, 'report\u202Efdp.exe')] }));
+    await landSnapshot(engine, folderView({ children: [file(NOTE, LONG_NAME)] }));
 
-    openRowMenu('reportfdp.exe');
+    openRowMenu(SHOWN_LONG_NAME);
     chooseMenuItem('rename');
 
-    expect((screen.getByLabelText('new name') as HTMLInputElement).value).toBe(
-      'report\u202Efdp.exe'
-    );
+    expect((screen.getByLabelText('new name') as HTMLInputElement).value).toBe(LONG_NAME);
     expect((screen.getByTestId('rename-confirm') as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -247,14 +248,12 @@ describe('the vault browser write path', () => {
     const saves = trackSaves();
     try {
       renderBrowser(engine);
-      await landSnapshot(engine, folderView({ children: [file(NOTE, 'report\u202Efdp.exe')] }));
+      await landSnapshot(engine, folderView({ children: [file(NOTE, LONG_NAME)] }));
 
-      openRowMenu('reportfdp.exe');
+      openRowMenu(SHOWN_LONG_NAME);
       chooseMenuItem('download');
 
-      await waitFor(() =>
-        expect(saves.clicked.map((save) => save.download)).toEqual(['report\u202Efdp.exe'])
-      );
+      await waitFor(() => expect(saves.clicked.map((save) => save.download)).toEqual([LONG_NAME]));
     } finally {
       saves.restore();
     }

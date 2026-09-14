@@ -24,6 +24,7 @@ import {
   type BroadcastChannelLike,
 } from './broadcast.js';
 import { BroadcastTransport, refusedForAccount } from './broadcastTransport.js';
+import { wipeTransfer } from './buffers.js';
 import { EngineRequestError, fanOut, unknownHandle } from './correlatedTransport.js';
 import { asError } from './errorMessage.js';
 import { EngineFacade } from './facade.js';
@@ -34,22 +35,14 @@ import type { PortCourier } from './portRelay.js';
 import { requestStoragePersistence } from './storagePersistence.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import { LocalTransport } from './transport.js';
+import { commandTransfer, readTransfer } from './worker/protocol.js';
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResult,
   StreamHandle,
-  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -158,6 +151,151 @@ class HandleTable {
 
   clear(): void {
     this.inner.clear();
+  }
+}
+
+/** Refuses a call the way the engine refuses one before its own `start`. */
+function notStarted(): EngineRequestError {
+  return new EngineRequestError('engine not started', 'notStarted');
+}
+
+/**
+ * The engine a leadership hosts, which is a worker only once something needs
+ * one. A leadership with no session hosts nothing, so a greeting flood against
+ * it has no worker to tear down and no WASM cold start to buy.
+ *
+ * A call the engine could not serve before its own `start` is refused here with
+ * the engine's own code rather than paying for a worker to say the same thing,
+ * and whatever secret the refused call carried is scrubbed: this frame is that
+ * buffer's last owner (AGENTS.md 7). Two calls do bring the worker up — `start`
+ * itself, and the device-approval rendezvous, which the engine serves as a pure
+ * function of the transcript with no session behind it (ADR 0009).
+ */
+class LeaderEngine implements EngineTransport {
+  private local: LocalTransport | null = null;
+  private innerUnsub: (() => void) | null = null;
+  private readonly listeners = new Set<EngineEventListener>();
+  private closed = false;
+  private faulted = false;
+
+  /**
+   * `onFault` reports a worker this leadership cannot bring up at all. The lock
+   * is held for an engine that will never exist, so the holder releases it.
+   */
+  constructor(
+    private readonly spawn: () => EngineWorkerLike,
+    private readonly onFault: (error: unknown) => void
+  ) {}
+
+  private engine(): LocalTransport {
+    if (this.local) return this.local;
+    if (this.closed) throw new Error('engine transport closed');
+    let worker: EngineWorkerLike;
+    let local: LocalTransport;
+    try {
+      worker = this.spawn();
+      local = new LocalTransport(worker);
+    } catch (error) {
+      this.fault(error);
+      throw asError(error);
+    }
+    this.local = local;
+    this.innerUnsub = local.subscribe((event) => fanOut(this.listeners, event));
+    // A worker can also die after it is built: a construction fault reaches the
+    // host as `fatal`, a thread fault as `error`. Both reject the calls already
+    // in flight, and this is the only seam that can also give the lock up.
+    worker.addEventListener('error', (event) =>
+      this.fault(new Error(event.message || 'engine worker error'))
+    );
+    worker.addEventListener('message', (event) => {
+      if (event.data.type === 'fatal') this.fault(new Error(event.data.error));
+    });
+    return local;
+  }
+
+  /** Reports, once, an engine this leadership cannot host. */
+  private fault(error: unknown): void {
+    if (this.faulted || this.closed) return;
+    this.faulted = true;
+    this.onFault(error);
+  }
+
+  start(secret: ArrayBuffer, accountId: string): Promise<void> {
+    let local: LocalTransport;
+    try {
+      local = this.engine();
+    } catch (error) {
+      // Nothing took the buffer, so this frame is still its terminal owner.
+      new Uint8Array(secret).fill(0);
+      return Promise.reject(asError(error));
+    }
+    return local.start(secret, accountId);
+  }
+
+  command(command: CommandDescriptor): Promise<CommandOutcomeDescriptor> {
+    if (this.local) return this.local.command(command);
+    wipeTransfer(commandTransfer(command));
+    return Promise.reject(notStarted());
+  }
+
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    if (read.kind === 'deviceRendezvous' && !this.local) {
+      try {
+        return this.engine().read(read);
+      } catch (error) {
+        wipeTransfer(readTransfer(read));
+        return Promise.reject(asError(error));
+      }
+    }
+    if (this.local) return this.local.read(read);
+    wipeTransfer(readTransfer(read));
+    return Promise.reject(notStarted());
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    return this.local ? this.local.beginWrite(target, size) : Promise.reject(notStarted());
+  }
+
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    if (this.local) return this.local.pushChunk(handle, chunk);
+    new Uint8Array(chunk).fill(0);
+    return Promise.reject(notStarted());
+  }
+
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    return this.local ? this.local.commitWrite(handle) : Promise.reject(notStarted());
+  }
+
+  abortWrite(handle: WriteHandle): Promise<void> {
+    return this.local ? this.local.abortWrite(handle) : Promise.reject(notStarted());
+  }
+
+  openContentStream(node: Uint8Array): Promise<OpenedStream> {
+    return this.local ? this.local.openContentStream(node) : Promise.reject(notStarted());
+  }
+
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    return this.local
+      ? this.local.readStream(handle, offset, length)
+      : Promise.reject(notStarted());
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    return this.local ? this.local.closeStream(handle) : Promise.reject(notStarted());
+  }
+
+  subscribe(listener: EngineEventListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  close(): void {
+    this.closed = true;
+    this.innerUnsub?.();
+    this.innerUnsub = null;
+    this.local?.close();
+    this.local = null;
+    this.listeners.clear();
   }
 }
 
@@ -301,7 +439,8 @@ export class EngineClient implements EngineTransport {
     if (asFollower) new Uint8Array(secret).fill(0);
     if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
     // Named before the send: a promotion landing mid-start must cold-start for
-    // this account rather than take the lock as an engine-less leader.
+    // this account rather than take the lock as an engine-less leader, and a
+    // greeting arriving while the worker spawns must not stand this tab down.
     this.pendingLogin = accountId;
     return this.current.start(secret, accountId).then(
       () => {
@@ -473,52 +612,8 @@ export class EngineClient implements EngineTransport {
     this.writes.release(handle);
   }
 
-  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
-    return this.current.snapshot(folder);
-  }
-
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    return this.current.sharing(scope);
-  }
-
-  receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    return this.current.receivedShares();
-  }
-
-  bin(): Promise<BinDescriptor> {
-    return this.current.bin();
-  }
-
-  vaultStorage(): Promise<VaultStorageDescriptor> {
-    return this.current.vaultStorage();
-  }
-
-  authMethods(): Promise<AuthMethodDescriptor[]> {
-    return this.current.authMethods();
-  }
-
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    return this.current.devices();
-  }
-
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    return this.current.deviceRegistrationChallenge(devicePublicKey);
-  }
-
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    return this.current.pendingApprovals();
-  }
-
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    return this.current.deviceRendezvous(step);
-  }
-
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    return this.current.siweChallenge(intent);
-  }
-
-  download(node: Uint8Array): Promise<ArrayBuffer> {
-    return this.current.download(node);
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    return this.current.read(read);
   }
 
   async openContentStream(node: Uint8Array): Promise<OpenedStream> {
@@ -604,13 +699,22 @@ export class EngineClient implements EngineTransport {
       this.yieldWanted = false;
       this.yieldLeadership();
     }, YIELD_COOLDOWN_MS);
+    this.standDown();
+    this.election.requeue();
+  }
+
+  /**
+   * Drops everything this leadership holds and mirrors the next leader instead.
+   * Every seam it touches is idempotent, so a stand-down racing a teardown
+   * leaves one follower rather than two.
+   */
+  private standDown(): void {
     this.innerUnsub();
     this.relay?.close();
     this.relay = null;
     this.current.close();
     this.role = 'follower';
     this.installFollower();
-    this.election.requeue();
   }
 
   /** Installs the live transport, retiring the handles the previous one held. */
@@ -660,13 +764,16 @@ export class EngineClient implements EngineTransport {
   }
 
   /**
-   * Win the lock → become the engine host. The worker is spawned and (on
-   * failover) cold-started with a re-derived secret **before** we advertise
-   * leadership: we do not install the local transport, route commands, or
-   * register the relay until the worker start resolves, so a command in the
+   * Win the lock → become the engine host. A promotion with a session to serve
+   * spawns the worker and cold-starts it with a re-derived secret **before** we
+   * advertise leadership: we do not install the local transport, route commands,
+   * or register the relay until the worker start resolves, so a command in the
    * promotion window never reaches an uninitialized worker. If startup fails we
    * release the lock (a healthy tab takes over) and surface via `onError` rather
    * than holding a dead-leader lock.
+   *
+   * A promotion with no session spawns no worker at all ([`LeaderEngine`]) —
+   * the first call that needs one brings it up.
    */
   private async promote(): Promise<void> {
     if (this.role === 'closed') return;
@@ -682,11 +789,12 @@ export class EngineClient implements EngineTransport {
     // from `spawnWorker()` or the `LocalTransport` constructor must release the
     // Web Lock exactly like an async startup failure, never leave it held with
     // no live leader (a dead-leader lock).
-    let local: LocalTransport | null = null;
+    // The fault report is armed only once this leadership is live: the catch
+    // below owns every failure inside the promotion itself.
+    const local = new LeaderEngine(this.config.spawnWorker, (error) => {
+      if (this.role === 'leader') this.abortPromotion(null, error);
+    });
     try {
-      const worker = this.config.spawnWorker();
-      local = new LocalTransport(worker);
-
       if (hasSession) {
         this.holdParkedStarts();
         const { secret, accountId } = await this.provideFailoverSecret();
@@ -737,11 +845,12 @@ export class EngineClient implements EngineTransport {
     return source.provideSecret();
   }
 
-  private abortPromotion(local: LocalTransport | null, error: unknown): void {
-    // Never advertise a dead leader: tear down any half-built worker, release
-    // the lock so a healthy tab is elected, and fall back to a follower that
-    // mirrors the next leader. `local` is null when the throw beat transport
-    // construction — there is nothing to tear down, only the lock to release.
+  private abortPromotion(local: EngineTransport | null, error: unknown): void {
+    // Never advertise a dead leader: tear down the half-built worker and
+    // whatever a live leadership already holds, release the lock so a healthy
+    // tab is elected, and fall back to a follower that mirrors the next leader.
+    // `local` is null where the caller is not mid-promotion — the engine the
+    // stand-down closes is then this tab's own.
     local?.close();
     const failure = asError(error);
     // Cleared before the follower is rebuilt, which greets under it: the engine
@@ -749,8 +858,7 @@ export class EngineClient implements EngineTransport {
     // UI rendering signed in over it would be rendering a dead one.
     this.holdsAccount(null);
     if (this.role !== 'closed') {
-      this.role = 'follower';
-      this.installFollower();
+      this.standDown();
       void this.election.close();
     }
     this.settleParkedStarts(failure);

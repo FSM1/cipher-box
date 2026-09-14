@@ -18,7 +18,7 @@ export interface FolderPicker {
   folders: ListingRow[];
   /** The folder a command would target, or `null` until the listing lands. */
   destination: Uint8Array | null;
-  /** That folder's name, neutralised for display, or `null` until it lands. */
+  /** That folder's name, clamped for display, or `null` until it lands. */
   destinationName: string | null;
   isLoading: boolean;
   error: string | null;

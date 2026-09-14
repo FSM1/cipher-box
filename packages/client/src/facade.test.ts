@@ -15,21 +15,13 @@ import {
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import { MAX_FRAGMENT_CHARS } from './worker/protocol.js';
 import type {
-  AuthMethodDescriptor,
-  BinDescriptor,
   CommandDescriptor,
   CommandOutcomeDescriptor,
-  DeviceRendezvousResult,
-  DeviceRendezvousStep,
   OpenedStream,
-  PendingApprovalDescriptor,
-  ReceivedShareDescriptor,
-  RegisteredDeviceDescriptor,
-  SharingDescriptor,
-  SiweIntent,
-  SnapshotDescriptor,
+  ReadDescriptor,
+  ReadResult,
+  ReadResultValue,
   StreamHandle,
-  VaultStorageDescriptor,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -58,22 +50,41 @@ function mintingTransport(): FakeTransport {
   return transport;
 }
 
+/** What this double answers each read kind with. */
+function answerRead(read: ReadDescriptor): ReadResultValue {
+  switch (read.kind) {
+    case 'snapshot':
+      return emptySnapshot(read.folder ?? undefined);
+    case 'sharing':
+      return emptySharing(read.scope ?? undefined);
+    case 'receivedShares':
+      return [];
+    case 'bin':
+      return emptyBin();
+    case 'vaultStorage':
+      return emptyVaultStorage();
+    case 'authMethods':
+      return [];
+    case 'devices':
+      return [];
+    case 'deviceRegistrationChallenge':
+      return Uint8Array.of(1, 2, 3);
+    case 'pendingApprovals':
+      return [];
+    case 'deviceRendezvous':
+      return { kind: 'factor', factorKey: Uint8Array.of(7, 7) };
+    case 'siweChallenge':
+      return FAKE_SIWE_NONCE;
+    case 'download':
+      return new Uint8Array([1, 2, 3]).buffer;
+  }
+}
+
 class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
   commands: CommandDescriptor[] = [];
-  snapshots: Uint8Array[] = [];
-  sharingReads: Array<Uint8Array | null> = [];
-  receivedShareReads = 0;
-  binReads = 0;
-  vaultStorageReads = 0;
-  authMethodReads = 0;
-  deviceReads = 0;
-  pendingApprovalReads = 0;
-  registrationChallenges: string[] = [];
-  rendezvousSteps: DeviceRendezvousStep[] = [];
-  downloads: Uint8Array[] = [];
-  siweChallenges = 0;
-  siweChallengeIntents: SiweIntent[] = [];
+  /** Every read the facade issued, in call order. */
+  readIntents: ReadDescriptor[] = [];
   opened: Uint8Array[] = [];
   reads: Array<{ handle: StreamHandle; offset: number; length: number }> = [];
   closedStreams: StreamHandle[] = [];
@@ -127,65 +138,9 @@ class FakeTransport implements EngineTransport {
     return Promise.resolve();
   }
 
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
-    this.snapshots.push(folder);
-    return Promise.resolve(emptySnapshot(folder));
-  }
-
-  sharing(scope: Uint8Array | null): Promise<SharingDescriptor> {
-    this.sharingReads.push(scope);
-    return Promise.resolve(emptySharing(scope ?? undefined));
-  }
-
-  receivedShares(): Promise<ReceivedShareDescriptor[]> {
-    this.receivedShareReads += 1;
-    return Promise.resolve([]);
-  }
-
-  bin(): Promise<BinDescriptor> {
-    this.binReads += 1;
-    return Promise.resolve(emptyBin());
-  }
-
-  vaultStorage(): Promise<VaultStorageDescriptor> {
-    this.vaultStorageReads += 1;
-    return Promise.resolve(emptyVaultStorage());
-  }
-
-  authMethods(): Promise<AuthMethodDescriptor[]> {
-    this.authMethodReads += 1;
-    return Promise.resolve([]);
-  }
-
-  devices(): Promise<RegisteredDeviceDescriptor[]> {
-    this.deviceReads += 1;
-    return Promise.resolve([]);
-  }
-
-  deviceRegistrationChallenge(devicePublicKey: string): Promise<Uint8Array> {
-    this.registrationChallenges.push(devicePublicKey);
-    return Promise.resolve(Uint8Array.of(1, 2, 3));
-  }
-
-  pendingApprovals(): Promise<PendingApprovalDescriptor[]> {
-    this.pendingApprovalReads += 1;
-    return Promise.resolve([]);
-  }
-
-  deviceRendezvous(step: DeviceRendezvousStep): Promise<DeviceRendezvousResult> {
-    this.rendezvousSteps.push(step);
-    return Promise.resolve({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
-  }
-
-  siweChallenge(intent: SiweIntent): Promise<string> {
-    this.siweChallenges += 1;
-    this.siweChallengeIntents.push(intent);
-    return Promise.resolve(FAKE_SIWE_NONCE);
-  }
-
-  download(node: Uint8Array): Promise<ArrayBuffer> {
-    this.downloads.push(node);
-    return Promise.resolve(new Uint8Array([1, 2, 3]).buffer);
+  read<D extends ReadDescriptor>(read: D): Promise<ReadResult<D>> {
+    this.readIntents.push(read);
+    return Promise.resolve(answerRead(read)) as Promise<ReadResult<D>>;
   }
 
   openContentStream(node: Uint8Array): Promise<OpenedStream> {
@@ -570,11 +525,11 @@ describe('EngineFacade', () => {
 
     const view = await facade.snapshot(folder);
     expect(view.folder).toBe(folder);
-    expect(transport.snapshots).toEqual([folder]);
+    expect(transport.readIntents).toEqual([{ kind: 'snapshot', folder }]);
 
     const content = await facade.download(node);
     expect([...new Uint8Array(content)]).toEqual([1, 2, 3]);
-    expect(transport.downloads).toEqual([node]);
+    expect(transport.readIntents.at(-1)).toEqual({ kind: 'download', node });
   });
 
   it('forwards a sharing read, and a null scope as the vault root', async () => {
@@ -586,7 +541,10 @@ describe('EngineFacade', () => {
     expect(view.scope).toBe(scope);
 
     await facade.sharing(null);
-    expect(transport.sharingReads).toEqual([scope, null]);
+    expect(transport.readIntents).toEqual([
+      { kind: 'sharing', scope },
+      { kind: 'sharing', scope: null },
+    ]);
   });
 
   it('forwards a received-shares read', async () => {
@@ -594,7 +552,7 @@ describe('EngineFacade', () => {
     const facade = new EngineFacade(transport);
 
     await facade.receivedShares();
-    expect(transport.receivedShareReads).toBe(1);
+    expect(transport.readIntents).toEqual([{ kind: 'receivedShares' }]);
   });
 
   it('reads the SIWE nonce over the transport rather than the API', async () => {
@@ -602,8 +560,7 @@ describe('EngineFacade', () => {
     const facade = new EngineFacade(transport);
 
     await expect(facade.siweChallenge('link')).resolves.toBe(FAKE_SIWE_NONCE);
-    expect(transport.siweChallenges).toBe(1);
-    expect(transport.siweChallengeIntents).toEqual(['link']);
+    expect(transport.readIntents).toEqual([{ kind: 'siweChallenge', intent: 'link' }]);
   });
 
   it('forwards a bin read', async () => {
@@ -611,7 +568,7 @@ describe('EngineFacade', () => {
     const facade = new EngineFacade(transport);
 
     await expect(facade.bin()).resolves.toEqual(emptyBin());
-    expect(transport.binReads).toBe(1);
+    expect(transport.readIntents).toEqual([{ kind: 'bin' }]);
   });
 
   it('forwards a vault-storage read', async () => {
@@ -619,7 +576,7 @@ describe('EngineFacade', () => {
     const facade = new EngineFacade(transport);
 
     await expect(facade.vaultStorage()).resolves.toEqual(emptyVaultStorage());
-    expect(transport.vaultStorageReads).toBe(1);
+    expect(transport.readIntents).toEqual([{ kind: 'vaultStorage' }]);
   });
 
   it('forwards an auth-methods read', async () => {
@@ -627,7 +584,7 @@ describe('EngineFacade', () => {
     const facade = new EngineFacade(transport);
 
     await expect(facade.authMethods()).resolves.toEqual([]);
-    expect(transport.authMethodReads).toBe(1);
+    expect(transport.readIntents).toEqual([{ kind: 'authMethods' }]);
   });
 
   it('sends a restore and a purge as their own commands, destination intact', async () => {
@@ -651,14 +608,14 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
 
     await expect(new EngineFacade(transport).devices()).resolves.toEqual([]);
-    expect(transport.deviceReads).toBe(1);
+    expect(transport.readIntents).toEqual([{ kind: 'devices' }]);
   });
 
   it('forwards a pending-approvals read', async () => {
     const transport = new FakeTransport();
 
     await expect(new EngineFacade(transport).pendingApprovals()).resolves.toEqual([]);
-    expect(transport.pendingApprovalReads).toBe(1);
+    expect(transport.readIntents).toEqual([{ kind: 'pendingApprovals' }]);
   });
 
   it('names the device key a registration challenge is issued for', async () => {
@@ -667,7 +624,9 @@ describe('EngineFacade', () => {
     await expect(
       new EngineFacade(transport).deviceRegistrationChallenge('ed25519hex')
     ).resolves.toEqual(Uint8Array.of(1, 2, 3));
-    expect(transport.registrationChallenges).toEqual(['ed25519hex']);
+    expect(transport.readIntents).toEqual([
+      { kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' },
+    ]);
   });
 
   it('posts the rendezvous step it was handed, unaltered', async () => {
@@ -681,8 +640,8 @@ describe('EngineFacade', () => {
         scalar,
       })
     ).resolves.toEqual({ kind: 'factor', factorKey: Uint8Array.of(7, 7) });
-    expect(transport.rendezvousSteps).toEqual([
-      { kind: 'open', devicePublicKey: 'ed25519hex', scalar },
+    expect(transport.readIntents).toEqual([
+      { kind: 'deviceRendezvous', step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar } },
     ]);
   });
 

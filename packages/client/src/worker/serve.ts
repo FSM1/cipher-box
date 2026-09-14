@@ -10,6 +10,7 @@
  * order with no drops.
  */
 
+import { isBuffer } from '../buffers.js';
 import { errorMessage } from '../errorMessage.js';
 import { WriteQueue } from '../writeQueue.js';
 import type { EngineHostLike } from './engineHost.js';
@@ -72,66 +73,18 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           post({ type: 'response', id: request.id, ok: true, result });
           return;
         }
-        case 'snapshot': {
-          const result = await host.snapshot(request.folder);
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'sharing': {
-          const result = await host.sharing(request.scope);
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'receivedShares': {
-          const result = await host.receivedShares();
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'bin': {
-          const result = await host.bin();
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'vaultStorage': {
-          const result = await host.vaultStorage();
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'authMethods': {
-          const result = await host.authMethods();
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'devices': {
-          const result = await host.devices();
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'deviceRegistrationChallenge': {
-          const result = await host.deviceRegistrationChallenge(request.devicePublicKey);
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'pendingApprovals': {
-          const result = await host.pendingApprovals();
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'deviceRendezvous': {
-          const result = await host.deviceRendezvous(request.step);
-          // The opened factor is transferred, not cloned: a copy left in this
-          // realm would outlive the call with no owner to erase it.
+        case 'read': {
+          const result = await host.read(request.read);
+          // A plaintext download and an opened factor key are transferred, not
+          // cloned: a copy left in this realm would outlive the call with no
+          // owner to erase it.
+          if (isBuffer(result)) {
+            postOwned(request.id, result);
+            return;
+          }
           post({ type: 'response', id: request.id, ok: true, result }, rendezvousTransfer(result));
           return;
         }
-        case 'siweChallenge': {
-          const result = await host.siweChallenge(request.intent);
-          post({ type: 'response', id: request.id, ok: true, result });
-          return;
-        }
-        case 'download':
-          postOwned(request.id, await host.download(request.node));
-          return;
         case 'openContentStream': {
           const result = await host.openContentStream(request.node);
           post({ type: 'response', id: request.id, ok: true, result });

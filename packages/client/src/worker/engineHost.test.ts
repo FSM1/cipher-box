@@ -143,7 +143,9 @@ describe('EngineHost', () => {
     const { wasm } = recordingWasm();
     const host = new EngineHost(wasm, () => ({}), { apiBaseUrl: 'https://api.example.test' });
 
-    await expect(host.snapshot(null)).rejects.toMatchObject({ code: 'notStarted' });
+    await expect(host.read({ kind: 'snapshot', folder: null })).rejects.toMatchObject({
+      code: 'notStarted',
+    });
   });
 
   it('scrubs a BYO bearer on a command it refuses before the codec is reached', async () => {
@@ -312,7 +314,7 @@ describe('EngineHost request fields', () => {
   it('lists the vault root for the one folder that is not bytes', async () => {
     const { host, calls } = await permissiveHost();
 
-    await host.snapshot(null);
+    await host.read({ kind: 'snapshot', folder: null });
 
     expect(calls).toEqual([['snapshot', undefined]]);
   });
@@ -320,26 +322,32 @@ describe('EngineHost request fields', () => {
   it('refuses a snapshot of a folder that is not bytes', async () => {
     const { host, calls } = await permissiveHost();
 
-    await expect(host.snapshot('root' as unknown as Uint8Array)).rejects.toThrow(
-      'invalid request field folder: string'
-    );
-    await expect(host.snapshot(undefined as unknown as Uint8Array)).rejects.toThrow(
-      'invalid request field folder: undefined'
-    );
+    await expect(
+      host.read({ kind: 'snapshot', folder: 'root' as unknown as Uint8Array })
+    ).rejects.toThrow('invalid request field folder: string');
+    await expect(
+      host.read({ kind: 'snapshot', folder: undefined as unknown as Uint8Array })
+    ).rejects.toThrow('invalid request field folder: undefined');
     expect(calls).toEqual([]);
   });
 
-  it.each(['download', 'openContentStream'] as const)(
-    'refuses a %s of a non-node',
-    async (call) => {
-      const { host, calls } = await permissiveHost();
+  it('refuses a download of a non-node', async () => {
+    const { host, calls } = await permissiveHost();
 
-      await expect(host[call]('sixteen bytes!!!' as unknown as Uint8Array)).rejects.toThrow(
-        'invalid request field node: string'
-      );
-      expect(calls).toEqual([]);
-    }
-  );
+    await expect(
+      host.read({ kind: 'download', node: 'sixteen bytes!!!' as unknown as Uint8Array })
+    ).rejects.toThrow('invalid request field node: string');
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses an openContentStream of a non-node', async () => {
+    const { host, calls } = await permissiveHost();
+
+    await expect(
+      host.openContentStream('sixteen bytes!!!' as unknown as Uint8Array)
+    ).rejects.toThrow('invalid request field node: string');
+    expect(calls).toEqual([]);
+  });
 
   it.each([
     ['offset', '0', 1024, 'offset: string'],
@@ -597,7 +605,7 @@ describe('EngineHost device reads', () => {
   it('reads the registry rows through, and an absent label as null', async () => {
     const { host } = await deviceReadHost();
 
-    await expect(host.devices()).resolves.toEqual([
+    await expect(host.read({ kind: 'devices' })).resolves.toEqual([
       { ...DEVICE_ROW },
       { ...DEVICE_ROW, id: '9a2b-uuid', label: null },
     ]);
@@ -606,24 +614,24 @@ describe('EngineHost device reads', () => {
   it('reads the pending rows through with the digits each screen must show', async () => {
     const { host } = await deviceReadHost();
 
-    await expect(host.pendingApprovals()).resolves.toEqual([PENDING_ROW]);
+    await expect(host.read({ kind: 'pendingApprovals' })).resolves.toEqual([PENDING_ROW]);
   });
 
   it('names the device key the registration challenge is issued for', async () => {
     const { host, challenged } = await deviceReadHost();
 
-    await expect(host.deviceRegistrationChallenge('ed25519hex')).resolves.toEqual(
-      Uint8Array.of(9, 9)
-    );
+    await expect(
+      host.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 'ed25519hex' })
+    ).resolves.toEqual(Uint8Array.of(9, 9));
     expect(challenged).toEqual(['ed25519hex']);
   });
 
   it('refuses a registration challenge for a key that is not a string', async () => {
     const { host, challenged } = await deviceReadHost();
 
-    await expect(host.deviceRegistrationChallenge(42 as unknown as string)).rejects.toThrow(
-      'invalid request field devicePublicKey: number'
-    );
+    await expect(
+      host.read({ kind: 'deviceRegistrationChallenge', devicePublicKey: 42 as unknown as string })
+    ).rejects.toThrow('invalid request field devicePublicKey: number');
     expect(challenged).toEqual([]);
   });
 });
@@ -640,24 +648,33 @@ describe('EngineHost device rendezvous', () => {
     const factorScalar = scalarBytes();
     const zeros = (length: number) => new Uint8Array(length);
 
-    await host.deviceRendezvous({ kind: 'open', devicePublicKey: 'ed25519hex', scalar });
-    await host.deviceRendezvous({
-      kind: 'approve',
-      devicePublicKey: 'ed25519hex',
-      requestId: 'req-1',
-      requesterDevicePublicKey: 'reqhex',
-      ephemeralPublicKey: '02beef',
-      sealScalar,
-      factorKey,
+    await host.read({
+      kind: 'deviceRendezvous',
+      step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar },
     });
-    await host.deviceRendezvous({
-      kind: 'openFactor',
-      sealedFactor: 'c2VhbA==',
-      requestId: 'req-1',
-      requesterDevicePublicKey: 'reqhex',
-      responderDevicePublicKey: 'apprhex',
-      responseSignature: 'sighex',
-      scalar: factorScalar,
+    await host.read({
+      kind: 'deviceRendezvous',
+      step: {
+        kind: 'approve',
+        devicePublicKey: 'ed25519hex',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        ephemeralPublicKey: '02beef',
+        sealScalar,
+        factorKey,
+      },
+    });
+    await host.read({
+      kind: 'deviceRendezvous',
+      step: {
+        kind: 'openFactor',
+        sealedFactor: 'c2VhbA==',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        responderDevicePublicKey: 'apprhex',
+        responseSignature: 'sighex',
+        scalar: factorScalar,
+      },
     });
 
     expect(scalar).toEqual(zeros(scalar.length));
@@ -731,7 +748,9 @@ describe('EngineHost device rendezvous', () => {
       const { wasm, calls } = rendezvousWasm();
       const host = await started(wasm);
 
-      await expect(host.deviceRendezvous(step as DeviceRendezvousStep)).resolves.toEqual(result);
+      await expect(
+        host.read({ kind: 'deviceRendezvous', step: step as DeviceRendezvousStep })
+      ).resolves.toEqual(result);
       expect(calls).toEqual([call]);
     }
   );
@@ -740,16 +759,18 @@ describe('EngineHost device rendezvous', () => {
     const { wasm, freed } = rendezvousWasm();
     const host = await started(wasm);
 
-    await host.deviceRendezvous({
-      kind: 'open',
-      devicePublicKey: 'ed25519hex',
-      scalar: scalarBytes(),
+    await host.read({
+      kind: 'deviceRendezvous',
+      step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar: scalarBytes() },
     });
-    await host.deviceRendezvous({
-      kind: 'deny',
-      devicePublicKey: 'ed25519hex',
-      requestId: 'req-1',
-      ephemeralPublicKey: '02beef',
+    await host.read({
+      kind: 'deviceRendezvous',
+      step: {
+        kind: 'deny',
+        devicePublicKey: 'ed25519hex',
+        requestId: 'req-1',
+        ephemeralPublicKey: '02beef',
+      },
     });
 
     expect(freed()).toBe(2);
@@ -785,9 +806,9 @@ describe('EngineHost device rendezvous', () => {
     const { wasm, calls } = rendezvousWasm();
     const host = await started(wasm);
 
-    await expect(host.deviceRendezvous(step as unknown as DeviceRendezvousStep)).rejects.toThrow(
-      message
-    );
+    await expect(
+      host.read({ kind: 'deviceRendezvous', step: step as unknown as DeviceRendezvousStep })
+    ).rejects.toThrow(message);
     expect(calls).toEqual([]);
   });
 });

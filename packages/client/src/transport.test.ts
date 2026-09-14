@@ -133,11 +133,11 @@ describe('LocalTransport', () => {
     worker.emit({ type: 'ready' });
 
     const folder = new Uint8Array(16).fill(5);
-    const pending = transport.snapshot(folder);
+    const pending = transport.read({ kind: 'snapshot', folder });
     await tick();
 
     const { message } = worker.posted[0];
-    expect(message).toMatchObject({ type: 'snapshot', folder });
+    expect(message).toMatchObject({ type: 'read', read: { kind: 'snapshot', folder } });
     const result: SnapshotDescriptor = {
       ...emptySnapshot(folder),
       deadLetters: [{ opId: 1n, reason: 'targetGone' }],
@@ -158,8 +158,8 @@ describe('LocalTransport', () => {
     const downloadResult = new Uint8Array([4, 5, 6]).buffer;
 
     const command = transport.command({ kind: 'manualRefresh' });
-    const snapshot = transport.snapshot(new Uint8Array(16));
-    const download = transport.download(new Uint8Array(16));
+    const snapshot = transport.read({ kind: 'snapshot', folder: new Uint8Array(16) });
+    const download = transport.read({ kind: 'download', node: new Uint8Array(16) });
     await tick();
 
     const [commandId, snapshotId, downloadId] = worker.posted.map((entry) => entry.message.id);
@@ -178,8 +178,8 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const failing = transport.download(new Uint8Array(16));
-    const ok = transport.snapshot(new Uint8Array(16));
+    const failing = transport.read({ kind: 'download', node: new Uint8Array(16) });
+    const ok = transport.read({ kind: 'snapshot', folder: new Uint8Array(16) });
     await tick();
     const [idA, idB] = worker.posted.map((entry) => entry.message.id);
 
@@ -257,19 +257,22 @@ describe('LocalTransport', () => {
     const scalar = new Uint8Array(32).fill(5);
     const factorKey = new Uint8Array(32).fill(6);
 
-    void transport.deviceRendezvous({
-      kind: 'approve',
-      devicePublicKey: 'ed25519hex',
-      requestId: 'req-1',
-      requesterDevicePublicKey: 'reqhex',
-      ephemeralPublicKey: '02beef',
-      sealScalar: scalar,
-      factorKey,
+    void transport.read({
+      kind: 'deviceRendezvous',
+      step: {
+        kind: 'approve',
+        devicePublicKey: 'ed25519hex',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        ephemeralPublicKey: '02beef',
+        sealScalar: scalar,
+        factorKey,
+      },
     });
     await tick();
 
     const posted = worker.posted.at(-1);
-    expect(posted?.message.type).toBe('deviceRendezvous');
+    expect(posted?.message).toMatchObject({ type: 'read', read: { kind: 'deviceRendezvous' } });
     expect(posted?.transfer).toEqual([scalar.buffer, factorKey.buffer]);
   });
 
@@ -283,31 +286,36 @@ describe('LocalTransport', () => {
     const openScalar = new Uint8Array(32).fill(5);
     const factorScalar = new Uint8Array(32).fill(7);
 
-    void transport.deviceRendezvous({
-      kind: 'open',
-      devicePublicKey: 'ed25519hex',
-      scalar: openScalar,
+    void transport.read({
+      kind: 'deviceRendezvous',
+      step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar: openScalar },
     });
     await tick();
     expect(worker.posted.at(-1)?.transfer).toEqual([]);
 
-    void transport.deviceRendezvous({
-      kind: 'openFactor',
-      sealedFactor: 'c2VhbA==',
-      requestId: 'req-1',
-      requesterDevicePublicKey: 'reqhex',
-      responderDevicePublicKey: 'apprhex',
-      responseSignature: 'sighex',
-      scalar: factorScalar,
+    void transport.read({
+      kind: 'deviceRendezvous',
+      step: {
+        kind: 'openFactor',
+        sealedFactor: 'c2VhbA==',
+        requestId: 'req-1',
+        requesterDevicePublicKey: 'reqhex',
+        responderDevicePublicKey: 'apprhex',
+        responseSignature: 'sighex',
+        scalar: factorScalar,
+      },
     });
     await tick();
     expect(worker.posted.at(-1)?.transfer).toEqual([factorScalar.buffer]);
 
-    void transport.deviceRendezvous({
-      kind: 'deny',
-      devicePublicKey: 'ed25519hex',
-      requestId: 'req-1',
-      ephemeralPublicKey: '02beef',
+    void transport.read({
+      kind: 'deviceRendezvous',
+      step: {
+        kind: 'deny',
+        devicePublicKey: 'ed25519hex',
+        requestId: 'req-1',
+        ephemeralPublicKey: '02beef',
+      },
     });
     await tick();
     expect(worker.posted.at(-1)?.transfer).toEqual([]);
