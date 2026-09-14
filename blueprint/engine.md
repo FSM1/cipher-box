@@ -714,7 +714,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   is classified once, when the op is journaled; replay re-derives both ends
   against the boundaries the session has proved and dead-letters a relocation
   that now names three scopes, which one pass — anchored on one scope, carrying
-  one interior end — cannot author. A `move` is a
+  one interior end — cannot author. The journaled crossing is a plan, never the
+  authority: the drain re-derives it from the two planes its own pass proved and
+  owes the source cut from that pair, so a boundary the journaling session had
+  not yet proved still re-seals the moved subtree and cuts the scope it left. A `move` is a
   relink and a rename in one entry, optionally vacating the node already at the
   destination name — one POSIX rename is exactly one `move`, so the whole
   operation is journaled or none of it is. Replay is FIFO

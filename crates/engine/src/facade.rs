@@ -2361,7 +2361,10 @@ impl RelocationPlan {
 /// "Scope"), so `scope_roots` here is the **known** set: every boundary this
 /// session has proved, from its own mints and from the durable
 /// direct-child-scope index the tick walks. A boundary it does not know reads as
-/// no boundary. Full-depth, because each end resolves to the nearest listed root
+/// no boundary, which makes this a plan and not the authority: the drain
+/// re-derives the crossing from the two planes its own pass proved and owes the
+/// source cut from that pair, so a boundary proved after the journal entry still
+/// re-seals and cuts. Full-depth, because each end resolves to the nearest listed root
 /// above it rather than one level (FSM1/cipher-box-next#26 D7). That same law is
 /// what makes any interior source a **granted** source here: the cut that
 /// created it granted somebody, and a set of recipients that has since gone
