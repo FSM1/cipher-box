@@ -3029,6 +3029,8 @@ where
         // carries no seed ([`new_override_seed`]).
         let override_seed = new_override_seed(self.keys.enc_secret, root)?;
         let read_key = read_key_for(&override_seed, &node.node_id);
+        // The one authoring path where the scope changes while carried unknown
+        // fields travel — the scope-transplant rule in `blueprint/core.md`.
         self.publish_interior_head(
             &name,
             &InteriorSeal {
