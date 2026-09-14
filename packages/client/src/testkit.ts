@@ -696,6 +696,7 @@ export class FakeEngineWorker implements EngineWorkerLike {
   readonly posted: unknown[] = [];
   terminated = false;
   private messageListeners: Array<(event: MessageEvent<WorkerMessage>) => void> = [];
+  private errorListeners: Array<(event: ErrorEvent) => void> = [];
 
   /** What the handle-minting requests answer with — every engine's counters start at 1. */
   streamHandle: StreamHandle = 1n;
@@ -722,6 +723,7 @@ export class FakeEngineWorker implements EngineWorkerLike {
   addEventListener(type: 'message' | 'error', listener: unknown): void {
     if (type === 'message')
       this.messageListeners.push(listener as (e: MessageEvent<WorkerMessage>) => void);
+    else this.errorListeners.push(listener as (e: ErrorEvent) => void);
   }
 
   terminate(): void {
@@ -735,5 +737,10 @@ export class FakeEngineWorker implements EngineWorkerLike {
 
   ready(): void {
     this.emit({ type: 'ready' });
+  }
+
+  /** The thread itself failed, which a worker reports outside the protocol. */
+  fail(message: string): void {
+    for (const listener of this.errorListeners) listener({ message } as ErrorEvent);
   }
 }

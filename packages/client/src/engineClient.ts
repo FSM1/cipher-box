@@ -176,6 +176,7 @@ class LeaderEngine implements EngineTransport {
   private innerUnsub: (() => void) | null = null;
   private readonly listeners = new Set<EngineEventListener>();
   private closed = false;
+  private faulted = false;
 
   /**
    * `onFault` reports a worker this leadership cannot bring up at all. The lock
@@ -189,16 +190,34 @@ class LeaderEngine implements EngineTransport {
   private engine(): LocalTransport {
     if (this.local) return this.local;
     if (this.closed) throw new Error('engine transport closed');
+    let worker: EngineWorkerLike;
     let local: LocalTransport;
     try {
-      local = new LocalTransport(this.spawn());
+      worker = this.spawn();
+      local = new LocalTransport(worker);
     } catch (error) {
-      this.onFault(error);
+      this.fault(error);
       throw asError(error);
     }
     this.local = local;
     this.innerUnsub = local.subscribe((event) => fanOut(this.listeners, event));
+    // A worker can also die after it is built: a construction fault reaches the
+    // host as `fatal`, a thread fault as `error`. Both reject the calls already
+    // in flight, and this is the only seam that can also give the lock up.
+    worker.addEventListener('error', (event) =>
+      this.fault(new Error(event.message || 'engine worker error'))
+    );
+    worker.addEventListener('message', (event) => {
+      if (event.data.type === 'fatal') this.fault(new Error(event.data.error));
+    });
     return local;
+  }
+
+  /** Reports, once, an engine this leadership cannot host. */
+  private fault(error: unknown): void {
+    if (this.faulted || this.closed) return;
+    this.faulted = true;
+    this.onFault(error);
   }
 
   start(secret: ArrayBuffer, accountId: string): Promise<void> {
@@ -680,13 +699,22 @@ export class EngineClient implements EngineTransport {
       this.yieldWanted = false;
       this.yieldLeadership();
     }, YIELD_COOLDOWN_MS);
+    this.standDown();
+    this.election.requeue();
+  }
+
+  /**
+   * Drops everything this leadership holds and mirrors the next leader instead.
+   * Every seam it touches is idempotent, so a stand-down racing a teardown
+   * leaves one follower rather than two.
+   */
+  private standDown(): void {
     this.innerUnsub();
     this.relay?.close();
     this.relay = null;
     this.current.close();
     this.role = 'follower';
     this.installFollower();
-    this.election.requeue();
   }
 
   /** Installs the live transport, retiring the handles the previous one held. */
@@ -818,10 +846,11 @@ export class EngineClient implements EngineTransport {
   }
 
   private abortPromotion(local: EngineTransport | null, error: unknown): void {
-    // Never advertise a dead leader: tear down any half-built worker, release
-    // the lock so a healthy tab is elected, and fall back to a follower that
-    // mirrors the next leader. `local` is null when the throw beat transport
-    // construction — there is nothing to tear down, only the lock to release.
+    // Never advertise a dead leader: tear down the half-built worker and
+    // whatever a live leadership already holds, release the lock so a healthy
+    // tab is elected, and fall back to a follower that mirrors the next leader.
+    // `local` is null where the caller is not mid-promotion — the engine the
+    // stand-down closes is then this tab's own.
     local?.close();
     const failure = asError(error);
     // Cleared before the follower is rebuilt, which greets under it: the engine
@@ -829,8 +858,7 @@ export class EngineClient implements EngineTransport {
     // UI rendering signed in over it would be rendering a dead one.
     this.holdsAccount(null);
     if (this.role !== 'closed') {
-      this.role = 'follower';
-      this.installFollower();
+      this.standDown();
       void this.election.close();
     }
     this.settleParkedStarts(failure);

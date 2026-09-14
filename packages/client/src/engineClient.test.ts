@@ -69,7 +69,7 @@ function origin() {
     });
   };
 
-  return { tab, workers, liveWorkers, ports, addresses };
+  return { tab, workers, liveWorkers, ports, addresses, bus };
 }
 
 /**
@@ -85,6 +85,20 @@ async function greetUnderInventedAccount(
   const port = await ports.courier(`hostile-${clientId}`).connect(leaderAddress);
   port.start?.();
   port.postMessage({ type: 'cb:portHello', clientId, accountId: 'acct99' });
+}
+
+/**
+ * Watches the origin for a leadership stepping down. Only a live relay posts
+ * this, so it is how a test tells a torn-down leadership from one still
+ * answering ports for an engine that is gone.
+ */
+function watchStepDown(bus: FakeBus): () => boolean {
+  let seen = false;
+  const bystander = bus.channel();
+  bystander.addEventListener('message', (event: MessageEvent) => {
+    if ((event.data as { type?: string } | null)?.type === 'cb:leaderGone') seen = true;
+  });
+  return () => seen;
 }
 
 /** The origin's engine holds one account, so every tab in a test starts on it. */
@@ -125,6 +139,43 @@ describe('EngineClient leadership + transport swap', () => {
     expect(posted.length).toBe(1);
     await leader.dispose();
     await follower.dispose();
+  });
+
+  it('gives the lock up when a lazily spawned worker dies before it is ready', async () => {
+    const errors: Error[] = [];
+    const { tab, bus } = origin();
+    // Never readies, so the fault is the asynchronous one: a worker that built
+    // and then died, which only the transport's own `fatal` reports.
+    const dying = new FakeEngineWorker();
+    const idle = tab({ spawnWorker: () => dying, onError: (error) => errors.push(error) });
+    const healthy = tab();
+    await tick();
+    expect(idle.currentRole()).toBe('leader');
+    const steppedDown = watchStepDown(bus);
+
+    // The rendezvous is what brings the worker up on a leadership with no session.
+    const rendezvous = idle.facade
+      .deviceRendezvous({
+        kind: 'open',
+        devicePublicKey: 'ed25519hex',
+        scalar: new Uint8Array(32).fill(5),
+      })
+      .catch((error: unknown) => error);
+    await tick();
+    dying.emit({ type: 'fatal', error: 'engine construction failed' });
+    await tick();
+    await tick();
+
+    await expect(rendezvous).resolves.toMatchObject({ message: 'engine construction failed' });
+    expect(errors.map((error) => error.message)).toContain('engine construction failed');
+    // Everything the dead leadership held is gone: the relay, the transport and
+    // the lock, which the healthy tab was then elected on.
+    expect(steppedDown()).toBe(true);
+    expect(idle.currentRole()).not.toBe('leader');
+    expect(healthy.currentRole()).toBe('leader');
+
+    await idle.dispose();
+    await healthy.dispose();
   });
 
   it('hosts an engine for a device rendezvous, which needs no session behind it', async () => {
@@ -469,7 +520,7 @@ describe('EngineClient leadership + transport swap', () => {
   });
 
   it('releases the election lock and surfaces onError when a failover worker spawn throws synchronously (P1-5)', async () => {
-    const { tab } = origin();
+    const { tab, bus } = origin();
     const errors: Error[] = [];
     const spawnFailure = new Error('worker spawn failed');
 
@@ -487,6 +538,7 @@ describe('EngineClient leadership + transport swap', () => {
       onError: (error) => errors.push(error),
     });
     const healthy = tab();
+    const steppedDown = watchStepDown(bus);
     await tick();
     await tick();
     // The claim is what makes the promotion cold-start rather than stay dormant.
@@ -496,6 +548,9 @@ describe('EngineClient leadership + transport swap', () => {
 
     expect(doomed.currentRole()).not.toBe('leader');
     expect(errors).toContain(spawnFailure);
+    // The relay this leadership ran stepped down with it, rather than going on
+    // answering ports for an engine that does not exist.
+    expect(steppedDown()).toBe(true);
     // The released lock was handed to the healthy tab, proving it was never held
     // by the doomed leader after the throw.
     expect(healthy.currentRole()).toBe('leader');
