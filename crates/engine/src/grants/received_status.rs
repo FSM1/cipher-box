@@ -909,6 +909,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: None,
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                    ..Default::default()
                 },
             };
             served.seed(sequence);
@@ -1470,6 +1471,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: None,
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                    ..Default::default()
                 },
                 floors: InMemoryFloorStore::default(),
                 staging: InMemoryStagingStore::default(),
@@ -2022,6 +2024,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: None,
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                    ..Default::default()
                 },
                 floors: InMemoryFloorStore::default(),
                 staging: InMemoryStagingStore::default(),

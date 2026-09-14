@@ -4054,12 +4054,12 @@ where
                 .ok()
                 .and_then(|block| decode_root(&block).ok())
                 {
-                    Some(manifest) => manifest.leaf_cid_vecs(),
-                    None => Vec::new(),
+                    Some(manifest) => manifest.leaf_cids,
+                    None => Box::default(),
                 };
                 for cid in version_cids(
                     &version.content_cid,
-                    leaves.iter().map(Vec::as_slice),
+                    leaves.iter().map(|cid| cid.as_slice()),
                     RootPlacement::Last,
                 ) {
                     if seen.insert(cid.clone()) {
@@ -5012,6 +5012,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: Some(GatewaySource::public("https://gw.test")),
                     public_fallbacks: Vec::new(),
+                    ..Default::default()
                 },
                 profile: SyncTimingProfile::CI,
                 entropy: RefCell::new(SeededEntropy::new(7)),

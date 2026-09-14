@@ -26,6 +26,7 @@
 pub mod api;
 pub mod bin_index;
 pub mod content;
+pub mod deadlines;
 pub mod devices;
 pub mod entropy;
 pub mod facade;
@@ -63,6 +64,7 @@ pub use content::{
     frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block,
     seal_one_chunk, test_connection, validate_byo_config,
 };
+pub use deadlines::DeadlinePolicy;
 pub use devices::{
     ApprovalDecision, MalformedDeviceField, PendingApprovalView, RelayedAnswerRefused,
     adopt_factor, approval_request_payload, approval_response_payload, comparison_value,
@@ -70,13 +72,13 @@ pub use devices::{
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
-    ApiBaseUrl, BlankApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter,
-    Engine, EngineError, EngineView, Event, EventStream, LoginSecret, MAX_CONTACT_CODE_BYTES,
-    MAX_FOCUS_FILES, MAX_FOCUS_FOLDERS, MAX_FOLDER_CHILDREN, MAX_NODE_NAME_BYTES, MAX_OPEN_STREAMS,
-    NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause, Permission, QuotaView, ReceivedShareRow,
-    RefusedBudget, ScopeSharing, SessionStatus, SharingContact, SharingGrant, SharingInviteLinks,
-    SharingView, SiweIntent, SnapshotChild, SnapshotView, Staleness, StatFs, StreamHandle,
-    VaultStorageView, WriteHandle, WriteTarget,
+    ApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter, Engine,
+    EngineError, EngineView, Event, EventStream, InvalidApiBaseUrl, LoginSecret,
+    MAX_CONTACT_CODE_BYTES, MAX_FOCUS_FILES, MAX_FOCUS_FOLDERS, MAX_FOLDER_CHILDREN,
+    MAX_NODE_NAME_BYTES, MAX_OPEN_STREAMS, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause,
+    Permission, QuotaView, ReceivedShareRow, RefusedBudget, ScopeSharing, SessionStatus,
+    SharingContact, SharingGrant, SharingInviteLinks, SharingView, SiweIntent, SnapshotChild,
+    SnapshotView, Staleness, StatFs, StreamHandle, VaultStorageView, WriteHandle, WriteTarget,
 };
 pub use gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,

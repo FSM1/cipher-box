@@ -46,11 +46,13 @@ use crate::bin_index::{
 };
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::limits::folder_listing_budget;
+use crate::content::read::authority_of;
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
+use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
@@ -853,7 +855,7 @@ impl fmt::Debug for LoginSecret {
 }
 
 /// Where [`Engine::start`] authenticates and the liveness loop registers
-/// renewals — a non-blank API origin, or the named harness mode that has no API.
+/// renewals — an absolute API origin, or the named harness mode that has no API.
 ///
 /// [`parse`](Self::parse) is the only way to build a configured base and
 /// [`offline`](Self::offline) exists only under `test-kit`, so a shipped host
@@ -862,12 +864,31 @@ impl fmt::Debug for LoginSecret {
 pub struct ApiBaseUrl(Option<String>);
 
 impl ApiBaseUrl {
-    /// The API origin, trimmed of surrounding whitespace. Blank or
-    /// whitespace-only is refused.
-    pub fn parse(base_url: &str) -> Result<Self, BlankApiBaseUrl> {
+    /// The API origin, trimmed of surrounding whitespace.
+    ///
+    /// This base carries the access JWT and the rotating refresh token, so it
+    /// must be an absolute `https://` origin. Cleartext is admitted only for a
+    /// host that cannot leave the machine — loopback, or the `.test` TLD RFC
+    /// 6761 reserves — which is what a local stack and the e2e harnesses run
+    /// against. Anything else is refused at construction.
+    pub fn parse(base_url: &str) -> Result<Self, InvalidApiBaseUrl> {
         let trimmed = base_url.trim();
-        if trimmed.is_empty() {
-            return Err(BlankApiBaseUrl);
+        let authority = if let Some(rest) = trimmed.strip_prefix("https://") {
+            authority_of(rest)
+        } else if let Some(rest) = trimmed.strip_prefix("http://") {
+            let authority = authority_of(rest);
+            if !is_cleartext_host(host_of(authority)) {
+                return Err(InvalidApiBaseUrl);
+            }
+            authority
+        } else {
+            return Err(InvalidApiBaseUrl);
+        };
+        // An empty authority is the same URL a slash short, and userinfo would
+        // ride as Basic auth beside the bearer. A query or fragment would land
+        // mid-URL once a path is appended, so neither may open the base.
+        if authority.is_empty() || authority.contains('@') || trimmed.contains(['?', '#']) {
+            return Err(InvalidApiBaseUrl);
         }
         Ok(Self(Some(trimmed.to_owned())))
     }
@@ -885,17 +906,37 @@ impl ApiBaseUrl {
     }
 }
 
-/// [`ApiBaseUrl::parse`] refused a blank or whitespace-only base URL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlankApiBaseUrl;
-
-impl fmt::Display for BlankApiBaseUrl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("apiBaseUrl is required: the engine must authenticate to the API")
+/// The host of an authority, with any port and IPv6 brackets removed.
+fn host_of(authority: &str) -> &str {
+    match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
     }
 }
 
-impl std::error::Error for BlankApiBaseUrl {}
+/// Whether `host` may be reached over cleartext: loopback, or a name under the
+/// TLD RFC 6761 reserves for local testing. Decided on the spelling alone — a
+/// resolved verdict would be a TOCTOU hole, since the host is the transport's
+/// to resolve at request time.
+fn is_cleartext_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1") || host.ends_with(".test")
+}
+
+/// [`ApiBaseUrl::parse`] refused a base URL that is not an absolute origin the
+/// session credentials may ride.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidApiBaseUrl;
+
+impl fmt::Display for InvalidApiBaseUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "apiBaseUrl must be an absolute https origin, \
+             or http for a loopback or .test host: the engine must authenticate to the API",
+        )
+    }
+}
+
+impl std::error::Error for InvalidApiBaseUrl {}
 
 pub use crate::name::MAX_NODE_NAME_BYTES;
 
@@ -4374,6 +4415,8 @@ pub struct Engine<T: SeamTypes> {
     /// The measured storage split this device runs under, injected whole at
     /// construction so no staging read-modify-write queries the host mid-flight.
     storage_policy: StoragePolicy,
+    /// The transport deadlines every outbound request is held to.
+    deadlines: DeadlinePolicy,
     /// The frozen content-framing profile every write handle frames under.
     content_profile: ContentProfile,
     /// Live write handles and the staging bytes each has reserved. In memory
@@ -4674,6 +4717,7 @@ impl<T: SeamTypes> Engine<T> {
                 entropy: Rc::new(RefCell::new(entropy)),
                 profile,
                 storage_policy,
+                deadlines: DeadlinePolicy::default(),
                 content_profile,
                 writes: RefCell::new(LiveWrites::default()),
                 streams: RefCell::new(LiveStreams::default()),
@@ -4749,6 +4793,16 @@ impl<T: SeamTypes> Engine<T> {
         )
     }
 
+    /// Hold every outbound request to `deadlines` instead of the shipped
+    /// default. Call it before [`start`](Self::start): the API client and the
+    /// drain each take a copy of the policy the engine holds at that point.
+    #[must_use]
+    pub fn with_deadlines(mut self, deadlines: DeadlinePolicy) -> Self {
+        self.deadlines = deadlines;
+        self.gateway.deadlines = deadlines;
+        self
+    }
+
     /// Start of secret: consumes the login secret and brings the engine up.
     ///
     /// Derives the cold-start [`SessionIdentity`] from the secret — the
@@ -4795,7 +4849,8 @@ impl<T: SeamTypes> Engine<T> {
                 self.seams.credential_store.clone(),
                 base_url.unwrap_or_default().to_owned(),
             )
-            .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone()),
+            .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone())
+            .with_deadlines(self.deadlines),
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
@@ -5790,6 +5845,7 @@ where {
         let bookkeeping = self.bookkeeping.clone();
         let content_profile = self.content_profile;
         let storage_policy = self.storage_policy;
+        let deadlines = self.deadlines;
         let orphan_heads = self.orphan_heads.clone();
         let converged_tick = self.converged_tick.clone();
         let cancels = self.cancels.clone();
@@ -6406,6 +6462,7 @@ where {
                             scheduler: &scheduler,
                             http: &http,
                             gateway: &gateway,
+                            deadlines: &deadlines,
                             placement: &decision,
                             profile: &profile,
                             storage_policy: &storage_policy,
@@ -11874,6 +11931,20 @@ mod tests {
         (engine, events, device)
     }
 
+    /// The host-facing tuning point. That the gateway's copy is what a block
+    /// fetch is held to is proved in `content::read`.
+    #[test]
+    fn a_tuned_deadline_policy_reaches_the_read_gateway_and_the_api_client() {
+        let (engine, _events) = new_engine();
+        let engine = engine.with_deadlines(DeadlinePolicy {
+            block_fetch_ms: 5,
+            control_ms: 7,
+            ..DeadlinePolicy::default()
+        });
+        assert_eq!(engine.gateway.deadlines.block_fetch_ms, 5);
+        assert_eq!(engine.deadlines.control_ms, 7);
+    }
+
     fn new_engine() -> (Engine<FakeSeamTypes>, EventStream) {
         let device = FakeWorld::new().device(b"alice-pk");
         Engine::new(
@@ -13913,12 +13984,42 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_api_base_url_is_unrepresentable() {
-        for blank in ["", "   ", "\t\n"] {
+    fn only_an_absolute_origin_the_credentials_may_ride_is_representable() {
+        for refused in [
+            "",
+            "   ",
+            "\t\n",
+            "api.test",
+            "not a url",
+            "ftp://api.test",
+            "//api.test",
+            "https://",
+            "http://",
+            "https://user:pass@api.cipherbox.io",
+            "https://api.cipherbox.io?v=1",
+            "https://api.cipherbox.io#frag",
+            "http://api.cipherbox.io",
+            "http://127.0.0.2:3000",
+            "http://localhost.evil.io",
+            "http://api.test.evil.io",
+        ] {
             assert_eq!(
-                ApiBaseUrl::parse(blank),
-                Err(BlankApiBaseUrl),
-                "a blank base is refused: {blank:?}"
+                ApiBaseUrl::parse(refused),
+                Err(InvalidApiBaseUrl),
+                "refused base: {refused:?}"
+            );
+        }
+        for accepted in [
+            "https://api.cipherbox.io",
+            "https://api.cipherbox.io:8443/v2",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+            "http://api.test",
+        ] {
+            assert!(
+                ApiBaseUrl::parse(accepted).is_ok(),
+                "accepted base: {accepted:?}"
             );
         }
         assert_eq!(

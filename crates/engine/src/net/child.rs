@@ -522,6 +522,7 @@ mod tests {
         Gateway {
             accelerator: Some(GatewaySource::public("https://gw.test")),
             public_fallbacks: Vec::new(),
+            ..Default::default()
         }
     }
 

@@ -23,7 +23,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::content::LocalBlocks;
 use crate::content::chunk::SEALED_LEAF_OVERHEAD;
-use crate::content::dag::RootManifest;
+use crate::content::dag::{LeafCid, RootManifest};
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
 use crate::grants::{CONTACTS_PREFIX, INVITE_RECORDS_PREFIX, RECEIVED_SHARES_PREFIX};
@@ -282,16 +282,17 @@ pub(crate) async fn release_version_blocks<S: StagingStore>(store: &S, root_cid:
 /// is gone, fails its own CID, or does not decode — every caller is a
 /// reconciliation path that must still make progress on a store that has lost
 /// bytes.
-pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8]) -> Vec<Vec<u8>> {
+pub(crate) async fn version_leaf_cids<S: StagingStore>(
+    store: &S,
+    root_cid: &[u8],
+) -> Box<[LeafCid]> {
     let Ok(Some(block)) = store.staged_bytes(root_cid).await else {
-        return Vec::new();
+        return Box::default();
     };
     if verify_cid(root_cid, &block).is_err() {
-        return Vec::new();
+        return Box::default();
     }
-    decode_root(&block)
-        .map(|m| m.leaf_cid_vecs())
-        .unwrap_or_default()
+    decode_root(&block).map(|m| m.leaf_cids).unwrap_or_default()
 }
 
 /// One pass's view of which staging keys the store still holds, borrowed from
@@ -966,7 +967,7 @@ pub async fn orphan_staging_keys<S: StagingStore>(
             let Ok(manifest) = decode_root(&block) else {
                 return Ok(Vec::new());
             };
-            referenced.extend(manifest.leaf_cid_vecs());
+            referenced.extend(manifest.leaf_cids.iter().map(|cid| cid.to_vec()));
         }
         referenced.insert(upload_mark_key(&root));
         referenced.insert(root);

@@ -11,7 +11,7 @@
 use zeroize::Zeroizing;
 
 use super::chunk::{ContentKey, SealedChunk, seal_one_chunk};
-use super::dag::{ContentDag, assemble};
+use super::dag::{ContentDag, LeafCid, assemble, leaf_cid};
 use super::profile::ContentProfile;
 use super::{SealError, SealedContent};
 use crate::entropy::{Entropy, EntropyError};
@@ -110,8 +110,13 @@ impl ContentWriter {
             content_cid,
             root_block,
         } = assemble(&self.leaf_cids, self.observed, &self.profile)?;
+        let leaf_cids = self
+            .leaf_cids
+            .iter()
+            .map(|cid| leaf_cid(cid))
+            .collect::<Result<Box<[LeafCid]>, _>>()?;
         Ok(FinishedContent {
-            content: SealedContent::new(content_cid, self.observed, self.leaf_cids),
+            content: SealedContent::new(content_cid, self.observed, leaf_cids),
             root_block,
             tail,
             key: self.key,
@@ -199,8 +204,7 @@ mod tests {
         let (leaves, finished) = stream(&plaintext, 9, 5);
         let manifest = decode_root(&finished.root_block).unwrap();
         assert_eq!(manifest.size, plaintext.len() as u64);
-        let decoded = manifest.leaf_cid_vecs();
-        assert_eq!(decoded, finished.content.leaf_cids());
+        assert_eq!(&manifest.leaf_cids[..], finished.content.leaf_cids());
 
         let mut recovered = Vec::new();
         for (leaf, cid) in leaves.iter().zip(&manifest.leaf_cids) {

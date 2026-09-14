@@ -119,7 +119,7 @@ impl EngineHandle {
     /// `scheduler`, `stagingStore`, `snapshotCache`, `credentialStore`); a
     /// missing seam fails closed. `profile` selects the sync timing policy
     /// (`"ci"` for the compressed e2e cadences, production otherwise).
-    /// `apiBaseUrl` is required and non-blank. The content gateway
+    /// `apiBaseUrl` must be an absolute API origin. The content gateway
     /// is configured from `acceleratorBaseUrl` and `publicGateways` — the
     /// accelerator's credential is the read-scoped pseudonym login mints, so
     /// there is no host-supplied bearer to pass.
@@ -969,8 +969,15 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn an_engine_without_an_api_base_url_is_refused() {
-        for api_base_url in [None, Some(String::new()), Some("  ".to_owned())] {
+    fn an_engine_without_an_absolute_api_origin_is_refused() {
+        for api_base_url in [
+            None,
+            Some(String::new()),
+            Some("  ".to_owned()),
+            Some("api.test".to_owned()),
+            Some("ftp://api.test".to_owned()),
+            Some("http://api.cipherbox.io".to_owned()),
+        ] {
             let error = EngineHandle::new(
                 js_sys::Object::new().into(),
                 None,

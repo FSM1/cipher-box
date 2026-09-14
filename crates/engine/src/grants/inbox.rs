@@ -337,6 +337,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: None,
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                    ..Default::default()
                 },
                 hub,
                 mailbox,

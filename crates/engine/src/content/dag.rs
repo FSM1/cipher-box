@@ -210,18 +210,15 @@ pub struct RootManifest {
     pub leaf_cids: Box<[LeafCid]>,
 }
 
-impl RootManifest {
-    /// The links as owned byte vectors, for the consumers still keyed on
-    /// `Vec<u8>`.
-    #[must_use]
-    pub fn leaf_cid_vecs(&self) -> Vec<Vec<u8>> {
-        self.leaf_cids.iter().map(|cid| cid.to_vec()).collect()
-    }
-}
-
 /// A leaf's content CID: fixed-width by construction, so a manifest cannot hold
 /// a wrong-width link.
 pub type LeafCid = [u8; CONTENT_CID_LEN];
+
+/// Narrow one leaf address to the fixed-width link a manifest holds,
+/// fail-closed on any other width.
+pub(crate) fn leaf_cid(cid: &[u8]) -> Result<LeafCid, DagError> {
+    LeafCid::try_from(cid).map_err(|_| DagError::MalformedLeafCid)
+}
 
 /// Decode a root block (already verified against its `contentCid` by the
 /// caller) into its manifest, fail-closed — a `contentCid`-valid-but-internally
@@ -420,7 +417,11 @@ mod tests {
         assert_eq!(manifest.chunk_size, profile.chunk_size() as u64);
         assert_eq!(manifest.size, plaintext.len() as u64);
         assert_eq!(
-            manifest.leaf_cid_vecs(),
+            manifest
+                .leaf_cids
+                .iter()
+                .map(|cid| cid.to_vec())
+                .collect::<Vec<_>>(),
             leaves,
             "links preserve file order"
         );
