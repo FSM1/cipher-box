@@ -1060,9 +1060,7 @@ mod tests {
             if row.tag == link_tag() {
                 row.recipient_enc_pk = enc_pk;
                 if attest {
-                    row.owner_sig = sign_recipient_binding(&owner, &name, row)
-                        .expect("the owner signs the row as presented")
-                        .to_compact();
+                    row.owner_sig = sign_recipient_binding(&owner, &name, row).to_compact();
                 }
             }
         }

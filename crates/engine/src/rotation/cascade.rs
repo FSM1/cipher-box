@@ -953,9 +953,7 @@ mod tests {
                 tag,
                 [0u8; ECDSA_SIG_LEN],
             );
-            entry.owner_sig = sign_recipient_binding(&self.ecdsa, &ipns_name, &entry)
-                .expect("signs")
-                .to_compact();
+            entry.owner_sig = sign_recipient_binding(&self.ecdsa, &ipns_name, &entry).to_compact();
             let commitment = GrantSetCommitment {
                 ipns_name,
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),

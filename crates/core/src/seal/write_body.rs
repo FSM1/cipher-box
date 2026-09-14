@@ -20,7 +20,9 @@ use core::fmt;
 use core::num::NonZeroU64;
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
-use crate::codec::{Map, RedactedBytes, Value, decode, encode, encoded_len, head_len};
+use crate::codec::{
+    Map, RedactedBytes, Value, decode, encode, encode_fixed_depth, encoded_len, head_len,
+};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::MAX_IPNS_NAME_BYTES;
 use crate::suite::ecdsa::{
@@ -207,10 +209,7 @@ impl GrantLedgerEntry {
 /// another root's ledger. It deliberately excludes `permission` (already
 /// owner-signed in the grant-set commitment) and `expiresAt` (writer-mutable by
 /// design, see [`GrantLedgerEntry::expires_at`]), along with preserved unknowns.
-pub fn encode_recipient_binding(
-    ipns_name: &[u8],
-    entry: &GrantLedgerEntry,
-) -> Result<Vec<u8>, CodecError> {
+pub fn encode_recipient_binding(ipns_name: &[u8], entry: &GrantLedgerEntry) -> Vec<u8> {
     let mut m = Map::new();
     m.insert("ipnsName", Value::Bytes(ipns_name.to_vec()));
     m.insert(
@@ -222,7 +221,7 @@ pub fn encode_recipient_binding(
         Value::Bytes(entry.recipient_identity_pk.to_vec()),
     );
     m.insert("tag", Value::Bytes(entry.tag.to_vec()));
-    encode(&Value::Map(m))
+    encode_fixed_depth(&Value::Map(m))
 }
 
 /// Owner-sign one ledger row's recipient binding: RFC 6979 ECDSA over the
@@ -232,8 +231,8 @@ pub fn sign_recipient_binding(
     signer: &EcdsaSigner,
     ipns_name: &[u8],
     entry: &GrantLedgerEntry,
-) -> Result<EcdsaSignature, CodecError> {
-    Ok(signer.sign_detcbor(&encode_recipient_binding(ipns_name, entry)?))
+) -> EcdsaSignature {
+    signer.sign_detcbor(&encode_recipient_binding(ipns_name, entry))
 }
 
 /// Verify a ledger row's owner signature over its recipient binding. Fails
@@ -248,7 +247,7 @@ pub fn verify_recipient_binding(
 ) -> Result<(), CodecError> {
     let sig = EcdsaSignature::from_compact(&entry.owner_sig)
         .ok_or(TrustViolation::IdentitySignatureInvalid)?;
-    if verifier.verify_detcbor(&encode_recipient_binding(ipns_name, entry)?, &sig) {
+    if verifier.verify_detcbor(&encode_recipient_binding(ipns_name, entry), &sig) {
         Ok(())
     } else {
         Err(TrustViolation::IdentitySignatureInvalid.into())
@@ -581,9 +580,7 @@ mod tests {
         tag: [u8; 32],
     ) -> GrantLedgerEntry {
         let mut entry = GrantLedgerEntry::new(identity, enc, permission, tag, [0u8; ECDSA_SIG_LEN]);
-        entry.owner_sig = sign_recipient_binding(&owner(), SCOPE_ROOT_IPNS, &entry)
-            .expect("row binding signs")
-            .to_compact();
+        entry.owner_sig = sign_recipient_binding(&owner(), SCOPE_ROOT_IPNS, &entry).to_compact();
         entry
     }
 
@@ -1273,8 +1270,8 @@ mod tests {
         write.permission = Permission::Write;
         write.expires_at = NonZeroU64::new(1_700_000_000_000);
         assert_eq!(
-            encode_recipient_binding(SCOPE_ROOT_IPNS, &read).unwrap(),
-            encode_recipient_binding(SCOPE_ROOT_IPNS, &write).unwrap()
+            encode_recipient_binding(SCOPE_ROOT_IPNS, &read),
+            encode_recipient_binding(SCOPE_ROOT_IPNS, &write)
         );
         assert!(
             verify_recipient_binding(&owner().verifying_key(), SCOPE_ROOT_IPNS, &write).is_ok()

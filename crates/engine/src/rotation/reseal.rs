@@ -1203,9 +1203,7 @@ mod tests {
                 tag,
                 [0u8; ECDSA_SIG_LEN],
             );
-            row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, ipns_name, &row)
-                .expect("the owner attests the row it minted")
-                .to_compact();
+            row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, ipns_name, &row).to_compact();
             row
         }
 

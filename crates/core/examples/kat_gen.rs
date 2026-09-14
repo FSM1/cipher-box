@@ -5619,9 +5619,7 @@ fn signed_ledger_row(
         tag,
         [0u8; ECDSA_SIG_LEN],
     );
-    entry.owner_sig = sign_recipient_binding(&owner, WRITE_BODY_IPNS_NAME, &entry)
-        .expect("ledger row binding signs")
-        .to_compact();
+    entry.owner_sig = sign_recipient_binding(&owner, WRITE_BODY_IPNS_NAME, &entry).to_compact();
     assert!(
         verify_recipient_binding(&owner.verifying_key(), WRITE_BODY_IPNS_NAME, &entry).is_ok(),
         "ledger row binding must verify"
@@ -5962,8 +5960,7 @@ fn build_recipient_binding_accept() -> Vec<RecipientBindingAcceptVector> {
             names.insert(name),
             "duplicate recipient-binding accept {name}"
         );
-        let preimage = encode_recipient_binding(WRITE_BODY_IPNS_NAME, &entry)
-            .unwrap_or_else(|e| panic!("recipient-binding {name}: preimage: {e}"));
+        let preimage = encode_recipient_binding(WRITE_BODY_IPNS_NAME, &entry);
         assert!(
             verify_recipient_binding(&owner.verifying_key(), WRITE_BODY_IPNS_NAME, &entry).is_ok(),
             "recipient-binding {name}: must verify"
@@ -5971,7 +5968,7 @@ fn build_recipient_binding_accept() -> Vec<RecipientBindingAcceptVector> {
         // The same row under another scope root is a different preimage: the
         // binding is what stops a row being replayed into a foreign ledger.
         assert_ne!(
-            encode_recipient_binding(b"another-scope-root", &entry).unwrap(),
+            encode_recipient_binding(b"another-scope-root", &entry),
             preimage,
             "recipient-binding {name}: ipnsName must be bound"
         );
