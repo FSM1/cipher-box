@@ -136,6 +136,13 @@ pub enum SweepResolveFailure {
     /// root's own. Unreadable to every reader, so no retry can change it and it
     /// is not a verdict on the record's trustworthiness.
     Unreadable,
+    /// The record carries an envelope version this build does not author. A
+    /// newer client wrote it, so it is version skew and never a trust verdict:
+    /// the record may be perfectly honest, and this build simply cannot
+    /// re-author it. No retry converges it, so the node is isolated and named
+    /// for the operator, who reads it as a fleet-upgrade problem rather than an
+    /// attributable one.
+    VersionSkew,
     /// The same node id was reached through two parents carrying **different**
     /// `ipnsName` labels — the read plane's C2 conflict
     /// ([`ResolveFailure::ConflictingChildLabel`]). Converging the one picked
@@ -163,6 +170,9 @@ impl core::fmt::Display for SweepResolveFailure {
                 f.write_str("node id reached with conflicting ipnsName labels")
             }
             Self::Unreadable => f.write_str("node epoch beyond this scope's ratchet"),
+            Self::VersionSkew => {
+                f.write_str("record at an envelope version this build cannot author")
+            }
         }
     }
 }
@@ -182,7 +192,10 @@ impl SweepResolveFailure {
     /// ([`SweepOutcome::unreachable`]); a `Superseded` root and a C2 label
     /// conflict are statements about the scope, and still abort.
     fn isolates_the_node(self) -> bool {
-        matches!(self, Self::Unreadable | Self::Rejected | Self::Unavailable)
+        matches!(
+            self,
+            Self::Unreadable | Self::Rejected | Self::Unavailable | Self::VersionSkew
+        )
     }
 }
 
@@ -1175,15 +1188,16 @@ mod tests {
     // --- Nodes this pass cannot read ---
 
     /// One node no seed opens, one a revoked writer's record fails the gate on,
-    /// one no fetch answers for. The unit of progress is a single interior node,
-    /// so each is surfaced and stepped past rather than costing every other node
-    /// in the scope its convergence.
+    /// one no fetch answers for, one a newer build wrote. The unit of progress
+    /// is a single interior node, so each is surfaced and stepped past rather
+    /// than costing every other node in the scope its convergence.
     #[test]
     fn an_unreadable_node_is_isolated_and_the_rest_still_converges() {
         for reason in [
             SweepResolveFailure::Unreadable,
             SweepResolveFailure::Rejected,
             SweepResolveFailure::Unavailable,
+            SweepResolveFailure::VersionSkew,
         ] {
             let net = FakeNet::new(5, &[0x01, 0x02])
                 .node(0x01, 1, &[])
@@ -1305,13 +1319,15 @@ mod tests {
     }
 
     /// A settled verdict is not worth another pass — no retry re-opens a node no
-    /// seed reaches or a record the gate refused — so the driver returns on the
-    /// first pass with the node surfaced.
+    /// seed reaches, a record the gate refused, or a record at a version this
+    /// build cannot author — so the driver returns on the first pass with the
+    /// node surfaced.
     #[test]
     fn a_settled_isolation_does_not_spend_the_drivers_passes() {
         for reason in [
             SweepResolveFailure::Unreadable,
             SweepResolveFailure::Rejected,
+            SweepResolveFailure::VersionSkew,
         ] {
             let net = FakeNet::new(5, &[0x01])
                 .node(0x01, 1, &[])
