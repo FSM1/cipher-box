@@ -76,15 +76,14 @@ use crate::net::{
     Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
+use crate::record_plane::DefaultsReason;
 use crate::rotation::{ScopeExitRotator, derive_write_name, seed_at_epoch};
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
-use crate::settings::{
-    DefaultsReason, Destinations, Placement, PlacementDecision, SettingsRefusal,
-};
+use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::BookkeepingSeal;
 use crate::sync::cancel::UploadCancels;
