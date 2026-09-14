@@ -150,6 +150,7 @@ pub(crate) async fn within<S: Scheduler, W: Future>(
 }
 
 /// What a lapsed client-signed EOL means on this plane.
+#[derive(Clone, Copy)]
 pub(crate) enum EolRule {
     /// Refuse the record as of this instant. The reader of the settings record
     /// is always its signer, so a lapsed EOL is a refusal here rather than the
