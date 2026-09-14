@@ -67,8 +67,8 @@ pub use scope_exit_debt::{scope_exit_debt_key, seal_owed_cuts};
 pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
-    FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_files, focus_folders,
-    focus_folders_due, focus_set, on_access_refresh_due, resolve_mode,
+    FocusFile, FocusQueueOrigin, FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl,
+    focus_files, focus_folders, focus_folders_due, focus_set, on_access_refresh_due, resolve_mode,
 };
 pub use upload_mark::{UPLOAD_MARK_PREFIX, encode_upload_mark, upload_mark_key};
 

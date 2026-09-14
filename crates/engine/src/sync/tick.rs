@@ -48,11 +48,61 @@ pub struct FocusWindow {
     ///
     /// Bounded by `MAX_FOCUS_FILES`: a window is about what is in view now, so
     /// a full queue drops its oldest entry rather than refusing the file the
-    /// host just looked at.
-    pub open_files: Vec<NodeId>,
+    /// host just looked at. Which entry yields is the row's
+    /// [`FocusQueueOrigin`].
+    pub open_files: Vec<FocusFile>,
+}
+
+/// Which source put a file row on the focus queue.
+///
+/// The two sources share one bound, so the origin decides which row yields: a
+/// host access names a single row a caller is waiting on, and the bulk fan-out
+/// over a folder in view must not spend the bound on rows nobody asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusQueueOrigin {
+    /// A host filesystem operation named this file.
+    Host,
+    /// The fan-out over the unpainted file children of a folder in view.
+    Bulk,
+}
+
+/// One file row on the focus queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FocusFile {
+    /// The file the row names.
+    pub node: NodeId,
+    /// The source that queued it.
+    pub origin: FocusQueueOrigin,
+}
+
+impl FocusFile {
+    /// A row a host filesystem operation named.
+    pub fn host(node: NodeId) -> Self {
+        Self {
+            node,
+            origin: FocusQueueOrigin::Host,
+        }
+    }
+
+    /// A row the fan-out over a folder in view queued.
+    pub fn bulk(node: NodeId) -> Self {
+        Self {
+            node,
+            origin: FocusQueueOrigin::Bulk,
+        }
+    }
 }
 
 impl FocusWindow {
+    /// The queued file rows a host access named, as a set.
+    pub fn host_queued(&self) -> BTreeSet<NodeId> {
+        self.open_files
+            .iter()
+            .filter(|row| row.origin == FocusQueueOrigin::Host)
+            .map(|row| row.node)
+            .collect()
+    }
+
     /// Every folder the window holds open, navigation's slot first, each named
     /// once.
     pub fn folders_in_view(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -139,7 +189,7 @@ pub fn focus_set(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<FocusTarget> {
             .map(|(_, node)| FocusTarget::Folder(node)),
     );
     for file in &focus.open_files {
-        targets.push(FocusTarget::File(*file));
+        targets.push(FocusTarget::File(file.node));
     }
     targets
 }
@@ -309,6 +359,19 @@ pub fn focus_folders_due(
         .collect()
 }
 
+/// Drop every refresh stamp the staleness threshold has already expired.
+///
+/// A node with no stamp reads as due, which is what an expired stamp meant, so
+/// the map keeps only the stamps that still damp a refresh and stops growing
+/// with every node a session has ever passed over.
+pub fn expire_focus_stamps(
+    stamps: &mut BTreeMap<NodeId, UnixMillis>,
+    now: UnixMillis,
+    profile: &SyncTimingProfile,
+) {
+    stamps.retain(|_, last| !on_access_refresh_due(now, *last, profile));
+}
+
 /// Drop every operation-stream folder whose traffic went quiet past the
 /// profile's focus horizon, so it stops counting as open.
 ///
@@ -414,6 +477,58 @@ mod tests {
         }
     }
 
+    /// The stamp map damps a refresh and nothing else, so an entry the threshold
+    /// has expired holds a session's memory for a verdict it can no longer
+    /// change. Without the eviction the map grows for the life of the session.
+    #[test]
+    fn a_refresh_stamp_leaves_the_map_once_the_threshold_has_fully_elapsed() {
+        let profile = SyncTimingProfile::CI;
+        let threshold = crate::sync::duration_millis(profile.stale_after);
+        let walked = id(1);
+
+        for (now, still_held) in [
+            (1_000, true),
+            (1_000 + threshold - 1, true),
+            (1_000 + threshold, false),
+        ] {
+            let mut stamps = BTreeMap::from([(walked, UnixMillis(1_000))]);
+            expire_focus_stamps(&mut stamps, UnixMillis(now), &profile);
+            assert_eq!(stamps.contains_key(&walked), still_held);
+            assert_eq!(
+                on_access_refresh_due(UnixMillis(now), UnixMillis(1_000), &profile),
+                !still_held,
+                "an evicted stamp reads as due, which is what it already meant",
+            );
+        }
+    }
+
+    /// A session that walks a vault over several windows keeps only the stamps
+    /// of the last one, whatever the walk's size.
+    #[test]
+    fn a_long_walk_holds_only_the_stamps_of_the_last_window() {
+        let profile = SyncTimingProfile::CI;
+        let threshold = crate::sync::duration_millis(profile.stale_after);
+        let mut stamps: BTreeMap<NodeId, UnixMillis> = BTreeMap::new();
+        let mut now = 1_000;
+
+        for window in 0..4u8 {
+            for step in 0..20u8 {
+                stamps.insert(id(window * 20 + step), UnixMillis(now));
+            }
+            now += threshold;
+            expire_focus_stamps(&mut stamps, UnixMillis(now), &profile);
+        }
+
+        assert!(
+            stamps.is_empty(),
+            "every stamp of the last window has itself expired by the final pass",
+        );
+
+        stamps.insert(id(99), UnixMillis(now));
+        expire_focus_stamps(&mut stamps, UnixMillis(now + threshold - 1), &profile);
+        assert_eq!(stamps.len(), 1, "a stamp inside the window stays");
+    }
+
     #[test]
     fn a_folder_leaves_the_window_only_once_the_horizon_has_fully_elapsed() {
         let profile = SyncTimingProfile::CI;
@@ -512,7 +627,7 @@ mod tests {
         let focus = FocusWindow {
             open_folder: Some(id(2)),
             open_shared_scopes: vec![id(7)],
-            open_files: vec![id(3), id(4)],
+            open_files: vec![FocusFile::host(id(3)), FocusFile::host(id(4))],
             ..FocusWindow::default()
         };
         assert_eq!(
@@ -565,7 +680,7 @@ mod tests {
         let focus = FocusWindow {
             open_folder: Some(id(2)),
             open_shared_scopes: vec![id(7)],
-            open_files: vec![id(3)],
+            open_files: vec![FocusFile::host(id(3))],
             ..FocusWindow::default()
         };
         assert_eq!(focus_folders(&snap, &focus), vec![id(2), id(1)]);
@@ -580,7 +695,11 @@ mod tests {
         let focus = FocusWindow {
             open_folder: None,
             open_shared_scopes: vec![id(7)],
-            open_files: vec![id(5), id(3), id(9)],
+            open_files: vec![
+                FocusFile::host(id(5)),
+                FocusFile::host(id(3)),
+                FocusFile::host(id(9)),
+            ],
             ..FocusWindow::default()
         };
         assert_eq!(focus_files(&snap, &focus), vec![id(5), id(3), id(9)]);
@@ -791,7 +910,7 @@ mod tests {
             &FocusWindow {
                 open_folder: Some(id(8)),
                 open_shared_scopes: vec![id(7)],
-                open_files: vec![id(9)],
+                open_files: vec![FocusFile::host(id(9))],
                 ..FocusWindow::default()
             },
             &BTreeSet::new(),
@@ -847,7 +966,7 @@ mod tests {
         let window = FocusWindow {
             open_folder: Some(id(3)),
             open_shared_scopes: Vec::new(),
-            open_files: vec![id(4)],
+            open_files: vec![FocusFile::host(id(4))],
             ..FocusWindow::default()
         };
 
