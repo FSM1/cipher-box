@@ -3386,6 +3386,8 @@ fn leg_file_share(
         }
         kept.push(node);
     }
+    // Host rows alone still charge the budget: the origin orders the spend, it
+    // does not lift the bound.
     kept.drain(..over);
     kept
 }
@@ -3447,9 +3449,10 @@ fn queue_focus_file(
         .iter()
         .position(|held| held.node == row.node)
         .map(|index| focus.open_files.remove(index));
-    let origin = match held {
-        Some(held) if held.origin == FocusQueueOrigin::Host => FocusQueueOrigin::Host,
-        _ => row.origin,
+    let origin = if held.is_some_and(|held| held.origin == FocusQueueOrigin::Host) {
+        FocusQueueOrigin::Host
+    } else {
+        row.origin
     };
     if focus.open_files.len() >= MAX_FOCUS_FILES {
         let bulk = focus
