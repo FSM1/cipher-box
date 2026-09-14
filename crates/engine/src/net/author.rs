@@ -33,11 +33,13 @@ use cipherbox_core::seal::{
     seal_read_body, set_grant_section, verify_grant_set_bound,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
+use futures_channel::mpsc;
 
 use crate::content::limits::{
     MAX_RESOLVED_RECORD_BYTES, resealable_root_rest_bytes, scope_root_rest_bytes,
 };
 use crate::content::root_block_cid;
+use crate::facade::{Event, emit_trust_violation};
 use crate::gate::authenticate_section_structures;
 
 /// The envelope format+suite version this build authors (blueprint/core.md).
@@ -211,8 +213,34 @@ pub struct AuthoredHead {
     pub cid: String,
     /// The carried keys the encode had to drop to fit the block ceiling. A cut
     /// is data destroyed under pressure someone else applied, so a publisher
-    /// reports it rather than doing it quietly.
+    /// reports it rather than doing it quietly
+    /// ([`report_carried_cut`] is the one report every publisher runs).
     pub cut: CarriedCut,
+}
+
+/// Name the carried set an authoring at `name` had to cut. A cut only fires
+/// where the record standing at that name already ran to the block ceiling, so
+/// what this reports is that someone else's bytes are costing this node its
+/// forward-compatible fields (blueprint/engine.md, "never a silent failure").
+///
+/// Every publisher that authors from a carried set calls this, so the drain and
+/// the rotation arms report one event shape for one condition.
+pub(crate) fn report_carried_cut(
+    events: &mpsc::UnboundedSender<Event>,
+    name: &IpnsName,
+    cut: &CarriedCut,
+) {
+    if cut.is_empty() {
+        return;
+    }
+    emit_trust_violation(
+        events,
+        name.as_str(),
+        format_args!(
+            "carried fields dropped to fit the block ceiling: {}",
+            cut.join(", ")
+        ),
+    );
 }
 
 /// The inputs one node's envelope is sealed from. `carried_*` are the unknown
@@ -509,6 +537,28 @@ mod tests {
 
     fn name() -> IpnsName {
         IpnsName::from_public_key(&kdf::ipns_keypair(&[3u8; 32]).verifying_key())
+    }
+
+    /// A cut destroys carried data, so it reaches the host naming every key it
+    /// took. An empty cut is not an event: nothing was destroyed.
+    #[test]
+    fn a_cut_is_reported_with_the_keys_it_took_and_an_empty_cut_is_silent() {
+        let (events, mut emitted) = mpsc::unbounded();
+
+        report_carried_cut(&events, &name(), &CarriedCut::new());
+        assert!(emitted.try_recv().is_err(), "nothing was destroyed");
+
+        report_carried_cut(
+            &events,
+            &name(),
+            &vec!["zzPad".to_string(), "zzMore".to_string()],
+        );
+        let Ok(Event::AttributableAbuse { description }) = emitted.try_recv() else {
+            panic!("a cut is surfaced as an attributable abuse");
+        };
+        assert!(description.contains("zzPad"), "{description}");
+        assert!(description.contains("zzMore"), "{description}");
+        assert!(emitted.try_recv().is_err(), "one event for one cut");
     }
 
     fn folder() -> ReadBody {
