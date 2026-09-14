@@ -224,7 +224,7 @@ mod tests {
     };
     use crate::testkit::{
         OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
-        SeededEntropy, block_on, owner_root_fixture,
+        SeededEntropy, block_on, owner_root_fixture, owner_root_pseudonym,
     };
 
     use super::super::ledger::mint_grant_row;
@@ -281,6 +281,8 @@ mod tests {
             .expect("a contributory recipient key"),
         ];
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &sharer(),
             owner_enc: &sharer_enc().public(),
             scope_id: SCOPE,

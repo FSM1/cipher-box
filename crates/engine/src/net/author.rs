@@ -529,7 +529,7 @@ mod tests {
     use crate::content::DAG_ROOT_CODEC;
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OwnerRootFixture, OwnerRootSpec,
-        owner_root_fixture,
+        owner_root_fixture, owner_root_pseudonym,
     };
 
     const READ_KEY: [u8; 32] = [9u8; 32];
@@ -611,6 +611,8 @@ mod tests {
     /// write seed, so a section signed by anyone else still binds this name.
     fn root_signed_by(scalar: &[u8; 32]) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &EcdsaSigner::from_scalar(scalar).expect("valid scalar"),
             owner_enc: &kdf::enc_subkey(&[0x33; 32]).public(),
             scope_id: [2u8; 16],
@@ -632,6 +634,8 @@ mod tests {
     /// its parent's node seed derives, which the vault root above has none of.
     fn interior_root() -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: &EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar"),
             owner_enc: &kdf::enc_subkey(&[0x33; 32]).public(),
             scope_id: [2u8; 16],

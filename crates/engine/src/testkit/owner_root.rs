@@ -37,12 +37,18 @@ pub const OWNER_ROOT_EPOCH: u64 = 1;
 /// fixture that leaves the link empty above write epoch 1 is refused
 /// (`rotation::reseal::ResealError::EmptyWriteHistoryAboveFirstEpoch`).
 pub const CARRIED_WRITE_HISTORY_LINK: &[u8] = b"opaque-write-history-link";
-/// The seed of the writer pseudonym the fixture detach-signs every structure
-/// with — the key a re-seal of this root must sign under to stay committed.
+/// The seed of the default writer pseudonym ([`owner_root_pseudonym`]).
 pub const OWNER_ROOT_PSEUDONYM_SEED: [u8; 32] = [0x22; 32];
 
+/// The writer pseudonym a root that no live session re-seals is signed under.
+/// A root a session must rotate commits that session's own pseudonym instead
+/// ([`OwnerRootSpec::writer_pseudonym`]).
+pub fn owner_root_pseudonym() -> Ed25519Signer {
+    Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED)
+}
+
 const V: u64 = 1;
-/// The stable per-scope pointer read key the fixture's grant blobs carry.
+/// The default per-scope pointer read key ([`OwnerRootSpec::pointer_read_key`]).
 pub const OWNER_ROOT_POINTER_READ_KEY: [u8; 32] = [0x88; 32];
 const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
 const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
@@ -64,6 +70,16 @@ pub struct OwnerRootSpec<'a> {
     pub owner_identity: &'a EcdsaSigner,
     /// Recipient of the owner blob and owner-write-blob HPKE seals.
     pub owner_enc: &'a X25519Public,
+    /// The writer pseudonym every structure is detach-signed under, and that
+    /// the grant-set commitment names. A re-seal signs under the session's own
+    /// `pseudonym-sign` key, so a root a live session rotates must commit that
+    /// key and no other — `ResealError::SignerNotCommitted` is permanent.
+    /// [`owner_root_pseudonym`] serves a root no session re-seals.
+    pub writer_pseudonym: &'a Ed25519Signer,
+    /// The per-scope pointer read key the grant blobs carry — what a recipient
+    /// opens this scope's pointer with, so it must be the key the owner's own
+    /// session seals that pointer under.
+    pub pointer_read_key: [u8; 32],
     /// The scope every structure's AAD and structure signature binds.
     pub scope_id: [u8; 16],
     /// The scope-root node id; also the seed-tree edge the read/write keys hang off.
@@ -147,6 +163,8 @@ pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerR
     let OwnerRootSpec {
         owner_identity,
         owner_enc,
+        writer_pseudonym,
+        pointer_read_key,
         scope_id,
         root_id,
         children,
@@ -156,8 +174,6 @@ pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerR
         grants,
         write_history_link,
     } = spec;
-    let owner_pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
-
     let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &root_id);
     let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
     let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &root_id);
@@ -167,7 +183,7 @@ pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerR
     let sign_for = |tag: u8, recipient_tag: Option<[u8; 32]>, ct: &[u8]| -> [u8; 64] {
         let input =
             StructureSigInput::over_ciphertext(scope_id, read_epoch, tag, recipient_tag, ct);
-        sign_structure(&owner_pseudonym, &input).to_bytes()
+        sign_structure(writer_pseudonym, &input).to_bytes()
     };
     let sign = |tag: u8, ct: &[u8]| -> [u8; 64] { sign_for(tag, None, ct) };
     let aad = |epoch: u64, struct_tag: u8| AadContext {
@@ -271,7 +287,7 @@ pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerR
                     OWNER_ROOT_SCOPE_SEED,
                     write_scope_seed,
                     read_epoch,
-                    OWNER_ROOT_POINTER_READ_KEY,
+                    pointer_read_key,
                 ),
             )
             .unwrap();
@@ -288,7 +304,7 @@ pub fn owner_root_fixture_at(spec: OwnerRootSpec<'_>, read_epoch: u64) -> OwnerR
 
     let commitment = GrantSetCommitment {
         ipns_name: name.as_str().as_bytes().to_vec(),
-        owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+        owner_pseudonym_pk: writer_pseudonym.verifying_key().to_bytes(),
         cut_epoch: 0,
         entries: grants.iter().map(|g| g.commitment_entry.clone()).collect(),
         unknown: PreservedFields::new(),

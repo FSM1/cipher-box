@@ -650,7 +650,7 @@ mod tests {
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED,
         OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
-        with_cut_epoch,
+        owner_root_pseudonym, with_cut_epoch,
     };
 
     use crate::name::{MAX_NODE_NAME_BYTES, is_emittable};
@@ -718,6 +718,8 @@ mod tests {
             })
             .collect();
         owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             owner_identity: sharer,
             owner_enc: &sharer_enc().public(),
             scope_id: SCOPE,
@@ -1437,6 +1439,8 @@ mod tests {
                 .expect("a contributory recipient key"),
             ];
             let fixture = owner_root_fixture(OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
                 owner_identity: &sharer,
                 owner_enc: &sharer_enc().public(),
                 scope_id: SCOPE,
@@ -2083,6 +2087,8 @@ mod tests {
                 .expect("a contributory recipient key"),
             ];
             let fixture = owner_root_fixture(OwnerRootSpec {
+                writer_pseudonym: &owner_root_pseudonym(),
+                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
                 owner_identity: &self.sharers[which],
                 owner_enc: &self.encs[which].public(),
                 scope_id: scope,

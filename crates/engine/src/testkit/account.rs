@@ -16,7 +16,9 @@ use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
+use cipherbox_core::seal::ChildRef;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::{
     FakeDevice, FakeWorld, OWNER_ROOT_EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
@@ -25,6 +27,7 @@ use super::{
 use crate::NodeId;
 use crate::api::{REGISTRY_BATCH_REFUSED, RetireEntry};
 use crate::content::DAG_ROOT_CODEC;
+use crate::grants::GrantRow;
 use crate::net::REGISTRY_BATCH_MAX;
 use crate::seams::{HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult};
 use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
@@ -66,6 +69,20 @@ pub fn sequence_floor_label(name: &[u8]) -> [u8; 32] {
 /// The account owner's identity signer.
 pub fn owner_identity() -> EcdsaSigner {
     EcdsaSigner::from_scalar(&SECRET).expect("valid scalar")
+}
+
+/// The owner's writer pseudonym for [`SCOPE`] — the key a session started on
+/// [`SECRET`] signs every re-seal under
+/// (`SessionIdentity::owner_writer_pseudonym_signer`), so the seeded root must
+/// commit it or every rotation of that root refuses.
+pub fn owner_pseudonym() -> Ed25519Signer {
+    kdf::pseudonym_sign(kdf::owner_pseudonym_seed(&SECRET).as_bytes(), &SCOPE)
+}
+
+/// The per-scope pointer read key the owner's own session derives for
+/// [`SCOPE`], and that it seals that scope's pointer under.
+pub fn owner_pointer_read_key() -> [u8; 32] {
+    *kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes()
 }
 
 /// A test hook on the upload path: given a head block about to be stored,
@@ -517,12 +534,85 @@ pub fn serve_http(device: &FakeDevice, blocks: &Blocks, calls: usize) {
 /// root at sequence 1 and the vault pointer naming it. Returns the root's
 /// write-plane name.
 pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
+    seed_account_with(world, blocks, Vec::new(), Vec::new())
+}
+
+/// [`seed_account`] over a root that already commits `grants` and whose read
+/// body already names `children` — the state a session boots into, rather than
+/// one it authored.
+pub fn seed_account_with(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    grants: Vec<GrantRow>,
+    children: Vec<ChildRef>,
+) -> IpnsName {
+    let account = author_account(blocks, grants, children, 1);
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.seed_record(
+            &endpoint,
+            account.name.as_str(),
+            account.root_record.clone(),
+        );
+        world.record_store.seed_record(
+            &endpoint,
+            account.pointer_name.as_str(),
+            account.pointer_record.clone(),
+        );
+    }
+    account.name
+}
+
+/// [`seed_account`] with the vault pointer held back until a PUT lands at
+/// `revealed_by`: the account published from another device while this session
+/// was mid-mint. The pointer name is vacant when the mint probes it, and names a
+/// root the mint did not derive by the time the mint reads it back
+/// (`ProvisionOutcome::MovedOn`). It publishes past the sequence this run's own
+/// pointer PUT carries, so the mint cannot overwrite it.
+pub fn seed_account_published_after_put(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    revealed_by: &IpnsName,
+) -> IpnsName {
+    let account = author_account(blocks, Vec::new(), Vec::new(), 2);
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.seed_record(
+            &endpoint,
+            account.name.as_str(),
+            account.root_record.clone(),
+        );
+    }
+    world.record_store.seed_record_after_put(
+        revealed_by.as_str(),
+        account.pointer_name.as_str(),
+        account.pointer_record,
+    );
+    account.name
+}
+
+/// The account's published state, authored but not yet served.
+struct AuthoredAccount {
+    name: IpnsName,
+    root_record: Vec<u8>,
+    pointer_name: IpnsName,
+    pointer_record: Vec<u8>,
+}
+
+/// Author the owner root and the re-point naming it, and put the root's head
+/// block on the block plane. The pointer publishes at `pointer_sequence`.
+fn author_account(
+    blocks: &Blocks,
+    grants: Vec<GrantRow>,
+    children: Vec<ChildRef>,
+    pointer_sequence: u64,
+) -> AuthoredAccount {
     let fixture = owner_root_fixture(OwnerRootSpec {
+        writer_pseudonym: &owner_pseudonym(),
+        pointer_read_key: owner_pointer_read_key(),
         owner_identity: &owner_identity(),
         owner_enc: &kdf::enc_subkey(&SECRET).public(),
         scope_id: SCOPE,
         root_id: ROOT.0,
-        children: Vec::new(),
+        children,
         child_scope_index: Vec::new(),
         parent_node_seed: None,
         // At the read epoch, so the cold-seeded write floor opens the
@@ -530,7 +620,7 @@ pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
         // seed the drain derives every new node's name and signer from.
         owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
         write_history_link: Vec::new(),
-        grants: Vec::new(),
+        grants,
     });
     blocks.put(fixture.head_block.clone());
 
@@ -550,7 +640,7 @@ pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
     let pointer_block = seal_repoint(
         SessionRole::Owner,
         &mut SeededEntropy::new(POINTER_SEAL_ENTROPY_SEED),
-        kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes(),
+        &owner_pointer_read_key(),
         POINTER_PAYLOAD_VERSION,
         &owner_identity(),
         &RepointObject {
@@ -565,20 +655,16 @@ pub fn seed_account(world: &FakeWorld, blocks: &Blocks) -> IpnsName {
     let pointer_record = IpnsRecord::create_v2(
         &kdf::vault_pointer_index(&SECRET, 0),
         &pointer_block,
-        1,
+        pointer_sequence,
         TTL_NANOS,
         EOL,
     )
     .marshal();
-    let pointer_name = vault_pointer_name(&SECRET, 0);
 
-    for endpoint in world.record_store.endpoints() {
-        world
-            .record_store
-            .seed_record(&endpoint, fixture.name.as_str(), root_record.clone());
-        world
-            .record_store
-            .seed_record(&endpoint, pointer_name.as_str(), pointer_record.clone());
+    AuthoredAccount {
+        name: fixture.name,
+        root_record,
+        pointer_name: vault_pointer_name(&SECRET, 0),
+        pointer_record,
     }
-    fixture.name
 }
