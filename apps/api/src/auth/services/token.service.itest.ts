@@ -12,13 +12,16 @@ import { AcceleratorTokenService } from './accelerator-token.service';
 import { TokenService } from './token.service';
 
 /**
- * Rotation atomicity against a REAL Postgres: the property under test is that a
- * failure part-way through ROLLS BACK the single-use claim and every row written
- * beside it, which no in-memory repository can stand in for.
+ * Refresh-token rotation and the expiry sweep against a REAL Postgres. Rotation
+ * atomicity — a failure part-way through ROLLS BACK the single-use claim and
+ * every row written beside it — and a batched `DELETE ... FOR UPDATE SKIP
+ * LOCKED` are both properties no in-memory repository can stand in for.
  */
 
 const PUBLIC_KEY = '02'.padEnd(66, 'c');
 const ACCELERATOR_TTL_MS = 900_000;
+/** The default REFRESH_TOKEN_TTL_DAYS the sweep tests age a row past. */
+const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const publicKeyByUserId = async (): Promise<string> => PUBLIC_KEY;
 
 /**
@@ -47,7 +50,7 @@ class FlakyAcceleratorTokens {
   }
 }
 
-describe('TokenService rotation atomicity (real Postgres)', () => {
+describe('TokenService (real Postgres)', () => {
   let db: IntegrationDatabase;
   let refreshTokens: Repository<RefreshToken>;
   let acceleratorTokens: Repository<AcceleratorToken>;
@@ -67,10 +70,13 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
     await db?.teardown();
   });
 
-  function buildService(env: Record<string, string> = {}): TokenService {
+  function buildService(
+    env: Record<string, string> = {},
+    clock: FakeClock = new FakeClock()
+  ): TokenService {
     return new TokenService(
       new JwtService({ secret: 'test-secret', signOptions: { expiresIn: 900 } }),
-      new FakeClock(),
+      clock,
       new FakeEntropy(),
       accelerator as unknown as AcceleratorTokenService,
       fakeConfig(env).service,
@@ -187,5 +193,34 @@ describe('TokenService rotation atomicity (real Postgres)', () => {
       await holder.rollbackTransaction();
       await holder.release();
     }
+  });
+
+  it('sweeps every account’s expired rows on a tick, and spares the live ones', async () => {
+    const clock = new FakeClock();
+    const sweeper = buildService({}, clock);
+    await sweeper.createTokenPair(userId, PUBLIC_KEY);
+
+    clock.advanceMs(REFRESH_TTL_MS + 1);
+    const activeUserId = (await users.save({ publicKey: randomCompressedPublicKey() })).id;
+    await sweeper.createTokenPair(activeUserId, PUBLIC_KEY);
+
+    // No login or rotation by the abandoned account: only the scheduled sweep
+    // can reclaim its row.
+    expect(await sweeper.sweepExpired()).toBe(1);
+    expect(await refreshTokens.count({ where: { userId } })).toBe(0);
+    expect(await refreshTokens.count({ where: { userId: activeUserId } })).toBe(1);
+  });
+
+  it('walks past a full batch until nothing expired is left', async () => {
+    const clock = new FakeClock();
+    const sweeper = buildService({ REFRESH_TOKEN_SWEEP_BATCH_SIZE: '2' }, clock);
+    for (let i = 0; i < 5; i += 1) {
+      const abandoned = (await users.save({ publicKey: randomCompressedPublicKey() })).id;
+      await sweeper.createTokenPair(abandoned, PUBLIC_KEY);
+    }
+    clock.advanceMs(REFRESH_TTL_MS + 1);
+
+    expect(await sweeper.sweepExpired()).toBe(5);
+    expect(await refreshTokens.count()).toBe(0);
   });
 });

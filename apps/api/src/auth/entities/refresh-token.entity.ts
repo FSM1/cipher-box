@@ -37,6 +37,8 @@ export class RefreshToken {
   @Column({ name: 'token_hash', type: 'varchar', length: 64, unique: true })
   tokenHash: string;
 
+  /** Indexed so the scheduled expiry sweep scans by cutoff, not by table. */
+  @Index('idx_refresh_tokens_expires_at')
   @Column({ name: 'expires_at', type: 'timestamptz' })
   expiresAt: Date;
 
