@@ -104,8 +104,8 @@ fn web_storage_policy(headroom_bytes: Option<f64>) -> StoragePolicy {
     /// `2^64`, exactly representable as `f64`; the least value `as u64` saturates.
     const OVER_U64: f64 = 18_446_744_073_709_551_616.0;
     match headroom_bytes {
-        // Rejects NaN and both infinities by the range comparisons alone.
-        Some(bytes) if bytes >= 0.0 && bytes < OVER_U64 && bytes.fract() == 0.0 => {
+        // Rejects NaN and both infinities by the range check alone.
+        Some(bytes) if (0.0..OVER_U64).contains(&bytes) && bytes.fract() == 0.0 => {
             StoragePolicy::measured(StoragePlatform::WEB, bytes as u64)
         }
         _ => StoragePolicy::UNMEASURED,
