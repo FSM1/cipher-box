@@ -1469,7 +1469,6 @@ mod tests {
         assert_eq!(http.requests()[0].timeout_ms, Some(333));
     }
 
-    /// An untuned host calls the control plane under the shipped deadline.
     #[test]
     fn the_default_policy_keeps_the_shipped_control_deadline() {
         let (http, _creds, client) = fakes();

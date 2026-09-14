@@ -189,11 +189,17 @@ pub(crate) fn carries_credentials_safely(base_url: &str) -> bool {
     let Some(rest) = base_url.strip_prefix("https://") else {
         return false;
     };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority_of(rest);
     // `user:pass@host` would ride as Basic auth beside the bearer, and an empty
     // authority is the same URL a slash short — a parser reads its userinfo as
     // the path, so the host the token reaches is not the configured one.
     !authority.is_empty() && !authority.contains('@')
+}
+
+/// The authority of a base URL past its scheme: everything before the path, the
+/// query or the fragment starts.
+pub(crate) fn authority_of(rest: &str) -> &str {
+    rest.split(['/', '?', '#']).next().unwrap_or_default()
 }
 
 /// The content-gateway configuration handed to [`Engine::new`](crate::Engine),
@@ -553,7 +559,6 @@ mod tests {
         assert_eq!(http.requests()[0].timeout_ms, Some(777));
     }
 
-    /// An untuned host reads under the shipped block-fetch deadline.
     #[test]
     fn the_default_policy_keeps_the_shipped_block_fetch_deadline() {
         let leaf = one_leaf();

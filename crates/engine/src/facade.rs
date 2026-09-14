@@ -46,6 +46,7 @@ use crate::bin_index::{
 };
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::limits::folder_listing_budget;
+use crate::content::read::authority_of;
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
@@ -853,7 +854,7 @@ impl fmt::Debug for LoginSecret {
 }
 
 /// Where [`Engine::start`] authenticates and the liveness loop registers
-/// renewals — a non-blank API origin, or the named harness mode that has no API.
+/// renewals — an absolute API origin, or the named harness mode that has no API.
 ///
 /// [`parse`](Self::parse) is the only way to build a configured base and
 /// [`offline`](Self::offline) exists only under `test-kit`, so a shipped host
@@ -862,12 +863,31 @@ impl fmt::Debug for LoginSecret {
 pub struct ApiBaseUrl(Option<String>);
 
 impl ApiBaseUrl {
-    /// The API origin, trimmed of surrounding whitespace. Blank or
-    /// whitespace-only is refused.
-    pub fn parse(base_url: &str) -> Result<Self, BlankApiBaseUrl> {
+    /// The API origin, trimmed of surrounding whitespace.
+    ///
+    /// This base carries the access JWT and the rotating refresh token, so it
+    /// must be an absolute `https://` origin. Cleartext is admitted only for a
+    /// host that cannot leave the machine — loopback, or the `.test` TLD RFC
+    /// 6761 reserves — which is what a local stack and the e2e harnesses run
+    /// against. Anything else is refused at construction.
+    pub fn parse(base_url: &str) -> Result<Self, InvalidApiBaseUrl> {
         let trimmed = base_url.trim();
-        if trimmed.is_empty() {
-            return Err(BlankApiBaseUrl);
+        let authority = if let Some(rest) = trimmed.strip_prefix("https://") {
+            authority_of(rest)
+        } else if let Some(rest) = trimmed.strip_prefix("http://") {
+            let authority = authority_of(rest);
+            if !is_cleartext_host(host_of(authority)) {
+                return Err(InvalidApiBaseUrl);
+            }
+            authority
+        } else {
+            return Err(InvalidApiBaseUrl);
+        };
+        // An empty authority is the same URL a slash short, and userinfo would
+        // ride as Basic auth beside the bearer. A query or fragment would land
+        // mid-URL once a path is appended, so neither may open the base.
+        if authority.is_empty() || authority.contains('@') || trimmed.contains(['?', '#']) {
+            return Err(InvalidApiBaseUrl);
         }
         Ok(Self(Some(trimmed.to_owned())))
     }
@@ -885,17 +905,37 @@ impl ApiBaseUrl {
     }
 }
 
-/// [`ApiBaseUrl::parse`] refused a blank or whitespace-only base URL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlankApiBaseUrl;
-
-impl fmt::Display for BlankApiBaseUrl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("apiBaseUrl is required: the engine must authenticate to the API")
+/// The host of an authority, with any port and IPv6 brackets removed.
+fn host_of(authority: &str) -> &str {
+    match authority.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
     }
 }
 
-impl std::error::Error for BlankApiBaseUrl {}
+/// Whether `host` may be reached over cleartext: loopback, or a name under the
+/// TLD RFC 6761 reserves for local testing. Decided on the spelling alone — a
+/// resolved verdict would be a TOCTOU hole, since the host is the transport's
+/// to resolve at request time.
+fn is_cleartext_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1") || host.ends_with(".test")
+}
+
+/// [`ApiBaseUrl::parse`] refused a base URL that is not an absolute origin the
+/// session credentials may ride.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidApiBaseUrl;
+
+impl fmt::Display for InvalidApiBaseUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "apiBaseUrl must be an absolute https origin, \
+             or http for a loopback or .test host: the engine must authenticate to the API",
+        )
+    }
+}
+
+impl std::error::Error for InvalidApiBaseUrl {}
 
 pub use crate::name::MAX_NODE_NAME_BYTES;
 
@@ -13843,12 +13883,42 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_api_base_url_is_unrepresentable() {
-        for blank in ["", "   ", "\t\n"] {
+    fn only_an_absolute_origin_the_credentials_may_ride_is_representable() {
+        for refused in [
+            "",
+            "   ",
+            "\t\n",
+            "api.test",
+            "not a url",
+            "ftp://api.test",
+            "//api.test",
+            "https://",
+            "http://",
+            "https://user:pass@api.cipherbox.io",
+            "https://api.cipherbox.io?v=1",
+            "https://api.cipherbox.io#frag",
+            "http://api.cipherbox.io",
+            "http://127.0.0.2:3000",
+            "http://localhost.evil.io",
+            "http://api.test.evil.io",
+        ] {
             assert_eq!(
-                ApiBaseUrl::parse(blank),
-                Err(BlankApiBaseUrl),
-                "a blank base is refused: {blank:?}"
+                ApiBaseUrl::parse(refused),
+                Err(InvalidApiBaseUrl),
+                "refused base: {refused:?}"
+            );
+        }
+        for accepted in [
+            "https://api.cipherbox.io",
+            "https://api.cipherbox.io:8443/v2",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+            "http://api.test",
+        ] {
+            assert!(
+                ApiBaseUrl::parse(accepted).is_ok(),
+                "accepted base: {accepted:?}"
             );
         }
         assert_eq!(

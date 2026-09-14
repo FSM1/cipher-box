@@ -790,8 +790,6 @@ mod tests {
         assert_eq!(http.requests()[1].timeout_ms, Some(111));
     }
 
-    /// The shipped policy is what an untuned host runs under, so the values a
-    /// request carries by default are pinned here rather than at the struct.
     #[test]
     fn the_default_policy_keeps_the_shipped_placement_deadline() {
         let http = ScriptedHttp::default();
