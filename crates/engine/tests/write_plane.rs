@@ -13571,7 +13571,10 @@ fn leaves_of(blocks: &Blocks, content_cid: &[u8]) -> Vec<Vec<u8>> {
             .expect("the root block"),
     )
     .expect("a root manifest")
-    .leaf_cid_vecs()
+    .leaf_cids
+    .iter()
+    .map(|cid| cid.to_vec())
+    .collect()
 }
 
 /// Nothing readable names a dropped root once the shortened history is live, so

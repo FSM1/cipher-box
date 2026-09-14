@@ -500,13 +500,11 @@ mod tests {
         let plaintext: Vec<u8> = (0..100u8).collect();
         let (doomed, root_block, _) = doomed_version(&plaintext);
         let root = decode_content_cid_str(&doomed.content_cid).expect("a canonical root address");
-        let leaves = decode_root(&root_block)
-            .expect("a root manifest")
-            .leaf_cid_vecs();
+        let leaves = decode_root(&root_block).expect("a root manifest").leaf_cids;
 
         let registered = version_cids(
             &root,
-            leaves.iter().map(Vec::as_slice),
+            leaves.iter().map(|cid| cid.as_slice()),
             RootPlacement::First,
         );
         let retired = expand(&doomed, &root_block).expect("expands").cids();

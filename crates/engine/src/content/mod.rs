@@ -22,8 +22,8 @@ pub mod write;
 pub(crate) use budget::{Refused, StagingLedger, sealed_total_bytes};
 pub use chunk::{ContentKey, SealedChunk, frame_and_seal, seal_one_chunk};
 pub use dag::{
-    ContentDag, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, RootManifest, assemble, decode_root,
-    root_block_cid,
+    ContentDag, DAG_ROOT_CODEC, DagError, LeafCid, ROOT_FORMAT_VERSION, RootManifest, assemble,
+    decode_root, root_block_cid,
 };
 pub use profile::ContentProfile;
 pub(crate) use provider::place_block;
@@ -61,14 +61,14 @@ use crate::seams::Http;
 pub struct SealedContent {
     content_cid: Vec<u8>,
     size: u64,
-    leaf_cids: Vec<Vec<u8>>,
+    leaf_cids: Box<[LeafCid]>,
 }
 
 impl SealedContent {
     /// The identity of a version this process just assembled. `pub(crate)` so
     /// the only public constructor is [`Self::from_root_block`], which derives
     /// every field from bytes this crate's own decoder accepted.
-    pub(crate) fn new(content_cid: Vec<u8>, size: u64, leaf_cids: Vec<Vec<u8>>) -> Self {
+    pub(crate) fn new(content_cid: Vec<u8>, size: u64, leaf_cids: Box<[LeafCid]>) -> Self {
         Self {
             content_cid,
             size,
@@ -85,7 +85,7 @@ impl SealedContent {
         Ok(Self {
             content_cid: compute_cid(DAG_ROOT_CODEC, root_block),
             size: manifest.size,
-            leaf_cids: manifest.leaf_cid_vecs(),
+            leaf_cids: manifest.leaf_cids,
         })
     }
 
@@ -101,7 +101,7 @@ impl SealedContent {
     }
 
     /// The leaf content addresses, in file order.
-    pub fn leaf_cids(&self) -> &[Vec<u8>] {
+    pub fn leaf_cids(&self) -> &[LeafCid] {
         &self.leaf_cids
     }
 

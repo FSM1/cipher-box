@@ -5073,7 +5073,7 @@ where
 
         let content_cids = version_cids(
             &staged.root_cid,
-            content.leaf_cids().iter().map(Vec::as_slice),
+            content.leaf_cids().iter().map(|cid| cid.as_slice()),
             RootPlacement::First,
         );
         Ok(UploadedVersion {
@@ -5762,7 +5762,7 @@ where
                 version_leaf_cids(self.staging, root_cid)
                     .await
                     .iter()
-                    .map(Vec::as_slice),
+                    .map(|cid| cid.as_slice()),
                 RootPlacement::First,
             ),
             None => Vec::new(),
