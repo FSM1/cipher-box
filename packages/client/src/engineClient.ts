@@ -118,6 +118,15 @@ interface ParkedStart {
 const YIELD_TIMEOUT_MS = 5000;
 
 /**
+ * The shortest interval between two stand-downs by the same tab. The greeting
+ * that asks for one is unauthenticated, and a stand-down costs a worker
+ * teardown plus a cold start on re-election, so a flood must buy one hand-off
+ * per window rather than one per message. A greeting inside the window is
+ * deferred rather than dropped, and lands well inside `YIELD_TIMEOUT_MS`.
+ */
+const YIELD_COOLDOWN_MS = 1000;
+
+/**
  * One engine plane's open handles, as this client's own id → the live engine's.
  *
  * An engine's handle counters restart at 1, so a handle from a departed leader
@@ -188,6 +197,10 @@ export class EngineClient implements EngineTransport {
   // Starts parked on an engine for this tab becoming reachable (`awaitEngine`).
   private readonly parkedStarts = new Set<ParkedStart>();
   private ownFocus: Uint8Array | null = null;
+  // The stand-down throttle (`yieldLeadership`): the cooldown timer that is
+  // running, and whether a greeting arrived while it was.
+  private yieldCooldown: ReturnType<typeof setTimeout> | null = null;
+  private yieldWanted = false;
 
   constructor(private readonly config: EngineClientConfig) {
     this.clientId = config.clientId ?? newClientId();
@@ -558,6 +571,8 @@ export class EngineClient implements EngineTransport {
   async dispose(): Promise<void> {
     if (this.role === 'closed') return;
     this.role = 'closed';
+    if (this.yieldCooldown !== null) clearTimeout(this.yieldCooldown);
+    this.yieldCooldown = null;
     this.innerUnsub();
     this.relay?.close();
     this.current.close();
@@ -574,9 +589,21 @@ export class EngineClient implements EngineTransport {
    * with, so every other tab on the origin is blocked until it gives the lock
    * up. Only a leader with no login of its own ever yields, so two engine-less
    * tabs cannot pass the lock between themselves.
+   *
+   * Rate-limited by `YIELD_COOLDOWN_MS`.
    */
   private yieldLeadership(): void {
     if (this.role !== 'leader' || this.hasLogin) return;
+    if (this.yieldCooldown !== null) {
+      this.yieldWanted = true;
+      return;
+    }
+    this.yieldCooldown = setTimeout(() => {
+      this.yieldCooldown = null;
+      if (!this.yieldWanted) return;
+      this.yieldWanted = false;
+      this.yieldLeadership();
+    }, YIELD_COOLDOWN_MS);
     this.innerUnsub();
     this.relay?.close();
     this.relay = null;
