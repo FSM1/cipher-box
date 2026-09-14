@@ -1,0 +1,75 @@
+# The staging e2e suite (blueprint/testing.md, staging release gates): the v1
+# usage profiles driven through a real browser against the deployed front, with
+# the real wallet login a deployed bundle ships. It builds nothing — the bits
+# under test are whatever the base URL serves — and it gates no merge, so a red
+# run is the verdict on a deploy, never on a pull request.
+name: Staging E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      base-url:
+        description: The deployed app to drive
+        required: false
+        default: https://app-staging.cipherbox.cc
+        type: string
+  workflow_call:
+    inputs:
+      base-url:
+        description: The deployed app to drive
+        required: false
+        default: https://app-staging.cipherbox.cc
+        type: string
+      ref:
+        description: 'Git ref to checkout for the suite sources'
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  staging-e2e:
+    name: Staging E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: ./.github/actions/playwright-chromium
+        with:
+          package: '@cipherbox/web-e2e'
+          working-directory: tests/web-e2e
+
+      # One worker: staging is a 2-vCPU box, and its auth surface is rate
+      # limited per caller address with no bypass.
+      - name: Run the staging profiles
+        timeout-minutes: 35
+        run: pnpm --filter @cipherbox/web-e2e test:e2e
+        env:
+          E2E_BASE_URL: ${{ inputs.base-url }}
+
+      - name: Upload the Playwright report and the measured timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-e2e-report
+          path: |
+            tests/web-e2e/playwright-report/
+            tests/web-e2e/test-results/
+          retention-days: 14

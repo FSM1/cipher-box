@@ -1,13 +1,18 @@
-// The web e2e suite (blueprint/testing.md "E2E"). Both projects run against the
-// production static build, served from a built directory — the artifact that
-// ships is the artifact tested. `e2e` drives the build carrying the
-// introspection hook; `release` drives the same build without the flag.
+// The web e2e suite (blueprint/testing.md "E2E"). The local projects run
+// against the production static build, served from a built directory — the
+// artifact that ships is the artifact tested. `e2e` drives the build carrying
+// the introspection hook; `release` drives the same build without the flag.
 //
 // `E2E_SUITE` picks the slice: `smoke` (the default) is the PR gate's
 // bounded-minutes budget and drops every `@full`-tagged test; `full` is the main
 // gate and runs everything.
 //
-// `retries: 0` is policy in both slices, not tuning: a flaky test is a defect.
+// `E2E_BASE_URL` switches the whole run onto the deployed front instead: no
+// local server, the `staging` project only, and the real login the staging
+// profiles need (`staging/README` and blueprint/testing.md staging release
+// gates).
+//
+// `retries: 0` is policy in every slice, not tuning: a flaky test is a defect.
 import { defineConfig, devices } from '@playwright/test';
 
 const suite = process.env.E2E_SUITE ?? 'smoke';
@@ -37,24 +42,45 @@ const preview = (outDir: string, port: number, reuse = false) => ({
   stderr: 'pipe' as const,
 });
 
-export default defineConfig({
-  testDir: './tests',
+const stagingBaseUrl = process.env.E2E_BASE_URL?.trim();
+
+/**
+ * The deployed front, driven through the real login. Staging is a 2-vCPU box
+ * behind a rate limit keyed on the caller address, so the run is serial.
+ */
+const staging = {
+  workers: 1,
+  fullyParallel: false,
+  timeout: 300_000,
+  projects: [
+    {
+      name: 'staging-media',
+      testDir: './staging',
+      testMatch: '**/media.setup.ts',
+    },
+    {
+      name: 'staging',
+      testDir: './staging',
+      testIgnore: '**/*.setup.ts',
+      dependencies: ['staging-media'],
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: stagingBaseUrl,
+        // No trace: this run holds a real session, and its report is an
+        // artifact of a public repository. A trace records every request
+        // header, which here carries the session bearer and the accelerator
+        // pseudonym — a gateway credential (blueprint/api.md Egress).
+        trace: 'off' as const,
+      },
+    },
+  ],
+};
+
+const local = {
   // Every test cold-starts its own vault from a fresh login secret, so nothing
   // is shared to serialize around.
   fullyParallel: true,
-  forbidOnly: isCi,
-  grepInvert: suite === 'smoke' ? /@full/ : undefined,
-  retries: 0,
   timeout: 120_000,
-  reporter: isCi ? [['list'], ['html', { open: 'never' }]] : 'list',
-  use: {
-    // Chrome's own headless, not Playwright's default `chrome-headless-shell`:
-    // the shell segfaults on a page that registers a Service Worker, killing the
-    // browser under whichever assertion is in flight.
-    channel: 'chromium',
-    screenshot: 'only-on-failure',
-    trace: 'retain-on-failure',
-  },
   projects: [
     {
       name: 'e2e',
@@ -70,4 +96,21 @@ export default defineConfig({
     },
   ],
   webServer: [preview('dist', E2E_PORT, true), preview('dist-release', RELEASE_PORT)],
+};
+
+export default defineConfig({
+  testDir: './tests',
+  forbidOnly: isCi,
+  grepInvert: suite === 'smoke' ? /@full/ : undefined,
+  retries: 0,
+  reporter: isCi ? [['list'], ['html', { open: 'never' }]] : 'list',
+  ...(stagingBaseUrl ? staging : local),
+  use: {
+    // Chrome's own headless, not Playwright's default `chrome-headless-shell`:
+    // the shell segfaults on a page that registers a Service Worker, killing the
+    // browser under whichever assertion is in flight.
+    channel: 'chromium',
+    screenshot: 'only-on-failure',
+    trace: 'retain-on-failure',
+  },
 });
