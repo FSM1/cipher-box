@@ -20,7 +20,7 @@ use std::rc::Rc;
 use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
-    ContentProfile, Entropy, EntropyError, GatewayConfig, OverBudgetCause, OwnerScopedFloorStore,
+    ContentProfile, GatewayConfig, OsEntropy, OverBudgetCause, OwnerScopedFloorStore,
     QueueGenerationStore, SeamSet, SeamTypes, SiweIntent, StoragePlatform, StoragePolicy,
     StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
 };
@@ -55,18 +55,6 @@ impl SeamTypes for WebSeamTypes {
     type StagingStore = StagingStoreAdapter;
     type SnapshotCache = SnapshotCacheAdapter;
     type CredentialStore = CredentialStoreAdapter;
-}
-
-/// Production entropy: the target's `getrandom`, whose wasm backend wires to
-/// `crypto.getRandomValues` in the worker scope (`.cargo/config.toml`
-/// `getrandom_backend="wasm_js"`). Fail-closed — never substitutes predictable
-/// bytes.
-struct GetrandomEntropy;
-
-impl Entropy for GetrandomEntropy {
-    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
-        getrandom::fill(dest).map_err(|error| EntropyError::new(error.to_string()))
-    }
 }
 
 /// Pulls one named seam off the JS seam bag, failing closed if it is missing.
@@ -177,7 +165,7 @@ impl EngineHandle {
 
         let (engine, events) = Engine::new(
             seam_set,
-            Box::new(GetrandomEntropy),
+            Box::new(OsEntropy),
             profile,
             // The framing is frozen and pins the wire format, so the browser
             // always writes the shipped profile — never the CI one.

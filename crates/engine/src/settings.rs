@@ -19,11 +19,7 @@
 
 use core::cell::RefCell;
 use core::fmt;
-use core::future::{Future, poll_fn};
 use core::num::NonZeroU64;
-use core::pin::pin;
-use core::task::Poll;
-use core::time::Duration;
 
 use cipherbox_core::codec::{Map, Value, decode, encode};
 use cipherbox_core::error::{CodecError, Malformed};
@@ -42,19 +38,18 @@ use crate::content::{ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, Re
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
-use crate::net::eol::is_expired;
-use crate::net::fanout_get_verify;
-use crate::net::fetch_head_block;
 use crate::net::liveness::{HeldRecord, HeldValue};
-use crate::net::publish::{PublishOutcome, head_cid_from_value};
+use crate::net::publish::PublishOutcome;
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
 };
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
+use crate::record_plane::{
+    DefaultsReason, EolRule, OpenedBody, RecordLoad, RecordPlane, load_record, prefixed_key,
+};
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
-    UnixMillis,
 };
 
 /// The owner's client configuration, sealed into the vault settings record.
@@ -521,83 +516,6 @@ pub enum SettingsPublishError {
     Revision,
 }
 
-/// Why a load did not use the published record, carried by both degraded
-/// outcomes. Reported rather than collapsed, because the reasons are not
-/// equally benign: `UnprovenFirstRun` is the one that still authorises a write,
-/// while `Suppressed` and `RolledBack` are what an adversary who controls the
-/// record plane produces, and reverting a member's placement choice to the
-/// hosted default is exactly what they gain by it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DefaultsReason {
-    /// No endpoint served a record, and this device holds none of the three
-    /// durable marks one leaves: the sequence floor, the adopted body revision,
-    /// or the publish mint counter. Named for what it is rather than what it
-    /// looks like — absence is a statement about *this device*, never proof
-    /// that the account has never published, so the first run it reports is
-    /// assumed and not established. Durable-mark evidence only: a cached
-    /// last-known-good block can accompany it, since no raise is gated on the
-    /// cache write.
-    UnprovenFirstRun,
-    /// No usable record, but a durable mark proves this device already adopted
-    /// one: the record is being withheld or its head block is unreachable.
-    Suppressed,
-    /// No usable record, and the publish mint counter is this device's only
-    /// mark: a publish minted a revision and then failed, or landed and lost
-    /// its floor write before the store could record it. Refused like
-    /// [`Self::Suppressed`], because the second case is a record this device
-    /// must not publish over — and reported apart from it, because no other
-    /// device is needed to reach it and none may be needed to leave it
-    /// (blueprint/engine.md "Bin index record").
-    StrandedMint,
-    /// A record below the durable sequence floor — a replay, not staleness.
-    RolledBack {
-        /// The durable floor the record failed.
-        floor: u64,
-        /// The sequence the replayed record carried.
-        sequence: u64,
-    },
-    /// A record whose sealed body revision is below this device's durable
-    /// revision high-water: a same-sequence fork or a replay the outer sequence
-    /// cannot tell apart, never staleness.
-    RevisionRolledBack {
-        /// The durable revision high-water the record failed.
-        floor: u64,
-        /// The revision the refused body carried.
-        revision: u64,
-    },
-    /// The record's client-signed EOL has lapsed, so it is no longer
-    /// authoritative about the member's current configuration.
-    Expired,
-    /// The load did not finish inside the profile's budget.
-    TimedOut,
-    /// A record was found but yielded no usable settings: it will not open
-    /// under the enc subkey, or its body is malformed or invalid.
-    Unreadable,
-    /// The durable sequence floor could not be read, so no record could be
-    /// held to its rollback bar. Host I/O, not a verdict on any record.
-    FloorUnreadable,
-}
-
-impl DefaultsReason {
-    /// The stable check name a host renders, carrying no record figures — the
-    /// floors and sequences the data-carrying variants hold are this device's
-    /// own state, and a host has no use for them.
-    #[must_use]
-    pub fn check(self) -> &'static str {
-        match self {
-            Self::UnprovenFirstRun => "unproven-first-run",
-            Self::Suppressed => "suppressed",
-            Self::StrandedMint => "stranded-mint",
-            Self::RolledBack { .. } => "rolled-back",
-            Self::RevisionRolledBack { .. } => "revision-rolled-back",
-            Self::Expired => "expired",
-            Self::TimedOut => "timed-out",
-            Self::Unreadable => "unreadable",
-            Self::FloorUnreadable => "floor-unreadable",
-        }
-    }
-}
-
 /// What a load produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsLoad {
@@ -682,32 +600,6 @@ fn revision_adopted_key(name: &IpnsName) -> Vec<u8> {
 
 fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
     prefixed_key(b"settings-revision-mint/", name)
-}
-
-/// The verdict a load reaches when no endpoint served a record, from the three
-/// durable marks a publish leaves. Stated once, because both record planes read
-/// it and the drain must not learn a rule of its own.
-///
-/// The two adoption marks answer first: either one proves a record this device
-/// already took, so an absent one is withheld. The mint counter alone is an
-/// attempt this device made, and the residual case where it is also a landed
-/// publish whose floor write was lost is why it refuses too.
-pub(crate) fn unresolved_reason(
-    durable: Option<u64>,
-    minted: Option<u64>,
-    adopted: Option<u64>,
-) -> DefaultsReason {
-    match (durable.or(adopted), minted) {
-        (Some(_), _) => DefaultsReason::Suppressed,
-        (None, Some(_)) => DefaultsReason::StrandedMint,
-        (None, None) => DefaultsReason::UnprovenFirstRun,
-    }
-}
-
-pub(crate) fn prefixed_key(prefix: &[u8], name: &IpnsName) -> Vec<u8> {
-    let mut key = prefix.to_vec();
-    key.extend_from_slice(name.as_str().as_bytes());
-    key
 }
 
 /// The next body revision for this account's settings record.
@@ -899,43 +791,43 @@ where
     Sch: Scheduler,
 {
     let name = IpnsName::from_public_key(&signer.verifying_key());
-    // Held outside the budget so a load that runs out of it mid-resolve still
-    // has the cached ciphertext the resolve read on its way in.
-    let mut cached = None;
-    let load = resolve_settings(
+    let plane = RecordPlane {
+        cache_key: settings_cache_key(&name),
+        adopted_key: revision_adopted_key(&name),
+        mint_key: revision_mint_key(&name),
+        // The reader of this record is always its signer, so a lapsed EOL is a
+        // refusal rather than the availability event it is plane-wide.
+        eol: EolRule::RefuseAt(scheduler.now()),
+        name: &name,
+        signer,
+    };
+    let read = load_record(
         transport,
         gateway,
         http,
         floors,
         snapshots,
-        &mut cached,
-        enc_secret,
-        signer,
-        &name,
-        scheduler.now(),
-    );
-    let reason = match within(scheduler, profile.settings_load_budget, load).await {
-        Some(Ok((settings, renewable))) => {
-            return SettingsRead {
-                load: SettingsLoad::Resolved(settings),
-                renewable,
-            };
-        }
-        Some(Err(reason)) => reason,
-        None => DefaultsReason::TimedOut,
-    };
-    // A rollback takes this arm like every other reason: pinning last-known-good
-    // is what the record plane already owes a gate failure (blueprint/engine.md).
-    let load = match cached.and_then(|block| open_settings_head(enc_secret, &block)) {
-        Some(body) => SettingsLoad::Stale {
-            settings: body.settings,
-            reason,
+        scheduler,
+        profile.settings_load_budget,
+        &plane,
+        |block| {
+            open_settings_head(enc_secret, block).map(|body| OpenedBody {
+                revision: body.revision,
+                body: body.settings,
+            })
         },
-        None => SettingsLoad::Defaults(reason),
-    };
+    )
+    .await;
     SettingsRead {
-        load,
-        renewable: None,
+        load: match read.load {
+            RecordLoad::Resolved(settings) => SettingsLoad::Resolved(settings),
+            RecordLoad::Stale {
+                body: settings,
+                reason,
+            } => SettingsLoad::Stale { settings, reason },
+            RecordLoad::Degraded(reason) => SettingsLoad::Defaults(reason),
+        },
+        renewable: read.renewable,
     }
 }
 
@@ -959,133 +851,12 @@ pub(crate) fn cached_settings_block(
 /// record-plane keys [`crate::net::resolve`] writes — those hold record bytes,
 /// this holds the block the record anchors.
 fn settings_cache_key(name: &IpnsName) -> Vec<u8> {
-    let mut key = b"settings-head/".to_vec();
-    key.extend_from_slice(name.as_str().as_bytes());
-    key
+    prefixed_key(b"settings-head/", name)
 }
 
-/// Open a settings head block. Being cached buys bytes nothing — the cached and
-/// the fetched copy reach their verdict here, through one seal open and one
-/// body grammar — so a copy this build cannot authenticate is discarded rather
-/// than applied.
+/// Open a settings head block: one seal open and one body grammar.
 fn open_settings_head(enc_secret: &X25519Secret, block: &[u8]) -> Option<SettingsBody> {
     decode_settings_body(&open_settings_record(enc_secret, block).ok()?).ok()
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn resolve_settings<T, H, F, Sn>(
-    transport: &T,
-    gateway: &Gateway,
-    http: &H,
-    floors: &F,
-    snapshots: &Sn,
-    cached: &mut Option<Vec<u8>>,
-    enc_secret: &X25519Secret,
-    signer: &Ed25519Signer,
-    name: &IpnsName,
-    now: UnixMillis,
-) -> Result<(VaultSettings, Option<HeldRecord>), DefaultsReason>
-where
-    T: RecordTransport,
-    H: Http,
-    F: FloorStore,
-    Sn: SnapshotCache,
-{
-    let key = name.as_str().as_bytes();
-    let cache_key = settings_cache_key(name);
-    // Read ahead of the resolve so a degraded outcome has last-known-good to
-    // fall back on; the cache never short-circuits the fetch.
-    *cached = snapshots.get(&cache_key).await.ok().flatten();
-    // The settings record belongs to no scope and carries no epoch, so the
-    // per-name sequence floor and the adopted body revision are its whole floor
-    // law. A floor the host cannot read is never treated as no floor.
-    let Ok(durable) = floor::sequence_floor(floors, key).await else {
-        return Err(DefaultsReason::FloorUnreadable);
-    };
-    let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
-        // The other two marks join the sequence floor only here, because only
-        // here does their absence still authorise a write, and each is raised
-        // where the sequence floor is not. The mint counter is raised ahead of
-        // everything a publish can fail at, so it outlives any save that got as
-        // far as minting a revision. The adopted revision is raised by a
-        // separate, non-atomic store write, so it can outlive a lost one.
-        let (Ok(minted), Ok(adopted)) = (
-            floor::sequence_floor(floors, &revision_mint_key(name)).await,
-            floor::sequence_floor(floors, &revision_adopted_key(name)).await,
-        ) else {
-            return Err(DefaultsReason::FloorUnreadable);
-        };
-        return Err(unresolved_reason(durable, minted, adopted));
-    };
-    // The reader of this record is always its signer, so a lapsed EOL is a
-    // refusal here rather than the availability event it is plane-wide
-    // (blueprint/engine.md "Vault settings load").
-    if is_expired(now, &verified.validity) {
-        return Err(DefaultsReason::Expired);
-    }
-    let sequence = verified.sequence;
-    let floor = durable.unwrap_or(0);
-    if sequence < floor {
-        return Err(DefaultsReason::RolledBack { floor, sequence });
-    }
-
-    // The record verified under a name only this account can sign for, so a
-    // head block that will not come back is a withheld settings record.
-    let Ok((_, block)) = fetch_head_block(gateway, http, name, &record_bytes, None).await else {
-        return Err(DefaultsReason::Suppressed);
-    };
-    let body = open_settings_head(enc_secret, &block).ok_or(DefaultsReason::Unreadable)?;
-    let adopted_key = revision_adopted_key(name);
-    let Ok(adopted) = floor::sequence_floor(floors, &adopted_key).await else {
-        return Err(DefaultsReason::FloorUnreadable);
-    };
-    let adopted = adopted.unwrap_or(0);
-    // The revision arbitrates only what the sequence cannot: a fork *at* the
-    // sequence this device already adopted. A strictly newer record won its CAS
-    // against the network, and holding it to a device-local revision counter
-    // would refuse a second device's legitimate publish forever.
-    if sequence == floor && body.revision < adopted {
-        return Err(DefaultsReason::RevisionRolledBack {
-            floor: adopted,
-            revision: body.revision,
-        });
-    }
-    // Both bars are behind this point ([`SettingsRead::renewable`]).
-    let renewable = durable
-        .and_then(|_| head_cid_from_value(&verified.value))
-        .map(|head_cid| HeldRecord {
-            routing_key: name.as_str().to_owned(),
-            record_bytes,
-            signer: signer.clone(),
-            value: HeldValue::Head(head_cid),
-            // The settings record anchors its sealed body and nothing else.
-            content_cids: Vec::new(),
-        });
-    // Only a record that cleared its floor and opened becomes last-known-good,
-    // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
-    let _ = snapshots.put(&cache_key, &block).await;
-    // Advancing behind the open, never ahead of it, is the floor law: a record
-    // that will not open must not raise the bar the next resolve is held to.
-    // Neither store failing is a verdict on settings we just authenticated.
-    let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
-    let _ = floor::advance_sequence_on_unseal(floors, &adopted_key, body.revision).await;
-    Ok((body.settings, renewable))
-}
-
-/// Run `work`, giving up once `budget` has elapsed on the injected scheduler.
-/// `None` is the timeout.
-pub(crate) async fn within<S: Scheduler, W: Future>(
-    scheduler: &S,
-    budget: Duration,
-    work: W,
-) -> Option<W::Output> {
-    let mut work = pin!(work);
-    let mut expiry = pin!(scheduler.sleep(budget));
-    poll_fn(|cx| match work.as_mut().poll(cx) {
-        Poll::Ready(out) => Poll::Ready(Some(out)),
-        Poll::Pending => expiry.as_mut().poll(cx).map(|()| None),
-    })
-    .await
 }
 
 // ---------------------------------------------------------------------------

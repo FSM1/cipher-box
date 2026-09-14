@@ -37,6 +37,7 @@ pub mod name;
 pub mod net;
 mod owner_keys;
 pub mod profile;
+pub mod record_plane;
 pub mod rotation;
 pub mod seams;
 mod session;
@@ -70,7 +71,7 @@ pub use devices::{
     adopt_factor, approval_request_payload, approval_response_payload, comparison_value,
     rendezvous_public_key, seal_factor,
 };
-pub use entropy::{Entropy, EntropyError};
+pub use entropy::{Entropy, EntropyError, OsEntropy};
 pub use facade::{
     ApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter, Engine,
     EngineError, EngineView, Event, EventStream, InvalidApiBaseUrl, LoginSecret,
@@ -102,6 +103,7 @@ pub use net::{
     revive,
 };
 pub use profile::SyncTimingProfile;
+pub use record_plane::DefaultsReason;
 pub use rotation::{
     ChildIndexResolver, CommittedSet, CutRotationReport, CutRotator, EagerSet, EnumerationError,
     GrantCutPlan, PrevEpochSeed, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
@@ -117,11 +119,10 @@ pub use seams::{
     SeamSet, SeamTypes,
 };
 pub use settings::{
-    DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, MAX_BIN_RETENTION_DAYS, Placement,
-    PlacementDecision, PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad,
-    SettingsOrigin, SettingsPublishError, SettingsRead, SettingsRefusal, VaultSettings,
-    VaultSettingsSummary, decide_placement, load_settings, placement_of, publish_settings,
-    settings_name,
+    DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS, Placement, PlacementDecision,
+    PlacementRefusal, PlacementSource, SessionPlacement, SettingsLoad, SettingsOrigin,
+    SettingsPublishError, SettingsRead, SettingsRefusal, VaultSettings, VaultSettingsSummary,
+    decide_placement, load_settings, placement_of, publish_settings, settings_name,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{

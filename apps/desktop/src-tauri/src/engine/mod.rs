@@ -26,7 +26,9 @@ use std::thread::JoinHandle;
 
 use cipherbox_desktop_seams::{account_data_dir, measured_storage_policy};
 use cipherbox_engine::facade::{Command, Engine, Event, EventStream, LoginSecret};
-use cipherbox_engine::{ChallengeSigner, ContentProfile, IdentityChallengeSigner, Staleness};
+use cipherbox_engine::{
+    ChallengeSigner, ContentProfile, IdentityChallengeSigner, OsEntropy, Staleness,
+};
 use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use zeroize::Zeroizing;
@@ -34,7 +36,7 @@ use zeroize::Zeroizing;
 use crate::mount::{FromMount, MountStatus, Projection};
 
 pub use config::EngineConfig;
-pub use seams::{DesktopSeamTypes, HostCredentialStore, OsEntropy};
+pub use seams::{DesktopSeamTypes, HostCredentialStore};
 
 /// The secp256k1 scalar length `crates/engine/src/session.rs` requires.
 pub const LOGIN_SECRET_LEN: usize = 32;

@@ -2,9 +2,10 @@
 //! soft-deleted node (CONTEXT.md "Bin index", blueprint/engine.md "Bin index
 //! record").
 //!
-//! The record plane is [`crate::settings`]'s, so the floor law, the degradation
-//! ladder and the mint-versus-adopt revision pair carry over unchanged. The
-//! properties that do not are stated where they bite: the nonce rule at
+//! The floor law, the degradation ladder and the mint-versus-adopt revision
+//! pair are [`crate::record_plane`]'s, shared with the vault settings record.
+//! The properties that are this plane's own are stated where they bite: the
+//! nonce rule at
 //! [`publish_bin_index`], the rewrite guard at [`BinIndexLoad::writable`], and
 //! the renewal enrolment at [`BinIndexRead::renewable`], which stands in for the
 //! settings resolve's lapsed-EOL refusal (blueprint/engine.md "Bin index
@@ -27,19 +28,19 @@ use crate::content::Gateway;
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
-use crate::net::fanout_get_verify;
-use crate::net::fetch_head_block;
 use crate::net::liveness::{HeldRecord, HeldValue};
-use crate::net::publish::{PublishOutcome, head_cid_from_value};
+use crate::net::publish::PublishOutcome;
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_bin_index, publish_record,
 };
 use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
+use crate::record_plane::{
+    DefaultsReason, EolRule, OpenedBody, RecordLoad, RecordPlane, load_record, prefixed_key,
+};
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
 };
-use crate::settings::{DefaultsReason, prefixed_key, unresolved_reason, within};
 
 /// What a bin index load produced.
 ///
@@ -452,124 +453,44 @@ where
     Sn: SnapshotCache,
     Sch: Scheduler,
 {
-    let seal_key = &keys.seal_key;
-    // Held outside the budget so a load that runs out of it mid-resolve still
-    // has the cached ciphertext the resolve read on its way in.
-    let mut cached = None;
-    let load = resolve_bin_index(
+    let name = &keys.name;
+    let plane = RecordPlane {
+        name,
+        signer: &keys.signer,
+        cache_key: bin_index_cache_key(name),
+        adopted_key: revision_adopted_key(name),
+        mint_key: revision_mint_key(name),
+        eol: EolRule::LeaveToRenewal,
+    };
+    let read = load_record(
         transport,
         gateway,
         http,
         floors,
         snapshots,
-        &mut cached,
-        keys,
-    );
-    let reason = match within(scheduler, profile.settings_load_budget, load).await {
-        Some(Ok((index, renewable))) => {
-            return BinIndexRead {
-                load: BinIndexLoad::Resolved(index),
-                renewable,
-            };
-        }
-        Some(Err(reason)) => reason,
-        None => DefaultsReason::TimedOut,
-    };
-    // The cached copy clears the same seal open the fetched one does; being
-    // cached buys bytes nothing.
-    let load = match cached.and_then(|block| open_bin_index(seal_key.as_bytes(), &block).ok()) {
-        Some(index) => BinIndexLoad::Stale { index, reason },
-        None => BinIndexLoad::Empty(reason),
-    };
+        scheduler,
+        profile.settings_load_budget,
+        &plane,
+        |block| {
+            let index = open_bin_index(keys.seal_key.as_bytes(), block).ok()?;
+            Some(OpenedBody {
+                revision: index.revision,
+                body: index,
+            })
+        },
+    )
+    .await;
     BinIndexRead {
-        load,
-        renewable: None,
+        load: match read.load {
+            RecordLoad::Resolved(index) => BinIndexLoad::Resolved(index),
+            RecordLoad::Stale {
+                body: index,
+                reason,
+            } => BinIndexLoad::Stale { index, reason },
+            RecordLoad::Degraded(reason) => BinIndexLoad::Empty(reason),
+        },
+        renewable: read.renewable,
     }
-}
-
-/// The resolved index and the record to enrol for renewal
-/// ([`BinIndexRead::renewable`]), or the reason the ladder degrades.
-#[allow(clippy::too_many_arguments)]
-async fn resolve_bin_index<T, H, F, Sn>(
-    transport: &T,
-    gateway: &Gateway,
-    http: &H,
-    floors: &F,
-    snapshots: &Sn,
-    cached: &mut Option<Vec<u8>>,
-    keys: &BinIndexKeys,
-) -> Result<(BinIndex, Option<HeldRecord>), DefaultsReason>
-where
-    T: RecordTransport,
-    H: Http,
-    F: FloorStore,
-    Sn: SnapshotCache,
-{
-    let name = &keys.name;
-    let seal_key = &keys.seal_key;
-    let key = name.as_str().as_bytes();
-    let cache_key = bin_index_cache_key(name);
-    // Read ahead of the resolve so a degraded outcome has last-known-good to
-    // fall back on; the cache never short-circuits the fetch.
-    *cached = snapshots.get(&cache_key).await.ok().flatten();
-    // No scope and no epoch, so the per-name sequence floor and the adopted body
-    // revision are this record's whole floor law.
-    let Ok(durable) = floor::sequence_floor(floors, key).await else {
-        return Err(DefaultsReason::FloorUnreadable);
-    };
-    let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
-        // All three marks answer here, because only here does their absence
-        // still let a publish mint a first index. Each is raised where the
-        // sequence floor is not.
-        let (Ok(minted), Ok(adopted)) = (
-            floor::sequence_floor(floors, &revision_mint_key(name)).await,
-            floor::sequence_floor(floors, &revision_adopted_key(name)).await,
-        ) else {
-            return Err(DefaultsReason::FloorUnreadable);
-        };
-        return Err(unresolved_reason(durable, minted, adopted));
-    };
-    let sequence = verified.sequence;
-    let floor = durable.unwrap_or(0);
-    if sequence < floor {
-        return Err(DefaultsReason::RolledBack { floor, sequence });
-    }
-
-    // The name only this account can sign for, so an absent head block is a
-    // withheld bin index.
-    let Ok((_, block)) = fetch_head_block(gateway, http, name, &record_bytes, None).await else {
-        return Err(DefaultsReason::Suppressed);
-    };
-    let index =
-        open_bin_index(seal_key.as_bytes(), &block).map_err(|_| DefaultsReason::Unreadable)?;
-    let adopted_key = revision_adopted_key(name);
-    let Ok(adopted) = floor::sequence_floor(floors, &adopted_key).await else {
-        return Err(DefaultsReason::FloorUnreadable);
-    };
-    let adopted = adopted.unwrap_or(0);
-    // The revision arbitrates only what the sequence cannot: a fork *at* the
-    // adopted sequence.
-    if sequence == floor && index.revision < adopted {
-        return Err(DefaultsReason::RevisionRolledBack {
-            floor: adopted,
-            revision: index.revision,
-        });
-    }
-    // Both bars are behind this point ([`BinIndexRead::renewable`]).
-    let renewable = durable
-        .and_then(|_| head_cid_from_value(&verified.value))
-        .map(|head_cid| HeldRecord {
-            routing_key: name.as_str().to_owned(),
-            record_bytes,
-            signer: keys.signer.clone(),
-            value: HeldValue::Head(head_cid),
-            content_cids: Vec::new(),
-        });
-    // Ciphertext at rest: the sealed block, never the opened index.
-    let _ = snapshots.put(&cache_key, &block).await;
-    let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
-    let _ = floor::advance_sequence_on_unseal(floors, &adopted_key, index.revision).await;
-    Ok((index, renewable))
 }
 
 #[cfg(test)]

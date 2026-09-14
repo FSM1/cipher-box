@@ -96,6 +96,7 @@ use crate::net::{
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
+use crate::record_plane::DefaultsReason;
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
@@ -113,10 +114,10 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
-    DEFAULT_BIN_RETENTION_DAYS, DefaultsReason, PlacementRefusal, PlacementSource,
-    SessionPlacement, SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary,
-    decide_placement, load_settings, load_settings_at, placement_of, publish_settings,
-    redecide_placement, summarize_settings,
+    DEFAULT_BIN_RETENTION_DAYS, PlacementRefusal, PlacementSource, SessionPlacement,
+    SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary, decide_placement,
+    load_settings, load_settings_at, placement_of, publish_settings, redecide_placement,
+    summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};

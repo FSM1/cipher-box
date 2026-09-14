@@ -31,15 +31,13 @@ zeroize.workspace = true
 
 # Browser wasm host deps: the engine worker host (`src/host.rs`) and the shared
 # seam adapters (`src/seams_bridge.rs`) marshal JS values, drive engine futures,
-# surface panics, and source entropy. getrandom's `wasm_js` backend wires to
-# `crypto.getRandomValues` in the worker scope (`.cargo/config.toml`
-# `getrandom_backend="wasm_js"`). Scoped to wasm32-unknown-unknown — the browser
-# target — so native workspace builds/tests skip the JS glue entirely.
+# and surface panics. Entropy comes from the engine's `OsEntropy`. Scoped to
+# wasm32-unknown-unknown — the browser target — so native workspace
+# builds/tests skip the JS glue entirely.
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 console_error_panic_hook = "0.1"
-getrandom = { workspace = true, features = ["wasm_js"] }
 # Async locks: an RwLock lets reads (`snapshot`/`download`) share the engine
 # while `start`/`command` serialize as the single writer; a Mutex bounds
 # `nextEvent` to one outstanding stream read.
@@ -51,3 +49,6 @@ async-lock = "3"
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 cipherbox-core.workspace = true
 wasm-bindgen-test = "0.3"
+# The boundary suite asserts that getrandom's `wasm_js` backend reaches
+# `crypto.getRandomValues` in the worker scope — the getrandom parity surface.
+getrandom = { workspace = true, features = ["wasm_js"] }

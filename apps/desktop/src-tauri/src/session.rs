@@ -16,13 +16,14 @@
 use std::path::PathBuf;
 
 use cipherbox_desktop_seams::{KeyringCredentialStore, SealedCoreKitStore, core_kit_store_dir};
+use cipherbox_engine::OsEntropy;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Emitter, Manager, State};
 use zeroize::Zeroizing;
 
 use crate::engine::{
-    EngineConfig, EngineHost, HostCredentialStore, LOGIN_SECRET_LEN, NOT_A_SCALAR, OsEntropy,
-    SessionEnv, Shell, VaultStatus,
+    EngineConfig, EngineHost, HostCredentialStore, LOGIN_SECRET_LEN, NOT_A_SCALAR, SessionEnv,
+    Shell, VaultStatus,
 };
 use crate::tray;
 

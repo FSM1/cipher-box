@@ -34,9 +34,6 @@ test-kit = []
 cipherbox-core.workspace = true
 cipherbox-engine.workspace = true
 zeroize.workspace = true
-# The spill's per-handle sealing key is drawn here, at the production mount's
-# own construction site — see `SpillArea::production`.
-getrandom.workspace = true
 
 # The spill area's lease: one exclusive OS file lock, `flock` on unix and
 # `LockFileEx` on Windows, without the `unsafe` this crate forbids.
