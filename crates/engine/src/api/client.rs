@@ -27,16 +27,11 @@ use super::types::{
     TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest, UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
+use crate::deadlines::DeadlinePolicy;
 use crate::seams::{
     CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, SeamError,
     bearer_header, item_id_is_legal,
 };
-
-/// Control-plane deadline: small JSON round trips must not park a UI flow.
-const CONTROL_TIMEOUT_MS: u64 = 10_000;
-/// Upload deadline: a content block legitimately moves megabytes on a slow
-/// uplink, so it cannot share the control-plane bound.
-const TRANSFER_TIMEOUT_MS: u64 = 120_000;
 
 const CONTENT_TYPE: &str = "Content-Type";
 const APPLICATION_JSON: &str = "application/json";
@@ -90,6 +85,7 @@ pub struct ApiClient<H: Http, C: CredentialStore> {
     /// gateway leg cannot present each other's credential.
     accelerator: SessionBearer,
     refresh_waiters: RefreshWaiters,
+    deadlines: DeadlinePolicy,
 }
 
 impl<H: Http, C: CredentialStore> ApiClient<H, C> {
@@ -107,7 +103,15 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             session: SessionBearer::default(),
             accelerator: SessionBearer::default(),
             refresh_waiters: RefCell::new(None),
+            deadlines: DeadlinePolicy::default(),
         }
+    }
+
+    /// Hold every API leg to `deadlines` instead of the shipped default.
+    #[must_use]
+    pub fn with_deadlines(mut self, deadlines: DeadlinePolicy) -> Self {
+        self.deadlines = deadlines;
+        self
     }
 
     /// Hold this session's credentials in the caller's cells rather than
@@ -170,7 +174,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             headers: Vec::new(),
             body: None,
             credentials: HttpCredentials::Include,
-            timeout_ms: Some(CONTROL_TIMEOUT_MS),
+            timeout_ms: Some(self.deadlines.control_ms),
         };
         siwe_nonce(ok_or_err(self.http.send(request).await?)?)
     }
@@ -441,7 +445,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                 Some(APPLICATION_OCTET_STREAM),
                 &[(CONTENT_CID, cid)],
                 Some(content.to_vec()),
-                TRANSFER_TIMEOUT_MS,
+                self.deadlines.transfer_ms,
             )
             .await?;
         let response = ok_or_err(response)?;
@@ -676,7 +680,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
             body: Some(to_json(body)),
             credentials: HttpCredentials::Include,
-            timeout_ms: Some(CONTROL_TIMEOUT_MS),
+            timeout_ms: Some(self.deadlines.control_ms),
         };
         Ok(self.http.send(request).await?)
     }
@@ -695,7 +699,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             Some(APPLICATION_JSON),
             &[],
             Some(to_json(body)),
-            CONTROL_TIMEOUT_MS,
+            self.deadlines.control_ms,
         )
         .await
     }
@@ -706,7 +710,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         method: HttpMethod,
         path: &str,
     ) -> Result<HttpResponse, ApiError> {
-        self.request_authed_with(method, path, None, &[], None, CONTROL_TIMEOUT_MS)
+        self.request_authed_with(method, path, None, &[], None, self.deadlines.control_ms)
             .await
     }
 
@@ -819,7 +823,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
             body: Some(body.to_vec()),
             credentials: HttpCredentials::Include,
-            timeout_ms: Some(CONTROL_TIMEOUT_MS),
+            timeout_ms: Some(self.deadlines.control_ms),
         };
         let response = self.http.send(request).await?;
         if !is_success(response.status) {
@@ -1448,6 +1452,33 @@ mod tests {
             block_on(client.test_login("h", "wrong")).unwrap_err(),
             ApiError::Forbidden
         );
+    }
+
+    #[test]
+    fn the_injected_control_deadline_rides_an_api_request() {
+        let (http, _creds, client) = fakes();
+        let client = client.with_deadlines(DeadlinePolicy {
+            control_ms: 333,
+            ..DeadlinePolicy::default()
+        });
+        http.enqueue_response(json_response(
+            200,
+            json!({ "nonce": "a1b2c3d4e5f60718", "expiresAt": "2026-01-01T00:00:00Z" }),
+        ));
+        block_on(client.siwe_challenge()).expect("nonce");
+        assert_eq!(http.requests()[0].timeout_ms, Some(333));
+    }
+
+    /// An untuned host calls the control plane under the shipped deadline.
+    #[test]
+    fn the_default_policy_keeps_the_shipped_control_deadline() {
+        let (http, _creds, client) = fakes();
+        http.enqueue_response(json_response(
+            200,
+            json!({ "nonce": "a1b2c3d4e5f60718", "expiresAt": "2026-01-01T00:00:00Z" }),
+        ));
+        block_on(client.siwe_challenge()).expect("nonce");
+        assert_eq!(http.requests()[0].timeout_ms, Some(10_000));
     }
 
     #[test]

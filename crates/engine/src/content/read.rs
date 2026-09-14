@@ -22,14 +22,12 @@ use zeroize::Zeroizing;
 
 use super::dag::DAG_ROOT_CODEC;
 use super::limits::MAX_RESOLVED_RECORD_BYTES;
+use crate::deadlines::DeadlinePolicy;
 use crate::seams::{
     CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, SeamError, bearer_header,
 };
 
 const ACCEPT: &str = "Accept";
-/// Deadline for one leaf-block GET: a seek issues one per leaf against sources
-/// of unknown quality, so a stalled gateway must fail over.
-const BLOCK_FETCH_TIMEOUT_MS: u64 = 30_000;
 /// The trustless-gateway raw-block content type (IPIP-0402).
 const RAW_BLOCK: &str = "application/vnd.ipld.raw";
 /// Byte offset of the multicodec in the fixed CIDv1 framing (version at 0).
@@ -164,12 +162,14 @@ impl GatewaySource {
 
 /// The ordered read source set: the token-authed accelerator is tried first as
 /// a member convenience, then the public no-auth fallbacks in order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Gateway {
     /// The member accelerator (token-authed), consulted first when present.
     pub accelerator: Option<GatewaySource>,
     /// Public trustless-gateway fallbacks, tried in order after the accelerator.
     pub public_fallbacks: Vec<GatewaySource>,
+    /// The deadline every leg of a read is held to.
+    pub deadlines: DeadlinePolicy,
 }
 
 impl Gateway {
@@ -226,6 +226,7 @@ impl GatewayConfig {
     /// a leg denied it still serves reads, just unauthenticated.
     pub fn into_gateway(self, accelerator_bearer: SessionBearer) -> Gateway {
         Gateway {
+            deadlines: DeadlinePolicy::default(),
             accelerator: self
                 .accelerator
                 .map(|base_url| GatewaySource::accelerator(base_url, accelerator_bearer)),
@@ -314,7 +315,7 @@ pub async fn read_block(
     // no-source Unavailable.
     let mut over_cap: Option<(usize, usize)> = None;
     for source in gateway.sources() {
-        let response = match fetch(source, http, cid_str).await {
+        let response = match fetch(source, http, cid_str, gateway.deadlines.block_fetch_ms).await {
             Ok(response) => response,
             // Transport-level failure is availability: rotate to the next source.
             Err(CappedFetchError::Transport(_)) => continue,
@@ -425,6 +426,7 @@ async fn fetch(
     source: &GatewaySource,
     http: &impl Http,
     cid_str: &str,
+    timeout_ms: u64,
 ) -> Result<crate::seams::HttpResponse, CappedFetchError> {
     let base = source.base_url.trim_end_matches('/');
     let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned())];
@@ -442,7 +444,7 @@ async fn fetch(
         body: None,
         // The bearer above is the only credential a gateway source gets.
         credentials: HttpCredentials::Omit,
-        timeout_ms: Some(BLOCK_FETCH_TIMEOUT_MS),
+        timeout_ms: Some(timeout_ms),
     };
     http.send_capped(request, MAX_RESOLVED_RECORD_BYTES).await
 }
@@ -523,7 +525,50 @@ mod tests {
                 bearer: SessionBearer::holding("member-token"),
             }),
             public_fallbacks: vec![GatewaySource::public("https://public.gw.test")],
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn the_gateways_injected_deadline_rides_every_block_fetch() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+        let gateway = Gateway {
+            deadlines: DeadlinePolicy {
+                block_fetch_ms: 777,
+                ..DeadlinePolicy::default()
+            },
+            ..accelerator_only()
+        };
+
+        block_on(read_block(
+            &gateway,
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(http.requests()[0].timeout_ms, Some(777));
+    }
+
+    /// An untuned host reads under the shipped block-fetch deadline.
+    #[test]
+    fn the_default_policy_keeps_the_shipped_block_fetch_deadline() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(http.requests()[0].timeout_ms, Some(30_000));
     }
 
     #[test]
@@ -759,6 +804,7 @@ mod tests {
                 bearer: SessionBearer::holding("member\r\nX-Injected: 1"),
             }),
             public_fallbacks: vec![GatewaySource::public("https://public.gw.test")],
+            ..Default::default()
         };
 
         let out = block_on(read_block(

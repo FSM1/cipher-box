@@ -51,6 +51,7 @@ use crate::content::{
     RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
     pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
+use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
@@ -4325,6 +4326,8 @@ pub struct Engine<T: SeamTypes> {
     /// The measured storage split this device runs under, injected whole at
     /// construction so no staging read-modify-write queries the host mid-flight.
     storage_policy: StoragePolicy,
+    /// The transport deadlines every outbound request is held to.
+    deadlines: DeadlinePolicy,
     /// The frozen content-framing profile every write handle frames under.
     content_profile: ContentProfile,
     /// Live write handles and the staging bytes each has reserved. In memory
@@ -4625,6 +4628,7 @@ impl<T: SeamTypes> Engine<T> {
                 entropy: Rc::new(RefCell::new(entropy)),
                 profile,
                 storage_policy,
+                deadlines: DeadlinePolicy::default(),
                 content_profile,
                 writes: RefCell::new(LiveWrites::default()),
                 streams: RefCell::new(LiveStreams::default()),
@@ -4700,6 +4704,16 @@ impl<T: SeamTypes> Engine<T> {
         )
     }
 
+    /// Hold every outbound request to `deadlines` instead of the shipped
+    /// default. Call it before [`start`](Self::start): the API client and the
+    /// drain each take a copy of the policy the engine holds at that point.
+    #[must_use]
+    pub fn with_deadlines(mut self, deadlines: DeadlinePolicy) -> Self {
+        self.deadlines = deadlines;
+        self.gateway.deadlines = deadlines;
+        self
+    }
+
     /// Start of secret: consumes the login secret and brings the engine up.
     ///
     /// Derives the cold-start [`SessionIdentity`] from the secret — the
@@ -4746,7 +4760,8 @@ impl<T: SeamTypes> Engine<T> {
                 self.seams.credential_store.clone(),
                 base_url.unwrap_or_default().to_owned(),
             )
-            .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone()),
+            .with_session_bearers(self.session_bearer.clone(), self.accelerator_bearer.clone())
+            .with_deadlines(self.deadlines),
         );
         if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
@@ -5741,6 +5756,7 @@ where {
         let bookkeeping = self.bookkeeping.clone();
         let content_profile = self.content_profile;
         let storage_policy = self.storage_policy;
+        let deadlines = self.deadlines;
         let orphan_heads = self.orphan_heads.clone();
         let converged_tick = self.converged_tick.clone();
         let cancels = self.cancels.clone();
@@ -6350,6 +6366,7 @@ where {
                             scheduler: &scheduler,
                             http: &http,
                             gateway: &gateway,
+                            deadlines: &deadlines,
                             placement: &decision,
                             profile: &profile,
                             storage_policy: &storage_policy,
@@ -11771,6 +11788,20 @@ mod tests {
             GatewayConfig::disabled(),
         );
         (engine, events, device)
+    }
+
+    /// The host-facing tuning point. That the gateway's copy is what a block
+    /// fetch is held to is proved in `content::read`.
+    #[test]
+    fn a_tuned_deadline_policy_reaches_the_read_gateway_and_the_api_client() {
+        let (engine, _events) = new_engine();
+        let engine = engine.with_deadlines(DeadlinePolicy {
+            block_fetch_ms: 5,
+            control_ms: 7,
+            ..DeadlinePolicy::default()
+        });
+        assert_eq!(engine.gateway.deadlines.block_fetch_ms, 5);
+        assert_eq!(engine.deadlines.control_ms, 7);
     }
 
     fn new_engine() -> (Engine<FakeSeamTypes>, EventStream) {

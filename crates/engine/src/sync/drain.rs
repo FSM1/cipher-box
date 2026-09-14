@@ -50,6 +50,7 @@ use crate::content::{
     SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
     read_block, validate_byo_config, version_cids,
 };
+use crate::deadlines::DeadlinePolicy;
 use crate::entropy::{Entropy, SharedEntropy, fresh_ephemeral, fresh_nonce};
 use crate::facade::{
     BlockProgress, Event, MAX_NODE_NAME_BYTES, NodeId, OpPhase, RetainedDeadLetters,
@@ -966,6 +967,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) scheduler: &'a Sch,
     pub(crate) http: &'a H,
     pub(crate) gateway: &'a Gateway,
+    /// The transport deadlines this pass's uploads and placements run under.
+    pub(crate) deadlines: &'a DeadlinePolicy,
     /// Where this session's bytes go. An `Err` holds every content op — the
     /// drain publishes no version it cannot place.
     pub(crate) placement: &'a PlacementDecision,
@@ -5187,7 +5190,7 @@ where
                 self.charged(op_id, cid);
             }
             Placement::External(config) => {
-                place_block(config, cid, block, self.http)
+                place_block(config, cid, block, self.http, self.deadlines)
                     .await
                     .map_err(classify_placement)?;
                 self.charged(op_id, cid);
@@ -5201,7 +5204,7 @@ where
                     // boundary. The charge above is already recorded, so one
                     // landing here still retires these bytes.
                     self.cancel_checkpoint(op_id).await?;
-                    match place_block(config, cid, block, self.http).await {
+                    match place_block(config, cid, block, self.http, self.deadlines).await {
                         Ok(()) => break,
                         Err(error) => mirror.refused(error),
                     }

@@ -16,18 +16,11 @@ use cipherbox_core::content::{
 use zeroize::Zeroizing;
 
 use crate::content::DAG_ROOT_CODEC;
+use crate::deadlines::DeadlinePolicy;
 use crate::seams::{
     AUTHORIZATION, CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
     check_bearer,
 };
-
-/// Deadline for a BYO-provider reachability probe: an unresponsive endpoint
-/// must read as unreachable rather than hang the settings flow.
-const PROBE_TIMEOUT_MS: u64 = 10_000;
-
-/// Deadline for one block placed on a member's provider. Longer than the
-/// settings-flow probe above: this one moves up to a whole block.
-const PLACEMENT_TIMEOUT_MS: u64 = 60_000;
 
 /// Ceiling on what a BYO provider may answer with. The endpoint is
 /// member-supplied and answers over the network, so an uncapped read lets it
@@ -114,13 +107,21 @@ pub(crate) async fn place_block(
     cid: &[u8],
     block: &[u8],
     http: &impl Http,
+    deadlines: &DeadlinePolicy,
 ) -> Result<(), ProviderError> {
     validate_byo_config(config)?;
     let address = content_address(cid)?;
+    let timeout_ms = deadlines.placement_ms;
     let request = match config.kind {
-        ByoKind::Kubo => kubo_block_put(config, &address, block),
-        ByoKind::Psa => pin_by_cid(config, "/pins", "cid", &address.cid),
-        ByoKind::Pinata => pin_by_cid(config, "/pinning/pinByHash", "hashToPin", &address.cid),
+        ByoKind::Kubo => kubo_block_put(config, &address, block, timeout_ms),
+        ByoKind::Psa => pin_by_cid(config, "/pins", "cid", &address.cid, timeout_ms),
+        ByoKind::Pinata => pin_by_cid(
+            config,
+            "/pinning/pinByHash",
+            "hashToPin",
+            &address.cid,
+            timeout_ms,
+        ),
     };
     let response = capped(http, request).await?;
     if !(200..300).contains(&response.status) {
@@ -176,7 +177,12 @@ fn content_address(cid: &[u8]) -> Result<ContentAddress, ProviderError> {
 /// `block/put` under the block's own codec and the frozen BLAKE3-256 framing,
 /// pinned in the same call, so the member's node addresses it exactly as the
 /// engine does.
-fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]) -> HttpRequest {
+fn kubo_block_put(
+    config: &ByoIpfsConfig,
+    address: &ContentAddress,
+    block: &[u8],
+    timeout_ms: u64,
+) -> HttpRequest {
     // Derived from the block's own address, so the delimiter cannot occur in the
     // payload it frames: that would take a block carrying the base32 of its own
     // BLAKE3 digest, which is a preimage. 62 bytes of base32 and `-`, inside RFC
@@ -209,12 +215,18 @@ fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]
         ),
         body: Some(body),
         credentials: HttpCredentials::Omit,
-        timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
+        timeout_ms: Some(timeout_ms),
     }
 }
 
 /// Ask a pin-by-CID service to pin an address it fetches itself.
-fn pin_by_cid(config: &ByoIpfsConfig, path: &str, field: &str, cid: &str) -> HttpRequest {
+fn pin_by_cid(
+    config: &ByoIpfsConfig,
+    path: &str,
+    field: &str,
+    cid: &str,
+    timeout_ms: u64,
+) -> HttpRequest {
     HttpRequest {
         method: HttpMethod::Post,
         url: format!("{}{path}", base(config)),
@@ -222,7 +234,7 @@ fn pin_by_cid(config: &ByoIpfsConfig, path: &str, field: &str, cid: &str) -> Htt
         // The CID is base32 alphanumerics, so it needs no JSON escaping.
         body: Some(format!("{{\"{field}\":\"{cid}\"}}").into_bytes()),
         credentials: HttpCredentials::Omit,
-        timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
+        timeout_ms: Some(timeout_ms),
     }
 }
 
@@ -356,9 +368,10 @@ impl ProviderError {
 pub async fn test_connection(
     config: &ByoIpfsConfig,
     http: &impl Http,
+    deadlines: &DeadlinePolicy,
 ) -> Result<(), ProviderError> {
     validate_byo_config(config)?;
-    let response = capped(http, probe_request(config)).await?;
+    let response = capped(http, probe_request(config, deadlines.probe_ms)).await?;
     if (200..300).contains(&response.status) {
         Ok(())
     } else {
@@ -495,7 +508,7 @@ fn is_path_byte(b: u8) -> bool {
 /// The per-kind reachability probe. The endpoints are each provider's standard
 /// identity/auth check: Kubo `POST /api/v0/id`, PSA `GET /pins?limit=1`, Pinata
 /// `GET /data/testAuthentication`.
-fn probe_request(config: &ByoIpfsConfig) -> HttpRequest {
+fn probe_request(config: &ByoIpfsConfig, timeout_ms: u64) -> HttpRequest {
     let (method, path) = match config.kind {
         ByoKind::Kubo => (HttpMethod::Post, "/api/v0/id"),
         ByoKind::Psa => (HttpMethod::Get, "/pins?limit=1"),
@@ -507,7 +520,7 @@ fn probe_request(config: &ByoIpfsConfig) -> HttpRequest {
         headers: headers(config, None),
         body: None,
         credentials: HttpCredentials::Omit,
-        timeout_ms: Some(PROBE_TIMEOUT_MS),
+        timeout_ms: Some(timeout_ms),
     }
 }
 
@@ -540,7 +553,12 @@ mod tests {
     fn kubo_probe_posts_the_id_endpoint() {
         let http = ScriptedHttp::default();
         http.enqueue_response(ok());
-        block_on(test_connection(&config(ByoKind::Kubo, None), &http)).unwrap();
+        block_on(test_connection(
+            &config(ByoKind::Kubo, None),
+            &http,
+            &DeadlinePolicy::default(),
+        ))
+        .unwrap();
         let request = &http.requests()[0];
         assert_eq!(request.method, HttpMethod::Post);
         assert_eq!(request.url, "https://ipfs.member.test/api/v0/id");
@@ -553,6 +571,7 @@ mod tests {
         block_on(test_connection(
             &config(ByoKind::Psa, Some("psa-key")),
             &http,
+            &DeadlinePolicy::default(),
         ))
         .unwrap();
         let request = &http.requests()[0];
@@ -573,6 +592,7 @@ mod tests {
         block_on(test_connection(
             &config(ByoKind::Pinata, Some("pin")),
             &http,
+            &DeadlinePolicy::default(),
         ))
         .unwrap();
         assert_eq!(
@@ -589,7 +609,12 @@ mod tests {
             headers: Vec::new(),
             body: Vec::new(),
         });
-        let err = block_on(test_connection(&config(ByoKind::Psa, Some("bad")), &http)).unwrap_err();
+        let err = block_on(test_connection(
+            &config(ByoKind::Psa, Some("bad")),
+            &http,
+            &DeadlinePolicy::default(),
+        ))
+        .unwrap_err();
         assert_eq!(err, ProviderError::Rejected { status: 401 });
     }
 
@@ -597,7 +622,12 @@ mod tests {
     fn transport_failure_is_unreachable() {
         let http = ScriptedHttp::default();
         http.enqueue_error(crate::seams::SeamError::new("dns failure"));
-        let err = block_on(test_connection(&config(ByoKind::Kubo, None), &http)).unwrap_err();
+        let err = block_on(test_connection(
+            &config(ByoKind::Kubo, None),
+            &http,
+            &DeadlinePolicy::default(),
+        ))
+        .unwrap_err();
         assert_eq!(err, ProviderError::Unreachable);
     }
 
@@ -652,7 +682,7 @@ mod tests {
                 access_token: None,
             };
             assert_eq!(
-                block_on(test_connection(&cfg, &http)).unwrap_err(),
+                block_on(test_connection(&cfg, &http, &DeadlinePolicy::default())).unwrap_err(),
                 verdict,
                 "{bad:?} must be rejected"
             );
@@ -682,7 +712,7 @@ mod tests {
                 kind: ByoKind::Kubo,
                 access_token: None,
             };
-            block_on(test_connection(&cfg, &http)).unwrap();
+            block_on(test_connection(&cfg, &http, &DeadlinePolicy::default())).unwrap();
             assert_eq!(http.requests()[0].url, format!("{endpoint}/api/v0/id"));
         }
     }
@@ -692,7 +722,12 @@ mod tests {
         let http = ScriptedHttp::default();
         for bad in ["tok\r\nX-Evil: 1", "tok\n", "tok\u{7f}", "tok tok", ""] {
             assert_eq!(
-                block_on(test_connection(&config(ByoKind::Psa, Some(bad)), &http)).unwrap_err(),
+                block_on(test_connection(
+                    &config(ByoKind::Psa, Some(bad)),
+                    &http,
+                    &DeadlinePolicy::default()
+                ))
+                .unwrap_err(),
                 ProviderError::InvalidCredential,
                 "{bad:?} must be rejected"
             );
@@ -725,6 +760,56 @@ mod tests {
     }
 
     #[test]
+    fn the_injected_deadlines_ride_the_placement_and_probe_requests() {
+        let deadlines = DeadlinePolicy {
+            probe_ms: 111,
+            placement_ms: 222,
+            ..DeadlinePolicy::default()
+        };
+        let http = ScriptedHttp::default();
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        http.enqueue_response(ok());
+        block_on(place_block(
+            &config(ByoKind::Psa, Some("psa-key")),
+            &cid,
+            &block,
+            &http,
+            &deadlines,
+        ))
+        .unwrap();
+        http.enqueue_response(ok());
+        block_on(test_connection(
+            &config(ByoKind::Psa, Some("psa-key")),
+            &http,
+            &deadlines,
+        ))
+        .unwrap();
+
+        assert_eq!(http.requests()[0].timeout_ms, Some(222));
+        assert_eq!(http.requests()[1].timeout_ms, Some(111));
+    }
+
+    /// The shipped policy is what an untuned host runs under, so the values a
+    /// request carries by default are pinned here rather than at the struct.
+    #[test]
+    fn the_default_policy_keeps_the_shipped_placement_deadline() {
+        let http = ScriptedHttp::default();
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        http.enqueue_response(ok());
+        block_on(place_block(
+            &config(ByoKind::Psa, Some("psa-key")),
+            &cid,
+            &block,
+            &http,
+            &DeadlinePolicy::default(),
+        ))
+        .unwrap();
+        assert_eq!(http.requests()[0].timeout_ms, Some(60_000));
+    }
+
+    #[test]
     fn kubo_puts_the_block_under_its_own_codec_and_the_frozen_hash() {
         let http = ScriptedHttp::default();
         let block = b"sealed leaf bytes".to_vec();
@@ -740,6 +825,7 @@ mod tests {
             &cid,
             &block,
             &http,
+            &DeadlinePolicy::default(),
         ))
         .unwrap();
 
@@ -790,6 +876,7 @@ mod tests {
             &cid,
             &block,
             &http,
+            &DeadlinePolicy::default(),
         ))
         .unwrap();
         assert!(http.requests()[0].url.contains("cid-codec=dag-cbor"));
@@ -826,7 +913,8 @@ mod tests {
                     &config(ByoKind::Kubo, None),
                     &cid,
                     &block,
-                    &http
+                    &http,
+                    &DeadlinePolicy::default()
                 ))
                 .unwrap_err(),
                 verdict,
@@ -846,7 +934,14 @@ mod tests {
         ] {
             let http = ScriptedHttp::default();
             http.enqueue_response(ok());
-            block_on(place_block(&config(kind, Some("tok")), &cid, &block, &http)).unwrap();
+            block_on(place_block(
+                &config(kind, Some("tok")),
+                &cid,
+                &block,
+                &http,
+                &DeadlinePolicy::default(),
+            ))
+            .unwrap();
             let request = &http.requests()[0];
             assert_eq!(request.url, format!("https://ipfs.member.test{path}"));
             assert_eq!(
@@ -878,7 +973,8 @@ mod tests {
                 &config(ByoKind::Psa, Some("t")),
                 &cid,
                 &block,
-                &http
+                &http,
+                &DeadlinePolicy::default()
             ))
             .unwrap_err(),
             ProviderError::Rejected { status: 507 }
@@ -890,7 +986,8 @@ mod tests {
                 &config(ByoKind::Kubo, None),
                 &cid,
                 &block,
-                &http
+                &http,
+                &DeadlinePolicy::default()
             ))
             .unwrap_err(),
             ProviderError::Unreachable
@@ -910,7 +1007,14 @@ mod tests {
             access_token: None,
         };
         assert_eq!(
-            block_on(place_block(&bad, &cid, &block, &http)).unwrap_err(),
+            block_on(place_block(
+                &bad,
+                &cid,
+                &block,
+                &http,
+                &DeadlinePolicy::default()
+            ))
+            .unwrap_err(),
             ProviderError::BlockedAddress
         );
         assert!(http.requests().is_empty());
@@ -936,7 +1040,14 @@ mod tests {
             Vec::new(),
         ] {
             assert_eq!(
-                block_on(place_block(&config(ByoKind::Kubo, None), &cid, b"x", &http)).unwrap_err(),
+                block_on(place_block(
+                    &config(ByoKind::Kubo, None),
+                    &cid,
+                    b"x",
+                    &http,
+                    &DeadlinePolicy::default()
+                ))
+                .unwrap_err(),
                 ProviderError::MalformedBlockAddress,
                 "{cid:02x?}"
             );
@@ -960,7 +1071,14 @@ mod tests {
             let http = ScriptedHttp::default();
             http.enqueue_response(oversized());
             assert_eq!(
-                block_on(place_block(&config(kind, Some("tok")), &cid, &block, &http)).unwrap_err(),
+                block_on(place_block(
+                    &config(kind, Some("tok")),
+                    &cid,
+                    &block,
+                    &http,
+                    &DeadlinePolicy::default()
+                ))
+                .unwrap_err(),
                 ProviderError::NoVerdict,
                 "{kind:?}"
             );
@@ -968,7 +1086,12 @@ mod tests {
             let http = ScriptedHttp::default();
             http.enqueue_response(oversized());
             assert_eq!(
-                block_on(test_connection(&config(kind, Some("tok")), &http)).unwrap_err(),
+                block_on(test_connection(
+                    &config(kind, Some("tok")),
+                    &http,
+                    &DeadlinePolicy::default()
+                ))
+                .unwrap_err(),
                 ProviderError::NoVerdict,
                 "{kind:?}"
             );

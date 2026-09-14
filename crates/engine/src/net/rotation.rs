@@ -4999,6 +4999,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: Some(GatewaySource::public("https://gw.test")),
                     public_fallbacks: Vec::new(),
+                    ..Default::default()
                 },
                 profile: SyncTimingProfile::CI,
                 entropy: RefCell::new(SeededEntropy::new(7)),

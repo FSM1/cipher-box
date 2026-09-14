@@ -462,6 +462,7 @@ mod tests {
                 gateway: Gateway {
                     accelerator: None,
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
+                    ..Default::default()
                 },
                 floors: InMemoryFloorStore::default(),
                 base: BaseSnapshot::new(Snapshot::new(NodeId(OWN_ROOT))),

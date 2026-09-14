@@ -82,6 +82,7 @@ pub fn gateway() -> Gateway {
     Gateway {
         accelerator: None,
         public_fallbacks: vec![GatewaySource::public("https://public.gw.test")],
+        ..Default::default()
     }
 }
 

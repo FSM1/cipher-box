@@ -26,6 +26,7 @@
 pub mod api;
 pub mod bin_index;
 pub mod content;
+pub mod deadlines;
 pub mod devices;
 pub mod entropy;
 pub mod facade;
@@ -63,6 +64,7 @@ pub use content::{
     frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block,
     seal_one_chunk, test_connection, validate_byo_config,
 };
+pub use deadlines::DeadlinePolicy;
 pub use devices::{
     ApprovalDecision, MalformedDeviceField, PendingApprovalView, RelayedAnswerRefused,
     adopt_factor, approval_request_payload, approval_response_payload, comparison_value,
