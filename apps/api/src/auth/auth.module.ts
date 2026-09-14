@@ -4,7 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { isDisabled } from '../common/env-flag';
 import { SchedulerModule } from '../common/scheduler.module';
-import { WorkerScheduler } from '../common/worker-scheduler';
+import { PeriodicTask, WorkerScheduler } from '../common/worker-scheduler';
 import { OpsModule } from '../ops/ops.module';
 import { AuthMetricsInterceptor } from './auth-metrics.interceptor';
 import { AuthController } from './auth.controller';
@@ -31,6 +31,7 @@ import { SiweService } from './services/siwe.service';
 import { TestAuthService } from './services/test-auth.service';
 import { TokenService } from './services/token.service';
 import { AcceleratorTokenSweepTask } from './tasks/accelerator-token-sweep.task';
+import { RefreshTokenSweepTask } from './tasks/refresh-token-sweep.task';
 
 export function buildJwtOptions(configService: ConfigService) {
   const nodeEnv = configService.get<string>('NODE_ENV') ?? 'development';
@@ -67,6 +68,7 @@ export function buildJwtOptions(configService: ConfigService) {
     TokenService,
     AcceleratorTokenService,
     AcceleratorTokenSweepTask,
+    RefreshTokenSweepTask,
     ChallengeService,
     IdentityService,
     SiweService,
@@ -86,15 +88,21 @@ export function buildJwtOptions(configService: ConfigService) {
 export class AuthModule implements OnModuleInit {
   constructor(
     private readonly scheduler: WorkerScheduler,
-    private readonly sweepTask: AcceleratorTokenSweepTask,
+    private readonly acceleratorSweepTask: AcceleratorTokenSweepTask,
+    private readonly refreshSweepTask: RefreshTokenSweepTask,
     private readonly configService: ConfigService
   ) {}
 
   onModuleInit(): void {
-    // Opt-out (default on) for deployments that run the sweep out of process.
-    if (isDisabled(this.configService.get('ACCELERATOR_TOKEN_SWEEP_ENABLED'))) {
+    // Opt-out (default on) for deployments that run a sweep out of process.
+    this.registerSweep('ACCELERATOR_TOKEN_SWEEP_ENABLED', this.acceleratorSweepTask);
+    this.registerSweep('REFRESH_TOKEN_SWEEP_ENABLED', this.refreshSweepTask);
+  }
+
+  private registerSweep(flag: string, task: PeriodicTask): void {
+    if (isDisabled(this.configService.get(flag))) {
       return;
     }
-    this.scheduler.register(this.sweepTask);
+    this.scheduler.register(task);
   }
 }

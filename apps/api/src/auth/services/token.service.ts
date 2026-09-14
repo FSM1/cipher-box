@@ -18,6 +18,7 @@ import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
 import { Entropy } from '../../common/entropy';
 import { sha256Hex } from '../../common/hash';
+import { DEFAULT_SWEEP_BATCH_SIZE, drainBatches, MAX_SWEEP_BATCH_SIZE } from '../../common/sweep';
 import type { TokenScope } from '../decorators/allow-scope.decorator';
 import { RefreshToken } from '../entities/refresh-token.entity';
 import { refreshRowState } from '../refresh-liveness';
@@ -67,6 +68,7 @@ export class TokenService {
   private readonly refreshTtlMs: number;
   private readonly scopedTtlSeconds: number;
   private readonly lockTimeoutMs: number;
+  private readonly sweepBatchSize: number;
 
   constructor(
     private readonly jwtService: JwtService,
@@ -87,6 +89,11 @@ export class TokenService {
       MAX_SCOPED_TTL_SECONDS
     );
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
+    this.sweepBatchSize = positiveIntConfig(
+      configService.get('REFRESH_TOKEN_SWEEP_BATCH_SIZE'),
+      DEFAULT_SWEEP_BATCH_SIZE,
+      MAX_SWEEP_BATCH_SIZE
+    );
   }
 
   /** Issue an access JWT and start a fresh refresh-token family. */
@@ -187,6 +194,37 @@ export class TokenService {
   /** Hard-delete every refresh token the user holds (logout everywhere). */
   async revokeAllForUser(userId: string): Promise<void> {
     await this.revoke(userId, { userId });
+  }
+
+  /**
+   * Reclaim every account's expired refresh rows, whether or not that account
+   * ever comes back. An expired row stops authenticating at the expiry check,
+   * so this is table growth only and runs outside any request.
+   */
+  async sweepExpired(): Promise<number> {
+    const cutoff = this.clock.now();
+    return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
+  }
+
+  /**
+   * Postgres has no `DELETE ... LIMIT`, so the batch is bounded by selecting
+   * `ctid`s under the cutoff and deleting exactly those; `expires_at` ordering
+   * lets `idx_refresh_tokens_expires_at` drive the scan. `SKIP LOCKED` yields
+   * any row a rotation or a revocation is already deleting under the account's
+   * `session-credential` lock, so the account-wide and the table-wide delete
+   * take their row locks in whatever order they like without forming a cycle.
+   */
+  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
+    const result = await this.refreshTokenRepository
+      .createQueryBuilder()
+      .delete()
+      .from(RefreshToken)
+      .where(
+        'ctid IN (SELECT ctid FROM refresh_tokens WHERE expires_at <= :cutoff ORDER BY expires_at LIMIT :limit FOR UPDATE SKIP LOCKED)',
+        { cutoff, limit: this.sweepBatchSize }
+      )
+      .execute();
+    return result.affected ?? 0;
   }
 
   get refreshTokenTtlMs(): number {
