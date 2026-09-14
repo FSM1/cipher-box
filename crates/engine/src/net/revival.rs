@@ -11,13 +11,14 @@
 //!
 //! A signature attests authorship, never freshness, so the recovery endpoint's
 //! record is corroborated rather than believed: the fan-out outranks it whenever
-//! it can, and a basis below the sequence this device durably adopted is refused
-//! outright (the floor law).
+//! it can, an unreadable routing set refuses the revival outright, and a basis
+//! below the sequence this device durably adopted is refused too (the floor
+//! law).
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
-use super::fanout::fanout_get_verify;
+use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::publish::{PublishError, PublishOutcome, PublishRequest, head_cid_from_value, publish};
 use crate::api::{ApiClient, ApiError};
 use crate::gate::floor;
@@ -45,6 +46,13 @@ pub enum ReviveError {
     /// The recovered bytes are not a valid record for this name, or its value is
     /// not an `/ipfs/<cid>` path — nothing safe to revive from.
     Unrecoverable,
+    /// The routing set neither served a verifiable record nor agreed the name is
+    /// vacant, so nothing corroborates the recovery endpoint. Re-minting on a
+    /// recovery-only basis is the replay this corroboration exists to deny: an
+    /// attacker on both planes serves back the owner's own superseded record.
+    /// The residual: one endpoint serving garbage denies the revival until the
+    /// set settles, which is the safe half of that trade.
+    Uncorroborated,
     /// Every reachable source served a record older than the sequence this
     /// device durably adopted for the name — a replay, not a lapse. Reviving
     /// from it would republish superseded content at a fresh sequence and roll
@@ -92,10 +100,13 @@ where
 
     // The routing set is the canonical plane, so it takes the tie: a same-sequence
     // fork is a designed-for state after an unconfirmed publish retry, and the
-    // recovery endpoint must not get to pick which side of one is re-minted.
-    let basis = match fanout_get_verify(transport, request.name).await {
-        Some((observed, _)) if observed.sequence >= recovered.sequence => observed,
-        _ => recovered,
+    // recovery endpoint must not get to pick which side of one is re-minted. A
+    // unanimous "no record" is the expected shape of a >EOL lapse and corroborates
+    // the recovery endpoint; silence corroborates nothing (fan-out rule 6).
+    let basis = match fanout_get_classified(transport, request.name).await {
+        FanoutRecord::Found(observed, _) if observed.sequence >= recovered.sequence => observed,
+        FanoutRecord::Found(..) | FanoutRecord::Absent => recovered,
+        FanoutRecord::Unavailable => return Err(ReviveError::Uncorroborated),
     };
 
     // A basis below the durable floor is a rolled-back source (the floor law).
