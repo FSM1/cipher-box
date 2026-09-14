@@ -1990,6 +1990,7 @@ impl EngineError {
             | CreateGrantError::SubtreeBoundaryDiverged { .. }
             | CreateGrantError::UnusableRecipientKey
             | CreateGrantError::RecipientIsTheOwner
+            | CreateGrantError::DisplayNameTooLong(_)
             | CreateGrantError::CommitmentEncode(_)
             | CreateGrantError::Entropy(_)
             | CreateGrantError::Mint(_)
@@ -2030,11 +2031,12 @@ impl EngineError {
                     message: reason.to_string(),
                 }
             }
-            // The recipient's own key, and a subtree the converge could not
-            // bring current: both are the request's inputs, not verdicts on a
-            // peer's record.
+            // The recipient's own key, the label they would be shown, and a
+            // subtree the converge could not bring current: all three are the
+            // request's inputs, not verdicts on a peer's record.
             e @ (CreateGrantError::UnusableRecipientKey
             | CreateGrantError::RecipientIsTheOwner
+            | CreateGrantError::DisplayNameTooLong(_)
             | CreateGrantError::SubtreeNotConverged { .. }) => {
                 EngineError::MalformedInput { check: e.check() }
             }
@@ -8496,11 +8498,19 @@ where {
             let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
             let idempotency: [u8; 16] = fresh_bytes(&mut entropy, "claim grant idempotency key")
                 .map_err(EngineError::from_entropy)?;
-            let pointer = SharePointer {
-                scope_root_name: current.commitment.ipns_name.clone(),
-                sharer_identity_pk: owner_identity.to_sec1(),
-                display_name: display_name.clone(),
-                permission: delivery.permission,
+            let pointer = match SharePointer::bounded(
+                current.commitment.ipns_name.clone(),
+                owner_identity.to_sec1(),
+                display_name.clone(),
+                delivery.permission,
+            ) {
+                Ok(pointer) => pointer,
+                Err(_) => {
+                    failure.get_or_insert(EngineError::MalformedInput {
+                        check: "grant-display-name-too-long",
+                    });
+                    continue;
+                }
             };
             if let Err(e) = post_sealed(
                 api.as_ref(),
