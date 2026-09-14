@@ -71,6 +71,24 @@ impl<E: Entropy + ?Sized> Entropy for Box<E> {
     }
 }
 
+/// Production entropy: the target's CSPRNG through `getrandom`.
+///
+/// The one production implementation of [`Entropy`] in the tree. It lives here
+/// rather than at each host because the wiring is per-target `getrandom`, owned
+/// by the engine's construction site, not host logic. On wasm the backend is
+/// `crypto.getRandomValues`, selected by the `getrandom_backend="wasm_js"` cfg
+/// in `.cargo/config.toml`.
+///
+/// Fail-closed: a draw that cannot be served is an error, never substituted
+/// bytes.
+pub struct OsEntropy;
+
+impl Entropy for OsEntropy {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        getrandom::fill(dest).map_err(|error| EntropyError::new(error.to_string()))
+    }
+}
+
 /// A shared [`Entropy`] cell as an [`Entropy`] source that re-borrows per draw.
 ///
 /// The engine holds one source behind a [`RefCell`] shared with every spawned
@@ -197,6 +215,15 @@ mod fresh_draw_tests {
                 .message(),
             "no entropy",
         );
+    }
+
+    #[test]
+    fn the_production_source_serves_a_draw() {
+        let mut drawn = [0u8; 32];
+        OsEntropy
+            .fill(&mut drawn)
+            .expect("the target CSPRNG serves");
+        assert!(drawn.iter().any(|byte| *byte != 0));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_engine::Entropy;
-use cipherbox_engine::entropy::{EntropyError, fresh_bytes, fresh_seed};
+use cipherbox_engine::entropy::{EntropyError, OsEntropy, fresh_bytes, fresh_seed};
 use zeroize::Zeroizing;
 
 use crate::error::VfsError;
@@ -154,16 +154,6 @@ fn reclaim(root: &Path, mine: usize) {
         if matches!(lease::claim(&lock), Ok(Some(_dead))) {
             let _ = fs::remove_dir_all(&dir);
         }
-    }
-}
-
-/// The target's CSPRNG. Fail-closed: a draw that cannot be served is an error,
-/// never substituted bytes.
-struct OsEntropy;
-
-impl Entropy for OsEntropy {
-    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
-        getrandom::fill(dest).map_err(|error| EntropyError::new(error.to_string()))
     }
 }
 

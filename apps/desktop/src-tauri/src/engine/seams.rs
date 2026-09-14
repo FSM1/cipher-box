@@ -1,6 +1,6 @@
 //! The seam set the native host injects (blueprint/desktop.md "Engine
-//! wiring"): `crates/desktop-seams` for the seven durable/transport seams, and
-//! the OS CSPRNG for entropy.
+//! wiring"): `crates/desktop-seams` for the seven durable/transport seams.
+//! Entropy is not a seam — the engine owns its one production source.
 
 use std::path::Path;
 
@@ -9,9 +9,7 @@ use cipherbox_desktop_seams::{
     TokioScheduler,
 };
 use cipherbox_engine::seams::SeamResult;
-use cipherbox_engine::{
-    Entropy, EntropyError, OwnerScopedFloorStore, QueueGenerationStore, SeamSet, SeamTypes,
-};
+use cipherbox_engine::{OwnerScopedFloorStore, QueueGenerationStore, SeamSet, SeamTypes};
 
 use super::config::EngineConfig;
 
@@ -34,16 +32,6 @@ impl SeamTypes for DesktopSeamTypes {
     type StagingStore = FileStagingStore;
     type SnapshotCache = FileSnapshotCache;
     type CredentialStore = HostCredentialStore;
-}
-
-/// Production entropy: the OS CSPRNG. Fail-closed — never substitutes
-/// predictable bytes.
-pub struct OsEntropy;
-
-impl Entropy for OsEntropy {
-    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
-        getrandom::fill(dest).map_err(|error| EntropyError::new(error.to_string()))
-    }
 }
 
 /// Opens every durable store under `account_dir` and builds the whole seam set.

@@ -20,6 +20,9 @@ caseless.workspace = true
 cipherbox-core.workspace = true
 futures-channel.workspace = true
 futures-core.workspace = true
+# The tree's one production `Entropy` impl lives here, in `entropy::OsEntropy`;
+# every host uses it rather than repeating the per-target wiring.
+getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 unicode-normalization.workspace = true
@@ -54,3 +57,9 @@ test = false
 # leg.
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 criterion.workspace = true
+
+# The browser target reaches `crypto.getRandomValues` only with getrandom's
+# `wasm_js` feature as well as the `.cargo/config.toml` cfg. Declared here so
+# the engine builds for wasm32 on its own, not only beside `crates/wasm`.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }

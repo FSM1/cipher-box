@@ -70,7 +70,7 @@ pub use devices::{
     adopt_factor, approval_request_payload, approval_response_payload, comparison_value,
     rendezvous_public_key, seal_factor,
 };
-pub use entropy::{Entropy, EntropyError};
+pub use entropy::{Entropy, EntropyError, OsEntropy};
 pub use facade::{
     ApiBaseUrl, BlockProgress, Breadcrumb, Command, CommandOutcome, DeadLetter, Engine,
     EngineError, EngineView, Event, EventStream, InvalidApiBaseUrl, LoginSecret,
