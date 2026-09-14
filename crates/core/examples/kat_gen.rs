@@ -3684,6 +3684,24 @@ fn build_charged_bounds() -> BoundsSection {
             other => panic!("{}: one byte past the bound: {other:?}", spec.name),
         }
 
+        // The label against the geometry it claims, before it is written: the
+        // gap between the charge and the whole encoding is the measure. A
+        // retuned bound that moves that gap fails here rather than relabelling
+        // itself on the next regeneration.
+        let (encoded, pad) = (at_bound.len(), lo);
+        let describes = match spec.charged_measure {
+            "whole-encoding" => encoded == spec.max_bytes,
+            "byte-string-payload" => pad == spec.max_bytes && encoded > spec.max_bytes,
+            "entry-value-plus-key" => pad < spec.max_bytes && encoded > spec.max_bytes,
+            "whole-encoding-history-link-at-max" => encoded < spec.max_bytes,
+            other => panic!("{}: unknown charged measure {other}", spec.name),
+        };
+        assert!(
+            describes,
+            "{}: {} does not describe the at-the-bound artifact",
+            spec.name, spec.charged_measure
+        );
+
         out.push(ChargedBound {
             name: spec.name.to_string(),
             charged_measure: spec.charged_measure.to_string(),
