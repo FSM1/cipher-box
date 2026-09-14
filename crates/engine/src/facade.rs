@@ -151,9 +151,10 @@ use crate::sync::staging::{
 };
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
-    FocusWindow, ResolveMode, TickControl, consult_scopes, consult_scopes_due, elapsed_at_least,
-    expire_touched_folders, focus_by_scope, focus_files, focus_folders_due, on_access_refresh_due,
-    resolve_mode, run_tick_loop, scope_root_of,
+    FocusFile, FocusQueueOrigin, FocusWindow, ResolveMode, TickControl, consult_scopes,
+    consult_scopes_due, elapsed_at_least, expire_focus_stamps, expire_touched_folders,
+    focus_by_scope, focus_files, focus_folders_due, on_access_refresh_due, resolve_mode,
+    run_tick_loop, scope_root_of,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -2360,7 +2361,10 @@ impl RelocationPlan {
 /// "Scope"), so `scope_roots` here is the **known** set: every boundary this
 /// session has proved, from its own mints and from the durable
 /// direct-child-scope index the tick walks. A boundary it does not know reads as
-/// no boundary. Full-depth, because each end resolves to the nearest listed root
+/// no boundary, which makes this a plan and not the authority: the drain
+/// re-derives the crossing from the two planes its own pass proved and owes the
+/// source cut from that pair, so a boundary proved after the journal entry still
+/// re-seals and cuts. Full-depth, because each end resolves to the nearest listed root
 /// above it rather than one level (FSM1/cipher-box-next#26 D7). That same law is
 /// what makes any interior source a **granted** source here: the cut that
 /// created it granted somebody, and a set of recipients that has since gone
@@ -3361,14 +3365,31 @@ fn nodes_in_scope(
 ///
 /// The bound is per pass, not per leg (blueprint/desktop.md "Freshness"). Each
 /// leg refills the queue with its own scope's rows, so the budget is charged
-/// across the legs, and the newest rows take what is left of it.
-fn leg_file_share(mut queued: Vec<NodeId>, attempted: &[NodeId]) -> Vec<NodeId> {
+/// across the legs, and the newest rows take what is left of it. A bulk row
+/// yields the budget to a row a host access named, whatever their queue order:
+/// the fan-out over a large folder in view queues last and would otherwise
+/// spend the whole pass on rows nobody is waiting on.
+fn leg_file_share(
+    mut queued: Vec<NodeId>,
+    attempted: &[NodeId],
+    host_queued: &BTreeSet<NodeId>,
+) -> Vec<NodeId> {
     queued.retain(|node| !attempted.contains(node));
-    let over = queued
+    let mut over = queued
         .len()
         .saturating_sub(MAX_FOCUS_FILES.saturating_sub(attempted.len()));
-    queued.drain(..over);
-    queued
+    let mut kept: Vec<NodeId> = Vec::with_capacity(queued.len());
+    for node in queued {
+        if over > 0 && !host_queued.contains(&node) {
+            over -= 1;
+            continue;
+        }
+        kept.push(node);
+    }
+    // Host rows alone still charge the budget: the origin orders the spend, it
+    // does not lift the bound.
+    kept.drain(..over);
+    kept
 }
 
 /// Queue every direct file child of `folder` the base projects no size for, in
@@ -3393,34 +3414,62 @@ fn queue_unprojected_children(
         .map(|child| child.id)
         .collect();
     for child in unprojected {
-        queue_focus_file(focus, focus_refreshed, profile, now, child);
+        queue_focus_file(focus, focus_refreshed, profile, now, FocusFile::bulk(child));
     }
 }
 
-/// Put `node` on the on-access file queue, newest last and bounded by
+/// Put `row` on the on-access file queue, newest last and bounded by
 /// [`MAX_FOCUS_FILES`]. The focus window and the refresh hint do not move.
 ///
 /// Damped by the same staleness threshold every other on-access refresh runs
 /// against. A file that has published no version projects no size however often
 /// a pass resolves it, so an undamped caller keyed on the absent size would
 /// spend a resolve on that node every pass, forever.
+///
+/// A full queue drops its oldest bulk row. A row a host access named is dropped
+/// only for another such row, and a bulk row that finds none to drop is refused:
+/// the caller waiting on a stat must outlive the fan-out over a folder in view.
 fn queue_focus_file(
     focus: &RefCell<FocusWindow>,
     focus_refreshed: &RefCell<BTreeMap<NodeId, UnixMillis>>,
     profile: &SyncTimingProfile,
     now: UnixMillis,
-    node: NodeId,
+    row: FocusFile,
 ) {
-    let resolved = focus_refreshed.borrow().get(&node).copied();
+    let resolved = focus_refreshed.borrow().get(&row.node).copied();
     if resolved.is_some_and(|last| !on_access_refresh_due(now, last, profile)) {
         return;
     }
     let mut focus = focus.borrow_mut();
-    focus.open_files.retain(|held| *held != node);
-    focus.open_files.push(node);
-    if focus.open_files.len() > MAX_FOCUS_FILES {
-        focus.open_files.remove(0);
+    // A host access marks the row for as long as the row is queued: the fan-out
+    // that re-queues it behind the listing must not demote what a caller waits
+    // on.
+    let held = focus
+        .open_files
+        .iter()
+        .position(|held| held.node == row.node)
+        .map(|index| focus.open_files.remove(index));
+    let origin = if held.is_some_and(|held| held.origin == FocusQueueOrigin::Host) {
+        FocusQueueOrigin::Host
+    } else {
+        row.origin
+    };
+    if focus.open_files.len() >= MAX_FOCUS_FILES {
+        let bulk = focus
+            .open_files
+            .iter()
+            .position(|held| held.origin == FocusQueueOrigin::Bulk);
+        let evict = match (bulk, origin) {
+            (Some(index), _) => index,
+            (None, FocusQueueOrigin::Host) => 0,
+            (None, FocusQueueOrigin::Bulk) => return,
+        };
+        focus.open_files.remove(evict);
     }
+    focus.open_files.push(FocusFile {
+        node: row.node,
+        origin,
+    });
 }
 
 /// Settle one focus read leg and report the verdict it earned: hold what it saw
@@ -6061,6 +6110,11 @@ where {
                         }
                     }
                     expire_touched_folders(&mut focus.borrow_mut(), scheduler.now(), &profile);
+                    expire_focus_stamps(
+                        &mut focus_refreshed.borrow_mut(),
+                        scheduler.now(),
+                        &profile,
+                    );
                     // The focus window's folders below each scope root — the read
                     // leg for a subtree this device did not author. It runs before
                     // the drain, so the queue rebases onto the deepest state this
@@ -6166,6 +6220,7 @@ where {
                                     folder,
                                 );
                             }
+                            let host_queued = focus.borrow().host_queued();
                             leg_file_share(
                                 nodes_in_scope(
                                     &base_now,
@@ -6174,6 +6229,7 @@ where {
                                     focus_files(&base_now, &focus.borrow()),
                                 ),
                                 &attempted_files,
+                                &host_queued,
                             )
                         };
                         attempted_files.extend(files.iter().copied());
@@ -6187,7 +6243,7 @@ where {
                     focus
                         .borrow_mut()
                         .open_files
-                        .retain(|node| !attempted_files.contains(node));
+                        .retain(|row| !attempted_files.contains(&row.node));
                     // `Adopted`/`Current` are the reconciled outcomes: both prove the
                     // record plane answered with gate-passing state, so both stamp
                     // the ladder's `last_success` (#33 D4). A gate rejection is a
@@ -8733,7 +8789,7 @@ where {
                 self.focus
                     .borrow_mut()
                     .open_files
-                    .retain(|node| !files.contains(node));
+                    .retain(|row| !files.contains(&row.node));
             }
         }
     }
@@ -10764,13 +10820,18 @@ where {
             &self.focus_refreshed,
             &self.profile,
             self.seams.scheduler.now(),
-            node,
+            FocusFile::host(node),
         );
     }
 
     /// The files the tick's file leg will resolve next, oldest first.
     pub fn queued_focus_files(&self) -> Vec<NodeId> {
-        self.focus.borrow().open_files.clone()
+        self.focus
+            .borrow()
+            .open_files
+            .iter()
+            .map(|row| row.node)
+            .collect()
     }
 
     /// The folders the focus window currently holds open: the folder navigation
@@ -10863,22 +10924,62 @@ mod tests {
         let node = |n: u8| NodeId([n; 16]);
         let queued: Vec<NodeId> = (0..MAX_FOCUS_FILES as u8 + 4).map(node).collect();
 
+        let none = BTreeSet::new();
+
         assert_eq!(
-            leg_file_share(queued.clone(), &[]),
+            leg_file_share(queued.clone(), &[], &none),
             queued[4..],
             "the first leg takes the newest rows the bound admits"
         );
 
         let attempted: Vec<NodeId> = (100..100 + MAX_FOCUS_FILES as u8 - 2).map(node).collect();
         assert_eq!(
-            leg_file_share(queued.clone(), &attempted),
+            leg_file_share(queued.clone(), &attempted, &none),
             queued[queued.len() - 2..],
             "a later leg takes only what the earlier legs left"
         );
         let spent: Vec<NodeId> = (100..100 + MAX_FOCUS_FILES as u8).map(node).collect();
         assert!(
-            leg_file_share(queued, &spent).is_empty(),
+            leg_file_share(queued, &spent, &none).is_empty(),
             "a spent budget admits nothing more"
+        );
+    }
+
+    /// A stat the host is waiting on keeps its place in the pass however many
+    /// rows the fan-out over the folder in view queues behind it.
+    #[test]
+    fn a_legs_file_share_spends_a_bulk_row_before_a_host_queued_row() {
+        let node = |n: u8| NodeId([n; 16]);
+        let stat = node(200);
+        // The host row is oldest, so the plain recency rule would drop it first.
+        let mut queued = vec![stat];
+        queued.extend((0..MAX_FOCUS_FILES as u8 + 4).map(node));
+        let host_queued = BTreeSet::from([stat]);
+
+        let share = leg_file_share(queued.clone(), &[], &host_queued);
+        assert_eq!(share.len(), MAX_FOCUS_FILES);
+        assert!(
+            share.contains(&stat),
+            "the fan-out yields the budget to the row a caller waits on"
+        );
+        assert!(
+            !leg_file_share(queued, &[], &BTreeSet::new()).contains(&stat),
+            "and the same pass drops it when no host access named it"
+        );
+    }
+
+    /// Host rows alone still charge the budget: the origin orders the spend, it
+    /// does not lift the bound.
+    #[test]
+    fn host_queued_rows_do_not_lift_the_passes_budget() {
+        let node = |n: u8| NodeId([n; 16]);
+        let queued: Vec<NodeId> = (0..MAX_FOCUS_FILES as u8 + 4).map(node).collect();
+        let host_queued: BTreeSet<NodeId> = queued.iter().copied().collect();
+
+        assert_eq!(
+            leg_file_share(queued.clone(), &[], &host_queued),
+            queued[4..],
+            "with every row host-queued the newest still win"
         );
     }
 
@@ -10890,7 +10991,7 @@ mod tests {
         let queued = vec![node(1), node(2), node(3)];
 
         assert_eq!(
-            leg_file_share(queued, &[node(2)]),
+            leg_file_share(queued, &[node(2)], &BTreeSet::new()),
             vec![node(1), node(3)],
             "the attempted row is gone, the rest keeps its order"
         );
@@ -15363,6 +15464,45 @@ mod tests {
             poll_tasks_once(tasks);
         }
 
+        /// The refresh stamps live for the session, so the pass that closes a
+        /// quiet focus window also drops the stamps the staleness threshold has
+        /// expired. Without that, a host walking a large vault grows the map for
+        /// as long as the session runs.
+        #[test]
+        fn the_tick_drops_the_refresh_stamps_the_threshold_expired() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+
+            let walked: Vec<NodeId> = (0..64u8).map(|i| NodeId([i; 16])).collect();
+            {
+                let now = engine.seams.scheduler.now();
+                let mut stamps = engine.focus_refreshed.borrow_mut();
+                for node in &walked {
+                    stamps.insert(*node, now);
+                }
+            }
+            world.scheduler.advance(SyncTimingProfile::CI.stale_after);
+            let fresh = NodeId([200; 16]);
+            engine
+                .focus_refreshed
+                .borrow_mut()
+                .insert(fresh, engine.seams.scheduler.now());
+
+            tick(&world, &device, &mut tasks);
+
+            assert_eq!(
+                engine
+                    .focus_refreshed
+                    .borrow()
+                    .keys()
+                    .copied()
+                    .collect::<Vec<NodeId>>(),
+                vec![fresh],
+                "one pass holds only the stamps of the last window",
+            );
+        }
+
         /// Nothing the spawned loops share may outlive the engine: a parked task
         /// is not polled again until its next scheduler wake, so `Drop` — not the
         /// next pass — has to clear the key material.
@@ -17381,6 +17521,82 @@ mod focus_access_tests {
             engine.queued_focus_files(),
             unprojected[unprojected.len() - MAX_FOCUS_FILES..],
             "the newest rows win the window, oldest first"
+        );
+    }
+
+    /// A stat is a caller waiting on one row. The listing behind it queues a
+    /// folder's worth, so the bound must spend a fan-out row before it spends
+    /// the stat.
+    #[test]
+    fn a_listing_never_pushes_a_host_queued_row_off_the_queue() {
+        let (engine, _clock) = engine();
+        let unprojected = folder_with_files(&engine, MAX_FOCUS_FILES * 2 + 5);
+        // The first child: the listing queues it first and then queues a
+        // folder's worth behind it, so recency alone would drop it.
+        let stat = unprojected[0];
+        engine.note_focus_file(stat);
+        assert_eq!(engine.queued_focus_files(), vec![stat]);
+
+        engine.note_focus_access(Some(FOLDER));
+
+        let queued = engine.queued_focus_files();
+        assert_eq!(queued.len(), MAX_FOCUS_FILES, "the bound still holds");
+        assert!(
+            queued.contains(&stat),
+            "the fan-out yields its slot, never the row the host named"
+        );
+    }
+
+    /// The stat's own row is what a repeat stat refreshes: a host row is not
+    /// duplicated, and it does not become a fan-out row it can then be evicted
+    /// as.
+    #[test]
+    fn a_repeat_stat_keeps_one_host_queued_row() {
+        let (engine, _clock) = engine();
+        let unprojected = folder_with_files(&engine, MAX_FOCUS_FILES * 2 + 5);
+        let stat = unprojected[0];
+        engine.note_focus_access(Some(FOLDER));
+        engine.note_focus_file(stat);
+        engine.note_focus_file(stat);
+        assert_eq!(
+            engine
+                .queued_focus_files()
+                .iter()
+                .filter(|node| **node == stat)
+                .count(),
+            1,
+        );
+
+        engine.note_focus_access(Some(FOLDER));
+        assert!(
+            engine.queued_focus_files().contains(&stat),
+            "and it survives the next listing"
+        );
+    }
+
+    /// An evicted stamp is the state a never-stamped node is in, so the node it
+    /// named resolves again on its next access rather than staying damped.
+    #[test]
+    fn a_node_whose_stamp_expired_is_due_on_its_next_access() {
+        let (engine, clock) = engine();
+        let now = engine.seams.scheduler.now();
+        engine.focus_refreshed.borrow_mut().insert(FOLDER, now);
+        assert!(
+            !engine.note_focus_access(Some(FOLDER)),
+            "a fresh stamp damps the access"
+        );
+
+        clock.advance(SyncTimingProfile::CI.stale_after);
+        expire_focus_stamps(
+            &mut engine.focus_refreshed.borrow_mut(),
+            engine.seams.scheduler.now(),
+            &engine.profile,
+        );
+
+        assert!(engine.focus_refreshed.borrow().is_empty());
+        assert!(
+            engine.note_focus_access(Some(FOLDER)),
+            "the evicted node is due, as a never-stamped node is"
         );
     }
 

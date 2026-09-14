@@ -2121,6 +2121,78 @@ fn a_rejected_descendant_refuses_every_relocation_until_a_later_walk_succeeds() 
     );
 }
 
+/// The crossing a command journals is a plan, not the authority. A session that
+/// has run no pass names no boundary below the render root, so the overlay
+/// places a queued create under a granted scope root and the move out of it
+/// journals as intra-scope. The drain re-derives the crossing from the two
+/// planes its own pass proved, so the subtree still re-seals at the destination
+/// scope and the source scope still carries its cut.
+#[test]
+fn a_move_journaled_before_any_walk_verdict_re_seals_and_cuts_at_the_drain() {
+    let mut fx = GrantScenario::new();
+    let album = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "album");
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let source_before = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    // The authoring session ends, so nothing it proved carries over.
+    drop(fx.world.scheduler.take_spawned_tasks());
+    let (mut fresh, _events, mut tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
+    block_on(fresh.command(Command::Create {
+        parent: fx.folder,
+        name: "note".into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("the create stages under the granted root");
+    let note = block_on(fresh.view())
+        .expect("a rendered view")
+        .children(fx.folder)
+        .into_iter()
+        .find(|child| child.name == "note")
+        .expect("the overlay places the queued create under the granted root")
+        .id;
+
+    assert!(
+        matches!(
+            block_on(fresh.command(Command::Relink {
+                node: note,
+                new_parent: album,
+            })),
+            Ok(CommandOutcome::Queued { .. })
+        ),
+        "the move queues before any walk has named a boundary"
+    );
+    assert_eq!(
+        queued_crossings(&fx.owner_device),
+        vec![ScopeCrossing::Intra],
+        "and a boundary this session has not proved reads as no boundary"
+    );
+
+    tick(&fx.world, &fresh, &mut tasks);
+    tick(&fx.world, &fresh, &mut tasks);
+
+    assert!(
+        queued_crossings(&fx.owner_device).is_empty(),
+        "the pass published the move"
+    );
+    let (scope, epoch, opened) =
+        published_seal(&fx.world, &fx.blocks, &write_name(note), &read_key_of(note));
+    assert_eq!(
+        (scope, epoch, opened.is_some()),
+        (
+            ROOT.0,
+            published_read_epoch(&fx.world, &fx.blocks, ROOT),
+            true
+        ),
+        "the moved subtree binds the destination scope, not the one it was journaled in"
+    );
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        source_before + 1,
+        "and the scope the move really left carries its cut"
+    );
+}
+
 /// A descendant no endpoint serves is availability. The session keeps the retry
 /// it has, refuses nothing, and accuses nobody — a refusal on every dark record
 /// would be a denial of service on the owner's own moves.
