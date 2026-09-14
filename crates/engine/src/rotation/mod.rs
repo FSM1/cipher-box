@@ -67,10 +67,10 @@ pub use rotate::{
     ScopeRootPublisher, rotate_scope,
 };
 pub use rotate_write::{
-    RepointChannel, RepublishedNode, ResumedRoot, ResumedWriteWave, RotateScopeWritePlan,
-    WritePublishError, WriteRotateError, WriteRotationOutcome, WriteScopeNode,
-    WriteSubtreeResolver, WriteWavePublisher, build_repoint_object, derive_write_name,
-    rotate_scope_write,
+    RecoveredWave, RepointChannel, RepublishedNode, ResumedRoot, ResumedWriteWave,
+    RotateScopeWritePlan, WritePublishError, WriteRotateError, WriteRotationOutcome,
+    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, build_repoint_object,
+    derive_write_name, rotate_scope_write,
 };
 pub(crate) use scope_material::{WalkedReadEpochs, install_walked_read_epochs};
 pub use sweep::{
