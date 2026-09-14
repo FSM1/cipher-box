@@ -67,6 +67,27 @@ impl fmt::Debug for SharePointer {
 }
 
 impl SharePointer {
+    /// Build a pointer the recipient's own vault can store.
+    ///
+    /// `display_name` is bounded release-active at [`MAX_NODE_NAME_BYTES`], the
+    /// bound the recipient's received-shares codec rejects at in both
+    /// directions (AGENTS.md rule 8). A pointer past it is one this build's own
+    /// reader can never store and never ack, so it redelivers until its TTL.
+    pub fn bounded(
+        scope_root_name: Vec<u8>,
+        sharer_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
+        display_name: String,
+        permission: Permission,
+    ) -> Result<Self, TooLong> {
+        within("displayName", display_name.len(), MAX_NODE_NAME_BYTES)?;
+        Ok(Self {
+            scope_root_name,
+            sharer_identity_pk,
+            display_name,
+            permission,
+        })
+    }
+
     /// Encode to det-CBOR (canonical key order). Unknown fields are not carried:
     /// this is an engine-authored payload, not a re-sealed shared structure.
     pub fn encode(&self) -> Vec<u8> {
@@ -323,8 +344,9 @@ pub(crate) const MAX_SCOPE_ROOT_NAME_BYTES: usize = 128;
 
 /// A collection or field past its frozen bound. Shared by the grants layer's
 /// bounded collections: the stored-body codecs, which all enforce their bounds
-/// in both directions (AGENTS.md rule 8), and the grafted claim record.
-#[derive(Debug)]
+/// in both directions (AGENTS.md rule 8), the grafted claim record, and the
+/// share pointer's own builder.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TooLong {
     /// Which bounded field breached.
     pub field: &'static str,
@@ -1443,6 +1465,33 @@ mod tests {
                 Err(ReceivedSharesCodecError::UnsupportedVersion { .. })
             ),
             "a forward body version is named, never read as empty"
+        );
+    }
+
+    /// The builder refuses the label the recipient's own store refuses, so no
+    /// build posts a pointer it could never bookmark (AGENTS.md rule 8).
+    #[test]
+    fn a_share_pointer_is_built_only_within_the_store_bound() {
+        let at_the_bound = SharePointer::bounded(
+            b"name".to_vec(),
+            [0x11; IDENTITY_PUBLIC_LEN],
+            "x".repeat(MAX_NODE_NAME_BYTES),
+            Permission::Read,
+        )
+        .expect("a label at the bound builds");
+        assert_eq!(at_the_bound.display_name.len(), MAX_NODE_NAME_BYTES);
+
+        assert_eq!(
+            SharePointer::bounded(
+                b"name".to_vec(),
+                [0x11; IDENTITY_PUBLIC_LEN],
+                "x".repeat(MAX_NODE_NAME_BYTES + 1),
+                Permission::Read,
+            )
+            .err()
+            .map(|e| (e.field, e.limit)),
+            Some(("displayName", MAX_NODE_NAME_BYTES)),
+            "one byte past the bound is refused"
         );
     }
 

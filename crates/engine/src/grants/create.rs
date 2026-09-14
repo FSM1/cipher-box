@@ -48,7 +48,7 @@ use core::fmt;
 use zeroize::Zeroizing;
 
 use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_ephemeral, fresh_seed};
-use crate::grants::SharePointer;
+use crate::grants::{SharePointer, TooLong};
 use cipherbox_core::payload::RepointObject;
 
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
@@ -259,6 +259,12 @@ pub enum CreateGrantError {
     /// [`ClaimantIsTheOwner`](super::InviteError::ClaimantIsTheOwner) refuses
     /// the same input.
     RecipientIsTheOwner,
+    /// The recipient's courtesy label is past
+    /// [`MAX_NODE_NAME_BYTES`](crate::name::MAX_NODE_NAME_BYTES), the bound the
+    /// recipient's own received-shares codec rejects at
+    /// ([`SharePointer::bounded`]). Refused before the post, so no build emits a
+    /// pointer its own reader can never store.
+    DisplayNameTooLong(TooLong),
     /// Encoding/signing the grant-set commitment failed (fail-closed codec).
     CommitmentEncode(CodecError),
     /// Entropy acquisition failed (seed mint or mailbox ephemeral).
@@ -377,6 +383,7 @@ impl CreateGrantError {
             Self::SubtreeBoundaryDiverged { .. } => "subtree-boundary-diverged",
             Self::UnusableRecipientKey => "unusable-recipient-key",
             Self::RecipientIsTheOwner => "recipient-is-the-owner",
+            Self::DisplayNameTooLong(_) => "grant-display-name-too-long",
             Self::CommitmentEncode(_) => "commitment-encode-failed",
             Self::Entropy(_) => "entropy-error",
             Self::Mint(_) => "mint-failed",
@@ -683,12 +690,13 @@ where
     M: Mailbox,
 {
     let recipient_enc_pub = recipient.enc_pub();
-    let pointer = SharePointer {
-        scope_root_name: scope_root_name.as_str().as_bytes().to_vec(),
-        sharer_identity_pk: owner.identity_signer.verifying_key().to_sec1(),
-        display_name: recipient.display_name.clone(),
-        permission: grantee.permission(),
-    };
+    let pointer = SharePointer::bounded(
+        scope_root_name.as_str().as_bytes().to_vec(),
+        owner.identity_signer.verifying_key().to_sec1(),
+        recipient.display_name.clone(),
+        grantee.permission(),
+    )
+    .map_err(CreateGrantError::DisplayNameTooLong)?;
     // Fresh HPKE ephemeral scalar, never a clock or a constant.
     let ephemeral = fresh_ephemeral(entropy).map_err(CreateGrantError::Entropy)?;
     // Fresh random, never derived: the API keeps only
@@ -1452,6 +1460,7 @@ mod tests {
     use crate::grants::recipient_blinded_tag;
     use crate::grants::{GrantRow, PublishedGrantBlob};
     use crate::mailbox::poll_verified;
+    use crate::name::MAX_NODE_NAME_BYTES;
     use crate::rotation::{
         CascadeTarget, LaggingNode, NodeRef, PrevEpochSeed, ResolveFailure, SweepResolveFailure,
         SweptChild, SweptNode, SweptScope,
@@ -2437,6 +2446,64 @@ mod tests {
     /// The API keeps `sha256(senderPublicKey : idempotencyKey)`, so an
     /// idempotency key an observer can recompute hands it back the sender to
     /// recipient edge. A seam that writes nothing makes every key that constant.
+    /// The courtesy label is bounded where the pointer is built, so a grant of
+    /// a long-named folder is refused rather than posted as an item the
+    /// recipient's own received-shares codec refuses to store (AGENTS.md rule
+    /// 8). Release-active: this test fires in a release build.
+    #[test]
+    fn an_oversized_label_posts_no_share_pointer() {
+        let owner_enc = owner_enc();
+        let owner_enc_pub = owner_enc.public();
+        let owner_identity = owner_identity();
+        let owner_pseudonym = owner_pseudonym();
+        let owner = OwnerGrantKeys {
+            enc_secret: &owner_enc,
+            identity_signer: &owner_identity,
+            pseudonym_signer: &owner_pseudonym,
+        };
+        let parent_node_seed = [0x44; SECRET_LEN];
+        let grantee_write_scope_seed = GRANTEE_WRITE_SCOPE_SEED;
+        let grantee = GranteeScopePlan {
+            v: V,
+            scope_id: GRANTEE_SCOPE,
+            parent_node_seed: &parent_node_seed,
+            owner_enc_pub: &owner_enc_pub,
+            write_scope_seed: &grantee_write_scope_seed,
+            write_cut: None,
+            pointer_read_key: &GRANTEE_POINTER_READ_KEY,
+            subtree_child_index: &[],
+        };
+        let contact = contact_for(recipient_enc().public());
+        let recorder = RecordingMailbox::default();
+        let mut entropy = SeededEntropy::new(11);
+        let mut post = |label: String| {
+            let recipient = GrantRecipient {
+                contact: &contact,
+                display_name: label,
+            };
+            block_on(post_share_pointer(
+                &mut entropy,
+                &recorder,
+                &owner,
+                &grantee,
+                &recipient,
+                &grantee.ipns_name(),
+            ))
+        };
+
+        post("x".repeat(MAX_NODE_NAME_BYTES)).expect("a label at the bound posts");
+        assert_eq!(recorder.posts.borrow().len(), 1);
+
+        let refused = post("x".repeat(MAX_NODE_NAME_BYTES + 1))
+            .expect_err("one byte past the bound is refused");
+        assert_eq!(refused.check(), "grant-display-name-too-long");
+        assert_eq!(
+            recorder.posts.borrow().len(),
+            1,
+            "the refusal lands before the delivery"
+        );
+    }
+
     #[test]
     fn a_silent_seam_delivers_no_grant_pointer() {
         // The idempotency key is the only 16-byte draw on this path, so
