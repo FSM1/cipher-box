@@ -695,5 +695,74 @@
         "unsupported-record-version"
       ]
     }
+  },
+  "bounds": {
+    "bases": {
+      "envelope": "a461760262696450a0a1a2a3a4a5a6a7a8a9aaabacadaeaf6865706f6368546167a26565706f6368056573636f706550b0b1b2b3b4b5b6b7b8b9babbbcbdbebf6a726561645365616c656458f2101112131415161718191a1b1c1d1e1f2021222324252627f62f822a6f982844331d3857563d319e6d40a482c552416973d7ca1d2129200eb0fd84e38f9adc77f84385ec063f7c932861c1044a907e04a49d53f7eb5d1254756caace5119cbb3cec8a9d2f1a703ba8286fd94d85646af61db1457916bd771a9f7e9fd2109896932876a4f85b4d4ae14efad8d489e3e171c1095753b7d57eb4c4faf2147f3d20ded9c6473f579496e1f715c5ab0456e9ae84ba2fa286b385f6ec9e743316a7de971857a1519c158d283f31dfda6ff1e443101fc3cd98d093326e802119c43fb49abc95495cf9c39a6be9680b2150e73094eb5",
+      "grantSection": "a6696f776e6572426c6f62a363656e6358202020202020202020202020202020202020202020202020202020202020202020637369675840232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323236a636970686572746578744121697772697465426f6479a263736967584053535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353667365616c656441506a636f6d6d69746d656e74586aa467656e7472696573806863757445706f6368006869706e734e616d6558186772616e742d73656374696f6e2d73636f70652d726f6f74706f776e657250736575646f6e796d506b582088888888888888888888888888888888888888888888888888888888888888886a6772616e74426c6f6273806c686973746f72794c696e6b73806d636f6d6d69746d656e74536967584011111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      "writeBody": "a36b6772616e744c656467657280707772697465486973746f72794c696e6b40756469726563744368696c6453636f7065496e64657880"
+    },
+    "entries": [
+      {
+        "name": "seal.envelopeMaxBytes",
+        "chargedMeasure": "whole-encoding",
+        "maxBytes": 2097152,
+        "collection": "envelope",
+        "artifact": "envelope",
+        "padField": "zzPad",
+        "padByte": 171,
+        "padLen": 2096822,
+        "encodedLen": 2097152,
+        "blake3": "3577a85dd04dd02e77c7de96c8dc6a435f83efb8c4662bda51aced7e3e529671"
+      },
+      {
+        "name": "seal.readSealedMaxBytes",
+        "chargedMeasure": "byte-string-payload",
+        "maxBytes": 2064384,
+        "collection": "readSealed",
+        "artifact": "envelope",
+        "padField": "readSealed",
+        "padByte": 171,
+        "padLen": 2064384,
+        "encodedLen": 2064464,
+        "blake3": "2fcfd31309d4f4a74b6eae3915fad18be153e19c94a3e7ad0b6bd7ad98488acd"
+      },
+      {
+        "name": "seal.criticalCarriedMaxBytes",
+        "chargedMeasure": "entry-value-plus-key",
+        "maxBytes": 16384,
+        "collection": "criticalCarried",
+        "artifact": "envelope",
+        "padField": "!pad",
+        "padByte": 171,
+        "padLen": 16376,
+        "encodedLen": 16703,
+        "blake3": "6942015dd892995abf0a2c074aae12c309186a8ed2671e828b45450e87af6449"
+      },
+      {
+        "name": "grant.writeBodyMaxBytes",
+        "chargedMeasure": "whole-encoding-history-link-at-max",
+        "maxBytes": 2031616,
+        "collection": "writeBody",
+        "artifact": "writeBody",
+        "padField": "zzPad",
+        "padByte": 171,
+        "padLen": 2031036,
+        "encodedLen": 2031102,
+        "blake3": "cf3377076fb8f929e716949d7329d672b6d48cee8435a3b8217eb6bb837c4f9f"
+      },
+      {
+        "name": "grant.grantSectionMaxBytes",
+        "chargedMeasure": "whole-encoding",
+        "maxBytes": 2048000,
+        "collection": "grantSection",
+        "artifact": "grantSection",
+        "padField": "zzPad",
+        "padByte": 171,
+        "padLen": 2047541,
+        "encodedLen": 2048000,
+        "blake3": "e59b407a2b1c2e18cc40e69c3ed0cc50b49802900308284fcd89f39db39322a8"
+      }
+    ]
   }
 }

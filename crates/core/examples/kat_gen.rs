@@ -15,7 +15,7 @@
 //! codec before anything is written, so a generator run is itself a
 //! self-check. Output is deterministic: re-running is byte-identical.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::num::NonZeroU64;
 use std::path::Path;
@@ -292,6 +292,9 @@ struct Manifest {
     content_key: ContentKeySection,
     owner_local: OwnerLocalSection,
     bin_index: BinIndexSection,
+    /// What each frozen byte bound charges, and the at-the-bound artifact that
+    /// proves it.
+    bounds: BoundsSection,
 }
 
 // --- Bin-index section: the owner-sealed, vault-level recycle-bin index,
@@ -2596,6 +2599,7 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                 ),
             },
         },
+        bounds: build_charged_bounds(),
     }
 }
 
@@ -3494,6 +3498,212 @@ fn build_read_body_reject() -> Vec<RejectVector> {
     ];
 
     finish_hex_reject_vectors("read-body", cases, decode_read_body)
+}
+
+// ---------------------------------------------------------------------------
+// Charged bounds: which bytes each frozen byte bound charges. The number alone
+// does not say that, and the measures differ per bound, so two implementations
+// can agree on every value and still refuse at different bytes. Each entry
+// carries an at-the-bound artifact as a recipe, not as a megabyte-long vector.
+// ---------------------------------------------------------------------------
+
+/// The charged-measure table and the artifact encodings its entries pad, keyed
+/// by artifact.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoundsSection {
+    bases: BTreeMap<String, String>,
+    entries: Vec<ChargedBound>,
+}
+
+/// One frozen byte bound, its charged measure, and the at-the-bound artifact
+/// that proves the measure: the `artifact` base decoded, top-level key
+/// `padField` set to `padLen` bytes of `padByte`, re-encoded canonically. That
+/// artifact encodes to `encodedLen` bytes whose BLAKE3 is `blake3`; the bound
+/// admits it, and refuses the same artifact at `padLen + 1` under `collection`.
+/// `encodedLen` differs from `maxBytes` by exactly what the measure leaves
+/// uncharged.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChargedBound {
+    /// The manifest path of the value this entry measures.
+    name: String,
+    charged_measure: String,
+    max_bytes: usize,
+    /// The wire key the over-bound refusal reports.
+    collection: String,
+    artifact: String,
+    pad_field: String,
+    pad_byte: u8,
+    pad_len: usize,
+    encoded_len: usize,
+    blake3: String,
+}
+
+/// The filler byte every at-the-bound artifact pads with.
+const BOUND_PAD_BYTE: u8 = 0xab;
+
+struct BoundSpec {
+    name: &'static str,
+    charged_measure: &'static str,
+    max_bytes: usize,
+    collection: &'static str,
+    artifact: &'static str,
+    pad_field: String,
+}
+
+/// `base` with its top-level `pad_field` set to `pad_len` filler bytes.
+fn pad_artifact(base: &[u8], pad_field: &str, pad_len: usize) -> Vec<u8> {
+    let mut m = decode(base)
+        .expect("a bound base decodes")
+        .as_map()
+        .expect("a bound base is a map")
+        .clone();
+    m.insert(pad_field, Value::Bytes(vec![BOUND_PAD_BYTE; pad_len]));
+    encode(&Value::Map(m)).expect("a padded bound artifact encodes")
+}
+
+/// Decode under the artifact's own codec and re-encode: an artifact a bound
+/// admits must survive the encode side at the same size (AGENTS.md rule 8).
+fn artifact_round_trip(artifact: &str, bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
+    match artifact {
+        "envelope" => decode_envelope(bytes).and_then(|v| encode_envelope(&v)),
+        "writeBody" => decode_write_body(bytes).and_then(|v| encode_write_body(&v)),
+        "grantSection" => {
+            seal::decode_grant_section(bytes).and_then(|v| seal::encode_grant_section(&v))
+        }
+        other => panic!("unknown bound artifact {other}"),
+    }
+}
+
+fn build_charged_bounds() -> BoundsSection {
+    let p = seal_probe();
+    let envelope = seal_read_body(
+        &p.key,
+        &p.nonce,
+        p.v,
+        p.id,
+        p.scope,
+        p.epoch,
+        &sample_folder(),
+    )
+    .expect("the sample folder seals");
+    let bases: BTreeMap<&str, Vec<u8>> = BTreeMap::from([
+        (
+            "envelope",
+            encode_envelope(&envelope).expect("the sample envelope encodes"),
+        ),
+        (
+            "writeBody",
+            encode_write_body(&epoch_one_write_body()).expect("the sample write-body encodes"),
+        ),
+        (
+            "grantSection",
+            seal::encode_grant_section(&vault_root_epoch_1_section())
+                .expect("the sample grant section encodes"),
+        ),
+    ]);
+
+    let specs = vec![
+        BoundSpec {
+            name: "seal.envelopeMaxBytes",
+            charged_measure: "whole-encoding",
+            max_bytes: MAX_BLOCK_BYTES,
+            collection: "envelope",
+            artifact: "envelope",
+            pad_field: "zzPad".to_string(),
+        },
+        BoundSpec {
+            name: "seal.readSealedMaxBytes",
+            charged_measure: "byte-string-payload",
+            max_bytes: MAX_READ_SEALED_BYTES,
+            collection: "readSealed",
+            artifact: "envelope",
+            pad_field: "readSealed".to_string(),
+        },
+        BoundSpec {
+            name: "seal.criticalCarriedMaxBytes",
+            charged_measure: "entry-value-plus-key",
+            max_bytes: MAX_CRITICAL_CARRIED_BYTES,
+            collection: "criticalCarried",
+            artifact: "envelope",
+            pad_field: format!("{CRITICAL_KEY_PREFIX}pad"),
+        },
+        BoundSpec {
+            name: "grant.writeBodyMaxBytes",
+            charged_measure: "whole-encoding-history-link-at-max",
+            max_bytes: MAX_WRITE_BODY_BYTES,
+            collection: "writeBody",
+            artifact: "writeBody",
+            pad_field: "zzPad".to_string(),
+        },
+        BoundSpec {
+            name: "grant.grantSectionMaxBytes",
+            charged_measure: "whole-encoding",
+            max_bytes: MAX_GRANT_SECTION_BYTES,
+            collection: "grantSection",
+            artifact: "grantSection",
+            pad_field: "zzPad".to_string(),
+        },
+    ];
+
+    let mut out = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let base = bases
+            .get(spec.artifact)
+            .unwrap_or_else(|| panic!("no base for {}", spec.artifact));
+        let admits = |pad_len: usize| {
+            let bytes = pad_artifact(base, &spec.pad_field, pad_len);
+            artifact_round_trip(spec.artifact, &bytes).is_ok_and(|round| round == bytes)
+        };
+
+        // The charge grows with the pad, so the largest admitted pad is a
+        // bisection over a monotone predicate. Where it lands is what the
+        // measure decides, and what this entry freezes.
+        assert!(admits(0), "{}: the unpadded base is refused", spec.name);
+        let (mut lo, mut hi) = (0usize, spec.max_bytes + 1);
+        assert!(
+            !admits(hi),
+            "{}: a pad past the bound is admitted",
+            spec.name
+        );
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if admits(mid) { lo = mid } else { hi = mid }
+        }
+
+        let at_bound = pad_artifact(base, &spec.pad_field, lo);
+        let over = pad_artifact(base, &spec.pad_field, lo + 1);
+        match artifact_round_trip(spec.artifact, &over) {
+            Err(CodecError::Malformed(Malformed::TooManyStructures {
+                collection, limit, ..
+            })) => {
+                assert_eq!(collection, spec.collection, "{}: collection", spec.name);
+                assert_eq!(limit, spec.max_bytes, "{}: limit", spec.name);
+            }
+            other => panic!("{}: one byte past the bound: {other:?}", spec.name),
+        }
+
+        out.push(ChargedBound {
+            name: spec.name.to_string(),
+            charged_measure: spec.charged_measure.to_string(),
+            max_bytes: spec.max_bytes,
+            collection: spec.collection.to_string(),
+            artifact: spec.artifact.to_string(),
+            pad_field: spec.pad_field.clone(),
+            pad_byte: BOUND_PAD_BYTE,
+            pad_len: lo,
+            encoded_len: at_bound.len(),
+            blake3: hexstr(&hash(&at_bound)),
+        });
+    }
+    BoundsSection {
+        bases: bases
+            .iter()
+            .map(|(name, bytes)| ((*name).to_string(), hexstr(bytes)))
+            .collect(),
+        entries: out,
+    }
 }
 
 fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
@@ -5401,6 +5611,17 @@ fn signed_ledger_row(
     entry
 }
 
+/// Write epoch 1: no prior write epoch, so no history link, and a scope root
+/// with no descendant scopes and no grants yet.
+fn epoch_one_write_body() -> WriteBody {
+    WriteBody {
+        grant_ledger: Vec::new(),
+        write_history_link: Vec::new(),
+        direct_child_scope_index: Vec::new(),
+        unknown: PreservedFields::new(),
+    }
+}
+
 fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
     let full = WriteBody {
         grant_ledger: vec![
@@ -5414,14 +5635,7 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         ],
         unknown: PreservedFields::new(),
     };
-    // Write epoch 1: no prior write epoch, so no history link, and a scope root
-    // with no descendant scopes and no grants yet.
-    let epoch_one = WriteBody {
-        grant_ledger: Vec::new(),
-        write_history_link: Vec::new(),
-        direct_child_scope_index: Vec::new(),
-        unknown: PreservedFields::new(),
-    };
+    let epoch_one = epoch_one_write_body();
     let read_only = WriteBody {
         grant_ledger: vec![signed_ledger_row(
             [0x02; 33],
@@ -5783,6 +5997,30 @@ fn section_grant_blob(tag: u8) -> SignedGrantBlob {
     }
 }
 
+/// Epoch 1 at the vault root: no grants, no history link, no ascent link.
+fn vault_root_epoch_1_section() -> seal::GrantSection {
+    seal::GrantSection {
+        commitment: section_commitment(Vec::new()),
+        commitment_sig: [0x11; 64],
+        grant_blobs: Vec::new(),
+        owner_blob: SignedOwnerBlob {
+            enc: [0x20; 32],
+            ciphertext: vec![0x21],
+            signature: [0x23; 64],
+            unknown: PreservedFields::new(),
+        },
+        owner_write_blob: None,
+        ascent_link: None,
+        history_links: Vec::new(),
+        write_body: SignedSealed {
+            sealed: vec![0x50],
+            signature: [0x53; 64],
+            unknown: PreservedFields::new(),
+        },
+        unknown: PreservedFields::new(),
+    }
+}
+
 fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
     let full = seal::GrantSection {
         commitment: section_commitment(vec![
@@ -5834,27 +6072,7 @@ fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
         },
         unknown: PreservedFields::new(),
     };
-    // Epoch 1 at the vault root: no grants, no history link, no ascent link.
-    let minimal = seal::GrantSection {
-        commitment: section_commitment(Vec::new()),
-        commitment_sig: [0x11; 64],
-        grant_blobs: Vec::new(),
-        owner_blob: SignedOwnerBlob {
-            enc: [0x20; 32],
-            ciphertext: vec![0x21],
-            signature: [0x23; 64],
-            unknown: PreservedFields::new(),
-        },
-        owner_write_blob: None,
-        ascent_link: None,
-        history_links: Vec::new(),
-        write_body: SignedSealed {
-            sealed: vec![0x50],
-            signature: [0x53; 64],
-            unknown: PreservedFields::new(),
-        },
-        unknown: PreservedFields::new(),
-    };
+    let minimal = vault_root_epoch_1_section();
     let cases: Vec<(&str, seal::GrantSection)> =
         vec![("full", full), ("vault-root-epoch-1", minimal)];
 
