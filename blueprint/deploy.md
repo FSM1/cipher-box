@@ -157,6 +157,9 @@ release management that worked:
    that HEAD is still green, on the exact bits being shipped.
 3. `staging-approval` environment gate (manual approval) → mint
    `staging-YYYYMMDD-release-N` → call `deploy-staging.yml`.
+4. Call `staging-e2e.yml` against the deployed front. The deploy carries no
+   health gate of its own, so this run is both the release verdict and the
+   first signal that the containers came up.
 
 ### The staging stack
 
@@ -335,8 +338,8 @@ default branch alone, so the file is inert until it lands on `main`.
 Dispatch-only (unscheduled): the load harness against local or staging
 (`load-test.yml` re-engaged over `crates/load`; the BYO scenario covers the
 API-side advisory-pin path, and external-provider throughput waits on the
-engine's provider layer), and the real Web3Auth
-Core Kit login job against staging with the test credentials — the honest
+engine's provider layer), and `staging-e2e.yml`, the real
+Core Kit login against staging through an injected test wallet — the honest
 inherited limitation testing.md records; never a PR gate.
 
 ## Disposition of the v1 inventory
