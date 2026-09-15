@@ -2556,6 +2556,28 @@ fn second_end_scope(base: &Snapshot, op: &Op, listed: &[NodeId]) -> Option<NodeI
     interior.all(|root| root == first).then_some(first)
 }
 
+/// The scan of `staging`'s durable queue for `reader`'s identity, served from
+/// `memo` while the queue stands where it stood when the memo was filled.
+///
+/// Memoized on the queue's generation, so a read pays the enumeration and the
+/// HPKE open per owned record once per queue mutation, not once per read. The
+/// generation is read before the queue, never after ([`QueueKey::new`]).
+async fn memoized_scan<St: StagingStore + QueueGeneration>(
+    staging: &St,
+    reader: &RecordReader<'_>,
+    memo: &RefCell<QueueScanMemo>,
+) -> SeamResult<QueueScan> {
+    let key = QueueKey::new(reader, staging.generation());
+    let hit = memo.borrow().hit(&key).cloned();
+    if let Some(scan) = hit {
+        return Ok(scan);
+    }
+    let raw = staging.queued_ops().await?;
+    let scan = decode_queue(reader, &raw);
+    memo.borrow_mut().fill(key, scan.clone());
+    Ok(scan)
+}
+
 /// The interior scope the **first** queued op that names one needs
 /// ([`second_end_scope`]), with the material the tick's boundary walk proved for
 /// it.
@@ -2585,17 +2607,7 @@ async fn queued_second_end<St: StagingStore + QueueGeneration>(
         return None;
     }
     let reader = RecordReader::new(enc_secret);
-    let key = QueueKey::new(&reader, staging.generation());
-    let hit = memo.borrow().hit(&key).cloned();
-    let scan = match hit {
-        Some(scan) => scan,
-        None => {
-            let raw = staging.queued_ops().await.ok()?;
-            let scan = decode_queue(&reader, &raw);
-            memo.borrow_mut().fill(key, scan.clone());
-            scan
-        }
-    };
+    let scan = memoized_scan(staging, &reader, memo).await.ok()?;
     let base = boundaries.base.borrow();
     let scope = scan
         .mine
@@ -10252,27 +10264,13 @@ where {
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
     ///
-    /// Memoized on the queue's generation ([`QueueScanMemo`]), so reads pay the
-    /// enumeration and the HPKE open per owned record once per queue mutation,
-    /// not once per read. The generation is read before the queue, never after
-    /// ([`QueueKey::new`]).
+    /// Rides the session's queue memo ([`memoized_scan`]).
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let reader = RecordReader::new(session.enc_subkey());
-        let key = QueueKey::new(&reader, self.seams.staging_store.generation());
-        let hit = self.queue_scan.borrow().hit(&key).cloned();
-        if let Some(scan) = hit {
-            return Ok(scan);
-        }
-        let raw = self
-            .seams
-            .staging_store
-            .queued_ops()
+        memoized_scan(&self.seams.staging_store, &reader, &self.queue_scan)
             .await
-            .map_err(EngineError::from_seam)?;
-        let scan = decode_queue(&reader, &raw);
-        self.queue_scan.borrow_mut().fill(key, scan.clone());
-        Ok(scan)
+            .map_err(EngineError::from_seam)
     }
 
     /// This session's pending ops, FIFO.
