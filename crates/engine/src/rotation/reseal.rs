@@ -51,6 +51,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
+use super::cascade::CascadeTarget;
 use crate::content::limits::{MAX_RETAINED_HISTORY_LINK_BYTES, resealable_section_bytes};
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
@@ -1037,6 +1038,69 @@ fn verify_ascent_link(
         return Err(ResealError::AscentLinkMismatch);
     }
     Ok(())
+}
+
+/// The half of a same-epoch re-seal a [`CascadeTarget`] does not carry: the
+/// scope's own identity, the ascent authority, and the owner subkey the caller
+/// holds.
+///
+/// A resolved target omits the self-identifying `scope_id` / `ipns_name` and the
+/// parent node seed on purpose — see [`CascadeTarget`] — so the caller names
+/// them here, from the enumerated [`ChildScopeRef`] it resolved under.
+#[derive(Clone, Copy)]
+pub struct ResealSite<'a> {
+    /// The scope-root node id (== scope id).
+    pub scope_id: [u8; 16],
+    /// The scope root's opaque `ipnsName` bytes.
+    pub ipns_name: &'a [u8],
+    /// The owner's X25519 encryption subkey — the re-seal re-wraps the owner
+    /// blob under it and proves every ledger row is filed under a tag it derives.
+    pub owner_enc_secret: &'a X25519Secret,
+    /// What this re-seal mints the ascent link under.
+    pub ascent: Option<AscentAuthority<'a>>,
+    /// Whether this root owes an ascent link
+    /// ([`ScopeRootIdentity::owes_ascent_link`]).
+    pub owes_ascent_link: bool,
+}
+
+/// Re-seal a resolved scope root at its **current** read epoch with one changed
+/// [`CommittedSet`] — the metadata-only shape shared by the grant hand-over's
+/// descendant re-key and the invite-claim conversion pass.
+///
+/// Same seed at the same epoch, so `prev` is `None` and the pass mints no
+/// history link, and the write plane rides through untouched
+/// ([`WriteHistory::Carried`]). Every seed stays the caller's to zero; this
+/// function borrows them (AGENTS.md rule 7).
+pub fn reseal_at_current_epoch<E: Entropy>(
+    entropy: &mut E,
+    target: &CascadeTarget,
+    site: &ResealSite<'_>,
+    committed: &CommittedSet<'_>,
+) -> Result<GrantSection, ResealError> {
+    reseal_scope_root(
+        entropy,
+        &ScopeRootIdentity {
+            v: target.v,
+            scope_id: site.scope_id,
+            ipns_name: site.ipns_name,
+            owner_enc_pub: &target.owner_enc_pub,
+            owner_enc_secret: Some(site.owner_enc_secret),
+            ascent: site.ascent,
+            owes_ascent_link: site.owes_ascent_link,
+            pseudonym_signer: &target.pseudonym_signer,
+        },
+        &ResealSeeds {
+            override_seed: &target.override_seed,
+            read_epoch: target.current_read_epoch,
+            prev: None,
+            write_scope_seed: &target.write_scope_seed,
+            write_epoch: target.write_epoch,
+            write_history: WriteHistory::Carried(&target.write_history_link),
+            pointer_read_key: &target.pointer_read_key,
+        },
+        committed,
+        &target.carried_history_links,
+    )
 }
 
 /// The override seed a re-sealed section's own owner blob carries, opened as an
@@ -2535,6 +2599,81 @@ mod tests {
         )
         .expect("every row derives the tag it is filed under");
         assert_eq!(section.grant_blobs.len(), 2);
+    }
+
+    /// The same-epoch helper reads a resolved target onto the very fields the
+    /// explicit form spells out — the property that lets a call site drop its own
+    /// `ScopeRootIdentity`/`ResealSeeds` literal.
+    #[test]
+    fn the_same_epoch_helper_seals_the_bytes_the_explicit_form_seals() {
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.minted();
+        let seed = [0x01; 32];
+        let target = CascadeTarget {
+            v: V,
+            current_read_epoch: 4,
+            owner_enc_pub: owner_pub,
+            pseudonym_signer: Ed25519Signer::from_seed([0x22; 32]),
+            write_body_signer: None,
+            override_seed: Zeroizing::new(seed),
+            write_scope_seed: Zeroizing::new(fx.write_scope_seed),
+            pointer_read_key: Zeroizing::new(fx.pointer_read_key),
+            write_epoch: 1,
+            commitment: commitment.clone(),
+            commitment_sig: sig,
+            grant_ledger: ledger.clone(),
+            write_history_link: Vec::new(),
+            direct_child_scope_index: Vec::new(),
+            carried_history_links: Vec::new(),
+            carried_ascent_link: false,
+        };
+        let committed = committed_set(&commitment, &sig, &ledger);
+
+        let explicit = reseal_scope_root(
+            &mut SeededEntropy::new(7),
+            &ScopeRootIdentity {
+                v: V,
+                scope_id: SCOPE,
+                ipns_name: MINTED_NAME,
+                owner_enc_pub: &owner_pub,
+                owner_enc_secret: Some(&fx.owner_enc),
+                ascent: None,
+                owes_ascent_link: false,
+                pseudonym_signer: &target.pseudonym_signer,
+            },
+            &ResealSeeds {
+                override_seed: &seed,
+                read_epoch: 4,
+                prev: None,
+                write_scope_seed: &fx.write_scope_seed,
+                write_epoch: 1,
+                write_history: WriteHistory::Carried(&[]),
+                pointer_read_key: &fx.pointer_read_key,
+            },
+            &committed,
+            &[],
+        )
+        .expect("the explicit same-epoch form seals");
+
+        let through_helper = reseal_at_current_epoch(
+            &mut SeededEntropy::new(7),
+            &target,
+            &ResealSite {
+                scope_id: SCOPE,
+                ipns_name: MINTED_NAME,
+                owner_enc_secret: &fx.owner_enc,
+                ascent: None,
+                owes_ascent_link: false,
+            },
+            &committed,
+        )
+        .expect("the helper seals the same inputs");
+
+        assert_eq!(
+            encode_grant_section(&through_helper).unwrap(),
+            encode_grant_section(&explicit).unwrap()
+        );
     }
 
     #[test]
