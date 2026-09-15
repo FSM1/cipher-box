@@ -48,6 +48,26 @@ export interface PollOptions {
   release?: () => Promise<unknown>;
 }
 
+/** A wait that settled: what it proved, how long it took, and what it cost in reads. */
+export interface WaitSample {
+  what: string;
+  elapsedMs: number;
+  attempts: number;
+}
+
+export type WaitObserver = (sample: WaitSample) => void;
+
+let observer: WaitObserver | undefined;
+
+/**
+ * Installs the observer every settled wait reports to, or clears it with
+ * `undefined`. The cross-client convergence latency is summarized from these
+ * samples; a run that installs no observer measures nothing and pays nothing.
+ */
+export function observeWaits(next: WaitObserver | undefined): void {
+  observer = next;
+}
+
 /**
  * A wait that ran out. It carries the last observed value, so a report names
  * the state the suite reached rather than only that time ran out.
@@ -93,7 +113,8 @@ export async function poll<T>(
   options: PollOptions
 ): Promise<T> {
   const clock = options.clock ?? REAL_CLOCK;
-  const deadline = clock.now() + options.timeoutMs;
+  const start = clock.now();
+  const deadline = start + options.timeoutMs;
   // One alarm bounds the read itself, so a read that never answers reports this
   // wait rather than the job timeout. The loop below cannot bound it: the loop
   // reaches its own deadline only after the read it is in returns.
@@ -116,7 +137,10 @@ export async function poll<T>(
       if (expired) throw expired;
       attempts += 1;
       last = value;
-      if (accept(value)) return value;
+      if (accept(value)) {
+        observer?.({ what: options.what, elapsedMs: clock.now() - start, attempts });
+        return value;
+      }
       const remaining = deadline - clock.now();
       if (remaining <= 0) {
         throw new PollTimeout(options.what, last, attempts, options.timeoutMs, false);

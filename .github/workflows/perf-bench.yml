@@ -9,6 +9,19 @@ name: Perf Benches
 on:
   workflow_dispatch:
     inputs:
+      job:
+        description: 'Which measurement to take'
+        required: true
+        default: 'benches'
+        type: choice
+        options:
+          - benches
+          - ranged-fetch
+          - cross-client-latency
+      crossClientRunId:
+        description: 'cross-client-latency: the Desktop E2E Tests run to summarize'
+        required: false
+        default: ''
       crate:
         description: 'Which pipeline stages to profile'
         required: true
@@ -32,6 +45,7 @@ permissions: {}
 jobs:
   bench:
     name: 'Perf Benches: ${{ inputs.crate }}'
+    if: inputs.job == 'benches'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -92,3 +106,99 @@ jobs:
           path: target/criterion/**
           retention-days: 30
           if-no-files-found: warn
+
+  # The ranged-fetch profile behind the frozen production chunk size: what one
+  # byte range costs on the wire, and the per-byte cost of framing it. The
+  # profile is arithmetic over the chunk-aligned leaf map, so its table reads the
+  # same on any host; the framing bench is the timing half, and does not.
+  ranged-fetch:
+    name: 'Perf Benches: ranged fetch'
+    if: inputs.job == 'ranged-fetch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: perf-bench-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            perf-bench-cargo-
+
+      - name: Profile the ranged fetch the frozen framing produces
+        run: |
+          set -euo pipefail
+          cargo run --release -p cipherbox-engine --example ranged_profile \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Bench the per-byte framing cost
+        run: cargo bench -p cipherbox-engine --benches -- chunk_framing
+
+      - name: Upload the criterion estimates
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-bench-ranged-fetch
+          path: target/criterion/**
+          retention-days: 30
+          if-no-files-found: warn
+
+  # The cross-client convergence latency. The samples come from a run of the
+  # cross-client suite, which needs a mounted desktop beside a browser, so this
+  # job summarizes a `Desktop E2E Tests` run rather than standing that stack up
+  # a second time.
+  cross-client-latency:
+    name: 'Perf Benches: cross-client latency'
+    if: inputs.job == 'cross-client-latency'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Name the run to summarize
+        env:
+          RUN_ID: ${{ inputs.crossClientRunId }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RUN_ID" ]; then
+            echo '::error::cross-client-latency needs crossClientRunId, a Desktop E2E Tests run'
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cross-client-wait-samples
+          path: wait-samples
+          run-id: ${{ inputs.crossClientRunId }}
+          github-token: ${{ github.token }}
+
+      - name: Summarize the waits that run measured
+        run: |
+          set -euo pipefail
+          pnpm --filter @cipherbox/perf latency wait-samples/wait-samples.jsonl \
+            | tee -a "$GITHUB_STEP_SUMMARY"

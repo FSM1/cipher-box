@@ -2,3 +2,6 @@ packages:
   - 'apps/*'
   - 'packages/*'
   - 'tests/*'
+  # Named rather than globbed: `tools/mock-ipns-routing` is a standalone npm
+  # image build with a lockfile of its own, and a glob would adopt it.
+  - 'tools/perf'
