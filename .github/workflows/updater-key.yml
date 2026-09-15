@@ -1,0 +1,68 @@
+# The updater refuses any release that its configured key did not sign. A
+# pubkey that drifts from the CI signing secret thus ships an app that can
+# never update again. The check has to compare the two, and the comparison
+# needs the private key, so it runs on the main gate: a push to main carries
+# reviewed code, while a pull-request job would hand the release signing key
+# to a tree the author still controls. The cost is that drift is reported
+# after the merge. The check answers to no path filter, because a key rotation
+# touches none.
+name: Updater Key
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  updater-key:
+    name: Updater Key
+    # The secret stays on reviewed code: a dispatch cannot aim this job at a branch.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # No git operation follows the checkout, and this job holds the signing
+      # secret, so the job token stays out of the workspace .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Assert the updater pubkey matches the signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is unavailable to this run, so the updater key is unverifiable"
+            exit 1
+          fi
+          WORK=$(mktemp -d)
+          # Tauri wraps both the public key and the signature file in base64;
+          # minisign wants the unwrapped bytes.
+          jq -er '.plugins.updater.pubkey' apps/desktop/src-tauri/tauri.conf.json \
+            | base64 -d > "${WORK}/updater.pub"
+          echo 'cipherbox updater key check' > "${WORK}/payload"
+          # `exec`, not the package's `tauri` script: that wrapper appends a
+          # `--config` the `signer` subcommand rejects.
+          pnpm --filter @cipherbox/desktop exec tauri signer sign "${WORK}/payload"
+          base64 -d < "${WORK}/payload.sig" > "${WORK}/payload.minisig"
+          minisign -V -p "${WORK}/updater.pub" -m "${WORK}/payload" -x "${WORK}/payload.minisig"
