@@ -100,12 +100,13 @@ use crate::record_plane::DefaultsReason;
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
-    MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, Retryable,
-    RevokeError, RevokedCommittedSet, RotateError, RotateOnExit, RotateScopePlan, RotationOutcome,
-    RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepResolveFailure,
-    WalkedReadEpochs, WriteHistory, WriteRevokeKind, bounded, cut_for_write_grant,
-    derive_write_name, install_walked_read_epochs, record_grant_floor, reseal_scope_root,
-    revoke_read_grant, revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep,
+    MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
+    Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnExit, RotateScopePlan,
+    RotationOutcome, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
+    SweepResolveFailure, WalkedReadEpochs, WriteHistory, WriteRevokeKind, bounded,
+    cut_for_write_grant, derive_write_name, install_walked_read_epochs, record_grant_floor,
+    reseal_at_current_epoch, reseal_scope_root, revoke_read_grant, revoke_write_grant,
+    rotate_on_cut, rotate_scope, run_sweep,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
@@ -8544,8 +8545,8 @@ where {
     }
 
     /// Publish the set a whole conversion pass produced at the scope root it
-    /// belongs to: re-seal at the **same** read epoch (a claim cuts no key, so
-    /// it mints no history link) and publish. `commitment_sig` is the owner's
+    /// belongs to: re-seal at the current read epoch — a claim cuts no key — and
+    /// publish. `commitment_sig` is the owner's
     /// signature over `current.commitment`, which the pass already made to
     /// authorise each conversion against the set the one before it left.
     async fn publish_converted_set(
@@ -8556,29 +8557,18 @@ where {
         current: &CascadeTarget,
         commitment_sig: &EcdsaSignature,
     ) -> Result<(), EngineError> {
-        let section = reseal_scope_root(
+        let section = reseal_at_current_epoch(
             &mut SharedEntropy(&self.entropy),
-            &ScopeRootIdentity {
-                v: current.v,
+            current,
+            &ResealSite {
                 scope_id: target.scope.scope_id,
                 ipns_name: &target.scope.ipns_name,
-                owner_enc_pub: &current.owner_enc_pub,
-                owner_enc_secret: Some(session.enc_subkey()),
+                owner_enc_secret: session.enc_subkey(),
                 ascent: target
                     .parent_node_seed
                     .as_deref()
                     .map(AscentAuthority::ParentSeed),
                 owes_ascent_link: current.carried_ascent_link,
-                pseudonym_signer: &current.pseudonym_signer,
-            },
-            &ResealSeeds {
-                override_seed: &current.override_seed,
-                read_epoch: current.current_read_epoch,
-                prev: None,
-                write_scope_seed: &current.write_scope_seed,
-                write_epoch: current.write_epoch,
-                write_history: WriteHistory::Carried(&current.write_history_link),
-                pointer_read_key: &current.pointer_read_key,
             },
             &CommittedSet {
                 commitment: &current.commitment,
@@ -8587,7 +8577,6 @@ where {
                 direct_child_scope_index: &current.direct_child_scope_index,
                 revoked_recipients: &[],
             },
-            &current.carried_history_links,
         )
         .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
         net.publish_scope_root(&ResealedScopeRoot {

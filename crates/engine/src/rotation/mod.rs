@@ -58,8 +58,9 @@ pub use eager_set::{
     ChildIndexResolver, EagerSet, EnumerationError, ResolveFailure, enumerate_eager_set,
 };
 pub use reseal::{
-    AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity,
-    WriteHistory, published_override_seed, reseal_scope_root, seed_at_epoch,
+    AscentAuthority, CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ResealSite,
+    ScopeRootIdentity, WriteHistory, published_override_seed, reseal_at_current_epoch,
+    reseal_scope_root, seed_at_epoch,
 };
 pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
 pub use rotate::{

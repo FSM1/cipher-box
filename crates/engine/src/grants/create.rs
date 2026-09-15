@@ -60,9 +60,9 @@ use crate::mailbox::post_sealed;
 use crate::rotation::sweep::{body_children, canonicalize_frontier, resolve_scope_current};
 use crate::rotation::{
     AscentAuthority, CascadeResealResolver, CommittedSet, NodeRef, ResealError, ResealSeeds,
-    ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
-    SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptNode, WriteHistory,
-    converge_subtree, derive_write_name, reseal_scope_root,
+    ResealSite, ResealedScopeRoot, ResolveFailure, RotationPublishError, ScopeRootIdentity,
+    ScopeRootPublisher, SweepError, SweepPublisher, SweepResolveFailure, SweepResolver, SweptNode,
+    WriteHistory, converge_subtree, derive_write_name, reseal_at_current_epoch, reseal_scope_root,
 };
 use crate::seams::{Mailbox, SeamError};
 use cipherbox_core::hex::lower as hex_lower;
@@ -1191,9 +1191,8 @@ where
 
     // Re-key the reparented direct children so each ascent link re-seals under
     // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
-    // blueprint/engine.md "subtree swept in"). Metadata-only (existing seed,
-    // current epoch, `prev = None`), threaded top-down as the eager cascade does
-    // (rotation/cascade.rs). Register-first: the grantee root published above
+    // blueprint/engine.md "subtree swept in"). Metadata-only, threaded
+    // top-down as the eager cascade does (rotation/cascade.rs). Register-first: the grantee root published above
     // already lists these descendants, so each points back at a parent that exists.
     for descendant in grantee.subtree_child_index {
         let target = net.resolve(descendant).await.map_err(|reason| {
@@ -1204,24 +1203,12 @@ where
         })?;
         let parent_node_seed =
             Zeroizing::new(*kdf::node_seed(&override_seed, &descendant.scope_id).as_bytes());
-        let identity = ScopeRootIdentity {
-            v: target.v,
+        let site = ResealSite {
             scope_id: descendant.scope_id,
             ipns_name: &descendant.ipns_name,
-            owner_enc_pub: &target.owner_enc_pub,
-            owner_enc_secret: Some(owner.enc_secret),
+            owner_enc_secret: owner.enc_secret,
             ascent: Some(AscentAuthority::ParentSeed(&parent_node_seed)),
             owes_ascent_link: true,
-            pseudonym_signer: &target.pseudonym_signer,
-        };
-        let seeds = ResealSeeds {
-            override_seed: &target.override_seed,
-            read_epoch: target.current_read_epoch,
-            prev: None,
-            write_scope_seed: &target.write_scope_seed,
-            write_epoch: target.write_epoch,
-            write_history: WriteHistory::Carried(&target.write_history_link),
-            pointer_read_key: &target.pointer_read_key,
         };
         let canonical_index = canonicalize(&target.direct_child_scope_index);
         let committed = CommittedSet {
@@ -1231,17 +1218,13 @@ where
             direct_child_scope_index: &canonical_index,
             revoked_recipients: &[],
         };
-        let section = reseal_scope_root(
-            entropy,
-            &identity,
-            &seeds,
-            &committed,
-            &target.carried_history_links,
-        )
-        .map_err(|error| CreateGrantError::DescendantMint {
-            scope_id: descendant.scope_id,
-            error,
-        })?;
+        let section =
+            reseal_at_current_epoch(entropy, &target, &site, &committed).map_err(|error| {
+                CreateGrantError::DescendantMint {
+                    scope_id: descendant.scope_id,
+                    error,
+                }
+            })?;
         let record = ResealedScopeRoot {
             scope_id: descendant.scope_id,
             ipns_name: descendant.ipns_name.clone(),
