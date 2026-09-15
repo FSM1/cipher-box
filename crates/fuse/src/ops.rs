@@ -606,6 +606,8 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             .lookup(new_parent_node, new_name)
             .filter(|dest| dest.id != source.id);
         if let Some(dest) = &replaced {
+            // The facade refuses a vacate of a folder that holds descendants
+            // too; this is the POSIX errno the mount owes for it.
             removable(&view, dest, source.kind)?;
             // The replaced node's own unlink rides the move op; only the hidden
             // junk it may still hold needs deletes of its own.

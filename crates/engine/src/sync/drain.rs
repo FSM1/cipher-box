@@ -664,7 +664,10 @@ impl QueueHoldReason {
 /// staging reservation until its reason's own exit comes.
 ///
 /// One cell, so one head cannot be claimed for two reasons at once and no arm
-/// has another arm's state to clear.
+/// has another arm's state to clear. The cell belongs to the tick rather than
+/// to one pass: a tick runs one pass per proved scope over one identity-wide
+/// queue, so a hold one pass takes is still the head's when the next pass of
+/// the same tick opens ([`bin_index_hold_exits`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueHold {
     /// The held op.
@@ -675,6 +678,22 @@ pub struct QueueHold {
     pub reason: QueueHoldReason,
 }
 
+/// Whether a halt frees a [`QueueHoldReason::BinIndex`] hold.
+///
+/// The exit is a classified verdict on the held op itself. A pass whose scope
+/// does not author that op takes [`Halt::Unclassified`] for it and knows
+/// nothing about the bin plane, so a later pass of the same tick must not drop
+/// the hold an earlier one took — the head would then wait with no cause the
+/// member can see.
+fn bin_index_hold_exits(hold: Option<QueueHold>, halted: OpId, halt: Halt) -> bool {
+    let Some(hold) = hold else {
+        return false;
+    };
+    matches!(hold.reason, QueueHoldReason::BinIndex(_))
+        && hold.op_id == halted
+        && !matches!(halt, Halt::HeldByBinIndex(_) | Halt::Unclassified)
+}
+
 /// The captures one pass adopts into the bin. A peer chooses both the trigger
 /// and the count, so the pass takes a bounded share and the rest waits.
 const MAX_BIN_ADOPTIONS: usize = 32;
@@ -683,10 +702,14 @@ const MAX_BIN_ADOPTIONS: usize = 32;
 /// fill, so it is bounded like every other per-session set.
 const MAX_HELD_CAPTURES: usize = 4096;
 
-/// Purges one pass queues for expired bin entries. A retention deadline can
+/// Purges one tick queues for expired bin entries. A retention deadline can
 /// come due for a whole bin at once, and a purge is an op like any other: the
-/// queue takes a bounded share per pass and the rest waits for the next tick.
-const MAX_BIN_EXPIRIES: usize = 32;
+/// queue takes a bounded share per tick and the rest waits for the next one.
+///
+/// Held by the tick rather than by the pass: a tick runs one pass per proved
+/// scope, so a per-pass bound would multiply by a scope count the owner sets
+/// ([`TickShare`]).
+pub(crate) const MAX_BIN_EXPIRIES: usize = 32;
 
 /// Milliseconds in one day, the unit the owner's bin retention is set in.
 const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
@@ -1103,6 +1126,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// costs one resolve rather than one per operation; the publish stays per
     /// operation, which is what keeps the entry ahead of its unlink.
     pub(crate) established_bin_index: RefCell<Option<BinIndex>>,
+    /// What this tick may still queue in bin purges, shared out across its
+    /// scope passes ([`MAX_BIN_EXPIRIES`]).
+    pub(crate) bin_expiries: RefCell<TickShare>,
     /// Scope roots this session owes a cut for ([`Drain::cut_exited_scopes`]).
     pub(crate) pending_scope_exits: &'a RefCell<BTreeSet<NodeId>>,
 }
@@ -1215,6 +1241,38 @@ impl BookkeepingCursors {
     }
 }
 
+/// One tick's allowance for work its scope passes each want to do, shared out
+/// evenly. A scope served first would otherwise spend every slot on its own
+/// backlog, and the scopes behind it would wait on a queue they never reach the
+/// head of.
+pub(crate) struct TickShare {
+    /// Slots left to the tick.
+    left: usize,
+    /// The most of them any one scope may take.
+    per_scope: usize,
+}
+
+impl TickShare {
+    /// `total` slots for a tick that runs `scopes` passes.
+    pub(crate) fn new(total: usize, scopes: usize) -> Self {
+        Self {
+            left: total,
+            per_scope: total.div_ceil(scopes.max(1)),
+        }
+    }
+
+    /// What one pass may take: its share, and never more than the tick has
+    /// left.
+    fn share(&self) -> usize {
+        self.per_scope.min(self.left)
+    }
+
+    /// Charge what one pass took.
+    fn spend(&mut self, taken: usize) {
+        self.left = self.left.saturating_sub(taken);
+    }
+}
+
 /// What one tick's journal replay may spend across every scope it settles: the
 /// entries it replays and the quarantine proofs those entries decide against.
 /// Held by the whole tick rather than per scope, so a vault of many promoted
@@ -1226,9 +1284,7 @@ impl BookkeepingCursors {
 struct JournalBudget {
     /// Entries left to replay ([`MAX_JOURNAL_REPLAYS`]). Each costs a store
     /// read and a registry batch.
-    replays: usize,
-    /// The most of them any one scope may take ([`Self::share`]).
-    per_scope: usize,
+    replays: TickShare,
     /// Quarantine proofs left ([`MAX_QUARANTINE_PROOFS`]). Each costs a fresh
     /// resolve of one descendant's record, so a delete of a large subtree
     /// settles over several ticks rather than holding one open.
@@ -1243,17 +1299,10 @@ impl JournalBudget {
     /// The budget for a tick that settles `scopes` scopes.
     fn new(scopes: usize) -> Self {
         Self {
-            replays: MAX_JOURNAL_REPLAYS,
-            per_scope: MAX_JOURNAL_REPLAYS.div_ceil(scopes.max(1)),
+            replays: TickShare::new(MAX_JOURNAL_REPLAYS, scopes),
             proofs: MAX_QUARANTINE_PROOFS,
             opens: MAX_BOOKKEEPING_OPENS,
         }
-    }
-
-    /// What one scope may replay: its share of the tick's slots, and never more
-    /// than the tick has left.
-    fn share(&self) -> usize {
-        self.per_scope.min(self.replays)
     }
 }
 
@@ -1777,10 +1826,10 @@ where
         report: &mut DrainReport,
     ) {
         // The bin plane has no probe of its own — the load is the only one — so
-        // its hold goes here, on the first halt that is not it. Every other
+        // its hold exits here, on a classified halt at the held op. Every other
         // reason has an exit the pre-pass gate can try.
-        if !matches!(halt, Halt::HeldByBinIndex(_)) {
-            self.release_bin_index_hold();
+        if bin_index_hold_exits(*self.hold.borrow(), op_id, halt) {
+            self.release_hold();
         }
         match halt {
             Halt::EpochLagged => {}
@@ -1957,16 +2006,6 @@ where
 
     fn release_hold(&self) {
         *self.hold.borrow_mut() = None;
-    }
-
-    fn release_bin_index_hold(&self) {
-        let held_by_bin_index = matches!(
-            self.hold.borrow().map(|hold| hold.reason),
-            Some(QueueHoldReason::BinIndex(_))
-        );
-        if held_by_bin_index {
-            self.release_hold();
-        }
     }
 
     /// This identity's queued ops, minus restore residue: an op at or below the
@@ -3103,7 +3142,7 @@ where
         budget: &mut JournalBudget,
     ) -> BTreeSet<[u8; 16]> {
         let mut owed_now = BTreeSet::new();
-        let mut mine = budget.share();
+        let mut mine = budget.replays.share();
         // Another scope's entry is that scope's to settle: its names derive from
         // a write seed this end does not hold, so every verdict here would be a
         // retry against a record this pass never read.
@@ -3151,7 +3190,7 @@ where
             else {
                 continue;
             };
-            budget.replays -= 1;
+            budget.replays.spend(1);
             mine -= 1;
             let settle = match self.converged_tick.get() {
                 true => Settle::Decide(&mut budget.proofs),
@@ -3390,6 +3429,7 @@ where
         let Some(index) = self.expiry_bin_index().await else {
             return;
         };
+        let share = self.bin_expiries.borrow().share();
         let expired: Vec<(NodeId, u64)> = {
             let base = self.base.borrow();
             let terminal = self.dead_letters.borrow();
@@ -3411,9 +3451,10 @@ where
                 })
                 .map(|entry| (NodeId(entry.node_id), entry.deleted_at))
                 .filter(|(node, _)| !queued.contains(node))
-                .take(MAX_BIN_EXPIRIES)
+                .take(share)
                 .collect()
         };
+        self.bin_expiries.borrow_mut().spend(expired.len());
         for (node, deleted_at) in expired {
             let Ok(ephemeral_scalar) = fresh_ephemeral(&mut *self.entropy.borrow_mut()) else {
                 return;
@@ -3572,7 +3613,14 @@ where
     /// hold a refused load took.
     fn establish_bin_index(&self, index: BinIndex) {
         *self.established_bin_index.borrow_mut() = Some(index);
-        self.release_bin_index_hold();
+        // The load is the hold's own probe, so an index this pass established
+        // is the exit whichever pass of the tick took the hold.
+        if matches!(
+            self.hold.borrow().map(|hold| hold.reason),
+            Some(QueueHoldReason::BinIndex(_))
+        ) {
+            self.release_hold();
+        }
     }
 
     /// Publish the bin index and hold the confirmed record for renewal.
@@ -7250,18 +7298,19 @@ mod tests {
     #[test]
     fn a_tick_shares_its_journal_replays_across_the_scopes_it_settles() {
         assert_eq!(
-            JournalBudget::new(1).share(),
+            JournalBudget::new(1).replays.share(),
             MAX_JOURNAL_REPLAYS,
             "one scope may spend the whole tick's slots"
         );
         let mut four = JournalBudget::new(4);
         assert!(
-            four.share() < MAX_JOURNAL_REPLAYS && four.share() * 4 >= MAX_JOURNAL_REPLAYS,
+            four.replays.share() < MAX_JOURNAL_REPLAYS
+                && four.replays.share() * 4 >= MAX_JOURNAL_REPLAYS,
             "four scopes divide them, and every slot is reachable"
         );
-        four.replays = 1;
+        four.replays.spend(MAX_JOURNAL_REPLAYS - 1);
         assert_eq!(
-            four.share(),
+            four.replays.share(),
             1,
             "no scope takes more than the tick has left"
         );
@@ -7600,6 +7649,7 @@ mod tests {
                 dead_letters: &self.dead_letters,
                 bin_index_record: &self.bin_index_record,
                 established_bin_index: RefCell::new(None),
+                bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
                 observed_unlinks: &self.observed_unlinks,
                 pending_scope_exits: &self.pending_scope_exits,
             }
@@ -7842,6 +7892,87 @@ mod tests {
             *undecided.hold.borrow(),
             Some(over_quota),
             "an outage leaves the head held rather than charging it",
+        );
+    }
+
+    /// The hold cell is the tick's, and a tick runs one pass per proved scope
+    /// over one identity-wide queue. A pass whose scope does not author the
+    /// held op halts on it with no verdict about the bin plane, so it must not
+    /// drop the hold an earlier pass of the same tick took — the head would
+    /// then wait with no cause the member can see.
+    #[test]
+    fn a_later_pass_of_the_same_tick_does_not_drop_another_pass_bin_index_hold() {
+        let node = NodeId([9; 16]);
+        let op = Op::rename(node, "renamed.txt", 1, UnixMillis(0));
+        let held = QueueHold {
+            op_id: OpId(1),
+            node,
+            reason: QueueHoldReason::BinIndex(DefaultsReason::Suppressed),
+        };
+
+        for (case, halted, halt) in [
+            (
+                "another scope's pass halts on an op of its own",
+                OpId(2),
+                Halt::Unclassified,
+            ),
+            (
+                "a pass that cannot author the held op refuses it",
+                OpId(1),
+                Halt::Unclassified,
+            ),
+        ] {
+            let harness = drain_harness(Some(harness_root_envelope()));
+            *harness.hold.borrow_mut() = Some(held);
+            block_on(harness.drain().apply_valve(
+                &harness.scope(),
+                halted,
+                &op,
+                halt,
+                &mut Attempts::default(),
+                &mut DrainReport::default(),
+            ));
+            assert_eq!(*harness.hold.borrow(), Some(held), "{case}");
+        }
+
+        let harness = drain_harness(Some(harness_root_envelope()));
+        *harness.hold.borrow_mut() = Some(held);
+        block_on(harness.drain().apply_valve(
+            &harness.scope(),
+            OpId(1),
+            &op,
+            Halt::EpochLagged,
+            &mut Attempts::default(),
+            &mut DrainReport::default(),
+        ));
+        assert_eq!(
+            *harness.hold.borrow(),
+            None,
+            "a classified verdict on the held op is the hold's own exit",
+        );
+    }
+
+    /// The bin sweep runs once per proved scope, so a per-pass bound would let
+    /// a tick stage its whole share again for every scope the owner holds.
+    #[test]
+    fn a_tick_shares_its_bin_expiries_across_the_scopes_it_drains() {
+        let one = TickShare::new(MAX_BIN_EXPIRIES, 1);
+        assert_eq!(
+            one.share(),
+            MAX_BIN_EXPIRIES,
+            "one scope may stage the whole tick's purges"
+        );
+
+        let mut four = TickShare::new(MAX_BIN_EXPIRIES, 4);
+        let mut staged = 0;
+        while four.share() > 0 {
+            let taken = four.share();
+            staged += taken;
+            four.spend(taken);
+        }
+        assert_eq!(
+            staged, MAX_BIN_EXPIRIES,
+            "four passes divide one tick's purges rather than taking one each"
         );
     }
 
