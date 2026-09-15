@@ -1986,6 +1986,7 @@ impl EngineError {
             | CreateGrantError::Resume(_)
             | CreateGrantError::ResumeNotThisGrant
             | CreateGrantError::TargetAlreadyNamesAScope
+            | CreateGrantError::ParentScopeSuperseded
             | CreateGrantError::InteriorNotConverged { .. }
             | CreateGrantError::InteriorEpochRegressed { .. }
             | CreateGrantError::DescendantMint { .. }
