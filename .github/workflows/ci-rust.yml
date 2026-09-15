@@ -158,6 +158,18 @@ jobs:
         with:
           node-version-file: 'package.json'
 
+      # The `lint` job above covers the host target only, and the legs below
+      # build and test wasm32 without linting it, so a wasm32-only lint would
+      # ship unseen. `--all-targets` is unusable here: the criterion benches
+      # have no wasm build.
+      - name: Cargo clippy (wasm32 targets)
+        run: |
+          set -euo pipefail
+          for target in wasm32-wasip1 wasm32-unknown-unknown; do
+            cargo clippy -p cipherbox-core -p cipherbox-engine -p cipherbox-wasm \
+              --lib --tests --target "$target" -- -D warnings
+          done
+
       - name: KAT vectors fresh (committed generator is the only writer)
         run: |
           cargo run -p cipherbox-core --example kat_gen
