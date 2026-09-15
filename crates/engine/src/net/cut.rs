@@ -24,8 +24,8 @@ use crate::facade::{Event, NodeId};
 use crate::gate::floor;
 use crate::net::liveness::HeldRecords;
 use crate::net::rotation::{
-    GatedRoots, GatedWaveRoot, OwnerRotationKeys, OwnerRotationNet, PointerConsultArm,
-    RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
+    GatedRoots, GatedWaveRoot, MovedScopeSeed, OwnerRotationKeys, OwnerRotationNet,
+    PointerConsultArm, RotationAncestry, SweptScopeState, WaveSubtree, WriteWaveNet,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -161,6 +161,7 @@ where
             payload_version: self.payload_version,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
+            moved_seed: MovedScopeSeed::default(),
         }
     }
 }

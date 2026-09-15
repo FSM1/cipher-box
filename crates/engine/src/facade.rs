@@ -83,7 +83,7 @@ use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
-use crate::net::rotation::{GatedRoots, RotationAncestry, SweptScopeState};
+use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, DescendantScopeRoot, EolRenewResult, FolderRefresh,
     FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords,
@@ -2803,6 +2803,7 @@ where
         payload_version: POINTER_PAYLOAD_VERSION,
         gated: GatedRoots::default(),
         swept: SweptScopeState::default(),
+        moved_seed: MovedScopeSeed::default(),
     };
     // The cut about to run mints a fresh seed at a fresh epoch, so the walked
     // material for this scope is superseded the moment it lands. Standing the
@@ -5714,6 +5715,7 @@ where {
                         payload_version: POINTER_PAYLOAD_VERSION,
                         gated: GatedRoots::default(),
                         swept: SweptScopeState::default(),
+                        moved_seed: MovedScopeSeed::default(),
                     };
                     // The wave is idempotent and every later write advances it,
                     // so a pass that does not converge is left to the next one.
@@ -7202,6 +7204,7 @@ where {
             payload_version: POINTER_PAYLOAD_VERSION,
             gated: GatedRoots::default(),
             swept: SweptScopeState::default(),
+            moved_seed: MovedScopeSeed::default(),
         }
     }
 

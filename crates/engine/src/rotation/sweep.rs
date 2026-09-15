@@ -513,7 +513,13 @@ where
     R: SweepResolver,
     P: SweepPublisher,
 {
-    walk_and_converge(resolver, publisher, scope, None).await
+    let (scope_ref, swept) = resolve_scope_current(resolver, scope)
+        .await
+        .map_err(|reason| SweepError::Scope {
+            scope_id: scope.scope_id,
+            reason,
+        })?;
+    walk_and_converge(resolver, publisher, &scope_ref, swept, None).await
 }
 
 /// Converge just the subtree rooted at `node` inside `scope` — grant creation's
@@ -522,38 +528,39 @@ where
 ///
 /// `node` itself is measured against the scope's epoch too: the granted folder
 /// is an interior node until the mint publishes its new scope root over it.
+///
+/// `scope` and `swept` are what [`resolve_scope_current`] proved, and the caller
+/// passes them in: grant creation must resolve the parent itself, because its
+/// resume probe reads the scope source only that resolve parks, and one command
+/// owes the parent name one resolve.
 pub async fn converge_subtree<R, P>(
     resolver: &R,
     publisher: &P,
     scope: &ChildScopeRef,
+    swept: SweptScope,
     node: &NodeRef,
 ) -> Result<SweepOutcome, SweepError>
 where
     R: SweepResolver,
     P: SweepPublisher,
 {
-    walk_and_converge(resolver, publisher, scope, Some(node)).await
+    walk_and_converge(resolver, publisher, scope, swept, Some(node)).await
 }
 
-/// The one pass both entry points run: gate the scope root, walk from `from`
-/// (or from the root's own body), self-heal the index, re-seal what lags.
+/// The one pass both entry points run over a scope root already proved current:
+/// walk from `from` (or from the root's own body), self-heal the index, re-seal
+/// what lags.
 async fn walk_and_converge<R, P>(
     resolver: &R,
     publisher: &P,
-    scope: &ChildScopeRef,
+    scope_ref: &ChildScopeRef,
+    swept: SweptScope,
     from: Option<&NodeRef>,
 ) -> Result<SweepOutcome, SweepError>
 where
     R: SweepResolver,
     P: SweepPublisher,
 {
-    let (scope_ref, swept) = resolve_scope_current(resolver, scope)
-        .await
-        .map_err(|reason| SweepError::Scope {
-            scope_id: scope.scope_id,
-            reason,
-        })?;
-
     let boundaries: BTreeSet<[u8; 16]> = swept
         .direct_child_scope_index
         .iter()
@@ -593,7 +600,7 @@ where
                 outcome.skipped_scope_roots.push(child.node_id);
                 continue;
             }
-            let (resolved, found) = match resolve_child_current(resolver, &scope_ref, child).await {
+            let (resolved, found) = match resolve_child_current(resolver, scope_ref, child).await {
                 Ok(pair) => pair,
                 Err(reason) if reason.isolates_the_node() => {
                     outcome.unreachable.push((child.node_id, reason));
@@ -635,7 +642,7 @@ where
         index = repair_observed(&index, scope_root.clone());
     }
     if index != swept.direct_child_scope_index {
-        match publisher.repair_child_scope_index(&scope_ref, &index).await {
+        match publisher.repair_child_scope_index(scope_ref, &index).await {
             Ok(()) => outcome
                 .flagged_indexes
                 .extend(omitted.iter().map(|root| root.scope_id)),
@@ -660,7 +667,7 @@ where
             carried_unknown: &swept_node.carried_unknown,
             carried_epoch_tag_unknown: &swept_node.carried_epoch_tag_unknown,
         };
-        match publisher.publish_node(&scope_ref, &lagging_node).await {
+        match publisher.publish_node(scope_ref, &lagging_node).await {
             Ok(()) => outcome.converged.push(node.node_id),
             // The one spec-mandated non-abort per-node path. The winner may be a
             // non-advancing ordinary write, so the node is not proven converged;
@@ -1278,6 +1285,7 @@ mod tests {
             &net,
             &net,
             &scope_ref(0x00),
+            block_on(net.resolve_scope(&scope_ref(0x00))).expect("the scope resolves"),
             &node_ref(0x01),
         ))
         .expect("the subtree converges");
@@ -1294,6 +1302,7 @@ mod tests {
             &net,
             &net,
             &scope_ref(0x00),
+            block_on(net.resolve_scope(&scope_ref(0x00))).expect("the scope resolves"),
             &node_ref(0x01),
         ))
         .expect("converges");

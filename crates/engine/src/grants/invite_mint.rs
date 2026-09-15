@@ -229,7 +229,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::super::create::{
-        GrantResumeResolver, InteriorRecord, InteriorResealer, PromotedScopeRoot,
+        GrantResumeResolver, InteriorRecord, InteriorResealer, MovingChild, PromotedScopeRoot,
     };
     use super::*;
     use crate::rotation::published_override_seed;
@@ -479,12 +479,16 @@ mod tests {
             Ok(false)
         }
 
-        async fn moved_interior_node(
+        async fn resolve_moving_child(
             &self,
+            source: &ChildScopeRef,
             _root: &ResealedScopeRoot,
-            _node: &NodeRef,
-        ) -> Result<Option<ReadBody>, SweepResolveFailure> {
-            Ok(None)
+            node: &NodeRef,
+        ) -> Result<MovingChild, SweepResolveFailure> {
+            match self.resolve_child(source, node).await? {
+                SweptChild::Interior(swept) => Ok(MovingChild::Pending(swept)),
+                SweptChild::ScopeRoot(_) => Ok(MovingChild::ScopeRoot),
+            }
         }
     }
 
