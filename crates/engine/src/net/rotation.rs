@@ -12,7 +12,7 @@
 //! adoption gate stays the only judge of a resolved record, and the publish
 //! pipeline stays the only path to the transport.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -476,6 +476,25 @@ struct GatedWritePlane {
     write_epoch: u64,
     /// The CAS lower bound this read carries, as [`ResealableRoot`] holds it.
     over_sequence: Option<u64>,
+}
+
+/// One record head as this pass read it: the name it was read at, the verified
+/// record, and the head block the gate re-assembles from.
+struct RecordHead {
+    name: IpnsName,
+    /// The verified IPNS record the head came out of.
+    record_bytes: Vec<u8>,
+    /// The record's own IPNS sequence, as the fetch authenticated it.
+    sequence: u64,
+    block: Vec<u8>,
+}
+
+impl RecordHead {
+    /// The envelope this head carries. A head block that does not decode is a
+    /// fail-closed rejection, never an availability stall.
+    fn envelope(&self) -> Result<Envelope, ResolveFailure> {
+        decode_envelope(&self.block).map_err(|_| ResolveFailure::Rejected)
+    }
 }
 
 /// Parse a `ChildScopeRef`'s opaque `ipnsName` bytes. A name that is not a
@@ -1455,8 +1474,8 @@ where
 /// Unseal a gated scope root's write-body under the write scope seed the reader
 /// recovered, at the durable write-epoch floor, and report that floor — the AAD
 /// epoch the seed's own recovery already bound, and the write epoch a re-seal of
-/// this root must republish at. A root held keyless has no readable write-body —
-/// availability, not a trust verdict.
+/// this root must republish at. A scope with no durable write-epoch floor has
+/// nothing to open the body under — availability, not a trust verdict.
 async fn write_plane_of<F: FloorStore>(
     floors: &F,
     envelope: &Envelope,
@@ -1474,12 +1493,67 @@ async fn write_plane_of<F: FloorStore>(
     Ok((body, write_epoch))
 }
 
+/// A gated scope root's write plane, plus the seed it opened under for a caller
+/// that carries that seed on.
+struct GatedWriteBody {
+    write_scope_seed: Zeroizing<[u8; SECRET_LEN]>,
+    body: WriteBody,
+    epoch: u64,
+}
+
+/// [`write_plane_of`] under the seed a gated root itself recovered. A root held
+/// keyless has no readable write-body — availability, not a trust verdict.
+async fn write_plane_of_gated<F: FloorStore>(
+    floors: &F,
+    gated: &GatedScopeRoot,
+    scope_id: [u8; 16],
+) -> Result<GatedWriteBody, ResolveFailure> {
+    let Some(write_scope_seed) = gated.write_scope_seed.clone() else {
+        return Err(ResolveFailure::Unavailable);
+    };
+    let (body, epoch) = write_plane_of(
+        floors,
+        &gated.envelope,
+        &gated.section,
+        &write_scope_seed,
+        scope_id,
+    )
+    .await?;
+    Ok(GatedWriteBody {
+        write_scope_seed,
+        body,
+        epoch,
+    })
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E, S> OwnerRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
     S: SnapshotCache,
 {
+    /// The head of the record at `ipns_name`: the name parsed, the record
+    /// fan-out verified, and the head block re-assembled from it. Every read
+    /// edge that gates a record itself, rather than through
+    /// [`Self::resealable_root`], starts here, so one rule governs what a head
+    /// read refuses and on which axis.
+    async fn head_at(&self, ipns_name: &[u8]) -> Result<RecordHead, ResolveFailure> {
+        let name = scope_name(ipns_name)?;
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let (sequence, block) =
+            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
+                .await
+                .map_err(resolve_verdict)?;
+        Ok(RecordHead {
+            name,
+            record_bytes,
+            sequence,
+            block,
+        })
+    }
+
     /// The freshest verified record at `name` run through the adoption gate
     /// under `scope_id` — the caller's own trusted label, imposed on the gate so
     /// a record claiming another scope is a transplant it rejects
@@ -1649,19 +1723,11 @@ where
             .resealable_root(scope.scope_id, &name, anchor)
             .await
             .map_err(ResolveFailure::from)?;
-        // A root held keyless has no readable write-body — availability, not a
-        // trust verdict.
-        let Some(write_scope_seed) = root.write_scope_seed.as_deref() else {
-            return Err(ResolveFailure::Unavailable);
-        };
-        let (write_body, write_epoch) = write_plane_of(
-            self.floors,
-            &root.envelope,
-            &root.section,
-            write_scope_seed,
-            scope.scope_id,
-        )
-        .await?;
+        let GatedWriteBody {
+            body: write_body,
+            epoch: write_epoch,
+            ..
+        } = write_plane_of_gated(self.floors, &root, scope.scope_id).await?;
         self.ancestry.record(
             scope.scope_id,
             &root.read_scope_seed,
@@ -2579,13 +2645,18 @@ impl SweptScopeState {
     }
 }
 
-/// Carry a gate error into the sweep's read arm on rule 6's axis: a rejection
-/// is a fail-closed trust violation, a seam failure is availability.
-fn read_verdict(error: GateError) -> SweepResolveFailure {
+/// Carry a gate error onto rule 6's axis: a rejection is a fail-closed trust
+/// violation, a seam failure is availability.
+fn resolve_verdict(error: GateError) -> ResolveFailure {
     match error {
-        GateError::Seam(_) => SweepResolveFailure::Unavailable,
-        GateError::Rejected(_) => SweepResolveFailure::Rejected,
+        GateError::Seam(_) => ResolveFailure::Unavailable,
+        GateError::Rejected(_) => ResolveFailure::Rejected,
     }
+}
+
+/// [`resolve_verdict`] in the sweep's read arm.
+fn read_verdict(error: GateError) -> SweepResolveFailure {
+    resolve_verdict(error).into()
 }
 
 /// Carry a re-seal refusal into the sweep's publish arm on rule 6's axis: every
@@ -2813,26 +2884,21 @@ where
         if root.envelope.v != ENVELOPE_V {
             return Err(SweepResolveFailure::VersionSkew);
         }
+        let GatedWriteBody {
+            write_scope_seed,
+            body: write_body,
+            epoch: write_epoch,
+        } = write_plane_of_gated(self.floors, &root, scope.scope_id)
+            .await
+            .map_err(SweepResolveFailure::from)?;
         let GatedScopeRoot {
             envelope,
             section,
             read_body,
             sequence: _,
             read_scope_seed,
-            write_scope_seed,
+            write_scope_seed: _,
         } = root;
-        // A root held keyless has no readable write-body — availability, not a
-        // trust verdict.
-        let write_scope_seed = write_scope_seed.ok_or(SweepResolveFailure::Unavailable)?;
-        let (write_body, write_epoch) = write_plane_of(
-            self.floors,
-            &envelope,
-            &section,
-            &write_scope_seed,
-            scope.scope_id,
-        )
-        .await
-        .map_err(SweepResolveFailure::from)?;
         let children = body_children(&read_body);
         let read_epoch = envelope.epoch;
         self.swept.park(SweptScopeSource {
@@ -2898,18 +2964,20 @@ where
         child: &NodeRef,
     ) -> Result<SweptChild, SweepResolveFailure> {
         let source = self.swept_scope(scope)?;
-        let name = scope_name(&child.ipns_name).map_err(SweepResolveFailure::from)?;
-        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
-            return Err(SweepResolveFailure::Unavailable);
-        };
-        let (sequence, block) =
-            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
-                .await
-                .map_err(read_verdict)?;
-        let envelope = decode_envelope(&block).map_err(|_| SweepResolveFailure::Rejected)?;
+        let head = self
+            .head_at(&child.ipns_name)
+            .await
+            .map_err(SweepResolveFailure::from)?;
+        let envelope = head.envelope().map_err(SweepResolveFailure::from)?;
         if has_grant_section(&envelope) {
             // The root gate re-assembles the head; hand it the block this read
             // already paid for.
+            let RecordHead {
+                name,
+                record_bytes,
+                block,
+                ..
+            } = head;
             return self
                 .gated_child_scope_root(
                     &source,
@@ -2923,7 +2991,7 @@ where
                 )
                 .await;
         }
-        self.interior_node(&source, child, &name, sequence, envelope)
+        self.interior_node(&source, child, &head.name, head.sequence, envelope)
             .await
             .map(SweptChild::Interior)
     }
@@ -3181,32 +3249,19 @@ where
         let source = self
             .swept_scope(parent)
             .map_err(|_| ResolveFailure::Rejected)?;
-        let name = scope_name(&node.ipns_name)?;
-        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
-            return Err(ResolveFailure::Unavailable);
-        };
-        let (sequence, block) =
-            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
-                .await
-                .map_err(|error| match error {
-                    GateError::Seam(_) => ResolveFailure::Unavailable,
-                    GateError::Rejected(_) => ResolveFailure::Rejected,
-                })?;
+        let head = self.head_at(&node.ipns_name).await?;
         // Ahead of the "not promoted" answer, so a rolled-back record cannot
         // withdraw a promotion this device has already seen and send the caller
         // on to mint a second scope over it.
         floor::check_sequence(
             self.floors,
-            name.as_str().as_bytes(),
-            sequence,
+            head.name.as_str().as_bytes(),
+            head.sequence,
             floor::Strictness::AtOrAboveFloor,
         )
         .await
-        .map_err(|error| match error {
-            GateError::Seam(_) => ResolveFailure::Unavailable,
-            GateError::Rejected(_) => ResolveFailure::Rejected,
-        })?;
-        let envelope = decode_envelope(&block).map_err(|_| ResolveFailure::Rejected)?;
+        .map_err(resolve_verdict)?;
+        let envelope = head.envelope()?;
         // Still an ordinary child of the parent scope, so no promotion of this
         // folder's stands to resume. Past this point the record claims to be a
         // scope root, and a gate that refuses it is a trust verdict rather than
@@ -3215,6 +3270,12 @@ where
             return Ok(None);
         }
         let adopter = self.descendant_adopter(&source, node.node_id);
+        let RecordHead {
+            name,
+            record_bytes,
+            block,
+            ..
+        } = head;
         adopter.hold_local_head(LocalHead {
             cid: root_block_cid(&block),
             block,
@@ -3225,20 +3286,11 @@ where
         if gated.envelope.v != ENVELOPE_V {
             return Err(ResolveFailure::Rejected);
         }
-        // A root held keyless has no readable write body, so the index it
-        // reparented cannot be read — availability, not a trust verdict.
-        let write_scope_seed = gated
-            .write_scope_seed
-            .as_deref()
-            .ok_or(ResolveFailure::Unavailable)?;
-        let (write_body, write_epoch) = write_plane_of(
-            self.floors,
-            &gated.envelope,
-            &gated.section,
-            write_scope_seed,
-            node.node_id,
-        )
-        .await?;
+        let GatedWriteBody {
+            body: write_body,
+            epoch: write_epoch,
+            ..
+        } = write_plane_of_gated(self.floors, &gated, node.node_id).await?;
         Ok(Some(PromotedScopeRoot {
             record: ResealedScopeRoot {
                 scope_id: node.node_id,
@@ -3267,16 +3319,18 @@ where
         node: &NodeRef,
     ) -> Result<MovingChild, SweepResolveFailure> {
         let source = self.swept_scope(source)?;
-        let name = scope_name(&node.ipns_name).map_err(SweepResolveFailure::from)?;
-        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &name).await else {
-            return Err(SweepResolveFailure::Unavailable);
-        };
-        let (sequence, block) =
-            fetch_head_block(self.gateway, self.http, &name, &record_bytes, None)
-                .await
-                .map_err(read_verdict)?;
-        let envelope = decode_envelope(&block).map_err(|_| SweepResolveFailure::Rejected)?;
+        let head = self
+            .head_at(&node.ipns_name)
+            .await
+            .map_err(SweepResolveFailure::from)?;
+        let envelope = head.envelope().map_err(SweepResolveFailure::from)?;
         if has_grant_section(&envelope) {
+            let RecordHead {
+                name,
+                record_bytes,
+                block,
+                ..
+            } = head;
             self.gated_child_scope_root(
                 &source,
                 node,
@@ -3292,11 +3346,11 @@ where
         }
         if envelope.scope == root.scope_id {
             return self
-                .moved_interior_node(root, node, &name, sequence, &envelope)
+                .moved_interior_node(root, node, &head.name, head.sequence, &envelope)
                 .await
                 .map(MovingChild::Moved);
         }
-        self.interior_node(&source, node, &name, sequence, envelope)
+        self.interior_node(&source, node, &head.name, head.sequence, envelope)
             .await
             .map(MovingChild::Pending)
     }
@@ -4747,6 +4801,10 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
     pub held: &'a RefCell<HeldRecords>,
     /// The vault root's node id, which is also its scope id.
     pub root_id: [u8; 16],
+    /// Latches once one pass walks the whole owned scope tree with no retryable
+    /// failure, which stops the walk for the rest of the session
+    /// ([`enrol_owned_scope_pointers`]).
+    pub walked: &'a Cell<bool>,
     /// The pointer-payload envelope version a consulted re-point is read under.
     pub payload_version: u64,
 }
@@ -4767,9 +4825,22 @@ pub(crate) struct ScopePointerEnrolment<'a, K, T, H: Http, C: CredentialStore, F
 /// no record, and an omitted one only leaves the lapse this pass repairs. Each
 /// scope runs through [`PointerConsult`] before it is held, which keeps the
 /// pointer plane's trust rules in one place.
+///
+/// The walk runs at most once per session. It exists to find the pointers
+/// earlier sessions flipped, and this session's own flip enrols the pointer it
+/// moves, so a walk that reached every owned root with no retryable failure has
+/// nothing left for a later pass to find: a writer-sized fan-out per hour buys
+/// nothing after it. A retryable failure leaves the latch open, and the next
+/// tick walks again.
+///
+/// Returns the scopes this pass consulted. A consult can raise a scope's durable
+/// write-epoch floor, which retires a seed a cache cell still holds, so the
+/// caller pairs the pass with the same floor refresh the focus tick pairs its
+/// own consult with.
 pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
     pass: ScopePointerEnrolment<'_, K, T, H, C, F, Sch, E, S>,
-) where
+) -> Vec<[u8; 16]>
+where
     K: OwnerScopeKeys + OwnerPointerSign,
     T: RecordTransport,
     H: Http,
@@ -4779,6 +4850,9 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
     E: Entropy,
     S: SnapshotCache,
 {
+    if pass.walked.get() {
+        return Vec::new();
+    }
     // The tick replaces the vault root's held record in place, so its routing
     // key is the name this session last adopted the root at.
     let Some(root_name) = pass
@@ -4787,7 +4861,7 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         .get(&HeldKey::Node(pass.root_id))
         .map(|record| record.routing_key.as_bytes().to_vec())
     else {
-        return;
+        return Vec::new();
     };
     let vault_root = ChildScopeRef::new(pass.root_id, root_name);
     let net = OwnerRotationNet {
@@ -4814,7 +4888,7 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         moved_seed: MovedScopeSeed::default(),
     };
     let Ok(root) = net.resolve_vault_root(&vault_root).await else {
-        return;
+        return Vec::new();
     };
     let consult = PointerConsult {
         scope_keys: pass.keys,
@@ -4826,18 +4900,30 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
     // pointer. The visited set pre-seeded with the root also ends a cycle.
     let mut scopes: BTreeSet<[u8; 16]> = BTreeSet::from([pass.root_id]);
     let mut frontier = root.direct_child_scope_index;
+    // Whether a later pass of this session could still find anything, on rule
+    // 6's axis: an availability stall converges on a retry, and a C2 label
+    // conflict converges once the re-point wave repairs the parent indexes, but
+    // a rejection is this session's verdict on that record. Re-arming the walk
+    // for a rejection would let one gate-failing entry in a write grantee's own
+    // index buy an hourly walk of the whole owned tree.
+    let mut complete = true;
     while !frontier.is_empty() {
         let mut next = Vec::new();
         for child in frontier {
             if !scopes.insert(child.scope_id) {
                 continue;
             }
-            if let Ok(grandchildren) = net.direct_child_index(&child).await {
-                next.extend(grandchildren);
+            match net.direct_child_index(&child).await {
+                Ok(grandchildren) => next.extend(grandchildren),
+                Err(ResolveFailure::Rejected) => {}
+                Err(ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel) => {
+                    complete = false;
+                }
             }
         }
         frontier = next;
     }
+    let mut consulted_scopes = Vec::new();
     for scope_id in scopes {
         // The flip's own entry is the fresher one, and the liveness pass drops a
         // superseded entry before this runs rather than replaces it here.
@@ -4848,10 +4934,19 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         {
             continue;
         }
-        if let Ok(Some(consulted)) = consult.run(pass.transport, pass.floors, &scope_id).await {
-            enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
+        match consult.run(pass.transport, pass.floors, &scope_id).await {
+            Ok(consulted) => {
+                consulted_scopes.push(scope_id);
+                if let Some(consulted) = consulted {
+                    enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
+                }
+            }
+            Err(PointerConsultError::Rejected) => {}
+            Err(PointerConsultError::Unavailable) => complete = false,
         }
     }
+    pass.walked.set(complete);
+    consulted_scopes
 }
 
 /// Hold the pointer record `consulted` authenticated, under the same
@@ -13147,7 +13242,17 @@ mod tests {
     fn run_enrolment<K: OwnerScopeKeys + OwnerPointerSign>(
         harness: &Harness<InMemoryRecordStore>,
         keys: &K,
-    ) {
+    ) -> Vec<[u8; 16]> {
+        run_enrolment_walking(harness, keys, &Cell::new(false))
+    }
+
+    /// [`run_enrolment`] over a latch the caller keeps across passes, which is
+    /// how the liveness loop holds one session's walk.
+    fn run_enrolment_walking<K: OwnerScopeKeys + OwnerPointerSign>(
+        harness: &Harness<InMemoryRecordStore>,
+        keys: &K,
+        walked: &Cell<bool>,
+    ) -> Vec<[u8; 16]> {
         block_on(enrol_owned_scope_pointers(ScopePointerEnrolment {
             api: &harness.api,
             transport: &harness.transport,
@@ -13165,7 +13270,115 @@ mod tests {
             held: &harness.held,
             root_id: SCOPE,
             payload_version: PAYLOAD_VERSION,
+            walked,
         }))
+    }
+
+    /// One owned tree, every root and pointer of it resolvable: the state a
+    /// clean pass needs.
+    fn owner_session_over_a_clean_tree() -> (Harness<InMemoryRecordStore>, OwnerRootFixture) {
+        let (child, child_ref, grandchild) = one_level();
+        let (harness, _) = owner_session_at_root(vec![child_ref]);
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        harness.stage(GRANDCHILD_SCOPE, &one_level_leaf(), Some(OWNER_ROOT_EPOCH));
+        for scope_id in [SCOPE, CHILD_SCOPE, grandchild.scope_id] {
+            stage_pointer_at(&harness, scope_id, &repoint_at(scope_id, OWNER_ROOT_EPOCH));
+        }
+        (harness, child)
+    }
+
+    /// The walk exists to find the pointers earlier sessions flipped, and a flip
+    /// this session makes enrols at the flip, so a pass that reached every owned
+    /// root leaves a later pass of the same session nothing to find. Re-walking
+    /// every hour would spend a writer-sized fan-out on the whole owned tree for
+    /// the life of the session.
+    #[test]
+    fn a_clean_enrolment_pass_stops_the_walk_for_the_rest_of_the_session() {
+        let (harness, child) = owner_session_over_a_clean_tree();
+        let walked = Cell::new(false);
+
+        assert_eq!(
+            run_enrolment_walking(&harness, &OwnerSeeds, &walked),
+            vec![SCOPE, CHILD_SCOPE, GRANDCHILD_SCOPE],
+            "the first pass consults every owned scope"
+        );
+        let spent = harness.store.get_count(child.name.as_str());
+        assert!(spent > 0, "the first pass walked the owned tree");
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert_eq!(
+            harness.store.get_count(child.name.as_str()),
+            spent,
+            "a later pass of the same session spends no fan-out on the owned tree"
+        );
+    }
+
+    /// A refused descendant is this session's verdict on that record, not a
+    /// stall, so it leaves nothing for a later pass to find. Re-arming for it
+    /// would let one gate-failing entry in a write grantee's own index buy an
+    /// hourly walk of the whole owned tree — the cost this latch removes.
+    #[test]
+    fn a_rejected_descendant_does_not_re_arm_the_walk() {
+        // A vault-root record under the descendant edge carries no ascent link,
+        // which that edge refuses fail-closed.
+        let refused = vault_root(CHILD_SCOPE, Vec::new());
+        let (harness, _) = owner_session_at_root(vec![child_ref(CHILD_SCOPE, &refused)]);
+        harness.stage(CHILD_SCOPE, &refused, Some(OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, CHILD_SCOPE, &repoint_at(CHILD_SCOPE, 1));
+        let walked = Cell::new(false);
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        let spent = harness.store.get_count(refused.name.as_str());
+        assert!(spent > 0, "the first pass reached the refused descendant");
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert_eq!(
+            harness.store.get_count(refused.name.as_str()),
+            spent,
+            "the rejection left the walk latched"
+        );
+    }
+
+    /// A pass that could not consult every owned scope has proved nothing about
+    /// what is left to find, so the walk stays armed until one pass reaches all
+    /// of it.
+    #[test]
+    fn a_retryable_enrolment_failure_re_arms_the_walk() {
+        let (harness, child) = owner_session_over_a_clean_tree();
+        let child_pointer = scope_pointer_name(&OWNER_POINTER_SEED, &CHILD_SCOPE);
+        harness.store.fail_get_for(child_pointer.as_str());
+        let walked = Cell::new(false);
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert!(
+            !harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::scope_pointer(CHILD_SCOPE)),
+            "the refused consult enrolled nothing"
+        );
+
+        harness.store.heal_get_for(child_pointer.as_str());
+        assert!(
+            run_enrolment_walking(&harness, &OwnerSeeds, &walked).contains(&CHILD_SCOPE),
+            "the refusal left the walk armed, so the next pass consults the scope again"
+        );
+        assert!(
+            harness
+                .held
+                .borrow()
+                .contains_key(&HeldKey::scope_pointer(CHILD_SCOPE)),
+            "and the re-armed pass enrols the pointer the refusal cost"
+        );
+        let spent = harness.store.get_count(child.name.as_str());
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert_eq!(
+            harness.store.get_count(child.name.as_str()),
+            spent,
+            "the pass that reached every scope stops the walk"
+        );
     }
 
     /// The flip enrols only the pointer it moves, so a later session that runs

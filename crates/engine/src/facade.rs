@@ -5708,8 +5708,12 @@ where {
         let http = self.seams.http.clone();
         let entropy = self.entropy.clone();
         let pointer_keys = self.sweep_keys.clone();
+        let scope_read_seeds = self.scope_read_seeds.clone();
+        let scope_write_seeds = self.scope_write_seeds.clone();
         let root_id = self.snapshot.borrow().root.0;
         self.seams.scheduler.spawn(Box::pin(async move {
+            // One latch per session: the loop is spawned once per start.
+            let scope_tree_walked = Cell::new(false);
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
                     return LivenessControl::Stop;
@@ -5720,7 +5724,7 @@ where {
                 // or the pointer lapses at its EOL.
                 let session_keys = pointer_keys.borrow().clone();
                 if let Some(keys) = session_keys {
-                    enrol_owned_scope_pointers(ScopePointerEnrolment {
+                    let consulted = enrol_owned_scope_pointers(ScopePointerEnrolment {
                         api: &api,
                         transport: &transport,
                         gateway: &gateway,
@@ -5737,8 +5741,21 @@ where {
                         held: &held,
                         root_id,
                         payload_version: POINTER_PAYLOAD_VERSION,
+                        walked: &scope_tree_walked,
                     })
                     .await;
+                    // The consult advances a sighted scope's write-epoch floor,
+                    // so the seed cells it retires are evicted here, exactly as
+                    // the focus tick evicts them around its own consult.
+                    for scope_id in consulted {
+                        refresh_seed_floors(
+                            &floors,
+                            &scope_id,
+                            &scope_read_seeds,
+                            &scope_write_seeds,
+                        )
+                        .await;
+                    }
                 }
                 let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                 keyless_re_put(&transport, &records).await;
