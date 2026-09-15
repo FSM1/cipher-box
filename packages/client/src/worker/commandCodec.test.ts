@@ -13,6 +13,7 @@ import {
   readSnapshot,
   readVaultStorage,
 } from './commandCodec.js';
+import { KEEP_STORED_BEARER } from './protocol.js';
 import type { CommandDescriptor } from './protocol.js';
 import type {
   EngineWasm,
@@ -453,7 +454,9 @@ describe('buildCommand', () => {
         },
       });
 
-      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Pinata, tokenBytes()]]);
+      expect(byo).toEqual([
+        ['https://kubo.example', fakeWasmEnums.ByoKind.Pinata, tokenBytes(), false],
+      ]);
       expect(settings).toHaveLength(1);
       expect(settings[0][0]).toBe(fakeWasmEnums.PinMode.Dual);
       expect(settings[0][2]).toBe(3);
@@ -529,7 +532,26 @@ describe('buildCommand', () => {
         },
       });
 
-      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Kubo, undefined]]);
+      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Kubo, undefined, false]]);
+    });
+
+    it('spells a keep intent as the keep flag, with no bearer bytes at all', () => {
+      const { wasm, byo } = spyWasm();
+
+      buildCommand(wasm, {
+        kind: 'saveVaultSettings',
+        settings: {
+          pinMode: 'external',
+          byo: {
+            endpoint: 'https://kubo.example',
+            kind: 'kubo',
+            accessToken: KEEP_STORED_BEARER,
+          },
+          keepLatestVersions: null,
+        },
+      });
+
+      expect(byo).toEqual([['https://kubo.example', fakeWasmEnums.ByoKind.Kubo, undefined, true]]);
     });
 
     it('scrubs the worker copy of the bearer once the builder holds it', () => {

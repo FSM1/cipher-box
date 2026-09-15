@@ -8,6 +8,7 @@
  * what an empty one means.
  */
 
+import { KEEP_STORED_BEARER } from '@cipherbox/client';
 import type { ByoKind, PinMode, VaultSettingsDescriptor } from '@cipherbox/client';
 
 /**
@@ -49,8 +50,14 @@ export type VaultSettingsDraft =
  * Builds the descriptor for one save. Called per dispatch, never cached: the
  * bearer rides a transferable buffer that `saveVaultSettings` detaches, so a
  * descriptor sent twice would carry a spent credential the second time.
+ *
+ * `keepStoredCredential` is `settingsSaveVerdict`'s answer: it is the only way
+ * a form that can never read a stored bearer publishes without destroying it.
  */
-export function buildVaultSettings(form: VaultSettingsFields): VaultSettingsDraft {
+export function buildVaultSettings(
+  form: VaultSettingsFields,
+  keepStoredCredential = false
+): VaultSettingsDraft {
   const keep = form.keepLatestVersions.trim();
   if (keep !== '' && !isCount(keep)) {
     return {
@@ -73,7 +80,11 @@ export function buildVaultSettings(form: VaultSettingsFields): VaultSettingsDraf
       byo:
         endpoint === ''
           ? null
-          : { endpoint, kind: form.byoKind, accessToken: bearer(form.byoAccessToken) },
+          : {
+              endpoint,
+              kind: form.byoKind,
+              accessToken: keepStoredCredential ? KEEP_STORED_BEARER : bearer(form.byoAccessToken),
+            },
       keepLatestVersions: keep === '' ? null : Number(keep),
       binRetentionDays: Number(binDays),
     },

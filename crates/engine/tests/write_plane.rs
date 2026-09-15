@@ -31,8 +31,8 @@ use zeroize::Zeroizing;
 use cipherbox_engine::api::RetireEntry;
 use cipherbox_engine::content::chunk::SEALED_LEAF_OVERHEAD;
 use cipherbox_engine::content::{
-    ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
-    assemble, decode_root,
+    ByoBearer, ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk,
+    SessionBearer, assemble, decode_root,
 };
 use cipherbox_engine::facade::{BinOrigin, PendingClass, SnapshotView};
 use cipherbox_engine::net::OrphanHeads;
@@ -10874,7 +10874,7 @@ fn member_node(kind: ByoKind) -> ByoIpfsConfig {
     ByoIpfsConfig {
         endpoint: MEMBER_NODE.to_owned(),
         kind,
-        access_token: Some(Zeroizing::new("member-token".to_owned())),
+        access_token: ByoBearer::Set(Zeroizing::new("member-token".to_owned())),
     }
 }
 

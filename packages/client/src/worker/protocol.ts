@@ -331,17 +331,23 @@ export type PinMode = 'hosted' | 'external' | 'dual';
 /** The kind of member-supplied IPFS provider (mirrors the facade `ByoKind`). */
 export type ByoKind = 'kubo' | 'psa' | 'pinata';
 
+/** The `accessToken` value that keeps the bearer the engine already holds. */
+export const KEEP_STORED_BEARER = 'keep';
+
 /** A member's own IPFS provider, as data. */
 export interface ByoIpfsConfigDescriptor {
   endpoint: string;
   kind: ByoKind;
   /**
-   * Bearer credential, `null` for a provider that needs none. A transferable
-   * buffer rather than a string, which cannot be overwritten: every hop moves
-   * it ([`commandTransfer`]), so the receiving realm is the only holder left
-   * and is the terminal owner that scrubs it.
+   * Bearer credential, three-state: a buffer sets a new one, `'keep'` keeps
+   * whatever the engine already holds, and `null` stores none. `'keep'` is the
+   * only way a host that can never read a stored bearer back leaves one alone.
+   *
+   * A transferable buffer rather than a string, which cannot be overwritten:
+   * every hop moves it ([`commandTransfer`]), so the receiving realm is the
+   * only holder left and is the terminal owner that scrubs it.
    */
-  accessToken: ArrayBuffer | null;
+  accessToken: ArrayBuffer | typeof KEEP_STORED_BEARER | null;
 }
 
 /** The member's placement, provider and retention choice, as data. */

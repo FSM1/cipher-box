@@ -48,9 +48,9 @@ use crate::content::budget::{Refusal, ReservationId};
 use crate::content::limits::folder_listing_budget;
 use crate::content::read::authority_of;
 use crate::content::{
-    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode, Refused,
-    RootManifest, SealError, SessionBearer, StagingLedger, open_content_range, open_content_root,
-    pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
+    ByoIpfsConfig, ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError,
+    PinMode, Refused, RootManifest, SealError, SessionBearer, StagingLedger, open_content_range,
+    open_content_root, pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
 use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
@@ -114,10 +114,10 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
-    DEFAULT_BIN_RETENTION_DAYS, PlacementRefusal, PlacementSource, SessionPlacement,
+    DEFAULT_BIN_RETENTION_DAYS, Placement, PlacementRefusal, PlacementSource, SessionPlacement,
     SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary, decide_placement,
     load_settings, load_settings_at, placement_of, publish_settings, redecide_placement,
-    summarize_settings,
+    resolve_kept_bearer, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -8678,12 +8678,24 @@ where {
         )
     }
 
+    /// The provider config this session holds, which is the one its placement
+    /// authorises: a session placing no bytes on the member's own provider
+    /// keeps no credential for it (security rule 7).
+    fn held_provider(&self) -> Option<ByoIpfsConfig> {
+        match &self.placement.borrow().as_ref()?.decision {
+            Ok(Placement::External(config) | Placement::Dual(config)) => Some(config.clone()),
+            Ok(Placement::Hosted) | Err(_) => None,
+        }
+    }
+
     /// Seal and publish the vault settings record, then adopt what it
     /// published: the renewal enrolment [`publish_settings`] states the need
     /// for, and the placement this session writes under.
     async fn save_vault_settings(&self, settings: &VaultSettings) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let settings = &resolve_kept_bearer(settings, self.held_provider().as_ref())
+            .map_err(|e| EngineError::from_settings_publish(SettingsPublishError::Byo(e)))?;
         let held = publish_settings(
             &self.record_transport,
             api,
@@ -11475,7 +11487,7 @@ mod tests {
     use core::num::NonZeroU64;
 
     use crate::api::{ChallengeSigner, new_user_login_response};
-    use crate::content::{ByoIpfsConfig, ByoKind, RetentionPolicy};
+    use crate::content::{ByoBearer, ByoIpfsConfig, ByoKind, RetentionPolicy};
     use crate::net::retire::ReclaimStallReason;
     use crate::seams::{CredentialStore, EndpointId, HttpMethod, HttpResponse, UnixMillis};
     use crate::settings::{cached_settings_block, settings_name};
@@ -12576,7 +12588,7 @@ mod tests {
             byo: Some(ByoIpfsConfig {
                 endpoint: "https://node.example".to_owned(),
                 kind: ByoKind::Kubo,
-                access_token: Some(Zeroizing::new(BEARER.to_owned())),
+                access_token: ByoBearer::Set(Zeroizing::new(BEARER.to_owned())),
             }),
             retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
             bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,

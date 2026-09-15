@@ -53,6 +53,7 @@ export type { MediaReader } from './media/broker.js';
 export { fromHex, toHex } from './seams/bytes.js';
 
 // The wire descriptors the UI exchanges with the engine over the transport.
+export { KEEP_STORED_BEARER } from './worker/protocol.js';
 export type {
   CommandDescriptor,
   CommandOutcomeDescriptor,

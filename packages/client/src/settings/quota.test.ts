@@ -185,38 +185,70 @@ describe('settingsSaveVerdict', () => {
     origin: 'resolved',
     credentialStored: false,
     byoEndpoint: '',
+    byoKind: 'kubo',
     byoAccessToken: '',
+    storedEndpoint: null,
+    storedKind: null,
     clearCredential: false,
     loadAcknowledged: false,
     ...overrides,
   });
 
   const stored = (overrides: Partial<SettingsSaveIntent> = {}): SettingsSaveIntent =>
-    intent({ credentialStored: true, byoEndpoint: 'https://kubo.example', ...overrides });
+    intent({
+      credentialStored: true,
+      byoEndpoint: 'https://kubo.example',
+      storedEndpoint: 'https://kubo.example',
+      storedKind: 'kubo',
+      ...overrides,
+    });
 
   it('takes a save off a record this session read', () => {
-    expect(settingsSaveVerdict(intent())).toEqual({ ok: true });
+    expect(settingsSaveVerdict(intent())).toEqual({ ok: true, keepStoredCredential: false });
   });
 
-  // The regression the prefill introduced: every other field round-trips, so a
-  // blank credential reads as "unchanged" while a save would publish it as gone.
-  it('refuses a blank credential over one the vault still holds', () => {
-    const verdict = settingsSaveVerdict(stored());
-
-    expect(verdict.ok).toBe(false);
-    expect(verdict.ok ? '' : verdict.problem).toMatch(/credential/);
+  // The point of the keep intent: every other field round-trips, so an
+  // untouched credential field must leave the stored bearer alone rather than
+  // publish it as gone.
+  it('keeps a stored credential the member did not touch', () => {
+    expect(settingsSaveVerdict(stored())).toEqual({ ok: true, keepStoredCredential: true });
   });
 
   it('takes the save once the member asks outright for the credential to go', () => {
-    expect(settingsSaveVerdict(stored({ clearCredential: true }))).toEqual({ ok: true });
+    expect(settingsSaveVerdict(stored({ clearCredential: true }))).toEqual({
+      ok: true,
+      keepStoredCredential: false,
+    });
   });
 
   it('takes the save once a new credential is typed', () => {
-    expect(settingsSaveVerdict(stored({ byoAccessToken: 'a fresh one' }))).toEqual({ ok: true });
+    expect(settingsSaveVerdict(stored({ byoAccessToken: 'a fresh one' }))).toEqual({
+      ok: true,
+      keepStoredCredential: false,
+    });
   });
 
   it('lets a blank credential go with the provider it belonged to', () => {
-    expect(settingsSaveVerdict(stored({ byoEndpoint: '  ' }))).toEqual({ ok: true });
+    expect(settingsSaveVerdict(stored({ byoEndpoint: '  ' }))).toEqual({
+      ok: true,
+      keepStoredCredential: false,
+    });
+  });
+
+  // A kept bearer belongs to the provider it was stored for. Carrying it on to
+  // another endpoint would hand the member's credential to that endpoint.
+  it('refuses to keep a credential on to a repointed endpoint', () => {
+    const verdict = settingsSaveVerdict(stored({ byoEndpoint: 'https://other.example' }));
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok ? '' : verdict.problem).toMatch(/different provider/);
+  });
+
+  it('refuses to keep a credential on to a different provider kind', () => {
+    const verdict = settingsSaveVerdict(stored({ byoKind: 'pinata' }));
+
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok ? '' : verdict.problem).toMatch(/different provider/);
   });
 
   it('refuses to publish defaults over a record nothing read', () => {
@@ -229,11 +261,15 @@ describe('settingsSaveVerdict', () => {
   it('publishes them once the member takes that on', () => {
     expect(settingsSaveVerdict(intent({ origin: 'defaults', loadAcknowledged: true }))).toEqual({
       ok: true,
+      keepStoredCredential: false,
     });
   });
 
   it('asks nothing extra of a stale read: it is still the member’s choice', () => {
-    expect(settingsSaveVerdict(intent({ origin: 'stale' }))).toEqual({ ok: true });
+    expect(settingsSaveVerdict(intent({ origin: 'stale' }))).toEqual({
+      ok: true,
+      keepStoredCredential: false,
+    });
   });
 });
 

@@ -57,13 +57,13 @@ pub use bin_index::{
     publish_bin_index,
 };
 pub use content::{
-    ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
-    ContentWriter, DAG_ROOT_CODEC, DagError, ExpandError, Expansion, FinishedContent, Gateway,
-    GatewayConfig, GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded,
-    ROOT_FORMAT_VERSION, ReadError, RetentionPolicy, RetireTarget, RootManifest, SealError,
-    SealedChunk, SealedContent, SessionBearer, assemble, decode_root, expand_retire_targets,
-    frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block,
-    seal_one_chunk, test_connection, validate_byo_config,
+    ByoBearer, ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile,
+    ContentVersion, ContentWriter, DAG_ROOT_CODEC, DagError, ExpandError, Expansion,
+    FinishedContent, Gateway, GatewayConfig, GatewaySource, PinMode, ProviderError, PrunePlan,
+    QuotaExceeded, ROOT_FORMAT_VERSION, ReadError, RetentionPolicy, RetireTarget, RootManifest,
+    SealError, SealedChunk, SealedContent, SessionBearer, assemble, decode_root,
+    expand_retire_targets, frame_and_seal, leaf_range_for_byte_range, plan_prune,
+    pre_flight_quota_check, read_block, seal_one_chunk, test_connection, validate_byo_config,
 };
 pub use deadlines::DeadlinePolicy;
 pub use devices::{

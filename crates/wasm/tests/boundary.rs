@@ -594,6 +594,7 @@ fn a_vault_settings_command_carries_the_stable_builder_name() {
                 "https://kubo.example".to_owned(),
                 ByoKind::Kubo,
                 Some(b"s3cret".to_vec()),
+                false,
             )
             .expect("UTF-8 token bytes build"),
         ),
@@ -625,10 +626,31 @@ fn a_bearer_the_engine_would_refuse_never_builds_a_config() {
                 "https://kubo.example".to_owned(),
                 ByoKind::Kubo,
                 Some(refused),
+                false,
             )
             .is_err()
         );
     }
+}
+
+/// "keep the stored bearer" and "use this bearer" are two different
+/// credentials, and which one the caller meant is not recoverable. Neither is
+/// published.
+#[wasm_bindgen_test]
+fn a_keep_intent_carrying_its_own_bearer_builds_no_config() {
+    assert!(
+        ByoIpfsConfig::new(
+            "https://kubo.example".to_owned(),
+            ByoKind::Kubo,
+            Some(b"s3cret".to_vec()),
+            true,
+        )
+        .is_err()
+    );
+    assert!(
+        ByoIpfsConfig::new("https://kubo.example".to_owned(), ByoKind::Kubo, None, true).is_ok(),
+        "a keep intent on its own builds",
+    );
 }
 
 /// The `deadLetterReason` ordinals the TypeScript side decodes against

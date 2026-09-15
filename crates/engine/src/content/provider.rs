@@ -66,6 +66,43 @@ pub enum ByoKind {
     Pinata,
 }
 
+/// What a provider config says about its bearer credential. Three-state so a
+/// host that can never read a stored bearer back can still say "leave it
+/// alone"; two states make every unrelated settings save destroy it.
+///
+/// [`Self::Keep`] is a save intent and names no bytes, so [`validate_byo_config`]
+/// refuses it on the encode path and on every request path.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ByoBearer {
+    /// The provider needs no credential, or the member cleared the stored one.
+    None,
+    /// This bearer. Zeroized on drop, never logged.
+    Set(Zeroizing<String>),
+    /// Keep the bearer the session already holds.
+    Keep,
+}
+
+impl ByoBearer {
+    /// The bearer this config names, or `None` for a config that names none.
+    #[must_use]
+    pub fn token(&self) -> Option<&Zeroizing<String>> {
+        match self {
+            Self::Set(token) => Some(token),
+            Self::None | Self::Keep => None,
+        }
+    }
+}
+
+impl fmt::Debug for ByoBearer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::None => "None",
+            Self::Set(_) => "Set(<redacted>)",
+            Self::Keep => "Keep",
+        })
+    }
+}
+
 /// A member's bring-your-own IPFS provider config. Stays sealed in vault
 /// settings (blueprint/engine.md); this is the plaintext the seal wraps. The
 /// access token is a credential: held in a zeroizing buffer and redacted from
@@ -77,8 +114,8 @@ pub struct ByoIpfsConfig {
     /// The provider kind, selecting the reachability probe.
     pub kind: ByoKind,
     /// Bearer credential, when the provider requires one (PSA/Pinata always;
-    /// Kubo when fronted by an auth proxy). Zeroized on drop, never logged.
-    pub access_token: Option<Zeroizing<String>>,
+    /// Kubo when fronted by an auth proxy).
+    pub access_token: ByoBearer,
 }
 
 impl fmt::Debug for ByoIpfsConfig {
@@ -86,10 +123,7 @@ impl fmt::Debug for ByoIpfsConfig {
         f.debug_struct("ByoIpfsConfig")
             .field("endpoint", &self.endpoint)
             .field("kind", &self.kind)
-            .field(
-                "access_token",
-                &self.access_token.as_ref().map(|_| "<redacted>"),
-            )
+            .field("access_token", &self.access_token)
             .finish()
     }
 }
@@ -276,7 +310,7 @@ fn base(config: &ByoIpfsConfig) -> &str {
 /// body. The configured access token is the only credential a BYO endpoint gets.
 fn headers(config: &ByoIpfsConfig, content_type: Option<String>) -> Vec<(String, String)> {
     let mut headers = Vec::new();
-    if let Some(token) = &config.access_token {
+    if let Some(token) = config.access_token.token() {
         headers.push((
             AUTHORIZATION.to_owned(),
             format!("Bearer {}", token.as_str()),
@@ -308,6 +342,18 @@ pub enum ProviderError {
     BlockedAddress,
     /// The access token carries bytes a header value may not.
     InvalidCredential,
+    /// The config still carries [`ByoBearer::Keep`]. Only a save resolves that
+    /// intent, so anything else holding it would send or seal a provider with
+    /// no credential at all (AGENTS.md rule 8).
+    UnresolvedCredential,
+    /// A save asked to keep the stored bearer and this session holds none, so
+    /// keeping would publish a credential-free provider rather than the one the
+    /// member has.
+    NoStoredCredential,
+    /// A save asked to keep the stored bearer while naming a different endpoint
+    /// or kind. A bearer is kept for the provider it was stored for, never
+    /// carried on to another one.
+    RepointedCredential,
     /// The provider could not be reached (transport-level failure).
     Unreachable,
     /// The provider answered, but with nothing that says what it did.
@@ -335,6 +381,9 @@ impl ProviderError {
             ProviderError::InsecureTransport => "byo-endpoint-insecure",
             ProviderError::BlockedAddress => "byo-endpoint-blocked",
             ProviderError::InvalidCredential => "byo-credential-invalid",
+            ProviderError::UnresolvedCredential => "byo-credential-unresolved",
+            ProviderError::NoStoredCredential => "byo-credential-not-stored",
+            ProviderError::RepointedCredential => "byo-credential-repointed",
             ProviderError::Unreachable => "byo-unreachable",
             ProviderError::NoVerdict => "byo-no-verdict",
             ProviderError::Rejected { .. } => "byo-rejected",
@@ -354,6 +403,9 @@ impl ProviderError {
                 | ProviderError::InsecureTransport
                 | ProviderError::BlockedAddress
                 | ProviderError::InvalidCredential
+                | ProviderError::UnresolvedCredential
+                | ProviderError::NoStoredCredential
+                | ProviderError::RepointedCredential
         )
     }
 }
@@ -390,8 +442,11 @@ pub fn validate_byo_config(config: &ByoIpfsConfig) -> Result<(), ProviderError> 
     match &config.access_token {
         // `None` is how a credential-less provider is spelled, so it is not a
         // verdict; a token that is present must be sendable as a header value.
-        Some(token) => check_bearer(token.as_str()).map_err(|_| ProviderError::InvalidCredential),
-        None => Ok(()),
+        ByoBearer::Set(token) => {
+            check_bearer(token.as_str()).map_err(|_| ProviderError::InvalidCredential)
+        }
+        ByoBearer::None => Ok(()),
+        ByoBearer::Keep => Err(ProviderError::UnresolvedCredential),
     }
 }
 
@@ -533,11 +588,17 @@ mod tests {
     use crate::testkit::block_on;
     use crate::testkit::fakes::ScriptedHttp;
 
+    fn bearer(token: Option<&str>) -> ByoBearer {
+        token.map_or(ByoBearer::None, |t| {
+            ByoBearer::Set(Zeroizing::new(t.to_owned()))
+        })
+    }
+
     fn config(kind: ByoKind, token: Option<&str>) -> ByoIpfsConfig {
         ByoIpfsConfig {
             endpoint: "https://ipfs.member.test/".into(),
             kind,
-            access_token: token.map(|t| Zeroizing::new(t.to_owned())),
+            access_token: bearer(token),
         }
     }
 
@@ -679,7 +740,7 @@ mod tests {
             let cfg = ByoIpfsConfig {
                 endpoint: bad.into(),
                 kind: ByoKind::Psa,
-                access_token: None,
+                access_token: ByoBearer::None,
             };
             assert_eq!(
                 block_on(test_connection(&cfg, &http, &DeadlinePolicy::default())).unwrap_err(),
@@ -710,7 +771,7 @@ mod tests {
             let cfg = ByoIpfsConfig {
                 endpoint: endpoint.to_owned(),
                 kind: ByoKind::Kubo,
-                access_token: None,
+                access_token: ByoBearer::None,
             };
             block_on(test_connection(&cfg, &http, &DeadlinePolicy::default())).unwrap();
             assert_eq!(http.requests()[0].url, format!("{endpoint}/api/v0/id"));
@@ -1002,7 +1063,7 @@ mod tests {
         let bad = ByoIpfsConfig {
             endpoint: "http://169.254.169.254".into(),
             kind: ByoKind::Kubo,
-            access_token: None,
+            access_token: ByoBearer::None,
         };
         assert_eq!(
             block_on(place_block(

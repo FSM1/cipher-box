@@ -28,7 +28,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use cipherbox_engine::content::{ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind};
+use cipherbox_engine::content::{
+    ByoBearer as EngineByoBearer, ByoIpfsConfig as EngineByo, ByoKind as EngineByoKind,
+};
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::{UnixMillis, check_bearer};
 use cipherbox_engine::settings::{DEFAULT_BIN_RETENTION_DAYS, MAX_BIN_RETENTION_DAYS};
@@ -260,9 +262,9 @@ fn decode_bearer(bytes: Vec<u8>) -> Result<Zeroizing<String>, JsError> {
 
 #[wasm_bindgen]
 impl ByoIpfsConfig {
-    /// Builds a provider config. `accessToken` is `undefined` for a provider
-    /// that needs none; when present it arrives as bytes and lands in a
-    /// zeroizing buffer.
+    /// Builds a provider config. The credential is three-state:
+    /// `keepAccessToken` keeps whatever the session already holds,
+    /// `accessToken` bytes set a new one, and neither clears it.
     ///
     /// Bytes rather than a `String` so the host holds the credential in
     /// something it can scrub: a JS string cannot be overwritten.
@@ -276,8 +278,22 @@ impl ByoIpfsConfig {
         endpoint: String,
         kind: ByoKind,
         access_token: Option<Vec<u8>>,
+        keep_access_token: bool,
     ) -> Result<ByoIpfsConfig, JsError> {
-        let access_token = access_token.map(decode_bearer).transpose()?;
+        let access_token = match (access_token, keep_access_token) {
+            // "keep this one" and "keep the stored one" are two different
+            // credentials. Which one the member meant is not recoverable here,
+            // so neither is published.
+            (Some(mut bytes), true) => {
+                bytes.zeroize();
+                return Err(JsError::new(
+                    "accessToken and keepAccessToken are contradictory",
+                ));
+            }
+            (Some(bytes), false) => EngineByoBearer::Set(decode_bearer(bytes)?),
+            (None, true) => EngineByoBearer::Keep,
+            (None, false) => EngineByoBearer::None,
+        };
         Ok(Self {
             inner: EngineByo {
                 endpoint,

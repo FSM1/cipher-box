@@ -1433,10 +1433,11 @@ function settingsSaveOf(accessToken: ArrayBuffer): CommandDescriptor {
 
 /** The bearer bytes a relayed settings command arrived with. */
 function bearerOf(command: CommandDescriptor | undefined): Uint8Array {
-  if (command?.kind !== 'saveVaultSettings' || !command.settings.byo?.accessToken) {
+  const bearer = command?.kind === 'saveVaultSettings' ? command.settings.byo?.accessToken : null;
+  if (!(bearer instanceof ArrayBuffer)) {
     throw new Error('the relayed command carried no bearer');
   }
-  return new Uint8Array(command.settings.byo.accessToken);
+  return new Uint8Array(bearer);
 }
 
 describe('leader relay write handles', () => {
