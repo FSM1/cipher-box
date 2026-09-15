@@ -1105,7 +1105,7 @@ async fn answer<T: SeamTypes>(
             access,
             truncate,
             reply,
-        } => match open_handle(core, ino, access, truncate).await {
+        } => match core.open(ino, access, truncate).await {
             Ok(handle) => reply.opened(handle.0, 0),
             Err(refusal) => reply.error(errno_of(&refusal)),
         },
@@ -1137,25 +1137,6 @@ async fn answer<T: SeamTypes>(
             Err(refusal) => reply.error(errno_of(&refusal)),
         },
     }
-}
-
-/// `O_TRUNC` is open-then-truncate: the new length rides into the one
-/// `updateContent` op this handle's release journals, so the opening truncate
-/// and the writes after it become a single version.
-async fn open_handle<T: SeamTypes>(
-    core: &mut OperationCore<T, FuseInvalidator>,
-    ino: u64,
-    access: Access,
-    truncate: bool,
-) -> Result<HandleId, VfsError> {
-    let handle = core.open(ino, access).await?;
-    if truncate && let Err(refusal) = core.truncate(ino, 0, Some(handle)).await {
-        // The kernel never learns this handle's number, so nothing will ever
-        // release it; the failed open has to give back what it took.
-        let _ = core.release(handle).await;
-        return Err(refusal);
-    }
-    Ok(handle)
 }
 
 fn empty(reply: ReplyEmpty, outcome: Result<(), VfsError>) {

@@ -1389,7 +1389,9 @@ impl Pump {
             // nothing.
             NodeKind::File => Held {
                 handle: match access {
-                    Some(access) => Some(core.open(attrs.ino, access).await?),
+                    // WinFsp signals an overwrite through its own `overwrite`
+                    // call on an already-open context, never as an open mode.
+                    Some(access) => Some(core.open(attrs.ino, access, false).await?),
                     None => None,
                 },
                 walk: None,

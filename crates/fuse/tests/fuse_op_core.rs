@@ -418,12 +418,12 @@ fn opening_a_directory_is_refused_and_opening_a_file_is_not() {
     let (mut core, _adapter) = mount();
     let dir = block_on(core.mkdir(ROOT_INO, "dir")).unwrap();
     assert_eq!(
-        block_on(core.open(dir.ino, Access::Read)),
+        block_on(core.open(dir.ino, Access::Read, false)),
         Err(VfsError::IsADirectory)
     );
     let (file, handle) = block_on(core.create(ROOT_INO, "f.txt", Access::Read)).unwrap();
     block_on(core.release(handle)).unwrap();
-    let reopened = block_on(core.open(file.ino, Access::Read)).unwrap();
+    let reopened = block_on(core.open(file.ino, Access::Read, false)).unwrap();
     assert_eq!(core.handle(reopened).unwrap().node, file.node);
 }
 
@@ -1085,7 +1085,7 @@ fn an_append_offset_refuses_a_length_it_cannot_resolve() {
     let found = block_on(core.lookup(ROOT_INO, "unresolved.txt")).expect("the seeded file");
     assert_eq!(found.size, None, "nothing has projected a length");
 
-    let handle = block_on(core.open(found.ino, Access::ReadWrite)).expect("the file opens");
+    let handle = block_on(core.open(found.ino, Access::ReadWrite, false)).expect("the file opens");
     assert!(
         matches!(
             block_on(core.append_offset(handle)),
@@ -1823,7 +1823,7 @@ fn writing_handle(core: &mut Core) -> HandleId {
 fn a_write_on_a_read_only_handle_is_refused() {
     let (mut core, _adapter) = mount();
     let (file, _reader) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
-    let handle = block_on(core.open(file.ino, Access::Read)).expect("the file opens");
+    let handle = block_on(core.open(file.ino, Access::Read, false)).expect("the file opens");
 
     assert_eq!(
         block_on(core.write(handle, 0, b"denied")),
@@ -2020,9 +2020,8 @@ fn two_handles_on_one_node_seal_under_different_keys() {
     let dir = tempfile::tempdir().expect("a spill dir");
     let (mut core, _staging) = mount_spilling_into(dir.path());
     let (file, first) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
-    let second = block_on(core.open(file.ino, Access::Write)).expect("a second handle");
-    // The second handle opened `O_TRUNC`, so it too starts from nothing.
-    block_on(core.truncate(file.ino, 0, Some(second))).expect("the truncate");
+    // The second handle opens `O_TRUNC`, so it too starts from nothing.
+    let second = block_on(core.open(file.ino, Access::Write, true)).expect("a second handle");
 
     block_on(core.write(first, 0, b"SECRET-1")).expect("the first write");
     block_on(core.write(second, 0, b"SECRET-1")).expect("the second write");
@@ -2209,7 +2208,7 @@ fn a_partial_write_over_an_unreadable_base_fails_closed() {
     let (mut core, _adapter) = mount();
     let (file, handle) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
     block_on(core.release(handle)).expect("the create closes");
-    let reopened = block_on(core.open(file.ino, Access::Write)).expect("the file opens");
+    let reopened = block_on(core.open(file.ino, Access::Write, false)).expect("the file opens");
 
     let outcome = block_on(core.write(reopened, 3, b"patch"));
     assert!(
@@ -2539,7 +2538,7 @@ mod published {
     }
 
     fn opened(mount: &mut Mount) -> HandleId {
-        block_on(mount.core.open(mount.ino, Access::Read)).expect("the file opens")
+        block_on(mount.core.open(mount.ino, Access::Read, false)).expect("the file opens")
     }
 
     /// The mount's focus window is the FUSE op stream: a sub-folder the kernel
@@ -2584,7 +2583,7 @@ mod published {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let handle =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
 
         let at = block_on(mount.core.append_offset(handle)).expect("the head resolves");
         assert_eq!(at, plaintext.len() as u64);
@@ -2773,12 +2772,53 @@ mod published {
         }
     }
 
+    /// `O_TRUNC` on an open that cannot write is the opening truncate the core
+    /// refuses, and the host never learns the number of a handle a refused open
+    /// did not hand it. Nothing else would ever release it, so the open must.
+    #[test]
+    fn a_refused_opening_truncate_leaves_no_handle_and_no_pinned_stream() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let ino = mount.ino;
+
+        let first = block_on(mount.core.open(ino, Access::Read, false)).expect("the file opens");
+        block_on(mount.core.release(first)).expect("the handle closes");
+        assert_eq!(
+            block_on(mount.core.open(ino, Access::Read, true)),
+            Err(VfsError::BadHandle),
+            "a truncate the open cannot serve must refuse the open"
+        );
+        // Handle numbers are monotonic and never reused, so the refused open
+        // took exactly the one after `first`.
+        assert_eq!(
+            mount.core.handle(HandleId(first.0 + 1)),
+            Err(VfsError::BadHandle),
+            "the refused open left its handle open"
+        );
+
+        // Past the engine's ceiling: a refusal that pinned a stream would
+        // exhaust the stream table long before the last round.
+        for round in 0..(MAX_OPEN_STREAMS + 8) {
+            assert_eq!(
+                block_on(mount.core.open(ino, Access::Read, true)),
+                Err(VfsError::BadHandle),
+                "round {round}: the opening truncate must refuse"
+            );
+        }
+        let handle = block_on(mount.core.open(ino, Access::Read, false)).expect("the file opens");
+        assert_eq!(
+            block_on(mount.core.read(handle, 0, 8)).expect("the read"),
+            plaintext[..8],
+            "the refusals emptied the file they never opened"
+        );
+    }
+
     #[test]
     fn a_sub_block_write_merges_over_the_block_the_read_path_cached() {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let handle =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
 
         block_on(mount.core.read(handle, 0, 4)).expect("the read caches the chunk it framed");
         let after_read = block_fetches(&mount.device);
@@ -2797,7 +2837,7 @@ mod published {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let handle =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
 
         // One sub-block write, so every later read renders through the pending
         // overlay and every untouched block still comes off the base version.
@@ -2821,7 +2861,8 @@ mod published {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let ino = mount.ino;
-        let handle = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+        let handle =
+            block_on(mount.core.open(ino, Access::ReadWrite, false)).expect("the file opens");
         block_on(mount.core.read(handle, 0, chunk() as u32)).expect("the read caches the chunk");
 
         block_on(mount.core.truncate(ino, 4, Some(handle))).expect("the shrink");
@@ -2850,7 +2891,7 @@ mod published {
         }
 
         let writer =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
         block_on(mount.core.write(writer, 1, b"a")).expect("the write lands");
         block_on(mount.core.release(writer)).expect("the release commits the whole version");
         advance_and_pump(&mut mount);
@@ -2959,7 +3000,7 @@ mod published {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let handle =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
 
         let patch = b"PATCHED!";
         let at = chunk() + 3;
@@ -2988,13 +3029,13 @@ mod published {
         // deliberately not drained.
         let staged = vec![0xBB; 323];
         let writer =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
         block_on(mount.core.write(writer, 0, &staged)).expect("the rewrite lands");
         block_on(mount.core.release(writer)).expect("the release commits");
 
         // A second handle sees the staged length and appends an unaligned tail.
-        let appender =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file reopens");
+        let appender = block_on(mount.core.open(mount.ino, Access::ReadWrite, false))
+            .expect("the file reopens");
         block_on(mount.core.write(appender, staged.len() as u64, b"TAIL"))
             .expect("the append composes over the version the length names");
         block_on(mount.core.release(appender)).expect("the release commits");
@@ -3022,12 +3063,12 @@ mod published {
 
         // The reader binds its stream to the published version first.
         let reader =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
         block_on(mount.core.read(reader, 0, 1)).expect("the first read binds the stream");
 
         let staged = vec![0xBB; 323];
-        let writer =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens twice");
+        let writer = block_on(mount.core.open(mount.ino, Access::ReadWrite, false))
+            .expect("the file opens twice");
         block_on(mount.core.write(writer, 0, &staged)).expect("the rewrite lands");
         block_on(mount.core.release(writer)).expect("the release commits");
 
@@ -3060,7 +3101,7 @@ mod published {
 
         // The reader binds its stream to the version the mount came up on.
         let reader =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
         block_on(mount.core.read(reader, 0, 1)).expect("the first read binds the stream");
 
         let remote = vec![0xBB; 323];
@@ -3129,7 +3170,8 @@ mod published {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let ino = mount.ino;
-        let handle = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+        let handle =
+            block_on(mount.core.open(ino, Access::ReadWrite, false)).expect("the file opens");
 
         block_on(mount.core.truncate(ino, 4, Some(handle))).expect("the shrink");
         block_on(mount.core.truncate(ino, 32, Some(handle))).expect("the regrow");
@@ -3151,7 +3193,8 @@ mod published {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let ino = mount.ino;
-        let handle = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+        let handle =
+            block_on(mount.core.open(ino, Access::ReadWrite, false)).expect("the file opens");
 
         block_on(mount.core.truncate(ino, 4, Some(handle))).expect("the shrink");
         block_on(mount.core.write(handle, 6, b"xy")).expect("the write past the gap");
@@ -3172,7 +3215,7 @@ mod published {
         let plaintext = clip_bytes();
         let mut mount = mount_published(&plaintext, CacheBudget::CI);
         let handle =
-            block_on(mount.core.open(mount.ino, Access::ReadWrite)).expect("the file opens");
+            block_on(mount.core.open(mount.ino, Access::ReadWrite, false)).expect("the file opens");
 
         let tail = b"appended";
         block_on(mount.core.write(handle, plaintext.len() as u64, tail)).expect("the append lands");
@@ -3220,7 +3263,8 @@ mod published {
         let reader = opened(&mut mount);
         block_on(mount.core.read(reader, 0, 8)).expect("the reader serves the published version");
 
-        let writer = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+        let writer =
+            block_on(mount.core.open(ino, Access::ReadWrite, false)).expect("the file opens");
         block_on(mount.core.write(writer, 3, b"EDIT")).expect("the write lands");
         mount.adapter.drain();
         block_on(mount.core.release(writer)).expect("the release commits");
@@ -3254,7 +3298,8 @@ mod published {
                 .is_some(),
             "the projected size is what leaves the write nothing to resolve"
         );
-        let handle = block_on(mount.core.open(ino, Access::ReadWrite)).expect("the file opens");
+        let handle =
+            block_on(mount.core.open(ino, Access::ReadWrite, false)).expect("the file opens");
 
         let whole_block = vec![0xab; chunk() as usize];
         let Poll::Ready(outcome) = poll_once(mount.core.write(handle, 0, &whole_block)) else {
@@ -3383,8 +3428,8 @@ mod published {
         block_on(mount.core.release(writer)).expect("the release commits");
 
         for what in ["the queue holds the version", "the drain published it"] {
-            let reader =
-                block_on(mount.core.open(made.ino, Access::Read)).expect("the file opens for read");
+            let reader = block_on(mount.core.open(made.ino, Access::Read, false))
+                .expect("the file opens for read");
             assert_eq!(
                 block_on(mount.core.read(reader, 0, 4096)).expect("the read serves"),
                 bytes,
