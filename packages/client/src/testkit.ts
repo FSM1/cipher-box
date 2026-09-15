@@ -26,6 +26,7 @@ import type {
   EventDescriptor,
   OpenedStream,
   PendingApprovalDescriptor,
+  VersionEntryDescriptor,
   ReceivedShareDescriptor,
   RegisteredDeviceDescriptor,
   SharingDescriptor,
@@ -526,6 +527,8 @@ export class FakeEngineTransport implements EngineTransport {
    */
   readonly rendezvousSteps: DeviceRendezvousStep[] = [];
   readonly downloads: Uint8Array[] = [];
+  readonly versionLists: Uint8Array[] = [];
+  readonly versionDownloads: Array<{ node: Uint8Array; contentCid: Uint8Array }> = [];
   siweChallenges = 0;
   readonly siweChallengeIntents: SiweIntent[] = [];
   readonly opened: Uint8Array[] = [];
@@ -562,6 +565,10 @@ export class FakeEngineTransport implements EngineTransport {
   respondRendezvous: (step: DeviceRendezvousStep) => Promise<DeviceRendezvousResult> = () =>
     Promise.resolve({ kind: 'factor', factorKey: new Uint8Array(0) });
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
+    Promise.resolve(new ArrayBuffer(0));
+  respondFileVersions: (node: Uint8Array) => Promise<VersionEntryDescriptor[]> = () =>
+    Promise.resolve([]);
+  respondDownloadVersion: (node: Uint8Array, contentCid: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
   respondReadStream: (
@@ -657,6 +664,12 @@ export class FakeEngineTransport implements EngineTransport {
       case 'download':
         this.downloads.push(read.node);
         return this.respondDownload(read.node);
+      case 'fileVersions':
+        this.versionLists.push(read.node);
+        return this.respondFileVersions(read.node);
+      case 'downloadVersion':
+        this.versionDownloads.push({ node: read.node, contentCid: read.contentCid });
+        return this.respondDownloadVersion(read.node, read.contentCid);
     }
   }
 

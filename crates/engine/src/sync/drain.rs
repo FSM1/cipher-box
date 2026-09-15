@@ -46,9 +46,9 @@ use crate::bin_index::{
 };
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::{
-    ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError, RootPlacement,
-    SealedContent, expand_retire_targets, place_block, plan_prune, pre_flight_quota_check,
-    read_block, validate_byo_config, version_cids,
+    ContentPlane, ContentProfile, ContentVersion, Expansion, Gateway, ProviderError,
+    RetentionPolicy, RootPlacement, SealedContent, expand_retire_targets, place_block, plan_prune,
+    pre_flight_quota_check, read_block, validate_byo_config, version_cids,
 };
 use crate::deadlines::DeadlinePolicy;
 use crate::entropy::{Entropy, SharedEntropy, fresh_ephemeral, fresh_nonce};
@@ -1109,6 +1109,12 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// bins rather than destroys; here it would destroy on a settings record
     /// this device merely failed to read (blueprint/engine.md "Delete branch").
     pub(crate) bin_retention_days: Option<u32>,
+    /// The version retention the owner chose, or [`RetentionPolicy::KeepAll`]
+    /// when this session's settings load carried no member choice.
+    ///
+    /// Shortening history retires bytes, so it acts only on a retention this
+    /// device can show is the owner's — the same rule the bin's expiry follows.
+    pub(crate) retention: RetentionPolicy,
     /// The dead letters this session has surfaced, so the expiry sweep does not
     /// re-queue a purge for an entry whose own purge is already terminal.
     pub(crate) dead_letters: &'a RefCell<RetainedDeadLetters>,
@@ -2543,6 +2549,14 @@ where
             }
             OpKind::Prune { keep_latest } => {
                 self.publish_prune(scope, pass, applied, *keep_latest).await
+            }
+            OpKind::RestoreVersion { content_cid } => {
+                self.publish_restore_version(scope, pass, applied, content_cid)
+                    .await
+            }
+            OpKind::DeleteVersion { content_cid } => {
+                self.publish_delete_version(scope, pass, applied, content_cid)
+                    .await
             }
         }
     }
@@ -4641,6 +4655,21 @@ where
         let shortfall = mirror_shortfall(&uploaded);
         // Newest first, head is current (`crates/core/src/seal/body.rs`).
         versions.insert(0, uploaded.version);
+        // The retention rule applies where history grows (blueprint/engine.md
+        // "Content plane"), so a vault keeping the newest N never accretes an
+        // (N+1)th version even for the moment between a write and a prune.
+        //
+        // A history this build refuses to shorten publishes whole: the member's
+        // own write is not the place to fail on a version list a co-writer
+        // authored, and leaving history long retires nothing.
+        if let RetentionPolicy::KeepLatest(keep_latest) = self.retention
+            && let Err(halt) = self
+                .shorten_history(scope, target, &mut versions, keep_latest)
+                .await
+            && !matches!(halt, Halt::Permanent(_))
+        {
+            return Err(halt);
+        }
         // Every retained version's root stays registered under this name, so a
         // republish never drops the pin that keeps an older version readable.
         let content_cids = uploaded
@@ -4757,40 +4786,14 @@ where
         else {
             return Err(Halt::Unclassified);
         };
-        let history = self.pinned_history(&versions)?;
-        let plan = plan_prune(&history, keep_latest);
-        if plan.retire_targets.is_empty() {
-            return Ok(());
-        }
         let head = versions.first().ok_or(Halt::Unclassified)?;
         let (head_size, head_cid) = (head.size, head.content_cid.clone());
-        // The plan named a suffix of the history, so the survivors are its
-        // prefix — one count, never a second clamp that could disagree.
-        let survivors = &history[..history.len() - plan.retire_targets.len()];
-        // A version list is authored by anyone holding the scope's write seed,
-        // and nothing on the wire forbids one `contentCid` appearing twice in
-        // it. Retiring a CID a surviving version still names would unpin the
-        // live file, so a repeated history is refused rather than pruned.
-        let kept: BTreeSet<&str> = survivors
-            .iter()
-            .map(|version| version.content_cid.as_str())
-            .collect();
-        if plan
-            .retire_targets
-            .iter()
-            .any(|doomed| kept.contains(doomed.content_cid.as_str()))
-        {
-            return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
-        }
-        // Ahead of the publish: a debt this pass cannot compute must leave the
-        // history it was read from standing, not a shortened one it never
-        // journaled.
-        let owed = self.prune_debt(target, &plan.retire_targets).await?;
-        StagingRetireLedger::new(self.staging, self.bookkeeping_seal(scope))
-            .owe(&owner_tag(scope.enc_secret), &owed)
-            .await
-            .map_err(seam)?;
-        versions.truncate(survivors.len());
+        let survivors = self
+            .shorten_history(scope, target, &mut versions, keep_latest)
+            .await?;
+        let Some(survivors) = survivors else {
+            return Ok(());
+        };
         let content_cids = survivors
             .iter()
             .map(|version| version.content_cid.clone())
@@ -4828,6 +4831,254 @@ where
             published,
         );
         Ok(())
+    }
+
+    /// Shorten `versions` to the newest `keep_latest` and journal what the drop
+    /// owes the registry. Returns the survivors, or `None` when the history was
+    /// already inside the rule and the caller has nothing to shorten.
+    ///
+    /// The journal precedes the caller's publish for the reason
+    /// [`Self::publish_prune`] states, and the caller must not publish a
+    /// shortened history if this returns an error.
+    async fn shorten_history(
+        &self,
+        scope: &DrainScope<'_>,
+        target: NodeId,
+        versions: &mut Vec<Version>,
+        keep_latest: NonZeroU64,
+    ) -> Result<Option<Vec<ContentVersion>>, Halt> {
+        let history = self.pinned_history(versions)?;
+        let plan = plan_prune(&history, keep_latest);
+        if plan.retire_targets.is_empty() {
+            return Ok(None);
+        }
+        // The plan named a suffix of the history, so the survivors are its
+        // prefix — one count, never a second clamp that could disagree.
+        let survivors = history[..history.len() - plan.retire_targets.len()].to_vec();
+        // A version list is authored by anyone holding the scope's write seed,
+        // and nothing on the wire forbids one `contentCid` appearing twice in
+        // it. Retiring a CID a surviving version still names would unpin the
+        // live file, so a repeated history is refused rather than pruned.
+        let kept: BTreeSet<&str> = survivors
+            .iter()
+            .map(|version| version.content_cid.as_str())
+            .collect();
+        if plan
+            .retire_targets
+            .iter()
+            .any(|doomed| kept.contains(doomed.content_cid.as_str()))
+        {
+            return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
+        }
+        self.journal_retire_debt(scope, target, &plan.retire_targets)
+            .await?;
+        versions.truncate(survivors.len());
+        Ok(Some(survivors))
+    }
+
+    /// Hold what `doomed` owes the registry on the retire ledger.
+    ///
+    /// Ahead of the caller's publish: a debt this pass cannot compute must leave
+    /// the history it was read from standing, not a shortened one it never
+    /// journaled.
+    async fn journal_retire_debt(
+        &self,
+        scope: &DrainScope<'_>,
+        target: NodeId,
+        doomed: &[ContentVersion],
+    ) -> Result<(), Halt> {
+        let owed = self.prune_debt(target, doomed).await?;
+        StagingRetireLedger::new(self.staging, self.bookkeeping_seal(scope))
+            .owe(&owner_tag(scope.enc_secret), &owed)
+            .await
+            .map_err(seam)
+    }
+
+    /// `restoreVersion`: put one prior version back at the head and republish.
+    ///
+    /// A reorder of the sealed history, not an upload — every retained version's
+    /// root stays registered under this record the whole time, so the restore
+    /// moves no byte and retires none. The record's `modified_at` follows the
+    /// head it establishes: no byte changed, so the restored version's own stamp
+    /// is the only modification time there is.
+    async fn publish_restore_version(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        content_cid: &[u8],
+    ) -> Result<(), Halt> {
+        let (plane, loaded) = self.open_file_record(scope, pass, applied).await?;
+        let target = applied.op.target;
+        let ReadBody::File {
+            created_at,
+            mut versions,
+            unknown,
+            ..
+        } = loaded.body
+        else {
+            return Err(Halt::Unclassified);
+        };
+        let at = version_index(&versions, content_cid)?;
+        // Already current: this restore landed, or a concurrent writer put the
+        // same version back first.
+        if at == 0 {
+            return Ok(());
+        }
+        // A rotate rather than a remove-and-insert, so no version's content key
+        // is moved out of the list it is owned by.
+        versions[..=at].rotate_right(1);
+        let head = versions.first().ok_or(Halt::Unclassified)?;
+        let (head_size, head_cid, modified_at) =
+            (head.size, head.content_cid.clone(), head.modified_at);
+        let content_cids = self
+            .pinned_history(&versions)?
+            .into_iter()
+            .map(|version| version.content_cid)
+            .collect();
+        let version_count = versions.len() as u64;
+        let body = ReadBody::File {
+            created_at,
+            modified_at,
+            versions,
+            unknown,
+        };
+        let published = self
+            .publish_node(
+                scope,
+                &plane,
+                target,
+                &loaded.name,
+                false,
+                &body,
+                content_cids,
+                loaded.envelope_unknown,
+                loaded.epoch_tag_unknown,
+                Some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        self.project_published_file(
+            target,
+            head_size,
+            modified_at,
+            version_count,
+            &head_cid,
+            published,
+        );
+        Ok(())
+    }
+
+    /// `deleteVersion`: drop one prior version from the history, journal what it
+    /// owes the registry, and republish the shortened record.
+    ///
+    /// The head is never a target: a file's current content leaves with the
+    /// file, never through its history.
+    async fn publish_delete_version(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        content_cid: &[u8],
+    ) -> Result<(), Halt> {
+        let (plane, loaded) = self.open_file_record(scope, pass, applied).await?;
+        let target = applied.op.target;
+        let ReadBody::File {
+            created_at,
+            modified_at,
+            mut versions,
+            unknown,
+        } = loaded.body
+        else {
+            return Err(Halt::Unclassified);
+        };
+        let at = version_index(&versions, content_cid)?;
+        // The named version became the file's current content under this op, so
+        // the history this op was formed against is gone.
+        if at == 0 {
+            return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
+        }
+        let history = self.pinned_history(&versions)?;
+        let doomed = history[at].clone();
+        // Same rule as [`Self::shorten_history`]: a root a surviving version
+        // still names must not be retired.
+        if history
+            .iter()
+            .enumerate()
+            .any(|(index, version)| index != at && version.content_cid == doomed.content_cid)
+        {
+            return Err(Halt::Permanent(DeadLetterReason::PayloadRefused));
+        }
+        self.journal_retire_debt(scope, target, core::slice::from_ref(&doomed))
+            .await?;
+        let head = versions.first().ok_or(Halt::Unclassified)?;
+        let (head_size, head_cid) = (head.size, head.content_cid.clone());
+        versions.remove(at);
+        let content_cids = self
+            .pinned_history(&versions)?
+            .into_iter()
+            .map(|version| version.content_cid)
+            .collect();
+        let version_count = versions.len() as u64;
+        // A delete removes history; it does not modify the file, so the record's
+        // `modified_at` stays the head version's.
+        let body = ReadBody::File {
+            created_at,
+            modified_at,
+            versions,
+            unknown,
+        };
+        let published = self
+            .publish_node(
+                scope,
+                &plane,
+                target,
+                &loaded.name,
+                false,
+                &body,
+                content_cids,
+                loaded.envelope_unknown,
+                loaded.epoch_tag_unknown,
+                Some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        self.project_published_file(
+            target,
+            head_size,
+            modified_at,
+            version_count,
+            &head_cid,
+            published,
+        );
+        Ok(())
+    }
+
+    /// Load the file record a history edit rewrites, with the plane it publishes
+    /// under. A resolution that also needs a parent-side write has no plan here,
+    /// the same rule every one-record publish gets.
+    async fn open_file_record<'s>(
+        &self,
+        scope: &DrainScope<'s>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+    ) -> Result<(SealPlane<'s>, LoadedNode), Halt> {
+        if applied.effective_name.is_some() {
+            return Err(Halt::Unclassified);
+        }
+        let target = applied.op.target;
+        let plane = self
+            .ensure_folder(scope, pass, self.published_parent(target)?)
+            .await?;
+        let loaded = self
+            .load_child_node(
+                &plane,
+                pass.anchor_for(&plane)?,
+                target,
+                ResolveMode::CacheFirst,
+            )
+            .await?;
+        Ok((plane, loaded))
     }
 
     /// A published history as [`ContentVersion`]s, newest first.
@@ -5985,6 +6236,16 @@ fn head_version_cid(body: &ReadBody) -> Option<&[u8]> {
         ReadBody::File { versions, .. } => versions.first().map(|head| head.content_cid.as_slice()),
         ReadBody::Folder { .. } => None,
     }
+}
+
+/// Where `content_cid` sits in a file's history. A history that no longer names
+/// it is one another writer has already shortened, and no retry brings the
+/// version back.
+fn version_index(versions: &[Version], content_cid: &[u8]) -> Result<usize, Halt> {
+    versions
+        .iter()
+        .position(|version| version.content_cid == content_cid)
+        .ok_or(Halt::Permanent(DeadLetterReason::BaseSuperseded))
 }
 
 fn local_head(head: &AuthoredHead) -> LocalHead {
@@ -7633,6 +7894,7 @@ mod tests {
                 events: &self.events,
                 bin_keys: &self.bin_keys,
                 bin_retention_days: None,
+                retention: RetentionPolicy::KeepAll,
                 dead_letters: &self.dead_letters,
                 established_bin_index: RefCell::new(None),
                 bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),

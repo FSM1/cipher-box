@@ -517,6 +517,8 @@ export type CommandDescriptor =
   | { kind: 'purge'; node: Uint8Array }
   | { kind: 'rename'; node: Uint8Array; newName: string }
   | { kind: 'relink'; node: Uint8Array; newParent: Uint8Array }
+  | { kind: 'restoreVersion'; node: Uint8Array; contentCid: Uint8Array }
+  | { kind: 'deleteVersion'; node: Uint8Array; contentCid: Uint8Array }
   | { kind: 'cancelUpload'; opId: bigint }
   | { kind: 'discardDeadLetter'; opId: bigint }
   | { kind: 'recoverDeadLetter'; opId: bigint }
@@ -727,6 +729,19 @@ export type SiweIntent = 'login' | 'link';
  * union, so a new read costs one member and one [`ReadResults`] entry rather
  * than a hand-threaded method at each layer of the rail.
  */
+/**
+ * One prior version of a file. Every field comes from the file's sealed
+ * read-body; the content key that rides beside them there never crosses this
+ * boundary. `contentCid` is the identifier every version call takes.
+ */
+export interface VersionEntryDescriptor {
+  contentCid: Uint8Array;
+  /** The version's plaintext size in bytes. */
+  size: bigint;
+  /** When the version was written, Unix millis. */
+  modifiedAt: bigint;
+}
+
 export type ReadDescriptor =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'sharing'; scope: Uint8Array | null }
@@ -739,7 +754,9 @@ export type ReadDescriptor =
   | { kind: 'pendingApprovals' }
   | { kind: 'deviceRendezvous'; step: DeviceRendezvousStep }
   | { kind: 'siweChallenge'; intent: SiweIntent }
-  | { kind: 'download'; node: Uint8Array };
+  | { kind: 'download'; node: Uint8Array }
+  | { kind: 'fileVersions'; node: Uint8Array }
+  | { kind: 'downloadVersion'; node: Uint8Array; contentCid: Uint8Array };
 
 /** What each read kind answers with. */
 export interface ReadResults {
@@ -755,6 +772,8 @@ export interface ReadResults {
   deviceRendezvous: DeviceRendezvousResult;
   siweChallenge: string;
   download: ArrayBuffer;
+  fileVersions: VersionEntryDescriptor[];
+  downloadVersion: ArrayBuffer;
 }
 
 /** The answer a given read descriptor resolves with. */
@@ -781,6 +800,8 @@ export const READ_KINDS: ReadonlySet<string> = new Set<ReadDescriptor['kind']>([
   'deviceRendezvous',
   'siweChallenge',
   'download',
+  'fileVersions',
+  'downloadVersion',
 ]);
 
 /**

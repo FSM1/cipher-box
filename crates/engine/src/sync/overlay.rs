@@ -86,6 +86,14 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
                     .map(|count| count.min(keep_latest.get()));
             }
         }
+        // A restore reorders history: its length is unchanged, and the head's
+        // own size and mtime are read from the record at publish.
+        OpKind::RestoreVersion { .. } => {}
+        OpKind::DeleteVersion { .. } => {
+            if let Some(node) = view.node_mut(op.target) {
+                node.content_version = node.content_version.map(|count| count.saturating_sub(1));
+            }
+        }
     }
 }
 

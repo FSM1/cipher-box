@@ -37,7 +37,7 @@ use crate::seams_bridge::{
 };
 use crate::{
     AuthMethod, BinView, Command, CommandOutcome, Event, NodeId, OpenedStream, PendingApproval,
-    ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView, VaultStorageView,
+    ReceivedShareRow, RegisteredDevice, SharingView, SnapshotView, VaultStorageView, VersionEntry,
 };
 
 /// The largest integer a JS number holds exactly (`Number.MAX_SAFE_INTEGER`).
@@ -498,6 +498,50 @@ impl EngineHandle {
                 .read()
                 .await
                 .read_content(node)
+                .await
+                .map_err(engine_error)?;
+            // Terminal owner of the Rust-side plaintext: the copy crosses into
+            // the JS heap here, so this buffer is wiped rather than freed.
+            let bytes = Zeroizing::new(bytes);
+            Ok(Uint8Array::from(bytes.as_slice()).into())
+        })
+    }
+
+    /// Lists one file's prior versions, newest first. The head is the file's
+    /// current content and is not in the list. Resolves with an array of
+    /// `VersionEntry`; rejects with the engine error.
+    #[wasm_bindgen(js_name = fileVersions)]
+    pub fn file_versions(&self, node: &NodeId) -> Promise {
+        let engine = self.engine.clone();
+        let node = node.facade();
+        future_to_promise(async move {
+            let rows = engine
+                .read()
+                .await
+                .file_versions(node)
+                .await
+                .map_err(engine_error)?;
+            Ok(rows
+                .into_iter()
+                .map(VersionEntry::from_facade)
+                .map(JsValue::from)
+                .collect::<js_sys::Array>()
+                .into())
+        })
+    }
+
+    /// Downloads and decrypts one prior version of a file, named by its content
+    /// root CID. Resolves with the plaintext bytes as a `Uint8Array`; rejects
+    /// with the engine error.
+    #[wasm_bindgen(js_name = downloadVersion)]
+    pub fn download_version(&self, node: &NodeId, content_cid: Vec<u8>) -> Promise {
+        let engine = self.engine.clone();
+        let node = node.facade();
+        future_to_promise(async move {
+            let bytes = engine
+                .read()
+                .await
+                .read_version_content(node, &content_cid)
                 .await
                 .map_err(engine_error)?;
             // Terminal owner of the Rust-side plaintext: the copy crosses into

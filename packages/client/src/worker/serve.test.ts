@@ -512,6 +512,8 @@ describe('serveEngine event pump over the real EngineHost', () => {
       openContentStream: () => Promise.reject(new Error('unused')),
       readStream: () => Promise.reject(new Error('unused')),
       closeStream: () => Promise.reject(new Error('unused')),
+      fileVersions: () => Promise.resolve([]),
+      downloadVersion: () => Promise.resolve(new Uint8Array(0)),
       nextEvent: () =>
         pumped.length > 0
           ? Promise.resolve(pumped.shift())

@@ -520,6 +520,8 @@ pub fn rebase_one(
         OpKind::Restore { into, name, kind } => rebase_restore(working, op, *into, name, *kind),
         OpKind::Purge { .. } => rebase_purge(working, op),
         OpKind::Prune { keep_latest } => rebase_prune(working, op, *keep_latest),
+        OpKind::RestoreVersion { .. } => rebase_history_edit(working, op, 0),
+        OpKind::DeleteVersion { .. } => rebase_history_edit(working, op, 1),
     }
 }
 
@@ -584,6 +586,21 @@ fn rebase_prune(working: &mut Snapshot, op: &Op, keep_latest: NonZeroU64) -> OpR
     node.content_version = node
         .content_version
         .map(|count| count.min(keep_latest.get()));
+    OpResolution::applied(None)
+}
+
+/// A restore or a delete of one version: the op names its target by
+/// `contentCid`, so a history that advanced under it still rebases and the
+/// drain decides against the record whether the named version is still there.
+/// `dropped` is what the edit takes off the rendered count — none for a
+/// restore, which reorders, and one for a delete.
+fn rebase_history_edit(working: &mut Snapshot, op: &Op, dropped: u64) -> OpResolution {
+    let Some(node) = working.node_mut(op.target) else {
+        return OpResolution::dropped(DropReason::AlreadySatisfied);
+    };
+    node.content_version = node
+        .content_version
+        .map(|count| count.saturating_sub(dropped));
     OpResolution::applied(None)
 }
 

@@ -37,6 +37,7 @@ import {
   readAuthMethods,
   readBin,
   readDevices,
+  readFileVersions,
   readEvent,
   readPendingApprovals,
   readReceivedShare,
@@ -409,6 +410,17 @@ export class EngineHost implements EngineHostLike {
         return this.handle.siweChallenge(read.intent);
       case 'download':
         return ownedBuffer(await this.handle.download(nodeId(this.wasm, read.node, 'node')));
+      case 'fileVersions':
+        return readFileVersions(
+          await this.handle.fileVersions(nodeId(this.wasm, read.node, 'node'))
+        );
+      case 'downloadVersion':
+        return ownedBuffer(
+          await this.handle.downloadVersion(
+            nodeId(this.wasm, read.node, 'node'),
+            bytes(read.contentCid, 'contentCid')
+          )
+        );
       default:
         // A descriptor reaches this realm by transfer, so this frame is the
         // last owner of whatever it carried (AGENTS.md 7).
