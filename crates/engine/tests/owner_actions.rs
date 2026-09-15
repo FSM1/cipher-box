@@ -3077,7 +3077,7 @@ fn published_bin_entries(fx: &GrantScenario) -> Vec<BinEntry> {
         fx.engine.profile(),
         &keys,
     ))
-    .enrol(&RefCell::new(None), None);
+    .enrol(&RefCell::new(cipherbox_engine::HeldRecords::new()), None);
     let (BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. }) = load else {
         panic!("the account's bin index reads");
     };

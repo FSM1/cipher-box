@@ -35,6 +35,7 @@ use cipherbox_engine::{
     GatewayConfig, HeldRecord, HeldValue, OrphanHeads, SessionBearer, SyncTimingProfile,
     load_bin_index, publish_bin_index,
 };
+use cipherbox_engine::{HeldKey, HeldRecords, observed_at};
 
 const SECRET: [u8; 32] = [7u8; 32];
 /// A second account signed in on the same device set.
@@ -897,12 +898,16 @@ fn the_bin_index_enrolment_captures_the_slot_ahead_of_its_load() {
     // stands above the published one, which is what the load reads.
     let published = held_bin_record("bafypublishedhead", 9);
     let published_bytes = published.record_bytes.clone();
-    let slot = Rc::new(RefCell::new(None));
-    let transport =
-        SlotFillingRecordStore::new(device.record_store.clone(), Rc::clone(&slot), published);
+    let held = Rc::new(RefCell::new(HeldRecords::new()));
+    let transport = SlotFillingRecordStore::new(
+        device.record_store.clone(),
+        Rc::clone(&held),
+        HeldKey::BinIndex,
+        published,
+    );
 
     serve_http(&device, &blocks, 4);
-    let observed = slot.borrow().as_ref().map(|held| held.record_bytes.clone());
+    let observed = observed_at(&held, HeldKey::BinIndex);
     let read = block_on(load_bin_index(
         &transport,
         &gateway(),
@@ -917,15 +922,12 @@ fn the_bin_index_enrolment_captures_the_slot_ahead_of_its_load() {
         read.renewable.is_some(),
         "the load resolved a record it would enrol",
     );
-    read.enrol(&slot, observed);
+    read.enrol(&held, observed);
 
     assert_eq!(
-        slot.borrow()
-            .as_ref()
-            .expect("the slot still holds a record")
-            .record_bytes,
+        held.borrow()[&HeldKey::BinIndex].record_bytes,
         published_bytes,
-        "the load ran against a slot the capture had already read",
+        "the load ran against a set the capture had already read",
     );
 }
 

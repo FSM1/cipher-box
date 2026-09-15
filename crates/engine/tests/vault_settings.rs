@@ -39,6 +39,7 @@ use cipherbox_engine::{
     SessionBearer, SettingsLoad, SettingsPublishError, SettingsRead, StoragePolicy,
     SyncTimingProfile, VaultSettings, WriteTarget, load_settings, publish_settings, settings_name,
 };
+use cipherbox_engine::{HeldKey, HeldRecords, observed_at};
 use cipherbox_engine::{HeldRecord, HeldValue};
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -578,15 +579,12 @@ fn an_enrolment_never_replaces_a_record_that_landed_across_its_load() {
         .expect("the saved record is renewable");
     let saved_bytes = saved.record_bytes.clone();
     assert_ne!(stale_bytes, saved_bytes, "the save replaced the record");
-    let slot = RefCell::new(Some(saved));
+    let held = RefCell::new(HeldRecords::from([(HeldKey::VaultSettings, saved)]));
 
-    stale.enrol(&slot, None);
+    stale.enrol(&held, None);
 
     assert_eq!(
-        slot.borrow()
-            .as_ref()
-            .expect("the slot still holds a record")
-            .record_bytes,
+        held.borrow()[&HeldKey::VaultSettings].record_bytes,
         saved_bytes,
         "the older read did not replace the record the save enrolled",
     );
@@ -606,12 +604,16 @@ fn the_settings_enrolment_captures_the_slot_ahead_of_its_load() {
     // the published one, which is what the load reads and would enrol.
     let saved = held_settings_record("bafysavedhead", 9);
     let saved_bytes = saved.record_bytes.clone();
-    let slot = Rc::new(RefCell::new(None));
-    let transport =
-        SlotFillingRecordStore::new(device.record_store.clone(), Rc::clone(&slot), saved);
+    let held = Rc::new(RefCell::new(HeldRecords::new()));
+    let transport = SlotFillingRecordStore::new(
+        device.record_store.clone(),
+        Rc::clone(&held),
+        HeldKey::VaultSettings,
+        saved,
+    );
 
     serve_http(&device, &blocks, 4);
-    let observed = slot.borrow().as_ref().map(|held| held.record_bytes.clone());
+    let observed = observed_at(&held, HeldKey::VaultSettings);
     let read = block_on(load_settings(
         &transport,
         &gateway(),
@@ -622,15 +624,12 @@ fn the_settings_enrolment_captures_the_slot_ahead_of_its_load() {
         &SyncTimingProfile::CI,
         &SECRET,
     ));
-    read.enrol(&slot, observed);
+    read.enrol(&held, observed);
 
     assert_eq!(
-        slot.borrow()
-            .as_ref()
-            .expect("the slot still holds a record")
-            .record_bytes,
+        held.borrow()[&HeldKey::VaultSettings].record_bytes,
         saved_bytes,
-        "the load ran against a slot the capture had already read",
+        "the load ran against a set the capture had already read",
     );
 }
 

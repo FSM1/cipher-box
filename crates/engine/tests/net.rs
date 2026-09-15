@@ -733,7 +733,7 @@ fn a_held_record_dropped_from_an_endpoint_is_alive_again_after_one_interval() {
 
     let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
     held.borrow_mut().insert(
-        HeldKey::node([1u8; 16]),
+        HeldKey::Node([1u8; 16]),
         held_record(&name, record(&s, VALUE, 1, 0)),
     );
 
@@ -762,11 +762,11 @@ fn an_evicted_record_is_not_re_put() {
 
     let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
     held.borrow_mut().insert(
-        HeldKey::node([1u8; 16]),
+        HeldKey::Node([1u8; 16]),
         held_record(&name, record(&s, VALUE, 1, 0)),
     );
     // Eviction leaves the set before the loop runs.
-    held.borrow_mut().remove(&HeldKey::node([1u8; 16]));
+    held.borrow_mut().remove(&HeldKey::Node([1u8; 16]));
     assert!(held.borrow().is_empty(), "eviction removes the record");
 
     let scheduler = world.scheduler.clone().with_auto_advance();

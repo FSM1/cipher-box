@@ -506,7 +506,7 @@ where
         let mut held = held.borrow_mut();
         // The drain is the only source of a head's held content CIDs, so a
         // re-hold carries the set forward rather than wiping it.
-        let key = HeldKey::node(node_id);
+        let key = HeldKey::Node(node_id);
         let content_cids = held
             .remove(&key)
             .filter(|prior| prior.head_cid() == Some(head_cid.as_str()))
@@ -780,7 +780,7 @@ mod tests {
         let map = held.borrow();
         assert_eq!(map.len(), 1, "the adopted record is held, keyed by node id");
         let record = map
-            .get(&HeldKey::node(node_id))
+            .get(&HeldKey::Node(node_id))
             .expect("held under its node id");
         assert_eq!(record.routing_key, name.as_str());
         assert!(
@@ -817,7 +817,7 @@ mod tests {
         let re_hold = |head_cid: &str| {
             let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
             held.borrow_mut().insert(
-                HeldKey::node(node_id),
+                HeldKey::Node(node_id),
                 HeldRecord {
                     routing_key: name.as_str().to_owned(),
                     record_bytes: Vec::new(),
@@ -836,7 +836,7 @@ mod tests {
                 ResolveMode::CacheFirst,
             ))
             .expect("resolve_and_hold");
-            held.borrow()[&HeldKey::node(node_id)].content_cids.clone()
+            held.borrow()[&HeldKey::Node(node_id)].content_cids.clone()
         };
 
         // `VALUE` is `/ipfs/<head>`, so this is the head the re-hold adopts.
@@ -928,7 +928,7 @@ mod tests {
         let map = held.borrow();
         assert_eq!(map.len(), 1, "our own current record is held by node id");
         let hr = map
-            .get(&HeldKey::node(node_id))
+            .get(&HeldKey::Node(node_id))
             .expect("held under its node id");
         assert_eq!(
             hr.record_bytes, bytes,
@@ -986,7 +986,7 @@ mod tests {
 
         let hr = held
             .borrow()
-            .get(&HeldKey::node(node_id))
+            .get(&HeldKey::Node(node_id))
             .cloned()
             .expect("own current root is held by its recovered node id");
         // Held under a valid signer that signs for exactly the routing key.
@@ -1122,7 +1122,7 @@ mod tests {
         // gate's node id, and it signs for exactly the held name.
         let hr = held
             .borrow()
-            .get(&HeldKey::node(node_id))
+            .get(&HeldKey::Node(node_id))
             .cloned()
             .expect("write grantee is held by the gate node id");
         assert_eq!(
@@ -1201,7 +1201,7 @@ mod tests {
         assert!(!expected.is_empty());
         let map = held.borrow();
         let record = map
-            .get(&HeldKey::node(node_id))
+            .get(&HeldKey::Node(node_id))
             .expect("held under its node id");
         assert_eq!(
             record.head_cid(),
@@ -1251,7 +1251,7 @@ mod tests {
         .expect("resolve_and_hold");
         let hr = held
             .borrow()
-            .get(&HeldKey::node(node_id))
+            .get(&HeldKey::Node(node_id))
             .cloned()
             .expect("held under its node id");
         let expected_head = head_cid_from_value(VALUE).expect("fixture value has a head cid");
@@ -1424,7 +1424,7 @@ mod tests {
         // The same device now loads it. The adopt re-holds the newer record
         // under the same node id, and the gate raises the floor behind it.
         let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-        held.borrow_mut().insert(HeldKey::node(node_id), ours);
+        held.borrow_mut().insert(HeldKey::Node(node_id), ours);
         block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
@@ -1441,7 +1441,7 @@ mod tests {
         raise(3);
         let re_held = held
             .borrow()
-            .get(&HeldKey::node(node_id))
+            .get(&HeldKey::Node(node_id))
             .cloned()
             .expect("held under its node id");
         assert_eq!(

@@ -73,7 +73,7 @@ use crate::net::retire::{
 };
 use crate::net::{
     Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
-    Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
+    Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, observed_at, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
@@ -1117,10 +1117,6 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// bin entry has landed: the merge that saw it has already dropped the node
     /// from the base, so a set this pass emptied on failure would lose it.
     pub(crate) observed_unlinks: &'a RefCell<Vec<UnlinkedChild>>,
-    /// The bin index record this session last published or resolved, shared
-    /// with the facade's renewal slot. A load fills it too, so the sub-EOL
-    /// renewal keeps the record alive on a session that publishes nothing.
-    pub(crate) bin_index_record: &'a RefCell<Option<HeldRecord>>,
     /// The bin index this pass has established: the one it resolved, or the one
     /// its last confirmed publish left standing. Carried so a bulk soft delete
     /// costs one resolve rather than one per operation; the publish stays per
@@ -1175,7 +1171,7 @@ struct MovePlan {
 /// What a crossing's re-seal published, held back until the move commits.
 ///
 /// The live-set key is the node id alone
-/// ([`HeldKey::node`](crate::net::HeldKey::node)), so installing a destination
+/// ([`HeldKey::Node`](crate::net::HeldKey::Node)), so installing a destination
 /// record's hold evicts the source record's. Doing that before the ref moves
 /// would leave the source record unrenewed while the source folder is still the
 /// only parent naming it, which is the reference-outliving-its-referent law read
@@ -3484,11 +3480,7 @@ where
         if let Some(index) = cached_bin_index(self.snapshot_cache, self.bin_keys).await {
             return Some(index);
         }
-        let observed = self
-            .bin_index_record
-            .borrow()
-            .as_ref()
-            .map(|held| held.record_bytes.clone());
+        let observed = observed_at(self.held, HeldKey::BinIndex);
         match load_bin_index(
             self.transport,
             self.gateway,
@@ -3500,7 +3492,7 @@ where
             self.bin_keys,
         )
         .await
-        .enrol(self.bin_index_record, observed)
+        .enrol(self.held, observed)
         {
             BinIndexLoad::Resolved(index) | BinIndexLoad::Stale { index, .. } => Some(index),
             BinIndexLoad::Empty(_) => None,
@@ -3562,11 +3554,7 @@ where
     /// entries. [`Self::carried_bin_index`] is the one caller that may build on
     /// what the pass already established.
     async fn writable_bin_index(&self) -> Result<BinIndex, Halt> {
-        let observed = self
-            .bin_index_record
-            .borrow()
-            .as_ref()
-            .map(|held| held.record_bytes.clone());
+        let observed = observed_at(self.held, HeldKey::BinIndex);
         let index = load_bin_index(
             self.transport,
             self.gateway,
@@ -3578,7 +3566,7 @@ where
             self.bin_keys,
         )
         .await
-        .enrol(self.bin_index_record, observed)
+        .enrol(self.held, observed)
         .writable()
         .map_err(|reason| {
             let halt = halt_for_bin_load(reason);
@@ -3642,7 +3630,7 @@ where
         )
         .await
         .map_err(|error| halt_for_bin_publish(&error))?;
-        *self.bin_index_record.borrow_mut() = Some(held);
+        self.held.borrow_mut().insert(HeldKey::BinIndex, held);
         // The confirm re-resolved this session's own bytes at its own sequence,
         // so the published entries are the standing index.
         self.establish_bin_index(index);
@@ -3879,11 +3867,11 @@ where
             let mut held = self.held.borrow_mut();
             let mut base = self.base.borrow_mut();
             let mut forget = |node: NodeId| {
-                held.remove(&HeldKey::node(node.0));
+                held.remove(&HeldKey::Node(node.0));
                 // A scope root's node id is its scope id, so a reclaimed root
                 // also owns the pointer entry under those bytes; a non-root id
                 // matches nothing in that plane.
-                held.remove(&HeldKey::scope_pointer(node.0));
+                held.remove(&HeldKey::ScopePointer(node.0));
             };
             let detached = reclamation
                 .doomed
@@ -5616,7 +5604,7 @@ where
     /// Insert a just-published record into the live held set so the liveness
     /// loop keeps it alive.
     fn hold(&self, node_id: [u8; 16], held: HeldRecord) {
-        self.held.borrow_mut().insert(HeldKey::node(node_id), held);
+        self.held.borrow_mut().insert(HeldKey::Node(node_id), held);
     }
 
     /// Remove a resolved op from the durable queue.
@@ -7605,7 +7593,6 @@ mod tests {
         bin_keys: BinIndexKeys,
         dead_letters: RefCell<RetainedDeadLetters>,
         observed_unlinks: RefCell<Vec<UnlinkedChild>>,
-        bin_index_record: RefCell<Option<HeldRecord>>,
         pending_scope_exits: RefCell<BTreeSet<NodeId>>,
         root_name: IpnsName,
         read_scope_seed: Zeroizing<[u8; 32]>,
@@ -7647,7 +7634,6 @@ mod tests {
                 bin_keys: &self.bin_keys,
                 bin_retention_days: None,
                 dead_letters: &self.dead_letters,
-                bin_index_record: &self.bin_index_record,
                 established_bin_index: RefCell::new(None),
                 bin_expiries: RefCell::new(TickShare::new(MAX_BIN_EXPIRIES, 1)),
                 observed_unlinks: &self.observed_unlinks,
@@ -7791,7 +7777,6 @@ mod tests {
             bin_keys: BinIndexKeys::derive(&HARNESS_SECRET),
             dead_letters: RefCell::new(RetainedDeadLetters::new()),
             observed_unlinks: RefCell::new(Vec::new()),
-            bin_index_record: RefCell::new(None),
             pending_scope_exits: RefCell::new(BTreeSet::new()),
             root_name,
             read_scope_seed: Zeroizing::new(OWNER_ROOT_SCOPE_SEED),

@@ -16,6 +16,7 @@
 //!
 //! The API republisher (~12 h inventory walk) backstops dormant vaults only.
 
+use core::cell::RefCell;
 use core::fmt;
 use core::future::Future;
 use core::time::Duration;
@@ -134,45 +135,74 @@ impl fmt::Debug for HeldRecord {
     }
 }
 
-/// Which record plane a [`HeldKey`]'s 16-byte id lives in.
+/// The held set's key: which record plane an entry lives in, and — for the two
+/// planes that hold many — which 16-byte id inside it.
 ///
 /// A scope root's node id **is** its scope id (`grants/create.rs`), so an id on
 /// its own cannot separate a root's own record from that scope's pointer: one
 /// would evict the other in the held set, and the survivor would decide which
 /// of the two names the liveness loop keeps alive. The plane separates them.
+///
+/// The two account-level planes carry no id: an account has one vault settings
+/// record and one bin index, each at a name derived from the login secret
+/// alone. They are keyed here rather than in slots of their own, so the renewal
+/// set is one place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RecordPlane {
+pub enum HeldKey {
     /// A node's own record, keyed by its node id (`id16`).
-    Node,
+    Node([u8; 16]),
     /// A scope's canonical re-point pointer, keyed by its scope id
     /// (`sync/pointer.rs::scope_pointer_name`).
-    ScopePointer,
-}
-
-/// The held set's key: the plane a record lives in, plus its 16-byte id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct HeldKey {
-    /// The record plane this id is read in.
-    pub plane: RecordPlane,
-    /// The plane's 16-byte identifier.
-    pub id: [u8; 16],
+    ScopePointer([u8; 16]),
+    /// The account's vault settings record (`settings::settings_name`).
+    VaultSettings,
+    /// The account's bin index record (`bin_index::BinIndexKeys`).
+    BinIndex,
 }
 
 impl HeldKey {
-    /// The key of a node's own record.
-    pub fn node(node_id: [u8; 16]) -> Self {
-        Self {
-            plane: RecordPlane::Node,
-            id: node_id,
-        }
+    /// Whether the resolve tick replaces this plane's entries in place, which is
+    /// what keeps a renewal off a stale record.
+    ///
+    /// The planes it does not refresh need [`drop_superseded`] ahead of every
+    /// renewal pass: a renewal re-signs at `floor + 1` with a fresh validity, so
+    /// re-signing a record another device superseded wins record selection and
+    /// rolls that name back to the body this session published.
+    #[must_use]
+    pub fn refreshed_by_resolve(&self) -> bool {
+        matches!(self, HeldKey::Node(_))
     }
+}
 
-    /// The key of a scope's canonical re-point pointer.
-    pub fn scope_pointer(scope_id: [u8; 16]) -> Self {
-        Self {
-            plane: RecordPlane::ScopePointer,
-            id: scope_id,
-        }
+/// The record bytes the set holds at `key`. Read before a load begins, and
+/// handed back to [`hold_if_unchanged`] when it ends.
+#[must_use]
+pub fn observed_at(held: &RefCell<HeldRecords>, key: HeldKey) -> Option<Vec<u8>> {
+    held.borrow()
+        .get(&key)
+        .map(|record| record.record_bytes.clone())
+}
+
+/// Put `record` at `key`, but only while the set still holds `observed` there.
+///
+/// `observed` is the record bytes the key held when the load that produced
+/// `record` began. A save that landed across that load installed its own
+/// confirmed record, and the renewal re-signs at `floor + 1`: writing this
+/// pass's older read back over it would win record selection and roll the name
+/// back to the body the save replaced.
+pub fn hold_if_unchanged(
+    held: &RefCell<HeldRecords>,
+    key: HeldKey,
+    record: HeldRecord,
+    observed: Option<&[u8]>,
+) {
+    let mut held = held.borrow_mut();
+    if held
+        .get(&key)
+        .map(|current| current.record_bytes.as_slice())
+        == observed
+    {
+        held.insert(key, record);
     }
 }
 
@@ -195,6 +225,42 @@ impl HeldKey {
 /// cleared at teardown, so a session keeps alive only what it proved current
 /// itself.
 pub type HeldRecords = BTreeMap<HeldKey, HeldRecord>;
+
+/// Drop every held record whose plane no longer serves it, across every plane
+/// the resolve tick does not refresh ([`HeldKey::refreshed_by_resolve`]).
+///
+/// Only a positively observed *different* record supersedes: a plane this pass
+/// cannot read is availability, and the renewal itself refuses to renew what it
+/// cannot resolve.
+pub async fn drop_superseded<R: RecordTransport>(transport: &R, held: &RefCell<HeldRecords>) {
+    let unrefreshed: Vec<(HeldKey, HeldRecord)> = held
+        .borrow()
+        .iter()
+        .filter(|(key, _)| !key.refreshed_by_resolve())
+        .map(|(key, record)| (*key, record.clone()))
+        .collect();
+    for (key, record) in unrefreshed {
+        let Ok(name) = IpnsName::parse(&record.routing_key) else {
+            continue;
+        };
+        let Some((live, _)) = fanout_get_verify(transport, &name).await else {
+            continue;
+        };
+        if live.value == record.value.record_value() {
+            continue;
+        }
+        // The verdict names the record this pass read: a publish that landed
+        // across the fetch installed its own confirmed entry, and dropping that
+        // one would take the fresh record out of the renewal.
+        let mut held = held.borrow_mut();
+        if held
+            .get(&key)
+            .is_some_and(|current| current.record_bytes == record.record_bytes)
+        {
+            held.remove(&key);
+        }
+    }
+}
 
 /// The result of re-PUTting one held record.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -809,17 +875,17 @@ mod tests {
             seeded_inline_held(&device, [2u8; 32], b"a-repoint", b"a-repoint", 0);
 
         let mut held = HeldRecords::new();
-        held.insert(HeldKey::node(id), root.clone());
-        held.insert(HeldKey::scope_pointer(id), pointer);
+        held.insert(HeldKey::Node(id), root.clone());
+        held.insert(HeldKey::ScopePointer(id), pointer);
 
         assert_eq!(held.len(), 2, "one id, two planes, two live records");
         assert_eq!(
-            held[&HeldKey::node(id)].routing_key,
+            held[&HeldKey::Node(id)].routing_key,
             root.routing_key,
             "the node plane still names the scope root",
         );
         assert_eq!(
-            held[&HeldKey::scope_pointer(id)].routing_key,
+            held[&HeldKey::ScopePointer(id)].routing_key,
             pointer_name.as_str(),
             "the pointer plane names the pointer",
         );

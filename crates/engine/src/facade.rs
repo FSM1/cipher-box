@@ -89,9 +89,9 @@ use crate::net::{
     FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords,
     LivenessControl, OwnerRotationKeys, OwnerRotationNet, PointerConsult, PointerConsultArm,
     PointerConsultError, PublishError, PublishOutcome, RE_PUT_INTERVAL, RETIRE_LEDGER_PREFIX,
-    RecordAccelerator, RecordPlane, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    ScopePointerEnrolment, ScopePointerMint, ScopeWalk, VaultProvisionNet, WalkFailure,
-    WritePlaneDark, enrol_owned_scope_pointers, eol_renew_pass, fanout_get_verify, keyless_re_put,
+    RecordAccelerator, RecordPointerFetch, ResolveOutcome, RootAdopter, ScopePointerEnrolment,
+    ScopePointerMint, ScopeWalk, VaultProvisionNet, WalkFailure, WritePlaneDark, drop_superseded,
+    enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at,
     refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
@@ -3888,7 +3888,7 @@ fn steady_state_hold(
         return None;
     }
     let held = held.borrow();
-    let record = held.get(&HeldKey::node(scope_root))?;
+    let record = held.get(&HeldKey::Node(scope_root))?;
     (record.routing_key == name.as_str()).then(|| record.record_bytes.clone())
 }
 
@@ -4215,86 +4215,6 @@ impl From<Refused> for EngineError {
 /// Map a content-sealing failure onto the facade error: entropy is fail-closed
 /// availability, and an assembly refusal is a version this build's own reader
 /// would reject.
-/// The account-level record in `slot` — the vault settings or the bin index —
-/// unless the record plane now serves a different one.
-///
-/// The resolve tick replaces each held record in place, so nothing in that map
-/// can go stale under the renewal; these slots have no such refresher. A
-/// second device that published after this session did leaves this record
-/// superseded, and a sub-EOL renewal would re-sign it at `floor + 1` with a
-/// fresh validity — which wins record selection and rolls the account back to
-/// the body this session published.
-///
-/// Only a positively observed *different* record supersedes: a plane this pass
-/// cannot read is availability, and the renewal itself refuses to renew what it
-/// cannot resolve.
-async fn live_account_record<R: RecordTransport>(
-    transport: &R,
-    slot: &RefCell<Option<HeldRecord>>,
-) -> Option<HeldRecord> {
-    let held = slot.borrow().clone()?;
-    let Ok(name) = IpnsName::parse(&held.routing_key) else {
-        return None;
-    };
-    match fanout_get_verify(transport, &name).await {
-        Some((live, _)) if live.value != held.value.record_value() => {
-            // The verdict names the record this pass read, not whatever the slot
-            // holds now: a save that landed across the resolve installed its own
-            // confirmed record, and clearing that one drops it from the renewal.
-            let mut slot = slot.borrow_mut();
-            if slot
-                .as_ref()
-                .is_some_and(|current| current.record_bytes == held.record_bytes)
-            {
-                *slot = None;
-            }
-            None
-        }
-        _ => Some(held),
-    }
-}
-
-/// Drop every held scope pointer the record plane no longer serves.
-///
-/// The resolve tick replaces each node-plane record in place; the pointer plane
-/// has no such refresher, and only a local rotation ever writes it. So a
-/// re-point another device landed leaves this session's entry stale, and both
-/// liveness layers would keep it alive: the keyless re-PUT would re-seed a
-/// retired re-point block hourly, and a sub-EOL renewal would re-sign it at a
-/// higher sequence and roll the scope back to a root name that no longer holds.
-///
-/// Only a positively observed *different* record supersedes, on the same terms
-/// as [`live_account_record`]: a plane this pass cannot read is availability.
-async fn drop_superseded_pointers<R: RecordTransport>(transport: &R, held: &RefCell<HeldRecords>) {
-    let pointers: Vec<(HeldKey, HeldRecord)> = held
-        .borrow()
-        .iter()
-        .filter(|(key, _)| key.plane == RecordPlane::ScopePointer)
-        .map(|(key, record)| (*key, record.clone()))
-        .collect();
-    for (key, record) in pointers {
-        let Ok(name) = IpnsName::parse(&record.routing_key) else {
-            continue;
-        };
-        let Some((live, _)) = fanout_get_verify(transport, &name).await else {
-            continue;
-        };
-        if live.value == record.value.record_value() {
-            continue;
-        }
-        // The verdict names the record this pass read: a flip that landed across
-        // the fetch installed its own confirmed entry, and dropping that one
-        // would take the fresh pointer out of the renewal.
-        let mut held = held.borrow_mut();
-        if held
-            .get(&key)
-            .is_some_and(|current| current.record_bytes == record.record_bytes)
-        {
-            held.remove(&key);
-        }
-    }
-}
-
 fn seal_error(error: SealError) -> EngineError {
     match error {
         SealError::Entropy(error) => EngineError::from_entropy(error),
@@ -4520,16 +4440,6 @@ pub struct Engine<T: SeamTypes> {
     /// it. The liveness loop this session spawns keyless re-PUTs its values on
     /// the hourly cadence.
     held_records: Rc<RefCell<HeldRecords>>,
-    /// The vault settings record this session published or read
-    /// ([`SettingsRead::enrol`]), in its own slot rather than in
-    /// [`held_records`](Self::held_records): that map is keyed by node id and
-    /// the settings record has none, so a synthetic id would put it in a slot a
-    /// resolved record could claim and evict its renewal.
-    settings_record: Rc<RefCell<Option<HeldRecord>>>,
-    /// The bin index record this session published, in its own slot for the
-    /// same reason the settings record has one, and shared with the drain,
-    /// which is what writes a bin entry.
-    bin_index_record: Rc<RefCell<Option<HeldRecord>>>,
     /// Scope roots this session owes a scope-exit cut for, driven by the drain.
     /// Session-lived, like the orphan-head set.
     pending_scope_exits: Rc<RefCell<BTreeSet<NodeId>>>,
@@ -4793,8 +4703,6 @@ impl<T: SeamTypes> Engine<T> {
                 snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId([0u8; 16])))),
                 render_memo: RefCell::new(RenderMemo::default()),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
-                settings_record: Rc::new(RefCell::new(None)),
-                bin_index_record: Rc::new(RefCell::new(None)),
                 pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
@@ -4914,11 +4822,7 @@ impl<T: SeamTypes> Engine<T> {
         // Where this session's bytes go. Server-free and ahead of any vault
         // resolve, so a self-hosting owner never needs CipherBox to tell them
         // where their own node is (blueprint/engine.md "Vault settings record").
-        let observed = self
-            .settings_record
-            .borrow()
-            .as_ref()
-            .map(|held| held.record_bytes.clone());
+        let observed = observed_at(&self.held_records, HeldKey::VaultSettings);
         let settings = load_settings(
             &self.record_transport,
             &self.gateway,
@@ -4930,7 +4834,7 @@ impl<T: SeamTypes> Engine<T> {
             secret.expose(),
         )
         .await
-        .enrol(&self.settings_record, observed);
+        .enrol(&self.held_records, observed);
         *self.placement.borrow_mut() = Some(decide_placement(&settings));
         *self.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
         // The secret zeroizes on drop here, at its terminal owner.
@@ -5157,12 +5061,6 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut held) = self.held_records.try_borrow_mut() {
             held.clear();
-        }
-        if let Ok(mut settings) = self.settings_record.try_borrow_mut() {
-            *settings = None;
-        }
-        if let Ok(mut bin_index) = self.bin_index_record.try_borrow_mut() {
-            *bin_index = None;
         }
         // Each open stream pins a version's content key; releasing the table's
         // `Rc`s here is what makes this the terminal owner (security rule 7).
@@ -5564,11 +5462,10 @@ impl<T: SeamTypes> Engine<T> {
         *self.tick_loop_spawner.borrow_mut() = None;
         *self.placement.borrow_mut() = None;
         *self.settings_summary.borrow_mut() = None;
-        // The settings load enrols ahead of the gate, and both slots hold a
-        // record's own signer, so a start that stops here drops them at their
-        // terminal owner (security rule 7).
-        *self.settings_record.borrow_mut() = None;
-        *self.bin_index_record.borrow_mut() = None;
+        // The settings and bin index loads enrol ahead of the gate, and every
+        // held record carries its name's own signer, so a start that stops here
+        // drops them at their terminal owner (security rule 7).
+        self.held_records.borrow_mut().clear();
         self.session_bearer.clear();
         self.accelerator_bearer.clear();
     }
@@ -5639,11 +5536,7 @@ where {
         if holds_a_bin_index_mark(&self.seams.floor_store, &keys).await {
             return;
         }
-        let observed = self
-            .bin_index_record
-            .borrow()
-            .as_ref()
-            .map(|held| held.record_bytes.clone());
+        let observed = observed_at(&self.held_records, HeldKey::BinIndex);
         let load = load_bin_index(
             &self.record_transport,
             &self.gateway,
@@ -5655,7 +5548,7 @@ where {
             &keys,
         )
         .await
-        .enrol(&self.bin_index_record, observed);
+        .enrol(&self.held_records, observed);
         if !matches!(load, BinIndexLoad::Empty(DefaultsReason::UnprovenFirstRun)) {
             return;
         }
@@ -5673,7 +5566,9 @@ where {
         )
         .await
         {
-            *self.bin_index_record.borrow_mut() = Some(held);
+            self.held_records
+                .borrow_mut()
+                .insert(HeldKey::BinIndex, held);
         }
     }
 
@@ -5795,8 +5690,6 @@ where {
         let snapshot_cache = LiveSeam::new(self.seams.snapshot_cache.clone(), self.alive.clone());
         let profile = self.profile;
         let held = self.held_records.clone();
-        let settings_record = self.settings_record.clone();
-        let bin_index_record = self.bin_index_record.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
         let gateway = self.gateway.clone();
@@ -5809,9 +5702,7 @@ where {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                let settings = live_account_record(&transport, &settings_record).await;
-                let bin_index = live_account_record(&transport, &bin_index_record).await;
-                drop_superseded_pointers(&transport, &held).await;
+                drop_superseded(&transport, &held).await;
                 // The flip is the only other producer of a held scope pointer,
                 // so a session that runs no rotation must re-enrol what it owns
                 // or the pointer lapses at its EOL.
@@ -5837,13 +5728,7 @@ where {
                     })
                     .await;
                 }
-                let records: Vec<HeldRecord> = held
-                    .borrow()
-                    .values()
-                    .cloned()
-                    .chain(settings)
-                    .chain(bin_index)
-                    .collect();
+                let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                 keyless_re_put(&transport, &records).await;
                 // Surface every renewal that did not land (LostRace/PublishError)
                 // as an Event — never a silent failure (blueprint/engine.md).
@@ -5887,7 +5772,6 @@ where {
         let tick_settings_signer = self.tick_settings_signer.clone();
         let tick_settings = self.settings_summary.clone();
         let observed_unlinks = self.observed_unlinks.clone();
-        let bin_index_record = self.bin_index_record.clone();
         let tick_contact_label_seed = self.tick_contact_label_seed.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = LiveSeam::new(self.seams.staging_store.clone(), self.alive.clone());
@@ -5913,7 +5797,6 @@ where {
         let placement = self.placement.clone();
         let settings_summary = self.settings_summary.clone();
         let byo_reconciled = self.byo_reconciled.clone();
-        let settings_record = self.settings_record.clone();
         // Start has just decided, so the first re-decide comes one interval on.
         let settings_rechecked = Cell::new(self.seams.scheduler.now());
         let held = self.held_records.clone();
@@ -5990,10 +5873,7 @@ where {
                         || elapsed_at_least(now, last_checked, profile.settings_recheck_interval)
                     {
                         settings_rechecked.set(now);
-                        let observed = settings_record
-                            .borrow()
-                            .as_ref()
-                            .map(|held| held.record_bytes.clone());
+                        let observed = observed_at(&held, HeldKey::VaultSettings);
                         let read = load_settings_at(
                             &transport,
                             &gateway,
@@ -6015,7 +5895,7 @@ where {
                         if !alive.get() {
                             return TickControl::Stop;
                         }
-                        let load = read.enrol(&settings_record, observed);
+                        let load = read.enrol(&held, observed);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
                             adopt_settings_summary(
@@ -6167,7 +6047,7 @@ where {
                     // walk needs no second read of either plane to start.
                     let held_root = held
                         .borrow()
-                        .get(&HeldKey::node(root_id))
+                        .get(&HeldKey::Node(root_id))
                         .map(|record| (record.routing_key.clone(), record.record_bytes.clone()));
                     // Cloned out of the cell: a `Ref` cannot be held across the
                     // walk's awaits.
@@ -6537,7 +6417,7 @@ where {
                             bin_keys: &bin_keys,
                             bin_retention_days: owner_bin_retention_days(&tick_settings),
                             dead_letters: &dead_letters,
-                            bin_index_record: &bin_index_record,
+
                             established_bin_index: RefCell::new(None),
                             bin_expiries: RefCell::new(TickShare::new(
                                 MAX_BIN_EXPIRIES,
@@ -8756,7 +8636,9 @@ where {
         )
         .await
         .map_err(EngineError::from_settings_publish)?;
-        *self.settings_record.borrow_mut() = Some(held);
+        self.held_records
+            .borrow_mut()
+            .insert(HeldKey::VaultSettings, held);
         // The confirm re-resolve read back our own bytes, so this device has
         // adopted what it published: the session's byte destinations follow, or
         // an `External` save keeps feeding the hosted leg until the next start.
@@ -10799,11 +10681,7 @@ where {
             .borrow()
             .clone()
             .ok_or(EngineError::NotStarted)?;
-        let observed = self
-            .bin_index_record
-            .borrow()
-            .as_ref()
-            .map(|held| held.record_bytes.clone());
+        let observed = observed_at(&self.held_records, HeldKey::BinIndex);
         let load = load_bin_index(
             &self.record_transport,
             &self.gateway,
@@ -10815,7 +10693,7 @@ where {
             &keys,
         )
         .await
-        .enrol(&self.bin_index_record, observed);
+        .enrol(&self.held_records, observed);
         let reason = match load {
             BinIndexLoad::Resolved(_) => return Ok(load),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,
@@ -11878,12 +11756,12 @@ mod tests {
         }
     }
 
-    /// A transport that lands a settings save into `slot` before the resolve it
-    /// wraps can answer — the interleaving a single-threaded executor allows at
-    /// any `.await`.
+    /// A transport that enrols a settings save before the resolve it wraps can
+    /// answer — the interleaving a single-threaded executor allows at any
+    /// `.await`.
     struct SavesAcrossTheResolve {
         inner: InMemoryRecordStore,
-        slot: Rc<RefCell<Option<HeldRecord>>>,
+        held: Rc<RefCell<HeldRecords>>,
         saved: HeldRecord,
     }
 
@@ -11899,7 +11777,9 @@ mod tests {
             max_bytes: usize,
             bearer: Option<&str>,
         ) -> SeamResult<Option<Vec<u8>>> {
-            *self.slot.borrow_mut() = Some(self.saved.clone());
+            self.held
+                .borrow_mut()
+                .insert(HeldKey::VaultSettings, self.saved.clone());
             self.inner
                 .get_record(endpoint, routing_key, max_bytes, bearer)
                 .await
@@ -11938,9 +11818,9 @@ mod tests {
         }
     }
 
-    /// Resolve `superseded` against a plane a second device published over,
-    /// with `saved` landing in the slot across the resolve. Answers what the
-    /// slot holds afterwards.
+    /// Sweep `superseded` against a plane a second device published over, with
+    /// `saved` enrolling across the resolve. Answers what the renewal set holds
+    /// at the settings plane afterwards.
     fn resolve_with_a_save_across_it(
         superseded: HeldRecord,
         saved: HeldRecord,
@@ -11952,14 +11832,17 @@ mod tests {
             inner.seed_record(&endpoint, name.as_str(), live.clone());
         }
 
-        let slot = Rc::new(RefCell::new(Some(superseded)));
+        let held = Rc::new(RefCell::new(HeldRecords::from([(
+            HeldKey::VaultSettings,
+            superseded,
+        )])));
         let transport = SavesAcrossTheResolve {
             inner,
-            slot: Rc::clone(&slot),
+            held: Rc::clone(&held),
             saved,
         };
-        assert!(block_on(live_account_record(&transport, &slot)).is_none());
-        slot.borrow().clone()
+        block_on(drop_superseded(&transport, &held));
+        held.borrow().get(&HeldKey::VaultSettings).cloned()
     }
 
     /// The superseded verdict names the record that pass read. A save that
@@ -12022,8 +11905,8 @@ mod tests {
     fn after_the_pointer_sweep(store: InMemoryRecordStore, held: HeldRecord) -> usize {
         let map = RefCell::new(HeldRecords::new());
         map.borrow_mut()
-            .insert(HeldKey::scope_pointer(POINTER_SCOPE), held);
-        block_on(drop_superseded_pointers(&store, &map));
+            .insert(HeldKey::ScopePointer(POINTER_SCOPE), held);
+        block_on(drop_superseded(&store, &map));
         map.borrow().len()
     }
 
@@ -12039,6 +11922,20 @@ mod tests {
     fn a_scope_pointer_the_plane_still_serves_stays_in_the_renewal() {
         let (store, held) = pointer_held(b"our-repoint", b"our-repoint", 1);
         assert_eq!(after_the_pointer_sweep(store, held), 1);
+    }
+
+    /// The resolve tick replaces a node-plane record in place, so the sweep
+    /// leaves that plane alone — dropping it here would take the vault root out
+    /// of the renewal on every pass that races a publish.
+    #[test]
+    fn a_node_record_the_plane_superseded_stays_in_the_renewal() {
+        let (store, held) = pointer_held(b"our-head", b"a-newer-head", 2);
+        let map = RefCell::new(HeldRecords::new());
+        map.borrow_mut().insert(HeldKey::Node(POINTER_SCOPE), held);
+
+        block_on(drop_superseded(&store, &map));
+
+        assert_eq!(map.borrow().len(), 1);
     }
 
     #[test]
@@ -15755,7 +15652,10 @@ mod tests {
                 "the fixture must fail at the cold-start gate: {out:?}",
             );
             assert!(
-                engine.settings_record.borrow().is_none(),
+                !engine
+                    .held_records
+                    .borrow()
+                    .contains_key(&HeldKey::VaultSettings),
                 "a fail-closed start re-signs nothing and holds no signer",
             );
         }
@@ -15815,7 +15715,7 @@ mod tests {
             let held = engine.held_records.borrow();
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
             let record = held
-                .get(&HeldKey::node(ROOT.0))
+                .get(&HeldKey::Node(ROOT.0))
                 .expect("held under the root node id");
             assert_eq!(record.routing_key, root_name.as_str());
             assert_eq!(
@@ -16006,13 +15906,13 @@ mod tests {
             engine
                 .held_records
                 .borrow_mut()
-                .get_mut(&HeldKey::node(ROOT.0))
+                .get_mut(&HeldKey::Node(ROOT.0))
                 .expect("held under the root node id")
                 .content_cids = vec!["bafystamp".to_owned()];
 
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].content_cids,
+                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)].content_cids,
                 vec!["bafystamp".to_owned()],
                 "the next poll left the hold alone"
             );
@@ -16041,7 +15941,7 @@ mod tests {
             let before = {
                 let mut held = engine.held_records.borrow_mut();
                 let record = held
-                    .get_mut(&HeldKey::node(ROOT.0))
+                    .get_mut(&HeldKey::Node(ROOT.0))
                     .expect("held under the root node id");
                 record.content_cids.clone_from(&published);
                 record.record_bytes.clone()
@@ -16062,12 +15962,12 @@ mod tests {
             tick(&world, &device, &mut tasks);
             let held = engine.held_records.borrow();
             assert_ne!(
-                held[&HeldKey::node(ROOT.0)].record_bytes,
+                held[&HeldKey::Node(ROOT.0)].record_bytes,
                 before,
                 "the poll really did re-hold, so the assertion below is not vacuous"
             );
             assert_eq!(
-                held[&HeldKey::node(ROOT.0)].content_cids,
+                held[&HeldKey::Node(ROOT.0)].content_cids,
                 published,
                 "the re-hold carried the published set forward"
             );
@@ -16078,13 +15978,13 @@ mod tests {
             engine
                 .held_records
                 .borrow_mut()
-                .get_mut(&HeldKey::node(ROOT.0))
+                .get_mut(&HeldKey::Node(ROOT.0))
                 .expect("held under the root node id")
                 .value = HeldValue::Head("bafyotherhead".to_owned());
             reseed(3);
             tick(&world, &device, &mut tasks);
             assert!(
-                engine.held_records.borrow()[&HeldKey::node(ROOT.0)]
+                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)]
                     .content_cids
                     .is_empty(),
                 "CIDs held for a different head are dropped, not carried over"
@@ -16322,7 +16222,7 @@ mod tests {
             let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
             tick(&world, &device, &mut tasks);
             assert_eq!(
-                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].routing_key,
+                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)].routing_key,
                 root_name.as_str(),
                 "cold start opened at the name the vault pointer gave it"
             );
@@ -16358,7 +16258,7 @@ mod tests {
                 abuse[0]
             );
             assert_ne!(
-                engine.held_records.borrow()[&HeldKey::node(ROOT.0)].routing_key,
+                engine.held_records.borrow()[&HeldKey::Node(ROOT.0)].routing_key,
                 moved.as_str(),
                 "and a gate refusal holds nothing (fail-closed)"
             );

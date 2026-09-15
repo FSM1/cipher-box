@@ -40,7 +40,7 @@ use crate::content::{
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral};
 use crate::gate::floor;
 use crate::gate::floor::RevisionMintError;
-use crate::net::liveness::{HeldRecord, HeldValue};
+use crate::net::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue, hold_if_unchanged};
 use crate::net::publish::PublishOutcome;
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
@@ -587,27 +587,17 @@ pub struct SettingsRead {
 }
 
 impl SettingsRead {
-    /// Put the renewable record in the session's slot and hand back the load.
+    /// Put the renewable record in the session's renewal set and hand back the
+    /// load.
     ///
     /// Every caller enrols: a load that reads and does not enrol is what lets
     /// the record's EOL lapse under a session that publishes nothing.
     ///
-    /// `observed` is the record bytes the slot held when the load began, and
-    /// the write happens only while the slot still holds them. A save that
-    /// landed across the load put its own confirmed record here, and the
-    /// renewal re-signs at `floor + 1`: re-signing this pass's older read would
-    /// win record selection and roll the account back to the body the save
-    /// replaced. The same bar `live_account_record` holds this slot to.
-    pub fn enrol(
-        self,
-        slot: &RefCell<Option<HeldRecord>>,
-        observed: Option<Vec<u8>>,
-    ) -> SettingsLoad {
+    /// `observed` is the record bytes the set held when the load began; the
+    /// compare-before-write bar is [`hold_if_unchanged`]'s.
+    pub fn enrol(self, held: &RefCell<HeldRecords>, observed: Option<Vec<u8>>) -> SettingsLoad {
         if let Some(renewable) = self.renewable {
-            let mut slot = slot.borrow_mut();
-            if slot.as_ref().map(|held| held.record_bytes.as_slice()) == observed.as_deref() {
-                *slot = Some(renewable);
-            }
+            hold_if_unchanged(held, HeldKey::VaultSettings, renewable, observed.as_deref());
         }
         self.load
     }
