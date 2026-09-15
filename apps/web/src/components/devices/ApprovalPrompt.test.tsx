@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PendingApprovalDescriptor } from '@cipherbox/client';
 import { authStore } from '../../stores/auth.store';
 import {
@@ -268,6 +268,106 @@ describe('the device approval prompt', () => {
     if (sent.kind !== 'approve') throw new Error('the seal step was not dispatched');
     expect(sent.factorKey.some((byte) => byte !== 0)).toBe(true);
     expect(sent.sealScalar.some((byte) => byte !== 0)).toBe(true);
+  });
+
+  /**
+   * The poll is a foreground beacon the server does not need, so a tab that
+   * finds nothing has to stop sending it every few seconds. Counted off the
+   * calls the component made, never off the timer it set.
+   */
+  describe('the poll back-off', () => {
+    /** Mounts over a pending list this test drives, counting every poll. */
+    async function mounted(rows: () => PendingApprovalDescriptor[]): Promise<() => number> {
+      let asked = 0;
+      const engine = fakeEngineClient({
+        pendingApprovals: () => {
+          asked += 1;
+          return Promise.resolve(rows());
+        },
+        devices: () => Promise.resolve([FAKE_REGISTERED_DEVICE]),
+      });
+      authStore.factorPolicy(true);
+      render(<ApprovalPrompt />, {
+        wrapper: authWrapper(engine.client, fakeCoreKitSession({ loggedIn: true }).session),
+      });
+      // The mount polls at once and only then sets its first timer, so nothing
+      // may advance the clock before that first run has landed.
+      await waitFor(() => expect(asked).toBe(1));
+      return () => asked;
+    }
+
+    /** Mounts over a pending list that never holds a row. */
+    const idle = (): Promise<() => number> => mounted(() => []);
+
+    beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+    afterEach(() => vi.useRealTimers());
+
+    it('doubles the wait away from the floor while every run comes back empty', async () => {
+      const asked = await idle();
+
+      // The floor, then twice it: a fixed interval would have asked four times
+      // over the same span.
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      await waitFor(() => expect(asked()).toBe(2));
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(asked()).toBe(2);
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      await waitFor(() => expect(asked()).toBe(3));
+    });
+
+    it('stops doubling at the ceiling, so an idle tab keeps a minute cadence', async () => {
+      const asked = await idle();
+      // Past 5 + 10 + 20 + 40 the wait is capped, so every further minute is
+      // exactly one more ask.
+      await act(() => vi.advanceTimersByTimeAsync(75_000));
+      await waitFor(() => expect(asked()).toBe(5));
+
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+      await waitFor(() => expect(asked()).toBe(6));
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+      await waitFor(() => expect(asked()).toBe(7));
+    });
+
+    it('returns to the floor as soon as a run raises a row', async () => {
+      let rows: PendingApprovalDescriptor[] = [];
+      const asked = await mounted(() => rows);
+      // Backed off to the ceiling: 5 + 10 + 20 + 40 of doubling, then a minute.
+      await act(() => vi.advanceTimersByTimeAsync(75_000));
+      await waitFor(() => expect(asked()).toBe(5));
+
+      rows = [PENDING];
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+      await waitFor(() => expect(asked()).toBe(6));
+
+      // One floor-length wait now answers, which the backed-off tab spent silent.
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(asked()).toBe(7);
+    });
+
+    it('returns to the floor when the tab regains focus', async () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get');
+      try {
+        const asked = await idle();
+        await act(() => vi.advanceTimersByTimeAsync(75_000));
+        await waitFor(() => expect(asked()).toBe(5));
+
+        visibility.mockReturnValue('hidden');
+        await act(async () => {
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        visibility.mockReturnValue('visible');
+        await act(async () => {
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        // The tab polls the moment it is back on screen, then again at the floor.
+        await waitFor(() => expect(asked()).toBe(6));
+
+        await act(() => vi.advanceTimersByTimeAsync(5000));
+        expect(asked()).toBe(7);
+      } finally {
+        visibility.mockRestore();
+      }
+    });
   });
 
   it('retires an answered request rather than raising it again on the next poll', async () => {

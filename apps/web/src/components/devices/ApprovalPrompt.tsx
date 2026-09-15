@@ -11,7 +11,14 @@ import { useAuthState } from '../../stores/auth.store';
 import { Modal } from '../ui/Modal';
 
 /** Short enough that a member reaches the prompt while the rendezvous is live. */
-const POLL_MS = 5000;
+const POLL_FLOOR_MS = 5000;
+
+/**
+ * Where an idle tab settles. The poll is a foreground beacon the server does not
+ * need, and a tab open all day sends it for no approval at all, so a run that
+ * finds nothing backs away from the floor and doubles up to here.
+ */
+const POLL_CEILING_MS = 60_000;
 
 const NO_IDENTITY = 'this browser holds no device identity key, so it cannot approve a sign-in';
 
@@ -77,22 +84,37 @@ export function ApprovalPrompt() {
     // Read until it holds, so a registration made in this session needs no
     // reload, and again whenever a row would be raised.
     let registered = false;
-    const poll = async (): Promise<void> => {
+    const poll = async (): Promise<boolean> => {
       if (!registered) {
         registered = await carriesThisDevice();
-        if (!registered) return;
+        if (!registered) return false;
       }
       const rows = await facade.pendingApprovals();
       if (rows.length > 0) registered = await carriesThisDevice();
+      const raised = registered && rows.length > 0;
       if (live) setPending(registered ? rows : []);
+      return raised;
     };
-    // A failed poll is the ordinary offline case; the next one answers.
-    const run = () => void poll().catch(() => undefined);
+    // The back-off is local to this run of the effect, so regaining focus or a
+    // network path restarts at the floor: both retire `polling` and cut a fresh
+    // one. A failed poll is the ordinary offline case and backs off like an
+    // empty one; the next poll answers.
+    let delay = POLL_FLOOR_MS;
+    let tick: ReturnType<typeof setTimeout>;
+    const run = (): void => {
+      void poll()
+        .catch(() => false)
+        .then((raised) => {
+          if (!live) return;
+          if (raised) delay = POLL_FLOOR_MS;
+          tick = setTimeout(run, delay);
+          delay = Math.min(delay * 2, POLL_CEILING_MS);
+        });
+    };
     run();
-    const tick = setInterval(run, POLL_MS);
     return () => {
       live = false;
-      clearInterval(tick);
+      clearTimeout(tick);
     };
   }, [client, polling, session]);
 
