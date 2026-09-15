@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "baseline": "tsx src/baseline.ts",
+    "latency": "tsx src/latency.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

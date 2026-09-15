@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { poll, PollTimeout, REAL_CLOCK, type PollClock } from './poll';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  observeWaits,
+  poll,
+  PollTimeout,
+  REAL_CLOCK,
+  type PollClock,
+  type WaitSample,
+} from './poll';
 
 /** A clock the test drives, so no unit test spends real time. */
 function fakeClock(): PollClock & { elapsed(): number; cancelled(): number } {
@@ -369,6 +376,59 @@ describe('poll', () => {
 
     expect(failure).toBeInstanceOf(PollTimeout);
     expect((failure as PollTimeout).last).toBe(cyclic);
+  });
+});
+
+describe('observeWaits', () => {
+  afterEach(() => observeWaits(undefined));
+
+  it('reports what a settled wait proved, what it took and what it cost', async () => {
+    const clock = fakeClock();
+    const samples: WaitSample[] = [];
+    observeWaits((sample) => samples.push(sample));
+
+    let reads = 0;
+    await poll(
+      () => {
+        reads += 1;
+        return reads;
+      },
+      (value) => value === 3,
+      { what: 'the third read', timeoutMs: 10_000, intervalMs: 500, clock }
+    );
+
+    expect(samples).toEqual([{ what: 'the third read', elapsedMs: 1_000, attempts: 3 }]);
+  });
+
+  it('reports nothing for a wait that ran out', async () => {
+    const clock = fakeClock();
+    const samples: WaitSample[] = [];
+    observeWaits((sample) => samples.push(sample));
+
+    await expect(
+      poll(
+        () => 'never',
+        () => false,
+        { what: 'a wait that cannot settle', timeoutMs: 1_000, intervalMs: 500, clock }
+      )
+    ).rejects.toBeInstanceOf(PollTimeout);
+
+    expect(samples).toEqual([]);
+  });
+
+  it('stops reporting once it is cleared', async () => {
+    const clock = fakeClock();
+    const samples: WaitSample[] = [];
+    observeWaits((sample) => samples.push(sample));
+    observeWaits(undefined);
+
+    await poll(
+      () => 'now',
+      () => true,
+      { what: 'a wait nobody watches', timeoutMs: 1_000, intervalMs: 500, clock }
+    );
+
+    expect(samples).toEqual([]);
   });
 });
 

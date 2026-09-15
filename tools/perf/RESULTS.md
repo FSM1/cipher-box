@@ -35,6 +35,13 @@ gh workflow run load-test.yml --ref main \
 gh run download <run-id>    # metrics-<scenario>-staging.json
 ```
 
+**The framing.** `cargo run --release -p cipherbox-engine --example
+ranged_profile` prints the ranged-fetch table, and `Perf Benches` with
+`job: ranged-fetch` runs it beside the framing bench.
+
+**The cross-client convergence latency.** Dispatch `Desktop E2E Tests`, then
+`Perf Benches` with `job: cross-client-latency` and that run's id.
+
 ## The environments
 
 |        | Local                                        | Staging                                 |
@@ -101,20 +108,98 @@ blocks in one call.
 
 ## Staging baseline — 5 accounts, 20 iterations each, 1200 ms pace
 
-| Scenario | Operation           |   n | 429 | err | p50 ms | p95 ms | p99 ms | ops/s |
-| -------- | ------------------- | --: | --: | --: | -----: | -----: | -----: | ----: |
-| `mixed`  | `auth-test-login`   |   5 |   0 |   0 |  154.8 |  698.7 |  698.7 |   0.1 |
-| `mixed`  | `content-upload`    | 100 |   0 |   0 |  270.8 |  634.3 |  849.9 |   1.9 |
-| `mixed`  | `registry-register` | 100 |   0 |   0 |  155.5 |  272.4 |  512.3 |   1.9 |
-| `mixed`  | `account-quota`     | 100 |   0 |   0 |  136.3 |  238.1 |  265.8 |   1.9 |
-| `mixed`  | `mailbox-post`      | 100 |   0 |   0 |  159.8 |  337.5 |  479.0 |   1.9 |
-| `mixed`  | `mailbox-poll`      | 100 |   0 |   0 |  135.1 |  229.3 |  320.9 |   1.9 |
-| `mixed`  | `mailbox-ack`       | 100 |   0 |   0 |  136.1 |  184.2 |  244.1 |   1.9 |
-| `mixed`  | `registry-retire`   |  10 |   0 |   0 |  572.7 |  970.1 |  970.1 |   0.2 |
-| `mixed`  | `account-delete`    |   5 |   0 |   0 |  133.0 |  143.5 |  143.5 |   0.1 |
-| `mixed`  | `all`               | 620 |   0 |   0 |  151.3 |  427.8 |  808.6 |  11.8 |
+| Scenario         | Operation           |   n | 429 | err | p50 ms | p95 ms | p99 ms | ops/s |
+| ---------------- | ------------------- | --: | --: | --: | -----: | -----: | -----: | ----: |
+| `mixed`          | `auth-test-login`   |   5 |   0 |   0 |  154.8 |  698.7 |  698.7 |   0.1 |
+| `mixed`          | `content-upload`    | 100 |   0 |   0 |  270.8 |  634.3 |  849.9 |   1.9 |
+| `mixed`          | `registry-register` | 100 |   0 |   0 |  155.5 |  272.4 |  512.3 |   1.9 |
+| `mixed`          | `account-quota`     | 100 |   0 |   0 |  136.3 |  238.1 |  265.8 |   1.9 |
+| `mixed`          | `mailbox-post`      | 100 |   0 |   0 |  159.8 |  337.5 |  479.0 |   1.9 |
+| `mixed`          | `mailbox-poll`      | 100 |   0 |   0 |  135.1 |  229.3 |  320.9 |   1.9 |
+| `mixed`          | `mailbox-ack`       | 100 |   0 |   0 |  136.1 |  184.2 |  244.1 |   1.9 |
+| `mixed`          | `registry-retire`   |  10 |   0 |   0 |  572.7 |  970.1 |  970.1 |   0.2 |
+| `mixed`          | `account-delete`    |   5 |   0 |   0 |  133.0 |  143.5 |  143.5 |   0.1 |
+| `mixed`          | `all`               | 620 |   0 |   0 |  151.3 |  427.8 |  808.6 |  11.8 |
+| `content-ingest` | `auth-test-login`   |   5 |   0 |   0 |  135.8 |  216.2 |  216.2 |   0.2 |
+| `content-ingest` | `content-upload`    | 100 |   0 |   0 |  175.8 |  527.2 |  607.7 |   3.1 |
+| `content-ingest` | `registry-retire`   |   5 |   0 |   0 |  857.0 |  907.1 |  907.1 |   0.2 |
+| `content-ingest` | `account-delete`    |   5 |   0 |   0 |  123.2 |  135.7 |  135.7 |   0.2 |
+| `content-ingest` | `all`               | 115 |   0 |   0 |  175.7 |  614.4 |  870.6 |   3.6 |
+| `name-wave`      | `auth-test-login`   |   5 |   0 |   0 |  195.6 |  794.6 |  794.6 |   0.1 |
+| `name-wave`      | `registry-register` | 100 |   0 |   0 |  178.1 |  583.8 |  666.3 |   1.7 |
+| `name-wave`      | `registry-retire`   | 100 |   0 |   0 |  168.8 |  189.3 |  251.7 |   1.7 |
+| `name-wave`      | `account-delete`    |   5 |   0 |   0 |  163.9 |  230.4 |  230.4 |   0.1 |
+| `name-wave`      | `all`               | 210 |   0 |   0 |  172.0 |  370.8 |  666.3 |   3.6 |
+| `byo-advisory`   | `auth-test-login`   |   5 |   0 |   0 |  253.0 | 1022.9 | 1022.9 |   0.1 |
+| `byo-advisory`   | `account-byo`       |   5 |   0 |   0 |  780.7 | 1002.0 | 1002.0 |   0.1 |
+| `byo-advisory`   | `registry-register` | 100 |   0 |   0 |  283.9 |  786.8 | 1059.4 |   0.9 |
+| `byo-advisory`   | `account-quota`     | 100 |   0 |   0 |  203.2 |  503.3 |  826.1 |   0.9 |
+| `byo-advisory`   | `registry-retire`   | 200 |   0 |   1 |  370.5 |  863.8 | 1208.0 |   1.8 |
+| `byo-advisory`   | `account-delete`    |   5 |   0 |   0 |  259.0 |  342.0 |  342.0 |   0.1 |
+| `byo-advisory`   | `all`               | 415 |   0 |   1 |  323.9 |  817.3 | 1208.0 |   3.8 |
 
-No threshold breached, and no operation was throttled or failed. The floor of
-every staging row is one round trip from a GitHub runner to the VPS: the
-cheapest surface, `mailbox-poll`, reads 135 ms where its local twin reads
-3.5 ms, so read the difference above that floor rather than the ratio.
+No threshold breached, and nothing was throttled. The floor of every staging row
+is one round trip from a GitHub runner to the VPS: the cheapest surface,
+`mailbox-poll`, reads 135 ms where its local twin reads 3.5 ms, so read the
+difference above that floor rather than the ratio. One `byo-advisory` retire of
+415 operations lost its connection to the API, which is 0.24 % against the 1 %
+band; a rerun of a staging row that shows one transport error is a rerun, and
+not a finding.
+
+One staging scenario is not recorded. `gateway-read` needs the
+`IPFS_GATEWAY_TOKEN` secret, which no workflow sets today: the read accelerator
+sits behind `forward_auth`, and the dispatch refuses the scenario without it.
+Dispatch one staging scenario at a time — the
+`load-test-staging` concurrency group holds one queued run, so a second
+dispatch made while one is pending cancels the one before it.
+
+## Ranged fetch over the frozen framing
+
+`ContentProfile::PRODUCTION` frames a 1 048 536-byte plaintext chunk, which
+seals to a 1 MiB block exactly. The flat DAG maps a byte range to a leaf range
+by division, so a range costs whole sealed leaves and nothing else.
+
+<!-- cargo run --release -p cipherbox-engine --example ranged_profile -->
+
+| Object | Range            |  Asked B | Leaves |   Wire B | Over-fetch |
+| ------ | ---------------- | -------: | -----: | -------: | ---------: |
+| 64 KiB | first 4 KiB      |     4096 |      1 |  1048576 |    256.00x |
+| 64 KiB | last 4 KiB       |     4096 |      1 |  1048576 |    256.00x |
+| 64 KiB | 1 MiB at 0       |    65536 |      1 |  1048576 |     16.00x |
+| 64 KiB | resume at 3/4    |    16384 |      1 |  1048576 |     64.00x |
+| 64 KiB | whole object     |    65536 |      1 |  1048576 |     16.00x |
+| 4 MiB  | first 4 KiB      |     4096 |      1 |  1048576 |    256.00x |
+| 4 MiB  | last 4 KiB       |     4096 |      2 |  2097152 |    512.00x |
+| 4 MiB  | 1 MiB at 0       |  1048576 |      2 |  2097152 |      2.00x |
+| 4 MiB  | 1 MiB at 512 KiB |  1048576 |      2 |  2097152 |      2.00x |
+| 4 MiB  | resume at 3/4    |  1048576 |      2 |  2097152 |      2.00x |
+| 4 MiB  | whole object     |  4194304 |      5 |  5242880 |      1.25x |
+| 64 MiB | first 4 KiB      |     4096 |      1 |  1048576 |    256.00x |
+| 64 MiB | last 4 KiB       |     4096 |      2 |  2097152 |    512.00x |
+| 64 MiB | 1 MiB at 0       |  1048576 |      2 |  2097152 |      2.00x |
+| 64 MiB | 1 MiB at 512 KiB |  1048576 |      2 |  2097152 |      2.00x |
+| 64 MiB | resume at 3/4    | 16777216 |     17 | 17825792 |      1.06x |
+| 64 MiB | whole object     | 67108864 |     65 | 68157440 |      1.02x |
+
+Two properties the freeze carries, both visible above.
+
+1. **One leaf is the floor.** A range shorter than a chunk costs one whole
+   sealed leaf, so a 4 KiB probe moves 1 MiB. The budget belongs to the block
+   because the ecosystem imposes its limits on blocks, and the trade is a
+   sequential read that costs 1.02x over the whole object against a small probe
+   that costs 256x.
+2. **A reader's MiB is never a leaf's MiB.** The plaintext chunk is 40 bytes
+   short of a MiB, because the seal overhead is charged to the block. A range a
+   reader aligns to 1 MiB therefore straddles two leaves from the second leaf
+   onward, which is why the 4 KiB tail of a 4 MiB object costs two leaves and
+   not one. A reader that wants one leaf must align to the chunk size, not to a
+   power of two.
+
+## Cross-client convergence latency
+
+Not recorded yet. The measurement needs the cross-client harness, which is a
+mounted desktop host beside a browser host on one vault, and `Perf Benches`
+takes it from a `Desktop E2E Tests` run's wait samples rather than by standing
+that stack up again. Until a row lands here, the five `SyncTimingProfile::PRODUCTION`
+placeholders — `escalation_window`, `focus_horizon`, `pointer_consult_interval`,
+`sweep_cadence` and `migration_window` — keep the values they carry.
