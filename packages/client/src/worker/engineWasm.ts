@@ -90,22 +90,17 @@ export interface WasmDeadLetter {
   readonly reason: number;
 }
 
-/** wasm-bindgen `BlockedOp` — the drain's over-budget hold. */
-export interface WasmBlockedOp {
-  readonly opId: bigint;
-  readonly node: Uint8Array;
-  readonly neededBytes: bigint;
-}
-
 /**
- * wasm-bindgen `SettingsHold` / `BinIndexHold` — a held queue head and the
- * stable check name of what refused it. The two carry different check
- * vocabularies, which `protocol.ts` maps apart.
+ * wasm-bindgen `QueueHold` — the held queue head and the reason it is held.
+ * Each reason carries exactly one figure, so the other is `undefined`:
+ * `neededBytes` on a quota hold, `check` on the two the host renders by name.
  */
 export interface WasmQueueHold {
   readonly opId: bigint;
   readonly node: Uint8Array;
-  readonly check: string;
+  readonly reason: string;
+  readonly neededBytes?: bigint;
+  readonly check?: string;
 }
 
 /**
@@ -127,9 +122,7 @@ export interface WasmSnapshotView {
   readonly children: WasmSnapshotChild[];
   readonly ancestors: WasmBreadcrumb[];
   readonly deadLetters: readonly WasmDeadLetter[];
-  readonly blocked?: WasmBlockedOp;
-  readonly settingsHold?: WasmQueueHold;
-  readonly binIndexHold?: WasmQueueHold;
+  readonly queueHold?: WasmQueueHold;
   readonly retainedRecords: number;
   readonly staleness: number;
 }

@@ -343,22 +343,12 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
             op_id: OpId(9),
             reason: facade::DeadLetterReason::SuffixExhausted,
         }],
-        blocked: Some(facade::BlockedOp {
+        queue_hold: Some(facade::QueueHold {
             op_id: OpId(12),
             node: facade::NodeId([6u8; 16]),
-            needed_bytes: u64::MAX,
-        }),
-        settings_hold: Some(facade::SettingsHold {
-            op_id: OpId(13),
-            node: facade::NodeId([7u8; 16]),
-            refusal: cipherbox_engine::SettingsRefusal::Byo(
-                cipherbox_engine::ProviderError::BlockedAddress,
-            ),
-        }),
-        bin_index_hold: Some(facade::BinIndexHold {
-            op_id: OpId(14),
-            node: facade::NodeId([8u8; 16]),
-            reason: cipherbox_engine::DefaultsReason::Suppressed,
+            reason: facade::QueueHoldReason::Quota {
+                needed_bytes: u64::MAX,
+            },
         }),
         retained_records: 0,
         staleness: facade::Staleness::Fresh,
@@ -416,8 +406,18 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         "the reason crosses as its mirror-enum ordinal"
     );
 
-    let blocked = get(&view, "blocked");
-    let needed = get(&blocked, "neededBytes");
+    let hold = get(&view, "queueHold");
+    assert_eq!(
+        get(&hold, "opId").js_typeof(),
+        JsValue::from_str("bigint"),
+        "a held op's opId must cross as a JS bigint, never a number"
+    );
+    assert_eq!(
+        get(&hold, "reason"),
+        JsValue::from_str("quota"),
+        "the host dispatches on the reason name"
+    );
+    let needed = get(&hold, "neededBytes");
     assert_eq!(
         needed.js_typeof(),
         JsValue::from_str("bigint"),
@@ -432,45 +432,13 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         ),
         u64::MAX.to_string()
     );
+    assert!(
+        get(&hold, "check").is_undefined(),
+        "a quota hold carries no check name"
+    );
     assert_eq!(
-        get(&blocked, "node")
-            .unchecked_into::<Uint8Array>()
-            .to_vec(),
+        get(&hold, "node").unchecked_into::<Uint8Array>().to_vec(),
         vec![6u8; 16]
-    );
-
-    let held = get(&view, "settingsHold");
-    assert_eq!(
-        get(&held, "opId").js_typeof(),
-        JsValue::from_str("bigint"),
-        "a held op's opId must cross as a JS bigint, never a number"
-    );
-    assert_eq!(
-        get(&held, "node").unchecked_into::<Uint8Array>().to_vec(),
-        vec![7u8; 16]
-    );
-    assert_eq!(
-        get(&held, "check"),
-        JsValue::from_str("byo-endpoint-blocked"),
-        "the refusing rule crosses by its stable check name"
-    );
-
-    let bin_held = get(&view, "binIndexHold");
-    assert_eq!(
-        get(&bin_held, "opId").js_typeof(),
-        JsValue::from_str("bigint"),
-        "a held op's opId must cross as a JS bigint, never a number"
-    );
-    assert_eq!(
-        get(&bin_held, "node")
-            .unchecked_into::<Uint8Array>()
-            .to_vec(),
-        vec![8u8; 16]
-    );
-    assert_eq!(
-        get(&bin_held, "check"),
-        JsValue::from_str("suppressed"),
-        "the load outcome crosses by its stable check name, carrying no figures"
     );
 
     let children = get(&view, "children");
@@ -536,6 +504,47 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     assert_eq!(
         get(&crumb, "id").unchecked_into::<Uint8Array>().to_vec(),
         vec![1u8; 16]
+    );
+}
+
+/// A settings hold crosses with its check name and no byte figure: the host
+/// renders the rule that refused, and nothing a quota hold would carry.
+#[wasm_bindgen_test]
+fn a_settings_queue_hold_crosses_with_its_check_and_no_byte_figure() {
+    let view: JsValue = SnapshotView::from_facade(facade::SnapshotView {
+        root: facade::NodeId([1u8; 16]),
+        folder: facade::NodeId([1u8; 16]),
+        folder_name: String::new(),
+        children: Vec::new(),
+        ancestors: Vec::new(),
+        dead_letters: Vec::new(),
+        queue_hold: Some(facade::QueueHold {
+            op_id: OpId(13),
+            node: facade::NodeId([7u8; 16]),
+            reason: facade::QueueHoldReason::Settings(cipherbox_engine::SettingsRefusal::Byo(
+                cipherbox_engine::ProviderError::BlockedAddress,
+            )),
+        }),
+        retained_records: 0,
+        staleness: facade::Staleness::Fresh,
+    })
+    .into();
+
+    let hold = Reflect::get(&view, &JsValue::from_str("queueHold")).expect("getter is readable");
+    let get = |key: &str| Reflect::get(&hold, &JsValue::from_str(key)).expect("getter is readable");
+    assert_eq!(get("reason"), JsValue::from_str("settings"));
+    assert_eq!(
+        get("check"),
+        JsValue::from_str("byo-endpoint-blocked"),
+        "the refusing rule crosses by its stable check name"
+    );
+    assert!(
+        get("neededBytes").is_undefined(),
+        "only a quota hold carries a byte figure"
+    );
+    assert_eq!(
+        get("node").unchecked_into::<Uint8Array>().to_vec(),
+        vec![7u8; 16]
     );
 }
 

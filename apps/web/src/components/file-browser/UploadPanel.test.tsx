@@ -126,7 +126,7 @@ describe('the upload panel', () => {
     await act(async () => {
       engine.publish({
         ...view(),
-        blocked: { opId: 1n, node: ROOT_ID, neededBytes: 900n },
+        queueHold: { reason: 'quota', opId: 1n, node: ROOT_ID, neededBytes: 900n },
       });
     });
     await waitFor(() =>
@@ -146,14 +146,20 @@ describe('the upload panel', () => {
     draw(engine.client, FOLDER);
     await queueOne(engine);
     await act(async () => {
-      engine.publish({ ...view(), blocked: { opId: 1n, node: ROOT_ID, neededBytes: 900n } });
+      engine.publish({
+        ...view(),
+        queueHold: { reason: 'quota', opId: 1n, node: ROOT_ID, neededBytes: 900n },
+      });
     });
     await waitFor(() => expect(screen.getByTestId('upload-row-hold')).toBeTruthy());
 
     // A hold on another session's op charges the same budget but is not this
     // row's business.
     await act(async () => {
-      engine.publish({ ...view(), blocked: { opId: 99n, node: ROOT_ID, neededBytes: 900n } });
+      engine.publish({
+        ...view(),
+        queueHold: { reason: 'quota', opId: 99n, node: ROOT_ID, neededBytes: 900n },
+      });
     });
 
     await waitFor(() => expect(screen.queryByTestId('upload-row-hold')).toBeNull());

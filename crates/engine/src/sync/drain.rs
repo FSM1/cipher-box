@@ -194,7 +194,7 @@ fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
 /// index cannot hold the queue head for good. A plane this pass could not read
 /// is availability and waits uncharged — but it waits as a *reported* hold, so
 /// a party who withholds one record does not stall the queue in silence
-/// ([`BinIndexHold`]).
+/// ([`QueueHoldReason::BinIndex`]).
 ///
 /// A stranded mint is neither. The hold's only exit is the record resolving,
 /// and on a single-device account nothing is left to publish it — so the op
@@ -428,7 +428,7 @@ enum Halt {
     Permanent(DeadLetterReason),
     /// The member's own settings were refused before any request was built.
     /// Not a failure of the op — it holds the head and its staging reservation
-    /// until those settings change ([`SettingsHold`]).
+    /// until those settings change ([`QueueHoldReason::Settings`]).
     HeldBySettings(SettingsRefusal),
     /// Over the account quota. Not a failure of the op — it holds the head and
     /// its staging reservation until a quota probe reports room.
@@ -440,7 +440,7 @@ enum Halt {
     /// The bin index plane did not establish the current index, and the reason
     /// is availability rather than a verdict on bytes it served. Not a failure
     /// of the op — it holds the head and its staging reservation until the
-    /// record resolves ([`BinIndexHold`]).
+    /// record resolves ([`QueueHoldReason::BinIndex`]).
     HeldByBinIndex(DefaultsReason),
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass.
@@ -622,50 +622,57 @@ struct Queue {
     all_ids: BTreeSet<OpId>,
 }
 
-/// The queue head is held over rather than failed: the account quota refused
-/// it, and it keeps its place and its staging reservation until a probe on a
-/// later drain tick reports room.
+/// Why the queue head is held over rather than failed. Each reason names its
+/// own exit, and [`Drain::hold_admits_the_head`] is the one gate that tries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlockedOp {
-    /// The held op.
-    pub op_id: OpId,
-    /// The node the op targets, so a host can point at it.
-    pub node: NodeId,
-    /// The byte count the resume probe must find room for.
-    pub needed_bytes: u64,
+pub enum QueueHoldReason {
+    /// The account quota refused the upload. The exit is a probe on a later
+    /// drain tick reporting room for `needed_bytes`.
+    Quota {
+        /// The byte count the resume probe must find room for.
+        needed_bytes: u64,
+    },
+    /// The member's own settings were refused before any request was built, so
+    /// every retry reaches the same verdict and charging one would spend the
+    /// version's budget and then release its staged blocks. The exit is
+    /// settings that name a placement this rule no longer refuses.
+    ///
+    /// Render it through [`SettingsRefusal::check`], which names the rule and
+    /// never the endpoint or the bearer the settings carry.
+    Settings(SettingsRefusal),
+    /// The bin index plane did not establish the current index. The exit is a
+    /// load that establishes it.
+    ///
+    /// Reported, because a party who withholds the record — or one head block
+    /// of it — otherwise stops every queued operation for the account with no
+    /// cause the member can see (blueprint/engine.md "Bin index record").
+    BinIndex(DefaultsReason),
 }
 
-/// The queue head is held over rather than failed: the member's own settings
-/// were refused before any request was built, so every retry reaches the same
-/// verdict and charging one would spend the version's budget and then release
-/// its staged blocks. It keeps its place and its staging reservation until the
-/// settings name a placement that clears the refusal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SettingsHold {
-    /// The held op.
-    pub op_id: OpId,
-    /// The node the op targets, so a host can point at it.
-    pub node: NodeId,
-    /// Which rule refused. Render it through [`SettingsRefusal::check`], which
-    /// names the rule and never the endpoint or the bearer the settings carry.
-    pub refusal: SettingsRefusal,
+impl QueueHoldReason {
+    /// The stable name a host dispatches on.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Quota { .. } => "quota",
+            Self::Settings(_) => "settings",
+            Self::BinIndex(_) => "bin-index",
+        }
+    }
 }
 
-/// The queue head is held over rather than failed: the bin index plane did not
-/// establish the current index, so the op that needs it keeps its place and its
-/// staging reservation until the record resolves.
+/// The queue head is held over rather than failed: it keeps its place and its
+/// staging reservation until its reason's own exit comes.
 ///
-/// Reported, because a party who withholds the record — or one head block of it
-/// — otherwise stops every queued operation for the account with no cause the
-/// member can see (blueprint/engine.md "Bin index record").
+/// One cell, so one head cannot be claimed for two reasons at once and no arm
+/// has another arm's state to clear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BinIndexHold {
+pub struct QueueHold {
     /// The held op.
     pub op_id: OpId,
     /// The node the op targets, so a host can point at it.
     pub node: NodeId,
-    /// Why the load did not establish the index.
-    pub reason: DefaultsReason,
+    /// What it waits on.
+    pub reason: QueueHoldReason,
 }
 
 /// The captures one pass adopts into the bin. A peer chooses both the trigger
@@ -1046,13 +1053,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) base: &'a BaseSnapshot,
     /// The live held-record set the liveness loop keeps alive.
     pub(crate) held: &'a RefCell<HeldRecords>,
-    /// The over-quota hold, shared with the facade's read surface. It clears
-    /// only here, on a quota probe reporting room.
-    pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
-    /// The settings-refused hold, shared with the facade's read surface. It
-    /// clears only here, once `placement` no longer carries the refusal that
-    /// took it.
-    pub(crate) settings_hold: &'a RefCell<Option<SettingsHold>>,
+    /// The held queue head, shared with the facade's read surface. It clears
+    /// only here, when its reason's own exit comes.
+    pub(crate) hold: &'a RefCell<Option<QueueHold>>,
     /// Pinned bytes the retire ledger still owes, shared with the facade's read
     /// surface. Rewritten at the end of every pass from the ledger itself.
     pub(crate) pending_reclaim: &'a Cell<u64>,
@@ -1095,9 +1098,6 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// with the facade's renewal slot. A load fills it too, so the sub-EOL
     /// renewal keeps the record alive on a session that publishes nothing.
     pub(crate) bin_index_record: &'a RefCell<Option<HeldRecord>>,
-    /// The bin-index-refused hold, shared with the facade's read surface. It
-    /// clears only here, on a load that establishes the index.
-    pub(crate) bin_index_hold: &'a RefCell<Option<BinIndexHold>>,
     /// The bin index this pass has established: the one it resolved, or the one
     /// its last confirmed publish left standing. Carried so a bulk soft delete
     /// costs one resolve rather than one per operation; the publish stays per
@@ -1620,21 +1620,11 @@ where
         };
         let queued = mine;
         if queued.is_empty() {
-            self.clear_block();
-            self.clear_settings_hold();
-            self.clear_bin_index_hold();
+            self.release_hold();
             // A debt outlives the op that owed it, so an empty queue is still a
             // pass that drives the cuts this device owes.
             self.cut_exited_scopes(scope, exits).await;
             return (report, Some(Vec::new()));
-        }
-        // The hold names one op, so it goes as soon as that op does.
-        if self
-            .bin_index_hold
-            .borrow()
-            .is_some_and(|hold| !still_queued(&queued, hold.op_id))
-        {
-            self.clear_bin_index_hold();
         }
         let purges = queued
             .iter()
@@ -1682,10 +1672,7 @@ where
         report: &mut DrainReport,
         attempts: &mut Attempts,
     ) -> Result<(), Halt> {
-        if !self.quota_admits_the_held_head(queued).await {
-            return Ok(());
-        }
-        if !self.settings_admit_the_held_head(queued) {
+        if !self.hold_admits_the_head(queued).await {
             return Ok(());
         }
 
@@ -1791,9 +1778,9 @@ where
     ) {
         // The bin plane has no probe of its own — the load is the only one — so
         // its hold goes here, on the first halt that is not it. Every other
-        // hold's own pre-pass gate is what lets go of it.
+        // reason has an exit the pre-pass gate can try.
         if !matches!(halt, Halt::HeldByBinIndex(_)) {
-            self.clear_bin_index_hold();
+            self.release_bin_index_hold();
         }
         match halt {
             Halt::EpochLagged => {}
@@ -1896,48 +1883,50 @@ where
             Halt::Permanent(reason) => {
                 self.dead_letter(scope, op_id, op, reason, report).await;
             }
-            // One pass raises one halt, and each hold's own gate is what lets
-            // go of it — so taking one drops the others rather than leaving two
-            // cells claiming the same head for different reasons.
             Halt::Blocked { needed_bytes } => {
-                self.clear_settings_hold();
-                *self.blocked.borrow_mut() = Some(BlockedOp {
-                    op_id,
-                    node: op.target,
-                    needed_bytes,
-                });
+                self.hold_head(op_id, op, QueueHoldReason::Quota { needed_bytes });
             }
             Halt::HeldBySettings(refusal) => {
-                self.clear_block();
-                *self.settings_hold.borrow_mut() = Some(SettingsHold {
-                    op_id,
-                    node: op.target,
-                    refusal,
-                });
+                self.hold_head(op_id, op, QueueHoldReason::Settings(refusal));
             }
             Halt::HeldByBinIndex(reason) => {
-                self.clear_block();
-                self.clear_settings_hold();
-                *self.bin_index_hold.borrow_mut() = Some(BinIndexHold {
-                    op_id,
-                    node: op.target,
-                    reason,
-                });
+                self.hold_head(op_id, op, QueueHoldReason::BinIndex(reason));
             }
         }
     }
 
-    /// Whether a held head may be tried again this tick. A `GET /account/quota`
-    /// probe reporting room is the hold's only exit, so an unanswered probe
-    /// leaves it in place.
-    async fn quota_admits_the_held_head(&self, queued: &[(OpId, Op)]) -> bool {
-        let Some(blocked) = *self.blocked.borrow() else {
+    /// Whether the held head may be tried again this tick: the one gate over
+    /// the one hold cell. A hold whose op has left the queue, or whose reason's
+    /// own exit has come, lets go of the cell.
+    async fn hold_admits_the_head(&self, queued: &[(OpId, Op)]) -> bool {
+        let Some(hold) = *self.hold.borrow() else {
             return true;
         };
-        if !still_queued(queued, blocked.op_id) {
-            self.clear_block();
-            return true;
+        if still_queued(queued, hold.op_id) {
+            match hold.reason {
+                QueueHoldReason::Quota { needed_bytes } => {
+                    if !self.quota_admits(needed_bytes).await {
+                        return false;
+                    }
+                }
+                QueueHoldReason::Settings(refusal) => {
+                    if settings_refusal(self.placement) == Some(refusal) {
+                        return false;
+                    }
+                }
+                // The bin index load is its own probe, so this reason neither
+                // stops a pass nor clears before one: [`Self::apply_valve`] and
+                // [`Self::establish_bin_index`] are its exits.
+                QueueHoldReason::BinIndex(_) => return true,
+            }
         }
+        self.release_hold();
+        true
+    }
+
+    /// Whether a `GET /account/quota` probe reports room for a held head. The
+    /// probe is the hold's only exit, so an unanswered one leaves it in place.
+    async fn quota_admits(&self, needed_bytes: u64) -> bool {
         let Ok(placement) = self.placement.as_ref() else {
             return false;
         };
@@ -1945,45 +1934,34 @@ where
         // could give bears on a hold under a placement without one — and an
         // endpoint that will not answer would park the head on that question.
         if !placement.has_hosted_leg() {
-            self.clear_block();
             return true;
         }
         let Ok(quota) = self.api.quota().await else {
             return false;
         };
-        if pre_flight_quota_check(blocked.needed_bytes, &quota, true).is_err() {
-            return false;
+        pre_flight_quota_check(needed_bytes, &quota, true).is_ok()
+    }
+
+    fn hold_head(&self, op_id: OpId, op: &Op, reason: QueueHoldReason) {
+        *self.hold.borrow_mut() = Some(QueueHold {
+            op_id,
+            node: op.target,
+            reason,
+        });
+    }
+
+    fn release_hold(&self) {
+        *self.hold.borrow_mut() = None;
+    }
+
+    fn release_bin_index_hold(&self) {
+        let held_by_bin_index = matches!(
+            self.hold.borrow().map(|hold| hold.reason),
+            Some(QueueHoldReason::BinIndex(_))
+        );
+        if held_by_bin_index {
+            self.release_hold();
         }
-        self.clear_block();
-        true
-    }
-
-    fn clear_block(&self) {
-        *self.blocked.borrow_mut() = None;
-    }
-
-    fn clear_bin_index_hold(&self) {
-        *self.bin_index_hold.borrow_mut() = None;
-    }
-
-    /// Whether a settings-held head may be tried again this tick: only once the
-    /// placement this pass runs under stops reaching the verdict that took the
-    /// hold.
-    fn settings_admit_the_held_head(&self, queued: &[(OpId, Op)]) -> bool {
-        let Some(hold) = *self.settings_hold.borrow() else {
-            return true;
-        };
-        if still_queued(queued, hold.op_id)
-            && settings_refusal(self.placement) == Some(hold.refusal)
-        {
-            return false;
-        }
-        self.clear_settings_hold();
-        true
-    }
-
-    fn clear_settings_hold(&self) {
-        *self.settings_hold.borrow_mut() = None;
     }
 
     /// This identity's queued ops, minus restore residue: an op at or below the
@@ -3589,7 +3567,7 @@ where
     /// hold a refused load took.
     fn establish_bin_index(&self, index: BinIndex) {
         *self.established_bin_index.borrow_mut() = Some(index);
-        self.clear_bin_index_hold();
+        self.release_bin_index_hold();
     }
 
     /// Publish the bin index and hold the confirmed record for renewal.
@@ -6152,7 +6130,7 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
 /// that repairs itself. Everything the provider *answered* is charged.
 ///
 /// A policy verdict is neither: it is deterministic, so it holds the op rather
-/// than charging it ([`SettingsHold`]).
+/// than charging it ([`QueueHoldReason::Settings`]).
 fn classify_placement(error: ProviderError) -> Halt {
     if error.is_deterministic() {
         return Halt::HeldBySettings(SettingsRefusal::Byo(error));
@@ -6189,8 +6167,7 @@ fn blocks(count: usize) -> u32 {
 
 /// The key-free classification an [`OpPhase::UploadFailed`] carries, or `None`
 /// where the halt is not a failed attempt: a hold keeps the op and its
-/// reservation, and the host reads them from `SnapshotView::blocked`,
-/// `SnapshotView::settings_hold` and `SnapshotView::bin_index_hold`.
+/// reservation, and the host reads them from `SnapshotView::queue_hold`.
 fn upload_failure(halt: Halt) -> Option<&'static str> {
     match halt {
         // A cancel reports `UploadCancelled` from the facade that ordered it.
@@ -7509,8 +7486,9 @@ mod tests {
         InMemoryStagingStore, ScriptedHttp, VirtualScheduler,
     };
     use crate::testkit::{
-        OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec,
-        SeededEntropy, block_on, gateway, owner_root_fixture, serve,
+        OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_SCOPE_SEED,
+        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootSpec, SeededEntropy, block_on, gateway,
+        owner_root_fixture, owner_root_pseudonym, serve,
     };
 
     /// The login secret the harness's owner identity, enc secret and bin keys
@@ -7557,8 +7535,7 @@ mod tests {
         entropy: RefCell<Box<dyn Entropy>>,
         base: BaseSnapshot,
         held: RefCell<HeldRecords>,
-        blocked: RefCell<Option<BlockedOp>>,
-        settings_hold: RefCell<Option<SettingsHold>>,
+        hold: RefCell<Option<QueueHold>>,
         pending_reclaim: Cell<u64>,
         reclaim_stalls: RefCell<Vec<ReclaimStall>>,
         bookkeeping: RefCell<BookkeepingCursors>,
@@ -7572,7 +7549,6 @@ mod tests {
         dead_letters: RefCell<RetainedDeadLetters>,
         observed_unlinks: RefCell<Vec<UnlinkedChild>>,
         bin_index_record: RefCell<Option<HeldRecord>>,
-        bin_index_hold: RefCell<Option<BinIndexHold>>,
         pending_scope_exits: RefCell<BTreeSet<NodeId>>,
         root_name: IpnsName,
         read_scope_seed: Zeroizing<[u8; 32]>,
@@ -7603,8 +7579,7 @@ mod tests {
                 entropy: &self.entropy,
                 base: &self.base,
                 held: &self.held,
-                blocked: &self.blocked,
-                settings_hold: &self.settings_hold,
+                hold: &self.hold,
                 pending_reclaim: &self.pending_reclaim,
                 reclaim_stalls: &self.reclaim_stalls,
                 bookkeeping: &self.bookkeeping,
@@ -7616,7 +7591,6 @@ mod tests {
                 bin_retention_days: None,
                 dead_letters: &self.dead_letters,
                 bin_index_record: &self.bin_index_record,
-                bin_index_hold: &self.bin_index_hold,
                 established_bin_index: RefCell::new(None),
                 observed_unlinks: &self.observed_unlinks,
                 pending_scope_exits: &self.pending_scope_exits,
@@ -7669,6 +7643,8 @@ mod tests {
         owner_root_fixture(OwnerRootSpec {
             owner_identity: &EcdsaSigner::from_scalar(&HARNESS_SECRET).expect("valid scalar"),
             owner_enc: &kdf::enc_subkey(&HARNESS_SECRET).public(),
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
             scope_id: HARNESS_SCOPE,
             root_id: HARNESS_ROOT.0,
             children: Vec::new(),
@@ -7745,8 +7721,7 @@ mod tests {
             entropy: RefCell::new(Box::new(SeededEntropy::new(42))),
             base: BaseSnapshot::new(Snapshot::new(HARNESS_ROOT)),
             held: RefCell::new(HeldRecords::new()),
-            blocked: RefCell::new(None),
-            settings_hold: RefCell::new(None),
+            hold: RefCell::new(None),
             pending_reclaim: Cell::new(0),
             reclaim_stalls: RefCell::new(Vec::new()),
             bookkeeping: RefCell::new(BookkeepingCursors::default()),
@@ -7759,7 +7734,6 @@ mod tests {
             dead_letters: RefCell::new(RetainedDeadLetters::new()),
             observed_unlinks: RefCell::new(Vec::new()),
             bin_index_record: RefCell::new(None),
-            bin_index_hold: RefCell::new(None),
             pending_scope_exits: RefCell::new(BTreeSet::new()),
             root_name,
             read_scope_seed: Zeroizing::new(OWNER_ROOT_SCOPE_SEED),

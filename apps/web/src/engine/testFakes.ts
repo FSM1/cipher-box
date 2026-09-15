@@ -37,9 +37,7 @@ export function view(
     })),
     ancestors: [],
     deadLetters: [],
-    blocked: null,
-    settingsHold: null,
-    binIndexHold: null,
+    queueHold: null,
     retainedRecords: 0,
     staleness,
   };

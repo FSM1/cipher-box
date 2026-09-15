@@ -323,7 +323,7 @@ async function digest(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 function settled(view: SnapshotDescriptor): boolean {
   return (
     view.staleness === 'fresh' &&
-    view.blocked === null &&
+    view.queueHold?.reason !== 'quota' &&
     view.children.every((child) => child.pending === 'none')
   );
 }

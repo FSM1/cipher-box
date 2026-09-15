@@ -44,7 +44,7 @@ pub use doomed::{
     MAX_BOOKKEEPING_OPENS, MAX_JOURNAL_REPLAYS, MAX_QUARANTINE_ATTEMPTS, doomed_journal_key,
 };
 pub use drain::{
-    BlockedOp, DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, SettingsHold,
+    DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, QueueHold, QueueHoldReason,
     owner_scoped_key, owner_tag,
 };
 pub use model::{Link, NodeMeta, Snapshot, case_fold, collation_key, suffix_name};

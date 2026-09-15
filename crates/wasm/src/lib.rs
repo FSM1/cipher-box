@@ -736,15 +736,15 @@ impl DeadLetter {
     }
 }
 
-/// The queue head held over the account quota, keeping its place and its
-/// staging reservation until a quota probe reports room.
+/// The queue head held over rather than failed, keeping its place and its
+/// staging reservation until its reason's own exit comes.
 #[wasm_bindgen]
-pub struct BlockedOp {
-    inner: facade::BlockedOp,
+pub struct QueueHold {
+    inner: facade::QueueHold,
 }
 
 #[wasm_bindgen]
-impl BlockedOp {
+impl QueueHold {
     /// The held op id (a `u64`, crossing as a `bigint`).
     #[wasm_bindgen(getter, js_name = opId)]
     pub fn op_id(&self) -> u64 {
@@ -757,67 +757,31 @@ impl BlockedOp {
         self.inner.node.0.to_vec()
     }
 
-    /// The byte count the resume probe must find room for.
+    /// What the hold waits on: `quota`, `settings` or `bin-index`.
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> String {
+        self.inner.reason.name().to_owned()
+    }
+
+    /// The byte count the resume probe must find room for, on a quota hold and
+    /// nowhere else.
     #[wasm_bindgen(getter, js_name = neededBytes)]
-    pub fn needed_bytes(&self) -> u64 {
-        self.inner.needed_bytes
-    }
-}
-
-/// The queue head held over the member's own settings, keeping its place and
-/// its staging reservation until those settings change.
-#[wasm_bindgen]
-pub struct SettingsHold {
-    inner: facade::SettingsHold,
-}
-
-#[wasm_bindgen]
-impl SettingsHold {
-    /// The held op id (a `u64`, crossing as a `bigint`).
-    #[wasm_bindgen(getter, js_name = opId)]
-    pub fn op_id(&self) -> u64 {
-        self.inner.op_id.0
+    pub fn needed_bytes(&self) -> Option<u64> {
+        match self.inner.reason {
+            facade::QueueHoldReason::Quota { needed_bytes } => Some(needed_bytes),
+            _ => None,
+        }
     }
 
-    /// The 16 raw bytes of the node the held op targets.
+    /// The stable check name of what refused, on a settings or a bin index hold.
+    /// Never the endpoint or the bearer the settings carry.
     #[wasm_bindgen(getter)]
-    pub fn node(&self) -> Vec<u8> {
-        self.inner.node.0.to_vec()
-    }
-
-    /// The stable check name of the rule that refused. Never the endpoint or
-    /// the bearer those settings carry.
-    #[wasm_bindgen(getter)]
-    pub fn check(&self) -> String {
-        self.inner.refusal.check().to_owned()
-    }
-}
-
-/// The queue head held over the owner's bin index, keeping its place and its
-/// staging reservation until that record resolves.
-#[wasm_bindgen]
-pub struct BinIndexHold {
-    inner: facade::BinIndexHold,
-}
-
-#[wasm_bindgen]
-impl BinIndexHold {
-    /// The held op id (a `u64`, crossing as a `bigint`).
-    #[wasm_bindgen(getter, js_name = opId)]
-    pub fn op_id(&self) -> u64 {
-        self.inner.op_id.0
-    }
-
-    /// The 16 raw bytes of the node the held op targets.
-    #[wasm_bindgen(getter)]
-    pub fn node(&self) -> Vec<u8> {
-        self.inner.node.0.to_vec()
-    }
-
-    /// The stable check name of what the bin index load produced.
-    #[wasm_bindgen(getter)]
-    pub fn check(&self) -> String {
-        self.inner.reason.check().to_owned()
+    pub fn check(&self) -> Option<String> {
+        match self.inner.reason {
+            facade::QueueHoldReason::Quota { .. } => None,
+            facade::QueueHoldReason::Settings(refusal) => Some(refusal.check().to_owned()),
+            facade::QueueHoldReason::BinIndex(reason) => Some(reason.check().to_owned()),
+        }
     }
 }
 
@@ -912,24 +876,10 @@ impl SnapshotView {
             .collect()
     }
 
-    /// The drain's over-quota hold, or `undefined`.
-    #[wasm_bindgen(getter)]
-    pub fn blocked(&self) -> Option<BlockedOp> {
-        self.inner.blocked.map(|inner| BlockedOp { inner })
-    }
-
-    /// The drain's settings-refused hold, or `undefined`.
-    #[wasm_bindgen(getter, js_name = settingsHold)]
-    pub fn settings_hold(&self) -> Option<SettingsHold> {
-        self.inner.settings_hold.map(|inner| SettingsHold { inner })
-    }
-
-    /// The drain's bin-index-refused hold, or `undefined`.
-    #[wasm_bindgen(getter, js_name = binIndexHold)]
-    pub fn bin_index_hold(&self) -> Option<BinIndexHold> {
-        self.inner
-            .bin_index_hold
-            .map(|inner| BinIndexHold { inner })
+    /// The drain's held queue head, or `undefined`.
+    #[wasm_bindgen(getter, js_name = queueHold)]
+    pub fn queue_hold(&self) -> Option<QueueHold> {
+        self.inner.queue_hold.map(|inner| QueueHold { inner })
     }
 
     /// Durable queue entries this session holds but cannot read — another
@@ -2602,22 +2552,10 @@ mod tests {
                     reason: facade::DeadLetterReason::AttemptsExhausted,
                 },
             ],
-            blocked: Some(facade::BlockedOp {
+            queue_hold: Some(facade::QueueHold {
                 op_id: OpId(12),
                 node: facade::NodeId([5u8; 16]),
-                needed_bytes: 4096,
-            }),
-            settings_hold: Some(facade::SettingsHold {
-                op_id: OpId(13),
-                node: facade::NodeId([6u8; 16]),
-                refusal: cipherbox_engine::SettingsRefusal::Byo(
-                    cipherbox_engine::ProviderError::InsecureTransport,
-                ),
-            }),
-            bin_index_hold: Some(facade::BinIndexHold {
-                op_id: OpId(14),
-                node: facade::NodeId([7u8; 16]),
-                reason: cipherbox_engine::DefaultsReason::Suppressed,
+                reason: facade::QueueHoldReason::Quota { needed_bytes: 4096 },
             }),
             retained_records: 3,
             staleness: facade::Staleness::Reconciling,
@@ -2637,18 +2575,12 @@ mod tests {
                 (11, DeadLetterReason::AttemptsExhausted),
             ]
         );
-        let blocked = view.blocked().expect("the view carries the hold");
-        assert_eq!(blocked.op_id(), 12);
-        assert_eq!(blocked.node(), vec![5u8; 16]);
-        assert_eq!(blocked.needed_bytes(), 4096);
-        let held = view.settings_hold().expect("the view carries the hold");
-        assert_eq!(held.op_id(), 13);
-        assert_eq!(held.node(), vec![6u8; 16]);
-        assert_eq!(held.check(), "byo-endpoint-insecure");
-        let bin_held = view.bin_index_hold().expect("the view carries the hold");
-        assert_eq!(bin_held.op_id(), 14);
-        assert_eq!(bin_held.node(), vec![7u8; 16]);
-        assert_eq!(bin_held.check(), "suppressed");
+        let hold = view.queue_hold().expect("the view carries the hold");
+        assert_eq!(hold.op_id(), 12);
+        assert_eq!(hold.node(), vec![5u8; 16]);
+        assert_eq!(hold.reason(), "quota");
+        assert_eq!(hold.needed_bytes(), Some(4096));
+        assert_eq!(hold.check(), None);
         assert_eq!(view.retained_records(), 3);
         assert_eq!(view.staleness(), Staleness::Reconciling);
 
@@ -2673,5 +2605,36 @@ mod tests {
         assert_eq!(ancestors.len(), 1);
         assert_eq!(ancestors[0].id(), vec![1u8; 16]);
         assert_eq!(ancestors[0].name(), "");
+    }
+
+    /// A host dispatches on the reason, and each one carries exactly the figure
+    /// its own notice renders.
+    #[test]
+    fn a_queue_hold_names_its_reason_and_carries_only_that_reasons_figure() {
+        let settings = QueueHold {
+            inner: facade::QueueHold {
+                op_id: OpId(13),
+                node: facade::NodeId([6u8; 16]),
+                reason: facade::QueueHoldReason::Settings(cipherbox_engine::SettingsRefusal::Byo(
+                    cipherbox_engine::ProviderError::InsecureTransport,
+                )),
+            },
+        };
+        assert_eq!(settings.reason(), "settings");
+        assert_eq!(settings.check().as_deref(), Some("byo-endpoint-insecure"));
+        assert_eq!(settings.needed_bytes(), None);
+
+        let bin_index = QueueHold {
+            inner: facade::QueueHold {
+                op_id: OpId(14),
+                node: facade::NodeId([7u8; 16]),
+                reason: facade::QueueHoldReason::BinIndex(
+                    cipherbox_engine::DefaultsReason::Suppressed,
+                ),
+            },
+        };
+        assert_eq!(bin_index.reason(), "bin-index");
+        assert_eq!(bin_index.check().as_deref(), Some("suppressed"));
+        assert_eq!(bin_index.needed_bytes(), None);
     }
 }

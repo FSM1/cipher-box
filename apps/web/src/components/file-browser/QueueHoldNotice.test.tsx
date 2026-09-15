@@ -21,7 +21,7 @@ describe('the queue hold notice', () => {
     render(
       <QueueHoldNotice
         view={listing({
-          settingsHold: { opId: 4n, node: NODE, check: 'byo-provider-missing' },
+          queueHold: { reason: 'settings', opId: 4n, node: NODE, check: 'byo-provider-missing' },
         })}
       />
     );
@@ -34,7 +34,9 @@ describe('the queue hold notice', () => {
   it('names why the bin index did not resolve, and clears when the hold clears', () => {
     const { rerender } = render(
       <QueueHoldNotice
-        view={listing({ binIndexHold: { opId: 5n, node: NODE, check: 'suppressed' } })}
+        view={listing({
+          queueHold: { reason: 'bin-index', opId: 5n, node: NODE, check: 'suppressed' },
+        })}
       />
     );
     expect(screen.getByTestId('queue-hold-notice').textContent).toContain(
@@ -49,7 +51,12 @@ describe('the queue hold notice', () => {
     render(
       <QueueHoldNotice
         view={listing({
-          binIndexHold: { opId: 6n, node: new Uint8Array(16).fill(9), check: 'timed-out' },
+          queueHold: {
+            reason: 'bin-index',
+            opId: 6n,
+            node: new Uint8Array(16).fill(9),
+            check: 'timed-out',
+          },
         })}
       />
     );
@@ -59,17 +66,15 @@ describe('the queue hold notice', () => {
     expect(notice.textContent).not.toContain('child-0');
   });
 
-  it('reports both holds at once', () => {
+  it('leaves the over-quota hold to the upload panel that renders its figure', () => {
     render(
       <QueueHoldNotice
         view={listing({
-          settingsHold: { opId: 4n, node: NODE, check: 'byo-endpoint-insecure' },
-          binIndexHold: { opId: 5n, node: NODE, check: 'floor-unreadable' },
+          queueHold: { reason: 'quota', opId: 7n, node: NODE, neededBytes: 900n },
         })}
       />
     );
 
-    expect(screen.getByTestId('queue-hold-notice').textContent).toContain('2 changes are waiting');
-    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.queryByTestId('queue-hold-notice')).toBeNull();
   });
 });

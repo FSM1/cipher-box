@@ -1099,20 +1099,11 @@ describe('readSnapshot', () => {
         { opId: 9n, reason: 4 },
         { opId: 9_007_199_254_740_993n, reason: 6 },
       ],
-      blocked: {
+      queueHold: {
         opId: 12n,
         node: new Uint8Array(16).fill(6),
+        reason: 'quota',
         neededBytes: 9_007_199_254_740_993n,
-      },
-      settingsHold: {
-        opId: 13n,
-        node: new Uint8Array(16).fill(7),
-        check: 'byo-provider-missing',
-      },
-      binIndexHold: {
-        opId: 14n,
-        node: new Uint8Array(16).fill(8),
-        check: 'suppressed',
       },
       retainedRecords: 2,
       staleness: 1,
@@ -1162,40 +1153,64 @@ describe('readSnapshot', () => {
         { opId: 9n, reason: 'undecodable' },
         { opId: 9_007_199_254_740_993n, reason: 'attemptsExhausted' },
       ],
-      blocked: {
+      queueHold: {
         opId: 12n,
         node: new Uint8Array(16).fill(6),
+        reason: 'quota',
         neededBytes: 9_007_199_254_740_993n,
-      },
-      settingsHold: {
-        opId: 13n,
-        node: new Uint8Array(16).fill(7),
-        check: 'byo-provider-missing',
-      },
-      binIndexHold: {
-        opId: 14n,
-        node: new Uint8Array(16).fill(8),
-        check: 'suppressed',
       },
       retainedRecords: 2,
       staleness: 'reconciling',
     });
   });
 
-  it('maps an absent over-budget hold to null', () => {
-    expect(readSnapshot(fakeWasm, baseView()).blocked).toBeNull();
+  it('maps an absent hold to null', () => {
+    expect(readSnapshot(fakeWasm, baseView()).queueHold).toBeNull();
   });
 
-  it('maps an absent settings hold and bin index hold to null', () => {
-    const view = readSnapshot(fakeWasm, baseView());
-    expect(view.settingsHold).toBeNull();
-    expect(view.binIndexHold).toBeNull();
+  it('reads a held head by its reason', () => {
+    const view = {
+      ...baseView(),
+      queueHold: {
+        opId: 13n,
+        node: new Uint8Array(16).fill(7),
+        reason: 'settings',
+        check: 'byo-provider-missing',
+      },
+    };
+    expect(readSnapshot(fakeWasm, view).queueHold).toEqual({
+      opId: 13n,
+      node: new Uint8Array(16).fill(7),
+      reason: 'settings',
+      check: 'byo-provider-missing',
+    });
+  });
+
+  it('fails closed on a hold reason this build cannot name', () => {
+    const view = {
+      ...baseView(),
+      queueHold: { opId: 1n, node: new Uint8Array(16), reason: 'weather' },
+    };
+    expect(() => readSnapshot(fakeWasm, view)).toThrow('unknown WASM queue hold reason: weather');
+  });
+
+  it('fails closed on a quota hold that carries no byte count', () => {
+    const view = {
+      ...baseView(),
+      queueHold: { opId: 1n, node: new Uint8Array(16), reason: 'quota' },
+    };
+    expect(() => readSnapshot(fakeWasm, view)).toThrow('WASM quota hold carries no byte count');
   });
 
   it('fails closed on a hold check this build cannot name', () => {
     const settings = {
       ...baseView(),
-      settingsHold: { opId: 1n, node: new Uint8Array(16), check: 'byo-unreachable' },
+      queueHold: {
+        opId: 1n,
+        node: new Uint8Array(16),
+        reason: 'settings',
+        check: 'byo-unreachable',
+      },
     };
     expect(() => readSnapshot(fakeWasm, settings)).toThrow(
       'unknown WASM settings hold check: byo-unreachable'
@@ -1203,17 +1218,22 @@ describe('readSnapshot', () => {
 
     const bin = {
       ...baseView(),
-      binIndexHold: { opId: 1n, node: new Uint8Array(16), check: 'stranded-mint' },
+      queueHold: {
+        opId: 1n,
+        node: new Uint8Array(16),
+        reason: 'bin-index',
+        check: 'stranded-mint',
+      },
     };
     expect(() => readSnapshot(fakeWasm, bin)).toThrow(
-      'unknown WASM bin index hold check: stranded-mint'
+      'unknown WASM bin-index hold check: stranded-mint'
     );
   });
 
   it('holds each check vocabulary apart', () => {
     const crossed = {
       ...baseView(),
-      settingsHold: { opId: 1n, node: new Uint8Array(16), check: 'suppressed' },
+      queueHold: { opId: 1n, node: new Uint8Array(16), reason: 'settings', check: 'suppressed' },
     };
     expect(() => readSnapshot(fakeWasm, crossed)).toThrow('unknown WASM settings hold check');
   });
