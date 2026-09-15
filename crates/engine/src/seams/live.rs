@@ -4,7 +4,10 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use super::{FloorRaise, FloorStore, OpId, SeamError, SeamResult, SnapshotCache, StagingStore};
+use super::{
+    FloorRaise, FloorStore, OpId, QueueGeneration, SeamError, SeamResult, SnapshotCache,
+    StagingStore,
+};
 
 /// A durable seam handed to a spawned pass, gated on the engine's session-alive
 /// latch: once that latch drops, every mutation is refused and only reads pass
@@ -100,6 +103,12 @@ impl<S: SnapshotCache> SnapshotCache for LiveSeam<S> {
 
     async fn clear(&self) -> SeamResult<()> {
         self.seam.clear().await
+    }
+}
+
+impl<S: QueueGeneration> QueueGeneration for LiveSeam<S> {
+    fn generation(&self) -> u64 {
+        self.seam.generation()
     }
 }
 

@@ -109,8 +109,8 @@ use crate::rotation::{
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
-    QueueGenerationStore, RecordTransport, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes,
-    SnapshotCache, StagingStore, UnixMillis,
+    QueueGeneration, QueueGenerationStore, RecordTransport, Scheduler, SeamError, SeamResult,
+    SeamSet, SeamTypes, SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -137,7 +137,7 @@ use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
     VaultPointerProbe, provision_vault,
 };
-use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
+use crate::sync::rebase::{QueueKey, QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
 use crate::sync::record::{RecordClass, record_content_root_cid};
 use crate::sync::render::{BaseSnapshot, RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
@@ -2574,7 +2574,7 @@ fn second_end_scope(base: &Snapshot, op: &Op, listed: &[NodeId]) -> Option<NodeI
 ///
 /// The decode rides the session's own queue memo: it is an HPKE open per owned
 /// record.
-async fn queued_second_end<St: StagingStore>(
+async fn queued_second_end<St: StagingStore + QueueGeneration>(
     staging: &St,
     enc_secret: &X25519Secret,
     memo: &RefCell<QueueScanMemo>,
@@ -2584,12 +2584,20 @@ async fn queued_second_end<St: StagingStore>(
     if listed.is_empty() {
         return None;
     }
-    let raw = staging.queued_ops().await.ok()?;
     let reader = RecordReader::new(enc_secret);
-    let mut memo = memo.borrow_mut();
+    let key = QueueKey::new(&reader, staging.generation());
+    let hit = memo.borrow().hit(&key).cloned();
+    let scan = match hit {
+        Some(scan) => scan,
+        None => {
+            let raw = staging.queued_ops().await.ok()?;
+            let scan = decode_queue(&reader, &raw);
+            memo.borrow_mut().fill(key, scan.clone());
+            scan
+        }
+    };
     let base = boundaries.base.borrow();
-    let scope = memo
-        .scan(&reader, &raw, decode_queue)
+    let scope = scan
         .mine
         .iter()
         .find_map(|(_, op)| second_end_scope(&base, op, listed))?;
@@ -5252,13 +5260,14 @@ impl<T: SeamTypes> Engine<T> {
         self.shut_down();
         // Dropped here, at the terminal owner: `shut_down` seals what the loops
         // share, and these are the engine's own copies (security rule 7). The
-        // render goes with them — it is plaintext metadata about the vault this
-        // session is leaving.
+        // render and the decoded queue go with them — both are plaintext
+        // metadata about the vault this session is leaving.
         drop(api);
         self.session = None;
         let root = self.snapshot.borrow().root;
         *self.snapshot.borrow_mut() = Snapshot::new(root);
         self.render_memo.borrow_mut().clear();
+        self.queue_scan.borrow_mut().clear();
 
         self.seams.credential_store.clear_refresh_token().await
     }
@@ -10361,19 +10370,27 @@ where {
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
     ///
-    /// Memoized on the queue's own shape ([`QueueScanMemo`]), so reads pay the
-    /// HPKE open per owned record once per queue mutation, not once per render.
+    /// Memoized on the queue's generation ([`QueueScanMemo`]), so reads pay the
+    /// enumeration and the HPKE open per owned record once per queue mutation,
+    /// not once per read. The generation is read before the queue, never after
+    /// ([`QueueKey::new`]).
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let reader = RecordReader::new(session.enc_subkey());
+        let key = QueueKey::new(&reader, self.seams.staging_store.generation());
+        let hit = self.queue_scan.borrow().hit(&key).cloned();
+        if let Some(scan) = hit {
+            return Ok(scan);
+        }
         let raw = self
             .seams
             .staging_store
             .queued_ops()
             .await
             .map_err(EngineError::from_seam)?;
-        let reader = RecordReader::new(session.enc_subkey());
-        let mut memo = self.queue_scan.borrow_mut();
-        Ok(memo.scan(&reader, &raw, decode_queue).clone())
+        let scan = decode_queue(&reader, &raw);
+        self.queue_scan.borrow_mut().fill(key, scan.clone());
+        Ok(scan)
     }
 
     /// This session's pending ops, FIFO.
@@ -14688,6 +14705,66 @@ mod tests {
                     Rc::ptr_eq(&first.rendered, &again.rendered),
                     "and applied the overlay once"
                 );
+            }
+
+            /// The reads that do not go through the render — the tray status
+            /// and the per-folder snapshot — consult the queue's generation
+            /// before its contents, so an unchanged queue is never enumerated
+            /// twice.
+            #[test]
+            fn the_reads_off_the_queue_between_two_mutations_cost_one_enumeration() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "notes.txt", NodeKind::File);
+
+                let before = queue_reads(&engine);
+                for _ in 0..8 {
+                    block_on(engine.status()).unwrap();
+                    block_on(engine.snapshot(root)).unwrap();
+                }
+
+                assert_eq!(
+                    queue_reads(&engine) - before,
+                    1,
+                    "sixteen reads read the durable queue once"
+                );
+            }
+
+            /// The generation covers the one shape a length check alone would
+            /// miss: the queue keeps its size while its contents turn over.
+            #[test]
+            fn a_removal_paired_with_an_enqueue_is_read_again() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "first.txt", NodeKind::File);
+                let queued = block_on(engine.seams.staging_store.queued_ops()).unwrap();
+                let (op_id, _) = *queued.first().expect("the create is queued");
+                assert_eq!(names(&engine, root), vec!["first.txt"]);
+
+                block_on(engine.seams.staging_store.remove_op(op_id)).unwrap();
+                create(&mut engine, root, "second.txt", NodeKind::File);
+
+                assert_eq!(names(&engine, root), vec!["second.txt"]);
+            }
+
+            /// The scan holds this session's decoded intent, so a logout drops
+            /// it with the render (security rule 7).
+            #[test]
+            fn a_logged_out_session_holds_no_decoded_queue() {
+                let (mut engine, _events) = started();
+                let root = engine.root();
+                create(&mut engine, root, "notes.txt", NodeKind::File);
+                block_on(engine.status()).unwrap();
+                let enc_subkey = cipherbox_core::kdf::enc_subkey(&[7u8; 32]);
+                let key = QueueKey::new(
+                    &RecordReader::new(&enc_subkey),
+                    engine.seams.staging_store.generation(),
+                );
+                assert!(engine.queue_scan.borrow().hit(&key).is_some());
+
+                block_on(engine.command(Command::Logout)).unwrap();
+
+                assert!(engine.queue_scan.borrow().hit(&key).is_none());
             }
 
             #[test]
