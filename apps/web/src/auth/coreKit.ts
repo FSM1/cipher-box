@@ -142,6 +142,9 @@ class Web3AuthSession implements WebCoreKitSession {
   private signedInSubject: string | null = null;
   private signedInToken: string | null = null;
 
+  /** A factor this session cut whose metadata sync did not land. */
+  private uncommittedFactorDelete: string | null = null;
+
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
     private readonly store: SealedStore,
@@ -388,10 +391,21 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   async deleteApprovalFactor(id: string): Promise<void> {
+    // The SDK cuts the factor out of the local metadata and re-shares the rest
+    // before the sync runs, so a second cut throws and only the sync is left to
+    // retry. Without this the idempotence guard would read the local list, find
+    // the factor gone, and leave the stored account still carrying it.
+    if (this.uncommittedFactorDelete === id) {
+      await this.coreKit.commitChanges();
+      this.uncommittedFactorDelete = null;
+      return;
+    }
     if (!this.coreKit.getTssFactorPub().includes(id)) return;
     await this.coreKit.deleteFactor(Point.fromSEC1(factorKeyCurve, id));
+    this.uncommittedFactorDelete = id;
     // Manual sync: an uncommitted removal leaves the factor live.
     await this.coreKit.commitChanges();
+    this.uncommittedFactorDelete = null;
   }
 
   async adoptApprovalFactor(factorKey: Uint8Array): Promise<void> {

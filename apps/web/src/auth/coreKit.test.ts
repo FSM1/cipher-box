@@ -702,6 +702,28 @@ describe('the factor an approval mints', () => {
     expect(sdk.deletedPubs).toEqual([minted.id]);
   });
 
+  /**
+   * The cut runs before the sync, so a sync that fails leaves the account still
+   * carrying a factor the local metadata has already dropped.
+   */
+  it('re-syncs a cut whose commit did not land, rather than reading it as gone', async () => {
+    const active = session();
+    const minted = await active.mintApprovalFactor();
+    sdk.factorPubs = [minted.id];
+    sdk.commitFailsAfter = sdk.commits + 1;
+
+    await expect(active.deleteApprovalFactor(minted.id)).rejects.toThrow(/metadata sync/);
+    expect(sdk.factorPubs).toEqual([]);
+    const committed = sdk.commits;
+
+    await active.deleteApprovalFactor(minted.id);
+
+    // The factor was cut once: a second cut would throw, so the retry is the
+    // sync and nothing else.
+    expect(sdk.deletedPubs).toEqual([minted.id]);
+    expect(sdk.commits).toBe(committed + 1);
+  });
+
   it('refuses to mint before this browser has reconstructed the account', async () => {
     sdk.status = COREKIT_STATUS.REQUIRED_SHARE;
 
