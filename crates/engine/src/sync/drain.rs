@@ -1928,7 +1928,12 @@ where
     /// probe is the hold's only exit, so an unanswered one leaves it in place.
     async fn quota_admits(&self, needed_bytes: u64) -> bool {
         let Ok(placement) = self.placement.as_ref() else {
-            return false;
+            // A placement the settings themselves refuse is a verdict the pass
+            // re-takes as its own hold, so the head stops waiting under a cause
+            // the member cannot act on. An outage is not a verdict: it keeps
+            // the head where it is rather than spending the unattributed budget
+            // on a placement no pass can decide.
+            return settings_refusal(self.placement).is_some();
         };
         // Only the hosted leg is quota-gated, so no answer the quota endpoint
         // could give bears on a hold under a placement without one — and an
@@ -7796,6 +7801,45 @@ mod tests {
                 "{case}",
             );
         }
+    }
+
+    /// A quota hold's exit is a probe, and a placement the session cannot use
+    /// answers that probe in two different ways. A refusal of the member's own
+    /// settings is a verdict: the pass re-takes the hold its own rule names, so
+    /// the member is not left reading "over quota" over a cause they cannot act
+    /// on. An outage is not a verdict, and letting the head run would spend the
+    /// unattributed budget on a placement no pass can decide.
+    #[test]
+    fn a_quota_hold_lets_go_of_a_refusing_placement_and_waits_out_an_undecided_one() {
+        let node = NodeId([9; 16]);
+        let queued = vec![(OpId(1), Op::rename(node, "renamed.txt", 1, UnixMillis(0)))];
+        let over_quota = QueueHold {
+            op_id: OpId(1),
+            node,
+            reason: QueueHoldReason::Quota { needed_bytes: 4096 },
+        };
+
+        let mut refusing = drain_harness(None);
+        refusing.placement = Err(PlacementRefusal::NoProvider);
+        *refusing.hold.borrow_mut() = Some(over_quota);
+        assert!(block_on(refusing.drain().hold_admits_the_head(&queued)));
+        assert_eq!(
+            *refusing.hold.borrow(),
+            None,
+            "the settings refusal is what the next pass names",
+        );
+
+        let mut undecided = drain_harness(None);
+        undecided.placement = Err(PlacementRefusal::SettingsUnavailable(
+            DefaultsReason::Suppressed,
+        ));
+        *undecided.hold.borrow_mut() = Some(over_quota);
+        assert!(!block_on(undecided.drain().hold_admits_the_head(&queued)));
+        assert_eq!(
+            *undecided.hold.borrow(),
+            Some(over_quota),
+            "an outage leaves the head held rather than charging it",
+        );
     }
 
     /// What a run of halted passes over one queued op left behind.
