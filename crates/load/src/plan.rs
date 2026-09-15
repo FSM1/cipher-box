@@ -119,7 +119,9 @@ pub const MAX_BLOCK_BYTES: u32 = 2 * 1024 * 1024;
 pub const MAX_BATCH: u32 = 1000;
 
 const DEFAULT_LOCAL_API_URL: &str = "http://localhost:3000";
-const DEFAULT_LOCAL_GATEWAY_URL: &str = "http://localhost:8080";
+/// Kubo's gateway by address: it serves `localhost` as a subdomain gateway and
+/// answers every path request with a 301 to a name that resolves nowhere.
+const DEFAULT_LOCAL_GATEWAY_URL: &str = "http://127.0.0.1:8080";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanError(pub String);
@@ -595,7 +597,7 @@ mod tests {
             local_env(),
         )
         .expect("plan");
-        assert_eq!(read.gateway_url.as_deref(), Some("http://localhost:8080"));
+        assert_eq!(read.gateway_url.as_deref(), Some("http://127.0.0.1:8080"));
 
         let ingest = build_plan(
             &flags(&[("scenario", "content-ingest"), ("target", "local")]),
