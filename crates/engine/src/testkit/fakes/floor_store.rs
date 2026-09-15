@@ -20,6 +20,12 @@ struct Inner {
     /// Floor keys whose epoch **read** fails once a budget of earlier reads
     /// of the same bar is spent.
     read_budgets: HashMap<Vec<u8>, u64>,
+    /// Whether [`FloorStore::commit_floors`] is injected to fail.
+    failing_commit: bool,
+    /// Raises still allowed before every later raise, on any key, fails.
+    raise_budget: Option<u64>,
+    /// Added to the floor a raise settles on before it is reported back.
+    raise_report_skew: u64,
 }
 
 impl Inner {
@@ -35,6 +41,20 @@ impl Inner {
         self.failing
             .contains(floor)
             .then(|| SeamError::new(format!("floor raise injected to fail for key {key:?}")))
+    }
+
+    /// Spend one raise of the injected budget, or refuse once it is spent.
+    fn spend_raise(&mut self) -> Option<SeamError> {
+        match self.raise_budget {
+            Some(0) => Some(SeamError::new(
+                "floor raise injected to fail past its budget",
+            )),
+            Some(remaining) => {
+                self.raise_budget = Some(remaining - 1);
+                None
+            }
+            None => None,
+        }
     }
 
     /// The read-side twin of [`refuse`](Self::refuse). Matched on the whole key
@@ -98,8 +118,8 @@ impl InMemoryFloorStore {
             .insert(key.to_vec());
     }
 
-    /// Restore every injected floor fault, the clear's included — one heal for
-    /// every injector this fake offers.
+    /// Restore every injected floor fault, the clear's and the commit's
+    /// included — one heal for every injector this fake offers.
     pub fn heal_floors(&self) {
         let mut inner = self.inner.lock().expect("lock");
         inner.failing.clear();
@@ -107,6 +127,28 @@ impl InMemoryFloorStore {
         inner.failing_reads = false;
         inner.failing_read_keys.clear();
         inner.read_budgets.clear();
+        inner.failing_commit = false;
+        inner.raise_budget = None;
+        inner.raise_report_skew = 0;
+    }
+
+    /// Let `budget` raises through, on any key, and fail every raise after, so
+    /// a test can fault one leg of an advance that raises several floors.
+    pub fn fail_floor_raises_after(&self, budget: u64) {
+        self.inner.lock().expect("lock").raise_budget = Some(budget);
+    }
+
+    /// Make [`FloorStore::commit_floors`] fail before it touches a key, so a
+    /// test can drive a transactional backing's all-or-nothing abort.
+    pub fn fail_floor_commits(&self) {
+        self.inner.lock().expect("lock").failing_commit = true;
+    }
+
+    /// Report every raise `skew` above the floor it settles on — the shape a
+    /// non-monotonic counter would take, which a mint must refuse rather than
+    /// publish behind.
+    pub fn skew_reported_raises(&self, skew: u64) {
+        self.inner.lock().expect("lock").raise_report_skew = skew;
     }
 
     /// Let `budget` epoch-floor reads naming `key` through and fail every one
@@ -177,10 +219,11 @@ impl FloorStore for InMemoryFloorStore {
 
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
         let mut inner = self.inner.lock().expect("lock");
-        match inner.refuse(scope_id) {
-            Some(error) => Err(error),
-            None => Ok(raise(&mut inner.epoch, scope_id, epoch)),
+        if let Some(error) = inner.refuse(scope_id).or_else(|| inner.spend_raise()) {
+            return Err(error);
         }
+        let skew = inner.raise_report_skew;
+        Ok(raise(&mut inner.epoch, scope_id, epoch).saturating_add(skew))
     }
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
@@ -193,10 +236,11 @@ impl FloorStore for InMemoryFloorStore {
 
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
         let mut inner = self.inner.lock().expect("lock");
-        match inner.refuse(ipns_name) {
-            Some(error) => Err(error),
-            None => Ok(raise(&mut inner.sequence, ipns_name, sequence)),
+        if let Some(error) = inner.refuse(ipns_name).or_else(|| inner.spend_raise()) {
+            return Err(error);
         }
+        let skew = inner.raise_report_skew;
+        Ok(raise(&mut inner.sequence, ipns_name, sequence).saturating_add(skew))
     }
 
     /// Genuinely all-or-nothing: the whole batch applies under one lock guard,
@@ -204,6 +248,9 @@ impl FloorStore for InMemoryFloorStore {
     /// asks of a transactional backing).
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         let mut inner = self.inner.lock().expect("lock");
+        if inner.failing_commit {
+            return Err(SeamError::new("floor commit injected to fail"));
+        }
         if let Some(error) = raises.iter().find_map(|r| inner.refuse(&r.key)) {
             return Err(error);
         }
@@ -224,5 +271,43 @@ impl FloorStore for InMemoryFloorStore {
         inner.epoch.clear();
         inner.sequence.clear();
         Ok(())
+    }
+}
+
+/// [`InMemoryFloorStore`] with no [`FloorStore::commit_floors`] override, so an
+/// advance runs the seam's non-atomic default and writes each floor on its own
+/// — the split-write backing a transactional one is contrasted against.
+#[derive(Clone, Default)]
+pub struct SplitWriteFloorStore {
+    floors: InMemoryFloorStore,
+}
+
+impl SplitWriteFloorStore {
+    /// The backing store, for the injectors and the heal.
+    #[must_use]
+    pub fn floors(&self) -> &InMemoryFloorStore {
+        &self.floors
+    }
+}
+
+impl FloorStore for SplitWriteFloorStore {
+    async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        self.floors.epoch_floor(scope_id).await
+    }
+
+    async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+        self.floors.raise_epoch_floor(scope_id, epoch).await
+    }
+
+    async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        self.floors.sequence_floor(ipns_name).await
+    }
+
+    async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+        self.floors.raise_sequence_floor(ipns_name, sequence).await
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.floors.clear().await
     }
 }

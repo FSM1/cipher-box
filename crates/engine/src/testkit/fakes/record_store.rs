@@ -1,10 +1,14 @@
 //! The fake `/routing/v1` record store — an in-memory [`RecordTransport`].
 
+use core::cell::RefCell;
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 
+use crate::net::HeldRecord;
 use crate::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
 
 /// Records held by one endpoint, keyed by routing key.
@@ -51,6 +55,12 @@ pub struct InMemoryRecordStore {
     /// Records held back until a PUT lands
     /// ([`seed_record_after_put`](InMemoryRecordStore::seed_record_after_put)).
     deferred: Arc<Mutex<DeferredRecords>>,
+    /// Whether every PUT is acked and discarded
+    /// ([`drop_puts`](InMemoryRecordStore::drop_puts)).
+    dropping_puts: Arc<AtomicBool>,
+    /// Whether every GET parks for ever
+    /// ([`stall_gets`](InMemoryRecordStore::stall_gets)).
+    stalling_gets: Arc<AtomicBool>,
 }
 
 impl InMemoryRecordStore {
@@ -75,6 +85,8 @@ impl InMemoryRecordStore {
             get_failing_keys: Arc::new(Mutex::new(HashSet::new())),
             gets: Arc::new(Mutex::new(HashMap::new())),
             deferred: Arc::new(Mutex::new(HashMap::new())),
+            dropping_puts: Arc::new(AtomicBool::new(false)),
+            stalling_gets: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -210,6 +222,19 @@ impl InMemoryRecordStore {
             .unwrap_or(0)
     }
 
+    /// Ack every PUT and retain nothing, so a confirm re-resolve reads no
+    /// record at all — an endpoint that answers 200 and stores nothing.
+    pub fn drop_puts(&self) {
+        self.dropping_puts.store(true, Ordering::SeqCst);
+    }
+
+    /// Park every GET for ever — the shape of a name no source answers for.
+    /// The future stays `Pending`, so a deterministic executor parks on it
+    /// rather than spinning.
+    pub fn stall_gets(&self) {
+        self.stalling_gets.store(true, Ordering::SeqCst);
+    }
+
     /// Whether `routing_key`'s GET is currently injected to fail everywhere.
     fn get_failing_key(&self, routing_key: &str) -> bool {
         self.get_failing_keys
@@ -237,6 +262,9 @@ impl RecordTransport for InMemoryRecordStore {
             .expect("lock")
             .entry(routing_key.to_owned())
             .or_default() += 1;
+        if self.stalling_gets.load(Ordering::SeqCst) {
+            return core::future::poll_fn(|_| core::task::Poll::Pending).await;
+        }
         if self.get_failing(endpoint) {
             return Err(SeamError::new(format!(
                 "endpoint unreachable: {}",
@@ -277,6 +305,9 @@ impl RecordTransport for InMemoryRecordStore {
         if self.put_failing_key(routing_key) {
             return Err(SeamError::new(format!("put refused for {routing_key}")));
         }
+        if self.dropping_puts.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let known = self
             .inner
             .lock()
@@ -296,6 +327,54 @@ impl RecordTransport for InMemoryRecordStore {
         }
         self.release_deferred(routing_key);
         Ok(())
+    }
+}
+
+/// A transport that lands `held` in `slot` before it delegates each GET — the
+/// interleaving a single-threaded executor allows at any `.await`, where a
+/// publish confirms and enrols its record while a load is still in flight.
+pub struct SlotFillingRecordStore {
+    inner: InMemoryRecordStore,
+    slot: Rc<RefCell<Option<HeldRecord>>>,
+    held: HeldRecord,
+}
+
+impl SlotFillingRecordStore {
+    /// Delegate to `inner`, filling `slot` with `held` on every GET.
+    pub fn new(
+        inner: InMemoryRecordStore,
+        slot: Rc<RefCell<Option<HeldRecord>>>,
+        held: HeldRecord,
+    ) -> Self {
+        Self { inner, slot, held }
+    }
+}
+
+impl RecordTransport for SlotFillingRecordStore {
+    fn endpoints(&self) -> Vec<EndpointId> {
+        self.inner.endpoints()
+    }
+
+    async fn get_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        max_bytes: usize,
+        bearer: Option<&str>,
+    ) -> SeamResult<Option<Vec<u8>>> {
+        *self.slot.borrow_mut() = Some(self.held.clone());
+        self.inner
+            .get_record(endpoint, routing_key, max_bytes, bearer)
+            .await
+    }
+
+    async fn put_record(
+        &self,
+        endpoint: &EndpointId,
+        routing_key: &str,
+        record: &[u8],
+    ) -> SeamResult<()> {
+        self.inner.put_record(endpoint, routing_key, record).await
     }
 }
 

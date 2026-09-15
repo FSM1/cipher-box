@@ -15,30 +15,26 @@ use core::cell::RefCell;
 use core::time::Duration;
 use std::sync::{Arc, Mutex};
 
-use cipherbox_core::error::TrustViolation;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
-use cipherbox_core::seal::{PreservedFields, ReadBody};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use cipherbox_engine::SyncTimingProfile;
 use cipherbox_engine::api::ApiClient;
-use cipherbox_engine::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    AdoptOutcome, Adopter, GatePass, HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl,
-    PublishError, PublishOutcome, PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError,
-    ReviveRequest, eol_republish, keyless_re_put, publish, resolve, revive, run_liveness_loop,
+    HeldKey, HeldRecord, HeldRecords, HeldValue, LivenessControl, PublishError, PublishOutcome,
+    PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
+    keyless_re_put, publish, resolve, revive, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
-    FloorStore, HttpResponse, RecordTransport, Scheduler, SeamError, SeamResult, SnapshotCache,
-    UnixMillis,
+    FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
 };
 use cipherbox_engine::sync::ResolveMode;
 use cipherbox_engine::testkit::fakes::{
-    InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp,
+    AdoptVerdict, InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore,
+    ScriptedAdopter, ScriptedHttp,
 };
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
-use zeroize::Zeroizing;
 
 // Deterministic fixture constants (KAT-style injected values; core reads no clock).
 const TTL_NANOS: u64 = 2_000_000_000;
@@ -143,84 +139,6 @@ fn head_value_at(store: &InMemoryRecordStore, name: &IpnsName) -> Vec<u8> {
         .value
 }
 
-// --- the Adopter stub: a scripted gate verdict + the sequences it was fed ----
-
-#[derive(Clone, Copy)]
-enum Verdict {
-    /// The record passes the gate.
-    Accept,
-    /// A non-floor trust violation (fail-closed, pins last-known-good).
-    TrustViolation,
-    /// Our own current record re-fetched: `sequence == floor` (a no-update,
-    /// never a violation).
-    EqualSequence,
-}
-
-/// Fronts the adoption gate for the resolve pipeline. Records every sequence it
-/// is handed so a test can prove the gate ran on the freshest fetched record,
-/// and returns a scripted verdict.
-#[derive(Clone)]
-struct StubAdopter {
-    verdict: Verdict,
-    seen: Arc<Mutex<Vec<u64>>>,
-}
-
-impl StubAdopter {
-    fn new(verdict: Verdict) -> Self {
-        Self {
-            verdict,
-            seen: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    fn seen(&self) -> Vec<u64> {
-        self.seen.lock().unwrap().clone()
-    }
-}
-
-impl Adopter for StubAdopter {
-    async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
-        let sequence = verify_seq(name, record_bytes);
-        self.seen.lock().unwrap().push(sequence);
-        match self.verdict {
-            Verdict::Accept => Ok(AdoptOutcome {
-                pass: GatePass::Advanced(Adopted {
-                    read_body: ReadBody::Folder {
-                        created_at: 0,
-                        modified_at: 0,
-                        children: Vec::new(),
-                        unknown: PreservedFields::new(),
-                    },
-                    sequence,
-                    epoch: 1,
-                }),
-                write_scope_seed: None,
-                node_id: [0u8; 16],
-                read_scope_seed: None,
-            }),
-            Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
-                stage: GateStage::RecordVerify,
-                reason: RejectionReason::Trust(TrustViolation::IpnsSignatureInvalid.into()),
-            })),
-            Verdict::EqualSequence => Err(GateError::Rejected(GateRejection {
-                stage: GateStage::Sequence,
-                reason: RejectionReason::SequenceNotNewer {
-                    floor: sequence,
-                    sequence,
-                },
-            })),
-        }
-    }
-
-    async fn probe_read_scope_seed(
-        &self,
-        _name: &IpnsName,
-        _record_bytes: &[u8],
-    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
-        Ok(None)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Resolve — cache-first, fan-out verify, adoption gate on every resolve.
 // ---------------------------------------------------------------------------
@@ -233,7 +151,7 @@ fn resolve_is_cache_first_and_renders_last_known_good_with_no_network_record() {
     let key = name.as_str().as_bytes();
 
     block_on(device.snapshot_cache.put(key, b"cached-lkg")).unwrap();
-    let adopter = StubAdopter::new(Verdict::Accept);
+    let adopter = ScriptedAdopter::new(AdoptVerdict::Accept);
 
     let resolved = block_on(resolve(
         &device.record_store,
@@ -260,7 +178,7 @@ fn resolve_nocache_never_reads_the_cache_and_reports_no_last_known_good() {
     let key = name.as_str().as_bytes();
 
     block_on(device.snapshot_cache.put(key, b"cached-lkg")).unwrap();
-    let adopter = StubAdopter::new(Verdict::Accept);
+    let adopter = ScriptedAdopter::new(AdoptVerdict::Accept);
 
     let resolved = block_on(resolve(
         &device.record_store,
@@ -302,7 +220,7 @@ fn resolve_picks_freshest_verified_record_gates_it_and_writes_the_snapshot() {
         .record_store
         .seed_record(&endpoints[0], name.as_str(), record(&s, VALUE, 2, 0));
 
-    let adopter = StubAdopter::new(Verdict::Accept);
+    let adopter = ScriptedAdopter::new(AdoptVerdict::Accept);
     let resolved = block_on(resolve(
         &device.record_store,
         &device.snapshot_cache,
@@ -344,7 +262,7 @@ fn resolve_gate_rejection_pins_last_known_good_and_never_overwrites_the_snapshot
         record(&s, VALUE, 9, 0),
     );
 
-    let adopter = StubAdopter::new(Verdict::TrustViolation);
+    let adopter = ScriptedAdopter::new(AdoptVerdict::TrustViolation);
     let resolved = block_on(resolve(
         &device.record_store,
         &device.snapshot_cache,
@@ -382,7 +300,7 @@ fn resolve_equal_sequence_is_current_not_a_trust_violation() {
         bytes.clone(),
     );
 
-    let adopter = StubAdopter::new(Verdict::EqualSequence);
+    let adopter = ScriptedAdopter::new(AdoptVerdict::EqualSequence);
     let resolved = block_on(resolve(
         &device.record_store,
         &device.snapshot_cache,
@@ -532,28 +450,13 @@ fn register_first_fail_closed_puts_no_record() {
     }
 }
 
-/// A [`FloorStore`] whose sequence-floor read always fails — models a durable
+/// A [`FloorStore`] whose floor reads always fail — models a durable
 /// floor-store I/O error so publish must fail closed rather than assume "no
 /// floor" and mint a stale sequence.
-#[derive(Clone, Default)]
-struct FailingFloorStore;
-
-impl FloorStore for FailingFloorStore {
-    async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        Ok(None)
-    }
-    async fn raise_epoch_floor(&self, _scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
-        Ok(epoch)
-    }
-    async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        Err(SeamError::new("floor store unavailable"))
-    }
-    async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
-        Ok(sequence)
-    }
-    async fn clear(&self) -> SeamResult<()> {
-        Ok(())
-    }
+fn failing_floor_store() -> InMemoryFloorStore {
+    let floors = InMemoryFloorStore::default();
+    floors.fail_floor_reads();
+    floors
 }
 
 #[test]
@@ -563,7 +466,7 @@ fn publish_fails_closed_when_the_sequence_floor_cannot_be_read() {
     let s = signer(9);
     let name = name_of(&s);
     let api = api_for(&device);
-    let floors = FailingFloorStore;
+    let floors = failing_floor_store();
     // Registration succeeds; the floor read then fails — the failure must stop
     // publish before any record is minted or PUT (never collapse to "no floor").
     device.http.enqueue_response(ok_200());
@@ -1301,7 +1204,7 @@ fn revive_fails_closed_when_the_sequence_floor_cannot_be_read() {
     let error = block_on(revive(
         &device.record_store,
         &api,
-        &FailingFloorStore,
+        &failing_floor_store(),
         &device.scheduler,
         &SyncTimingProfile::CI,
         ReviveRequest {

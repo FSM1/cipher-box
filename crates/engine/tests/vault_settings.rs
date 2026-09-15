@@ -9,12 +9,8 @@
 //! documented defaults — inside a scheduler-measured budget.
 
 use core::cell::RefCell;
-use core::future::poll_fn;
 use core::num::NonZeroU64;
-use core::task::Poll;
-use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -26,12 +22,13 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::content::{ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
 use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{
-    BoxedTask, EndpointId, FloorStore, RecordTransport, Scheduler, SeamError, SeamResult,
-    SnapshotCache, UnixMillis,
+    BoxedTask, EndpointId, FloorStore, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
 };
 use cipherbox_engine::testkit::account::{Blocks, serve_http};
-use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
-use cipherbox_engine::testkit::fakes::VirtualScheduler;
+use cipherbox_engine::testkit::fakes::{
+    InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, SlotFillingRecordStore,
+    VirtualScheduler,
+};
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on, poll_tasks_until_parked,
 };
@@ -117,7 +114,7 @@ fn publish_unconfirmed(
         "http://api.test",
     );
     block_on(publish_settings(
-        &AcksNothingBack,
+        &acks_nothing_back(),
         &api,
         &device.floor_store,
         &device.snapshot_cache,
@@ -305,32 +302,10 @@ fn published_block(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> Vec
 
 /// A transport that acks every PUT and serves nothing back: the confirm
 /// re-resolve reads no record at all.
-#[derive(Clone)]
-struct AcksNothingBack;
-
-impl RecordTransport for AcksNothingBack {
-    fn endpoints(&self) -> Vec<EndpointId> {
-        vec![EndpointId::new("fake:write-only")]
-    }
-
-    async fn get_record(
-        &self,
-        _endpoint: &EndpointId,
-        _routing_key: &str,
-        _max_bytes: usize,
-        _bearer: Option<&str>,
-    ) -> SeamResult<Option<Vec<u8>>> {
-        Ok(None)
-    }
-
-    async fn put_record(
-        &self,
-        _endpoint: &EndpointId,
-        _routing_key: &str,
-        _record: &[u8],
-    ) -> SeamResult<()> {
-        Ok(())
-    }
+fn acks_nothing_back() -> InMemoryRecordStore {
+    let store = InMemoryRecordStore::new(vec![EndpointId::new("fake:write-only")]);
+    store.drop_puts();
+    store
 }
 
 /// Retrying an unconfirmed publish is idempotent-in-sequence, so its floor must
@@ -487,32 +462,10 @@ fn a_settings_publish_that_never_confirmed_is_still_a_mark_of_a_choice() {
 }
 
 /// A transport whose GET never settles — the shape of an unresolvable name.
-#[derive(Clone)]
-struct NeverAnswers;
-
-impl RecordTransport for NeverAnswers {
-    fn endpoints(&self) -> Vec<EndpointId> {
-        vec![EndpointId::new("fake:hangs")]
-    }
-
-    async fn get_record(
-        &self,
-        _endpoint: &EndpointId,
-        _routing_key: &str,
-        _max_bytes: usize,
-        _bearer: Option<&str>,
-    ) -> SeamResult<Option<Vec<u8>>> {
-        poll_fn(|_| Poll::<SeamResult<Option<Vec<u8>>>>::Pending).await
-    }
-
-    async fn put_record(
-        &self,
-        _endpoint: &EndpointId,
-        _routing_key: &str,
-        _record: &[u8],
-    ) -> SeamResult<()> {
-        Err(SeamError::new("never answers"))
-    }
+fn never_answers() -> InMemoryRecordStore {
+    let store = InMemoryRecordStore::new(vec![EndpointId::new("fake:hangs")]);
+    store.stall_gets();
+    store
 }
 
 #[test]
@@ -524,7 +477,7 @@ fn an_unresolvable_settings_name_does_not_block_cold_start_past_the_budget() {
     let profile = SyncTimingProfile::CI;
 
     let load = block_on(load_settings(
-        &NeverAnswers,
+        &never_answers(),
         &gateway(),
         &device.http,
         &device.floor_store,
@@ -639,43 +592,6 @@ fn an_enrolment_never_replaces_a_record_that_landed_across_its_load() {
     );
 }
 
-/// A transport that lands a settings save in `slot` before the resolve it
-/// wraps can answer — the interleaving a single-threaded executor allows at
-/// any `.await`.
-struct SavesAcrossTheLoad {
-    inner: InMemoryRecordStore,
-    slot: Rc<RefCell<Option<HeldRecord>>>,
-    saved: HeldRecord,
-}
-
-impl RecordTransport for SavesAcrossTheLoad {
-    fn endpoints(&self) -> Vec<EndpointId> {
-        self.inner.endpoints()
-    }
-
-    async fn get_record(
-        &self,
-        endpoint: &EndpointId,
-        routing_key: &str,
-        max_bytes: usize,
-        bearer: Option<&str>,
-    ) -> SeamResult<Option<Vec<u8>>> {
-        *self.slot.borrow_mut() = Some(self.saved.clone());
-        self.inner
-            .get_record(endpoint, routing_key, max_bytes, bearer)
-            .await
-    }
-
-    async fn put_record(
-        &self,
-        endpoint: &EndpointId,
-        routing_key: &str,
-        record: &[u8],
-    ) -> SeamResult<()> {
-        self.inner.put_record(endpoint, routing_key, record).await
-    }
-}
-
 /// The bar rests on the capture running ahead of the load. A capture taken
 /// after it reads back the save's own record, matches it, and hands the slot
 /// straight to the older read the enrolment must refuse.
@@ -691,11 +607,8 @@ fn the_settings_enrolment_captures_the_slot_ahead_of_its_load() {
     let saved = held_settings_record("bafysavedhead", 9);
     let saved_bytes = saved.record_bytes.clone();
     let slot = Rc::new(RefCell::new(None));
-    let transport = SavesAcrossTheLoad {
-        inner: device.record_store.clone(),
-        slot: Rc::clone(&slot),
-        saved,
-    };
+    let transport =
+        SlotFillingRecordStore::new(device.record_store.clone(), Rc::clone(&slot), saved);
 
     serve_http(&device, &blocks, 4);
     let observed = slot.borrow().as_ref().map(|held| held.record_bytes.clone());
@@ -869,28 +782,10 @@ fn an_unavailable_head_block_yields_defaults() {
 }
 
 /// A floor store whose reads fail.
-struct UnreadableFloors;
-
-impl FloorStore for UnreadableFloors {
-    async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        Err(SeamError::new("floor store unreadable"))
-    }
-
-    async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
-        Err(SeamError::new("floor store unreadable"))
-    }
-
-    async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        Err(SeamError::new("floor store unreadable"))
-    }
-
-    async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
-        Err(SeamError::new("floor store unreadable"))
-    }
-
-    async fn clear(&self) -> SeamResult<()> {
-        Err(SeamError::new("floor store unreadable"))
-    }
+fn unreadable_floors() -> InMemoryFloorStore {
+    let floors = InMemoryFloorStore::default();
+    floors.fail_floor_reads();
+    floors
 }
 
 #[test]
@@ -920,7 +815,7 @@ fn a_floor_the_host_cannot_read_is_reported_apart_from_an_unusable_record() {
             &cold.record_store,
             &gateway(),
             &cold.http,
-            &UnreadableFloors,
+            &unreadable_floors(),
             &cold.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
@@ -1007,7 +902,7 @@ fn a_load_that_runs_out_of_budget_prefers_the_cached_copy() {
 
     assert_eq!(
         block_on(load_settings(
-            &NeverAnswers,
+            &never_answers(),
             &gateway(),
             &bob.http,
             &bob.floor_store,
@@ -1061,7 +956,7 @@ fn a_floor_the_host_cannot_read_prefers_the_cached_copy() {
             &bob.record_store,
             &gateway(),
             &bob.http,
-            &UnreadableFloors,
+            &unreadable_floors(),
             &bob.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
@@ -1092,24 +987,10 @@ fn a_degraded_load_with_no_cached_copy_reports_defaults_not_stale() {
 
 /// A snapshot cache that answers every key with bytes of the test's choosing —
 /// the shape of a tampered or transplanted last-known-good entry.
-struct ServesCiphertext(Vec<u8>);
-
-impl SnapshotCache for ServesCiphertext {
-    async fn put(&self, _cache_key: &[u8], _ciphertext: &[u8]) -> SeamResult<()> {
-        Ok(())
-    }
-
-    async fn get(&self, _cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
-        Ok(Some(self.0.clone()))
-    }
-
-    async fn remove(&self, _cache_key: &[u8]) -> SeamResult<()> {
-        Ok(())
-    }
-
-    async fn clear(&self) -> SeamResult<()> {
-        Ok(())
-    }
+fn serves_ciphertext(planted: Vec<u8>) -> InMemorySnapshotCache {
+    let cache = InMemorySnapshotCache::default();
+    cache.serve_fixed_ciphertext(planted);
+    cache
 }
 
 #[test]
@@ -1139,7 +1020,7 @@ fn a_cached_copy_that_does_not_authenticate_is_not_used() {
                 &gateway(),
                 &device.http,
                 &device.floor_store,
-                &ServesCiphertext(planted),
+                &serves_ciphertext(planted),
                 &world.scheduler,
                 &SyncTimingProfile::CI,
                 &SECRET,
@@ -1148,42 +1029,6 @@ fn a_cached_copy_that_does_not_authenticate_is_not_used() {
             SettingsLoad::Defaults(DefaultsReason::UnprovenFirstRun),
             "a cached copy is re-opened on every read, never trusted for being cached",
         );
-    }
-}
-
-/// A snapshot cache that keeps what the engine writes visible to the test.
-#[derive(Clone, Default)]
-struct SpyCache {
-    inner: Arc<Mutex<BTreeMap<Vec<u8>, Vec<u8>>>>,
-}
-
-impl SpyCache {
-    fn values(&self) -> Vec<Vec<u8>> {
-        self.inner.lock().expect("lock").values().cloned().collect()
-    }
-}
-
-impl SnapshotCache for SpyCache {
-    async fn put(&self, cache_key: &[u8], ciphertext: &[u8]) -> SeamResult<()> {
-        self.inner
-            .lock()
-            .expect("lock")
-            .insert(cache_key.to_vec(), ciphertext.to_vec());
-        Ok(())
-    }
-
-    async fn get(&self, cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
-        Ok(self.inner.lock().expect("lock").get(cache_key).cloned())
-    }
-
-    async fn remove(&self, cache_key: &[u8]) -> SeamResult<()> {
-        self.inner.lock().expect("lock").remove(cache_key);
-        Ok(())
-    }
-
-    async fn clear(&self) -> SeamResult<()> {
-        self.inner.lock().expect("lock").clear();
-        Ok(())
     }
 }
 
@@ -1199,7 +1044,7 @@ fn the_cache_holds_the_sealed_block_never_the_opened_body() {
     publish(&world, &alice, &blocks, &SECRET, &configured());
 
     let bob = world.device(b"alice-phone");
-    let cache = SpyCache::default();
+    let cache = InMemorySnapshotCache::default();
     serve_http(&bob, &blocks, 4);
     assert_eq!(
         block_on(load_settings(
@@ -1288,24 +1133,10 @@ fn a_second_account_on_the_device_never_sees_the_first_accounts_cached_settings(
 
 /// A snapshot cache whose reads never settle — the shape of a stalled host
 /// store.
-struct NeverReads;
-
-impl SnapshotCache for NeverReads {
-    async fn put(&self, _cache_key: &[u8], _ciphertext: &[u8]) -> SeamResult<()> {
-        Ok(())
-    }
-
-    async fn get(&self, _cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
-        poll_fn(|_| Poll::<SeamResult<Option<Vec<u8>>>>::Pending).await
-    }
-
-    async fn remove(&self, _cache_key: &[u8]) -> SeamResult<()> {
-        Ok(())
-    }
-
-    async fn clear(&self) -> SeamResult<()> {
-        Ok(())
-    }
+fn never_reads() -> InMemorySnapshotCache {
+    let cache = InMemorySnapshotCache::default();
+    cache.stall_gets();
+    cache
 }
 
 /// The cache read is inside the budget like every other stage: a stalled host
@@ -1323,7 +1154,7 @@ fn a_snapshot_cache_that_never_answers_does_not_block_cold_start() {
             &gateway(),
             &device.http,
             &device.floor_store,
-            &NeverReads,
+            &never_reads(),
             &scheduler,
             &profile,
             &SECRET,
@@ -1811,7 +1642,7 @@ fn a_retry_mints_a_revision_above_the_attempt_it_replaces() {
     serve_http(&device, &blocks, 4);
     assert_eq!(
         block_on(publish_settings(
-            &AcksNothingBack,
+            &acks_nothing_back(),
             &api,
             &device.floor_store,
             &device.snapshot_cache,
@@ -1929,7 +1760,7 @@ fn an_unconfirmed_publish_leaves_the_live_record_still_admissible() {
     serve_http(&device, &blocks, 4);
     assert_eq!(
         block_on(publish_settings(
-            &AcksNothingBack,
+            &acks_nothing_back(),
             &api,
             &device.floor_store,
             &device.snapshot_cache,
@@ -1969,7 +1800,7 @@ fn a_mint_counter_that_does_not_advance_refuses_the_publish() {
         block_on(publish_settings(
             &device.record_store,
             &api,
-            &StuckCounter,
+            &stuck_counter(),
             &device.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
@@ -1995,28 +1826,10 @@ fn a_mint_counter_that_does_not_advance_refuses_the_publish() {
 
 /// A floor store that reports a floor other than the one it was asked to raise
 /// to — the shape a non-monotonic mint would take.
-struct StuckCounter;
-
-impl FloorStore for StuckCounter {
-    async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        Ok(None)
-    }
-
-    async fn raise_epoch_floor(&self, _scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
-        Ok(epoch)
-    }
-
-    async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        Ok(None)
-    }
-
-    async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
-        Ok(sequence.saturating_add(1))
-    }
-
-    async fn clear(&self) -> SeamResult<()> {
-        Ok(())
-    }
+fn stuck_counter() -> InMemoryFloorStore {
+    let floors = InMemoryFloorStore::default();
+    floors.skew_reported_raises(1);
+    floors
 }
 
 // ---------------------------------------------------------------------------
@@ -2024,32 +1837,11 @@ impl FloorStore for StuckCounter {
 // ---------------------------------------------------------------------------
 
 /// A transport that refuses every PUT, so the fan-out acknowledges nothing.
-#[derive(Clone)]
-struct AcksNoPut;
-
-impl RecordTransport for AcksNoPut {
-    fn endpoints(&self) -> Vec<EndpointId> {
-        vec![EndpointId::new("fake:refuses-writes")]
-    }
-
-    async fn get_record(
-        &self,
-        _endpoint: &EndpointId,
-        _routing_key: &str,
-        _max_bytes: usize,
-        _bearer: Option<&str>,
-    ) -> SeamResult<Option<Vec<u8>>> {
-        Ok(None)
-    }
-
-    async fn put_record(
-        &self,
-        _endpoint: &EndpointId,
-        _routing_key: &str,
-        _record: &[u8],
-    ) -> SeamResult<()> {
-        Err(SeamError::new("endpoint refused the write"))
-    }
+fn acks_no_put() -> InMemoryRecordStore {
+    let endpoint = EndpointId::new("fake:refuses-writes");
+    let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
+    store.fail_put_endpoint(&endpoint);
+    store
 }
 
 /// The head block goes up under its own charged pin row before register-first
@@ -2115,7 +1907,7 @@ fn a_settings_publish_whose_fan_out_acked_nothing_retires_nothing() {
     let orphans = OrphanHeads::default();
 
     let outcome = block_on(publish_settings(
-        &AcksNoPut,
+        &acks_no_put(),
         &api,
         &device.floor_store,
         &device.snapshot_cache,

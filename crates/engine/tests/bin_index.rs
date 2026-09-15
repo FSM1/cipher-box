@@ -24,10 +24,10 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::net::keyless_re_put;
-use cipherbox_engine::seams::{EndpointId, FloorStore, RecordTransport, SeamResult};
+use cipherbox_engine::seams::{EndpointId, FloorStore, RecordTransport};
 use cipherbox_engine::testkit::account::{Blocks, serve_http};
 use cipherbox_engine::testkit::fakes::{
-    InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp,
+    InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp, SlotFillingRecordStore,
 };
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
@@ -454,6 +454,14 @@ fn a_same_sequence_fork_below_the_adopted_revision_is_refused() {
     );
 }
 
+/// A transport that acks every PUT and serves nothing back, so a publish gets
+/// past its mint and fails at the confirm.
+fn acks_nothing_back() -> InMemoryRecordStore {
+    let store = InMemoryRecordStore::new(vec![EndpointId::new("fake:write-only")]);
+    store.drop_puts();
+    store
+}
+
 /// A strictly newer record won its CAS against the network, so a second device's
 /// legitimate publish is adopted even though this device's revision counter has
 /// never seen it.
@@ -479,40 +487,11 @@ fn a_newer_sequence_is_adopted_whatever_this_devices_revision_counter_holds() {
 /// network may never serve.
 #[test]
 fn an_unconfirmed_publish_advances_neither_the_sequence_floor_nor_the_readers_bar() {
-    /// A transport that acks every PUT and serves nothing back.
-    #[derive(Clone)]
-    struct AcksNothingBack;
-
-    impl RecordTransport for AcksNothingBack {
-        fn endpoints(&self) -> Vec<EndpointId> {
-            vec![EndpointId::new("fake:write-only")]
-        }
-
-        async fn get_record(
-            &self,
-            _endpoint: &EndpointId,
-            _routing_key: &str,
-            _max_bytes: usize,
-            _bearer: Option<&str>,
-        ) -> SeamResult<Option<Vec<u8>>> {
-            Ok(None)
-        }
-
-        async fn put_record(
-            &self,
-            _endpoint: &EndpointId,
-            _routing_key: &str,
-            _record: &[u8],
-        ) -> SeamResult<()> {
-            Ok(())
-        }
-    }
-
     let world = FakeWorld::new();
     let device = world.device(b"me");
     serve_http(&device, &Blocks::default(), 4);
     let outcome = block_on(publish_bin_index(
-        &AcksNothingBack,
+        &acks_nothing_back(),
         &api(&device),
         &device.floor_store,
         &device.snapshot_cache,
@@ -832,43 +811,13 @@ fn a_bin_past_the_top_rung_is_refused_as_a_full_bin_and_not_as_a_codec_fault() {
 /// split pins.
 #[test]
 fn a_publish_that_fails_behind_its_mint_reads_as_a_stranded_mint() {
-    /// A transport that acks every PUT and serves nothing back, so the publish
-    /// gets past the mint and fails at the confirm.
-    #[derive(Clone)]
-    struct AcksNothingBack;
-
-    impl RecordTransport for AcksNothingBack {
-        fn endpoints(&self) -> Vec<EndpointId> {
-            vec![EndpointId::new("fake:write-only")]
-        }
-
-        async fn get_record(
-            &self,
-            _endpoint: &EndpointId,
-            _routing_key: &str,
-            _max_bytes: usize,
-            _bearer: Option<&str>,
-        ) -> SeamResult<Option<Vec<u8>>> {
-            Ok(None)
-        }
-
-        async fn put_record(
-            &self,
-            _endpoint: &EndpointId,
-            _routing_key: &str,
-            _record: &[u8],
-        ) -> SeamResult<()> {
-            Ok(())
-        }
-    }
-
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let device = world.device(b"only-device");
     serve_http(&device, &blocks, 4);
     assert_eq!(
         block_on(publish_bin_index(
-            &AcksNothingBack,
+            &acks_nothing_back(),
             &api(&device),
             &device.floor_store,
             &device.snapshot_cache,
@@ -932,43 +881,6 @@ fn a_second_device_publishes_the_record_a_stranded_mint_could_not() {
     );
 }
 
-/// A transport that lands a bin index publish in `slot` before the resolve it
-/// wraps can answer — the interleaving a single-threaded executor allows at any
-/// `.await`, since a command load and the drain are separate futures on it.
-struct PublishesAcrossTheLoad {
-    inner: InMemoryRecordStore,
-    slot: Rc<RefCell<Option<HeldRecord>>>,
-    published: HeldRecord,
-}
-
-impl RecordTransport for PublishesAcrossTheLoad {
-    fn endpoints(&self) -> Vec<EndpointId> {
-        self.inner.endpoints()
-    }
-
-    async fn get_record(
-        &self,
-        endpoint: &EndpointId,
-        routing_key: &str,
-        max_bytes: usize,
-        bearer: Option<&str>,
-    ) -> SeamResult<Option<Vec<u8>>> {
-        *self.slot.borrow_mut() = Some(self.published.clone());
-        self.inner
-            .get_record(endpoint, routing_key, max_bytes, bearer)
-            .await
-    }
-
-    async fn put_record(
-        &self,
-        endpoint: &EndpointId,
-        routing_key: &str,
-        record: &[u8],
-    ) -> SeamResult<()> {
-        self.inner.put_record(endpoint, routing_key, record).await
-    }
-}
-
 /// The renewal re-signs a held record at `floor + 1`, so an enrolment that
 /// overwrites the record a publish confirmed across the load would bring back
 /// the entries that publish removed. The bar rests on the capture running ahead
@@ -986,11 +898,8 @@ fn the_bin_index_enrolment_captures_the_slot_ahead_of_its_load() {
     let published = held_bin_record("bafypublishedhead", 9);
     let published_bytes = published.record_bytes.clone();
     let slot = Rc::new(RefCell::new(None));
-    let transport = PublishesAcrossTheLoad {
-        inner: device.record_store.clone(),
-        slot: Rc::clone(&slot),
-        published,
-    };
+    let transport =
+        SlotFillingRecordStore::new(device.record_store.clone(), Rc::clone(&slot), published);
 
     serve_http(&device, &blocks, 4);
     let observed = slot.borrow().as_ref().map(|held| held.record_bytes.clone());
