@@ -66,12 +66,31 @@ export interface WebCoreKitSession extends CoreKitSession {
    * A fresh factor for a device this session approves, and never this session's
    * own (ADR 0009 D5). The bytes are the caller's to seal and then to erase.
    */
-  mintApprovalFactor(): Promise<Uint8Array>;
+  mintApprovalFactor(): Promise<MintedApprovalFactor>;
+  /**
+   * Drops a factor this session minted for an approval that did not reach the
+   * API, named by its public identifier alone. Resolves when the account no
+   * longer carries it, so a repeated call is not an error.
+   */
+  deleteApprovalFactor(id: string): Promise<void>;
   /**
    * Adopt the factor an approver sealed back, and keep it as this device's own
    * so the next sign-in here needs neither a phrase nor a second device.
    */
   adoptApprovalFactor(factorKey: Uint8Array): Promise<void>;
+}
+
+/**
+ * A factor minted for one approval. The mint commits it to the account before
+ * the seal runs, so an approver that then fails needs a way to name it; the
+ * seal transfers `key` to the engine, and a copy kept for that would hold live
+ * key material in the tab for the length of the exchange.
+ */
+export interface MintedApprovalFactor {
+  /** The factor bytes, the caller's to seal and then to erase. */
+  key: Uint8Array;
+  /** The factor's public point in compressed SEC1 hex. Carries no secret. */
+  id: string;
 }
 
 /**
@@ -355,7 +374,7 @@ class Web3AuthSession implements WebCoreKitSession {
     return this.signedInToken;
   }
 
-  async mintApprovalFactor(): Promise<Uint8Array> {
+  async mintApprovalFactor(): Promise<MintedApprovalFactor> {
     if (!this.isLoggedIn()) throw new Error('sign in before you approve a device');
     const factor = generateFactorKey();
     await this.coreKit.createFactor({
@@ -365,7 +384,14 @@ class Web3AuthSession implements WebCoreKitSession {
     });
     // Manual sync: an uncommitted factor would open nothing on the new device.
     await this.coreKit.commitChanges();
-    return scalarBytes(factor.private);
+    return { key: scalarBytes(factor.private), id: factorId(factor.private) };
+  }
+
+  async deleteApprovalFactor(id: string): Promise<void> {
+    if (!this.coreKit.getTssFactorPub().includes(id)) return;
+    await this.coreKit.deleteFactor(Point.fromSEC1(factorKeyCurve, id));
+    // Manual sync: an uncommitted removal leaves the factor live.
+    await this.coreKit.commitChanges();
   }
 
   async adoptApprovalFactor(factorKey: Uint8Array): Promise<void> {
@@ -472,6 +498,11 @@ export function sealedCoreKitStore(): SealedStore {
  */
 function scalarBytes(scalar: BN): Uint8Array {
   return Uint8Array.from(scalar.toArray('be', 32));
+}
+
+/** A factor's public identifier, in the encoding `getTssFactorPub` reports. */
+function factorId(scalar: BN): string {
+  return Point.fromScalar(scalar, factorKeyCurve).toSEC1(factorKeyCurve, true).toString('hex');
 }
 
 /** Builds this tab's Core Kit session from the build-time environment. */

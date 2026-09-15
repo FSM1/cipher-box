@@ -1,9 +1,11 @@
 import {
   COREKIT_STATUS,
+  factorKeyCurve,
   FactorKeyTypeShareDescription,
   keyToMnemonic,
   TssShareType,
 } from '@web3auth/mpc-core-kit';
+import { Point } from '@tkey/common-types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deviceIdentitiesTestInstance, MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
@@ -37,6 +39,10 @@ const sdk = vi.hoisted(() => ({
   setDeviceFactors: [] as unknown[],
   /** The factor scalars `deleteFactor` was asked to drop, hex. */
   deleted: [] as string[],
+  /** The public point each `deleteFactor` named, in compressed SEC1 hex. */
+  deletedPubs: [] as string[],
+  /** The factors the account lists, as `getTssFactorPub` reports them. */
+  factorPubs: [] as string[],
   deleteFactorError: undefined as Error | undefined,
   commits: 0,
   /** Which `commitChanges` call rejects, 1-based; `0` for none. */
@@ -102,12 +108,19 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
         sdk.setDeviceFactors.push(replaceExisting);
         return Promise.resolve();
       }
+      getTssFactorPub(): string[] {
+        return sdk.factorPubs;
+      }
       deleteFactor(
-        _factorPub: unknown,
-        factorKey: { toString(base: string): string }
+        factorPub: Point,
+        factorKey?: { toString(base: string): string }
       ): Promise<void> {
         if (sdk.deleteFactorError) return Promise.reject(sdk.deleteFactorError);
-        sdk.deleted.push(factorKey.toString('hex'));
+        const pub = factorPub.toSEC1(factorKeyCurve, true).toString('hex');
+        sdk.deletedPubs.push(pub);
+        // The account stops listing a factor it dropped, as the real one does.
+        sdk.factorPubs = sdk.factorPubs.filter((listed) => listed !== pub);
+        if (factorKey) sdk.deleted.push(factorKey.toString('hex'));
         return Promise.resolve();
       }
       getKeyDetails(): Record<string, unknown> {
@@ -170,6 +183,8 @@ beforeEach(() => {
   sdk.created = [];
   sdk.setDeviceFactors = [];
   sdk.deleted = [];
+  sdk.deletedPubs = [];
+  sdk.factorPubs = [];
   sdk.deleteFactorError = undefined;
   sdk.commits = 0;
   sdk.commitFailsAfter = 0;
@@ -644,5 +659,53 @@ describe('a Core Kit login', () => {
 
     await created.logout();
     expect(created.email()).toBeNull();
+  });
+});
+
+/**
+ * The mint commits the factor before an approver can seal it, so an approval
+ * that then fails needs a handle on it. The seal transfers the bytes away, so
+ * the handle is the factor's public point and nothing else.
+ */
+describe('the factor an approval mints', () => {
+  it('reports an identifier the delete then names that same factor by', async () => {
+    const active = session();
+
+    const minted = await active.mintApprovalFactor();
+    sdk.factorPubs = [minted.id];
+    await active.deleteApprovalFactor(minted.id);
+
+    expect(sdk.created).toHaveLength(1);
+    expect(sdk.deletedPubs).toEqual([minted.id]);
+  });
+
+  it('commits the removal, so a dropped factor does not stay live on the account', async () => {
+    const active = session();
+    const minted = await active.mintApprovalFactor();
+    sdk.factorPubs = [minted.id];
+    const committed = sdk.commits;
+
+    await active.deleteApprovalFactor(minted.id);
+
+    expect(sdk.commits).toBe(committed + 1);
+  });
+
+  it('resolves without a delete when the account no longer carries the factor', async () => {
+    const active = session();
+    const minted = await active.mintApprovalFactor();
+    sdk.factorPubs = [minted.id];
+
+    await active.deleteApprovalFactor(minted.id);
+    await active.deleteApprovalFactor(minted.id);
+
+    // The second call finds nothing to drop, so it asks for nothing.
+    expect(sdk.deletedPubs).toEqual([minted.id]);
+  });
+
+  it('refuses to mint before this browser has reconstructed the account', async () => {
+    sdk.status = COREKIT_STATUS.REQUIRED_SHARE;
+
+    await expect(session().mintApprovalFactor()).rejects.toThrow(/sign in/);
+    expect(sdk.created).toEqual([]);
   });
 });

@@ -55,6 +55,11 @@ export function ApprovalPrompt() {
   // unmount. `erase` states why a transferred buffer is left alone.
   const factorKey = useRef<Uint8Array | null>(null);
   const sealScalar = useRef<Uint8Array | null>(null);
+  // The public identifier of the factor this answer minted, held from the mint
+  // until the response goes out. The mint commits the factor to the account
+  // before the seal runs, so a failure in between would otherwise leave one
+  // that opens nothing, and every retry would leave one more.
+  const mintedFactor = useRef<string | null>(null);
   const wipe = useCallback(() => {
     erase(factorKey.current);
     factorKey.current = null;
@@ -149,7 +154,8 @@ export function ApprovalPrompt() {
     }
     if (!session) throw new Error(NO_IDENTITY);
     const factor = await session.mintApprovalFactor();
-    factorKey.current = factor;
+    factorKey.current = factor.key;
+    mintedFactor.current = factor.id;
     const seal = crypto.getRandomValues(new Uint8Array(32));
     sealScalar.current = seal;
     return {
@@ -159,7 +165,7 @@ export function ApprovalPrompt() {
       requesterDevicePublicKey: row.requesterDevicePublicKey,
       ephemeralPublicKey: row.ephemeralPublicKey,
       sealScalar: seal,
-      factorKey: factor,
+      factorKey: factor.key,
     };
   };
 
@@ -168,24 +174,38 @@ export function ApprovalPrompt() {
       const identity = session?.deviceIdentity();
       if (!identity) throw new Error(NO_IDENTITY);
       const devicePublicKey = await identity.publicKeyHex();
-      let sealed;
       try {
-        const chosen = await step(row, decision, devicePublicKey);
-        sealed = await facade.deviceRendezvous(chosen);
-      } finally {
-        wipe();
+        let sealed;
+        try {
+          const chosen = await step(row, decision, devicePublicKey);
+          sealed = await facade.deviceRendezvous(chosen);
+        } finally {
+          wipe();
+        }
+        if (sealed.kind !== 'response') throw new Error(UNEXPECTED);
+        const signature = await identity.sign(Uint8Array.from(sealed.payload));
+        // Past the send a refusal and a lost acknowledgement look alike, so the
+        // record is dropped here: deleting the factor of a response the API did
+        // accept would strand the device that was let in.
+        mintedFactor.current = null;
+        await facade.respondToApproval(
+          row.requestId,
+          decision,
+          devicePublicKey,
+          row.ephemeralPublicKey,
+          signature,
+          // A denial seals nothing here, whatever the step answered with.
+          decision === 'approve' ? sealed.sealedFactor : null
+        );
+      } catch (failure) {
+        const orphan = mintedFactor.current;
+        mintedFactor.current = null;
+        // Best effort: the failure that got here is the one the member reads,
+        // and a factor left listed opens nothing without the seal that was
+        // never delivered.
+        if (orphan !== null) await session?.deleteApprovalFactor(orphan).catch(() => undefined);
+        throw failure;
       }
-      if (sealed.kind !== 'response') throw new Error(UNEXPECTED);
-      const signature = await identity.sign(Uint8Array.from(sealed.payload));
-      await facade.respondToApproval(
-        row.requestId,
-        decision,
-        devicePublicKey,
-        row.ephemeralPublicKey,
-        signature,
-        // A denial seals nothing here, whatever the step answered with.
-        decision === 'approve' ? sealed.sealedFactor : null
-      );
       settled(row.requestId);
     });
 

@@ -119,6 +119,12 @@ export function fakeComparisonValue(
   return `${digits.slice(0, 4)} ${digits.slice(4)}`;
 }
 
+/**
+ * The public identifier the fake mint reports, in the compressed SEC1 shape
+ * Core Kit names a factor by. It is a public point, so it carries no secret.
+ */
+export const FAKE_MINTED_FACTOR_ID = `03${'ee'.repeat(32)}`;
+
 /** The factor an approver sealed back, as the relay carries it. */
 export const FAKE_SEALED_FACTOR = 'c2VhbGVkLWZhY3Rvcg';
 
@@ -246,6 +252,8 @@ export function fakeEngineClient(
     registerDevice: () => Promise<void>;
     revokeDevice: () => Promise<void>;
     respondToApproval: () => Promise<void>;
+    /** Answers a step in place of the seal; `undefined` seals as usual. */
+    deviceRendezvous: () => Promise<DeviceRendezvousResult> | undefined;
   }> = {}
 ) {
   const calls: EngineCalls = {
@@ -332,6 +340,8 @@ export function fakeEngineClient(
         calls.rendezvous.push(step);
         calls.rendezvousSent.push(snapshotStep(step));
         detachTransferred(step);
+        const refused = overrides.deviceRendezvous?.();
+        if (refused) return refused;
         switch (step.kind) {
           case 'open':
             return Promise.resolve({
@@ -437,6 +447,8 @@ export interface CoreKitCalls {
   signed: Uint8Array[];
   /** Each fresh approval factor, still the caller's buffer, so a zeroization check reads it. */
   mintedFactors: Uint8Array[];
+  /** The identifier each delete named, in the order the tab asked for them. */
+  deletedFactors: string[];
   /** Each adopted factor's live buffer, and what it held on arrival. */
   adopted: Uint8Array[];
   adoptedBytes: Uint8Array[];
@@ -494,6 +506,7 @@ export function fakeCoreKitSession(
     enrollments: 0,
     signed: [],
     mintedFactors: [],
+    deletedFactors: [],
     adopted: [],
     adoptedBytes: [],
   };
@@ -545,9 +558,13 @@ export function fakeCoreKitSession(
     deviceIdentity: () => (options.noDeviceIdentity === true ? null : device),
     identityToken: () => identityToken,
     mintApprovalFactor() {
-      const factor = new Uint8Array(32).fill(0x5a);
-      calls.mintedFactors.push(factor);
-      return Promise.resolve(factor);
+      const key = new Uint8Array(32).fill(0x5a);
+      calls.mintedFactors.push(key);
+      return Promise.resolve({ key, id: FAKE_MINTED_FACTOR_ID });
+    },
+    deleteApprovalFactor(id) {
+      calls.deletedFactors.push(id);
+      return Promise.resolve();
     },
     adoptApprovalFactor(factorKey) {
       calls.adopted.push(factorKey);

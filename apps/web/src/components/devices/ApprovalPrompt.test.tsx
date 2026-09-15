@@ -8,6 +8,7 @@ import {
   FAKE_DENY_PAYLOAD,
   FAKE_DEVICE_PUBLIC_KEY,
   FAKE_EPHEMERAL_PUBLIC_KEY,
+  FAKE_MINTED_FACTOR_ID,
   FAKE_REGISTERED_DEVICE,
   FAKE_SEALED_FACTOR,
   fakeComparisonValue,
@@ -367,6 +368,128 @@ describe('the device approval prompt', () => {
       } finally {
         visibility.mockRestore();
       }
+    });
+  });
+
+  /**
+   * The mint commits the factor to the account before the seal runs, so a
+   * failure in between leaves one that opens nothing, and each retry leaves one
+   * more. The seal transfers the bytes away, so the public identifier is the
+   * only handle the tab keeps.
+   */
+  describe('the factor an approval minted', () => {
+    /** Mounts over the given rows with a seal and a send this test drives. */
+    async function answering(
+      rows: PendingApprovalDescriptor[],
+      overrides: {
+        deviceRendezvous?: () => Promise<never> | undefined;
+        respondToApproval?: () => Promise<never>;
+      } = {}
+    ): Promise<Mounted> {
+      const engine = fakeEngineClient({
+        ...overrides,
+        pendingApprovals: () => Promise.resolve(rows),
+        devices: () => Promise.resolve([FAKE_REGISTERED_DEVICE]),
+      });
+      const coreKit = fakeCoreKitSession({ loggedIn: true });
+      authStore.factorPolicy(true);
+      render(<ApprovalPrompt />, { wrapper: authWrapper(engine.client, coreKit.session) });
+      await waitFor(() => expect(screen.getByTestId('approval-prompt')).toBeTruthy());
+      return { engine: engine.calls, coreKit: coreKit.calls };
+    }
+
+    /** Confirms the value and approves the row on screen. */
+    async function approve(): Promise<void> {
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('approval-match'));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('approval-approve'));
+      });
+    }
+
+    it('deletes it when the approval failed before the response went out', async () => {
+      const { coreKit } = await answering([PENDING], {
+        deviceRendezvous: () => Promise.reject(new Error('the engine refused this seal')),
+      });
+
+      await approve();
+
+      await waitFor(() => expect(coreKit.deletedFactors).toEqual([FAKE_MINTED_FACTOR_ID]));
+      expect(coreKit.mintedFactors).toHaveLength(1);
+    });
+
+    /**
+     * A refusal and a lost acknowledgement look alike from here, and deleting
+     * the factor of a response the API did accept strands the device it let in.
+     */
+    it('keeps it when the response was already sent', async () => {
+      const { engine, coreKit } = await answering([PENDING], {
+        respondToApproval: () => Promise.reject(new Error('the answer did not land')),
+      });
+
+      await approve();
+
+      await waitFor(() => expect(engine.answered).toHaveLength(1));
+      expect(coreKit.deletedFactors).toEqual([]);
+    });
+
+    it('holds no record of it once the exchange has succeeded', async () => {
+      const second: PendingApprovalDescriptor = { ...PENDING, requestId: 'request-02' };
+      let seals = 0;
+      const { coreKit } = await answering([PENDING, second], {
+        deviceRendezvous: () => {
+          seals += 1;
+          return seals === 1
+            ? undefined
+            : Promise.reject(new Error('the engine refused this seal'));
+        },
+      });
+
+      await approve();
+      // The next row fails at its own seal, and it is a denial, so it minted
+      // nothing. A record left over from the first answer would be deleted here.
+      await waitFor(() => expect(screen.getByTestId('approval-prompt')).toBeTruthy());
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('approval-deny'));
+      });
+
+      await waitFor(() => expect(seals).toBe(2));
+      expect(coreKit.deletedFactors).toEqual([]);
+    });
+
+    it('mints nothing and deletes nothing for a denial', async () => {
+      const { coreKit } = await answering([PENDING], {
+        deviceRendezvous: () => Promise.reject(new Error('the engine refused this seal')),
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('approval-deny'));
+      });
+
+      expect(coreKit.mintedFactors).toEqual([]);
+      expect(coreKit.deletedFactors).toEqual([]);
+    });
+
+    /** The member has to read what actually failed, not what the cleanup did. */
+    it('reports the failure that caused the delete, not the delete', async () => {
+      const engine = fakeEngineClient({
+        deviceRendezvous: () => Promise.reject(new Error('the engine refused this seal')),
+        pendingApprovals: () => Promise.resolve([PENDING]),
+        devices: () => Promise.resolve([FAKE_REGISTERED_DEVICE]),
+      });
+      const coreKit = fakeCoreKitSession({ loggedIn: true });
+      coreKit.session.deleteApprovalFactor = () =>
+        Promise.reject(new Error('the account could not be re-synced'));
+      authStore.factorPolicy(true);
+      render(<ApprovalPrompt />, { wrapper: authWrapper(engine.client, coreKit.session) });
+      await waitFor(() => expect(screen.getByTestId('approval-prompt')).toBeTruthy());
+
+      await approve();
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('the engine refused this seal')
+      );
     });
   });
 
