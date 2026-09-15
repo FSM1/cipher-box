@@ -132,6 +132,14 @@ Tauri updater over GitHub releases, minisign-verified; with one release
 stream, `/releases/latest` resolves correctly with no un-marking
 choreography.
 
+The macOS bundle runs the hardened runtime and carries the
+`com.apple.security.cs.disable-library-validation` entitlement, without which
+library validation refuses the third-party `libfuse-t.dylib` the mount needs.
+Developer ID signing and notarization are optional: the macOS job exports the
+`APPLE_*` credentials only when the repository holds every one of them, so a
+repository with no Apple Developer account still gets the ad hoc signed
+bundle.
+
 ## Staging pipeline
 
 ### Release-tag gating (the v1 shape, simplified)

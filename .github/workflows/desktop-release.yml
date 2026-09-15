@@ -73,13 +73,32 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build shared packages
+      # Developer ID signing and notarization are optional: the repository may
+      # hold no Apple credentials, and the release must still produce the
+      # ad hoc signed bundle it produces today. An absent secret expands to an
+      # empty string, which the bundler reads as an identity and passes to
+      # `codesign`, so the whole set reaches the build or none of it does.
+      - name: Export the Apple credentials when the repository holds them
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
+          set -euo pipefail
+          names="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
+          for name in ${names}; do
+            if [ -z "${!name}" ]; then
+              echo "::notice::${name} is empty. The macOS bundle stays ad hoc signed and is not notarized."
+              exit 0
+            fi
+          done
+          delimiter="EOF-$(openssl rand -hex 16)"
+          for name in ${names}; do
+            printf '%s<<%s\n%s\n%s\n' "${name}" "${delimiter}" "${!name}" "${delimiter}" >> "${GITHUB_ENV}"
+          done
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -132,14 +151,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Build shared packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -203,14 +214,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Build shared packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
