@@ -641,15 +641,32 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(())
     }
 
-    /// Open a file handle.
-    pub async fn open(&mut self, ino: u64, access: Access) -> Result<HandleId, VfsError> {
+    /// Open a file handle, optionally emptying the file as it opens.
+    ///
+    /// `truncate` is the `O_TRUNC` an adapter decodes off the open mode: the
+    /// new length rides into the one `updateContent` op this handle's release
+    /// journals, so the opening truncate and the writes after it become a
+    /// single version. A truncate the core refuses takes the handle back — the
+    /// host never learns the number of a handle the open did not hand it, so
+    /// nothing else would ever release it.
+    pub async fn open(
+        &mut self,
+        ino: u64,
+        access: Access,
+        truncate: bool,
+    ) -> Result<HandleId, VfsError> {
         let view = self.render().await?;
         let node = self.node_of(ino)?;
         let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
         if meta.kind != NodeKind::File {
             return Err(VfsError::IsADirectory);
         }
-        Ok(self.handles.open(node, access))
+        let handle = self.handles.open(node, access);
+        if truncate && let Err(refusal) = self.truncate_handle(handle, 0).await {
+            let _ = self.release(handle).await;
+            return Err(refusal);
+        }
+        Ok(handle)
     }
 
     /// What an open handle addresses.
@@ -791,8 +808,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     ///
     /// On an open writable handle this is a spill-file operation: the new
     /// length rides into the one `updateContent` op that handle's release
-    /// journals, which is also how an adapter carries `O_TRUNC`. With no handle
-    /// it becomes its own op, so a bare `truncate(2)` is never silently lost.
+    /// journals, which is also how [`open`](Self::open) carries `O_TRUNC`. With
+    /// no handle it becomes its own op, so a bare `truncate(2)` is never
+    /// silently lost.
     pub async fn truncate(
         &mut self,
         ino: u64,
