@@ -18,10 +18,6 @@ export interface OperationRow {
 
 export interface LoadReport {
   scenario: string;
-  target: string;
-  clients: number;
-  opsPerClient: number;
-  wallMs: number;
   breaches: string[];
   operations: OperationRow[];
 }
@@ -64,10 +60,6 @@ export function parseLoadReport(json: string): LoadReport {
   });
   return {
     scenario: asString(report.scenario, 'scenario'),
-    target: asString(report.target, 'target'),
-    clients: asNumber(report.clients, 'clients'),
-    opsPerClient: asNumber(report.opsPerClient, 'opsPerClient'),
-    wallMs: asNumber(report.wallMs, 'wallMs'),
     breaches: asArray(report.breaches, 'breaches').map((entry, index) =>
       asString(entry, `breaches[${index}]`)
     ),

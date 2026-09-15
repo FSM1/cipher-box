@@ -7,6 +7,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -14,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Browser } from '@playwright/test';
 import { describe, names, parseArguments, select, withDeadline } from '../../desktop-e2e/src/cli';
 import { startInstance, type Instance } from '../../desktop-e2e/src/instance';
+import { observeWaits } from '../../desktop-e2e/src/poll';
 import { deadlines, type Deadlines } from '../../desktop-e2e/src/profile';
 import { Stack, requireFile } from '../../desktop-e2e/src/stack';
 import { Preview } from './preview';
@@ -105,6 +107,14 @@ async function main(): Promise<number> {
   const workdir =
     process.env.CIPHERBOX_E2E_WORKDIR ?? (await mkdtemp(join(tmpdir(), 'cipherbox-cross-client-')));
   await mkdir(workdir, { recursive: true });
+
+  // The cross-client convergence latency: every settled wait of the run, for
+  // `tools/perf` to summarize. Off unless a path is named, so an ordinary run
+  // measures nothing (tools/perf/RESULTS.md).
+  const samples = process.env.CIPHERBOX_WAIT_SAMPLES;
+  if (samples) {
+    observeWaits((sample) => appendFileSync(samples, `${JSON.stringify(sample)}\n`));
+  }
 
   const budget = deadlines();
   const logDir = join(workdir, 'logs');

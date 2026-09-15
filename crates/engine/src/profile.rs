@@ -85,10 +85,11 @@ impl SyncTimingProfile {
     /// `escalation_window`, `focus_horizon`, `pointer_consult_interval`,
     /// `sweep_cadence` and `migration_window` are placeholders pending the
     /// measurement process fixed in blueprint/testing.md ("The profile is where
-    /// measured constants land"); each lands as a profile-constant change with
-    /// its measurement linked. `migration_window`'s figure awaits
-    /// blueprint/testing.md's cross-client latency measurement job — until then
-    /// it is deliberately generous, because a window cut short retires a name
+    /// measured constants land"). Each is bounded by the cross-client
+    /// convergence latency, which the `Perf Benches` `cross-client-latency` job
+    /// takes; a value lands here when its row lands in `tools/perf/RESULTS.md`,
+    /// where that section is still empty. `migration_window` stays deliberately
+    /// generous until then, because a window cut short retires a name that
     /// lagging readers still chase.
     pub const PRODUCTION: Self = Self {
         record_ttl: Duration::from_secs(60),

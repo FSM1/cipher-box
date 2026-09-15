@@ -300,6 +300,18 @@ jobs:
           # served on the port `CIPHERBOX_WEB_PORT` defaults to.
           CORS_ALLOWED_ORIGINS: http://localhost:4175
           NODE_ENV: test
+          # Every settled wait of the run. `Perf Benches` summarizes the file
+          # into the cross-client convergence latency (tools/perf/RESULTS.md).
+          CIPHERBOX_WAIT_SAMPLES: ${{ runner.temp }}/wait-samples.jsonl
+
+      - name: Upload the wait samples the run measured
+        if: always() && matrix.suite == 'cross-client'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cross-client-wait-samples
+          path: ${{ runner.temp }}/wait-samples.jsonl
+          retention-days: 30
+          if-no-files-found: warn
 
       - name: Collect the logs a failure leaves
         if: failure()
