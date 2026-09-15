@@ -31,11 +31,22 @@ export function ContactImportForm({
 }: ContactImportFormProps) {
   const [pasted, setPasted] = useState('');
   const [scanState, setScanState] = useState<ScanState>('idle');
+  const [canScan, setCanScan] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const holder = useRef<AbortController | null>(null);
   // Memoized: a mis-paste can be arbitrarily long, and this runs per keystroke.
   const code = useMemo(() => parseContactCode(pasted), [pasted]);
   const unreadable = pasted.trim() !== '' && code === null;
-  const canScan = scanner.supported();
+
+  useEffect(() => {
+    let live = true;
+    void scanner.supported().then((able) => {
+      if (live) setCanScan(able);
+    });
+    return () => {
+      live = false;
+    };
+  }, [scanner]);
 
   // The dialog re-makes this each render; a re-run would drop the camera.
   const confirm = useRef(onConfirm);
@@ -46,12 +57,12 @@ export function ContactImportForm({
   useEffect(() => {
     const video = videoRef.current;
     if (scanState !== 'scanning' || video === null) return;
-    const holder = new AbortController();
-    let live = true;
+    const scan = new AbortController();
+    holder.current = scan;
     scanner
-      .scan({ video, signal: holder.signal })
+      .scan({ video, signal: scan.signal })
       .then((text) => {
-        if (!live) return;
+        if (scan.signal.aborted) return;
         const scanned = text === null ? null : parseContactCode(text);
         if (scanned === null) {
           setScanState('nothing-read');
@@ -61,17 +72,26 @@ export function ContactImportForm({
         confirm.current(scanned);
       })
       .catch(() => {
-        if (live) setScanState('no-camera');
+        if (!scan.signal.aborted) setScanState('no-camera');
       });
     return () => {
-      live = false;
-      holder.abort();
+      scan.abort();
+      if (holder.current === scan) holder.current = null;
     };
   }, [scanState, scanner]);
 
+  // The abort is what drops a scan already in flight, so a result that lands
+  // after this cannot hand on a second code.
+  const endScan = () => {
+    holder.current?.abort();
+    setScanState('idle');
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!busy && code !== null) onConfirm(code);
+    if (busy || code === null) return;
+    endScan();
+    onConfirm(code);
   };
 
   return (
@@ -120,7 +140,7 @@ export function ContactImportForm({
               <button
                 type="button"
                 className="dialog-button"
-                onClick={() => setScanState('idle')}
+                onClick={endScan}
                 data-testid="import-contact-scan-stop"
               >
                 stop scanning

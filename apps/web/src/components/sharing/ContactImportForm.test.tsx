@@ -4,6 +4,7 @@ import type { ContactScanner } from '../../sharing/contactScanner';
 import { ContactImportForm } from './ContactImportForm';
 
 const CODE_HEX = '00ff10';
+const OTHER_HEX = 'aabbcc';
 const CODE_BYTES = new Uint8Array([0x00, 0xff, 0x10]);
 
 /** A scanner that answers one fixture instead of holding a camera. */
@@ -13,7 +14,7 @@ function fakeScanner(
 ): ContactScanner & { aborted: () => boolean } {
   let signal: AbortSignal | null = null;
   return {
-    supported: () => supported,
+    supported: () => Promise.resolve(supported),
     scan: (target) => {
       signal = target.signal;
       return answer();
@@ -22,16 +23,20 @@ function fakeScanner(
   };
 }
 
-function importForm(scanner: ContactScanner, onConfirm = vi.fn()) {
-  const view = render(
-    <ContactImportForm
-      busy={false}
-      ownContactCode={null}
-      scanner={scanner}
-      onCancel={() => undefined}
-      onConfirm={onConfirm}
-    />
-  );
+/** Renders the form and lets the capability read land before anything else. */
+async function importForm(scanner: ContactScanner, onConfirm = vi.fn()) {
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(
+      <ContactImportForm
+        busy={false}
+        ownContactCode={null}
+        scanner={scanner}
+        onCancel={() => undefined}
+        onConfirm={onConfirm}
+      />
+    );
+  });
   return { view, onConfirm };
 }
 
@@ -41,15 +46,19 @@ async function click(testId: string) {
   });
 }
 
+function paste(value: string) {
+  fireEvent.change(screen.getByLabelText('their contact code'), { target: { value } });
+}
+
 describe('scanning a contact code', () => {
   it('hands on the same bytes a paste of that code hands on', async () => {
-    const scanned = importForm(fakeScanner(() => Promise.resolve(CODE_HEX)));
+    const scanned = await importForm(fakeScanner(() => Promise.resolve(CODE_HEX)));
     await click('import-contact-scan');
     await waitFor(() => expect(scanned.onConfirm).toHaveBeenCalledTimes(1));
     scanned.view.unmount();
 
-    const pasted = importForm(fakeScanner(() => Promise.resolve(null), false));
-    fireEvent.change(screen.getByLabelText('their contact code'), { target: { value: CODE_HEX } });
+    const pasted = await importForm(fakeScanner(() => Promise.resolve(null), false));
+    paste(CODE_HEX);
     await click('import-contact-confirm');
 
     expect(scanned.onConfirm.mock.calls[0][0]).toEqual(pasted.onConfirm.mock.calls[0][0]);
@@ -57,7 +66,7 @@ describe('scanning a contact code', () => {
   });
 
   it('says a frame carried no code, and claims no verdict the engine did not give', async () => {
-    const { onConfirm } = importForm(fakeScanner(() => Promise.resolve(null)));
+    const { onConfirm } = await importForm(fakeScanner(() => Promise.resolve(null)));
 
     await click('import-contact-scan');
 
@@ -69,7 +78,9 @@ describe('scanning a contact code', () => {
   });
 
   it('treats a frame that carries something other than a code the same way', async () => {
-    const { onConfirm } = importForm(fakeScanner(() => Promise.resolve('https://example.test')));
+    const { onConfirm } = await importForm(
+      fakeScanner(() => Promise.resolve('https://example.test'))
+    );
 
     await click('import-contact-scan');
 
@@ -78,7 +89,7 @@ describe('scanning a contact code', () => {
   });
 
   it('says the camera is unavailable when the member refuses it', async () => {
-    const { onConfirm } = importForm(fakeScanner(() => Promise.reject(new Error('denied'))));
+    const { onConfirm } = await importForm(fakeScanner(() => Promise.reject(new Error('denied'))));
 
     await click('import-contact-scan');
 
@@ -86,8 +97,8 @@ describe('scanning a contact code', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it('offers no scan control at all where the browser cannot decode a code', () => {
-    importForm(fakeScanner(() => Promise.resolve(CODE_HEX), false));
+  it('offers no scan control at all where the browser cannot read a QR code', async () => {
+    await importForm(fakeScanner(() => Promise.resolve(CODE_HEX), false));
 
     expect(screen.queryByTestId('import-contact-scan')).toBeNull();
     expect(screen.queryByTestId('import-contact-scan-section')).toBeNull();
@@ -95,7 +106,7 @@ describe('scanning a contact code', () => {
 
   it('holds the camera only while the scan is on screen', async () => {
     const scanner = fakeScanner(() => new Promise(() => undefined));
-    const { view } = importForm(scanner);
+    const { view } = await importForm(scanner);
 
     await click('import-contact-scan');
     expect(screen.getByTestId('import-contact-preview')).toBeTruthy();
@@ -108,7 +119,7 @@ describe('scanning a contact code', () => {
 
   it('ends the scan when the member stops it', async () => {
     const scanner = fakeScanner(() => new Promise(() => undefined));
-    importForm(scanner);
+    await importForm(scanner);
 
     await click('import-contact-scan');
     await click('import-contact-scan-stop');
@@ -116,5 +127,22 @@ describe('scanning a contact code', () => {
     expect(scanner.aborted()).toBe(true);
     expect(screen.queryByTestId('import-contact-preview')).toBeNull();
     expect(screen.getByTestId('import-contact-scan')).toBeTruthy();
+  });
+
+  it('hands on one code only, when a scan lands after a paste went out', async () => {
+    let answer: (text: string) => void = () => undefined;
+    const scanner = fakeScanner(() => new Promise<string>((resolve) => (answer = resolve)));
+    const { onConfirm } = await importForm(scanner);
+
+    await click('import-contact-scan');
+    paste(OTHER_HEX);
+    await click('import-contact-confirm');
+    await act(async () => {
+      answer(CODE_HEX);
+    });
+
+    expect(scanner.aborted()).toBe(true);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm).toHaveBeenCalledWith(new Uint8Array([0xaa, 0xbb, 0xcc]));
   });
 });

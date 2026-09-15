@@ -5,6 +5,8 @@
  * (blueprint/engine.md "Contact import").
  */
 
+const CODE_FORMAT = 'qr_code';
+
 /** How long one scan holds the camera before it reports that it read nothing. */
 const SCAN_BUDGET_MS = 20_000;
 
@@ -19,7 +21,10 @@ interface Detector {
   detect(source: CanvasImageSource): Promise<DetectedCode[]>;
 }
 
-type DetectorConstructor = new (init: { formats: string[] }) => Detector;
+interface DetectorConstructor {
+  new (init: { formats: string[] }): Detector;
+  getSupportedFormats(): Promise<string[]>;
+}
 
 interface ScanTarget {
   /** The preview the member aims; also the frame source the detector reads. */
@@ -29,8 +34,8 @@ interface ScanTarget {
 }
 
 export interface ContactScanner {
-  /** Whether this browser can read a code from the camera at all. */
-  supported(): boolean;
+  /** Whether this browser can read a QR code from the camera at all. */
+  supported(): Promise<boolean>;
   /**
    * The text of the first frame that carries a code, or `null` when the budget
    * passed or the member left. It rejects when the camera itself is refused.
@@ -40,7 +45,7 @@ export interface ContactScanner {
 
 function detectorConstructor(): DetectorConstructor | null {
   const candidate = (globalThis as { BarcodeDetector?: DetectorConstructor }).BarcodeDetector;
-  return typeof candidate === 'function' ? candidate : null;
+  return typeof candidate?.getSupportedFormats === 'function' ? candidate : null;
 }
 
 function camera(): MediaDevices | null {
@@ -52,9 +57,48 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * The work's value, or `null` once the member leaves or the budget passes.
+ * Neither `play()` nor `detect()` takes a signal or settles on a deadline of
+ * its own, so a pending one would otherwise hold the camera open.
+ */
+function firstOf<T>(work: Promise<T>, signal: AbortSignal, deadline: number): Promise<T | null> {
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise<T | null>((resolve, reject) => {
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', giveUp);
+    }
+    function giveUp() {
+      done();
+      resolve(null);
+    }
+    const timer = setTimeout(giveUp, Math.max(0, deadline - Date.now()));
+    signal.addEventListener('abort', giveUp, { once: true });
+    work.then(
+      (value) => {
+        done();
+        resolve(value);
+      },
+      (failure: unknown) => {
+        done();
+        reject(failure instanceof Error ? failure : new Error(String(failure)));
+      }
+    );
+  });
+}
+
 /** The browser seam. Tests pass their own `ContactScanner` instead. */
 export const browserContactScanner: ContactScanner = {
-  supported: () => detectorConstructor() !== null && camera() !== null,
+  async supported() {
+    const Constructor = detectorConstructor();
+    if (Constructor === null || camera() === null) return false;
+    try {
+      return (await Constructor.getSupportedFormats()).includes(CODE_FORMAT);
+    } catch {
+      return false;
+    }
+  },
 
   async scan({ video, signal }) {
     const Constructor = detectorConstructor();
@@ -63,12 +107,18 @@ export const browserContactScanner: ContactScanner = {
 
     const stream = await devices.getUserMedia({ video: { facingMode: 'environment' } });
     try {
-      video.srcObject = stream;
-      await video.play();
-      const detector = new Constructor({ formats: ['qr_code'] });
       const deadline = Date.now() + SCAN_BUDGET_MS;
+      video.srcObject = stream;
+      const playing = await firstOf(
+        video.play().then(() => true),
+        signal,
+        deadline
+      );
+      if (playing === null) return null;
+      const detector = new Constructor({ formats: [CODE_FORMAT] });
       while (!signal.aborted && Date.now() < deadline) {
-        const found = await detector.detect(video);
+        const found = await firstOf(detector.detect(video), signal, deadline);
+        if (found === null) return null;
         const text = found[0]?.rawValue;
         if (text !== undefined && text !== '') return text;
         await wait(FRAME_INTERVAL_MS);

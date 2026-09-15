@@ -9,17 +9,27 @@ interface Stubs {
   detect: ReturnType<typeof vi.fn>;
 }
 
+interface BrowserOptions {
+  getUserMedia?: Stubs['getUserMedia'];
+  formats?: string[];
+  play?: () => Promise<void>;
+}
+
+let playing: () => Promise<void> = () => Promise.resolve();
+
 /** A browser that carries both halves the scanner needs. */
-function browser(detect: Stubs['detect'], getUserMedia?: Stubs['getUserMedia']): Stubs {
+function browser(detect: Stubs['detect'], options: BrowserOptions = {}): Stubs {
   const stop = vi.fn();
   const stream = { getTracks: () => [{ stop }] } as unknown as MediaStream;
-  const media = getUserMedia ?? vi.fn(() => Promise.resolve(stream));
+  const media = options.getUserMedia ?? vi.fn(() => Promise.resolve(stream));
+  playing = options.play ?? (() => Promise.resolve());
   Object.defineProperty(globalThis.navigator, 'mediaDevices', {
     value: { getUserMedia: media },
     configurable: true,
   });
   Object.defineProperty(globalThis, 'BarcodeDetector', {
     value: class {
+      static getSupportedFormats = () => Promise.resolve(options.formats ?? ['qr_code']);
       detect = detect;
     },
     configurable: true,
@@ -28,7 +38,12 @@ function browser(detect: Stubs['detect'], getUserMedia?: Stubs['getUserMedia']):
 }
 
 function preview() {
-  return { play: vi.fn(() => Promise.resolve()), srcObject: null } as unknown as HTMLVideoElement;
+  return { play: () => playing(), srcObject: null } as unknown as HTMLVideoElement;
+}
+
+/** A promise that never settles, as a hung camera or detector answers. */
+function hangs<T>(): Promise<T> {
+  return new Promise<T>(() => undefined);
 }
 
 afterEach(() => {
@@ -40,27 +55,33 @@ afterEach(() => {
 });
 
 describe('the browser contact scanner', () => {
-  it('reports no capability where the browser cannot decode a code', () => {
+  it('reports no capability where the browser cannot decode a code', async () => {
     browser(vi.fn());
     Reflect.deleteProperty(globalThis, 'BarcodeDetector');
 
-    expect(browserContactScanner.supported()).toBe(false);
+    await expect(browserContactScanner.supported()).resolves.toBe(false);
   });
 
-  it('reports no capability where the browser offers no camera', () => {
+  it('reports no capability where the browser offers no camera', async () => {
     browser(vi.fn());
     Object.defineProperty(globalThis.navigator, 'mediaDevices', {
       value: undefined,
       configurable: true,
     });
 
-    expect(browserContactScanner.supported()).toBe(false);
+    await expect(browserContactScanner.supported()).resolves.toBe(false);
+  });
+
+  it('reports no capability where the detector reads no QR code', async () => {
+    browser(vi.fn(), { formats: ['ean_13', 'code_128'] });
+
+    await expect(browserContactScanner.supported()).resolves.toBe(false);
   });
 
   it('asks for the camera only when a scan starts', async () => {
     const stubs = browser(vi.fn(() => Promise.resolve([{ rawValue: CODE_HEX }])));
 
-    expect(browserContactScanner.supported()).toBe(true);
+    await expect(browserContactScanner.supported()).resolves.toBe(true);
     expect(stubs.getUserMedia).not.toHaveBeenCalled();
 
     await browserContactScanner.scan({ video: preview(), signal: new AbortController().signal });
@@ -94,6 +115,51 @@ describe('the browser contact scanner', () => {
     expect(stubs.stop).toHaveBeenCalledTimes(1);
   });
 
+  it('releases the camera when playback never settles and the caller leaves', async () => {
+    const holder = new AbortController();
+    const stubs = browser(vi.fn(), { play: hangs });
+
+    const scan = browserContactScanner.scan({ video: preview(), signal: holder.signal });
+    holder.abort();
+
+    await expect(scan).resolves.toBeNull();
+    expect(stubs.detect).not.toHaveBeenCalled();
+    expect(stubs.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the camera when a detect pass never settles and the caller leaves', async () => {
+    const holder = new AbortController();
+    const stubs = browser(
+      vi.fn(() => {
+        queueMicrotask(() => holder.abort());
+        return hangs();
+      })
+    );
+
+    const text = await browserContactScanner.scan({ video: preview(), signal: holder.signal });
+
+    expect(text).toBeNull();
+    expect(stubs.detect).toHaveBeenCalledTimes(1);
+    expect(stubs.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the camera when no detect pass settles before the budget runs out', async () => {
+    vi.useFakeTimers();
+    const stubs = browser(vi.fn(() => hangs()));
+    try {
+      const scan = browserContactScanner.scan({
+        video: preview(),
+        signal: new AbortController().signal,
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await expect(scan).resolves.toBeNull();
+      expect(stubs.stop).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('releases the camera when a detect pass throws', async () => {
     const stubs = browser(vi.fn(() => Promise.reject(new Error('detector failed'))));
 
@@ -104,10 +170,9 @@ describe('the browser contact scanner', () => {
   });
 
   it('passes on a camera the member refused, and holds no stream', async () => {
-    const stubs = browser(
-      vi.fn(),
-      vi.fn(() => Promise.reject(new Error('NotAllowedError')))
-    );
+    const stubs = browser(vi.fn(), {
+      getUserMedia: vi.fn(() => Promise.reject(new Error('NotAllowedError'))),
+    });
 
     await expect(
       browserContactScanner.scan({ video: preview(), signal: new AbortController().signal })
