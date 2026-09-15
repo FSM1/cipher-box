@@ -6,6 +6,7 @@ import {
   TssShareType,
 } from '@web3auth/mpc-core-kit';
 import { Point } from '@tkey/common-types';
+import type BN from 'bn.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deviceIdentitiesTestInstance, MemoryKeys, sealedTestStore } from '../test/storeFakes';
 import type { SealedStore } from './sealedStore';
@@ -41,8 +42,10 @@ const sdk = vi.hoisted(() => ({
   deleted: [] as string[],
   /** The public point each `deleteFactor` named, in compressed SEC1 hex. */
   deletedPubs: [] as string[],
-  /** The factors the account lists, as `getTssFactorPub` reports them. */
+  /** The factors the local metadata lists, as `getTssFactorPub` reports them. */
   factorPubs: [] as string[],
+  /** The factors the stored account carries; a commit writes the local list here. */
+  committedFactorPubs: [] as string[],
   deleteFactorError: undefined as Error | undefined,
   commits: 0,
   /** Which `commitChanges` call rejects, 1-based; `0` for none. */
@@ -82,9 +85,13 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       commitChanges(): Promise<void> {
         sdk.commits += 1;
-        return sdk.commits === sdk.commitFailsAfter
-          ? Promise.reject(new Error('metadata sync failed'))
-          : Promise.resolve();
+        if (sdk.commits === sdk.commitFailsAfter) {
+          return Promise.reject(new Error('metadata sync failed'));
+        }
+        // One sync writes every transition queued so far, as tkey's own
+        // `syncLocalMetadataTransitions` does.
+        sdk.committedFactorPubs = [...sdk.factorPubs];
+        return Promise.resolve();
       }
       logout(): Promise<void> {
         sdk.logoutCalls += 1;
@@ -102,6 +109,11 @@ vi.mock('@web3auth/mpc-core-kit', async (importOriginal) => {
       }
       createFactor(params: Record<string, unknown>): Promise<string> {
         sdk.created.push(params);
+        sdk.factorPubs.push(
+          Point.fromScalar(params.factorKey as BN, factorKeyCurve)
+            .toSEC1(factorKeyCurve, true)
+            .toString('hex')
+        );
         return Promise.resolve('factor');
       }
       setDeviceFactor(_factorKey: unknown, replaceExisting?: unknown): Promise<void> {
@@ -185,6 +197,7 @@ beforeEach(() => {
   sdk.deleted = [];
   sdk.deletedPubs = [];
   sdk.factorPubs = [];
+  sdk.committedFactorPubs = [];
   sdk.deleteFactorError = undefined;
   sdk.commits = 0;
   sdk.commitFailsAfter = 0;
@@ -672,33 +685,21 @@ describe('the factor an approval mints', () => {
     const active = session();
 
     const minted = await active.mintApprovalFactor();
-    sdk.factorPubs = [minted.id];
     await active.deleteApprovalFactor(minted.id);
 
     expect(sdk.created).toHaveLength(1);
     expect(sdk.deletedPubs).toEqual([minted.id]);
-  });
-
-  it('commits the removal, so a dropped factor does not stay live on the account', async () => {
-    const active = session();
-    const minted = await active.mintApprovalFactor();
-    sdk.factorPubs = [minted.id];
-    const committed = sdk.commits;
-
-    await active.deleteApprovalFactor(minted.id);
-
-    expect(sdk.commits).toBe(committed + 1);
+    expect(sdk.committedFactorPubs).toEqual([]);
   });
 
   it('resolves without a delete when the account no longer carries the factor', async () => {
     const active = session();
     const minted = await active.mintApprovalFactor();
-    sdk.factorPubs = [minted.id];
 
     await active.deleteApprovalFactor(minted.id);
     await active.deleteApprovalFactor(minted.id);
 
-    // The second call finds nothing to drop, so it asks for nothing.
+    // The second call finds nothing to drop and nothing to sync.
     expect(sdk.deletedPubs).toEqual([minted.id]);
   });
 
@@ -709,19 +710,37 @@ describe('the factor an approval mints', () => {
   it('re-syncs a cut whose commit did not land, rather than reading it as gone', async () => {
     const active = session();
     const minted = await active.mintApprovalFactor();
-    sdk.factorPubs = [minted.id];
     sdk.commitFailsAfter = sdk.commits + 1;
 
     await expect(active.deleteApprovalFactor(minted.id)).rejects.toThrow(/metadata sync/);
-    expect(sdk.factorPubs).toEqual([]);
-    const committed = sdk.commits;
+    expect(sdk.committedFactorPubs).toEqual([minted.id]);
 
     await active.deleteApprovalFactor(minted.id);
 
     // The factor was cut once: a second cut would throw, so the retry is the
     // sync and nothing else.
     expect(sdk.deletedPubs).toEqual([minted.id]);
-    expect(sdk.commits).toBe(committed + 1);
+    expect(sdk.committedFactorPubs).toEqual([]);
+  });
+
+  /**
+   * The approver never names an earlier factor again, because each failed
+   * approval mints its own. So the sync that lands an earlier cut is the next
+   * one this session runs, not a repeat call for that identifier.
+   */
+  it('lands an earlier cut on the next delete, without naming that factor again', async () => {
+    const active = session();
+    const first = await active.mintApprovalFactor();
+    const second = await active.mintApprovalFactor();
+    sdk.commitFailsAfter = sdk.commits + 1;
+
+    await expect(active.deleteApprovalFactor(first.id)).rejects.toThrow(/metadata sync/);
+    expect(sdk.committedFactorPubs).toEqual([first.id, second.id]);
+
+    await active.deleteApprovalFactor(second.id);
+
+    expect(sdk.deletedPubs).toEqual([first.id, second.id]);
+    expect(sdk.committedFactorPubs).toEqual([]);
   });
 
   it('refuses to mint before this browser has reconstructed the account', async () => {
