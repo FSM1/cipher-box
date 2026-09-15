@@ -59,8 +59,8 @@ function wait(ms: number): Promise<void> {
 
 /**
  * The work's value, or `null` once the member leaves or the budget passes.
- * Neither `play()` nor `detect()` takes a signal or settles on a deadline of
- * its own, so a pending one would otherwise hold the camera open.
+ * Nothing the scan loop waits on — playback, a detect pass, the frame gap —
+ * ends on the signal by itself, so one of them would hold the camera open.
  */
 function firstOf<T>(work: Promise<T>, signal: AbortSignal, deadline: number): Promise<T | null> {
   if (signal.aborted) return Promise.resolve(null);
@@ -121,7 +121,7 @@ export const browserContactScanner: ContactScanner = {
         if (found === null) return null;
         const text = found[0]?.rawValue;
         if (text !== undefined && text !== '') return text;
-        await wait(FRAME_INTERVAL_MS);
+        if ((await firstOf(wait(FRAME_INTERVAL_MS), signal, deadline)) === null) return null;
       }
       return null;
     } finally {

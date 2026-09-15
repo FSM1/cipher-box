@@ -160,6 +160,24 @@ describe('the browser contact scanner', () => {
     }
   });
 
+  it('releases the camera inside the gap between frames, without waiting it out', async () => {
+    vi.useFakeTimers();
+    const holder = new AbortController();
+    const stubs = browser(vi.fn(() => Promise.resolve([])));
+    try {
+      const scan = browserContactScanner.scan({ video: preview(), signal: holder.signal });
+      await vi.advanceTimersByTimeAsync(0);
+      holder.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(scan).resolves.toBeNull();
+      expect(stubs.detect).toHaveBeenCalledTimes(1);
+      expect(stubs.stop).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('releases the camera when a detect pass throws', async () => {
     const stubs = browser(vi.fn(() => Promise.reject(new Error('detector failed'))));
 
