@@ -2975,6 +2975,28 @@ fn refuse_full_parent(
     })
 }
 
+/// A vacate frees an empty folder and nothing else.
+///
+/// `Snapshot::relocate` takes the replaced node's whole subtree, while the
+/// publish plane drops one child ref for it. So a folder that still holds
+/// descendants would leave every registry name under it live and its content
+/// pinned, with no parent ref left for a later walk to reach them from.
+///
+/// The rule's home, rather than the mount's: a host that reaches
+/// [`Command::Move`] with nothing in front of it inherits it too.
+fn refuse_non_empty_vacate(
+    rendered: &Snapshot,
+    replacing: Option<NodeId>,
+) -> Result<(), EngineError> {
+    let vacated_subtree = replacing.is_some_and(|node| !rendered.children(node).is_empty());
+    if vacated_subtree {
+        return Err(EngineError::MalformedInput {
+            check: "replaced-folder-not-empty",
+        });
+    }
+    Ok(())
+}
+
 /// Whether `node`'s own record is authored as a scope root, and so is held to
 /// the re-seal reservation: the vault root always is, and the interior roots
 /// are the ones this session knows ([`Engine::authored_scope_roots`]).
@@ -6782,6 +6804,7 @@ where {
                     replacing,
                     &self.authored_scope_roots(),
                 )?;
+                refuse_non_empty_vacate(&rendered, replacing)?;
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
                     // The conditional-delete anchor: a concurrent edit that
@@ -12778,6 +12801,52 @@ mod tests {
         );
     }
 
+    /// A vacate is a delete, and the publish plane frees one child ref for it.
+    /// A folder that still holds descendants would strand every registry name
+    /// under it, so the move is refused before it stages anything. The mount
+    /// keeps its own POSIX check, but this is the rule's home: a host that
+    /// reaches the command directly inherits it.
+    #[test]
+    fn a_move_that_would_vacate_a_folder_holding_descendants_is_refused() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "photos", NodeKind::Folder);
+        let photos = named_child(&engine, root, "photos");
+        create(&mut engine, photos, "a.txt", NodeKind::File);
+        create(&mut engine, root, "empty", NodeKind::Folder);
+        let empty = named_child(&engine, root, "empty");
+        create(&mut engine, root, "b.txt", NodeKind::File);
+        let moved = named_child(&engine, root, "b.txt");
+
+        assert_eq!(
+            block_on(engine.command(Command::Move {
+                node: moved,
+                new_parent: root,
+                new_name: "photos".into(),
+                replacing: Some(photos),
+            })),
+            Err(EngineError::MalformedInput {
+                check: "replaced-folder-not-empty",
+            }),
+        );
+        assert_eq!(
+            block_on(engine.view()).unwrap().children(photos).len(),
+            1,
+            "a refused move stages nothing, so the subtree it would have stranded stands"
+        );
+
+        assert!(
+            block_on(engine.command(Command::Move {
+                node: moved,
+                new_parent: root,
+                new_name: "empty".into(),
+                replacing: Some(empty),
+            }))
+            .is_ok(),
+            "a vacate of an empty folder still publishes"
+        );
+    }
+
     /// The bound is release-active and it sits at the facade, because the
     /// projection's own name check runs above it and a web caller reaches the
     /// commands with nothing in front of them.
@@ -13359,6 +13428,17 @@ mod tests {
             out.push(event);
         }
         out
+    }
+
+    /// The id of `parent`'s child called `name`, as the render lists it.
+    fn named_child(engine: &Engine<FakeSeamTypes>, parent: NodeId, name: &str) -> NodeId {
+        block_on(engine.view())
+            .unwrap()
+            .children(parent)
+            .into_iter()
+            .find(|child| child.name == name)
+            .expect("the child is listed")
+            .id
     }
 
     fn create(engine: &mut Engine<FakeSeamTypes>, parent: NodeId, name: &str, kind: NodeKind) {
