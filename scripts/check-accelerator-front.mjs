@@ -24,6 +24,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { CLOUDFLARE_RANGES } from './cloudflare-ranges.mjs';
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CADDY_BUILD = resolve(repoRoot, 'docker/caddy');
 /** Generates the staging env, so it holds the hop count the API actually runs. */
@@ -81,31 +83,6 @@ const RATE_LIMIT_LOG = 'http.handlers.rate_limit';
 const ORIGIN_PULL_CA = '/etc/caddy/certs/cloudflare-zone-origin-pull-ca.pem';
 /** `verify_if_given` admits a caller that presents no certificate at all. */
 const CLIENT_AUTH_MODE = 'require_and_verify';
-/** cloudflare.com/ips — a hand-mirrored snapshot, so the set is pinned, not counted. */
-const CLOUDFLARE_RANGES = [
-  '173.245.48.0/20',
-  '103.21.244.0/22',
-  '103.22.200.0/22',
-  '103.31.4.0/22',
-  '141.101.64.0/18',
-  '108.162.192.0/18',
-  '190.93.240.0/20',
-  '188.114.96.0/20',
-  '197.234.240.0/22',
-  '198.41.128.0/17',
-  '162.158.0.0/15',
-  '104.16.0.0/13',
-  '104.24.0.0/14',
-  '172.64.0.0/13',
-  '131.0.72.0/22',
-  '2400:cb00::/32',
-  '2606:4700::/32',
-  '2803:f800::/32',
-  '2405:b500::/32',
-  '2405:8100::/32',
-  '2a06:98c0::/29',
-  '2c0f:f248::/32',
-];
 
 const failures = [];
 const check = (ok, message) => {
