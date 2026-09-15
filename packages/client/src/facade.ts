@@ -26,6 +26,7 @@ import type {
   NodeKind,
   OpenedStream,
   PendingApprovalDescriptor,
+  VersionEntryDescriptor,
   Permission,
   ReceivedShareDescriptor,
   RegisteredDeviceDescriptor,
@@ -193,6 +194,19 @@ export class EngineFacade {
   }
 
   /**
+   * One file's prior versions, newest first. The file's current content is not
+   * in the list; `contentCid` on the snapshot child names it.
+   */
+  fileVersions(node: Uint8Array): Promise<VersionEntryDescriptor[]> {
+    return this.transport.read({ kind: 'fileVersions', node });
+  }
+
+  /** Downloads one prior version's plaintext, named by its content root CID. */
+  downloadVersion(node: Uint8Array, contentCid: Uint8Array): Promise<ArrayBuffer> {
+    return this.transport.read({ kind: 'downloadVersion', node, contentCid });
+  }
+
+  /**
    * Opens a read stream over one file node, pinned to the head content version
    * for the handle's life. Released with `closeStream`.
    */
@@ -267,6 +281,19 @@ export class EngineFacade {
 
   relink(node: Uint8Array, newParent: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'relink', node, newParent });
+  }
+
+  /**
+   * Puts one prior version back at the head of a file's history. It publishes a
+   * new version rather than rewinding history, and moves no byte.
+   */
+  restoreVersion(node: Uint8Array, contentCid: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'restoreVersion', node, contentCid });
+  }
+
+  /** Drops one prior version of a file and reclaims its bytes. Irreversible. */
+  deleteVersion(node: Uint8Array, contentCid: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'deleteVersion', node, contentCid });
   }
 
   /**

@@ -72,6 +72,14 @@ export interface WasmBreadcrumb {
 }
 
 /** wasm-bindgen `SnapshotChild` — one direct child in a snapshot view. */
+/** One prior version of a file, as `fileVersions` resolves it. */
+export interface WasmVersionEntry {
+  readonly contentCid: Uint8Array;
+  readonly size: bigint;
+  readonly modifiedAt: bigint;
+  free(): void;
+}
+
 export interface WasmSnapshotChild {
   readonly id: Uint8Array;
   readonly name: string;
@@ -298,6 +306,8 @@ export interface WasmEngineHandle {
   pendingApprovals(): Promise<readonly WasmPendingApproval[]>;
   siweChallenge(intent: SiweIntent): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
+  fileVersions(node: WasmNodeId): Promise<readonly WasmVersionEntry[]>;
+  downloadVersion(node: WasmNodeId, contentCid: Uint8Array): Promise<Uint8Array>;
   openContentStream(node: WasmNodeId): Promise<WasmOpenedStream>;
   /** `offset`/`length` cross as plain JS numbers (the seam's `f64` convention). */
   readStream(handle: bigint, offset: number, length: number): Promise<Uint8Array>;
@@ -322,6 +332,8 @@ export interface EngineWasm {
     restore(node: WasmNodeId, into?: WasmNodeId): WasmCommand;
     purge(node: WasmNodeId): WasmCommand;
     rename(node: WasmNodeId, newName: string): WasmCommand;
+    restoreVersion(node: WasmNodeId, contentCid: Uint8Array): WasmCommand;
+    deleteVersion(node: WasmNodeId, contentCid: Uint8Array): WasmCommand;
     relink(node: WasmNodeId, newParent: WasmNodeId): WasmCommand;
     cancelUpload(opId: bigint): WasmCommand;
     discardDeadLetter(opId: bigint): WasmCommand;

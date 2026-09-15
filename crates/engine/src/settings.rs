@@ -80,12 +80,16 @@ pub const MAX_BIN_RETENTION_DAYS: u32 = 3650;
 /// names is not landed, so a soft-deleted node waits in the bin without bound.
 pub const DEFAULT_BIN_RETENTION_DAYS: u32 = 30;
 
+/// How many versions of a file a vault keeps before its owner chooses
+/// (blueprint/engine.md "Content plane").
+pub const DEFAULT_KEEP_LATEST_VERSIONS: NonZeroU64 = NonZeroU64::new(10).expect("nonzero");
+
 impl Default for VaultSettings {
     fn default() -> Self {
         Self {
             pin_mode: PinMode::Hosted,
             byo: None,
-            retention: RetentionPolicy::KeepAll,
+            retention: RetentionPolicy::KeepLatest(DEFAULT_KEEP_LATEST_VERSIONS),
             bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         }
     }

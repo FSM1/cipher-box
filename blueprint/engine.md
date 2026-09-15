@@ -1185,12 +1185,33 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   seals each with core's content-seal primitive (fresh random per-version
   content key, FSM1/cipher-box-next#26 D6), and assembles a DAG addressed by the version's
   `contentCid`, shaped so ranged block/CAR fetches map chunk-aligned.
-  Retention default: keep all versions within quota, with an explicit
-  user-initiated prune op. The framing is frozen (#820) and pinned by the
+  The framing is frozen (#820) and pinned by the
   engine KAT manifest: the 1 MiB budget belongs to the **block**, so a
   1,048,536-byte plaintext chunk seals to a 1 MiB leaf; the DAG is a flat root
   carrying an explicit format version, whose inlined link list caps a single
   file at ~107.78 GiB.
+- **Version retention is count-based and clock-free.** A vault keeps the newest
+  `keepLatestVersions` versions of a file; the default before the member chooses
+  is ten. The rule is enforced where history grows — the content publish
+  shortens the list it is about to seal — so a vault never carries a version
+  past the rule, and an explicit prune op re-applies the same plan to a history
+  a settings change left long. No clock enters the decision, which is what lets
+  the op queue replay it; an age-based rule was declined for that reason.
+- **Referenced equals kept.** Every retained version's root is re-registered
+  under the file's own name on each publish, so orphan GC leaves it alone. A
+  version that falls outside the rule loses that reference, and what it owes the
+  registry is journaled to the retire ledger before the shortened history
+  publishes.
+- **Shortening history acts only on a member choice.** It retires bytes and
+  cannot be undone, so a device whose settings load carried no member choice
+  keeps every version rather than applying the documented default — the same
+  rule the bin's expiry sweep follows.
+- **A restore is a write, never a rewind.** Putting a prior version back
+  publishes a new record whose head is that version, with the outgoing head as
+  the newest prior version. It moves no byte: the version's blocks were
+  registered the whole time. A delete of one version drops its entry and retires
+  its blocks; the head is never a target, because a file's current content
+  leaves with the file.
 
 ## Facade
 

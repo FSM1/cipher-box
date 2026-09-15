@@ -14222,3 +14222,327 @@ fn a_restart_drives_an_owed_scope_exit_cut_on_an_empty_queue() {
         "and the debt stands until the cut lands",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Version history: retention at the write, restore, and delete
+// ---------------------------------------------------------------------------
+
+/// Put a version-retention rule on the vault the running session reads.
+fn save_retention(engine: &mut Engine<FakeSeamTypes>, keep_latest: u64) {
+    block_on(engine.command(Command::SaveVaultSettings {
+        settings: VaultSettings {
+            pin_mode: PinMode::Hosted,
+            byo: None,
+            retention: RetentionPolicy::KeepLatest(NonZeroU64::new(keep_latest).expect("nonzero")),
+            bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
+        },
+    }))
+    .expect("the settings save publishes");
+}
+
+/// The rule bounds history where it grows. A superseded root inside the rule is
+/// still named by the published record, which is what keeps orphan GC off it;
+/// the write that pushes it outside the rule is the one that retires it.
+#[test]
+fn a_content_write_retires_only_the_version_the_retention_rule_drops() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    save_retention(&mut engine, 2);
+
+    let bodies: Vec<Vec<u8>> = (0..3u8)
+        .map(|version| (0..60u8).map(|byte| byte ^ (version + 1)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies[..2]);
+    let history = published_versions(&world.record_store, &blocks, file);
+    assert_eq!(
+        history.len(),
+        2,
+        "two writes sit inside a keep-latest-2 rule"
+    );
+    let oldest = history[1].content_cid.clone();
+    assert!(
+        !retire_targets(&alice).contains(&encode_content_cid_str(&oldest)),
+        "a superseded root inside the rule is retained, not collected",
+    );
+
+    let mark = retire_targets(&alice).len();
+    write_file(&mut engine, version(file), &bodies[2]).expect("the third write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let kept = published_versions(&world.record_store, &blocks, file);
+    assert_eq!(kept.len(), 2, "the rule bounds the history at two");
+    assert!(
+        kept.iter().all(|entry| entry.content_cid != oldest),
+        "and the version outside it left the record",
+    );
+    assert!(
+        retired_since(&alice, mark).contains(&encode_content_cid_str(&oldest)),
+        "the root that fell outside the rule is retired",
+    );
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the head reads"),
+        bodies[2],
+        "the write that shortened history still published its own version",
+    );
+}
+
+/// A device whose settings load carried no member choice keeps every version:
+/// shortening history retires bytes, so it acts only on a proven owner choice.
+#[test]
+fn a_content_write_with_no_member_retention_choice_keeps_every_version() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..3u8)
+        .map(|version| (0..40u8).map(|byte| byte ^ (version + 7)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        3,
+        "no member choice keeps the whole history",
+    );
+    assert!(retire_targets(&alice).is_empty(), "and retires nothing");
+}
+
+/// A restore publishes a new record whose head is the named version. History
+/// keeps its length: the outgoing head becomes the newest prior version, and no
+/// byte moves.
+#[test]
+fn restoring_a_prior_version_publishes_it_as_the_new_head_and_keeps_the_history() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..3u8)
+        .map(|version| (0..50u8).map(|byte| byte.wrapping_add(version)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let history = published_versions(&world.record_store, &blocks, file);
+    // Newest first, so the oldest write is the last entry.
+    let oldest = history[2].content_cid.clone();
+    let head_before = history[0].content_cid.clone();
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::RestoreVersion {
+        node: file,
+        content_cid: oldest.clone(),
+    }))
+    .expect("the restore queues");
+    tick(&world, &engine, &mut tasks);
+
+    let after = published_versions(&world.record_store, &blocks, file);
+    assert_eq!(after.len(), 3, "a restore never shortens history");
+    assert_eq!(after[0].content_cid, oldest, "the named version is current");
+    assert_eq!(
+        after[1].content_cid, head_before,
+        "and the outgoing head is the newest prior version",
+    );
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the restored head reads"),
+        bodies[0],
+        "the current content is the restored version's bytes",
+    );
+    assert!(
+        retired_since(&alice, mark).is_empty(),
+        "a restore moves no byte and retires none",
+    );
+}
+
+/// A delete drops the entry and retires what it owes. The version is then
+/// unresolvable: no read path can name it, and its bytes are collectable.
+#[test]
+fn deleting_one_version_makes_it_unresolvable_and_retires_its_blocks() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..70u8).map(|byte| byte ^ (version + 3)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let history = published_versions(&world.record_store, &blocks, file);
+    let doomed = history[1].content_cid.clone();
+    assert_eq!(
+        block_on(engine.read_version_content(file, &doomed)).expect("the prior version reads"),
+        bodies[0],
+        "the version opens before the delete",
+    );
+    let mark = retire_targets(&alice).len();
+
+    block_on(engine.command(Command::DeleteVersion {
+        node: file,
+        content_cid: doomed.clone(),
+    }))
+    .expect("the delete queues");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        1,
+        "the record carries the current version alone",
+    );
+    assert!(
+        block_on(engine.file_versions(file))
+            .expect("the list reads")
+            .is_empty(),
+        "and no prior version is listed",
+    );
+    assert!(
+        matches!(
+            block_on(engine.read_version_content(file, &doomed)),
+            Err(EngineError::UnsupportedTarget { .. })
+        ),
+        "the deleted version is unresolvable",
+    );
+    assert!(
+        retired_since(&alice, mark).contains(&encode_content_cid_str(&doomed)),
+        "and its root is retired",
+    );
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the head still reads"),
+        bodies[1],
+        "the file's current content is untouched",
+    );
+}
+
+/// A file's current content leaves with the file, never through its history.
+#[test]
+fn a_delete_of_the_current_version_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let body = vec![7u8; 30];
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[body]);
+    let head = published_versions(&world.record_store, &blocks, file)[0]
+        .content_cid
+        .clone();
+
+    assert!(
+        matches!(
+            block_on(engine.command(Command::DeleteVersion {
+                node: file,
+                content_cid: head,
+            })),
+            Err(EngineError::UnsupportedTarget { .. })
+        ),
+        "the head is never a version-delete target",
+    );
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        1,
+        "and the record is untouched",
+    );
+}
+
+/// Every version's content key rides inside the file's sealed read-body, so the
+/// re-seal the lazy wave performs after a cut re-wraps the whole history at
+/// once: a version written before the cut still opens after it, and no content
+/// byte is re-encrypted.
+#[test]
+fn a_version_retained_across_a_key_regression_epoch_still_opens() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..3u8)
+        .map(|version| (0..45u8).map(|byte| byte ^ (version + 11)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies[..2]);
+    let prior = published_versions(&world.record_store, &blocks, file)[1]
+        .content_cid
+        .clone();
+
+    block_on(engine.command(Command::RotateNow { node: ROOT })).expect("the cut lands");
+    tick(&world, &engine, &mut tasks);
+    // The lazy wave re-seals the file's own record at the new epoch on its next
+    // write, which is what carries the retained version's key across the cut.
+    write_file(&mut engine, version(file), &bodies[2]).expect("the post-cut write commits");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        block_on(engine.read_version_content(file, &prior)).expect("the prior version still reads"),
+        bodies[0],
+        "a version written before the cut opens under the epoch it regressed to",
+    );
+}
+
+/// A version list is authored by anyone holding the scope's write seed, so a
+/// co-writer can put a repeated `contentCid` on the wire. Retention is hygiene
+/// and the member's write is their work: a history this build refuses to
+/// shorten publishes whole rather than parking every write to that file.
+#[test]
+fn a_write_over_a_history_retention_cannot_shorten_still_publishes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    // Keep-latest-2 over a planted `[head, head]` makes the one doomed entry a
+    // CID a survivor still names, which is the refusal under test.
+    save_retention(&mut engine, 2);
+
+    let first = (0..60u8).collect::<Vec<u8>>();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &[first]);
+    let head = published_versions(&world.record_store, &blocks, file).remove(0);
+    plant_record(
+        &world.record_store,
+        &blocks,
+        file,
+        Planted {
+            node_id: file.0,
+            scope_id: SCOPE,
+            read_key: read_key_of(file),
+            body: &ReadBody::File {
+                created_at: 0,
+                modified_at: 0,
+                versions: vec![head.clone(), head],
+                unknown: PreservedFields::new(),
+            },
+        },
+    );
+    let retired_before = retire_targets(&alice).len();
+
+    let next = vec![9u8; 40];
+    write_file(&mut engine, version(file), &next).expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the new head reads"),
+        next,
+        "the member's write published over the history it could not shorten",
+    );
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        3,
+        "the history it could not shorten published whole",
+    );
+    assert_eq!(
+        retire_targets(&alice).len(),
+        retired_before,
+        "and no retire names the CID a survivor still holds",
+    );
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .expect("the view renders")
+            .dead_letters
+            .is_empty(),
+        "a co-writer's history never parks the member's own write",
+    );
+}

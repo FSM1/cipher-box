@@ -49,8 +49,9 @@ use crate::content::limits::folder_listing_budget;
 use crate::content::read::authority_of;
 use crate::content::{
     ByoIpfsConfig, ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError,
-    PinMode, Refused, RootManifest, SealError, SessionBearer, StagingLedger, open_content_range,
-    open_content_root, pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
+    PinMode, Refused, RetentionPolicy, RootManifest, SealError, SessionBearer, StagingLedger,
+    open_content_range, open_content_root, pre_flight_quota_check, read_pinned_range,
+    sealed_total_bytes,
 };
 use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
@@ -353,6 +354,36 @@ pub struct SnapshotChild {
     /// The head version's content root CID, `None` until projected — what a
     /// caller hands back on [`WriteTarget::Version::expected_version`].
     pub content_cid: Option<Vec<u8>>,
+}
+
+/// The refusal a version command earns when the file's history does not name
+/// the `contentCid` it targets.
+const UNKNOWN_VERSION: &str = "version-is-not-in-the-files-history";
+
+/// One prior version of a file, as [`Engine::file_versions`] lists it.
+///
+/// Every field is read from the file's sealed read-body — the content key that
+/// rides beside them there is not one of them and never leaves the engine.
+/// `content_cid` is the identifier: a history carries no other, and an index
+/// into it moves under a concurrent write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionEntry {
+    /// The version's content root CID, and the name every version command takes.
+    pub content_cid: Vec<u8>,
+    /// The version's plaintext size in bytes.
+    pub size: u64,
+    /// When the version was written (Unix millis), as the record stamped it.
+    pub modified_at: u64,
+}
+
+impl VersionEntry {
+    fn of(version: &Version) -> Self {
+        Self {
+            content_cid: version.content_cid.clone(),
+            size: version.size,
+            modified_at: version.modified_at,
+        }
+    }
 }
 
 impl fmt::Debug for SnapshotChild {
@@ -1029,6 +1060,27 @@ pub enum Command {
         /// The node the destination name currently holds, if any.
         replacing: Option<NodeId>,
     },
+    /// Put one prior version of a file back at the head of its history.
+    ///
+    /// A write like any other: it publishes a new record whose current content
+    /// is the named version, and the outgoing head becomes the newest prior
+    /// version. History is never rewound and no byte moves — the version's
+    /// blocks stay registered under the file's own name throughout.
+    RestoreVersion {
+        /// The file.
+        node: NodeId,
+        /// The `contentCid` of the version to make current.
+        content_cid: Vec<u8>,
+    },
+    /// Drop one prior version of a file and reclaim its bytes.
+    ///
+    /// The file's current content is never a target: it leaves with the file.
+    DeleteVersion {
+        /// The file.
+        node: NodeId,
+        /// The `contentCid` of the version to drop.
+        content_cid: Vec<u8>,
+    },
     /// Cancel a queued upload, releasing its staged blocks and retiring
     /// whatever of it already reached the network.
     ///
@@ -1234,6 +1286,8 @@ impl Command {
             Command::Rename { .. } => "rename",
             Command::Relink { .. } => "relink",
             Command::Move { .. } => "move",
+            Command::RestoreVersion { .. } => "restoreVersion",
+            Command::DeleteVersion { .. } => "deleteVersion",
             Command::CancelUpload { .. } => "cancelUpload",
             Command::DiscardDeadLetter { .. } => "discardDeadLetter",
             Command::RecoverDeadLetter { .. } => "recoverDeadLetter",
@@ -3768,6 +3822,17 @@ fn owner_bin_retention_days(summary: &RefCell<Option<VaultSettingsSummary>>) -> 
         .as_ref()
         .filter(|summary| summary.origin != SettingsOrigin::Defaults)
         .map(|summary| summary.bin_retention_days)
+}
+
+/// The version retention the owner actually chose, or [`RetentionPolicy::KeepAll`]
+/// when this device's settings load carried no member choice
+/// (blueprint/engine.md "Content plane").
+fn owner_retention(summary: &RefCell<Option<VaultSettingsSummary>>) -> RetentionPolicy {
+    let summary = summary.borrow();
+    summary
+        .as_ref()
+        .filter(|summary| summary.origin != SettingsOrigin::Defaults)
+        .map_or(RetentionPolicy::KeepAll, |summary| summary.retention)
 }
 
 /// The bin retention a session loaded, which decides whether a delete is soft
@@ -6446,6 +6511,7 @@ where {
                             events: &events,
                             bin_keys: &bin_keys,
                             bin_retention_days: owner_bin_retention_days(&tick_settings),
+                            retention: owner_retention(&tick_settings),
                             dead_letters: &dead_letters,
 
                             established_bin_index: RefCell::new(None),
@@ -6676,6 +6742,22 @@ where {
                 )?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::rename(node, new_name, seq, authored_at))
+                    .await
+            }
+            Command::RestoreVersion { node, content_cid } => {
+                self.version_position(node, &content_cid).await?;
+                let seq = self.render().await?.record_sequence(node).unwrap_or(1);
+                self.stage_and_notify(&Op::restore_version(node, content_cid, seq, authored_at))
+                    .await
+            }
+            Command::DeleteVersion { node, content_cid } => {
+                if self.version_position(node, &content_cid).await? == 0 {
+                    return Err(EngineError::UnsupportedTarget {
+                        check: "version-delete-target-is-the-current-version",
+                    });
+                }
+                let seq = self.render().await?.record_sequence(node).unwrap_or(1);
+                self.stage_and_notify(&Op::delete_version(node, content_cid, seq, authored_at))
                     .await
             }
             Command::Relink { node, new_parent } => {
@@ -9904,6 +9986,91 @@ where {
         }
     }
 
+    /// Where `content_cid` sits in the file's published history, refusing a
+    /// target the history does not name.
+    ///
+    /// The drain decides again against the record it publishes against, which is
+    /// where the rule is enforced; this is what turns the common case into a
+    /// refused command rather than a parked write.
+    async fn version_position(
+        &self,
+        node: NodeId,
+        content_cid: &[u8],
+    ) -> Result<usize, EngineError> {
+        let versions = self.resolve_versions(node).await?;
+        versions
+            .iter()
+            .position(|version| version.content_cid == content_cid)
+            .ok_or(EngineError::UnsupportedTarget {
+                check: UNKNOWN_VERSION,
+            })
+    }
+
+    /// List one file's prior versions, newest first (blueprint/engine.md
+    /// "Content plane": version history). The head is the file's current
+    /// content and is not a prior version, so it is not in the list; a caller
+    /// that needs it reads [`SnapshotChild::content_cid`].
+    ///
+    /// Resolved from the node's own sealed record through the same gated
+    /// pipeline a content read runs, so a listed version is one the adoption
+    /// gate passed.
+    pub async fn file_versions(&self, node: NodeId) -> Result<Vec<VersionEntry>, EngineError> {
+        self.live_session()?;
+        let versions = self.resolve_versions(node).await?;
+        Ok(versions.iter().skip(1).map(VersionEntry::of).collect())
+    }
+
+    /// Read one prior version's full plaintext content.
+    ///
+    /// [`read_content`](Engine::read_content) for a version the caller names by
+    /// its `content_cid`, opened under that version's own content key. It pins
+    /// no head and repaints nothing: a prior version is not the node's current
+    /// size or mtime.
+    pub async fn read_version_content(
+        &self,
+        node: NodeId,
+        content_cid: &[u8],
+    ) -> Result<Vec<u8>, EngineError> {
+        self.live_session()?;
+        self.emit_op_progress(node, OpPhase::DownloadStarted, None);
+        match self.read_whole_version(node, content_cid).await {
+            Ok(plaintext) => {
+                self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
+                Ok(plaintext)
+            }
+            Err(err) => {
+                self.emit_op_progress(node, OpPhase::DownloadFailed, Some(err.to_string()));
+                Err(err)
+            }
+        }
+    }
+
+    /// [`read_version_content`](Engine::read_version_content) without its
+    /// progress phases.
+    async fn read_whole_version(
+        &self,
+        node: NodeId,
+        content_cid: &[u8],
+    ) -> Result<Vec<u8>, EngineError> {
+        let versions = self.resolve_versions(node).await?;
+        let version = versions
+            .iter()
+            .find(|version| version.content_cid == content_cid)
+            .ok_or(EngineError::UnsupportedTarget {
+                check: UNKNOWN_VERSION,
+            })?;
+        open_content_range(
+            &self.staged_blocks(),
+            &self.gateway,
+            &self.seams.http,
+            version,
+            0,
+            u64::MAX,
+        )
+        .await
+        .map_err(|error| staged_open_error(None, error))
+    }
+
     /// [`read_content`](Engine::read_content) without its progress phases.
     async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
         let PinnedVersion {
@@ -10103,11 +10270,21 @@ where {
         }
     }
 
-    /// Resolve one file node's head content version: base-snapshot lookup →
-    /// gated child resolve → head of the sealed body's version list. Returns
-    /// the head version (`None` for a file that has published none) and the
-    /// body's version count.
+    /// Resolve one file node's head content version: the head of
+    /// [`Self::resolve_versions`] (`None` for a file that has published none)
+    /// and the history's length.
     async fn resolve_head(&self, node: NodeId) -> Result<(Option<Version>, u64), EngineError> {
+        let versions = self.resolve_versions(node).await?;
+        // Newest-first; head is current (crates/core/src/seal/body.rs). Clone the
+        // head rather than moving it out: `into_iter().next()` bitwise-moves slot
+        // 0, so its content key would reach the allocator unzeroized.
+        Ok((versions.first().cloned(), versions.len() as u64))
+    }
+
+    /// Resolve one file node's whole sealed version history, newest first:
+    /// base-snapshot lookup → gated child resolve → the sealed body's version
+    /// list.
+    async fn resolve_versions(&self, node: NodeId) -> Result<Vec<Version>, EngineError> {
         // The base snapshot alone answers the lookup (kind and ipnsName never
         // come from the overlay) — no full render for a single node. The borrow
         // never spans an await.
@@ -10184,10 +10361,7 @@ where {
                 message: "sealed body kind disagrees with the child ref".to_owned(),
             });
         };
-        // Newest-first; head is current (crates/core/src/seal/body.rs). Clone the
-        // head rather than moving it out: `into_iter().next()` bitwise-moves slot
-        // 0, so its content key would reach the allocator unzeroized.
-        Ok((versions.first().cloned(), versions.len() as u64))
+        Ok(versions)
     }
 
     /// Best-effort [`Event::OpProgress`] emission for a full content read (a

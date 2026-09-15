@@ -32,6 +32,7 @@ import type {
   ReceivedShareResolution,
   ReclaimStallReason,
   RegisteredDeviceDescriptor,
+  VersionEntryDescriptor,
   SettingsOrigin,
   SharingDescriptor,
   QueueHoldDescriptor,
@@ -52,6 +53,7 @@ import type {
   WasmQueueHold,
   WasmReceivedShareRow,
   WasmRegisteredDevice,
+  WasmVersionEntry,
   WasmSharingView,
   WasmSnapshotView,
   WasmVaultSettings,
@@ -309,6 +311,16 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.relink(
         nodeId(wasm, descriptor.node, 'node'),
         nodeId(wasm, descriptor.newParent, 'newParent')
+      );
+    case 'restoreVersion':
+      return wasm.Command.restoreVersion(
+        nodeId(wasm, descriptor.node, 'node'),
+        bytes(descriptor.contentCid, 'contentCid')
+      );
+    case 'deleteVersion':
+      return wasm.Command.deleteVersion(
+        nodeId(wasm, descriptor.node, 'node'),
+        bytes(descriptor.contentCid, 'contentCid')
       );
     case 'cancelUpload':
       return wasm.Command.cancelUpload(minted(descriptor.opId, 'opId'));
@@ -799,6 +811,15 @@ export function readDevices(rows: readonly WasmRegisteredDevice[]): RegisteredDe
     label: row.label ?? null,
     createdAt: row.createdAt,
     lastSeenAt: row.lastSeenAt,
+  }));
+}
+
+/** Reads the wasm-bindgen `VersionEntry` rows into descriptors. */
+export function readFileVersions(rows: readonly WasmVersionEntry[]): VersionEntryDescriptor[] {
+  return rows.map((row) => ({
+    contentCid: row.contentCid,
+    size: row.size,
+    modifiedAt: row.modifiedAt,
   }));
 }
 
