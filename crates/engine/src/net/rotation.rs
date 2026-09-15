@@ -801,10 +801,11 @@ fn note_unindexed_scope_roots(
 /// How many descendant scope roots one walk admits.
 const MAX_DESCENDANT_SCOPE_ROOTS: usize = 256;
 
-/// How many descents one walk pays for. Charged per attempt, not per pass: a
-/// `directChildScopeIndex` is writer-authored and every entry costs a fan-out
-/// GET whether or not it gates, so counting only the entries that gate would let
-/// a committed writer set this device's per-tick record traffic.
+/// How many index entries one walk admits. Charged per entry, not per pass: a
+/// `directChildScopeIndex` is writer-authored and every entry costs a label in
+/// the walk's map and at most one fan-out GET, whether or not it gates, so
+/// counting only the entries that gate would let a committed writer set this
+/// device's per-tick record traffic and the size of the map it holds.
 const MAX_SCOPE_DESCENT_ATTEMPTS: usize = 512;
 
 /// The pointer-plane leg of a grant mint: seal the owner-signed re-point that
@@ -1116,6 +1117,9 @@ where
         let (write, grandchildren) = self
             .write_plane(&gated, &name, child.scope_id, RootAnchor::Descendant)
             .await;
+        // A root this pass opened no write plane for read no index, and the
+        // classified verdict for that rides `write`.
+        let grandchildren = grandchildren.unwrap_or_default();
         Ok((
             DescendantScopeRoot {
                 scope_id: child.scope_id,
@@ -1134,8 +1138,10 @@ where
     }
 
     /// A gated scope root's own write plane and the `directChildScopeIndex` it
-    /// names, both empty where this device holds the root keyless: the index is
-    /// a write-plane read.
+    /// names. The index is a write-plane read, so a root this pass opened no
+    /// write plane for answers `None` — the index was never read, which is not
+    /// the same claim as a root that names no child scope, and a caller that
+    /// confused the two would treat an outage as a proved-empty boundary set.
     ///
     /// The seed is held to [`seed_names`] here, where the material is minted,
     /// rather than at each consumer: a drain pass takes a descendant's seed
@@ -1152,7 +1158,10 @@ where
         name: &IpnsName,
         scope_id: [u8; 16],
         anchor: RootAnchor,
-    ) -> (Result<ScopeWritePlane, WritePlaneDark>, Vec<ChildScopeRef>) {
+    ) -> (
+        Result<ScopeWritePlane, WritePlaneDark>,
+        Option<Vec<ChildScopeRef>>,
+    ) {
         if let Some(seed) = gated.write_scope_seed.clone()
             && seed_names(&seed, &scope_id, Some(name))
             && let Ok((write_body, epoch)) = write_plane_of(
@@ -1166,7 +1175,7 @@ where
         {
             return (
                 Ok(ScopeWritePlane { seed, epoch }),
-                write_body.direct_child_scope_index,
+                Some(write_body.direct_child_scope_index),
             );
         }
         match anchor {
@@ -1179,8 +1188,8 @@ where
             }
         }
         .map_or_else(
-            |dark| (Err(dark), Vec::new()),
-            |(plane, index)| (Ok(plane), index),
+            |dark| (Err(dark), None),
+            |(plane, index)| (Ok(plane), Some(index)),
         )
     }
 
@@ -1305,6 +1314,14 @@ where
         let (root_write, index) = self
             .write_plane(&gated, root_name, root_scope_id, RootAnchor::VaultRoot)
             .await;
+        // An index the vault root's own write plane did not serve leaves this
+        // walk with no boundary set at all. Answering the empty one would read
+        // as "this vault holds no descendant scope", and the caller evicts the
+        // seeds of every promotion missing from what it is told
+        // (`install_descendant_scopes`). Availability, never a trust verdict.
+        let Some(index) = index else {
+            return Err(WalkFailure::Unavailable);
+        };
         let mut unproved = BTreeSet::new();
         note_unindexed_scope_roots(
             &mut unproved,
@@ -1315,12 +1332,18 @@ where
         let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
         let mut descendants: Vec<DescendantScopeRoot> = Vec::new();
         let mut visited = BTreeSet::from([root_scope_id]);
-        let mut attempts = 0usize;
         let mut failure = None;
         let mut frontier = vec![(gated.read_scope_seed, index)];
         while !frontier.is_empty() {
             let mut next = Vec::new();
             for (parent_read_scope_seed, index) in frontier {
+                // The map grows with the index each level names, and the
+                // descents below spend the same budget, so a level it cannot
+                // take costs that level.
+                if labels.len().saturating_add(index.len()) > MAX_SCOPE_DESCENT_ATTEMPTS {
+                    WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
+                    continue;
+                }
                 // Ahead of the canonicalization, which drops every later entry
                 // for one `scope_id`: a level that names one scope twice at two
                 // labels would otherwise bind whichever entry the writer put
@@ -1338,16 +1361,13 @@ where
                     if !visited.insert(child.scope_id) {
                         continue;
                     }
-                    if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS
-                        || attempts >= MAX_SCOPE_DESCENT_ATTEMPTS
-                    {
+                    if descendants.len() >= MAX_DESCENDANT_SCOPE_ROOTS {
                         // The set this walk could still admit is incomplete, and
                         // a bound a legitimately wide vault reaches names no
                         // party: availability, never a trust verdict.
                         WalkFailure::accumulate(&mut failure, WalkFailure::Unavailable);
                         continue;
                     }
-                    attempts += 1;
                     match self.descend(&parent_read_scope_seed, &child).await {
                         Ok((descendant, grandchildren)) => {
                             note_unindexed_scope_roots(
@@ -5860,53 +5880,66 @@ mod tests {
         assert_eq!(walked.failure, Some(WalkFailure::Unavailable));
     }
 
-    /// Every entry of a writer-authored index costs a fan-out GET whether or
-    /// not it gates, so the descent is charged per attempt. The bound ends the
+    /// Every entry of a writer-authored index costs a label in the walk's map
+    /// and a fan-out GET, whether or not it gates, so both are charged per
+    /// entry. A level wider than the budget costs that level; every entry of a
+    /// level the budget admits pays for its own descent. The bound ends the
     /// walk rather than the traffic a writer can name.
     #[test]
-    fn the_descent_bound_ends_the_walk_and_names_no_party() {
-        let over_bound = MAX_SCOPE_DESCENT_ATTEMPTS + 1;
-        let names: Vec<IpnsName> = (0..over_bound)
-            .map(|i| {
-                let mut scope_id = [0u8; 16];
-                scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
-                derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &scope_id)
-            })
-            .collect();
-        let index = names
-            .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let mut scope_id = [0u8; 16];
-                scope_id[..8].copy_from_slice(&(i as u64).to_be_bytes());
-                ChildScopeRef {
-                    scope_id,
+    fn the_entry_bound_ends_the_walk_and_names_no_party() {
+        for (case, entries, paid) in [
+            (
+                "a level the budget admits",
+                MAX_SCOPE_DESCENT_ATTEMPTS,
+                MAX_SCOPE_DESCENT_ATTEMPTS,
+            ),
+            (
+                "a level wider than the budget",
+                MAX_SCOPE_DESCENT_ATTEMPTS + 1,
+                0,
+            ),
+        ] {
+            let names: Vec<IpnsName> = (0..entries)
+                .map(|i| derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &indexed_scope(i)))
+                .collect();
+            let index = names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| ChildScopeRef {
+                    scope_id: indexed_scope(i),
                     ipns_name: name.as_str().as_bytes().to_vec(),
                     unknown: PreservedFields::new(),
-                }
-            })
-            .collect();
-        let root = vault_root(SCOPE, index);
-        let harness = Harness::plain();
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+                })
+                .collect();
+            let root = vault_root(SCOPE, index);
+            let harness = Harness::plain();
+            harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
 
-        let walked = harness
-            .walk_boundaries(&InMemorySnapshotCache::default(), &root)
-            .expect("the vault root gates");
+            let walked = harness
+                .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+                .expect("the vault root gates");
 
-        assert_eq!(
-            walked.failure,
-            Some(WalkFailure::Unavailable),
-            "a bound a wide vault reaches too is no accusation"
-        );
-        assert_eq!(
-            names
-                .iter()
-                .filter(|name| harness.store.get_count(name.as_str()) > 0)
-                .count(),
-            MAX_SCOPE_DESCENT_ATTEMPTS,
-            "and the walk paid for no descent past it"
-        );
+            assert_eq!(
+                walked.failure,
+                Some(WalkFailure::Unavailable),
+                "{case}: a bound a wide vault reaches too is no accusation"
+            );
+            assert_eq!(
+                names
+                    .iter()
+                    .filter(|name| harness.store.get_count(name.as_str()) > 0)
+                    .count(),
+                paid,
+                "{case}: and the walk paid for no descent past the bound"
+            );
+        }
+    }
+
+    /// The `n`th scope id of a synthetic index.
+    fn indexed_scope(n: usize) -> [u8; 16] {
+        let mut scope_id = [0u8; 16];
+        scope_id[..8].copy_from_slice(&(n as u64).to_be_bytes());
+        scope_id
     }
 
     /// An index is writer-authored: an entry naming a scope the walk has already
@@ -6308,6 +6341,11 @@ mod tests {
     /// The vault root's own floor is the boot cold-seed's, taken from the
     /// owner-vouched vault pointer. The mint anchor is a weaker authority and
     /// never stands in for it.
+    ///
+    /// The index is a write-plane read, so a root that opens no write plane
+    /// read no index at all. Answered as an empty boundary set it would read as
+    /// "this vault holds no descendant scope", and the caller would drop the
+    /// seeds of every promotion it already knew.
     #[test]
     fn the_vault_root_takes_no_mint_anchor() {
         let (child, child_ref, _) = one_level();
@@ -6316,11 +6354,12 @@ mod tests {
         harness.stage(SCOPE, &root, None);
         harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
 
-        assert!(
+        assert_eq!(
             harness
-                .walked(&InMemorySnapshotCache::default(), &root)
-                .is_empty(),
-            "the vault root's index is a write-plane read it cannot make"
+                .walk_boundaries(&InMemorySnapshotCache::default(), &root)
+                .err(),
+            Some(WalkFailure::Unavailable),
+            "an index the write plane never served is an outage, not a proved-empty vault"
         );
         assert_eq!(
             block_on(floor::write_epoch_floor(&harness.floors, &SCOPE)).expect("floor read"),

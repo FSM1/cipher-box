@@ -124,8 +124,9 @@ use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_
 use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
-    BookkeepingCursors, Drain, DrainReport, DrainScope, ScopeEnd, SealPlane, bin_load_is_a_verdict,
-    charge_the_identity_to_one_pass, hold_captures, owner_scoped_key, published_op_mark,
+    BookkeepingCursors, Drain, DrainReport, DrainScope, MAX_BIN_EXPIRIES, ScopeEnd, SealPlane,
+    TickShare, bin_load_is_a_verdict, charge_the_identity_to_one_pass, hold_captures,
+    owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -4142,6 +4143,16 @@ fn install_descendant_scopes(
     }
 }
 
+/// Drop the proved-descendant set a session leaves behind.
+///
+/// Unconditional, unlike the best-effort clears it sits among: this set decides
+/// the own-plane floor namespace (`floor_view`), so a set that outlives its
+/// session is a trust gap rather than stale bookkeeping. A borrow this call
+/// cannot take is reported by the panic rather than skipped in silence.
+fn clear_proved_scope_roots(roots: &RefCell<BTreeSet<NodeId>>) {
+    roots.borrow_mut().clear();
+}
+
 /// Retained dead letters: op id → its target node when known (`None` for an
 /// undecodable queue entry, which never decoded far enough to name one) and why
 /// it dead-lettered.
@@ -5131,9 +5142,7 @@ impl<T: SeamTypes> Engine<T> {
                 seeds.clear();
             }
         }
-        if let Ok(mut roots) = self.descendant_scope_roots.try_borrow_mut() {
-            roots.clear();
-        }
+        clear_proved_scope_roots(&self.descendant_scope_roots);
         if let Ok(mut roots) = self.unproved_scope_roots.try_borrow_mut() {
             roots.clear();
         }
@@ -6496,6 +6505,10 @@ where {
                             dead_letters: &dead_letters,
                             bin_index_record: &bin_index_record,
                             established_bin_index: RefCell::new(None),
+                            bin_expiries: RefCell::new(TickShare::new(
+                                MAX_BIN_EXPIRIES,
+                                scopes.len(),
+                            )),
                             observed_unlinks: &observed_unlinks,
                             pending_scope_exits: &pending_scope_exits,
                         };
@@ -11022,6 +11035,29 @@ impl<T: SeamTypes> Drop for Engine<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The proved-descendant set decides the own-plane floor namespace, so the
+    /// end of a session must empty it.
+    #[test]
+    fn ending_a_session_empties_the_proved_descendant_set() {
+        let roots = RefCell::new(BTreeSet::from([NodeId([3; 16])]));
+
+        clear_proved_scope_roots(&roots);
+
+        assert!(roots.borrow().is_empty());
+    }
+
+    /// And a clear it cannot make is reported rather than skipped: a set that
+    /// outlives its session would hand a later account's grafted scope the
+    /// owner floor plane.
+    #[test]
+    #[should_panic(expected = "already borrowed")]
+    fn a_proved_descendant_set_that_will_not_clear_is_never_skipped_in_silence() {
+        let roots = RefCell::new(BTreeSet::from([NodeId([3; 16])]));
+        let _held = roots.borrow();
+
+        clear_proved_scope_roots(&roots);
+    }
 
     fn binned(origin_name: &str) -> cipherbox_core::seal::BinEntry {
         cipherbox_core::seal::BinEntry::new(
