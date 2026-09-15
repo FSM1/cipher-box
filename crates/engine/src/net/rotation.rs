@@ -1104,7 +1104,7 @@ fn hold_scope_pointer(
     record_bytes: Vec<u8>,
 ) {
     held.borrow_mut().insert(
-        HeldKey::scope_pointer(scope_id),
+        HeldKey::ScopePointer(scope_id),
         HeldRecord {
             routing_key: name.as_str().to_owned(),
             record_bytes,
@@ -4784,7 +4784,7 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
     let Some(root_name) = pass
         .held
         .borrow()
-        .get(&HeldKey::node(pass.root_id))
+        .get(&HeldKey::Node(pass.root_id))
         .map(|record| record.routing_key.as_bytes().to_vec())
     else {
         return;
@@ -4844,7 +4844,7 @@ pub(crate) async fn enrol_owned_scope_pointers<K, T, H, C, F, Sch, E, S>(
         if pass
             .held
             .borrow()
-            .contains_key(&HeldKey::scope_pointer(scope_id))
+            .contains_key(&HeldKey::ScopePointer(scope_id))
         {
             continue;
         }
@@ -4880,7 +4880,7 @@ fn enrol_scope_pointer<K>(
     // A flip that landed across the fetch installed its own confirmed entry, and
     // overwriting it with the record read before it would drop the fresh pointer
     // out of the renewal.
-    if let Entry::Vacant(slot) = held.borrow_mut().entry(HeldKey::scope_pointer(*scope_id)) {
+    if let Entry::Vacant(slot) = held.borrow_mut().entry(HeldKey::ScopePointer(*scope_id)) {
         slot.insert(HeldRecord {
             routing_key: name.as_str().to_owned(),
             record_bytes: consulted.record_bytes,
@@ -10923,7 +10923,7 @@ mod tests {
         harness
             .held
             .borrow_mut()
-            .insert(HeldKey::node(SCOPE), root_held.clone());
+            .insert(HeldKey::Node(SCOPE), root_held.clone());
 
         let block = b"a-sealed-repoint-object".to_vec();
         block_on(net.publish_repoint(RepointChannel::ScopePointer, &block))
@@ -10936,14 +10936,14 @@ mod tests {
             "both planes hold a record under the scope id"
         );
         let root = held
-            .get(&HeldKey::node(SCOPE))
+            .get(&HeldKey::Node(SCOPE))
             .expect("the scope root's own record survives the pointer enrolment");
         assert_eq!(root.record_bytes, root_held.record_bytes);
         assert_eq!(root.head_cid(), Some("bafyrootheadblock"));
 
         let pointer_name = scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE);
         let pointer = held
-            .get(&HeldKey::scope_pointer(SCOPE))
+            .get(&HeldKey::ScopePointer(SCOPE))
             .expect("the pointer enrols for renewal");
         assert_eq!(pointer.routing_key, pointer_name.as_str());
         assert_eq!(
@@ -13132,7 +13132,7 @@ mod tests {
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE);
         harness.held.borrow_mut().insert(
-            HeldKey::node(SCOPE),
+            HeldKey::Node(SCOPE),
             HeldRecord {
                 routing_key: root.name.as_str().to_owned(),
                 record_bytes: record_for(&SCOPE, &root.head_cid_str, 1),
@@ -13184,7 +13184,7 @@ mod tests {
         let held = harness.held.borrow();
         for scope_id in [SCOPE, CHILD_SCOPE] {
             let entry = held
-                .get(&HeldKey::scope_pointer(scope_id))
+                .get(&HeldKey::ScopePointer(scope_id))
                 .expect("the owner holds this scope's pointer for renewal");
             let name = scope_pointer_name(&OWNER_POINTER_SEED, &scope_id);
             assert_eq!(entry.routing_key, name.as_str());
@@ -13223,7 +13223,7 @@ mod tests {
         let held = harness.held.borrow();
         for scope_id in [SCOPE, CHILD_SCOPE, grandchild.scope_id] {
             assert!(
-                held.contains_key(&HeldKey::scope_pointer(scope_id)),
+                held.contains_key(&HeldKey::ScopePointer(scope_id)),
                 "the owner renews the pointer of every scope it owns"
             );
         }
@@ -13242,7 +13242,7 @@ mod tests {
             harness
                 .held
                 .borrow()
-                .get(&HeldKey::scope_pointer(SCOPE))
+                .get(&HeldKey::ScopePointer(SCOPE))
                 .is_none()
         );
     }
@@ -13266,7 +13266,7 @@ mod tests {
         harness
             .held
             .borrow_mut()
-            .insert(HeldKey::scope_pointer(SCOPE), flipped.clone());
+            .insert(HeldKey::ScopePointer(SCOPE), flipped.clone());
 
         enrol_scope_pointer(
             &OwnerSeeds,
@@ -13280,7 +13280,7 @@ mod tests {
         );
 
         assert_eq!(
-            harness.held.borrow()[&HeldKey::scope_pointer(SCOPE)].value,
+            harness.held.borrow()[&HeldKey::ScopePointer(SCOPE)].value,
             flipped.value,
         );
     }
@@ -13298,7 +13298,7 @@ mod tests {
                 .held
                 .borrow()
                 .keys()
-                .all(|key| key.plane == crate::net::RecordPlane::Node)
+                .all(|key| matches!(key, crate::net::HeldKey::Node(_)))
         );
     }
 

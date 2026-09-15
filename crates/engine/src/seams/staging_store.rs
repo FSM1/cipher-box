@@ -113,11 +113,6 @@ impl<S> QueueGenerationStore<S> {
         }
     }
 
-    /// The queue's generation: what a memoized read of it is keyed on.
-    pub fn generation(&self) -> u64 {
-        self.generation.get()
-    }
-
     /// The wrapped store, for a test that reaches a fake's failure injectors.
     /// Test-only: a queue mutation made through it is not counted, and the
     /// count is what tells a memoized read that its answer has expired.
@@ -140,6 +135,20 @@ impl<S: Clone> Clone for QueueGenerationStore<S> {
             seam: self.seam.clone(),
             generation: self.generation.clone(),
         }
+    }
+}
+
+/// The durable op queue's generation: a constant-size read that says whether a
+/// queue a reader already decoded still stands, so a memoized scan of it answers
+/// without enumerating the queue at all.
+pub trait QueueGeneration {
+    /// How many queue mutations this store has been asked for.
+    fn generation(&self) -> u64;
+}
+
+impl<S> QueueGeneration for QueueGenerationStore<S> {
+    fn generation(&self) -> u64 {
+        self.generation.get()
     }
 }
 

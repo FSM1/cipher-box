@@ -48,7 +48,7 @@ pub use record_transport::{EndpointId, RecordTransport};
 pub use retire_ledger::{OwedPage, OwedRetire, OwingRecord, RetireLedger};
 pub use scheduler::{BoxedTask, Scheduler, UnixMillis};
 pub use snapshot_cache::SnapshotCache;
-pub use staging_store::{OpId, QueueGenerationStore, StagingStore};
+pub use staging_store::{OpId, QueueGeneration, QueueGenerationStore, StagingStore};
 
 use core::fmt;
 

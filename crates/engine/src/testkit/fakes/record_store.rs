@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 
-use crate::net::HeldRecord;
+use crate::net::{HeldKey, HeldRecord, HeldRecords};
 use crate::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
 
 /// Records held by one endpoint, keyed by routing key.
@@ -330,23 +330,31 @@ impl RecordTransport for InMemoryRecordStore {
     }
 }
 
-/// A transport that lands `held` in `slot` before it delegates each GET — the
-/// interleaving a single-threaded executor allows at any `.await`, where a
-/// publish confirms and enrols its record while a load is still in flight.
+/// A transport that lands `record` at `key` in the renewal set before it
+/// delegates each GET — the interleaving a single-threaded executor allows at
+/// any `.await`, where a publish confirms and enrols its record while a load is
+/// still in flight.
 pub struct SlotFillingRecordStore {
     inner: InMemoryRecordStore,
-    slot: Rc<RefCell<Option<HeldRecord>>>,
-    held: HeldRecord,
+    held: Rc<RefCell<HeldRecords>>,
+    key: HeldKey,
+    record: HeldRecord,
 }
 
 impl SlotFillingRecordStore {
-    /// Delegate to `inner`, filling `slot` with `held` on every GET.
+    /// Delegate to `inner`, enrolling `record` at `key` on every GET.
     pub fn new(
         inner: InMemoryRecordStore,
-        slot: Rc<RefCell<Option<HeldRecord>>>,
-        held: HeldRecord,
+        held: Rc<RefCell<HeldRecords>>,
+        key: HeldKey,
+        record: HeldRecord,
     ) -> Self {
-        Self { inner, slot, held }
+        Self {
+            inner,
+            held,
+            key,
+            record,
+        }
     }
 }
 
@@ -362,7 +370,7 @@ impl RecordTransport for SlotFillingRecordStore {
         max_bytes: usize,
         bearer: Option<&str>,
     ) -> SeamResult<Option<Vec<u8>>> {
-        *self.slot.borrow_mut() = Some(self.held.clone());
+        self.held.borrow_mut().insert(self.key, self.record.clone());
         self.inner
             .get_record(endpoint, routing_key, max_bytes, bearer)
             .await
