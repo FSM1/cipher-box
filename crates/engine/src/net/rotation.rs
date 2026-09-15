@@ -13355,7 +13355,7 @@ mod tests {
             !harness
                 .held
                 .borrow()
-                .contains_key(&HeldKey::scope_pointer(CHILD_SCOPE)),
+                .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE)),
             "the refused consult enrolled nothing"
         );
 
@@ -13368,7 +13368,7 @@ mod tests {
             harness
                 .held
                 .borrow()
-                .contains_key(&HeldKey::scope_pointer(CHILD_SCOPE)),
+                .contains_key(&HeldKey::ScopePointer(CHILD_SCOPE)),
             "and the re-armed pass enrols the pointer the refusal cost"
         );
         let spent = harness.store.get_count(child.name.as_str());
