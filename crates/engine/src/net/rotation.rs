@@ -4900,6 +4900,12 @@ where
     // pointer. The visited set pre-seeded with the root also ends a cycle.
     let mut scopes: BTreeSet<[u8; 16]> = BTreeSet::from([pass.root_id]);
     let mut frontier = root.direct_child_scope_index;
+    // Whether a later pass of this session could still find anything, on rule
+    // 6's axis: an availability stall converges on a retry, and a C2 label
+    // conflict converges once the re-point wave repairs the parent indexes, but
+    // a rejection is this session's verdict on that record. Re-arming the walk
+    // for a rejection would let one gate-failing entry in a write grantee's own
+    // index buy an hourly walk of the whole owned tree.
     let mut complete = true;
     while !frontier.is_empty() {
         let mut next = Vec::new();
@@ -4909,7 +4915,10 @@ where
             }
             match net.direct_child_index(&child).await {
                 Ok(grandchildren) => next.extend(grandchildren),
-                Err(_) => complete = false,
+                Err(ResolveFailure::Rejected) => {}
+                Err(ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel) => {
+                    complete = false;
+                }
             }
         }
         frontier = next;
@@ -4932,7 +4941,8 @@ where
                     enrol_scope_pointer(pass.keys, &scope_id, consulted, pass.held);
                 }
             }
-            Err(_) => complete = false,
+            Err(PointerConsultError::Rejected) => {}
+            Err(PointerConsultError::Unavailable) => complete = false,
         }
     }
     pass.walked.set(complete);
@@ -13300,6 +13310,33 @@ mod tests {
             harness.store.get_count(child.name.as_str()),
             spent,
             "a later pass of the same session spends no fan-out on the owned tree"
+        );
+    }
+
+    /// A refused descendant is this session's verdict on that record, not a
+    /// stall, so it leaves nothing for a later pass to find. Re-arming for it
+    /// would let one gate-failing entry in a write grantee's own index buy an
+    /// hourly walk of the whole owned tree — the cost this latch removes.
+    #[test]
+    fn a_rejected_descendant_does_not_re_arm_the_walk() {
+        // A vault-root record under the descendant edge carries no ascent link,
+        // which that edge refuses fail-closed.
+        let refused = vault_root(CHILD_SCOPE, Vec::new());
+        let (harness, _) = owner_session_at_root(vec![child_ref(CHILD_SCOPE, &refused)]);
+        harness.stage(CHILD_SCOPE, &refused, Some(OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, SCOPE, &repoint_at(SCOPE, OWNER_ROOT_EPOCH));
+        stage_pointer_at(&harness, CHILD_SCOPE, &repoint_at(CHILD_SCOPE, 1));
+        let walked = Cell::new(false);
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        let spent = harness.store.get_count(refused.name.as_str());
+        assert!(spent > 0, "the first pass reached the refused descendant");
+
+        run_enrolment_walking(&harness, &OwnerSeeds, &walked);
+        assert_eq!(
+            harness.store.get_count(refused.name.as_str()),
+            spent,
+            "the rejection left the walk latched"
         );
     }
 
