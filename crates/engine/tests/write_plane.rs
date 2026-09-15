@@ -34,7 +34,7 @@ use cipherbox_engine::content::{
     ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode, RetentionPolicy, SealedChunk, SessionBearer,
     assemble, decode_root,
 };
-use cipherbox_engine::facade::{BinOrigin, PendingClass};
+use cipherbox_engine::facade::{BinOrigin, PendingClass, SnapshotView};
 use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
@@ -50,8 +50,8 @@ use cipherbox_engine::seams::{
     SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::{
-    Destinations, SettingsOrigin, SettingsPublishError, VaultSettings, publish_settings,
-    settings_name,
+    Destinations, SettingsOrigin, SettingsPublishError, SettingsRefusal, VaultSettings,
+    publish_settings, settings_name,
 };
 use cipherbox_engine::sync::pointer::{open_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
@@ -77,10 +77,10 @@ use cipherbox_engine::{
     CommittedSet, ContentProfile, DEFAULT_BIN_RETENTION_DAYS, DeadLetter, DeadLetterReason,
     DefaultsReason, Engine, EngineError, Entropy, EntropyError, Event, EventStream, GatewayConfig,
     LoginSecret, MAX_FOCUS_FILES, MAX_FOLDER_CHILDREN, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
-    OpKind, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, RecordReader,
-    RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity, StoragePolicy, SyncTimingProfile,
-    WriteHistory, WriteTarget, decode_queue, load_bin_index, publish_bin_index, reseal_scope_root,
-    stage_op,
+    OpKind, OpPhase, OverBudgetCause, Placement, PlacementRefusal, PrevEpochSeed, QueueHold,
+    QueueHoldReason, RecordReader, RecordSeal, ResealSeeds, ScopeCrossing, ScopeRootIdentity,
+    StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget, decode_queue, load_bin_index,
+    publish_bin_index, reseal_scope_root, stage_op,
 };
 
 /// The override seed a rotation mints for `SCOPE`'s second read epoch.
@@ -88,6 +88,48 @@ const ROTATED_READ_SCOPE_SEED: [u8; 32] = [0xA5; 32];
 /// The stable per-scope pointer read key the owner-root fixture's grant blobs
 /// carry.
 const POINTER_READ_KEY: [u8; 32] = [0x88; 32];
+
+/// The held queue head when the account quota is what holds it, with the byte
+/// count the resume probe must find room for.
+fn quota_hold(view: &SnapshotView) -> Option<(QueueHold, u64)> {
+    match view.queue_hold {
+        Some(
+            hold @ QueueHold {
+                reason: QueueHoldReason::Quota { needed_bytes },
+                ..
+            },
+        ) => Some((hold, needed_bytes)),
+        _ => None,
+    }
+}
+
+/// The held queue head when the member's own settings are what hold it, with
+/// the rule that refused.
+fn settings_hold(view: &SnapshotView) -> Option<(QueueHold, SettingsRefusal)> {
+    match view.queue_hold {
+        Some(
+            hold @ QueueHold {
+                reason: QueueHoldReason::Settings(refusal),
+                ..
+            },
+        ) => Some((hold, refusal)),
+        _ => None,
+    }
+}
+
+/// The held queue head when the owner's bin index is what holds it, with the
+/// reason the load did not establish the index.
+fn bin_index_hold(view: &SnapshotView) -> Option<(QueueHold, DefaultsReason)> {
+    match view.queue_hold {
+        Some(
+            hold @ QueueHold {
+                reason: QueueHoldReason::BinIndex(reason),
+                ..
+            },
+        ) => Some((hold, reason)),
+        _ => None,
+    }
+}
 /// The destination set the upload mark opens on.
 const DESTINATIONS_LEN: usize = Destinations::LEN;
 
@@ -3368,15 +3410,9 @@ fn an_over_quota_upload_holds_the_op_without_reporting_a_failure() {
         )),
         "a full account is not a failed upload attempt"
     );
-    assert_eq!(
-        block_on(engine.snapshot(ROOT))
-            .expect("a snapshot")
-            .blocked
-            .expect("the over-quota head is held")
-            .op_id,
-        op_id,
-        "the hold is what the host acts on"
-    );
+    let (hold, _) = quota_hold(&block_on(engine.snapshot(ROOT)).expect("a snapshot"))
+        .expect("the over-quota head is held");
+    assert_eq!(hold.op_id, op_id, "the hold is what the host acts on");
 }
 
 /// An op the completion record already covers is restore residue: a data dir
@@ -4726,11 +4762,10 @@ fn a_withheld_bin_index_reports_a_named_hold_that_clears_when_it_resolves() {
     tick(&world, &engine, &mut tasks);
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
-    let hold = view
-        .bin_index_hold
-        .expect("a bin index the pass cannot read holds the head");
+    let (hold, reason) =
+        bin_index_hold(&view).expect("a bin index the pass cannot read holds the head");
     assert_eq!(hold.node, second);
-    assert_eq!(hold.reason.check(), "suppressed");
+    assert_eq!(reason.check(), "suppressed");
     assert!(
         view.dead_letters.is_empty(),
         "a withheld record is not a failed op"
@@ -4745,7 +4780,7 @@ fn a_withheld_bin_index_reports_a_named_hold_that_clears_when_it_resolves() {
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
     assert!(
-        view.bin_index_hold.is_none(),
+        bin_index_hold(&view).is_none(),
         "the hold clears when the record resolves"
     );
     assert!(
@@ -7374,13 +7409,11 @@ fn an_over_quota_source_remove_holds_the_op_with_its_needed_bytes() {
         });
     tick(&world, &engine, &mut tasks);
 
-    let blocked = block_on(engine.snapshot(ROOT))
-        .expect("a snapshot")
-        .blocked
+    let (hold, needed_bytes) = quota_hold(&block_on(engine.snapshot(ROOT)).expect("a snapshot"))
         .expect("the over-quota source-remove is held");
-    assert_eq!(blocked.op_id, op_id);
+    assert_eq!(hold.op_id, op_id);
     assert!(
-        blocked.needed_bytes > 0,
+        needed_bytes > 0,
         "the figure the resume probe must find room for survives the leg"
     );
 }
@@ -7870,11 +7903,11 @@ fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
     tick(&world, &engine, &mut tasks);
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
-    let blocked = view.blocked.expect("the over-quota head is held");
-    assert_eq!(blocked.op_id, held);
-    assert_eq!(blocked.node, photos);
+    let (hold, needed_bytes) = quota_hold(&view).expect("the over-quota head is held");
+    assert_eq!(hold.op_id, held);
+    assert_eq!(hold.node, photos);
     assert!(
-        blocked.needed_bytes > 0,
+        needed_bytes > 0,
         "the hold records what the refused upload asked for"
     );
     assert!(
@@ -7900,7 +7933,7 @@ fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
         before,
         "a held head re-probes the quota, never the upload"
     );
-    assert!(block_on(engine.snapshot(ROOT)).unwrap().blocked.is_some());
+    assert!(quota_hold(&block_on(engine.snapshot(ROOT)).unwrap()).is_some());
 
     // Room appears.
     blocks.accept_uploads();
@@ -7908,7 +7941,7 @@ fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
     tick(&world, &engine, &mut tasks);
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
-    assert!(view.blocked.is_none(), "the probe cleared the hold");
+    assert!(quota_hold(&view).is_none(), "the probe cleared the hold");
     assert_eq!(
         published_names(&world.record_store, &blocks, ROOT),
         vec!["notes".to_owned(), "photos".to_owned()],
@@ -7930,7 +7963,7 @@ fn an_over_cap_413_is_permanent_and_its_reason_reaches_the_host() {
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
     assert!(
-        view.blocked.is_none(),
+        quota_hold(&view).is_none(),
         "the transport cap is not the account-quota gate"
     );
     assert_eq!(
@@ -7974,7 +8007,7 @@ fn a_413_the_api_did_not_stamp_neither_blocks_nor_abandons_the_op() {
 
         let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
         assert!(
-            view.blocked.is_none(),
+            quota_hold(&view).is_none(),
             "no positive quota evidence, no hold"
         );
         assert!(
@@ -11031,10 +11064,7 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
     create(&mut engine, "photos");
     tick(&world, &engine, &mut tasks);
     assert!(
-        block_on(engine.snapshot(ROOT))
-            .expect("a snapshot")
-            .blocked
-            .is_some(),
+        quota_hold(&block_on(engine.snapshot(ROOT)).expect("a snapshot")).is_some(),
         "the refused head block held the op"
     );
 
@@ -11053,7 +11083,7 @@ fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
     assert!(
-        view.blocked.is_none(),
+        quota_hold(&view).is_none(),
         "an unreachable quota endpoint never gates a placement it does not cover"
     );
     assert_eq!(
@@ -11834,11 +11864,11 @@ fn a_deterministic_placement_refusal_holds_the_queued_write_rather_than_charging
             .contains(&root_cid),
         "and its staged version with it"
     );
-    let hold = view.settings_hold.expect("the pass names what it waits on");
+    let (hold, refusal) = settings_hold(&view).expect("the pass names what it waits on");
     assert_eq!(hold.op_id, op_id);
     assert_eq!(hold.node, photo);
     assert_eq!(
-        hold.refusal.check(),
+        refusal.check(),
         "byo-provider-missing",
         "the rule that refused, never the settings it read"
     );
@@ -11875,7 +11905,8 @@ fn a_degraded_settings_load_retries_the_queued_write_and_takes_no_hold() {
         "an outage this pass could not resolve never spends the budget"
     );
     assert_eq!(
-        view.settings_hold, None,
+        settings_hold(&view),
+        None,
         "no settings change is what this head is waiting for"
     );
     assert_eq!(

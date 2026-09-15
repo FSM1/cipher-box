@@ -45,9 +45,9 @@ export function isRecoverable(error: SnapshotError): boolean {
  * it a snapshot field rather than an event.
  */
 export function heldBytes(state: SnapshotState, opId: bigint | null): bigint | null {
-  const blocked = state.view?.blocked;
-  if (blocked == null || opId === null || blocked.opId !== opId) return null;
-  return blocked.neededBytes;
+  const hold = state.view?.queueHold;
+  if (hold == null || hold.reason !== 'quota' || opId === null || hold.opId !== opId) return null;
+  return hold.neededBytes;
 }
 
 /** Durable queue entries this session cannot read but whose bytes it is charged for. */

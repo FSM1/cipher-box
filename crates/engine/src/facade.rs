@@ -142,7 +142,7 @@ use crate::sync::render::{BaseSnapshot, RenderKey, RenderMemo};
 use crate::sync::scope_exit_debt::SCOPE_EXIT_DEBT_PREFIX;
 use cipherbox_core::hex::lower as hex_lower;
 
-pub use crate::sync::drain::{BinIndexHold, BlockedOp, SettingsHold};
+pub use crate::sync::drain::{QueueHold, QueueHoldReason};
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 pub use crate::sync::refresh::ForcedPass;
@@ -710,18 +710,11 @@ pub struct DeadLetter {
 pub struct SessionStatus {
     /// Every retained dead-lettered op, with its reason.
     pub dead_letters: Vec<DeadLetter>,
-    /// The over-quota hold, if the drain has one. Read rather than evented:
+    /// The held queue head, if the drain has one. Read rather than evented:
     /// this is a state that *clears*, and a lost "resumed" would strand a host
-    /// on a blockage that is gone.
-    pub blocked: Option<BlockedOp>,
-    /// The settings-refused hold, if the drain has one. Read for the same
-    /// reason as `blocked`, and it names the rule so a host can tell the member
-    /// which part of their own provider config to fix.
-    pub settings_hold: Option<SettingsHold>,
-    /// The bin-index-refused hold, if the drain has one. Read for the same
-    /// reason as `blocked`, and it names the reason so a withheld record is a
-    /// cause the member can see rather than a silently stalled queue.
-    pub bin_index_hold: Option<BinIndexHold>,
+    /// on a hold that is gone. It names its reason, so a stall is a cause the
+    /// member can see rather than a silent queue.
+    pub queue_hold: Option<QueueHold>,
     /// How many durable queue entries this session holds but cannot read
     /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
     /// device is not empty, never whose work it holds — and it exists so an
@@ -751,12 +744,8 @@ pub struct SnapshotView {
     pub ancestors: Vec<Breadcrumb>,
     /// See [`SessionStatus::dead_letters`].
     pub dead_letters: Vec<DeadLetter>,
-    /// See [`SessionStatus::blocked`].
-    pub blocked: Option<BlockedOp>,
-    /// See [`SessionStatus::settings_hold`].
-    pub settings_hold: Option<SettingsHold>,
-    /// See [`SessionStatus::bin_index_hold`].
-    pub bin_index_hold: Option<BinIndexHold>,
+    /// See [`SessionStatus::queue_hold`].
+    pub queue_hold: Option<QueueHold>,
     /// See [`SessionStatus::retained_records`].
     pub retained_records: usize,
     /// See [`SessionStatus::staleness`].
@@ -772,9 +761,7 @@ impl fmt::Debug for SnapshotView {
             .field("children", &self.children)
             .field("ancestors", &self.ancestors)
             .field("dead_letters", &self.dead_letters)
-            .field("blocked", &self.blocked)
-            .field("settings_hold", &self.settings_hold)
-            .field("bin_index_hold", &self.bin_index_hold)
+            .field("queue_hold", &self.queue_hold)
             .field("retained_records", &self.retained_records)
             .field("staleness", &self.staleness)
             .finish()
@@ -4613,17 +4600,10 @@ pub struct Engine<T: SeamTypes> {
     /// Memo of the durable queue scan every read renders through
     /// ([`scan_queue`](Self::scan_queue)).
     queue_scan: Rc<RefCell<QueueScanMemo>>,
-    /// The drain's over-quota hold, written by the drain tick and read by
+    /// The drain's held queue head, written by the drain tick and read by
     /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
-    /// next drain attempt's own 413 rather than trusting a stale verdict.
-    blocked: Rc<RefCell<Option<BlockedOp>>>,
-    /// The drain's settings-refused hold, on the same in-memory terms as
-    /// [`blocked`](Self::blocked): a restart re-derives it from the next drain
-    /// attempt's own verdict.
-    settings_hold: Rc<RefCell<Option<SettingsHold>>>,
-    /// The drain's bin-index-refused hold, on the same in-memory terms as
-    /// [`blocked`](Self::blocked).
-    bin_index_hold: Rc<RefCell<Option<BinIndexHold>>>,
+    /// next drain attempt's own verdict rather than trusting a stale one.
+    queue_hold: Rc<RefCell<Option<QueueHold>>>,
     /// Pinned bytes a published prune still owes the registry, written by the
     /// drain tick and read by [`pending_reclaim_bytes`](Self::pending_reclaim_bytes).
     /// In-memory: the durable record is the retire ledger, which every pass re-reads.
@@ -4794,9 +4774,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
-                blocked: Rc::new(RefCell::new(None)),
-                settings_hold: Rc::new(RefCell::new(None)),
-                bin_index_hold: Rc::new(RefCell::new(None)),
+                queue_hold: Rc::new(RefCell::new(None)),
                 pending_reclaim: Rc::new(Cell::new(0)),
                 reclaim_stalls: Rc::new(RefCell::new(Vec::new())),
                 bookkeeping: Rc::new(RefCell::new(BookkeepingCursors::default())),
@@ -5873,9 +5851,7 @@ where {
         let entropy = self.entropy.clone();
         let scope_write_seeds = self.scope_write_seeds.clone();
         let dead_letters = self.dead_letters.clone();
-        let blocked = self.blocked.clone();
-        let settings_hold = self.settings_hold.clone();
-        let bin_index_hold = self.bin_index_hold.clone();
+        let queue_hold = self.queue_hold.clone();
         let pending_reclaim = self.pending_reclaim.clone();
         let reclaim_stalls = self.reclaim_stalls.clone();
         let bookkeeping = self.bookkeeping.clone();
@@ -6507,8 +6483,7 @@ where {
                             entropy: &entropy,
                             base: &base,
                             held: &held,
-                            blocked: &blocked,
-                            settings_hold: &settings_hold,
+                            hold: &queue_hold,
                             pending_reclaim: &pending_reclaim,
                             reclaim_stalls: &reclaim_stalls,
                             bookkeeping: &bookkeeping,
@@ -6520,7 +6495,6 @@ where {
                             bin_retention_days: owner_bin_retention_days(&tick_settings),
                             dead_letters: &dead_letters,
                             bin_index_record: &bin_index_record,
-                            bin_index_hold: &bin_index_hold,
                             established_bin_index: RefCell::new(None),
                             observed_unlinks: &observed_unlinks,
                             pending_scope_exits: &pending_scope_exits,
@@ -9470,9 +9444,7 @@ where {
         let retained_records = self.scan_queue().await?.retained;
         Ok(SessionStatus {
             dead_letters: self.retained_dead_letters(),
-            blocked: *self.blocked.borrow(),
-            settings_hold: *self.settings_hold.borrow(),
-            bin_index_hold: *self.bin_index_hold.borrow(),
+            queue_hold: *self.queue_hold.borrow(),
             retained_records,
             staleness: self.staleness_now(),
         })
@@ -9563,9 +9535,7 @@ where {
             children,
             ancestors,
             dead_letters: self.retained_dead_letters(),
-            blocked: *self.blocked.borrow(),
-            settings_hold: *self.settings_hold.borrow(),
-            bin_index_hold: *self.bin_index_hold.borrow(),
+            queue_hold: *self.queue_hold.borrow(),
             retained_records: scan.retained,
             staleness: self.staleness_now(),
         })
@@ -11466,9 +11436,7 @@ mod tests {
                 name: FOLDER.to_string(),
             }],
             dead_letters: Vec::new(),
-            blocked: None,
-            settings_hold: None,
-            bin_index_hold: None,
+            queue_hold: None,
             retained_records: 0,
             staleness: Staleness::Fresh,
         };
@@ -13597,20 +13565,20 @@ mod tests {
     fn a_settings_refused_hold_reaches_both_read_surfaces() {
         let (engine, _events) = started();
         let root = engine.root();
-        let hold = SettingsHold {
+        let hold = QueueHold {
             op_id: OpId(1),
             node: root,
-            refusal: crate::settings::SettingsRefusal::Byo(
+            reason: QueueHoldReason::Settings(crate::settings::SettingsRefusal::Byo(
                 crate::content::ProviderError::InsecureTransport,
-            ),
+            )),
         };
-        *engine.settings_hold.borrow_mut() = Some(hold);
+        *engine.queue_hold.borrow_mut() = Some(hold);
 
         assert_eq!(
-            block_on(engine.snapshot(root)).unwrap().settings_hold,
+            block_on(engine.snapshot(root)).unwrap().queue_hold,
             Some(hold)
         );
-        assert_eq!(block_on(engine.status()).unwrap().settings_hold, Some(hold));
+        assert_eq!(block_on(engine.status()).unwrap().queue_hold, Some(hold));
     }
 
     #[test]

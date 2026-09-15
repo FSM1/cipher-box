@@ -13,7 +13,6 @@ import type {
   AuthMethodKind,
   BinDescriptor,
   BinOriginDescriptor,
-  BlockedOpDescriptor,
   ByoKind,
   CommandDescriptor,
   DeadLetterReason,
@@ -30,6 +29,7 @@ import type {
   RegisteredDeviceDescriptor,
   SettingsOrigin,
   SharingDescriptor,
+  QueueHoldDescriptor,
   SnapshotDescriptor,
   Staleness,
   VaultStorageDescriptor,
@@ -39,7 +39,6 @@ import type {
   WasmAuthMethod,
   WasmBinRow,
   WasmBinView,
-  WasmBlockedOp,
   WasmCommand,
   WasmEvent,
   WasmByoIpfsConfig,
@@ -487,31 +486,35 @@ function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLet
   }
 }
 
-function blockedHold(blocked: WasmBlockedOp | undefined): BlockedOpDescriptor | null {
-  if (blocked === undefined) return null;
-  return {
-    opId: blocked.opId,
-    node: blocked.node,
-    neededBytes: blocked.neededBytes,
-  };
+/**
+ * Reads the held queue head, refusing a reason or a check name this build does
+ * not know. A hold whose cause cannot be named would render as an unexplained
+ * stall, which is the state the hold exists to remove.
+ */
+function queueHold(hold: WasmQueueHold | undefined): QueueHoldDescriptor | null {
+  if (hold === undefined) return null;
+  const head = { opId: hold.opId, node: hold.node };
+  switch (hold.reason) {
+    case 'quota':
+      if (hold.neededBytes === undefined) {
+        throw new Error('WASM quota hold carries no byte count');
+      }
+      return { ...head, reason: 'quota', neededBytes: hold.neededBytes };
+    case 'settings':
+      return { ...head, reason: 'settings', check: holdCheck(hold, SETTINGS_HOLD_CHECKS) };
+    case 'bin-index':
+      return { ...head, reason: 'bin-index', check: holdCheck(hold, BIN_INDEX_HOLD_CHECKS) };
+    default:
+      throw new Error(`unknown WASM queue hold reason: ${hold.reason}`);
+  }
 }
 
-/**
- * Reads a held queue head, refusing a check name this build does not know. A
- * hold whose cause cannot be named would render as an unexplained stall, which
- * is the state the hold exists to remove.
- */
-function queueHold<TCheck extends string>(
-  hold: WasmQueueHold | undefined,
-  checks: readonly TCheck[],
-  held: string
-): { opId: bigint; node: Uint8Array; check: TCheck } | null {
-  if (hold === undefined) return null;
+function holdCheck<TCheck extends string>(hold: WasmQueueHold, checks: readonly TCheck[]): TCheck {
   const check = checks.find((known) => known === hold.check);
   if (check === undefined) {
-    throw new Error(`unknown WASM ${held} hold check: ${hold.check}`);
+    throw new Error(`unknown WASM ${hold.reason} hold check: ${hold.check}`);
   }
-  return { opId: hold.opId, node: hold.node, check };
+  return check;
 }
 
 function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
@@ -606,9 +609,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       opId: dead.opId,
       reason: deadLetterReason(wasm, dead.reason),
     })),
-    blocked: blockedHold(view.blocked),
-    settingsHold: queueHold(view.settingsHold, SETTINGS_HOLD_CHECKS, 'settings'),
-    binIndexHold: queueHold(view.binIndexHold, BIN_INDEX_HOLD_CHECKS, 'bin index'),
+    queueHold: queueHold(view.queueHold),
     retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
   };

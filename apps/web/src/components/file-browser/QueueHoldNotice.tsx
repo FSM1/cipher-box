@@ -24,38 +24,24 @@ const BIN_INDEX_CAUSES: Record<BinIndexHoldCheck, string> = {
 };
 
 /**
- * The two held queue heads the engine reports beside the over-quota hold: the
- * member's own settings refused the head, or the owner's bin index did not
- * resolve for it. Both clear, so the notice follows the snapshot and goes when
- * the hold does.
+ * The held queue head, when the member's own settings refused it or the owner's
+ * bin index did not resolve for it. The over-quota hold is the upload panel's,
+ * which renders the figure it carries. A hold clears, so the notice follows the
+ * snapshot and goes when the hold does.
  */
 export function QueueHoldNotice({ view }: { view: SnapshotDescriptor | null }) {
-  const holds: { key: string; text: string }[] = [];
-  if (view?.settingsHold != null) {
-    const { node, check } = view.settingsHold;
-    holds.push({
-      key: 'settings',
-      text: `${held(view, node)} waits on your settings: ${SETTINGS_CAUSES[check]}.`,
-    });
-  }
-  if (view?.binIndexHold != null) {
-    const { node, check } = view.binIndexHold;
-    holds.push({
-      key: 'bin-index',
-      text: `${held(view, node)} waits on your bin: ${BIN_INDEX_CAUSES[check]}.`,
-    });
-  }
-  if (holds.length === 0) return null;
+  const hold = view?.queueHold ?? null;
+  if (view == null || hold === null || hold.reason === 'quota') return null;
+  const text =
+    hold.reason === 'settings'
+      ? `${held(view, hold.node)} waits on your settings: ${SETTINGS_CAUSES[hold.check]}.`
+      : `${held(view, hold.node)} waits on your bin: ${BIN_INDEX_CAUSES[hold.check]}.`;
 
   return (
     <div className="queue-hold-notice" role="status" data-testid="queue-hold-notice">
-      <p className="queue-hold-notice-title">
-        {`[!] ${holds.length === 1 ? 'a change is' : `${holds.length} changes are`} waiting`}
-      </p>
+      <p className="queue-hold-notice-title">[!] a change is waiting</p>
       <ul className="queue-hold-notice-list">
-        {holds.map((hold) => (
-          <li key={hold.key}>{hold.text}</li>
-        ))}
+        <li>{text}</li>
       </ul>
     </div>
   );

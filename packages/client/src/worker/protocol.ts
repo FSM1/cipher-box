@@ -88,13 +88,6 @@ export interface DeadLetterDescriptor {
   reason: DeadLetterReason;
 }
 
-/** The drain's over-budget hold, as data (mirrors the facade `BlockedOp`). */
-export interface BlockedOpDescriptor {
-  opId: bigint;
-  node: Uint8Array;
-  neededBytes: bigint;
-}
-
 /**
  * The rule that refused the member's own settings, as the engine's stable check
  * names. Only the verdicts a settings hold can carry: a hold waits on the member
@@ -126,26 +119,42 @@ export const BIN_INDEX_HOLD_CHECKS = [
 
 export type BinIndexHoldCheck = (typeof BIN_INDEX_HOLD_CHECKS)[number];
 
-/**
- * The queue head held over the member's own settings, as data (mirrors the
- * facade `SettingsHold`). The check names the rule, never the endpoint or the
- * bearer those settings carry.
- */
-export interface SettingsHoldDescriptor {
+/** The held op and the node it targets, which every hold reason carries. */
+interface HeldQueueHead {
   opId: bigint;
   node: Uint8Array;
-  check: SettingsHoldCheck;
+}
+
+/** The queue head held over the account quota. */
+export interface QuotaHoldDescriptor extends HeldQueueHead {
+  reason: 'quota';
+  neededBytes: bigint;
 }
 
 /**
- * The queue head held over the owner's bin index, as data (mirrors the facade
- * `BinIndexHold`).
+ * The queue head held over the member's own settings. The check names the rule,
+ * never the endpoint or the bearer those settings carry.
  */
-export interface BinIndexHoldDescriptor {
-  opId: bigint;
-  node: Uint8Array;
+export interface SettingsHoldDescriptor extends HeldQueueHead {
+  reason: 'settings';
+  check: SettingsHoldCheck;
+}
+
+/** The queue head held over the owner's bin index. */
+export interface BinIndexHoldDescriptor extends HeldQueueHead {
+  reason: 'bin-index';
   check: BinIndexHoldCheck;
 }
+
+/**
+ * The one held queue head, as data (mirrors the facade `QueueHold`). One head
+ * is held for one reason, so a host dispatches on `reason` rather than reading
+ * parallel fields.
+ */
+export type QueueHoldDescriptor =
+  | QuotaHoldDescriptor
+  | SettingsHoldDescriptor
+  | BinIndexHoldDescriptor;
 
 /**
  * One direct child in a snapshot, as data. `size`/`mtime`/`contentVersion` are
@@ -177,12 +186,8 @@ export interface SnapshotDescriptor {
   children: SnapshotChildDescriptor[];
   ancestors: BreadcrumbDescriptor[];
   deadLetters: DeadLetterDescriptor[];
-  /** The drain's over-budget hold, or `null` when nothing is held. */
-  blocked: BlockedOpDescriptor | null;
-  /** The drain's settings-refused hold, or `null` when nothing is held. */
-  settingsHold: SettingsHoldDescriptor | null;
-  /** The drain's bin-index-refused hold, or `null` when nothing is held. */
-  binIndexHold: BinIndexHoldDescriptor | null;
+  /** The drain's held queue head, or `null` when nothing is held. */
+  queueHold: QueueHoldDescriptor | null;
   /**
    * Durable queue entries this session holds but cannot read — another
    * identity's, or written by a newer build. They occupy staged bytes against

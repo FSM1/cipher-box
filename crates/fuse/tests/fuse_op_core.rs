@@ -2316,7 +2316,7 @@ fn a_dead_lettered_op_reaches_the_mount_status_with_its_reason() {
     assert!(
         block_on(core.status())
             .expect("the status reads again")
-            .blocked
+            .queue_hold
             .is_none(),
         "a dead letter is not a drain hold"
     );
@@ -2357,7 +2357,7 @@ fn the_mount_status_reports_a_quiet_mount_as_quiet() {
     let status = block_on(core.status()).expect("the status reads");
 
     assert!(status.dead_letters.is_empty());
-    assert!(status.blocked.is_none());
+    assert!(status.queue_hold.is_none());
     assert_eq!(status.retained_records, 0);
     assert_eq!(status.staleness, Staleness::Fresh);
 }

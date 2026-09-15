@@ -59,9 +59,7 @@ function folderView(overrides: Partial<SnapshotDescriptor> = {}): SnapshotDescri
     children: [],
     ancestors: [],
     deadLetters: [],
-    blocked: null,
-    settingsHold: null,
-    binIndexHold: null,
+    queueHold: null,
     retainedRecords: 0,
     staleness: 'fresh',
     ...overrides,
@@ -1364,7 +1362,7 @@ describe('the queue overlay', () => {
       engine,
       folderView({
         children: [file(NOTE, 'notes.txt')],
-        binIndexHold: { opId: 8n, node: NOTE, check: 'timed-out' },
+        queueHold: { reason: 'bin-index', opId: 8n, node: NOTE, check: 'timed-out' },
       })
     );
 

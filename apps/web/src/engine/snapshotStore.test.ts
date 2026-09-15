@@ -398,7 +398,7 @@ describe('failure classification', () => {
 describe("the drain's over-budget hold", () => {
   const HELD = 7n;
   const held = (opId: bigint, neededBytes: bigint) => ({
-    view: { ...view(), blocked: { opId, node: ROOT_ID, neededBytes } },
+    view: { ...view(), queueHold: { reason: 'quota' as const, opId, node: ROOT_ID, neededBytes } },
     error: null,
   });
 
