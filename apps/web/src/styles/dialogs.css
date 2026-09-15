@@ -392,3 +392,10 @@
   overflow-wrap: anywhere;
   color: var(--color-text-primary);
 }
+
+.sharing-scan-preview {
+  width: 100%;
+  max-height: 40vh;
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
