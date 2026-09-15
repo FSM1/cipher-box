@@ -380,14 +380,23 @@ class Web3AuthSession implements WebCoreKitSession {
   async mintApprovalFactor(): Promise<MintedApprovalFactor> {
     if (!this.isLoggedIn()) throw new Error('sign in before you approve a device');
     const factor = generateFactorKey();
+    const id = factorId(factor.private);
     await this.coreKit.createFactor({
       shareType: TssShareType.DEVICE,
       factorKey: factor.private,
       shareDescription: FactorKeyTypeShareDescription.DeviceShare,
     });
-    // Manual sync: an uncommitted factor would open nothing on the new device.
-    await this.coreKit.commitChanges();
-    return { key: scalarBytes(factor.private), id: factorId(factor.private) };
+    try {
+      // Manual sync: an uncommitted factor would open nothing on the new device.
+      await this.coreKit.commitChanges();
+    } catch (failure) {
+      // The caller never receives this factor, and the creation stays queued, so
+      // a later sync would carry it onto the account. Best effort: the sync that
+      // failed is the one to report.
+      await this.deleteApprovalFactor(id).catch(() => undefined);
+      throw failure;
+    }
+    return { key: scalarBytes(factor.private), id };
   }
 
   async deleteApprovalFactor(id: string): Promise<void> {

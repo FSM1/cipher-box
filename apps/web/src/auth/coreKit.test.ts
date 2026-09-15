@@ -743,6 +743,23 @@ describe('the factor an approval mints', () => {
     expect(sdk.committedFactorPubs).toEqual([]);
   });
 
+  /**
+   * The create runs before the sync and stays queued when the sync fails, so a
+   * later sync would carry a factor onto the account whose key the approver
+   * never received.
+   */
+  it('cuts a factor back out when its own sync failed, so no later sync carries it', async () => {
+    const active = session();
+    sdk.commitFailsAfter = 1;
+
+    await expect(active.mintApprovalFactor()).rejects.toThrow(/metadata sync/);
+
+    expect(sdk.created).toHaveLength(1);
+    expect(sdk.deletedPubs).toHaveLength(1);
+    expect(sdk.factorPubs).toEqual([]);
+    expect(sdk.committedFactorPubs).toEqual([]);
+  });
+
   it('refuses to mint before this browser has reconstructed the account', async () => {
     sdk.status = COREKIT_STATUS.REQUIRED_SHARE;
 

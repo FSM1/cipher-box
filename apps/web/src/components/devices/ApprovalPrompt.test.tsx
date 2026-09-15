@@ -369,6 +369,31 @@ describe('the device approval prompt', () => {
         visibility.mockRestore();
       }
     });
+
+    /** The same reset, driven by the other gate the poll effect reads. */
+    it('returns to the floor when the network comes back', async () => {
+      const online = vi.spyOn(navigator, 'onLine', 'get');
+      try {
+        const asked = await idle();
+        await act(() => vi.advanceTimersByTimeAsync(75_000));
+        await waitFor(() => expect(asked()).toBe(5));
+
+        online.mockReturnValue(false);
+        await act(async () => {
+          window.dispatchEvent(new Event('offline'));
+        });
+        online.mockReturnValue(true);
+        await act(async () => {
+          window.dispatchEvent(new Event('online'));
+        });
+        await waitFor(() => expect(asked()).toBe(6));
+
+        await act(() => vi.advanceTimersByTimeAsync(5000));
+        expect(asked()).toBe(7);
+      } finally {
+        online.mockRestore();
+      }
+    });
   });
 
   /**
