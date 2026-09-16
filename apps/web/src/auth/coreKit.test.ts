@@ -760,6 +760,49 @@ describe('the factor an approval mints', () => {
     expect(sdk.committedFactorPubs).toEqual([]);
   });
 
+  /**
+   * The cut is a network call of its own, so it fails in the same conditions
+   * that fail a sync. An attempt dropped at that point leaves the factor listed.
+   */
+  it('retries a cut the SDK refused, on the next approval this session drops', async () => {
+    const active = session();
+    const first = await active.mintApprovalFactor();
+    sdk.deleteFactorError = REFUSED;
+
+    await expect(active.deleteApprovalFactor(first.id)).rejects.toThrow(REFUSED.message);
+    expect(sdk.committedFactorPubs).toEqual([first.id]);
+
+    sdk.deleteFactorError = undefined;
+    const second = await active.mintApprovalFactor();
+    await active.deleteApprovalFactor(second.id);
+
+    // The refused cut ran without the caller naming that factor again.
+    expect(sdk.deletedPubs).toEqual([first.id, second.id]);
+    expect(sdk.committedFactorPubs).toEqual([]);
+  });
+
+  /**
+   * The worst case of the two: the mint's own sync failed and the cleanup cut
+   * was refused, so a creation nobody can use sits queued behind the next sync.
+   */
+  it('drains an owed removal before it mints, so its own sync cannot carry one', async () => {
+    const active = session();
+    sdk.commitFailsAfter = 1;
+    sdk.deleteFactorError = REFUSED;
+
+    await expect(active.mintApprovalFactor()).rejects.toThrow(/metadata sync/);
+    expect(sdk.committedFactorPubs).toEqual([]);
+
+    sdk.deleteFactorError = undefined;
+    const second = await active.mintApprovalFactor();
+
+    // The first factor was cut before this mint synced, so only the second one
+    // reached the account.
+    expect(sdk.committedFactorPubs).toEqual([second.id]);
+    expect(sdk.deletedPubs).toHaveLength(1);
+    expect(sdk.deletedPubs).not.toContain(second.id);
+  });
+
   it('refuses to mint before this browser has reconstructed the account', async () => {
     sdk.status = COREKIT_STATUS.REQUIRED_SHARE;
 

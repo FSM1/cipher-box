@@ -142,8 +142,12 @@ class Web3AuthSession implements WebCoreKitSession {
   private signedInSubject: string | null = null;
   private signedInToken: string | null = null;
 
-  /** Whether a factor this session cut still waits for its metadata sync. */
-  private removalSyncPending = false;
+  /**
+   * Factors this session minted that must not stay on the account, held until
+   * a sync has carried their removal. Neither the cut nor the sync is reliable,
+   * so the entry survives both and every later call drains it.
+   */
+  private readonly owedRemovals = new Set<string>();
 
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
@@ -379,6 +383,10 @@ class Web3AuthSession implements WebCoreKitSession {
 
   async mintApprovalFactor(): Promise<MintedApprovalFactor> {
     if (!this.isLoggedIn()) throw new Error('sign in before you approve a device');
+    // Refused rather than risked: this mint's own sync writes every queued
+    // transition, so an owed removal left standing would be carried onto the
+    // account by it.
+    if (this.owedRemovals.size > 0) await this.drainOwedRemovals();
     const factor = generateFactorKey();
     const id = factorId(factor.private);
     await this.coreKit.createFactor({
@@ -400,18 +408,29 @@ class Web3AuthSession implements WebCoreKitSession {
   }
 
   async deleteApprovalFactor(id: string): Promise<void> {
-    // The SDK cuts the factor out of the local metadata before the sync runs,
-    // so the idempotence guard alone would read a cut whose sync failed as a
-    // factor already gone and leave the stored account still carrying it.
-    const listed = this.coreKit.getTssFactorPub().includes(id);
-    if (!listed && !this.removalSyncPending) return;
-    if (listed) await this.coreKit.deleteFactor(Point.fromSEC1(factorKeyCurve, id));
-    this.removalSyncPending = true;
-    // Manual sync: an uncommitted removal leaves the factor live. One sync
-    // writes every transition this session has queued, so it lands the cuts of
+    // A factor the account does not list and no owed removal is already gone.
+    if (!this.coreKit.getTssFactorPub().includes(id) && this.owedRemovals.size === 0) return;
+    this.owedRemovals.add(id);
+    await this.drainOwedRemovals();
+  }
+
+  /**
+   * Cuts every factor this session owes a removal for, then syncs once. An
+   * entry clears only after that sync, because the SDK cuts a factor out of the
+   * local metadata before the sync runs: an entry dropped at the cut would let
+   * a later sync carry the factor onto the account instead.
+   */
+  private async drainOwedRemovals(): Promise<void> {
+    const owed = [...this.owedRemovals];
+    for (const id of owed) {
+      // Skipped when an earlier attempt already cut it and only the sync failed.
+      if (!this.coreKit.getTssFactorPub().includes(id)) continue;
+      await this.coreKit.deleteFactor(Point.fromSEC1(factorKeyCurve, id));
+    }
+    // One sync writes every transition queued so far, so it lands the cuts of
     // earlier approvals too.
     await this.coreKit.commitChanges();
-    this.removalSyncPending = false;
+    for (const id of owed) this.owedRemovals.delete(id);
   }
 
   async adoptApprovalFactor(factorKey: Uint8Array): Promise<void> {
