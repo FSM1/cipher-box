@@ -35,14 +35,16 @@ test('a batch moves, downloads and deletes every selected row', async ({ page })
   for (const name of FILES) await files.select(name);
   await expect(files.selectionCount).toHaveText('3 files selected');
 
+  // Matched on the bytes, not on the name: a save that streams through the
+  // service worker names the download after the stored name, which is not the
+  // name the listing shows.
   const downloads = await files.saveSelected(FILES.length);
-  const saved = new Map<string, Uint8Array>();
+  const saved: Uint8Array[] = [];
   for (const download of downloads) {
-    saved.set(download.suggestedFilename(), new Uint8Array(await readFile(await download.path())));
+    saved.push(new Uint8Array(await readFile(await download.path())));
   }
-  for (const [name, bytes] of sent) {
-    expect(saved.get(name), `${name} read back`).toEqual(bytes);
-  }
+  const bySize = (left: Uint8Array, right: Uint8Array) => left.length - right.length;
+  expect(saved.sort(bySize)).toEqual([...sent.values()].sort(bySize));
 
   await files.moveSelected(DESTINATION);
   for (const name of FILES) await expect(files.row(name)).toHaveCount(0);

@@ -146,7 +146,9 @@ export class SharePage {
     await this.recipientChoice.selectOption({ index: 1 });
     await this.permissionChoice.selectOption(permission);
     await this.grantButton.click();
-    await expect(this.grantRows).toHaveCount(1);
+    // A grant re-wraps the scope key and publishes it, so against a real record
+    // plane the row lands well after the click.
+    await expect(this.grantRows).toHaveCount(1, { timeout: 180_000 });
     await expect(this.permission).toHaveText(permission);
   }
 
@@ -168,7 +170,9 @@ export class SharePage {
       await this.page.getByLabel('link expires').selectOption(lifetime);
     }
     await this.mintButton.click();
-    await expect(this.mintedLink).toBeVisible();
+    // A mint publishes the link's own record, so it lands well after the click
+    // against a real record plane.
+    await expect(this.mintedLink).toBeVisible({ timeout: 180_000 });
     const shown = await this.mintedLink.locator('.details-copyable-text').textContent();
     expect(shown, 'the dialog showed no minted link').not.toBeNull();
     return new URL(shown!);

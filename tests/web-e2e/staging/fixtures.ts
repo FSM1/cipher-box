@@ -100,28 +100,19 @@ function report(
  * profile records.
  */
 export async function signIn(page: Page): Promise<number> {
+  const login = new LoginPage(page);
   const files = new FilesPage(page);
 
-  const started = await connectWallet(page);
-  await page.waitForURL('**/files', { timeout: 180_000 });
-  await expect(files.browser).toBeVisible({ timeout: 120_000 });
-  return Date.now() - started;
-}
-
-/**
- * Drives the wallet method as far as the signature, and no further: a browser
- * that holds no factor for this identity stops at the recovery choice rather
- * than at the vault. Returns the instant the journey started.
- */
-export async function connectWallet(page: Page): Promise<number> {
-  const login = new LoginPage(page);
   await page.goto('/');
   await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
 
   const started = Date.now();
   await login.walletButton.click();
   await page.getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true }).click();
-  return started;
+
+  await page.waitForURL('**/files', { timeout: 180_000 });
+  await expect(files.browser).toBeVisible({ timeout: 120_000 });
+  return Date.now() - started;
 }
 
 /**

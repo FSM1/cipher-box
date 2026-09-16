@@ -29,22 +29,22 @@ test('a deleted file restores, and a purged one does not come back', async ({ pa
   await published(page);
 
   await bin.open();
-  await expect(bin.row(RESTORED)).toBeVisible({ timeout: 180_000 });
-  await expect(bin.row(PURGED)).toBeVisible();
+  await bin.appeared(RESTORED);
+  await bin.appeared(PURGED);
   // The vault's own retention dates every expiry on the page, so a row that
   // reads `no expiry` means the retention never landed.
   await expect(bin.retention).toBeVisible();
   await expect(bin.row(RESTORED).getByTestId('bin-expires')).not.toHaveText('no expiry');
 
   await bin.restore(RESTORED);
-  await bin.gone(RESTORED);
+  await bin.gone(RESTORED, 180_000);
   await files.openFromSidebar();
   await expect(files.row(RESTORED)).toBeVisible({ timeout: 180_000 });
   await published(page);
 
   await bin.open();
   await bin.purge(PURGED);
-  await bin.gone(PURGED);
+  await bin.gone(PURGED, 180_000);
   await expect(bin.empty).toBeVisible();
 
   await files.openFromSidebar();

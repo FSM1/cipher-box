@@ -75,22 +75,6 @@ export class SettingsPage {
     return this.page.getByTestId('settings-clear-credential');
   }
 
-  /** The devices this account holds a key for. */
-  get devices(): Locator {
-    return this.page.getByTestId('settings-devices');
-  }
-
-  /**
-   * Enrols this browser as an approver. Offered only on a fresh sign-in: a
-   * session restored across a reload holds no identity token to register with.
-   */
-  async registerDevice(): Promise<void> {
-    const register = this.page.getByTestId('settings-device-register');
-    await expect(register).toBeEnabled({ timeout: 60_000 });
-    await register.click();
-    await expect(this.page.getByTestId('settings-device-own')).toBeVisible({ timeout: 60_000 });
-  }
-
   /** Raises the forget dialog, acknowledges what it takes, and confirms. */
   async forgetDevice(): Promise<void> {
     await this.page.getByTestId('settings-forget-device').click();
