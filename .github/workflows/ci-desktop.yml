@@ -149,6 +149,21 @@ jobs:
       - name: Tauri build (unsigned, no bundle)
         run: pnpm --filter @cipherbox/desktop tauri build --no-bundle
 
+      # The macOS bundle block turns on the hardened runtime and names an
+      # entitlements file. Only a real bundle run proves that path still yields
+      # the ad hoc signed app a credential-free build ships today. The updater
+      # artifact stays off: it wants the minisign key, which no pull-request
+      # job holds.
+      - name: Tauri bundle with no Apple credentials
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          pnpm --filter @cipherbox/desktop tauri build --bundles app \
+            --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          app=target/release/bundle/macos/CipherBox.app
+          test -x "${app}/Contents/MacOS/cipherbox-desktop"
+          codesign -dv "${app}" 2>&1 | grep -q 'Signature=adhoc'
+
       # The shipped binary links FUSE-T's `@rpath` install name but sits outside
       # the guarded workspace test leg, so the rpath its build script emits is
       # asserted on the artifact itself.
