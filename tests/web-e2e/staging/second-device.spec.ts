@@ -16,8 +16,8 @@ test('a second browser on the same identity reaches the same vault', async ({
   secondContext,
 }) => {
   const first = new FilesPage(page);
-  const marker = `first-${Date.now().toString(36)}`;
-  const answer = `second-${Date.now().toString(36)}`;
+  const marker = 'first-device';
+  const answer = 'second-device';
 
   await signIn(page);
   await first.createFolder(marker);

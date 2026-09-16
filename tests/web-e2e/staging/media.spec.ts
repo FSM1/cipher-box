@@ -31,7 +31,11 @@ async function streamUrl(page: Page, testId: string): Promise<string> {
   const element = page.getByTestId(testId);
   await expect(element).toBeVisible({ timeout: 120_000 });
   const url = await element.evaluate((node) => (node as HTMLMediaElement).src);
-  expect(new URL(url).pathname.startsWith(STREAM_PATH), `${testId} src ${url}`).toBe(true);
+  // A ticket is a bearer token, so the origin is part of the assertion: a
+  // `/stream/` path on a foreign origin would hand the ticket away.
+  const ticket = new URL(url);
+  expect(ticket.origin, `${testId} origin ${url}`).toBe(new URL(page.url()).origin);
+  expect(ticket.pathname.startsWith(STREAM_PATH), `${testId} src ${url}`).toBe(true);
   return url;
 }
 

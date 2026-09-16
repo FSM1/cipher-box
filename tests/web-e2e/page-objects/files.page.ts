@@ -81,7 +81,9 @@ export class FilesPage {
   /** Walks the open move dialog onto `destination` and confirms it. */
   private async pickDestination(destination: string): Promise<void> {
     const dialog = this.page.getByTestId('move-dialog');
-    await dialog.getByTestId('folder-picker-entry').filter({ hasText: destination }).click();
+    // The entry's accessible name is the folder name alone, so an exact name
+    // match cannot take a longer neighbour such as `docs-old` for `docs`.
+    await dialog.getByRole('button', { name: destination, exact: true }).click();
     await expect(dialog.getByTestId('folder-picker-destination')).toHaveText(destination);
     await this.page.getByTestId('move-confirm').click();
     await expect(dialog).toHaveCount(0);
