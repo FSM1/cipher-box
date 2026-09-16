@@ -14,6 +14,10 @@ import { CLOUDFLARE_RANGES } from './cloudflare-ranges.mjs';
 const SOURCE = 'https://api.cloudflare.com/client/v4/ips';
 const ATTEMPTS = 3;
 const RETRY_DELAY_MS = 5000;
+// Node bounds the connect phase only, so a source that accepts the socket and
+// then stalls the body would hang until the runner kills the job. Three attempts
+// plus the delays stay well inside the job's own timeout.
+const ATTEMPT_TIMEOUT_MS = 15_000;
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -22,7 +26,10 @@ async function fetchPublishedRanges() {
   let last;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
     try {
-      const response = await fetch(SOURCE, { headers: { accept: 'application/json' } });
+      const response = await fetch(SOURCE, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
+      });
       if (!response.ok) throw new Error(`${SOURCE} answered ${response.status}`);
       const payload = await response.json();
       if (payload?.success !== true) throw new Error(`${SOURCE} reported success=false`);
