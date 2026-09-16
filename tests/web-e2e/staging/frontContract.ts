@@ -8,12 +8,13 @@
 import type { Page } from '@playwright/test';
 
 export interface RoutingFrontLog {
-  /** Record PUTs the browser never completed, with the network error. */
+  /** Record PUTs that did not land, with the network error or the status. */
   readonly refusedPublishes: string[];
   /** Read answers the browser was told it may reuse, with the header. */
   readonly cacheableReads: string[];
   /** Every read answer seen, so an assertion can say it saw nothing at all. */
   readonly reads: string[];
+  /** Record PUTs the front answered 2xx, which is the only landed publish. */
   readonly publishes: string[];
 }
 
@@ -41,16 +42,20 @@ export function watchRoutingFront(page: Page, routingOrigin: string): RoutingFro
 
   page.on('response', (response) => {
     const request = response.request();
-    if (!mine(request.url()) || request.method() !== 'GET') return;
+    if (!mine(request.url())) return;
+    if (request.method() === 'PUT') {
+      // The front can answer a publish and still refuse it; only a 2xx lands.
+      const status = response.status();
+      if (status >= 200 && status < 300) log.publishes.push(request.url());
+      else log.refusedPublishes.push(`${request.url()} status: ${status}`);
+      return;
+    }
+    if (request.method() !== 'GET') return;
     const cacheControl = response.headers()['cache-control'] ?? null;
     log.reads.push(request.url());
     if (isCacheable(cacheControl)) {
       log.cacheableReads.push(`${request.url()} cache-control: ${cacheControl}`);
     }
-  });
-
-  page.on('requestfinished', (request) => {
-    if (mine(request.url()) && request.method() === 'PUT') log.publishes.push(request.url());
   });
 
   page.on('requestfailed', (request) => {

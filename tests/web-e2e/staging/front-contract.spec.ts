@@ -3,8 +3,8 @@
  * real session: a record publish the browser never completes, and a read answer
  * the browser is told it may reuse.
  *
- * The last two cases are the proof that those checks fail red: they answer the
- * same requests with the broken headers and assert the check refuses them.
+ * The last three cases are the proof that those checks fail red: they answer
+ * the same requests with a broken front and assert the check refuses them.
  */
 
 import type { Page } from '@playwright/test';
@@ -54,7 +54,7 @@ test('the routing front carries a real session', async ({ page, baseURL }) => {
     .poll(() => log.publishes.length + log.refusedPublishes.length, { timeout: 180_000 })
     .toBeGreaterThan(0);
 
-  expect(log.refusedPublishes, 'the browser completed every record publish').toEqual([]);
+  expect(log.refusedPublishes, 'the front landed every record publish').toEqual([]);
   expect(log.reads.length, 'the session read the routing front').toBeGreaterThan(0);
   expect(log.cacheableReads, 'no read answer carried a cache lifetime').toEqual([]);
 });
@@ -70,6 +70,32 @@ test('the check refuses a front that blocks the record publish', async ({ page, 
   await probe(page, routing, 'PUT');
 
   expect(log.refusedPublishes).not.toEqual([]);
+});
+
+test('the check refuses a front that answers the record publish with a refusal', async ({
+  page,
+  baseURL,
+}) => {
+  const routing = routingOrigin(baseURL!);
+  const log = watchRoutingFront(page, routing);
+  // A publish the front answers rather than drops: the request completes, so
+  // only the status separates a landed record from a refused one.
+  const cors = {
+    'access-control-allow-origin': new URL(baseURL!).origin,
+    'access-control-allow-methods': 'GET, PUT, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+  };
+  await page.route(`${routing}/routing/v1/ipns/*`, (route) =>
+    route.request().method() === 'OPTIONS'
+      ? route.fulfill({ status: 204, headers: cors })
+      : route.fulfill({ status: 502, headers: cors, body: 'bad gateway' })
+  );
+
+  await page.goto('/');
+  await probe(page, routing, 'PUT');
+
+  await expect.poll(() => log.refusedPublishes).not.toEqual([]);
+  expect(log.publishes, 'a refused publish is never counted as a publish').toEqual([]);
 });
 
 test('the check refuses a cacheable vacancy', async ({ page, baseURL }) => {
