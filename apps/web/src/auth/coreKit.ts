@@ -66,12 +66,31 @@ export interface WebCoreKitSession extends CoreKitSession {
    * A fresh factor for a device this session approves, and never this session's
    * own (ADR 0009 D5). The bytes are the caller's to seal and then to erase.
    */
-  mintApprovalFactor(): Promise<Uint8Array>;
+  mintApprovalFactor(): Promise<MintedApprovalFactor>;
+  /**
+   * Drops a factor this session minted for an approval that did not reach the
+   * API, named by its public identifier alone. Resolves when the account no
+   * longer carries it, so a repeated call is not an error.
+   */
+  deleteApprovalFactor(id: string): Promise<void>;
   /**
    * Adopt the factor an approver sealed back, and keep it as this device's own
    * so the next sign-in here needs neither a phrase nor a second device.
    */
   adoptApprovalFactor(factorKey: Uint8Array): Promise<void>;
+}
+
+/**
+ * A factor minted for one approval. The mint commits it to the account before
+ * the seal runs, so an approver that then fails needs a way to name it; the
+ * seal transfers `key` to the engine, and a copy kept for that would hold live
+ * key material in the tab for the length of the exchange.
+ */
+export interface MintedApprovalFactor {
+  /** The factor bytes, the caller's to seal and then to erase. */
+  key: Uint8Array;
+  /** The factor's public point in compressed SEC1 hex. Carries no secret. */
+  id: string;
 }
 
 /**
@@ -122,6 +141,13 @@ class Web3AuthSession implements WebCoreKitSession {
    * which is the state a device-approval request is opened from. */
   private signedInSubject: string | null = null;
   private signedInToken: string | null = null;
+
+  /**
+   * Factors this session minted that must not stay on the account, held until
+   * a sync has carried their removal. Neither the cut nor the sync is reliable,
+   * so the entry survives both and every later call drains it.
+   */
+  private readonly owedRemovals = new Set<string>();
 
   constructor(
     private readonly coreKit: Web3AuthMPCCoreKit,
@@ -355,17 +381,56 @@ class Web3AuthSession implements WebCoreKitSession {
     return this.signedInToken;
   }
 
-  async mintApprovalFactor(): Promise<Uint8Array> {
+  async mintApprovalFactor(): Promise<MintedApprovalFactor> {
     if (!this.isLoggedIn()) throw new Error('sign in before you approve a device');
+    // Refused rather than risked: this mint's own sync writes every queued
+    // transition, so an owed removal left standing would be carried onto the
+    // account by it.
+    if (this.owedRemovals.size > 0) await this.drainOwedRemovals();
     const factor = generateFactorKey();
+    const id = factorId(factor.private);
     await this.coreKit.createFactor({
       shareType: TssShareType.DEVICE,
       factorKey: factor.private,
       shareDescription: FactorKeyTypeShareDescription.DeviceShare,
     });
-    // Manual sync: an uncommitted factor would open nothing on the new device.
+    try {
+      // Manual sync: an uncommitted factor would open nothing on the new device.
+      await this.coreKit.commitChanges();
+    } catch (failure) {
+      // The caller never receives this factor, and the creation stays queued, so
+      // a later sync would carry it onto the account. Best effort: the sync that
+      // failed is the one to report.
+      await this.deleteApprovalFactor(id).catch(() => undefined);
+      throw failure;
+    }
+    return { key: scalarBytes(factor.private), id };
+  }
+
+  async deleteApprovalFactor(id: string): Promise<void> {
+    // A factor the account does not list and no owed removal is already gone.
+    if (!this.coreKit.getTssFactorPub().includes(id) && this.owedRemovals.size === 0) return;
+    this.owedRemovals.add(id);
+    await this.drainOwedRemovals();
+  }
+
+  /**
+   * Cuts every factor this session owes a removal for, then syncs once. An
+   * entry clears only after that sync, because the SDK cuts a factor out of the
+   * local metadata before the sync runs: an entry dropped at the cut would let
+   * a later sync carry the factor onto the account instead.
+   */
+  private async drainOwedRemovals(): Promise<void> {
+    const owed = [...this.owedRemovals];
+    for (const id of owed) {
+      // Skipped when an earlier attempt already cut it and only the sync failed.
+      if (!this.coreKit.getTssFactorPub().includes(id)) continue;
+      await this.coreKit.deleteFactor(Point.fromSEC1(factorKeyCurve, id));
+    }
+    // One sync writes every transition queued so far, so it lands the cuts of
+    // earlier approvals too.
     await this.coreKit.commitChanges();
-    return scalarBytes(factor.private);
+    for (const id of owed) this.owedRemovals.delete(id);
   }
 
   async adoptApprovalFactor(factorKey: Uint8Array): Promise<void> {
@@ -472,6 +537,11 @@ export function sealedCoreKitStore(): SealedStore {
  */
 function scalarBytes(scalar: BN): Uint8Array {
   return Uint8Array.from(scalar.toArray('be', 32));
+}
+
+/** A factor's public identifier, in the encoding `getTssFactorPub` reports. */
+function factorId(scalar: BN): string {
+  return Point.fromScalar(scalar, factorKeyCurve).toSEC1(factorKeyCurve, true).toString('hex');
 }
 
 /** Builds this tab's Core Kit session from the build-time environment. */
