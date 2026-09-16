@@ -24,9 +24,14 @@ export function DetailsDialog({ row, onClose }: DetailsDialogProps) {
   const isFile = row.kind === 'file';
   const versions = useFileVersions(isFile ? row.id : null, row.storedName);
   const [pending, setPending] = useState<PendingWrite | null>(null);
+  // A confirmed write spans two engine calls, the write and its re-read, and
+  // `versions.busy` falls to null between them. Only this holds for both.
+  const [confirming, setConfirming] = useState(false);
 
   const confirm = (write: PendingWrite) => {
+    setConfirming(true);
     void versions.write(write.command, write.entry.contentCid).then((accepted) => {
+      setConfirming(false);
       if (accepted) setPending(null);
     });
   };
@@ -62,7 +67,7 @@ export function DetailsDialog({ row, onClose }: DetailsDialogProps) {
           testId={`version-${pending.command}`}
           onClose={() => setPending(null)}
           onConfirm={() => confirm(pending)}
-          busy={versions.busy === pending.command}
+          busy={confirming}
           error={versions.error}
         />
       )}

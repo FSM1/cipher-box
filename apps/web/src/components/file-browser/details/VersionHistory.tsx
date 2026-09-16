@@ -30,7 +30,10 @@ export function VersionHistory({
   onRestore,
   onDelete,
 }: VersionHistoryProps) {
-  if (entries === null || entries.length === 0) return null;
+  const listed = entries !== null && entries.length > 0;
+  // A failed read leaves no entries, so a section gated on entries alone would
+  // report the failure nowhere.
+  if (!listed && error === null) return null;
 
   return (
     <div className="details-version-section" data-testid="version-history">
@@ -41,7 +44,7 @@ export function VersionHistory({
         </p>
       )}
       <ul className="details-version-list">
-        {entries.map((entry) => {
+        {(entries ?? []).map((entry) => {
           const cid = toHex(entry.contentCid);
           const named = shortCid(cid);
           return (

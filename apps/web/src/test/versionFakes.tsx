@@ -79,7 +79,13 @@ export function versionEntry(
 }
 
 export function renderWithEngine(ui: ReactElement, client: EngineClient) {
-  return render(<EngineProvider createClient={() => client}>{ui}</EngineProvider>);
+  const wrap = (tree: ReactElement) => (
+    <EngineProvider createClient={() => client}>{tree}</EngineProvider>
+  );
+  const view = render(wrap(ui));
+  // Re-wrapping keeps the same provider instance, so a rerender swaps only the
+  // subject under test and never rebuilds the engine.
+  return { ...view, rerender: (next: ReactElement) => view.rerender(wrap(next)) };
 }
 
 function drop(held: VersionEntryDescriptor[], contentCid: Uint8Array): void {

@@ -38,8 +38,8 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
 
 function openDetails(options: VersionEngineOptions = {}, onClose = () => undefined) {
   const engine = versionEngine(options);
-  renderWithEngine(<DetailsDialog row={fileRow()} onClose={onClose} />, engine.client);
-  return engine;
+  const view = renderWithEngine(<DetailsDialog row={fileRow()} onClose={onClose} />, engine.client);
+  return { ...engine, view };
 }
 
 /** The label a version's controls carry, which is its clamped content root CID. */
@@ -175,6 +175,49 @@ describe('the version history', () => {
     fireEvent.click(screen.getByLabelText('close'));
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('reports a failed read of the list, which leaves no entry to report it against', async () => {
+    openDetails({ refusals: { fileVersions: new Error('the versions could not be read') } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('version-error').textContent).toContain(
+        'the versions could not be read'
+      )
+    );
+  });
+
+  it('holds the confirmation locked until the re-read after the write lands', async () => {
+    const engine = openDetails({ entries: [OLDER, OLDEST] });
+    await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
+
+    fireEvent.click(control('delete', OLDEST_CID));
+    // The re-read never settles, so the write is still the dialog's to own.
+    engine.facade.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
+    fireEvent.click(screen.getByTestId('version-delete-confirm'));
+
+    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('version-delete-confirm').hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(screen.getByTestId('version-delete-confirm'));
+    expect(engine.facade.deleteVersion).toHaveBeenCalledOnce();
+  });
+
+  it('drops the list of the node it left when the dialog is shown another node', async () => {
+    const engine = openDetails({ entries: [OLDER, OLDEST] });
+    await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
+
+    // The next node's read never settles, so only a cleared list can hide the
+    // entries the previous node answered with.
+    engine.facade.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
+    engine.view.rerender(
+      <DetailsDialog
+        row={fileRow({ id: new Uint8Array(4).fill(0xcd) })}
+        onClose={() => undefined}
+      />
+    );
+
+    await waitFor(() => expect(screen.queryByTestId('version-history')).toBeNull());
   });
 
   it('refuses to dismiss the details dialog under an unanswered confirmation', async () => {

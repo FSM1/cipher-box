@@ -63,7 +63,14 @@ export function useFileVersions(node: Uint8Array | null, name: string): FileVers
   );
 
   useEffect(() => {
-    if (node !== null) void reload(node);
+    // Entries name one node. A list the previous node answered with must not
+    // stay on screen, and an in-flight read of it must not land on the new one.
+    setEntries(null);
+    if (node === null) {
+      generation.current += 1;
+      return;
+    }
+    void reload(node);
   }, [node, reload]);
 
   const download = useCallback(
