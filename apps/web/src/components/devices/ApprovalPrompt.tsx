@@ -11,7 +11,14 @@ import { useAuthState } from '../../stores/auth.store';
 import { Modal } from '../ui/Modal';
 
 /** Short enough that a member reaches the prompt while the rendezvous is live. */
-const POLL_MS = 5000;
+const POLL_FLOOR_MS = 5000;
+
+/**
+ * Where an idle tab settles. The poll is a foreground beacon the server does not
+ * need, and a tab open all day sends it for no approval at all, so a run that
+ * finds nothing backs away from the floor and doubles up to here.
+ */
+const POLL_CEILING_MS = 60_000;
 
 const NO_IDENTITY = 'this browser holds no device identity key, so it cannot approve a sign-in';
 
@@ -48,6 +55,11 @@ export function ApprovalPrompt() {
   // unmount. `erase` states why a transferred buffer is left alone.
   const factorKey = useRef<Uint8Array | null>(null);
   const sealScalar = useRef<Uint8Array | null>(null);
+  // The public identifier of the factor this answer minted, held from the mint
+  // until the response goes out. The mint commits the factor to the account
+  // before the seal runs, so a failure in between would otherwise leave one
+  // that opens nothing, and every retry would leave one more.
+  const mintedFactor = useRef<string | null>(null);
   const wipe = useCallback(() => {
     erase(factorKey.current);
     factorKey.current = null;
@@ -77,22 +89,37 @@ export function ApprovalPrompt() {
     // Read until it holds, so a registration made in this session needs no
     // reload, and again whenever a row would be raised.
     let registered = false;
-    const poll = async (): Promise<void> => {
+    const poll = async (): Promise<boolean> => {
       if (!registered) {
         registered = await carriesThisDevice();
-        if (!registered) return;
+        if (!registered) return false;
       }
       const rows = await facade.pendingApprovals();
       if (rows.length > 0) registered = await carriesThisDevice();
+      const raised = registered && rows.length > 0;
       if (live) setPending(registered ? rows : []);
+      return raised;
     };
-    // A failed poll is the ordinary offline case; the next one answers.
-    const run = () => void poll().catch(() => undefined);
+    // The back-off is local to this run of the effect, so regaining focus or a
+    // network path restarts at the floor: both retire `polling` and cut a fresh
+    // one. A failed poll is the ordinary offline case and backs off like an
+    // empty one; the next poll answers.
+    let delay = POLL_FLOOR_MS;
+    let tick: ReturnType<typeof setTimeout>;
+    const run = (): void => {
+      void poll()
+        .catch(() => false)
+        .then((raised) => {
+          if (!live) return;
+          if (raised) delay = POLL_FLOOR_MS;
+          tick = setTimeout(run, delay);
+          delay = Math.min(delay * 2, POLL_CEILING_MS);
+        });
+    };
     run();
-    const tick = setInterval(run, POLL_MS);
     return () => {
       live = false;
-      clearInterval(tick);
+      clearTimeout(tick);
     };
   }, [client, polling, session]);
 
@@ -127,7 +154,8 @@ export function ApprovalPrompt() {
     }
     if (!session) throw new Error(NO_IDENTITY);
     const factor = await session.mintApprovalFactor();
-    factorKey.current = factor;
+    factorKey.current = factor.key;
+    mintedFactor.current = factor.id;
     const seal = crypto.getRandomValues(new Uint8Array(32));
     sealScalar.current = seal;
     return {
@@ -137,7 +165,7 @@ export function ApprovalPrompt() {
       requesterDevicePublicKey: row.requesterDevicePublicKey,
       ephemeralPublicKey: row.ephemeralPublicKey,
       sealScalar: seal,
-      factorKey: factor,
+      factorKey: factor.key,
     };
   };
 
@@ -146,24 +174,38 @@ export function ApprovalPrompt() {
       const identity = session?.deviceIdentity();
       if (!identity) throw new Error(NO_IDENTITY);
       const devicePublicKey = await identity.publicKeyHex();
-      let sealed;
       try {
-        const chosen = await step(row, decision, devicePublicKey);
-        sealed = await facade.deviceRendezvous(chosen);
-      } finally {
-        wipe();
+        let sealed;
+        try {
+          const chosen = await step(row, decision, devicePublicKey);
+          sealed = await facade.deviceRendezvous(chosen);
+        } finally {
+          wipe();
+        }
+        if (sealed.kind !== 'response') throw new Error(UNEXPECTED);
+        const signature = await identity.sign(Uint8Array.from(sealed.payload));
+        // Past the send a refusal and a lost acknowledgement look alike, so the
+        // record is dropped here: deleting the factor of a response the API did
+        // accept would strand the device that was let in.
+        mintedFactor.current = null;
+        await facade.respondToApproval(
+          row.requestId,
+          decision,
+          devicePublicKey,
+          row.ephemeralPublicKey,
+          signature,
+          // A denial seals nothing here, whatever the step answered with.
+          decision === 'approve' ? sealed.sealedFactor : null
+        );
+      } catch (failure) {
+        const orphan = mintedFactor.current;
+        mintedFactor.current = null;
+        // Best effort: the failure that got here is the one the member reads,
+        // and a factor left listed opens nothing without the seal that was
+        // never delivered.
+        if (orphan !== null) await session?.deleteApprovalFactor(orphan).catch(() => undefined);
+        throw failure;
       }
-      if (sealed.kind !== 'response') throw new Error(UNEXPECTED);
-      const signature = await identity.sign(Uint8Array.from(sealed.payload));
-      await facade.respondToApproval(
-        row.requestId,
-        decision,
-        devicePublicKey,
-        row.ephemeralPublicKey,
-        signature,
-        // A denial seals nothing here, whatever the step answered with.
-        decision === 'approve' ? sealed.sealedFactor : null
-      );
       settled(row.requestId);
     });
 
