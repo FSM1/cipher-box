@@ -263,6 +263,42 @@ describe('the version history', () => {
     expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a new confirmation when a write from an earlier display of the node lands', async () => {
+    const engine = openDetails({ entries: [OLDER, OLDEST] });
+    await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
+
+    let land = (): void => undefined;
+    engine.facade.deleteVersion.mockImplementation(
+      () =>
+        new Promise<CommandOutcomeDescriptor>((resolve) => {
+          land = () => resolve({ kind: 'done' });
+        })
+    );
+    fireEvent.click(control('delete', OLDEST_CID));
+    fireEvent.click(screen.getByTestId('version-delete-confirm'));
+    await waitFor(() => expect(engine.facade.deleteVersion).toHaveBeenCalledOnce());
+
+    // The dialog leaves the node and is shown it again, while the write is still
+    // in flight. Each display reads the list, so the entries come back.
+    engine.view.rerender(
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} onClose={() => undefined} />
+    );
+    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE));
+    engine.view.rerender(<DetailsDialog row={fileRow()} onClose={() => undefined} />);
+    await waitFor(() => expect(control('restore', OLDER_CID).hasAttribute('disabled')).toBe(false));
+
+    fireEvent.click(control('restore', OLDER_CID));
+    expect(screen.getByTestId('version-restore-dialog')).toBeDefined();
+
+    await act(async () => {
+      land();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The write named the earlier display, so it may not answer this one.
+    expect(screen.getByTestId('version-restore-dialog')).toBeDefined();
+  });
+
   it('refuses to dismiss the details dialog under an unanswered confirmation', async () => {
     const onClose = vi.fn();
     openDetails({ entries: [OLDER] }, onClose);

@@ -32,17 +32,23 @@ export function DetailsDialog({ row, onClose }: DetailsDialogProps) {
   // swaps in place. The swap must retire it in that same render, or the answer
   // sends the previous node's version against the new one.
   const shown = useRef(node);
+  // The one write the member answered for, which names its own display. A node
+  // swap retires it, so a result from a display the dialog has left can never
+  // answer for a later confirmation, not even one of the same node.
+  const answered = useRef<PendingWrite | null>(null);
   if (shown.current !== node) {
     shown.current = node;
+    answered.current = null;
     setPending(null);
     setConfirming(false);
   }
 
   const confirm = (write: PendingWrite) => {
-    const target = node;
+    answered.current = write;
     setConfirming(true);
     void versions.write(write.command, write.entry.contentCid).then((accepted) => {
-      if (shown.current !== target) return;
+      if (answered.current !== write) return;
+      answered.current = null;
       setConfirming(false);
       if (accepted) setPending(null);
     });
