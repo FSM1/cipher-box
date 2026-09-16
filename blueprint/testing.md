@@ -331,10 +331,11 @@ percentage never did.
   engineering judgment at build time, revisited as the suite grows.
 - **Measured constants** — kernel TTLs, migration window, sweep cadence,
   chunk size/DAG shape: process fixed above, values land during build.
-- **Web3Auth Core Kit interactive login** — wallet-mock covers SIWE in CI;
-  real Core Kit login and MFA enrollment stay a staging-dispatch job with an
-  injected test wallet (`Staging E2E`), never a PR gate — an honest, inherited
-  limitation.
+- **Web3Auth Core Kit interactive login** — wallet-mock covers SIWE in CI, and
+  `Staging E2E` drives that same SIWE path with an injected test wallet against
+  the deployed front. Real Core Kit login and MFA enrollment stay uncovered by
+  every automated suite: they need an interactive staging run, never a PR gate —
+  an honest, inherited limitation.
   **Device approval is not covered by that exemption** ([ADR 0009](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0009-device-approval-is-a-bound-rendezvous.md)): it is a
   rendezvous over our own API, and it needs a harness driving two sessions. v1
   skipped every cross-device case for want of a second device, which is how a

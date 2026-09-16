@@ -10,8 +10,11 @@ on:
         required: false
         type: string
 
+# One staging environment. This run holds it from the tag through the deploy and
+# the staging e2e verdict, so no other deploy path can replace the revision the
+# suite is measuring.
 concurrency:
-  group: tag-staging
+  group: staging-environment
   cancel-in-progress: false
 
 permissions: {}

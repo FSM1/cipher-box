@@ -22,7 +22,11 @@ export function isCacheable(cacheControl: string | null): boolean {
   if (cacheControl === null) return true;
   const directives = cacheControl.toLowerCase();
   if (/(^|[\s,])no-store([\s,]|$)/.test(directives)) return false;
-  return /(?:^|[\s,])(?:s-)?max-age=([1-9]\d*)|stale-while-revalidate=([1-9]\d*)/.test(directives);
+  // One delimiter group over both names: an alternation of whole patterns lets
+  // the second name match inside a longer vendor directive.
+  return /(?:^|[\s,])(?:(?:s-)?max-age|stale-while-revalidate)=[1-9]\d*(?=$|[\s,])/.test(
+    directives
+  );
 }
 
 /** Records what the routing front answers for the rest of the test. */
