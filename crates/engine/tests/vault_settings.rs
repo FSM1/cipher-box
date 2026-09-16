@@ -34,10 +34,11 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, DEFAULT_BIN_RETENTION_DAYS,
-    DefaultsReason, Engine, EngineError, EventStream, Gateway, GatewayConfig, LoginSecret,
-    MAX_BIN_RETENTION_DAYS, NodeId, OrphanHeads, PlacementRefusal, ProviderError, RetentionPolicy,
-    SessionBearer, SettingsLoad, SettingsPublishError, SettingsRead, StoragePolicy,
-    SyncTimingProfile, VaultSettings, WriteTarget, load_settings, publish_settings, settings_name,
+    DEFAULT_KEEP_LATEST_VERSIONS, DefaultsReason, Engine, EngineError, EventStream, Gateway,
+    GatewayConfig, LoginSecret, MAX_BIN_RETENTION_DAYS, NodeId, OrphanHeads, PlacementRefusal,
+    ProviderError, RetentionPolicy, SessionBearer, SettingsLoad, SettingsPublishError,
+    SettingsRead, StoragePolicy, SyncTimingProfile, VaultSettings, WriteTarget, load_settings,
+    publish_settings, settings_name,
 };
 use cipherbox_engine::{HeldKey, HeldRecords, observed_at};
 use cipherbox_engine::{HeldRecord, HeldValue};
@@ -414,10 +415,10 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
         VaultSettings {
             pin_mode: PinMode::Hosted,
             byo: None,
-            retention: RetentionPolicy::KeepAll,
+            retention: RetentionPolicy::KeepLatest(DEFAULT_KEEP_LATEST_VERSIONS),
             bin_retention_days: DEFAULT_BIN_RETENTION_DAYS,
         },
-        "the documented defaults: hosted pinning, no member provider, keep all, and the default bin window",
+        "the documented defaults: hosted pinning, no member provider, the newest ten versions, and the default bin window",
     );
 }
 

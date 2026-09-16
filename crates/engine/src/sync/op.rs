@@ -270,6 +270,27 @@ pub enum OpKind {
         #[zeroize(skip)]
         keep_latest: NonZeroU64,
     },
+    /// Put one prior version back at the head of a file's history.
+    ///
+    /// A reorder, never an upload: the version's blocks are still registered
+    /// under the file's own name ([`Self::UpdateContent`] re-lists every
+    /// retained root), so the restore re-seals and republishes the record and
+    /// moves no byte. History keeps its length — the outgoing head becomes the
+    /// newest prior version.
+    RestoreVersion {
+        /// The `contentCid` of the version to put at the head. A version is
+        /// named by its content root because a history carries no other
+        /// identifier and an index moves under a concurrent write.
+        content_cid: Vec<u8>,
+    },
+    /// Drop one prior version from a file's history and reclaim its bytes.
+    ///
+    /// The head is never a target: a file's current content is deleted by
+    /// deleting the file.
+    DeleteVersion {
+        /// The `contentCid` of the version to drop.
+        content_cid: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for OpKind {
@@ -338,6 +359,14 @@ impl fmt::Debug for OpKind {
             Self::Prune { keep_latest } => f
                 .debug_struct("Prune")
                 .field("keep_latest", keep_latest)
+                .finish(),
+            Self::RestoreVersion { content_cid } => f
+                .debug_struct("RestoreVersion")
+                .field("content_cid", content_cid)
+                .finish(),
+            Self::DeleteVersion { content_cid } => f
+                .debug_struct("DeleteVersion")
+                .field("content_cid", content_cid)
                 .finish(),
         }
     }
@@ -515,6 +544,36 @@ impl Op {
             base_sequence,
             authored_at,
             kind: OpKind::Prune { keep_latest },
+        }
+    }
+
+    /// A `restoreVersion` op putting `content_cid` back at the head.
+    pub fn restore_version(
+        target: NodeId,
+        content_cid: Vec<u8>,
+        base_sequence: u64,
+        authored_at: UnixMillis,
+    ) -> Self {
+        Self {
+            target,
+            base_sequence,
+            authored_at,
+            kind: OpKind::RestoreVersion { content_cid },
+        }
+    }
+
+    /// A `deleteVersion` op dropping `content_cid` from the history.
+    pub fn delete_version(
+        target: NodeId,
+        content_cid: Vec<u8>,
+        base_sequence: u64,
+        authored_at: UnixMillis,
+    ) -> Self {
+        Self {
+            target,
+            base_sequence,
+            authored_at,
+            kind: OpKind::DeleteVersion { content_cid },
         }
     }
 

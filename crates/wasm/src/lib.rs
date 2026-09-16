@@ -731,6 +731,40 @@ impl SnapshotChild {
     }
 }
 
+/// One prior version of a file, as `fileVersions` lists it.
+#[wasm_bindgen]
+pub struct VersionEntry {
+    inner: facade::VersionEntry,
+}
+
+#[wasm_bindgen]
+impl VersionEntry {
+    /// The version's content root CID — the name every version call takes.
+    #[wasm_bindgen(getter, js_name = contentCid)]
+    pub fn content_cid(&self) -> Vec<u8> {
+        self.inner.content_cid.clone()
+    }
+
+    /// The version's plaintext size in bytes, as a `bigint`.
+    #[wasm_bindgen(getter)]
+    pub fn size(&self) -> u64 {
+        self.inner.size
+    }
+
+    /// When the version was written, Unix millis as a `bigint`.
+    #[wasm_bindgen(getter, js_name = modifiedAt)]
+    pub fn modified_at(&self) -> u64 {
+        self.inner.modified_at
+    }
+}
+
+impl VersionEntry {
+    /// Wraps an engine version entry. Never exported to JS.
+    pub fn from_facade(inner: facade::VersionEntry) -> Self {
+        Self { inner }
+    }
+}
+
 /// One retained dead-lettered op and why it dead-lettered.
 #[wasm_bindgen]
 pub struct DeadLetter {
@@ -1780,6 +1814,26 @@ impl Command {
         Self::wrap(facade::Command::Relink {
             node: node.facade(),
             new_parent: new_parent.facade(),
+        })
+    }
+
+    /// Put one prior version of a file back at the head of its history. It
+    /// publishes a new record rather than rewinding history, and moves no byte.
+    #[wasm_bindgen(js_name = restoreVersion)]
+    pub fn restore_version(node: &NodeId, content_cid: Vec<u8>) -> Command {
+        Self::wrap(facade::Command::RestoreVersion {
+            node: node.facade(),
+            content_cid,
+        })
+    }
+
+    /// Drop one prior version of a file and reclaim its bytes. Irreversible.
+    /// The file's current content is never a target.
+    #[wasm_bindgen(js_name = deleteVersion)]
+    pub fn delete_version(node: &NodeId, content_cid: Vec<u8>) -> Command {
+        Self::wrap(facade::Command::DeleteVersion {
+            node: node.facade(),
+            content_cid,
         })
     }
 

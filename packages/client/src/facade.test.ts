@@ -57,6 +57,10 @@ function answerRead(read: ReadDescriptor): ReadResultValue {
       return emptySnapshot(read.folder ?? undefined);
     case 'sharing':
       return emptySharing(read.scope ?? undefined);
+    case 'fileVersions':
+      return [];
+    case 'downloadVersion':
+      return new ArrayBuffer(0);
     case 'receivedShares':
       return [];
     case 'bin':
