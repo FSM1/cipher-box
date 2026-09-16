@@ -117,6 +117,48 @@ export class SharePage {
     return this.page.getByTestId('share-revoke');
   }
 
+  /** Takes a write grant back down to read. There is no way back up. */
+  get downgrade(): Locator {
+    return this.page.getByTestId('share-downgrade');
+  }
+
+  /** What a grant or a mint would carry: `read` or `write`. */
+  get permissionChoice(): Locator {
+    return this.page.getByLabel('permission');
+  }
+
+  /** The imported contacts this member can grant to. */
+  get recipientChoice(): Locator {
+    return this.page.getByLabel('contact');
+  }
+
+  /**
+   * Imports `code` and grants the folder to it. The picker lists contacts by
+   * their identity key, so the freshly imported one is the only entry beside
+   * the placeholder.
+   */
+  async grantTo(code: string, permission: 'read' | 'write'): Promise<void> {
+    await this.openImport();
+    await this.contactCode.fill(code);
+    await this.importConfirm.click();
+    await expect(this.importForm).toHaveCount(0);
+
+    await this.recipientChoice.selectOption({ index: 1 });
+    await this.permissionChoice.selectOption(permission);
+    await this.grantButton.click();
+    await expect(this.grantRows).toHaveCount(1);
+    await expect(this.permission).toHaveText(permission);
+  }
+
+  /** This member's own code, read off the import step it is shown beside. */
+  async readOwnContactCode(): Promise<string> {
+    await this.openImport();
+    const shown = await this.ownContactCode.locator('.details-copyable-text').textContent();
+    expect(shown, 'the import step showed no contact code').not.toBeNull();
+    await this.cancelImport();
+    return shown!.trim();
+  }
+
   /**
    * Mints a link and returns the URL the dialog shows. The link is shown once,
    * so the caller keeps it.

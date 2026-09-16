@@ -18,6 +18,15 @@ export interface RoutingFrontLog {
   readonly publishes: string[];
 }
 
+/** The routing front beside the app front; `E2E_ROUTING_URL` overrides it. */
+export function routingOrigin(baseUrl: string): string {
+  const override = process.env.E2E_ROUTING_URL?.trim();
+  if (override) return override.replace(/\/+$/, '');
+  const url = new URL(baseUrl);
+  url.host = url.host.replace(/^app-/, 'routing-');
+  return url.origin;
+}
+
 /** A lifetime the browser may serve from, rather than a re-fetch. */
 export function isCacheable(cacheControl: string | null): boolean {
   if (cacheControl === null) return true;

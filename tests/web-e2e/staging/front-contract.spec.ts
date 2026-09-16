@@ -10,16 +10,7 @@
 import type { Page } from '@playwright/test';
 import { FilesPage } from '../page-objects/files.page';
 import { expect, signIn, test } from './fixtures';
-import { watchRoutingFront } from './frontContract';
-
-/** The routing front beside the app front; `E2E_ROUTING_URL` overrides it. */
-function routingOrigin(baseUrl: string): string {
-  const override = process.env.E2E_ROUTING_URL?.trim();
-  if (override) return override.replace(/\/+$/, '');
-  const url = new URL(baseUrl);
-  url.host = url.host.replace(/^app-/, 'routing-');
-  return url.origin;
-}
+import { routingOrigin, watchRoutingFront } from './frontContract';
 
 /** A name nothing has ever published under, so a read of it is a vacancy. */
 const ABSENT = 'k51qzi5uqu5dh9ihj4p2v5sl3hxvbgvpsnbnbxjdvgfcgb0w5s4nxjdsfyqzjt';
