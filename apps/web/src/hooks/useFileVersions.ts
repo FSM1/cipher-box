@@ -37,6 +37,10 @@ export function useFileVersions(node: Uint8Array | null, name: string): FileVers
   // Two reads can land out of order; only the newest may write the state.
   const generation = useRef(0);
   const blobUrls = useRef(new Map<ReturnType<typeof setTimeout>, string>());
+  // A write outlives the render that started it, so its re-read must ask
+  // whether its own node is still the one on screen.
+  const active = useRef(node);
+  active.current = node;
 
   // A deferred revoke left behind outlives the dialog that owns it: it holds the
   // plaintext blob alive past the close.
@@ -98,7 +102,7 @@ export function useFileVersions(node: Uint8Array | null, name: string): FileVers
           ? facade.restoreVersion(node, contentCid)
           : facade.deleteVersion(node, contentCid)
       );
-      if (accepted) await reload(node);
+      if (accepted && active.current === node) await reload(node);
       return accepted;
     },
     [node, reload, run]

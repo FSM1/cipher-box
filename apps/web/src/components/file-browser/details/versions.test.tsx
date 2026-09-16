@@ -1,5 +1,5 @@
-import { toHex } from '@cipherbox/client';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { toHex, type CommandOutcomeDescriptor } from '@cipherbox/client';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   renderWithEngine,
@@ -12,6 +12,7 @@ import type { ListingRow } from '../../../vault/listing';
 import { DetailsDialog } from '../DetailsDialog';
 
 const NODE = new Uint8Array(4).fill(0xab);
+const OTHER_NODE = new Uint8Array(4).fill(0xcd);
 const OLDER = versionEntry(0x11, { size: 2048n });
 const OLDEST = versionEntry(0x22);
 const OLDER_CID = toHex(OLDER.contentCid);
@@ -211,13 +212,55 @@ describe('the version history', () => {
     // entries the previous node answered with.
     engine.facade.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
     engine.view.rerender(
-      <DetailsDialog
-        row={fileRow({ id: new Uint8Array(4).fill(0xcd) })}
-        onClose={() => undefined}
-      />
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} onClose={() => undefined} />
     );
 
     await waitFor(() => expect(screen.queryByTestId('version-history')).toBeNull());
+  });
+
+  it('retires an unanswered confirmation when the dialog is shown another node', async () => {
+    const engine = openDetails({ entries: [OLDER, OLDEST] });
+    await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
+
+    fireEvent.click(control('restore', OLDER_CID));
+    expect(screen.getByTestId('version-restore-dialog')).toBeDefined();
+
+    engine.view.rerender(
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} onClose={() => undefined} />
+    );
+
+    expect(screen.queryByTestId('version-restore-dialog')).toBeNull();
+  });
+
+  it('does not re-read for a node the dialog left while its write was in flight', async () => {
+    const engine = openDetails({ entries: [OLDER, OLDEST] });
+    await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
+
+    let land = (): void => undefined;
+    engine.facade.deleteVersion.mockImplementation(
+      () =>
+        new Promise<CommandOutcomeDescriptor>((resolve) => {
+          land = () => resolve({ kind: 'done' });
+        })
+    );
+    fireEvent.click(control('delete', OLDEST_CID));
+    fireEvent.click(screen.getByTestId('version-delete-confirm'));
+    await waitFor(() => expect(engine.facade.deleteVersion).toHaveBeenCalledOnce());
+
+    engine.view.rerender(
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} onClose={() => undefined} />
+    );
+    await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2));
+    expect(engine.facade.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE);
+
+    // The read the new node asked for stays the last one. A re-read for the node
+    // the write named would land the previous node's list on this one.
+    await act(async () => {
+      land();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2);
   });
 
   it('refuses to dismiss the details dialog under an unanswered confirmation', async () => {
