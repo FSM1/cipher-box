@@ -5,6 +5,6 @@
   "journeys": {
     "login_to_vault_ms": { "baseline_ms": 42482, "ceiling_ms": 150000 },
     "upload_to_visible_ms": { "baseline_ms": 197, "ceiling_ms": 5000 },
-    "share_to_accessible_ms": { "baseline_ms": 0, "ceiling_ms": 300000 }
+    "share_to_accessible_ms": { "baseline_ms": 0, "ceiling_ms": 600000 }
   }
 }

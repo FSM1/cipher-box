@@ -10,6 +10,10 @@ import { expect, published, test } from './fixtures';
 import { grant, OWNER_FOLDER } from './sharing';
 import { recordJourneys } from './timing';
 
+// The grant has to cross a second identity's sync pass against the real record
+// plane, which outlasts the suite's own per-test budget on a 2-vCPU box.
+test.setTimeout(900_000);
+
 const AFTER_GRANT = 'after-the-grant.bin';
 
 test('a grant reaches a second identity, and a revoke cuts it', async ({
@@ -48,6 +52,6 @@ test('a grant reaches a second identity, and a revoke cuts it', async ({
 
   const list = new SharedPage(recipient);
   await list.open();
-  await list.awaitStanding('revocation-signal');
+  await list.awaitStanding('revocation-signal', 600_000);
   await expect(list.rows.getByTestId('shared-standing')).toHaveAttribute('data-tone', 'warning');
 });

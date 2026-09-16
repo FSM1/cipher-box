@@ -38,8 +38,8 @@ export class InvitePage {
   }
 
   /** Waits for the panel to report one claim state. */
-  async expectState(state: string): Promise<void> {
-    await expect(this.panel).toHaveAttribute('data-state', state);
+  async expectState(state: string, timeout?: number): Promise<void> {
+    await expect(this.panel).toHaveAttribute('data-state', state, { timeout });
   }
 
   /** Spends the link. The claim needs this gesture; nothing claims on mount. */

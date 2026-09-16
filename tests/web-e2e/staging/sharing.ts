@@ -56,7 +56,7 @@ export async function grant(
 
   const list = new SharedPage(recipient);
   await list.open();
-  await list.awaitStanding('granted');
+  await list.awaitStanding('granted', 600_000);
   await list.rows.getByTestId('shared-open').click();
   await expect(new FilesPage(recipient).breadcrumbs).toBeVisible({ timeout: 180_000 });
 

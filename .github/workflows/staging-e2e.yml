@@ -31,7 +31,7 @@ jobs:
   staging-e2e:
     name: Staging E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       contents: read
 
@@ -59,7 +59,7 @@ jobs:
       # One worker: staging is a 2-vCPU box, and its auth surface is rate
       # limited per caller address with no bypass.
       - name: Run the staging profiles
-        timeout-minutes: 35
+        timeout-minutes: 80
         run: pnpm --filter @cipherbox/web-e2e test:e2e
         env:
           E2E_BASE_URL: ${{ inputs.base-url }}

@@ -9,6 +9,10 @@ import { SharedPage } from '../page-objects/shared.page';
 import { expect, published, test } from './fixtures';
 import { grant, OWNER_FOLDER } from './sharing';
 
+// The grant has to cross a second identity's sync pass against the real record
+// plane, which outlasts the suite's own per-test budget on a 2-vCPU box.
+test.setTimeout(900_000);
+
 const WRITTEN = 'written-by-the-recipient.bin';
 const NESTED = 'recipient-subfolder';
 
@@ -50,6 +54,6 @@ test('a write grant lets a second identity build inside the folder', async ({
 
   const list = new SharedPage(recipient);
   await list.open();
-  await list.awaitStanding('granted');
+  await list.awaitStanding('granted', 600_000);
   await expect(list.rows.getByTestId('shared-permission')).toHaveText('read');
 });

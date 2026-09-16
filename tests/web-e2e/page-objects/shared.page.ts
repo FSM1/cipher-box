@@ -60,7 +60,7 @@ export class SharedPage {
    * moves on the engine's sync pass, so each turn nudges that pass as well as
    * the list.
    */
-  async awaitStanding(resolution: string): Promise<void> {
+  async awaitStanding(resolution: string, timeout = 60_000): Promise<void> {
     await expect
       .poll(
         async () => {
@@ -69,7 +69,7 @@ export class SharedPage {
           if ((await this.rows.count()) !== 1) return 'no row';
           return this.rows.getByTestId('shared-standing').getAttribute('data-resolution');
         },
-        { timeout: 300_000, intervals: [5_000] }
+        { timeout, intervals: [5_000] }
       )
       .toBe(resolution);
   }
