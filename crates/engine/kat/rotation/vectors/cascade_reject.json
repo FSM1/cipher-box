@@ -1,0 +1,27 @@
+[
+  {
+    "name": "re-key-without-the-owner-encryption-subkey",
+    "check": "rot-cascade-owner-subkey-missing",
+    "class": "capability"
+  },
+  {
+    "name": "read-epoch-at-its-ceiling",
+    "check": "rot-cascade-epoch-exhausted",
+    "class": "over-cap"
+  },
+  {
+    "name": "publisher-that-refuses-the-root-record",
+    "check": "rot-cascade-publish-failed",
+    "class": "trust"
+  },
+  {
+    "name": "floor-store-that-refuses-the-raise",
+    "check": "rot-cascade-floor-raise-failed",
+    "class": "availability"
+  },
+  {
+    "name": "descendant-the-gate-refuses",
+    "check": "rot-cascade-resolve-failed",
+    "class": "trust"
+  }
+]

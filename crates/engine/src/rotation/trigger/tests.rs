@@ -412,14 +412,14 @@ fn a_cut_at_the_counter_ceiling_fails_closed() {
         .to_compact();
 
     let err = revoke_read_grant(&fx.plan(), &read_tag()).expect_err("the ceiling");
-    assert_eq!(err.check(), "cut-epoch-exhausted");
+    assert_eq!(err.check(), "rot-revoke-cut-epoch-exhausted");
 }
 
 #[test]
 fn revoke_unknown_tag_fails_closed() {
     let fx = Fixture::new();
     let err = revoke_read_grant(&fx.plan(), &[0xff; 32]).expect_err("not granted");
-    assert_eq!(err.check(), "not-granted");
+    assert_eq!(err.check(), "rot-revoke-not-granted");
 }
 
 /// A read revoke that drops a write grantee reads as complete — tag gone,
@@ -429,7 +429,7 @@ fn revoke_unknown_tag_fails_closed() {
 fn read_revoking_a_write_grantee_fails_closed() {
     let fx = Fixture::new();
     let err = revoke_read_grant(&fx.plan(), &write_tag()).expect_err("write granted");
-    assert_eq!(err.check(), "write-granted");
+    assert_eq!(err.check(), "rot-revoke-write-granted");
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn revoke_wrong_signer_fails_closed() {
     let stranger = stranger();
     let err = revoke_read_grant(&fx.plan_signed_by(&stranger), &link_tag())
         .expect_err("unauthorized signer");
-    assert_eq!(err.check(), "unauthorized-signer");
+    assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
 }
 
 #[test]
@@ -462,7 +462,7 @@ fn revoke_tampered_commitment_preimage_fails_closed() {
         ..fx.plan()
     };
     let err = revoke_read_grant(&plan, &link_tag()).expect_err("tampered commitment preimage");
-    assert_eq!(err.check(), "unauthorized-signer");
+    assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
 }
 
 /// The owner gate alone would let one owner-signed commitment be cut against
@@ -481,7 +481,7 @@ fn a_cut_against_another_scope_fails_closed() {
         prune_expired_grants(&plan, &owner_deadlines(&[(link_tag(), DEADLINE)]), DEADLINE)
             .expect_err("expiry prune"),
     ] {
-        assert_eq!(err.check(), "commitment-scope-mismatch");
+        assert_eq!(err.check(), "rot-revoke-commitment-scope-mismatch");
     }
 }
 
@@ -574,8 +574,8 @@ fn a_write_revoke_of_a_read_grant_fails_closed() {
     // the scope without cutting anything.
     let fx = Fixture::new();
     for (tag, check) in [
-        (read_tag(), "not-write-granted"),
-        ([0xff; 32], "not-granted"),
+        (read_tag(), "rot-revoke-not-write-granted"),
+        ([0xff; 32], "rot-revoke-not-granted"),
     ] {
         let err = revoke_write_grant(&fx.plan(), &tag, WriteRevokeKind::Full)
             .expect_err("no write grant");
@@ -725,7 +725,7 @@ fn a_non_owner_session_cuts_nothing_on_a_discovered_expiry() {
         DEADLINE,
     )
     .expect_err("a grantee cannot prune");
-    assert_eq!(err.check(), "unauthorized-signer");
+    assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
 }
 
 /// Records which arms fired, in call order, failing the ones named. Each
@@ -849,7 +849,7 @@ fn a_write_only_cut_that_withholds_a_read_grant_is_refused_before_anything_publi
     let rotator = FakeCutRotator::new();
 
     let err = block_on(rotate_on_cut(&rotator, node(1), &cut)).expect_err("refused");
-    assert_eq!(err.check(), "write-only-cut-withdraws-read");
+    assert_eq!(err.check(), "rot-cut-write-only-cut-withdraws-read");
     assert!(!err.is_retryable());
     assert!(
         rotator.seen.borrow().is_empty(),
@@ -940,7 +940,7 @@ fn a_write_grant_cut_refuses_a_set_the_owner_did_not_sign() {
     let fx = Fixture::new();
     let err = cut_for_write_grant(&fx.plan_signed_by(&stranger()))
         .expect_err("a set this signer never authorized");
-    assert_eq!(err.check(), "unauthorized-signer");
+    assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
 }
 
 #[test]
@@ -957,7 +957,7 @@ fn a_write_grant_cut_refuses_a_set_committing_no_write_row() {
         ..fx.plan()
     })
     .expect_err("no write row to cut a scope for");
-    assert_eq!(err.check(), "not-write-granted");
+    assert_eq!(err.check(), "rot-revoke-not-write-granted");
 }
 
 #[test]
@@ -991,7 +991,7 @@ fn a_refused_write_plane_fails_the_whole_revoke() {
     let err = block_on(rotate_on_cut(&rotator, node(1), &full_write_revoke()))
         .expect_err("write plane refused");
 
-    assert_eq!(err.check(), "epoch-exhausted");
+    assert_eq!(err.check(), "rot-write-epoch-exhausted");
     assert!(!err.is_retryable());
 }
 
@@ -1005,4 +1005,41 @@ fn trigger_names_are_stable() {
         "discovered-expiry"
     );
     assert_eq!(RotationTrigger::Manual.name(), "manual");
+}
+
+/// A new variant that inherits another variant's check name, or is appended out
+/// of order, fails here rather than reaching a reject vector unnamed.
+/// `LedgerDiverges` surfaces the grant plane's verdict and stays off the
+/// surface, so the walk names it and skips it.
+#[test]
+fn the_revoke_check_surface_matches_the_variants_in_order() {
+    let named: Vec<&str> = [
+        RevokeError::UnauthorizedSigner,
+        RevokeError::CommitmentScopeMismatch,
+        RevokeError::NotGranted,
+        RevokeError::NotWriteGranted,
+        RevokeError::WriteGranted,
+        RevokeError::CutEpochExhausted,
+        RevokeError::Sign(cipherbox_core::error::TrustViolation::DuplicateGrantTag.into()),
+    ]
+    .iter()
+    .map(RevokeError::check)
+    .collect();
+    assert_eq!(named, RevokeError::CHECKS);
+}
+
+/// The three per-plane variants delegate, so the cut driver owns exactly one
+/// check of its own.
+#[test]
+fn the_cut_check_surface_matches_the_variants_in_order() {
+    let named: Vec<&str> = [RotateOnCutError::WriteOnlyCutWithdrawsRead]
+        .iter()
+        .map(RotateOnCutError::check)
+        .collect();
+    assert_eq!(named, RotateOnCutError::CHECKS);
+
+    assert_eq!(
+        RotateOnCutError::Write(WriteRotateError::NotOwner).check(),
+        WriteRotateError::NotOwner.check(),
+    );
 }

@@ -476,7 +476,7 @@ mod tests {
             &RefCell::new(BTreeSet::from([node(3), node(4)])),
         );
 
-        assert_eq!(owed, vec![(node(4), "publish-failed")]);
+        assert_eq!(owed, vec![(node(4), "rot-read-publish-failed")]);
     }
 
     /// A floor raise that failed leaves the cut published, so the debt settles

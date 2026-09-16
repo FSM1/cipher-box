@@ -325,17 +325,45 @@ impl core::fmt::Display for CascadeError {
 impl std::error::Error for CascadeError {}
 
 impl CascadeError {
+    /// Every cascade check, in declaration order — the surface
+    /// `crates/engine/tests/kat_rotation.rs` pins (see the module header for the
+    /// prefix rule).
+    pub const CHECKS: &'static [&'static str] = &[
+        "rot-cascade-resolve-failed",
+        "rot-cascade-reseal-rejected",
+        "rot-cascade-publish-failed",
+        "rot-cascade-floor-raise-failed",
+        "rot-cascade-revocation-floor-failed",
+        "rot-cascade-owner-subkey-missing",
+        "rot-cascade-unverified-threaded-seed",
+        "rot-cascade-epoch-exhausted",
+    ];
+
     /// A stable, key-material-free classification name (host/log facing).
     pub fn check(&self) -> &'static str {
         match self {
-            CascadeError::Resolve { .. } => "resolve-failed",
-            CascadeError::Reseal { .. } => "reseal-rejected",
-            CascadeError::Publish { .. } => "publish-failed",
-            CascadeError::Floor { .. } => "floor-raise-failed",
-            CascadeError::RevocationFloor { .. } => "revocation-floor-failed",
-            CascadeError::OwnerSubkeyMissing { .. } => "owner-subkey-missing",
-            CascadeError::UnverifiedThreadedSeed { .. } => "unverified-threaded-seed",
-            CascadeError::EpochExhausted { .. } => "epoch-exhausted",
+            CascadeError::Resolve { .. } => "rot-cascade-resolve-failed",
+            CascadeError::Reseal { .. } => "rot-cascade-reseal-rejected",
+            CascadeError::Publish { .. } => "rot-cascade-publish-failed",
+            CascadeError::Floor { .. } => "rot-cascade-floor-raise-failed",
+            CascadeError::RevocationFloor { .. } => "rot-cascade-revocation-floor-failed",
+            CascadeError::OwnerSubkeyMissing { .. } => "rot-cascade-owner-subkey-missing",
+            CascadeError::UnverifiedThreadedSeed { .. } => "rot-cascade-unverified-threaded-seed",
+            CascadeError::EpochExhausted { .. } => "rot-cascade-epoch-exhausted",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive, so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            CascadeError::Resolve { reason, .. } => reason.class(),
+            CascadeError::Reseal { error, .. } => error.class(),
+            CascadeError::Publish { error, .. } => error.class(),
+            CascadeError::Floor { .. } | CascadeError::RevocationFloor { .. } => "availability",
+            CascadeError::OwnerSubkeyMissing { .. } => "capability",
+            CascadeError::UnverifiedThreadedSeed { .. } => "trust",
+            CascadeError::EpochExhausted { .. } => "over-cap",
         }
     }
 

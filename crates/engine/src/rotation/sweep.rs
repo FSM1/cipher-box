@@ -197,6 +197,17 @@ impl SweepResolveFailure {
             Self::Unreadable | Self::Rejected | Self::Unavailable | Self::VersionSkew
         )
     }
+
+    /// The class label a reject vector carries for this failure. `Unreadable`
+    /// and `VersionSkew` are capability limits of *this* reader, not verdicts on
+    /// the record.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::Rejected => "trust",
+            Self::Unavailable | Self::Superseded | Self::ConflictingChildLabel => "availability",
+            Self::Unreadable | Self::VersionSkew => "capability",
+        }
+    }
 }
 
 /// The read edge the sweep runs on: resolve + adoption-gate + unseal. The owner
@@ -393,13 +404,34 @@ impl core::fmt::Display for SweepError {
 impl std::error::Error for SweepError {}
 
 impl SweepError {
+    /// Every sweep check, in declaration order — the surface
+    /// `crates/engine/tests/kat_rotation.rs` pins (see the module header for the
+    /// prefix rule).
+    pub const CHECKS: &'static [&'static str] = &[
+        "rot-sweep-scope-root-unresolved",
+        "rot-sweep-node-unresolved",
+        "rot-sweep-publish-failed",
+        "rot-sweep-index-repair-failed",
+    ];
+
     /// A stable, key-material-free classification name (host/log facing).
     pub fn check(&self) -> &'static str {
         match self {
-            SweepError::Scope { .. } => "scope-root-unresolved",
-            SweepError::Node { .. } => "node-unresolved",
-            SweepError::Publish { .. } => "publish-failed",
-            SweepError::IndexRepair { .. } => "index-repair-failed",
+            SweepError::Scope { .. } => "rot-sweep-scope-root-unresolved",
+            SweepError::Node { .. } => "rot-sweep-node-unresolved",
+            SweepError::Publish { .. } => "rot-sweep-publish-failed",
+            SweepError::IndexRepair { .. } => "rot-sweep-index-repair-failed",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive, so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            SweepError::Scope { reason, .. } | SweepError::Node { reason, .. } => reason.class(),
+            SweepError::Publish { error, .. } | SweepError::IndexRepair { error, .. } => {
+                error.class()
+            }
         }
     }
 

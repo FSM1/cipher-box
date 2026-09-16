@@ -1,0 +1,22 @@
+[
+  {
+    "name": "scope-root-the-gate-refuses",
+    "check": "rot-sweep-scope-root-unresolved",
+    "class": "trust"
+  },
+  {
+    "name": "interior-node-below-its-floor-with-no-fresher-name",
+    "check": "rot-sweep-node-unresolved",
+    "class": "availability"
+  },
+  {
+    "name": "publisher-that-refuses-a-lagging-node",
+    "check": "rot-sweep-publish-failed",
+    "class": "trust"
+  },
+  {
+    "name": "index-repair-the-publisher-refuses",
+    "check": "rot-sweep-index-repair-failed",
+    "class": "trust"
+  }
+]

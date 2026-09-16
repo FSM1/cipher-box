@@ -109,6 +109,14 @@ impl RotationPublishError {
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::NotPublished | Self::LostRace)
     }
+
+    /// The class label a reject vector carries for this failure.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::NotPublished | Self::LostRace => "availability",
+            Self::Rejected => "trust",
+        }
+    }
 }
 
 impl core::fmt::Display for RotationPublishError {
@@ -213,14 +221,37 @@ impl core::fmt::Display for RotateError {
 impl std::error::Error for RotateError {}
 
 impl RotateError {
+    /// Every read-plane root-cut check, in declaration order — the surface
+    /// `crates/engine/tests/kat_rotation.rs` pins (see the module header for the
+    /// prefix rule).
+    pub const CHECKS: &'static [&'static str] = &[
+        "rot-read-resolve-failed",
+        "rot-read-reseal-failed",
+        "rot-read-publish-failed",
+        "rot-read-floor-raise-failed",
+        "rot-read-epoch-exhausted",
+    ];
+
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {
         match self {
-            RotateError::Resolve(_) => "resolve-failed",
-            RotateError::Reseal(_) => "reseal-failed",
-            RotateError::Publish(_) => "publish-failed",
-            RotateError::Floor(_) => "floor-raise-failed",
-            RotateError::EpochExhausted => "epoch-exhausted",
+            RotateError::Resolve(_) => "rot-read-resolve-failed",
+            RotateError::Reseal(_) => "rot-read-reseal-failed",
+            RotateError::Publish(_) => "rot-read-publish-failed",
+            RotateError::Floor(_) => "rot-read-floor-raise-failed",
+            RotateError::EpochExhausted => "rot-read-epoch-exhausted",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive, so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            RotateError::Resolve(reason) => reason.class(),
+            RotateError::Reseal(error) => error.class(),
+            RotateError::Publish(error) => error.class(),
+            RotateError::Floor(_) => "availability",
+            RotateError::EpochExhausted => "over-cap",
         }
     }
 

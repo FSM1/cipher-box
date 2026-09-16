@@ -450,33 +450,90 @@ impl core::fmt::Display for ResealError {
 impl std::error::Error for ResealError {}
 
 impl ResealError {
+    /// Every re-seal check, in declaration order — the surface
+    /// `crates/engine/tests/kat_rotation.rs` pins (see the module header for the
+    /// prefix rule).
+    pub const CHECKS: &'static [&'static str] = &[
+        "rot-reseal-ledger-diverges-from-commitment",
+        "rot-reseal-signer-not-committed",
+        "rot-reseal-unusable-recipient-key",
+        "rot-reseal-tag-not-bound-to-recipient",
+        "rot-reseal-ascent-link-mismatch",
+        "rot-reseal-ascent-link-dropped",
+        "rot-reseal-ascent-link-not-owed",
+        "rot-reseal-unusable-ascent-public",
+        "rot-reseal-entropy-error",
+        "rot-reseal-too-many-history-links",
+        "rot-reseal-too-many-committed-grants",
+        "rot-reseal-history-link-not-descending",
+        "rot-reseal-history-link-not-contiguous",
+        "rot-reseal-empty-write-history-above-first-epoch",
+        "rot-reseal-owner-key-required-for-write-cut",
+        "rot-reseal-write-body-too-large",
+        "rot-reseal-history-link-too-large",
+        "rot-reseal-carried-write-history-link-too-large",
+        "rot-reseal-section-not-resealable",
+        "rot-reseal-structure-encode-failed",
+    ];
+
     /// A stable, key-material-free classification name (host/log facing).
     pub fn check(&self) -> &'static str {
         match self {
-            ResealError::LedgerDivergesFromCommitment => "ledger-diverges-from-commitment",
-            ResealError::SignerNotCommitted => "signer-not-committed",
-            ResealError::UnusableRecipientKey => "unusable-recipient-key",
-            ResealError::TagNotBoundToRecipient => "tag-not-bound-to-recipient",
-            ResealError::AscentLinkMismatch => "ascent-link-mismatch",
-            ResealError::AscentLinkDropped => "ascent-link-dropped",
-            ResealError::AscentLinkNotOwed => "ascent-link-not-owed",
-            ResealError::UnusableAscentPublic => "unusable-ascent-public",
-            ResealError::Entropy(_) => "entropy-error",
-            ResealError::TooManyHistoryLinks => "too-many-history-links",
-            ResealError::TooManyCommittedGrants => "too-many-committed-grants",
-            ResealError::HistoryLinkNotDescending => "history-link-not-descending",
-            ResealError::HistoryLinkNotContiguous => "history-link-not-contiguous",
+            ResealError::LedgerDivergesFromCommitment => {
+                "rot-reseal-ledger-diverges-from-commitment"
+            }
+            ResealError::SignerNotCommitted => "rot-reseal-signer-not-committed",
+            ResealError::UnusableRecipientKey => "rot-reseal-unusable-recipient-key",
+            ResealError::TagNotBoundToRecipient => "rot-reseal-tag-not-bound-to-recipient",
+            ResealError::AscentLinkMismatch => "rot-reseal-ascent-link-mismatch",
+            ResealError::AscentLinkDropped => "rot-reseal-ascent-link-dropped",
+            ResealError::AscentLinkNotOwed => "rot-reseal-ascent-link-not-owed",
+            ResealError::UnusableAscentPublic => "rot-reseal-unusable-ascent-public",
+            ResealError::Entropy(_) => "rot-reseal-entropy-error",
+            ResealError::TooManyHistoryLinks => "rot-reseal-too-many-history-links",
+            ResealError::TooManyCommittedGrants => "rot-reseal-too-many-committed-grants",
+            ResealError::HistoryLinkNotDescending => "rot-reseal-history-link-not-descending",
+            ResealError::HistoryLinkNotContiguous => "rot-reseal-history-link-not-contiguous",
             ResealError::EmptyWriteHistoryAboveFirstEpoch => {
-                "empty-write-history-above-first-epoch"
+                "rot-reseal-empty-write-history-above-first-epoch"
             }
-            ResealError::OwnerKeyRequiredForWriteCut => "owner-key-required-for-write-cut",
-            ResealError::WriteBodyTooLarge => "write-body-too-large",
-            ResealError::HistoryLinkTooLarge { .. } => "history-link-too-large",
+            ResealError::OwnerKeyRequiredForWriteCut => {
+                "rot-reseal-owner-key-required-for-write-cut"
+            }
+            ResealError::WriteBodyTooLarge => "rot-reseal-write-body-too-large",
+            ResealError::HistoryLinkTooLarge { .. } => "rot-reseal-history-link-too-large",
             ResealError::CarriedWriteHistoryLinkTooLarge { .. } => {
-                "carried-write-history-link-too-large"
+                "rot-reseal-carried-write-history-link-too-large"
             }
-            ResealError::SectionNotResealable { .. } => "section-not-resealable",
-            ResealError::Encode(_) => "structure-encode-failed",
+            ResealError::SectionNotResealable { .. } => "rot-reseal-section-not-resealable",
+            ResealError::Encode(_) => "rot-reseal-structure-encode-failed",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive, so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            ResealError::LedgerDivergesFromCommitment
+            | ResealError::SignerNotCommitted
+            | ResealError::UnusableRecipientKey
+            | ResealError::TagNotBoundToRecipient
+            | ResealError::AscentLinkMismatch
+            | ResealError::AscentLinkDropped
+            | ResealError::AscentLinkNotOwed
+            | ResealError::UnusableAscentPublic
+            | ResealError::HistoryLinkNotDescending
+            | ResealError::HistoryLinkNotContiguous
+            | ResealError::EmptyWriteHistoryAboveFirstEpoch => "trust",
+            ResealError::Entropy(_) => "availability",
+            ResealError::OwnerKeyRequiredForWriteCut => "capability",
+            ResealError::TooManyHistoryLinks
+            | ResealError::TooManyCommittedGrants
+            | ResealError::WriteBodyTooLarge
+            | ResealError::HistoryLinkTooLarge { .. }
+            | ResealError::CarriedWriteHistoryLinkTooLarge { .. }
+            | ResealError::SectionNotResealable { .. } => "over-cap",
+            ResealError::Encode(error) => error.class(),
         }
     }
 }

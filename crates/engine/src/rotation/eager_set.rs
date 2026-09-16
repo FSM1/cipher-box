@@ -79,6 +79,16 @@ pub enum ResolveFailure {
     ConflictingChildLabel,
 }
 
+impl ResolveFailure {
+    /// The class label a reject vector carries for this failure.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::Rejected => "trust",
+            Self::Unavailable | Self::ConflictingChildLabel => "availability",
+        }
+    }
+}
+
 impl core::fmt::Display for ResolveFailure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

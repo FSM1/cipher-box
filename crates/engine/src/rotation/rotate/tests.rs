@@ -270,7 +270,7 @@ fn publish_failure_does_not_bump_floor_or_enqueue_sweep() {
         SeededEntropy::new(9),
         Err(RotationPublishError::NotPublished),
     );
-    assert_eq!(outcome.unwrap_err().check(), "publish-failed");
+    assert_eq!(outcome.unwrap_err().check(), "rot-read-publish-failed");
     assert_eq!(seen.len(), 1, "publish was attempted");
     assert_eq!(final_floor, None, "floor NOT raised on a failed publish");
     assert_eq!(spawned, 0, "no sweep enqueued on failure");
@@ -280,7 +280,7 @@ fn publish_failure_does_not_bump_floor_or_enqueue_sweep() {
 fn lost_cas_race_does_not_bump_floor() {
     let (outcome, _seen, _snap, spawned, final_floor) =
         run_rotation(SeededEntropy::new(9), Err(RotationPublishError::LostRace));
-    assert_eq!(outcome.unwrap_err().check(), "publish-failed");
+    assert_eq!(outcome.unwrap_err().check(), "rot-read-publish-failed");
     assert_eq!(final_floor, None, "a lost race advances no floor");
     assert_eq!(spawned, 0);
 }
@@ -409,7 +409,7 @@ fn floor_raise_failure_after_publish_returns_floor_error_and_skips_sweep() {
         .await
     });
 
-    assert_eq!(outcome.unwrap_err().check(), "floor-raise-failed");
+    assert_eq!(outcome.unwrap_err().check(), "rot-read-floor-raise-failed");
     assert_eq!(
         seen.borrow().len(),
         1,
@@ -474,7 +474,7 @@ fn exhausted_epoch_fails_closed_without_publishing() {
         .await
     });
 
-    assert_eq!(outcome.unwrap_err().check(), "epoch-exhausted");
+    assert_eq!(outcome.unwrap_err().check(), "rot-read-epoch-exhausted");
     assert_eq!(
         seen.borrow().len(),
         0,
@@ -486,4 +486,21 @@ fn exhausted_epoch_fails_closed_without_publishing() {
         "no floor raised"
     );
     assert_eq!(scheduler.take_spawned_tasks().len(), 0, "no sweep enqueued");
+}
+
+/// A new variant that inherits another variant's check name, or is appended out
+/// of order, fails here rather than reaching a reject vector unnamed.
+#[test]
+fn the_check_surface_matches_the_variants_in_order() {
+    let named: Vec<&str> = [
+        RotateError::Resolve(ResolveFailure::Rejected),
+        RotateError::Reseal(ResealError::SignerNotCommitted),
+        RotateError::Publish(RotationPublishError::NotPublished),
+        RotateError::Floor(SeamError::new("floor store unavailable")),
+        RotateError::EpochExhausted,
+    ]
+    .iter()
+    .map(RotateError::check)
+    .collect();
+    assert_eq!(named, RotateError::CHECKS);
 }
