@@ -51,22 +51,22 @@ export const test = base.extend<StagingFixtures>({
   // own subject, and `account-removal.spec.ts` is what holds the path itself
   // to a verdict.
   apiOrigin: [
-    async ({ page }, use, testInfo) => {
+    async ({ page, wallet }, use, testInfo) => {
       const origin = watchApiOrigin(page);
       await use(origin);
-      await report(testInfo, 'account-removal', await removeAccount(page, origin()));
+      await report(testInfo, 'account-removal', await removeOnce(page, origin(), wallet.address));
     },
     { auto: true },
   ],
 
   secondContext: async ({ browser }: { browser: Browser }, use, testInfo) => {
-    const opened: Array<{ page: Page; apiOrigin: () => string | null }> = [];
+    const opened: Array<{ page: Page; apiOrigin: () => string | null; address: string }> = [];
 
     await use(async (privateKey?: Hex) => {
       const page = await (await browser.newContext()).newPage();
       const apiOrigin = watchApiOrigin(page);
       const wallet = await installTestWallet(page, privateKey);
-      opened.push({ page, apiOrigin });
+      opened.push({ page, apiOrigin, address: wallet.address });
       return { page, wallet };
     });
 
@@ -74,12 +74,36 @@ export const test = base.extend<StagingFixtures>({
       await report(
         testInfo,
         `account-removal-${index + 1}`,
-        await removeAccount(context.page, context.apiOrigin())
+        await removeOnce(context.page, context.apiOrigin(), context.address)
       );
       await context.page.context().close();
     }
   },
 });
+
+/** The identities this worker has already taken back, as wallet addresses. */
+const reclaimed = new Set<string>();
+
+/**
+ * Removes the account behind `address`, at most once per identity. Two pages
+ * can hold one account — a second device signs in on the same wallet — and a
+ * spec that removes explicitly still meets the automatic teardown. `DELETE
+ * /account` hard-deletes the authentication rows, so a second attempt fails at
+ * the refresh and reports a kept account that is in fact gone.
+ */
+export async function removeOnce(
+  page: Page,
+  apiOrigin: string | null,
+  address: string
+): Promise<RemovalOutcome> {
+  const identity = address.toLowerCase();
+  if (reclaimed.has(identity)) {
+    return { removed: true, detail: 'an earlier call removed this account' };
+  }
+  const outcome = await removeAccount(page, apiOrigin);
+  if (outcome.removed) reclaimed.add(identity);
+  return outcome;
+}
 
 function report(
   testInfo: {

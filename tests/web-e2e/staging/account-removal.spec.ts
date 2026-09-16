@@ -6,10 +6,9 @@
  */
 
 import { FilesPage } from '../page-objects/files.page';
-import { removeAccount } from './cleanup';
-import { expect, published, signIn, test } from './fixtures';
+import { expect, published, removeOnce, signIn, test } from './fixtures';
 
-test('a run removes the account it mints', async ({ page, apiOrigin }) => {
+test('a run removes the account it mints', async ({ page, apiOrigin, wallet }) => {
   const files = new FilesPage(page);
   await signIn(page);
 
@@ -19,6 +18,6 @@ test('a run removes the account it mints', async ({ page, apiOrigin }) => {
   await expect(files.row('removal.bin')).toBeVisible({ timeout: 180_000 });
   await published(page);
 
-  const outcome = await removeAccount(page, apiOrigin());
+  const outcome = await removeOnce(page, apiOrigin(), wallet.address);
   expect(outcome.removed, outcome.detail).toBe(true);
 });
