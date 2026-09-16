@@ -1,0 +1,32 @@
+[
+  {
+    "name": "cut-presented-by-a-stranger",
+    "check": "rot-revoke-unauthorized-signer",
+    "class": "trust"
+  },
+  {
+    "name": "commitment-bound-to-another-scope-root",
+    "check": "rot-revoke-commitment-scope-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "tag-absent-from-the-committed-set",
+    "check": "rot-revoke-not-granted",
+    "class": "trust"
+  },
+  {
+    "name": "read-tag-presented-to-the-write-revoke",
+    "check": "rot-revoke-not-write-granted",
+    "class": "trust"
+  },
+  {
+    "name": "write-tag-presented-to-the-read-revoke",
+    "check": "rot-revoke-write-granted",
+    "class": "trust"
+  },
+  {
+    "name": "cut-epoch-at-its-ceiling",
+    "check": "rot-revoke-cut-epoch-exhausted",
+    "class": "over-cap"
+  }
+]

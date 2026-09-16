@@ -311,6 +311,29 @@ pub enum WritePublishError {
     Rejected,
 }
 
+/// The class label a re-point seal failure carries. `PointerError` serves the
+/// pointer plane too, so its rotation reading lives here.
+fn pointer_error_class(error: &PointerError) -> &'static str {
+    match error {
+        PointerError::NotOwnerSession => "capability",
+        PointerError::Entropy(_) | PointerError::Seam(_) | PointerError::Unavailable => {
+            "availability"
+        }
+        PointerError::Open(error) => error.class(),
+        PointerError::IndexRegression { .. } => "trust",
+    }
+}
+
+impl WritePublishError {
+    /// The class label a reject vector carries for this failure.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::NotLanded | Self::LostRace | Self::RegistryFull => "availability",
+            Self::Rejected => "trust",
+        }
+    }
+}
+
 impl core::fmt::Display for WritePublishError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -476,20 +499,57 @@ impl core::fmt::Display for WriteRotateError {
 impl std::error::Error for WriteRotateError {}
 
 impl WriteRotateError {
+    /// Every write-plane rotation check, in declaration order — the surface
+    /// `crates/engine/tests/kat_rotation.rs` pins (see the module header for the
+    /// prefix rule).
+    pub const CHECKS: &'static [&'static str] = &[
+        "rot-write-not-owner",
+        "rot-write-commitment-scope-mismatch",
+        "rot-write-epoch-exhausted",
+        "rot-write-write-epoch-not-advancing",
+        "rot-write-identity-repoint",
+        "rot-write-entropy-error",
+        "rot-write-resumed-seed-not-at-its-root",
+        "rot-write-resumed-wave-at-another-epoch",
+        "rot-write-resolve-failed",
+        "rot-write-publish-failed",
+        "rot-write-repoint-seal-failed",
+    ];
+
     /// A stable, key-material-free classification name (host/log facing).
     pub fn check(&self) -> &'static str {
         match self {
-            WriteRotateError::NotOwner => "not-owner",
-            WriteRotateError::CommitmentScopeMismatch => "commitment-scope-mismatch",
-            WriteRotateError::EpochExhausted => "epoch-exhausted",
-            WriteRotateError::WriteEpochNotAdvancing => "write-epoch-not-advancing",
-            WriteRotateError::IdentityRepoint => "identity-repoint",
-            WriteRotateError::Entropy(_) => "entropy-error",
-            WriteRotateError::ResumedSeedNotAtItsRoot => "resumed-seed-not-at-its-root",
-            WriteRotateError::ResumedWaveAtAnotherEpoch => "resumed-wave-at-another-epoch",
-            WriteRotateError::Resolve { .. } => "resolve-failed",
-            WriteRotateError::Publish { .. } => "publish-failed",
-            WriteRotateError::Repoint(_) => "repoint-seal-failed",
+            WriteRotateError::NotOwner => "rot-write-not-owner",
+            WriteRotateError::CommitmentScopeMismatch => "rot-write-commitment-scope-mismatch",
+            WriteRotateError::EpochExhausted => "rot-write-epoch-exhausted",
+            WriteRotateError::WriteEpochNotAdvancing => "rot-write-write-epoch-not-advancing",
+            WriteRotateError::IdentityRepoint => "rot-write-identity-repoint",
+            WriteRotateError::Entropy(_) => "rot-write-entropy-error",
+            WriteRotateError::ResumedSeedNotAtItsRoot => "rot-write-resumed-seed-not-at-its-root",
+            WriteRotateError::ResumedWaveAtAnotherEpoch => {
+                "rot-write-resumed-wave-at-another-epoch"
+            }
+            WriteRotateError::Resolve { .. } => "rot-write-resolve-failed",
+            WriteRotateError::Publish { .. } => "rot-write-publish-failed",
+            WriteRotateError::Repoint(_) => "rot-write-repoint-seal-failed",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive, so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            WriteRotateError::NotOwner
+            | WriteRotateError::CommitmentScopeMismatch
+            | WriteRotateError::WriteEpochNotAdvancing
+            | WriteRotateError::IdentityRepoint
+            | WriteRotateError::ResumedSeedNotAtItsRoot
+            | WriteRotateError::ResumedWaveAtAnotherEpoch => "trust",
+            WriteRotateError::EpochExhausted => "over-cap",
+            WriteRotateError::Entropy(_) => "availability",
+            WriteRotateError::Resolve { reason, .. } => reason.class(),
+            WriteRotateError::Publish { error, .. } => error.class(),
+            WriteRotateError::Repoint(error) => pointer_error_class(error),
         }
     }
 

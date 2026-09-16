@@ -1,0 +1,81 @@
+{
+  "manifestVersion": 1,
+  "profile": "cipherbox/v2 engine rotation plane",
+  "families": {
+    "cascade": {
+      "file": "vectors/cascade_reject.json",
+      "count": 5,
+      "checks": [
+        "rot-cascade-resolve-failed",
+        "rot-cascade-publish-failed",
+        "rot-cascade-floor-raise-failed",
+        "rot-cascade-owner-subkey-missing",
+        "rot-cascade-epoch-exhausted"
+      ]
+    },
+    "cut": {
+      "file": "vectors/cut_reject.json",
+      "count": 1,
+      "checks": [
+        "rot-cut-write-only-cut-withdraws-read"
+      ]
+    },
+    "read_rotate": {
+      "file": "vectors/read_rotate_reject.json",
+      "count": 4,
+      "checks": [
+        "rot-read-reseal-failed",
+        "rot-read-publish-failed",
+        "rot-read-floor-raise-failed",
+        "rot-read-epoch-exhausted"
+      ]
+    },
+    "reseal": {
+      "file": "vectors/reseal_reject.json",
+      "count": 8,
+      "checks": [
+        "rot-reseal-ledger-diverges-from-commitment",
+        "rot-reseal-signer-not-committed",
+        "rot-reseal-unusable-recipient-key",
+        "rot-reseal-tag-not-bound-to-recipient",
+        "rot-reseal-ascent-link-dropped",
+        "rot-reseal-ascent-link-not-owed",
+        "rot-reseal-entropy-error",
+        "rot-reseal-owner-key-required-for-write-cut"
+      ]
+    },
+    "revoke": {
+      "file": "vectors/revoke_reject.json",
+      "count": 6,
+      "checks": [
+        "rot-revoke-unauthorized-signer",
+        "rot-revoke-commitment-scope-mismatch",
+        "rot-revoke-not-granted",
+        "rot-revoke-not-write-granted",
+        "rot-revoke-write-granted",
+        "rot-revoke-cut-epoch-exhausted"
+      ]
+    },
+    "sweep": {
+      "file": "vectors/sweep_reject.json",
+      "count": 4,
+      "checks": [
+        "rot-sweep-scope-root-unresolved",
+        "rot-sweep-node-unresolved",
+        "rot-sweep-publish-failed",
+        "rot-sweep-index-repair-failed"
+      ]
+    },
+    "write_rotate": {
+      "file": "vectors/write_rotate_reject.json",
+      "count": 5,
+      "checks": [
+        "rot-write-not-owner",
+        "rot-write-commitment-scope-mismatch",
+        "rot-write-epoch-exhausted",
+        "rot-write-write-epoch-not-advancing",
+        "rot-write-identity-repoint"
+      ]
+    }
+  }
+}

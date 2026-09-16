@@ -762,7 +762,7 @@ fn a_refused_canonical_repoint_aborts_before_any_retire() {
         .await
     })
     .expect_err("the canonical channel is not optional");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-write-publish-failed");
     assert!(
         state.retired.borrow().is_empty(),
         "nothing retires while the old names are still the live ones"
@@ -815,7 +815,7 @@ fn mid_wave_crash_resumes_from_published_records_only() {
         .await
     })
     .expect_err("the wave crashes mid-flight");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-write-publish-failed");
     assert_eq!(
         state.published.borrow().len(),
         5,
@@ -1028,7 +1028,7 @@ fn a_recovered_wave_at_another_write_epoch_is_refused_before_any_publish() {
         .await
     })
     .expect_err("a wave at another write epoch is not this run's to resume");
-    assert_eq!(err.check(), "resumed-wave-at-another-epoch");
+    assert_eq!(err.check(), "rot-write-resumed-wave-at-another-epoch");
     assert!(!err.is_retryable(), "a replayed re-point is not a stall");
     assert!(
         state.published.borrow().is_empty(),
@@ -1069,7 +1069,7 @@ fn a_recovered_seed_that_does_not_derive_its_root_name_is_refused() {
         .await
     })
     .expect_err("a seed that does not derive its own root name is refused");
-    assert_eq!(err.check(), "resumed-seed-not-at-its-root");
+    assert_eq!(err.check(), "rot-write-resumed-seed-not-at-its-root");
     assert!(!err.is_retryable(), "no retry reconciles the two halves");
     assert!(
         state.published.borrow().is_empty(),
@@ -1170,7 +1170,7 @@ fn a_wave_whose_retire_refused_on_a_floor_rise_converges_on_the_next_run() {
         .await
     })
     .expect_err("the retire refuses on the floor rise");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-write-publish-failed");
     assert!(!err.is_retryable(), "a fail-closed refusal is not a stall");
     assert_eq!(
         state.repoint_channels.borrow().len(),
@@ -1320,7 +1320,7 @@ fn non_owner_signer_is_rejected_fail_closed() {
         rotate_scope_write(&mut e, &resolver, &publisher, &p).await
     })
     .expect_err("a non-owner is rejected");
-    assert_eq!(err.check(), "not-owner");
+    assert_eq!(err.check(), "rot-write-not-owner");
     assert!(
         !err.is_retryable(),
         "owner-only is not an availability stall"
@@ -1357,7 +1357,7 @@ fn commitment_naming_a_different_scope_is_rejected_fail_closed() {
         .await
     })
     .expect_err("a commitment naming another scope is rejected");
-    assert_eq!(err.check(), "commitment-scope-mismatch");
+    assert_eq!(err.check(), "rot-write-commitment-scope-mismatch");
     assert!(
         !err.is_retryable(),
         "a scope-binding violation is not an availability stall"
@@ -1391,7 +1391,7 @@ fn resolve_failure_aborts_without_publishing() {
         .await
     })
     .expect_err("an unresolvable node aborts the wave");
-    assert_eq!(err.check(), "resolve-failed");
+    assert_eq!(err.check(), "rot-write-resolve-failed");
     assert!(
         state.published.borrow().is_empty(),
         "nothing republished when enumeration fails"
@@ -1413,7 +1413,7 @@ fn exhausted_write_epoch_fails_closed() {
         rotate_scope_write(&mut e, &resolver, &publisher, &p).await
     })
     .expect_err("an exhausted epoch fails closed");
-    assert_eq!(err.check(), "epoch-exhausted");
+    assert_eq!(err.check(), "rot-write-epoch-exhausted");
 }
 
 #[test]
@@ -1446,7 +1446,7 @@ fn build_repoint_rejects_non_advancing_write_epoch_release_active() {
             7,
         )
         .expect_err("non-advancing write epoch");
-        assert_eq!(err.check(), "write-epoch-not-advancing");
+        assert_eq!(err.check(), "rot-write-write-epoch-not-advancing");
     }
 }
 
@@ -1457,7 +1457,7 @@ fn build_repoint_rejects_identity_repoint_release_active() {
     let same = old_name_of(&SCOPE);
     let err =
         build_repoint_object(SCOPE, same.clone(), same, 6, 5, 7).expect_err("identity re-point");
-    assert_eq!(err.check(), "identity-repoint");
+    assert_eq!(err.check(), "rot-write-identity-repoint");
 }
 
 #[test]
@@ -1469,4 +1469,35 @@ fn build_repoint_accepts_a_valid_advance() {
     assert_eq!(obj.prev_root, Some(prev_root));
     assert_eq!(obj.write_epoch, 6);
     assert_eq!(obj.min_read_epoch, 7, "read plane carried unchanged");
+}
+
+/// A new variant that inherits another variant's check name, or is appended out
+/// of order, fails here rather than reaching a reject vector unnamed.
+#[test]
+fn the_check_surface_matches_the_variants_in_order() {
+    let node_id = [1u8; 16];
+    let named: Vec<&str> = [
+        WriteRotateError::NotOwner,
+        WriteRotateError::CommitmentScopeMismatch,
+        WriteRotateError::EpochExhausted,
+        WriteRotateError::WriteEpochNotAdvancing,
+        WriteRotateError::IdentityRepoint,
+        WriteRotateError::Entropy(EntropyError::new("no entropy")),
+        WriteRotateError::ResumedSeedNotAtItsRoot,
+        WriteRotateError::ResumedWaveAtAnotherEpoch,
+        WriteRotateError::Resolve {
+            node_id,
+            reason: ResolveFailure::Rejected,
+        },
+        WriteRotateError::Publish {
+            stage: "republish",
+            node_id,
+            error: WritePublishError::NotLanded,
+        },
+        WriteRotateError::Repoint(PointerError::NotOwnerSession),
+    ]
+    .iter()
+    .map(WriteRotateError::check)
+    .collect();
+    assert_eq!(named, WriteRotateError::CHECKS);
 }

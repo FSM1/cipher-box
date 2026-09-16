@@ -1,7 +1,8 @@
-//! The committed KAT generator for the engine's content-DAG and adoption-gate
-//! fixtures (blueprint/core.md "KAT regime": vectors regenerate only through
-//! committed generators, never hand-edits). Sibling to core's generator; see
-//! `crates/engine/tests/kat_content.rs` for why the engine needs its own.
+//! The committed KAT generator for the engine's content-DAG, adoption-gate and
+//! rotation fixtures (blueprint/core.md "KAT regime": vectors regenerate only
+//! through committed generators, never hand-edits). Sibling to core's
+//! generator; see `crates/engine/tests/kat_content.rs` for why the engine needs
+//! its own.
 //!
 //! Run from any cwd:
 //!
@@ -10,12 +11,15 @@
 //! ```
 //!
 //! Accept vectors run the live [`assemble`] over leaves the live framing
-//! produced. Reject vectors are hand-built root maps, since a valid encoder run
-//! cannot emit any of them. Every vector is asserted against the live decoder
+//! produced. DAG reject vectors are hand-built root maps, since a valid encoder
+//! run cannot emit any of them; the rotation reject families come off error
+//! values the live rotation entry points returned
+//! ([`reject_families`](cipherbox_engine::testkit::rotation::reject_families)).
+//! Every vector is asserted against the live decoder or driven from live code
 //! before anything is written, so a generator run is itself a self-check.
 //! Output is deterministic: re-running is byte-identical.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -38,6 +42,7 @@ use cipherbox_engine::content::{
 };
 use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::gate::authenticate_section_structures;
+use cipherbox_engine::testkit::rotation::reject_families;
 use cipherbox_engine::testkit::{
     OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OwnerRootSpec, owner_root_fixture,
     owner_root_pseudonym,
@@ -46,6 +51,7 @@ use serde::Serialize;
 
 const PROFILE: &str = "cipherbox/v2 engine content-dag";
 const GATE_PROFILE: &str = "cipherbox/v2 engine adoption-gate";
+const ROTATION_PROFILE: &str = "cipherbox/v2 engine rotation plane";
 
 /// A pinned entropy stream: KAT vectors must be byte-reproducible, so the
 /// generator injects a fixed nonce sequence instead of sampling one.
@@ -171,6 +177,24 @@ struct GateManifest {
     section_signer_reject: RejectSection,
 }
 
+/// One rotation refusal: the verdict the live entry point returned for a named
+/// fixture.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RotationRejectOut {
+    name: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RotationManifest {
+    manifest_version: u64,
+    profile: String,
+    families: BTreeMap<String, RejectSection>,
+}
+
 fn main() {
     let kat_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("kat");
     let content_dir = kat_dir.join("vectors").join("content");
@@ -261,13 +285,58 @@ fn main() {
         },
     );
 
+    let rotation_dir = kat_dir.join("rotation");
+    let rotation_vectors = rotation_dir.join("vectors");
+    fs::create_dir_all(&rotation_vectors)
+        .unwrap_or_else(|e| panic!("create {}: {e}", rotation_vectors.display()));
+
+    let mut families = BTreeMap::new();
+    let mut rotation_count = 0usize;
+    for family in reject_families() {
+        let file = format!("vectors/{}_reject.json", family.plane);
+        let vectors: Vec<RotationRejectOut> = family
+            .vectors
+            .iter()
+            .map(|v| RotationRejectOut {
+                name: v.name.to_string(),
+                check: v.check.to_string(),
+                class: v.class.to_string(),
+            })
+            .collect();
+        write_pretty(&rotation_dir.join(&file), &vectors);
+        rotation_count += vectors.len();
+        families.insert(
+            family.plane.to_string(),
+            RejectSection {
+                file,
+                count: vectors.len(),
+                checks: checks_in_surface_order(
+                    family.surface,
+                    family.vectors.iter().map(|v| v.check),
+                ),
+            },
+        );
+    }
+    let plane_count = families.len();
+    write_pretty(
+        &rotation_dir.join("manifest.json"),
+        &RotationManifest {
+            manifest_version: 1,
+            profile: ROTATION_PROFILE.to_string(),
+            families,
+        },
+    );
+
     println!(
         "kat_gen: wrote {} accept, {} reject, 2 capacity vectors + manifest.json; \
-         gate: {} accept, {} reject + gate/manifest.json",
+         gate: {} accept, {} reject + gate/manifest.json; \
+         rotation: {} reject vectors over {} planes + rotation/manifest.json",
         root_accept.len(),
         root_reject.len(),
         signer_accept.len(),
-        signer_reject.len()
+        signer_reject.len(),
+        rotation_count,
+        plane_count
     );
 }
 

@@ -1,0 +1,27 @@
+[
+  {
+    "name": "rotation-presented-by-a-stranger",
+    "check": "rot-write-not-owner",
+    "class": "trust"
+  },
+  {
+    "name": "commitment-bound-to-another-scope-root",
+    "check": "rot-write-commitment-scope-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "write-epoch-at-its-ceiling",
+    "check": "rot-write-epoch-exhausted",
+    "class": "over-cap"
+  },
+  {
+    "name": "re-point-that-repeats-the-write-epoch",
+    "check": "rot-write-write-epoch-not-advancing",
+    "class": "trust"
+  },
+  {
+    "name": "re-point-back-to-the-predecessor-name",
+    "check": "rot-write-identity-repoint",
+    "class": "trust"
+  }
+]

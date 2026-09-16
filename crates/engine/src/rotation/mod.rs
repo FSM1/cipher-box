@@ -38,6 +38,26 @@
 //! [`WriteSubtreeResolver`] and [`WriteWavePublisher`] have production
 //! implementations over the real transport in [`crate::net::rotation`], and
 //! [`CutRotator`] in [`crate::net::cut`].
+//!
+//! # Check surfaces and class labels
+//!
+//! Every rotation error type publishes a `CHECKS` surface — its own checks in
+//! declaration order — and a `class()` that is exhaustive over its variants, on
+//! the model `content::DagError` sets. Each surface carries a `rot-<plane>-`
+//! prefix, so a rotation check can never collide with a core check or with
+//! another plane's. A variant that surfaces another type's verdict verbatim
+//! (a wrapped `CodecError`, a wrapped `AuthorityViolation`) delegates and stays
+//! off this surface, exactly as `DagError::Cbor` does.
+//!
+//! `class()` names the one axis a caller acts on:
+//!
+//! - `"trust"` — a fail-closed verdict on authority or consistency.
+//! - `"availability"` — a stall a later attempt can clear.
+//! - `"over-cap"` — a frozen bound, or a counter that cannot step again.
+//! - `"capability"` — this client cannot author or read it; no retry converges
+//!   and the record is not suspect.
+//!
+//! A delegated variant keeps the wrapped type's own label.
 
 pub mod cascade;
 pub mod eager_set;

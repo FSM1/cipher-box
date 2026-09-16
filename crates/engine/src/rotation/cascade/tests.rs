@@ -887,7 +887,7 @@ fn a_keyless_re_sealer_mints_nothing() {
     );
 
     let err = outcome.expect_err("a keyless re-sealer cannot check its own re-key");
-    assert_eq!(err.check(), "owner-subkey-missing");
+    assert_eq!(err.check(), "rot-cascade-owner-subkey-missing");
     assert_eq!(err.scope_id(), sid(0x00), "it refuses at the root");
     assert!(!err.is_retryable(), "no retry supplies the owner subkey");
     assert!(
@@ -912,7 +912,7 @@ fn a_re_key_the_owner_cannot_read_back_is_never_published_release_active() {
     let (outcome, net, floors, spawned) = run(net, &[0x0a]);
 
     let err = outcome.expect_err("a re-key the owner cannot read back is refused");
-    assert_eq!(err.check(), "unverified-threaded-seed");
+    assert_eq!(err.check(), "rot-cascade-unverified-threaded-seed");
     assert_eq!(err.scope_id(), sid(0x0a));
     assert!(!err.is_retryable(), "the same bytes reach the same verdict");
     let published = net.published.borrow();
@@ -1098,7 +1098,7 @@ fn c2_conflicting_ipns_name_aborts_fail_closed_permutation_independent() {
     let fwd = forward.expect_err("conflict aborts");
     let rev = reversed.expect_err("conflict aborts");
     assert_eq!(fwd, rev, "abort is permutation-independent");
-    assert_eq!(fwd.check(), "resolve-failed");
+    assert_eq!(fwd.check(), "rot-cascade-resolve-failed");
     assert_eq!(fwd.scope_id(), sid(0x0d), "the conflict names scope D");
     assert!(
         fwd.is_retryable(),
@@ -1156,7 +1156,7 @@ fn attacker_label_without_commitment_binding_is_fatal() {
         .scope(0x0d, 4, &[]);
     let (out, _net, _f, spawned) = run_with_index(net, vec![childref(0x0a)]);
     let err = out.expect_err("attacker label is rejected");
-    assert_eq!(err.check(), "resolve-failed");
+    assert_eq!(err.check(), "rot-cascade-resolve-failed");
     assert_eq!(err.scope_id(), sid(0x0d));
     assert!(!err.is_retryable(), "a commitment-gate rejection is fatal");
     assert_eq!(spawned, 0);
@@ -1185,7 +1185,7 @@ fn unresolvable_descendant_aborts_fail_closed() {
         .resolve_fault(0x0b, ResolveFailure::Rejected);
     let (outcome, _net, floors, spawned) = run(net, &[0x0a]);
     let err = outcome.expect_err("rejected descendant fails closed");
-    assert_eq!(err.check(), "resolve-failed");
+    assert_eq!(err.check(), "rot-cascade-resolve-failed");
     assert_eq!(err.scope_id(), sid(0x0b));
     assert!(!err.is_retryable(), "a gate rejection is fatal");
     // No sweep enqueued on an aborted cascade (the enqueue is the last step).
@@ -1203,7 +1203,7 @@ fn publish_not_landed_aborts_fail_closed() {
         .publish_fault(0x0a, RotationPublishError::NotPublished);
     let (outcome, _net, _f, spawned) = run(net, &[0x0a]);
     let err = outcome.expect_err("unpublished descendant fails closed");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-cascade-publish-failed");
     assert_eq!(err.scope_id(), sid(0x0a));
     assert!(err.is_retryable(), "not-landed is an availability stall");
     assert_eq!(spawned, 0);
@@ -1219,7 +1219,7 @@ fn a_publish_the_publisher_refused_is_fatal_not_retryable() {
         .publish_fault(0x0a, RotationPublishError::Rejected);
     let (outcome, _net, _f, spawned) = run(net, &[0x0a]);
     let err = outcome.expect_err("a refused publish fails closed");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-cascade-publish-failed");
     assert!(!err.is_retryable());
     assert_eq!(spawned, 0);
 }
@@ -1233,7 +1233,7 @@ fn lost_race_aborts_unlike_the_sweep() {
         .publish_fault(0x0a, RotationPublishError::LostRace);
     let (outcome, _net, _f, _s) = run(net, &[0x0a]);
     let err = outcome.expect_err("lost race aborts the cascade");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-cascade-publish-failed");
     assert_eq!(err.scope_id(), sid(0x0a));
 }
 
@@ -1245,7 +1245,7 @@ fn epoch_exhausted_descendant_aborts_release_active() {
     let net = FakeNet::new().scope(0x0a, u64::MAX, &[]);
     let (outcome, net, _f, spawned) = run(net, &[0x0a]);
     let err = outcome.expect_err("exhausted epoch fails closed");
-    assert_eq!(err.check(), "epoch-exhausted");
+    assert_eq!(err.check(), "rot-cascade-epoch-exhausted");
     assert_eq!(err.scope_id(), sid(0x0a));
     assert!(!err.is_retryable());
     assert_eq!(spawned, 0);
@@ -1285,4 +1285,40 @@ fn leaf_root_with_no_descendants_still_rekeys_root_and_enqueues_sweep() {
     assert_eq!(block_on(floors.epoch_floor(&sid(0x00))).unwrap(), Some(5));
     assert_eq!(spawned, 1);
     assert!(!ct_eq(&net.published_seed(0x00), &[0x00; 32]));
+}
+
+/// A new variant that inherits another variant's check name, or is appended out
+/// of order, fails here rather than reaching a reject vector unnamed.
+#[test]
+fn the_check_surface_matches_the_variants_in_order() {
+    let scope_id = sid(1);
+    let named: Vec<&str> = [
+        CascadeError::Resolve {
+            scope_id,
+            reason: ResolveFailure::Rejected,
+        },
+        CascadeError::Reseal {
+            scope_id,
+            error: ResealError::SignerNotCommitted,
+        },
+        CascadeError::Publish {
+            scope_id,
+            error: RotationPublishError::NotPublished,
+        },
+        CascadeError::Floor {
+            scope_id,
+            error: SeamError::new("floor store unavailable"),
+        },
+        CascadeError::RevocationFloor {
+            scope_id,
+            error: SeamError::new("floor store unavailable"),
+        },
+        CascadeError::OwnerSubkeyMissing { scope_id },
+        CascadeError::UnverifiedThreadedSeed { scope_id },
+        CascadeError::EpochExhausted { scope_id },
+    ]
+    .iter()
+    .map(CascadeError::check)
+    .collect();
+    assert_eq!(named, CascadeError::CHECKS);
 }

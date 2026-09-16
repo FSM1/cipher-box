@@ -1,0 +1,22 @@
+[
+  {
+    "name": "read-epoch-at-its-ceiling",
+    "check": "rot-read-epoch-exhausted",
+    "class": "over-cap"
+  },
+  {
+    "name": "entropy-seam-that-draws-nothing",
+    "check": "rot-read-reseal-failed",
+    "class": "availability"
+  },
+  {
+    "name": "publisher-that-refuses-the-record",
+    "check": "rot-read-publish-failed",
+    "class": "trust"
+  },
+  {
+    "name": "floor-store-that-refuses-the-raise",
+    "check": "rot-read-floor-raise-failed",
+    "class": "availability"
+  }
+]
