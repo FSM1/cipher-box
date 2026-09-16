@@ -1,0 +1,62 @@
+[
+  {
+    "name": "endpoint-without-a-scheme",
+    "check": "byo-endpoint-invalid",
+    "class": "capability"
+  },
+  {
+    "name": "plaintext-http-to-a-public-host",
+    "check": "byo-endpoint-insecure",
+    "class": "capability"
+  },
+  {
+    "name": "endpoint-naming-the-cloud-metadata-service",
+    "check": "byo-endpoint-blocked",
+    "class": "capability"
+  },
+  {
+    "name": "bearer-carrying-a-header-separator",
+    "check": "byo-credential-invalid",
+    "class": "capability"
+  },
+  {
+    "name": "bearer-left-as-keep",
+    "check": "byo-credential-unresolved",
+    "class": "capability"
+  },
+  {
+    "name": "keep-with-no-bearer-in-this-session",
+    "check": "byo-credential-not-stored",
+    "class": "capability"
+  },
+  {
+    "name": "keep-carried-to-another-endpoint",
+    "check": "byo-credential-repointed",
+    "class": "capability"
+  },
+  {
+    "name": "provider-that-never-answered",
+    "check": "byo-unreachable",
+    "class": "availability"
+  },
+  {
+    "name": "provider-that-refused-the-bearer",
+    "check": "byo-rejected",
+    "class": "availability"
+  },
+  {
+    "name": "answer-past-the-provider-response-cap",
+    "check": "byo-no-verdict",
+    "class": "availability"
+  },
+  {
+    "name": "block-address-off-the-frozen-shapes",
+    "check": "byo-block-address-malformed",
+    "class": "capability"
+  },
+  {
+    "name": "provider-that-stored-another-address",
+    "check": "byo-address-mismatch",
+    "class": "trust"
+  }
+]

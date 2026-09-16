@@ -408,11 +408,24 @@ pub enum RelayedAnswerRefused {
 }
 
 impl RelayedAnswerRefused {
+    /// The one engine-owned check here, the surface `crates/engine/tests/
+    /// kat_checks.rs` pins (see the crate header). `Sealed` surfaces core's
+    /// verdict verbatim and stays off it.
+    pub const CHECKS: &'static [&'static str] = &["device-response-binding-refused"];
+
     /// The stable name of the check that fired; safe to surface and to log.
     pub fn check(&self) -> &'static str {
         match self {
-            Self::Unsigned => "device-response-binding-refused",
+            Self::Unsigned => Self::CHECKS[0],
             Self::Sealed(violation) => violation.check(),
+        }
+    }
+
+    /// The class label used in reject vectors. Both arms accuse whoever relayed
+    /// the answer, so no retry of the same bytes converges.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::Unsigned | Self::Sealed(_) => "trust",
         }
     }
 }

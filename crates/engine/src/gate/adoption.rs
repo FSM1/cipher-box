@@ -137,6 +137,22 @@ pub struct GateRejection {
 }
 
 impl GateRejection {
+    /// Every engine-owned gate check, in [`RejectionReason`] declaration order —
+    /// the surface `crates/engine/tests/kat_checks.rs` pins (see the crate
+    /// header). `Trust` surfaces core's verdict verbatim and stays off it.
+    ///
+    /// The gate is the read side of each of these bounds, so it is where the
+    /// name lives: the produce side that must refuse the same bytes delegates
+    /// here ([`AuthorError::check`](crate::net::author::AuthorError::check)).
+    pub const CHECKS: &'static [&'static str] = &[
+        "sequence-not-newer",
+        "epoch-below-floor",
+        Self::SCOPE_ROOT_NOT_RESEALABLE,
+    ];
+
+    /// The one name both sides of the resealable-root budget publish.
+    pub const SCOPE_ROOT_NOT_RESEALABLE: &'static str = "scope-root-not-resealable";
+
     /// The stable named error for this rejection: the composed core check name
     /// for a cryptographic/codec stage, or the engine floor-law verdict name
     /// for a floor stage. This is the string the six-stage matrix asserts 1:1
@@ -147,6 +163,18 @@ impl GateRejection {
             RejectionReason::SequenceNotNewer { .. } => "sequence-not-newer",
             RejectionReason::EpochBelowFloor { .. } => "epoch-below-floor",
             RejectionReason::ScopeRootNotResealable { .. } => "scope-root-not-resealable",
+        }
+    }
+
+    /// The class label used in reject vectors. A floor comparison is a trust
+    /// verdict, never staleness; an unresealable scope root met a frozen bound.
+    pub fn class(&self) -> &'static str {
+        match &self.reason {
+            RejectionReason::Trust(e) => e.class(),
+            RejectionReason::SequenceNotNewer { .. } | RejectionReason::EpochBelowFloor { .. } => {
+                "trust"
+            }
+            RejectionReason::ScopeRootNotResealable { .. } => "over-cap",
         }
     }
 }

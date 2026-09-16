@@ -1,0 +1,12 @@
+[
+  {
+    "name": "record-replayed-below-the-sequence-floor",
+    "check": "sequence-not-newer",
+    "class": "trust"
+  },
+  {
+    "name": "record-from-an-epoch-a-revocation-cut",
+    "check": "epoch-below-floor",
+    "class": "trust"
+  }
+]

@@ -24,7 +24,7 @@
 //!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
 //!   [`IpnsName`] to both the body and the parent's ref.
 
-use cipherbox_core::error::CodecError;
+use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     CarriedCut, ChildRef, Envelope, GrantSection, GrantSetBindingError, NodeKind, PreservedFields,
@@ -40,7 +40,7 @@ use crate::content::limits::{
 };
 use crate::content::root_block_cid;
 use crate::facade::{Event, emit_trust_violation};
-use crate::gate::authenticate_section_structures;
+use crate::gate::{GateRejection, authenticate_section_structures};
 
 /// The envelope format+suite version this build authors (blueprint/core.md).
 pub const ENVELOPE_V: u64 = 1;
@@ -111,12 +111,25 @@ pub enum AuthorError {
 }
 
 impl AuthorError {
+    /// Every engine-owned authoring check, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header). The
+    /// three arms that surface another surface's verdict verbatim stay off it.
+    pub const CHECKS: &'static [&'static str] = &[
+        "grant-section-on-child",
+        "missing-grant-section",
+        "invalid-grant-section",
+        "commitment-name-mismatch",
+        "commitment-signature-invalid",
+        "missing-ascent-link",
+        "head-too-large",
+        "grant-section-too-large",
+    ];
+
     /// The stable kebab-case name of this refusal — the produce-side counterpart
     /// of [`GateRejection::check`], and what [`Display`] renders, so a
     /// regression in the epoch or commitment pairing is legible in the field
     /// rather than a silent retry.
     ///
-    /// [`GateRejection::check`]: crate::gate::GateRejection::check
     /// [`Display`]: core::fmt::Display
     pub fn check(&self) -> &'static str {
         match self {
@@ -128,13 +141,33 @@ impl AuthorError {
             // reader deliberately tells an attacker nothing.
             Self::CommitmentNameMismatch => "commitment-name-mismatch",
             Self::CommitmentSignatureInvalid => "commitment-signature-invalid",
-            // The gate's own verdict name: this is the same predicate.
-            Self::SectionSignatureInvalid => "structure-signature-invalid",
+            // The same predicate core publishes, so the name stays at its home.
+            Self::SectionSignatureInvalid => TrustViolation::StructureSignatureInvalid.check(),
             Self::MissingAscentLink => "missing-ascent-link",
             Self::Seal(e) => e.check(),
             Self::HeadTooLarge { .. } => "head-too-large",
-            Self::ScopeRootNotResealable { .. } => "scope-root-not-resealable",
+            // The read side of this bound names it (AGENTS.md rule 8).
+            Self::ScopeRootNotResealable { .. } => GateRejection::SCOPE_ROOT_NOT_RESEALABLE,
             Self::GrantSectionTooLarge => "grant-section-too-large",
+        }
+    }
+
+    /// The class label used in reject vectors. A refusal on the record's own
+    /// bytes is `trust` — the produce-side mirror of a gate rejection — where a
+    /// frozen byte bound this pass met is `over-cap`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::GrantSectionOnChild
+            | Self::MissingGrantSection
+            | Self::InvalidGrantSection
+            | Self::CommitmentNameMismatch
+            | Self::CommitmentSignatureInvalid
+            | Self::SectionSignatureInvalid
+            | Self::MissingAscentLink => "trust",
+            Self::Seal(e) => e.class(),
+            Self::HeadTooLarge { .. }
+            | Self::ScopeRootNotResealable { .. }
+            | Self::GrantSectionTooLarge => "over-cap",
         }
     }
 

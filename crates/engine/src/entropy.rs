@@ -41,6 +41,23 @@ impl EntropyError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// The one seam-failure check, the surface `crates/engine/tests/
+    /// kat_checks.rs` pins (see the crate header). Every plane that folds a
+    /// failed draw into its own error delegates here rather than naming it
+    /// again.
+    pub const CHECKS: &'static [&'static str] = &["entropy-error"];
+
+    /// The stable classification name. Never the diagnostic message.
+    pub fn check(&self) -> &'static str {
+        Self::CHECKS[0]
+    }
+
+    /// The class label used in reject vectors. A seam that answered nothing has
+    /// accused nobody, and a later draw can succeed.
+    pub fn class(&self) -> &'static str {
+        "availability"
+    }
 }
 
 impl fmt::Display for EntropyError {

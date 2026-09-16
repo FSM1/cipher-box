@@ -14,6 +14,23 @@
 //! The `test-kit` feature adds [`testkit`]: in-memory fakes for every seam,
 //! a virtual-clock scheduler, seeded entropy, and the reusable per-seam
 //! conformance kits that real host implementations must pass.
+//!
+//! # Check surfaces and class labels
+//!
+//! Every engine error type a host branches on publishes a `CHECKS` surface —
+//! its own check names in variant declaration order — and a `class()` that is
+//! exhaustive over its variants. A check name is owned by exactly one surface;
+//! a variant that surfaces another type's verdict verbatim delegates to it and
+//! stays off its own surface. `crates/engine/tests/kat_checks.rs` holds the one
+//! collision table over every surface, and freezes a reject vector per check.
+//!
+//! `class()` names the one axis a caller acts on:
+//!
+//! - `"trust"` — a fail-closed verdict on authority or consistency.
+//! - `"availability"` — a stall a later attempt can clear.
+//! - `"over-cap"` — a frozen bound, or a counter that cannot step again.
+//! - `"capability"` — this client cannot author or read it; no retry converges
+//!   and the record is not suspect.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "external-only-with-no-provider-configured",
+    "check": "byo-provider-missing",
+    "class": "capability"
+  },
+  {
+    "name": "external-only-over-a-pin-by-cid-provider",
+    "check": "byo-no-external-ingress",
+    "class": "capability"
+  },
+  {
+    "name": "settings-load-degraded-past-a-first-run",
+    "check": "settings-unavailable",
+    "class": "availability"
+  }
+]

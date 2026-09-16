@@ -78,9 +78,19 @@ pub struct AbuseEvent {
 }
 
 impl AbuseEvent {
+    /// The one owner-entry check, the surface `crates/engine/tests/
+    /// kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &["owner-seed-cross-check-disagreement"];
+
     /// The stable classification name.
     pub fn check(&self) -> &'static str {
-        "owner-seed-cross-check-disagreement"
+        Self::CHECKS[0]
+    }
+
+    /// The class label used in reject vectors. A seed disagreement is
+    /// attributable to a writer, so it is a trust verdict and never a stall.
+    pub fn class(&self) -> &'static str {
+        "trust"
     }
 }
 
