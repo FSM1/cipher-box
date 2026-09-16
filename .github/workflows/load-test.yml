@@ -116,8 +116,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
-          restore-keys: linux-cargo-
+          # Its own key, not the `linux-cargo-` one `desktop-release.yml` also
+          # writes: this job builds `crates/load` under `--release` over a
+          # different graph, so a shared primary key makes each workflow
+          # overwrite the other's `target/` and restore nothing reusable.
+          key: load-test-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: load-test-cargo-
 
       - name: Install dependencies
         if: inputs.environment == 'local'
