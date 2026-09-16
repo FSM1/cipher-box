@@ -15,6 +15,7 @@
 //! tests. One contract, every platform.
 
 pub mod account;
+pub mod checks;
 pub mod conformance;
 mod content;
 mod entropy;
@@ -22,6 +23,7 @@ mod executor;
 pub mod fakes;
 pub mod name_law;
 mod owner_root;
+pub mod reject;
 pub mod rotation;
 mod world;
 

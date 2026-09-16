@@ -12,9 +12,8 @@
 //!
 //! Accept vectors run the live [`assemble`] over leaves the live framing
 //! produced. DAG reject vectors are hand-built root maps, since a valid encoder
-//! run cannot emit any of them; the rotation reject families come off error
-//! values the live rotation entry points returned
-//! ([`reject_families`](cipherbox_engine::testkit::rotation::reject_families)).
+//! run cannot emit any of them; every reject family comes off error values the
+//! live entry points returned (`testkit::rotation`, `testkit::checks`).
 //! Every vector is asserted against the live decoder or driven from live code
 //! before anything is written, so a generator run is itself a self-check.
 //! Output is deterministic: re-running is byte-identical.
@@ -42,16 +41,18 @@ use cipherbox_engine::content::{
 };
 use cipherbox_engine::entropy::{Entropy, EntropyError};
 use cipherbox_engine::gate::authenticate_section_structures;
-use cipherbox_engine::testkit::rotation::reject_families;
+use cipherbox_engine::testkit::reject::RejectFamily;
 use cipherbox_engine::testkit::{
     OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OwnerRootSpec, owner_root_fixture,
     owner_root_pseudonym,
 };
+use cipherbox_engine::testkit::{checks, rotation};
 use serde::Serialize;
 
 const PROFILE: &str = "cipherbox/v2 engine content-dag";
 const GATE_PROFILE: &str = "cipherbox/v2 engine adoption-gate";
 const ROTATION_PROFILE: &str = "cipherbox/v2 engine rotation plane";
+const CHECKS_PROFILE: &str = "cipherbox/v2 engine check surfaces";
 
 /// A pinned entropy stream: KAT vectors must be byte-reproducible, so the
 /// generator injects a fixed nonce sequence instead of sampling one.
@@ -177,11 +178,10 @@ struct GateManifest {
     section_signer_reject: RejectSection,
 }
 
-/// One rotation refusal: the verdict the live entry point returned for a named
-/// fixture.
+/// One refusal: the verdict the live entry point returned for a named fixture.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RotationRejectOut {
+struct RejectOut {
     name: String,
     check: String,
     class: String,
@@ -189,7 +189,7 @@ struct RotationRejectOut {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RotationManifest {
+struct FamilyManifest {
     manifest_version: u64,
     profile: String,
     families: BTreeMap<String, RejectSection>,
@@ -285,26 +285,56 @@ fn main() {
         },
     );
 
-    let rotation_dir = kat_dir.join("rotation");
-    let rotation_vectors = rotation_dir.join("vectors");
-    fs::create_dir_all(&rotation_vectors)
-        .unwrap_or_else(|e| panic!("create {}: {e}", rotation_vectors.display()));
+    let rotation = write_family_corpus(
+        &kat_dir.join("rotation"),
+        ROTATION_PROFILE,
+        rotation::reject_families(),
+    );
+    let checks = write_family_corpus(
+        &kat_dir.join("checks"),
+        CHECKS_PROFILE,
+        checks::reject_families(),
+    );
+
+    println!(
+        "kat_gen: wrote {} accept, {} reject, 2 capacity vectors + manifest.json; \
+         gate: {} accept, {} reject + gate/manifest.json; \
+         rotation: {} reject vectors over {} planes; \
+         checks: {} reject vectors over {} planes",
+        root_accept.len(),
+        root_reject.len(),
+        signer_accept.len(),
+        signer_reject.len(),
+        rotation.0,
+        rotation.1,
+        checks.0,
+        checks.1,
+    );
+}
+
+/// Write one reject corpus — a vector file per plane plus its manifest — and
+/// answer `(vectors, planes)`. A new plane adds a family builder and touches
+/// nothing here.
+fn write_family_corpus(dir: &Path, profile: &str, built: Vec<RejectFamily>) -> (usize, usize) {
+    let vectors_dir = dir.join("vectors");
+    fs::create_dir_all(&vectors_dir)
+        .unwrap_or_else(|e| panic!("create {}: {e}", vectors_dir.display()));
 
     let mut families = BTreeMap::new();
-    let mut rotation_count = 0usize;
-    for family in reject_families() {
+    let mut count = 0usize;
+    for family in built {
         let file = format!("vectors/{}_reject.json", family.plane);
-        let vectors: Vec<RotationRejectOut> = family
+        let vectors: Vec<RejectOut> = family
             .vectors
             .iter()
-            .map(|v| RotationRejectOut {
+            .map(|v| RejectOut {
                 name: v.name.to_string(),
                 check: v.check.to_string(),
                 class: v.class.to_string(),
             })
             .collect();
-        write_pretty(&rotation_dir.join(&file), &vectors);
-        rotation_count += vectors.len();
+        write_pretty(&dir.join(&file), &vectors);
+        count += vectors.len();
         families.insert(
             family.plane.to_string(),
             RejectSection {
@@ -317,27 +347,16 @@ fn main() {
             },
         );
     }
-    let plane_count = families.len();
+    let planes = families.len();
     write_pretty(
-        &rotation_dir.join("manifest.json"),
-        &RotationManifest {
+        &dir.join("manifest.json"),
+        &FamilyManifest {
             manifest_version: 1,
-            profile: ROTATION_PROFILE.to_string(),
+            profile: profile.to_string(),
             families,
         },
     );
-
-    println!(
-        "kat_gen: wrote {} accept, {} reject, 2 capacity vectors + manifest.json; \
-         gate: {} accept, {} reject + gate/manifest.json; \
-         rotation: {} reject vectors over {} planes + rotation/manifest.json",
-        root_accept.len(),
-        root_reject.len(),
-        signer_accept.len(),
-        signer_reject.len(),
-        rotation_count,
-        plane_count
-    );
+    (count, planes)
 }
 
 fn write_pretty<T: Serialize>(path: &Path, value: &T) {

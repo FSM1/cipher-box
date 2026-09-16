@@ -1,0 +1,7 @@
+[
+  {
+    "name": "answer-signed-for-another-request",
+    "check": "device-response-binding-refused",
+    "class": "trust"
+  }
+]

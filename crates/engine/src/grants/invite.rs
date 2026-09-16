@@ -161,13 +161,66 @@ pub enum InviteError {
 }
 
 impl InviteError {
+    /// Every invite check, in variant declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header). The
+    /// three arms that surface another surface's verdict verbatim stay off it.
+    pub const CHECKS: &'static [&'static str] = &[
+        "invalid-invite-secret",
+        "unusable-invitee-key",
+        "malformed-claim",
+        "malformed-invite-fragment",
+        "invite-fragment-too-large",
+        "claim-scope-mismatch",
+        "commitment-names-another-scope-root",
+        "not-owner",
+        "link-not-committed",
+        "link-expired",
+        "claim-already-converted",
+        "claim-id-is-zero",
+        "grant-was-cut",
+        "claimant-contact-invalid",
+        "claimant-is-the-ephemeral-half",
+        "claimant-is-the-owner",
+        "grant-set-full",
+        "unusable-claimant-key",
+        "duplicate-tag",
+    ];
+
+    /// The class label used in reject vectors. An invite refuses on the owner's
+    /// authority over the set, on a bound the recipient's own decoder enforces,
+    /// or on a deadline and a spent-set the link itself carries.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::InvalidSecret
+            | Self::UnusableInviteeKey
+            | Self::MalformedFragment
+            | Self::ScopeMismatch
+            | Self::ScopeUnbound
+            | Self::NotOwner
+            | Self::LinkNotCommitted
+            | Self::LinkExpired
+            | Self::ClaimAlreadyConverted
+            | Self::ClaimIdIsZero
+            | Self::GrantWasCut
+            | Self::ClaimantIsTheEphemeralHalf
+            | Self::ClaimantIsTheOwner
+            | Self::UnusableClaimantKey
+            | Self::DuplicateTag => "trust",
+            Self::Entropy(error) => error.class(),
+            Self::InvalidExpiry => CodecError::from(Malformed::InvalidExpiry).class(),
+            Self::MalformedClaim(error) | Self::ClaimantContact(error) => error.class(),
+            Self::FragmentTooLarge | Self::GrantSetFull => "over-cap",
+            Self::Authority(violation) => violation.class(),
+        }
+    }
+
     /// A stable, key-material-free classification name (host/log facing).
     pub fn check(&self) -> &'static str {
         match self {
-            Self::Entropy(_) => "entropy-error",
+            Self::Entropy(error) => error.check(),
             Self::InvalidSecret => "invalid-invite-secret",
             Self::UnusableInviteeKey => "unusable-invitee-key",
-            Self::InvalidExpiry => "invalid-expiry",
+            Self::InvalidExpiry => Malformed::InvalidExpiry.check(),
             Self::MalformedClaim(_) => "malformed-claim",
             Self::MalformedFragment => "malformed-invite-fragment",
             Self::FragmentTooLarge => "invite-fragment-too-large",

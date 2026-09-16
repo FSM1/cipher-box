@@ -1,0 +1,12 @@
+[
+  {
+    "name": "courtesy-label-past-the-recipients-own-bound",
+    "check": "grant-display-name-too-long",
+    "class": "capability"
+  },
+  {
+    "name": "mailbox-that-did-not-accept-the-pointer",
+    "check": "mailbox-post-failed",
+    "class": "availability"
+  }
+]

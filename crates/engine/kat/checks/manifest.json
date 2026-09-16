@@ -1,0 +1,103 @@
+{
+  "manifestVersion": 1,
+  "profile": "cipherbox/v2 engine check surfaces",
+  "families": {
+    "author": {
+      "file": "vectors/author_reject.json",
+      "count": 6,
+      "checks": [
+        "grant-section-on-child",
+        "missing-grant-section",
+        "invalid-grant-section",
+        "commitment-name-mismatch",
+        "commitment-signature-invalid",
+        "missing-ascent-link"
+      ]
+    },
+    "create": {
+      "file": "vectors/create_reject.json",
+      "count": 2,
+      "checks": [
+        "grant-display-name-too-long",
+        "mailbox-post-failed"
+      ]
+    },
+    "devices": {
+      "file": "vectors/devices_reject.json",
+      "count": 1,
+      "checks": [
+        "device-response-binding-refused"
+      ]
+    },
+    "gate": {
+      "file": "vectors/gate_reject.json",
+      "count": 2,
+      "checks": [
+        "sequence-not-newer",
+        "epoch-below-floor"
+      ]
+    },
+    "invite": {
+      "file": "vectors/invite_reject.json",
+      "count": 15,
+      "checks": [
+        "invalid-invite-secret",
+        "malformed-claim",
+        "malformed-invite-fragment",
+        "invite-fragment-too-large",
+        "claim-scope-mismatch",
+        "commitment-names-another-scope-root",
+        "not-owner",
+        "link-not-committed",
+        "link-expired",
+        "claim-already-converted",
+        "claim-id-is-zero",
+        "claimant-contact-invalid",
+        "claimant-is-the-ephemeral-half",
+        "claimant-is-the-owner",
+        "duplicate-tag"
+      ]
+    },
+    "ledger": {
+      "file": "vectors/ledger_reject.json",
+      "count": 1,
+      "checks": [
+        "ledger-diverges-from-commitment"
+      ]
+    },
+    "owner_entry": {
+      "file": "vectors/owner_entry_reject.json",
+      "count": 1,
+      "checks": [
+        "owner-seed-cross-check-disagreement"
+      ]
+    },
+    "placement": {
+      "file": "vectors/placement_reject.json",
+      "count": 3,
+      "checks": [
+        "settings-unavailable",
+        "byo-provider-missing",
+        "byo-no-external-ingress"
+      ]
+    },
+    "provider": {
+      "file": "vectors/provider_reject.json",
+      "count": 12,
+      "checks": [
+        "byo-endpoint-invalid",
+        "byo-endpoint-insecure",
+        "byo-endpoint-blocked",
+        "byo-credential-invalid",
+        "byo-credential-unresolved",
+        "byo-credential-not-stored",
+        "byo-credential-repointed",
+        "byo-unreachable",
+        "byo-no-verdict",
+        "byo-rejected",
+        "byo-block-address-malformed",
+        "byo-address-mismatch"
+      ]
+    }
+  }
+}

@@ -378,6 +378,14 @@ pub enum PlacementRefusal {
 }
 
 impl PlacementRefusal {
+    /// Every placement check, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &[
+        "settings-unavailable",
+        "byo-provider-missing",
+        "byo-no-external-ingress",
+    ];
+
     /// The stable check name a host branches on. Never carries the endpoint or
     /// the credential the settings hold.
     pub fn check(&self) -> &'static str {
@@ -385,6 +393,15 @@ impl PlacementRefusal {
             Self::SettingsUnavailable(_) => "settings-unavailable",
             Self::NoProvider => "byo-provider-missing",
             Self::NoExternalIngress(_) => "byo-no-external-ingress",
+        }
+    }
+
+    /// The class label used in reject vectors. A degraded load clears itself on
+    /// a later tick; the other two stand until the member edits the settings.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::SettingsUnavailable(_) => "availability",
+            Self::NoProvider | Self::NoExternalIngress(_) => "capability",
         }
     }
 
@@ -419,12 +436,25 @@ pub enum SettingsRefusal {
 }
 
 impl SettingsRefusal {
+    /// A hold owns no check of its own: both arms carry the verdict of the rule
+    /// that refused, so the surface is empty and the names stay at their homes
+    /// ([`ProviderError::CHECKS`], [`PlacementRefusal::CHECKS`]).
+    pub const CHECKS: &'static [&'static str] = &[];
+
     /// The stable check name of the rule that refused. Never the endpoint or
     /// the bearer the settings carry.
     pub fn check(&self) -> &'static str {
         match self {
             Self::Byo(error) => error.check(),
             Self::Placement(refusal) => refusal.check(),
+        }
+    }
+
+    /// The class label used in reject vectors, carried from the same rule.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::Byo(error) => error.class(),
+            Self::Placement(refusal) => refusal.class(),
         }
     }
 }

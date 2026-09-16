@@ -1,0 +1,32 @@
+[
+  {
+    "name": "child-envelope-carrying-the-scope-root-marker",
+    "check": "grant-section-on-child",
+    "class": "trust"
+  },
+  {
+    "name": "scope-root-without-the-marker-every-root-adoption-requires",
+    "check": "missing-grant-section",
+    "class": "trust"
+  },
+  {
+    "name": "scope-root-whose-carried-section-does-not-decode",
+    "check": "invalid-grant-section",
+    "class": "trust"
+  },
+  {
+    "name": "commitment-naming-another-scope-root",
+    "check": "commitment-name-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "commitment-the-anchored-owner-did-not-sign",
+    "check": "commitment-signature-invalid",
+    "class": "trust"
+  },
+  {
+    "name": "interior-scope-root-carrying-no-ascent-link",
+    "check": "missing-ascent-link",
+    "class": "trust"
+  }
+]

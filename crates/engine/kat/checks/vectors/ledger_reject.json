@@ -1,0 +1,7 @@
+[
+  {
+    "name": "ledger-row-the-owner-never-committed",
+    "check": "ledger-diverges-from-commitment",
+    "class": "trust"
+  }
+]

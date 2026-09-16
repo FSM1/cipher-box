@@ -1,0 +1,77 @@
+[
+  {
+    "name": "invite-secret-outside-the-group",
+    "check": "invalid-invite-secret",
+    "class": "trust"
+  },
+  {
+    "name": "fragment-that-is-not-this-build-encoding",
+    "check": "malformed-invite-fragment",
+    "class": "trust"
+  },
+  {
+    "name": "fragment-past-the-invite-link-bound",
+    "check": "invite-fragment-too-large",
+    "class": "over-cap"
+  },
+  {
+    "name": "gated-reference-to-a-scope-the-set-does-not-name",
+    "check": "commitment-names-another-scope-root",
+    "class": "trust"
+  },
+  {
+    "name": "conversion-presented-by-a-stranger",
+    "check": "not-owner",
+    "class": "trust"
+  },
+  {
+    "name": "claim-payload-that-did-not-decode",
+    "check": "malformed-claim",
+    "class": "malformed"
+  },
+  {
+    "name": "claim-naming-another-scope-root",
+    "check": "claim-scope-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "claim-on-a-link-the-owner-records-no-more",
+    "check": "link-not-committed",
+    "class": "trust"
+  },
+  {
+    "name": "claim-on-a-link-past-its-deadline",
+    "check": "link-expired",
+    "class": "trust"
+  },
+  {
+    "name": "claim-id-already-in-the-spent-set",
+    "check": "claim-already-converted",
+    "class": "trust"
+  },
+  {
+    "name": "claim-carrying-the-id-a-broken-entropy-seam-emits",
+    "check": "claim-id-is-zero",
+    "class": "trust"
+  },
+  {
+    "name": "claimant-contact-code-that-fails-its-binding-verify",
+    "check": "claimant-contact-invalid",
+    "class": "trust"
+  },
+  {
+    "name": "claimant-anchored-back-to-the-links-own-identity",
+    "check": "claimant-is-the-ephemeral-half",
+    "class": "trust"
+  },
+  {
+    "name": "claimant-handing-back-the-owners-own-contact",
+    "check": "claimant-is-the-owner",
+    "class": "trust"
+  },
+  {
+    "name": "ledger-filing-two-rows-under-one-tag",
+    "check": "duplicate-tag",
+    "class": "trust"
+  }
+]

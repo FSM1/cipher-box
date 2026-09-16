@@ -383,6 +383,69 @@ pub enum CreateGrantError {
 }
 
 impl CreateGrantError {
+    /// Every grant-creation check, in variant declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
+    /// `Entropy` surfaces the seam's own verdict and stays off it.
+    pub const CHECKS: &'static [&'static str] = &[
+        "converge-failed",
+        "subtree-not-converged",
+        "subtree-boundary-diverged",
+        "unusable-recipient-key",
+        "recipient-is-the-owner",
+        "grant-display-name-too-long",
+        "commitment-encode-failed",
+        "mint-failed",
+        "publish-failed",
+        "resume-probe-failed",
+        "resume-not-this-grant",
+        "parent-scope-superseded",
+        "target-already-names-a-scope",
+        "descendant-resolve-failed",
+        "interior-resolve-failed",
+        "interior-not-converged",
+        "interior-epoch-regressed",
+        "interior-publish-failed",
+        "descendant-mint-failed",
+        "descendant-publish-failed",
+        "parent-mint-failed",
+        "parent-publish-failed",
+        "vouch-scope-failed",
+        "mailbox-post-failed",
+    ];
+
+    /// The class label used in reject vectors. A wrapped verdict keeps its own
+    /// label: a resolve the gate refused and a publish the network refused are
+    /// trust rejections, and a caller that read them as stalls would retry a
+    /// fail-closed refusal for ever.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::SubtreeNotConverged { .. }
+            | Self::SubtreeBoundaryDiverged { .. }
+            | Self::ResumeNotThisGrant
+            | Self::ParentScopeSuperseded
+            | Self::TargetAlreadyNamesAScope
+            | Self::InteriorNotConverged { .. }
+            | Self::InteriorEpochRegressed { .. } => "trust",
+            Self::Converge(error) => error.class(),
+            Self::Mint(error) | Self::DescendantMint { error, .. } | Self::ParentMint(error) => {
+                error.class()
+            }
+            Self::Entropy(error) => error.class(),
+            Self::CommitmentEncode(error) => error.class(),
+            Self::Resume(reason) | Self::DescendantResolve { reason, .. } => reason.class(),
+            Self::InteriorResolve { reason, .. } => reason.class(),
+            Self::Publish(error)
+            | Self::InteriorPublish { error, .. }
+            | Self::DescendantPublish { error, .. }
+            | Self::ParentPublish(error)
+            | Self::VouchScope(error) => error.class(),
+            Self::Mailbox(_) => "availability",
+            Self::UnusableRecipientKey
+            | Self::RecipientIsTheOwner
+            | Self::DisplayNameTooLong(_) => "capability",
+        }
+    }
+
     /// A stable machine tag for assertions and host classification.
     pub fn check(&self) -> &'static str {
         match self {
@@ -393,18 +456,18 @@ impl CreateGrantError {
             Self::RecipientIsTheOwner => "recipient-is-the-owner",
             Self::DisplayNameTooLong(_) => "grant-display-name-too-long",
             Self::CommitmentEncode(_) => "commitment-encode-failed",
-            Self::Entropy(_) => "entropy-error",
+            Self::Entropy(error) => error.check(),
             Self::Mint(_) => "mint-failed",
             Self::Publish(_) => "publish-failed",
             Self::Resume(_) => "resume-probe-failed",
             Self::ResumeNotThisGrant => "resume-not-this-grant",
             Self::ParentScopeSuperseded => "parent-scope-superseded",
             Self::TargetAlreadyNamesAScope => "target-already-names-a-scope",
+            Self::DescendantResolve { .. } => "descendant-resolve-failed",
             Self::InteriorResolve { .. } => "interior-resolve-failed",
             Self::InteriorNotConverged { .. } => "interior-not-converged",
             Self::InteriorEpochRegressed { .. } => "interior-epoch-regressed",
             Self::InteriorPublish { .. } => "interior-publish-failed",
-            Self::DescendantResolve { .. } => "descendant-resolve-failed",
             Self::DescendantMint { .. } => "descendant-mint-failed",
             Self::DescendantPublish { .. } => "descendant-publish-failed",
             Self::ParentMint(_) => "parent-mint-failed",

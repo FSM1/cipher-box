@@ -6,7 +6,7 @@
 //! or classes shows up as a diff against the committed vectors
 //! (`crates/engine/kat/rotation`, written by `examples/kat_gen.rs`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::payload::pointer::RepointObject;
@@ -35,31 +35,12 @@ use crate::rotation::{
 };
 use crate::seams::{FloorStore, SeamError, SeamResult};
 use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
+use crate::testkit::reject::{RejectFamily, RejectVector, family, refusal};
 use crate::testkit::{SeededEntropy, SilentEntropy, block_on};
-
-/// One refusal the live rotation code produced, and the verdict it must keep.
-pub struct RotationRejectVector {
-    /// A short description of the fixture that provoked the refusal.
-    pub name: &'static str,
-    /// The check the returned error named.
-    pub check: &'static str,
-    /// The class label the returned error carried.
-    pub class: &'static str,
-}
-
-/// One error type's reject vectors and the surface they must sit on.
-pub struct RotationRejectFamily {
-    /// The file stem under `kat/rotation/vectors/`, e.g. `"reseal"`.
-    pub plane: &'static str,
-    /// The type's `CHECKS`.
-    pub surface: &'static [&'static str],
-    /// The refusals this family pins, in build order.
-    pub vectors: Vec<RotationRejectVector>,
-}
 
 /// Every rotation reject family, in a fixed order. Deterministic: two calls
 /// give byte-identical output.
-pub fn reject_families() -> Vec<RotationRejectFamily> {
+pub fn reject_families() -> Vec<RejectFamily> {
     vec![
         reseal_family(),
         revoke_family(),
@@ -69,46 +50,6 @@ pub fn reject_families() -> Vec<RotationRejectFamily> {
         sweep_family(),
         cut_family(),
     ]
-}
-
-/// Read the verdict pair off an error value. A macro, not a generic function:
-/// the seven rotation error types share `check`/`class` by convention, not by a
-/// trait.
-macro_rules! refusal {
-    ($name:expr, $error:expr $(,)?) => {{
-        let error = $error;
-        RotationRejectVector {
-            name: $name,
-            check: error.check(),
-            class: error.class(),
-        }
-    }};
-}
-
-fn family(
-    plane: &'static str,
-    surface: &'static [&'static str],
-    vectors: Vec<RotationRejectVector>,
-) -> RotationRejectFamily {
-    let mut names = BTreeSet::new();
-    for vector in &vectors {
-        assert!(
-            names.insert(vector.name),
-            "{plane}: duplicate vector name {}",
-            vector.name
-        );
-        assert!(
-            surface.contains(&vector.check),
-            "{plane}: {} names off-surface check {}",
-            vector.name,
-            vector.check
-        );
-    }
-    RotationRejectFamily {
-        plane,
-        surface,
-        vectors,
-    }
 }
 
 // --- The one scope every family rotates -------------------------------------
@@ -271,7 +212,7 @@ fn reseal_refusal<E: Entropy>(
     identity: &ScopeRootIdentity<'_>,
     seeds: &ResealSeeds<'_>,
     committed: &CommittedSet<'_>,
-) -> RotationRejectVector {
+) -> RejectVector {
     refusal!(
         name,
         reseal_scope_root(entropy, identity, seeds, committed, &[])
@@ -280,7 +221,7 @@ fn reseal_refusal<E: Entropy>(
     )
 }
 
-fn reseal_family() -> RotationRejectFamily {
+fn reseal_family() -> RejectFamily {
     let fx = ScopeFixture::new();
     let fresh_seed = [0x9d; 32];
     let honest = || reseal_seeds(&fresh_seed, WriteHistory::Carried(WRITE_HISTORY_LINK));
@@ -289,7 +230,7 @@ fn reseal_family() -> RotationRejectFamily {
         identity: &ScopeRootIdentity<'_>,
         seeds: &ResealSeeds<'_>,
         committed: &CommittedSet<'_>,
-    ) -> RotationRejectVector {
+    ) -> RejectVector {
         reseal_refusal(
             name,
             &mut SeededEntropy::new(ENTROPY_SEED),
@@ -419,7 +360,7 @@ fn reseal_family() -> RotationRejectFamily {
 
 // --- revoke -----------------------------------------------------------------
 
-fn revoke_family() -> RotationRejectFamily {
+fn revoke_family() -> RejectFamily {
     let fx = ScopeFixture::new();
     let read_tag = fx.tag(Permission::Read);
     let write_tag = fx.tag(Permission::Write);
@@ -575,7 +516,7 @@ fn read_rotate_refusal<F: FloorStore, E: Entropy>(
     .expect_err("the rotation must fail closed")
 }
 
-fn read_rotate_family() -> RotationRejectFamily {
+fn read_rotate_family() -> RejectFamily {
     let healthy = InMemoryFloorStore::default();
     let seeded = || SeededEntropy::new(ENTROPY_SEED);
     let vectors = vec![
@@ -654,7 +595,7 @@ fn cascade_refusal<F: FloorStore>(
     .expect_err("the cascade must fail closed")
 }
 
-fn cascade_family() -> RotationRejectFamily {
+fn cascade_family() -> RejectFamily {
     let healthy = InMemoryFloorStore::default();
     let descendant = vec![ChildScopeRef::new(
         [0x7d; 16],
@@ -737,7 +678,7 @@ impl WriteWavePublisher for UndrivenWave {
     }
 }
 
-fn write_rotate_family() -> RotationRejectFamily {
+fn write_rotate_family() -> RejectFamily {
     let fx = ScopeFixture::new();
     let stranger = stranger();
     let elsewhere = other_name();
@@ -874,7 +815,7 @@ fn empty_folder() -> ReadBody {
     }
 }
 
-fn sweep_family() -> RotationRejectFamily {
+fn sweep_family() -> RejectFamily {
     let scope_ref = ChildScopeRef::new(SCOPE, b"scope-root-name".to_vec());
     let child = NodeRef {
         node_id: SWEEP_CHILD,
@@ -997,7 +938,7 @@ impl crate::rotation::CutRotator for PermissiveRotator {
     }
 }
 
-fn cut_family() -> RotationRejectFamily {
+fn cut_family() -> RejectFamily {
     let fx = ScopeFixture::new();
     // A downgrade rotates the write plane alone, so it is the cut that cannot
     // carry a withheld recipient: only the read cascade records one durably.

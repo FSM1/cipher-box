@@ -221,9 +221,19 @@ pub struct AuthorityViolation {
 }
 
 impl AuthorityViolation {
+    /// The one owner-authority check, the surface `crates/engine/tests/
+    /// kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &["ledger-diverges-from-commitment"];
+
     /// The stable classification name (host-facing, no key material).
     pub fn check(&self) -> &'static str {
-        "ledger-diverges-from-commitment"
+        Self::CHECKS[0]
+    }
+
+    /// The class label used in reject vectors. A divergence is always a verdict
+    /// on who authored the set, never a stall.
+    pub fn class(&self) -> &'static str {
+        "trust"
     }
 }
 

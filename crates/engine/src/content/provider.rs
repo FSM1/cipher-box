@@ -373,6 +373,23 @@ pub enum ProviderError {
 }
 
 impl ProviderError {
+    /// Every BYO provider check, in declaration order — the surface
+    /// `crates/engine/tests/kat_checks.rs` pins (see the crate header).
+    pub const CHECKS: &'static [&'static str] = &[
+        "byo-endpoint-invalid",
+        "byo-endpoint-insecure",
+        "byo-endpoint-blocked",
+        "byo-credential-invalid",
+        "byo-credential-unresolved",
+        "byo-credential-not-stored",
+        "byo-credential-repointed",
+        "byo-unreachable",
+        "byo-no-verdict",
+        "byo-rejected",
+        "byo-block-address-malformed",
+        "byo-address-mismatch",
+    ];
+
     /// The stable check name a host branches on. Never carries the endpoint or
     /// the credential.
     pub fn check(&self) -> &'static str {
@@ -389,6 +406,29 @@ impl ProviderError {
             ProviderError::Rejected { .. } => "byo-rejected",
             ProviderError::MalformedBlockAddress => "byo-block-address-malformed",
             ProviderError::AddressMismatch => "byo-address-mismatch",
+        }
+    }
+
+    /// The class label used in reject vectors. A policy verdict on the member's
+    /// own config is a `capability` limit of this client — no retry converges,
+    /// and the provider is not accused — where an answer the provider gave, or
+    /// failed to give, is an `availability` stall. Only
+    /// [`AddressMismatch`](Self::AddressMismatch) accuses the provider: it
+    /// stored the block under an address other than the one it was given.
+    pub fn class(&self) -> &'static str {
+        match self {
+            ProviderError::InvalidEndpoint
+            | ProviderError::InsecureTransport
+            | ProviderError::BlockedAddress
+            | ProviderError::InvalidCredential
+            | ProviderError::UnresolvedCredential
+            | ProviderError::NoStoredCredential
+            | ProviderError::RepointedCredential
+            | ProviderError::MalformedBlockAddress => "capability",
+            ProviderError::Unreachable
+            | ProviderError::NoVerdict
+            | ProviderError::Rejected { .. } => "availability",
+            ProviderError::AddressMismatch => "trust",
         }
     }
 
