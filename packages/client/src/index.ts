@@ -73,6 +73,7 @@ export type {
   QueueHoldDescriptor,
   SnapshotDescriptor,
   SnapshotChildDescriptor,
+  VersionEntryDescriptor,
   BreadcrumbDescriptor,
   ReceivedShareDescriptor,
   ReceivedShareResolution,
