@@ -125,3 +125,41 @@ them.
 
 Rebuild the bundle after any `apps/web` change — the suite serves `dist/`, not
 a dev server.
+
+## The staging profiles
+
+`E2E_BASE_URL` switches the whole run onto a deployed front: no local server,
+the `staging` project only, and one worker. The specs live in `staging/` and
+never run in a merge gate — the `e2e` and `release` projects keep their gates,
+and a red staging run is the verdict on a deploy.
+
+```sh
+E2E_BASE_URL=https://app-staging.cipherbox.cc pnpm --filter @cipherbox/web-e2e test:e2e
+```
+
+The workflow is `Staging E2E` (`.github/workflows/staging-e2e.yml`), dispatchable
+with a base URL and called by `tag-staging.yml` after the deploy job.
+
+A deployed bundle refuses the introspection hook, so these specs sign in through
+a shipped method: an injected test wallet for SIWE (`staging/wallet.ts`). Each
+page holds its own key, so each spec is a fresh identity subject over an empty
+vault; nothing is shared, and nothing outlives the run except the account the
+run minted. The specs wait on what the chrome renders — the per-row queue mark
+and the staleness rung — because no introspection hook is there to poll.
+
+Staging rate-limits its auth surface per caller address and raises the limit
+only on an undeployed profile, so the run stays serial and every spec logs in
+once.
+
+`front-contract.spec.ts` holds the two defects the v2.0.2 deploy shipped: a
+record publish the browser never completes, and a read answer carrying a cache
+lifetime. Two further cases answer the same requests with the broken headers and
+assert the checks refuse them, so the checks cannot silently stop failing.
+
+`staging/media.setup.ts` writes the fixture media into `staging/.media`. The
+bytes are generated and deterministic, so a read-back assertion compares against
+what the upload sent and the repository carries no binaries.
+
+`journey-timing.spec.ts` measures login-to-vault and upload-to-visible against
+`baselines/staging-journey-timing.json` and writes what it measured to
+`test-results/staging-journey-timing.json`, which the workflow uploads.

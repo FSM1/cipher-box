@@ -27,6 +27,13 @@ env:
   # can take is also a valid checkout ref.
   DEPLOY_TAG: ${{ inputs.staging_tag || (github.event_name == 'workflow_dispatch' && github.sha) || github.ref_name }}
 
+# The shared staging environment group. A tag run already holds it for the whole
+# chain, so the call it makes takes a group of its own rather than waiting on its
+# own caller; `staging_tag` is required on the call path and set on no other.
+concurrency:
+  group: ${{ inputs.staging_tag && format('staging-deploy-{0}', github.run_id) || 'staging-environment' }}
+  cancel-in-progress: false
+
 permissions: {}
 
 jobs:

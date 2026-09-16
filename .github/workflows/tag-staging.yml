@@ -10,8 +10,11 @@ on:
         required: false
         type: string
 
+# One staging environment. This run holds it from the tag through the deploy and
+# the staging e2e verdict, so no other deploy path can replace the revision the
+# suite is measuring.
 concurrency:
-  group: tag-staging
+  group: staging-environment
   cancel-in-progress: false
 
 permissions: {}
@@ -125,3 +128,14 @@ jobs:
     with:
       staging_tag: ${{ needs.tag-staging.outputs.staging_tag }}
     secrets: inherit
+
+  # The deploy carries no health gate of its own, so this run is both the
+  # release verdict and the first signal that the containers came up.
+  staging-e2e:
+    name: Staging E2E
+    needs: [resolve-main, deploy]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/staging-e2e.yml
+    with:
+      ref: ${{ needs.resolve-main.outputs.sha }}
