@@ -6745,18 +6745,18 @@ where {
                     .await
             }
             Command::RestoreVersion { node, content_cid } => {
+                let seq = self.base_sequence_for(node).await?;
                 self.version_position(node, &content_cid).await?;
-                let seq = self.render().await?.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::restore_version(node, content_cid, seq, authored_at))
                     .await
             }
             Command::DeleteVersion { node, content_cid } => {
+                let seq = self.base_sequence_for(node).await?;
                 if self.version_position(node, &content_cid).await? == 0 {
                     return Err(EngineError::UnsupportedTarget {
                         check: "version-delete-target-is-the-current-version",
                     });
                 }
-                let seq = self.render().await?.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::delete_version(node, content_cid, seq, authored_at))
                     .await
             }

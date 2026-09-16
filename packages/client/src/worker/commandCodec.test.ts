@@ -6,6 +6,7 @@ import {
   readAuthMethods,
   readBin,
   readDevices,
+  readFileVersions,
   readPendingApprovals,
   readEvent,
   readReceivedShare,
@@ -21,6 +22,7 @@ import type {
   WasmEvent,
   WasmSnapshotView,
   WasmVaultStorageView,
+  WasmVersionEntry,
 } from './engineWasm.js';
 
 /**
@@ -897,6 +899,52 @@ describe('readDevices', () => {
         lastSeenAt: '2026-08-27T11:00:00.000Z',
       },
     ]);
+  });
+});
+
+describe('readFileVersions', () => {
+  const versionRow = (
+    contentCid: Uint8Array,
+    free: () => void,
+    getter?: () => bigint
+  ): WasmVersionEntry => ({
+    contentCid,
+    get size() {
+      return getter ? getter() : 12n;
+    },
+    modifiedAt: 1756_000_000_000n,
+    free,
+  });
+
+  it('reads a version row through and releases it', () => {
+    const freed: number[] = [];
+    const rows = [
+      versionRow(Uint8Array.of(1, 2), () => freed.push(0)),
+      versionRow(Uint8Array.of(3, 4), () => freed.push(1)),
+    ];
+
+    expect(readFileVersions(rows)).toEqual([
+      { contentCid: Uint8Array.of(1, 2), size: 12n, modifiedAt: 1756_000_000_000n },
+      { contentCid: Uint8Array.of(3, 4), size: 12n, modifiedAt: 1756_000_000_000n },
+    ]);
+    expect(freed).toEqual([0, 1]);
+  });
+
+  it('releases every row when one row throws, not only the rows it reached', () => {
+    const freed: number[] = [];
+    const rows = [
+      versionRow(
+        Uint8Array.of(1, 2),
+        () => freed.push(0),
+        () => {
+          throw new Error('boundary read failed');
+        }
+      ),
+      versionRow(Uint8Array.of(3, 4), () => freed.push(1)),
+    ];
+
+    expect(() => readFileVersions(rows)).toThrow('boundary read failed');
+    expect(freed).toEqual([0, 1]);
   });
 });
 

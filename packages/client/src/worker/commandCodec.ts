@@ -814,13 +814,24 @@ export function readDevices(rows: readonly WasmRegisteredDevice[]): RegisteredDe
   }));
 }
 
-/** Reads the wasm-bindgen `VersionEntry` rows into descriptors. */
+/**
+ * Reads the wasm-bindgen `VersionEntry` rows into descriptors.
+ *
+ * Each row is an owned pointer into WASM memory, so every row is released here,
+ * including the rows a mid-list throw never reaches.
+ */
 export function readFileVersions(rows: readonly WasmVersionEntry[]): VersionEntryDescriptor[] {
-  return rows.map((row) => ({
-    contentCid: row.contentCid,
-    size: row.size,
-    modifiedAt: row.modifiedAt,
-  }));
+  try {
+    return rows.map((row) => ({
+      contentCid: row.contentCid,
+      size: row.size,
+      modifiedAt: row.modifiedAt,
+    }));
+  } finally {
+    for (const row of rows) {
+      row.free();
+    }
+  }
 }
 
 /** Reads the wasm-bindgen `PendingApproval` rows into descriptors. */

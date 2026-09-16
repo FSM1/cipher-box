@@ -14417,6 +14417,55 @@ fn deleting_one_version_makes_it_unresolvable_and_retires_its_blocks() {
     );
 }
 
+/// An accepted shared scope is grafted in parentless, so a browse reaches its
+/// files but the write plane cannot author under them. Both version commands
+/// must refuse there at the caller, not journal an op whose chain the drain can
+/// never walk to a root.
+#[test]
+fn a_version_command_on_a_file_outside_this_vaults_tree_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..40u8).map(|byte| byte ^ (version + 5)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine, &mut tasks, &bodies);
+    let history = published_versions(&world.record_store, &blocks, file);
+    let prior = history[1].content_cid.clone();
+
+    // Re-link the file under a scope root the render does not hold: its
+    // ancestors no longer reach the vault root.
+    engine.plant_committed_child(NodeId([0xf1; 16]), file, "clip.bin", NodeKind::File);
+
+    for command in [
+        Command::RestoreVersion {
+            node: file,
+            content_cid: prior.clone(),
+        },
+        Command::DeleteVersion {
+            node: file,
+            content_cid: prior.clone(),
+        },
+    ] {
+        let name = command.name();
+        assert!(
+            matches!(
+                block_on(engine.command(command)),
+                Err(EngineError::ScopeExitRefused { .. })
+            ),
+            "{name} outside this vault's tree is refused at the command",
+        );
+    }
+    assert_eq!(
+        published_versions(&world.record_store, &blocks, file).len(),
+        2,
+        "and neither refusal touched the record",
+    );
+}
+
 /// A file's current content leaves with the file, never through its history.
 #[test]
 fn a_delete_of_the_current_version_is_refused() {
