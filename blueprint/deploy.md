@@ -367,7 +367,7 @@ Docker, scripts, hooks:
 | `apps/api/Dockerfile`                                                                                       | **Edited** — build graph becomes crates + api                                                                              |
 | `tools/mock-ipns-routing/Dockerfile`                                                                        | **Ports** — the promoted CI routing store (testing.md)                                                                     |
 | `scripts/check-api-client.sh`, `check-vector-parity.sh`, vector/bench generators, `backfill-pinned-cids.ts` | **Die** (gates replaced; one-shots done)                                                                                   |
-| `scripts/baseline-benchmark.sh`                                                                             | **Ports** — ops tooling                                                                                                    |
+| `scripts/baseline-benchmark.sh`                                                                             | **Ported** — it is `tools/perf`, over `cipherbox-load`; the recorded numbers live in `tools/perf/RESULTS.md`               |
 | `.husky/pre-commit`                                                                                         | **Edited** — lint-staged stays, the api-client staging check dies; the Entire wrapper hooks are untouched                  |
 
 Secrets and environments (repo settings reused as-is per D7; retirements at
