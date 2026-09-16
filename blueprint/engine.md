@@ -1196,7 +1196,8 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
   shortens the list it is about to seal — so a vault never carries a version
   past the rule, and an explicit prune op re-applies the same plan to a history
   a settings change left long. No clock enters the decision, which is what lets
-  the op queue replay it; an age-based rule was declined for that reason.
+  the op queue replay it; an age-based rule was declined for that reason
+  ([ADR 0019](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0019-file-version-retention-is-count-based-keep-latest-n.md)).
 - **Referenced equals kept.** Every retained version's root is re-registered
   under the file's own name on each publish, so orphan GC leaves it alone. A
   version that falls outside the rule loses that reference, and what it owes the
