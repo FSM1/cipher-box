@@ -587,7 +587,7 @@ fn an_ascent_link_the_gate_would_reject_is_never_signed() {
     }
     assert_eq!(
         ResealError::AscentLinkMismatch.check(),
-        "ascent-link-mismatch"
+        "rot-reseal-ascent-link-mismatch"
     );
 }
 
@@ -849,7 +849,7 @@ fn a_carried_set_past_the_codec_bound_fails_closed_before_any_seal() {
     let carried = real_chain(MAX_HISTORY_LINKS as u64 + 3);
     let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
         .expect_err("past the bound");
-    assert_eq!(err.check(), "too-many-history-links");
+    assert_eq!(err.check(), "rot-reseal-too-many-history-links");
 }
 
 #[test]
@@ -1096,7 +1096,7 @@ fn a_commitment_past_the_codec_bound_fails_closed_before_any_seal() {
     let cs = committed_set(&commitment, &sig, &ledger);
     let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &[])
         .expect_err("past the bound");
-    assert_eq!(err.check(), "too-many-committed-grants");
+    assert_eq!(err.check(), "rot-reseal-too-many-committed-grants");
 }
 
 #[test]
@@ -1125,7 +1125,7 @@ fn a_committed_ledger_past_the_codec_bound_fails_closed_before_any_seal() {
     let cs = committed_set(&commitment, &sig, &ledger);
     let err =
         reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[]).expect_err("past the bound");
-    assert_eq!(err.check(), "too-many-committed-grants");
+    assert_eq!(err.check(), "rot-reseal-too-many-committed-grants");
 }
 
 #[test]
@@ -1319,7 +1319,7 @@ fn diverging_ledger_fails_closed_release_active() {
     let cs = committed_set(&commitment, &sig, &ledger);
     let mut e = SeededEntropy::new(5);
     let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("diverging ledger");
-    assert_eq!(err.check(), "ledger-diverges-from-commitment");
+    assert_eq!(err.check(), "rot-reseal-ledger-diverges-from-commitment");
 }
 
 #[test]
@@ -1347,7 +1347,7 @@ fn signer_not_committed_fails_closed_release_active() {
     let cs = committed_set(&commitment, &sig, &ledger);
     let mut e = SeededEntropy::new(7);
     let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("signer mismatch");
-    assert_eq!(err.check(), "signer-not-committed");
+    assert_eq!(err.check(), "rot-reseal-signer-not-committed");
 }
 
 #[test]
@@ -1369,7 +1369,7 @@ fn a_descendant_re_sealed_with_no_parent_seed_fails_closed_release_active() {
     let cs = committed_set(&commitment, &sig, &ledger);
     let mut e = SeededEntropy::new(11);
     let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("no link to bind it");
-    assert_eq!(err.check(), "ascent-link-dropped");
+    assert_eq!(err.check(), "rot-reseal-ascent-link-dropped");
 
     // The same identity handed the seed mints the link and seals.
     let ok = ScopeRootIdentity {
@@ -1414,7 +1414,7 @@ fn a_root_that_owes_no_ascent_link_is_never_re_sealed_with_one() {
     let cs = committed_set(&commitment, &sig, &ledger);
     let mut e = SeededEntropy::new(11);
     let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("a link it does not owe");
-    assert_eq!(err.check(), "ascent-link-not-owed");
+    assert_eq!(err.check(), "rot-reseal-ascent-link-not-owed");
 
     // The same identity handed no seed seals, link-less.
     let ok = identity(&fx, &owner_pub, b"scope-root-name", None);
@@ -1667,7 +1667,7 @@ fn a_committed_recipient_key_core_will_not_adopt_fails_closed_release_active() {
         ] {
             let err = reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[])
                 .expect_err("a grant can never be wrapped to a key core will not adopt");
-            assert_eq!(err.check(), "unusable-recipient-key");
+            assert_eq!(err.check(), "rot-reseal-unusable-recipient-key");
         }
     }
 }
@@ -1707,7 +1707,7 @@ fn unusable_recipient_key_fails_closed() {
     let cs = committed_set(&commitment, &sig, &ledger);
     let mut e = SeededEntropy::new(6);
     let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("bad key");
-    assert_eq!(err.check(), "unusable-recipient-key");
+    assert_eq!(err.check(), "rot-reseal-unusable-recipient-key");
 }
 
 #[test]
@@ -1843,7 +1843,7 @@ fn a_write_cut_without_the_owner_key_is_refused_before_any_seal() {
         )
         .expect_err("a keyless cut seals nothing")
         .check(),
-        "owner-key-required-for-write-cut"
+        "rot-reseal-owner-key-required-for-write-cut"
     );
 }
 
@@ -1877,7 +1877,7 @@ fn a_carried_write_history_link_past_the_codec_bound_is_refused_before_any_seal(
         reseal_scope_root(&mut UndrawnEntropy, &id, &at_len(BLOATED), &cs, &[])
             .expect_err("an over-length carried link seals nothing")
             .check(),
-        "carried-write-history-link-too-large"
+        "rot-reseal-carried-write-history-link-too-large"
     );
 
     // The bound itself still carries, so the refusal is the codec's own and
@@ -1916,7 +1916,7 @@ fn a_minted_empty_write_history_above_write_epoch_1_is_refused_before_any_seal()
         reseal_scope_root(&mut UndrawnEntropy, &id, &at_epoch(2), &cs, &[])
             .expect_err("an empty link above write epoch 1 seals nothing")
             .check(),
-        "empty-write-history-above-first-epoch"
+        "rot-reseal-empty-write-history-above-first-epoch"
     );
 
     let mut e = SeededEntropy::new(83);
@@ -1988,7 +1988,7 @@ fn a_history_link_that_does_not_descend_is_refused_before_any_seal() {
                 reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[])
                     .expect_err("a non-descending link seals nothing")
                     .check(),
-                "history-link-not-descending"
+                "rot-reseal-history-link-not-descending"
             );
         }
     }
@@ -2025,7 +2025,7 @@ fn a_gapped_read_history_link_is_refused_but_a_gapped_write_cut_is_not() {
         reseal_scope_root(&mut UndrawnEntropy, &id, &read_cut, &cs, &[])
             .expect_err("a gapped read link seals nothing")
             .check(),
-        "history-link-not-contiguous"
+        "rot-reseal-history-link-not-contiguous"
     );
 
     let write_cut = cut_seeds(
@@ -2090,4 +2090,36 @@ fn a_link_from_another_scope_breaks_the_walk() {
 fn a_scope_at_epoch_one_resolves_its_own_seed_with_no_links() {
     let seed = seed_at_epoch(V, SCOPE, &chain_seed(1), 1, &[], 1).expect("the current seed");
     assert!(ct_eq(&seed, &chain_seed(1)));
+}
+
+/// A new variant that inherits another variant's check name, or is appended out
+/// of order, fails here rather than reaching a reject vector unnamed.
+#[test]
+fn the_check_surface_matches_the_variants_in_order() {
+    let named: Vec<&str> = [
+        ResealError::LedgerDivergesFromCommitment,
+        ResealError::SignerNotCommitted,
+        ResealError::UnusableRecipientKey,
+        ResealError::TagNotBoundToRecipient,
+        ResealError::AscentLinkMismatch,
+        ResealError::AscentLinkDropped,
+        ResealError::AscentLinkNotOwed,
+        ResealError::UnusableAscentPublic,
+        ResealError::Entropy(EntropyError::new("no entropy")),
+        ResealError::TooManyHistoryLinks,
+        ResealError::TooManyCommittedGrants,
+        ResealError::HistoryLinkNotDescending,
+        ResealError::HistoryLinkNotContiguous,
+        ResealError::EmptyWriteHistoryAboveFirstEpoch,
+        ResealError::OwnerKeyRequiredForWriteCut,
+        ResealError::WriteBodyTooLarge,
+        ResealError::HistoryLinkTooLarge { size: 1, limit: 0 },
+        ResealError::CarriedWriteHistoryLinkTooLarge { size: 1, limit: 0 },
+        ResealError::SectionNotResealable { size: 1, limit: 0 },
+        ResealError::Encode(cipherbox_core::error::TrustViolation::DuplicateGrantTag.into()),
+    ]
+    .iter()
+    .map(ResealError::check)
+    .collect();
+    assert_eq!(named, ResealError::CHECKS);
 }

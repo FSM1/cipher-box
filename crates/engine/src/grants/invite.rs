@@ -1309,7 +1309,7 @@ mod tests {
             &rogue,
         )
         .unwrap_err();
-        assert_eq!(err.check(), "signer-not-committed");
+        assert_eq!(err.check(), "rot-reseal-signer-not-committed");
     }
 
     #[test]

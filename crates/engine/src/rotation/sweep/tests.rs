@@ -205,7 +205,7 @@ fn an_index_repair_that_did_not_land_fails_closed() {
     net.state.borrow_mut().index_repair_fault = Some(RotationPublishError::NotPublished);
 
     let err = run(&net, 0x00).expect_err("fails closed");
-    assert_eq!(err.check(), "index-repair-failed");
+    assert_eq!(err.check(), "rot-sweep-index-repair-failed");
     assert!(err.is_retryable());
 }
 
@@ -219,7 +219,7 @@ fn the_index_repair_lands_before_a_node_publish_can_abort_the_pass() {
         .fault(0x01, RotationPublishError::NotPublished);
 
     let err = run(&net, 0x00).expect_err("the node publish aborts");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-sweep-publish-failed");
     assert_eq!(net.index_repairs.get(), 1);
     assert!(net.state.borrow().repaired_index.is_some());
 }
@@ -252,7 +252,7 @@ fn a_below_floor_scope_root_whose_fresh_record_still_lags_is_refused() {
         .pointer_to(0x09);
 
     let err = run(&net, 0x00).expect_err("fails closed");
-    assert_eq!(err.check(), "scope-root-unresolved");
+    assert_eq!(err.check(), "rot-sweep-scope-root-unresolved");
     assert!(!err.is_retryable(), "a surviving supersede is fatal");
     assert_eq!(net.consults.get(), 1, "one consult, one re-resolve");
     assert_eq!(net.publishes(0x01), 0);
@@ -278,7 +278,7 @@ fn a_forged_scope_root_is_refused_without_any_consult() {
         .forged(0x00)
         .pointer_to(0x09);
     let err = run(&net, 0x00).expect_err("fails closed");
-    assert_eq!(err.check(), "scope-root-unresolved");
+    assert_eq!(err.check(), "rot-sweep-scope-root-unresolved");
     assert!(!err.is_retryable());
     assert_eq!(net.consults.get(), 0, "a trust rejection never consults");
 }
@@ -588,7 +588,7 @@ fn the_driver_gives_up_on_a_persistent_availability_stall() {
         .node(0x01, 1, &[])
         .fault(0x01, RotationPublishError::NotPublished);
     let err = drive(&net, 3, 2).expect_err("the stall surfaces");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-sweep-publish-failed");
     assert_eq!(net.publishes(0x01), 3, "one attempt per allowed pass");
 }
 
@@ -625,7 +625,7 @@ fn an_ended_session_stops_the_drivers_retry_of_a_stall() {
         .node(0x01, 1, &[])
         .fault(0x01, RotationPublishError::NotPublished);
     let err = drive_while(&net, 3, 0, &|| false).expect_err("the stall surfaces");
-    assert_eq!(err.check(), "publish-failed");
+    assert_eq!(err.check(), "rot-sweep-publish-failed");
     assert_eq!(net.publishes(0x01), 1, "the stall was not re-driven");
 }
 
@@ -904,4 +904,33 @@ fn the_job_parks_across_a_focus_window_poll_tick() {
         1,
         "the sweep fires at the sweep cadence"
     );
+}
+
+/// A new variant that inherits another variant's check name, or is appended out
+/// of order, fails here rather than reaching a reject vector unnamed.
+#[test]
+fn the_check_surface_matches_the_variants_in_order() {
+    let id = [1u8; 16];
+    let named: Vec<&str> = [
+        SweepError::Scope {
+            scope_id: id,
+            reason: SweepResolveFailure::Rejected,
+        },
+        SweepError::Node {
+            node_id: id,
+            reason: SweepResolveFailure::Rejected,
+        },
+        SweepError::Publish {
+            node_id: id,
+            error: RotationPublishError::NotPublished,
+        },
+        SweepError::IndexRepair {
+            scope_id: id,
+            error: RotationPublishError::NotPublished,
+        },
+    ]
+    .iter()
+    .map(SweepError::check)
+    .collect();
+    assert_eq!(named, SweepError::CHECKS);
 }

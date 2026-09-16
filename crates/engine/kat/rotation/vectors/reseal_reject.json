@@ -1,0 +1,42 @@
+[
+  {
+    "name": "entropy-seam-that-draws-nothing",
+    "check": "rot-reseal-entropy-error",
+    "class": "availability"
+  },
+  {
+    "name": "signer-outside-the-committed-set",
+    "check": "rot-reseal-signer-not-committed",
+    "class": "trust"
+  },
+  {
+    "name": "descendant-root-with-no-ascent-authority",
+    "check": "rot-reseal-ascent-link-dropped",
+    "class": "trust"
+  },
+  {
+    "name": "vault-root-handed-an-ascent-authority",
+    "check": "rot-reseal-ascent-link-not-owed",
+    "class": "trust"
+  },
+  {
+    "name": "write-cut-without-the-owner-encryption-subkey",
+    "check": "rot-reseal-owner-key-required-for-write-cut",
+    "class": "capability"
+  },
+  {
+    "name": "ledger-with-an-uncommitted-row",
+    "check": "rot-reseal-ledger-diverges-from-commitment",
+    "class": "trust"
+  },
+  {
+    "name": "committed-recipient-key-no-key-can-open",
+    "check": "rot-reseal-unusable-recipient-key",
+    "class": "trust"
+  },
+  {
+    "name": "tag-that-is-not-the-owner-recipient-ecdh",
+    "check": "rot-reseal-tag-not-bound-to-recipient",
+    "class": "trust"
+  }
+]

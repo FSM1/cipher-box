@@ -303,17 +303,46 @@ impl core::fmt::Display for RevokeError {
 impl std::error::Error for RevokeError {}
 
 impl RevokeError {
+    /// Every cut check this type owns, in declaration order — the surface
+    /// `crates/engine/tests/kat_rotation.rs` pins (see the module header for the
+    /// prefix rule). [`RevokeError::LedgerDiverges`] surfaces the grant plane's
+    /// own verdict verbatim and so stays off this surface.
+    pub const CHECKS: &'static [&'static str] = &[
+        "rot-revoke-unauthorized-signer",
+        "rot-revoke-commitment-scope-mismatch",
+        "rot-revoke-not-granted",
+        "rot-revoke-not-write-granted",
+        "rot-revoke-write-granted",
+        "rot-revoke-cut-epoch-exhausted",
+        "rot-revoke-commitment-sign-failed",
+    ];
+
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {
         match self {
-            RevokeError::UnauthorizedSigner => "unauthorized-signer",
-            RevokeError::CommitmentScopeMismatch => "commitment-scope-mismatch",
-            RevokeError::NotGranted => "not-granted",
-            RevokeError::NotWriteGranted => "not-write-granted",
-            RevokeError::WriteGranted => "write-granted",
+            RevokeError::UnauthorizedSigner => "rot-revoke-unauthorized-signer",
+            RevokeError::CommitmentScopeMismatch => "rot-revoke-commitment-scope-mismatch",
+            RevokeError::NotGranted => "rot-revoke-not-granted",
+            RevokeError::NotWriteGranted => "rot-revoke-not-write-granted",
+            RevokeError::WriteGranted => "rot-revoke-write-granted",
             RevokeError::LedgerDiverges(v) => v.check(),
-            RevokeError::CutEpochExhausted => "cut-epoch-exhausted",
-            RevokeError::Sign(_) => "commitment-sign-failed",
+            RevokeError::CutEpochExhausted => "rot-revoke-cut-epoch-exhausted",
+            RevokeError::Sign(_) => "rot-revoke-commitment-sign-failed",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive, so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            RevokeError::UnauthorizedSigner
+            | RevokeError::CommitmentScopeMismatch
+            | RevokeError::NotGranted
+            | RevokeError::NotWriteGranted
+            | RevokeError::WriteGranted
+            | RevokeError::LedgerDiverges(_) => "trust",
+            RevokeError::CutEpochExhausted => "over-cap",
+            RevokeError::Sign(error) => error.class(),
         }
     }
 }
@@ -712,12 +741,28 @@ impl core::fmt::Display for RotateOnCutError {
 impl std::error::Error for RotateOnCutError {}
 
 impl RotateOnCutError {
+    /// Every cut-driver check this type owns — the surface
+    /// `crates/engine/tests/kat_rotation.rs` pins (see the module header for the
+    /// prefix rule). The three per-plane variants surface the plane's own
+    /// verdict verbatim and so stay off this surface.
+    pub const CHECKS: &'static [&'static str] = &["rot-cut-write-only-cut-withdraws-read"];
+
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {
         match self {
             RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.check(),
             RotateOnCutError::Write(e) => e.check(),
-            RotateOnCutError::WriteOnlyCutWithdrawsRead => "write-only-cut-withdraws-read",
+            RotateOnCutError::WriteOnlyCutWithdrawsRead => "rot-cut-write-only-cut-withdraws-read",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive, so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            RotateOnCutError::PublishCut(e) | RotateOnCutError::Read(e) => e.class(),
+            RotateOnCutError::Write(e) => e.class(),
+            RotateOnCutError::WriteOnlyCutWithdrawsRead => "trust",
         }
     }
 

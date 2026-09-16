@@ -1,0 +1,7 @@
+[
+  {
+    "name": "write-only-cut-that-withholds-a-recipient",
+    "check": "rot-cut-write-only-cut-withdraws-read",
+    "class": "trust"
+  }
+]
