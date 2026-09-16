@@ -19,6 +19,33 @@ describe('parseSamples', () => {
   it('refuses a line that is not an object', () => {
     expect(() => parseSamples('42')).toThrow(/sample 1 is not an object/);
   });
+
+  it('refuses an elapsed time no wait can produce', () => {
+    // 1e400 parses to Infinity, which `typeof` calls a number.
+    const overflowed = '{"what":"a wait","elapsedMs":1e400,"attempts":1}';
+    expect(() => parseSamples(overflowed)).toThrow(/sample 1 is not a wait sample/);
+
+    const negative = '{"what":"a wait","elapsedMs":-1,"attempts":1}';
+    expect(() => parseSamples(negative)).toThrow(/sample 1 is not a wait sample/);
+  });
+
+  it('refuses a read count that is fractional or negative', () => {
+    const fractional = '{"what":"a wait","elapsedMs":10,"attempts":1.5}';
+    expect(() => parseSamples(fractional)).toThrow(/sample 1 is not a wait sample/);
+
+    const negative = '{"what":"a wait","elapsedMs":10,"attempts":-2}';
+    expect(() => parseSamples(negative)).toThrow(/sample 1 is not a wait sample/);
+  });
+
+  it('takes a wait that settled on its first read with no time on the clock', () => {
+    const instant = '{"what":"a wait","elapsedMs":0,"attempts":1}';
+    expect(parseSamples(instant)).toEqual([{ what: 'a wait', elapsedMs: 0, attempts: 1 }]);
+  });
+
+  it('takes a fractional elapsed time, which a clock can produce', () => {
+    const fractional = '{"what":"a wait","elapsedMs":0.5,"attempts":1}';
+    expect(parseSamples(fractional)[0].elapsedMs).toBe(0.5);
+  });
 });
 
 describe('group', () => {

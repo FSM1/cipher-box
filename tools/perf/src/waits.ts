@@ -33,15 +33,26 @@ export function parseSamples(jsonl: string): WaitSample[] {
         throw new Error(`sample ${index + 1} is not an object`);
       }
       const sample = value as Record<string, unknown>;
+      // `typeof` alone admits Infinity, a negative elapsed time and a
+      // fractional read count, none of which a wait can produce and all of
+      // which reach a rendered latency row intact.
       if (
         typeof sample.what !== 'string' ||
-        typeof sample.elapsedMs !== 'number' ||
-        typeof sample.attempts !== 'number'
+        !isDuration(sample.elapsedMs) ||
+        !isCount(sample.attempts)
       ) {
         throw new Error(`sample ${index + 1} is not a wait sample`);
       }
       return { what: sample.what, elapsedMs: sample.elapsedMs, attempts: sample.attempts };
     });
+}
+
+function isDuration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 /**
