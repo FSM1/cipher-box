@@ -47,16 +47,26 @@ export class BinPage {
    * Re-reads until `name` is gone. A restore and a purge are journaled ops, so
    * the published index changes only once the queue drains past them.
    */
-  async gone(name: string): Promise<void> {
+  async gone(name: string, timeout = 60_000): Promise<void> {
+    await this.readUntil(name, 0, timeout);
+  }
+
+  /** Re-reads until `name` is listed; a delete is journaled the same way. */
+  async appeared(name: string, timeout = 180_000): Promise<void> {
+    await this.readUntil(name, 1, timeout);
+  }
+
+  /** The page reads the index on demand, so a wait has to ask again. */
+  private async readUntil(name: string, count: number, timeout: number): Promise<void> {
     await expect
       .poll(
         async () => {
           await this.readAgain();
           return this.row(name).count();
         },
-        { timeout: 60_000 }
+        { timeout }
       )
-      .toBe(0);
+      .toBe(count);
   }
 
   get rows(): Locator {

@@ -20,15 +20,23 @@ const SIGN_BINDING = '__cipherboxE2eSign';
 
 export interface TestWallet {
   readonly address: string;
+  /**
+   * The key that answers this wallet's signatures. It stays in the test process
+   * — a second context takes it to sign in as the SAME identity subject, which
+   * is what a second-device journey needs.
+   */
+  readonly privateKey: Hex;
 }
 
 /**
- * Installs a wallet nobody else holds on `page`, before any navigation. A fresh
- * key is a fresh identity subject, and so a fresh account over an empty vault —
- * which is what keeps a run from inheriting an earlier run's tree.
+ * Installs a wallet on `page`, before any navigation. Without a key it mints
+ * one nobody else holds, and a fresh key is a fresh identity subject — so a
+ * fresh account over an empty vault, which is what keeps a run from inheriting
+ * an earlier run's tree.
  */
-export async function installTestWallet(page: Page): Promise<TestWallet> {
-  const account = privateKeyToAccount(generatePrivateKey());
+export async function installTestWallet(page: Page, privateKey?: Hex): Promise<TestWallet> {
+  const key = privateKey ?? generatePrivateKey();
+  const account = privateKeyToAccount(key);
 
   await page.exposeFunction(SIGN_BINDING, (message: Hex) =>
     account.signMessage({ message: hexToString(message) })
@@ -89,5 +97,5 @@ export async function installTestWallet(page: Page): Promise<TestWallet> {
     [account.address, TEST_WALLET_NAME, SIGN_BINDING] as const
   );
 
-  return { address: account.address };
+  return { address: account.address, privateKey: key };
 }

@@ -75,8 +75,15 @@ export class FilesPage {
   /** Moves a row into a subfolder of the listing it is in. */
   async move(name: string, destination: string): Promise<void> {
     await this.act(name, 'move to...');
+    await this.pickDestination(destination);
+  }
+
+  /** Walks the open move dialog onto `destination` and confirms it. */
+  private async pickDestination(destination: string): Promise<void> {
     const dialog = this.page.getByTestId('move-dialog');
-    await dialog.getByTestId('folder-picker-entry').filter({ hasText: destination }).click();
+    // The entry's accessible name is the folder name alone, so an exact name
+    // match cannot take a longer neighbour such as `docs-old` for `docs`.
+    await dialog.getByRole('button', { name: destination, exact: true }).click();
     await expect(dialog.getByTestId('folder-picker-destination')).toHaveText(destination);
     await this.page.getByTestId('move-confirm').click();
     await expect(dialog).toHaveCount(0);
@@ -101,10 +108,26 @@ export class FilesPage {
   }
 
   async preview(name: string): Promise<string> {
-    await this.act(name, 'preview');
+    await this.openPreview(name);
     const shown = this.page.getByTestId('preview-text');
     await expect(shown).toBeVisible();
     return (await shown.textContent()) ?? '';
+  }
+
+  /** The preview dialog's body, which carries the rendered surface per kind. */
+  get previewDialog(): Locator {
+    return this.page.getByTestId('file-preview-dialog');
+  }
+
+  /** Raises the preview on a row and leaves the dialog open. */
+  async openPreview(name: string): Promise<void> {
+    await this.act(name, 'preview');
+    await expect(this.previewDialog).toBeVisible();
+  }
+
+  async closePreview(): Promise<void> {
+    await this.page.keyboard.press('Escape');
+    await expect(this.previewDialog).toHaveCount(0);
   }
 
   async save(name: string): Promise<Download> {
@@ -113,6 +136,51 @@ export class FilesPage {
       this.act(name, 'download'),
     ]);
     return download;
+  }
+
+  /** The bar the listing raises over a non-empty selection. */
+  get selectionBar(): Locator {
+    return this.page.getByTestId('selection-action-bar');
+  }
+
+  get selectionCount(): Locator {
+    return this.page.getByTestId('selection-count');
+  }
+
+  /** Adds one row to the selection, or takes it back out. */
+  async select(name: string): Promise<void> {
+    await this.page.getByRole('checkbox', { name: `select ${name}`, exact: true }).click();
+  }
+
+  /** Selects every row of the listing, or clears it when all are selected. */
+  async selectAll(): Promise<void> {
+    await this.page.getByTestId('select-all').click();
+  }
+
+  /**
+   * Saves every selected file. The browser raises one download per file, in
+   * listing order, so the caller says how many it expects.
+   */
+  async saveSelected(count: number): Promise<Download[]> {
+    const downloads = Promise.all(
+      Array.from({ length: count }, () => this.page.waitForEvent('download'))
+    );
+    await this.page.getByTestId('selection-download').click();
+    return downloads;
+  }
+
+  /** Moves every selected row into `destination`. */
+  async moveSelected(destination: string): Promise<void> {
+    await this.page.getByTestId('selection-move').click();
+    await this.pickDestination(destination);
+  }
+
+  /** Deletes every selected row, through the confirmation the batch takes. */
+  async removeSelected(): Promise<void> {
+    await this.page.getByTestId('selection-delete').click();
+    const dialog = this.page.getByTestId('delete-dialog');
+    await this.page.getByTestId('delete-confirm').click();
+    await expect(dialog).toHaveCount(0);
   }
 
   /** Raises a row's action menu and picks one item off it. */

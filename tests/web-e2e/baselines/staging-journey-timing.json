@@ -1,9 +1,10 @@
 {
   "captured": "2026-09-14",
   "environment": "staging",
-  "note": "baseline_ms is what the journey measured when it was captured; ceiling_ms is what the spec refuses. The gap absorbs a 2-vCPU box behind a CDN and a cold runner.",
+  "note": "baseline_ms is what the journey measured when it was captured; ceiling_ms is what the spec refuses. The gap absorbs a 2-vCPU box behind a CDN and a cold runner. A baseline_ms of 0 means the journey has not been captured yet.",
   "journeys": {
     "login_to_vault_ms": { "baseline_ms": 42482, "ceiling_ms": 150000 },
-    "upload_to_visible_ms": { "baseline_ms": 197, "ceiling_ms": 5000 }
+    "upload_to_visible_ms": { "baseline_ms": 197, "ceiling_ms": 5000 },
+    "share_to_accessible_ms": { "baseline_ms": 0, "ceiling_ms": 600000 }
   }
 }
