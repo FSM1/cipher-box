@@ -7,18 +7,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { errorMessage } from '../lib/errorMessage';
+import { OPAQUE, REVOKE_AFTER_MS, saveBlobToDisk } from '../lib/saveBlob';
 import { streamTicket } from '../lib/streamTicket';
 import { useEngine, useMediaService } from '../providers/EngineProvider';
 import { displayName } from '../vault/displayName';
-
-/** Never a renderable type: a blob URL is same-origin with the app. */
-const OPAQUE = 'application/octet-stream';
-
-/**
- * The save commits a task or two after the click; Firefox and Safari cancel it
- * silently if the URL is gone by then. Short, because the bytes are plaintext.
- */
-const REVOKE_AFTER_MS = 1_000;
 
 /** How long a minted ticket waits for the browser to open the save it triggered. */
 const STREAM_START_MS = 30_000;
@@ -156,17 +148,6 @@ export function useFileDownload(): FileDownload {
   );
 
   return { error, save, saveAll, clearError: useCallback(() => setError(null), []) };
-}
-
-/** A blob URL never involves the worker, so the link form is safe for it. */
-function saveBlobToDisk(url: string, name: string): void {
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = name;
-  link.rel = 'noopener';
-  document.body.append(link);
-  link.click();
-  link.remove();
 }
 
 /**

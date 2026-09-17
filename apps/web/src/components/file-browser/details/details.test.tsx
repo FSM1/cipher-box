@@ -1,7 +1,14 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderWithEngine, versionEngine } from '../../../test/versionFakes';
 import type { ListingRow } from '../../../vault/listing';
 import { DetailsDialog } from '../DetailsDialog';
+
+/** The panel reads versions on open, so every mount needs an engine under it. */
+function render(ui: ReactElement) {
+  return renderWithEngine(ui, versionEngine().client);
+}
 
 const NODE = new Uint8Array(4).fill(0xab);
 

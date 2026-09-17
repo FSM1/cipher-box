@@ -33,6 +33,11 @@ const HEAD = 6;
 const TAIL = 4;
 
 export function shortAccountId(accountId: string): string {
-  if (accountId.length <= HEAD + TAIL + 1) return accountId;
-  return `${accountId.slice(0, HEAD)}…${accountId.slice(-TAIL)}`;
+  return clampId(accountId, HEAD, TAIL);
+}
+
+/** Clamps a long identifier from both ends, keeping `head` and `tail` characters. */
+export function clampId(value: string, head: number, tail: number): string {
+  if (value.length <= head + tail + 1) return value;
+  return `${value.slice(0, head)}…${value.slice(-tail)}`;
 }
