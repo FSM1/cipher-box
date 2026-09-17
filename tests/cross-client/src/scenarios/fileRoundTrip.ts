@@ -35,9 +35,10 @@ export const fileRoundTrip: Scenario = {
     const tab = await context.web('tab', secret);
 
     const folderAtMount = join(mount.mountRoot, FOLDER);
+    const written = fileBytes(MOUNT_BYTES);
     const from = Date.now();
     await mkdir(folderAtMount);
-    await writeFile(join(folderAtMount, FROM_MOUNT), fileBytes(MOUNT_BYTES));
+    await writeFile(join(folderAtMount, FROM_MOUNT), written);
     const to = Date.now();
     await mount.refresh();
     context.log(`the mount wrote ${FROM_MOUNT} in ${FOLDER}`);
@@ -54,6 +55,9 @@ export const fileRoundTrip: Scenario = {
 
     await tab.openFiles();
     await tab.files.open(FOLDER);
+    await served(tab, FROM_MOUNT, written);
+    context.log(`the tab served ${FROM_MOUNT} as the mount wrote it`);
+
     const uploaded = fileBytes(TAB_BYTES);
     await tab.files.upload(FROM_TAB, uploaded);
     await tab.vault.settled();
@@ -84,6 +88,19 @@ export const fileRoundTrip: Scenario = {
     mountHeld(await mount.status(), 'the file round trip');
   },
 };
+
+/**
+ * Reads one listed file back through the tab's own save path. A size cell
+ * carries the child's record; only the saved bytes carry its content.
+ */
+async function served(host: WebHost, name: string, want: Uint8Array): Promise<void> {
+  const saved = await (await host.files.save(name)).path();
+  const bytes = await readFile(saved);
+  assert.ok(
+    bytes.equals(Buffer.from(want)),
+    `the tab saves ${name} as ${want.length} bytes, and it saved ${bytes.length}`
+  );
+}
 
 /** What the mount serves for `path`, as one short value a timeout can name. */
 async function readBack(path: string, want: Uint8Array): Promise<string> {
