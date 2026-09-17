@@ -8,15 +8,15 @@
  * populated sub-folder is exercised.
  */
 
-import { strict as assert } from 'node:assert';
-import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  converges,
   fileBytes,
   listsAtRoot,
   listsInFolder,
   mountHeld,
-  projects,
+  sizes,
   type Scenario,
   type ScenarioContext,
 } from '../scenario';
@@ -42,8 +42,7 @@ export const secondSession: Scenario = {
     await tab.files.open(FOLDER);
     await tab.files.upload(FROM_TAB, fileBytes(TAB_BYTES));
     await tab.vault.settled();
-    await first.refresh();
-    await projects(context, first, FROM_TAB, join(first.mountRoot, FOLDER));
+    await converges(context, first, FROM_TAB, join(first.mountRoot, FOLDER));
     context.log(`both devices wrote into ${FOLDER}`);
 
     await first.stop();
@@ -55,20 +54,11 @@ export const secondSession: Scenario = {
     const folder = join(second.mountRoot, FOLDER);
     // The read is what puts the folder in the focus window the tick walks.
     await readdir(folder).catch(() => []);
-    await second.refresh();
     for (const child of [FROM_MOUNT, FROM_TAB]) {
-      await projects(context, second, child, folder);
+      await converges(context, second, child, folder);
     }
-    assert.equal(
-      (await stat(join(folder, FROM_MOUNT))).size,
-      MOUNT_BYTES,
-      `the second session sizes ${FROM_MOUNT} at what the first one wrote`
-    );
-    assert.equal(
-      (await stat(join(folder, FROM_TAB))).size,
-      TAB_BYTES,
-      `the second session sizes ${FROM_TAB} at what the tab uploaded`
-    );
+    await sizes(context, second, join(folder, FROM_MOUNT), MOUNT_BYTES);
+    await sizes(context, second, join(folder, FROM_TAB), TAB_BYTES);
     mountHeld(await second.status(), 'the second session');
     context.log('the second desktop instance listed both children');
 
