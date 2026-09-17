@@ -3,7 +3,7 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import type { Instance } from '../../desktop-e2e/src/instance';
 import type { VaultStatus } from '../../desktop-e2e/src/control';
 import { poll } from '../../desktop-e2e/src/poll';
@@ -52,7 +52,13 @@ export function mountNames(path: string): Promise<string[]> {
   return readdir(path);
 }
 
-/** Waits for `name` under the mount. It takes the instance so a wedged read can abandon it. */
+/**
+ * Waits for a name this mount itself wrote to reach its own listing. It takes
+ * the instance so a wedged read can abandon it.
+ *
+ * A name another client published needs `converges` instead: that one reads
+ * off the network rather than off local state.
+ */
 export async function projects(
   context: ScenarioContext,
   mount: Instance,
@@ -66,6 +72,75 @@ export async function projects(
       what: `the mount to project ${name} in ${at}`,
       timeoutMs: context.deadlines.refreshMs,
       intervalMs: context.deadlines.intervalMs,
+      release: () => mount.abandon(),
+    }
+  );
+}
+
+/**
+ * Waits for a name another client published to reach this mount.
+ *
+ * It needs a record off the network rather than a render of local state, so it
+ * runs on the cross-device budget and refreshes on every pass
+ * (`Deadlines.convergeMs`).
+ */
+export function converges(
+  context: ScenarioContext,
+  mount: Instance,
+  name: string,
+  at: string = mount.mountRoot
+): Promise<void> {
+  return afterRefresh(
+    context,
+    mount,
+    `the mount to converge on ${name} in ${at}`,
+    () => mountNames(at),
+    (names) => names.includes(name)
+  );
+}
+
+/**
+ * Waits for the mount to size `path` at `bytes`. The length rides the child's
+ * own record, which the parent's listing does not carry, so it needs a pass of
+ * its own once the name has arrived.
+ */
+export function sizes(
+  context: ScenarioContext,
+  mount: Instance,
+  path: string,
+  bytes: number
+): Promise<void> {
+  return afterRefresh(
+    context,
+    mount,
+    `the mount to size ${path} at ${bytes} bytes`,
+    () =>
+      stat(path).then(
+        (read): number | string => read.size,
+        (error: NodeJS.ErrnoException) => error.code ?? String(error)
+      ),
+    (size) => size === bytes
+  );
+}
+
+/** One cross-device wait at the mount: a nocache pass, then the read it proves. */
+async function afterRefresh<T>(
+  context: ScenarioContext,
+  mount: Instance,
+  what: string,
+  read: () => Promise<T>,
+  accept: (value: T) => boolean
+): Promise<void> {
+  await poll(
+    async () => {
+      await mount.refresh();
+      return read();
+    },
+    accept,
+    {
+      what,
+      timeoutMs: context.deadlines.convergeMs,
+      intervalMs: context.deadlines.readIntervalMs,
       release: () => mount.abandon(),
     }
   );
@@ -140,7 +215,9 @@ export async function rowsListed(
  * Polls `rows` until one fresh pass counts exactly `want` of them.
  *
  * Each read is a whole pass rather than a retry of one: a record the network
- * has not served yet is discovered, never delivered.
+ * has not served yet is discovered, never delivered. Every caller waits on what
+ * another client published, so the budget is the cross-device one
+ * (`Deadlines.convergeMs`).
  */
 export async function passUntil(
   context: ScenarioContext,
@@ -150,7 +227,7 @@ export async function passUntil(
 ): Promise<void> {
   await poll(rows, (count) => count === want, {
     what: `a pass at ${what}`,
-    timeoutMs: context.deadlines.refreshMs,
+    timeoutMs: context.deadlines.convergeMs,
     intervalMs: context.deadlines.intervalMs,
   });
 }
