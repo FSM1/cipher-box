@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.1.0](https://github.com/FSM1/cipher-box/compare/v2.0.3...v2.1.0) (2026-09-17)
+
+
+### Features
+
+* **api:** sweep expired refresh_tokens rows on a schedule ([#1839](https://github.com/FSM1/cipher-box/issues/1839)) ([fed9d5a](https://github.com/FSM1/cipher-box/commit/fed9d5a385fd809b5db4545277a8c8aa8a4088dd))
+* freeze the per-bound charging convention in the KAT manifest ([#1834](https://github.com/FSM1/cipher-box/issues/1834)) ([0384ee1](https://github.com/FSM1/cipher-box/commit/0384ee17426b39b3db2fb5f6c0a59c23be1da3d7))
+* keep a stored provider credential across an unrelated settings save ([#1847](https://github.com/FSM1/cipher-box/issues/1847)) ([32068fc](https://github.com/FSM1/cipher-box/commit/32068fc0d3a95cd403b6ac6462a435408adc605d))
+* render file version history in the details dialog ([#1866](https://github.com/FSM1/cipher-box/issues/1866)) ([6d4fdbd](https://github.com/FSM1/cipher-box/commit/6d4fdbd3b42208553fdb5baccf279d9aeef42f50))
+* retain prior file versions and expose restore and delete ([#1862](https://github.com/FSM1/cipher-box/issues/1862)) ([63cb731](https://github.com/FSM1/cipher-box/commit/63cb731da039cab9f3259969a08a273992d2fa67))
+* scan a contact code from the camera on the import path ([#1855](https://github.com/FSM1/cipher-box/issues/1855)) ([dbca20e](https://github.com/FSM1/cipher-box/commit/dbca20ebae9b0c47c11b4a0d93cbc6db59d544b1))
+
+
+### Bug Fixes
+
+* back off the approver poll and delete the factor of a failed approval ([#1857](https://github.com/FSM1/cipher-box/issues/1857)) ([906ae56](https://github.com/FSM1/cipher-box/commit/906ae5638c19f63eead65236c961ebf71e826e88))
+* bound the per-scope drain residuals and state the vacate rule at the facade ([#1851](https://github.com/FSM1/cipher-box/issues/1851)) ([ec5d7c2](https://github.com/FSM1/cipher-box/commit/ec5d7c2f7f446d2c2af63867b346f9ba66611346))
+* charge the drain unattributed halt and cover its unanchorable-root refusal ([#1842](https://github.com/FSM1/cipher-box/issues/1842)) ([588d646](https://github.com/FSM1/cipher-box/commit/588d646c6c55852ac92770745f05e9b9018567b0))
+* **client:** throttle the engine-less leader stand-down ([#1823](https://github.com/FSM1/cipher-box/issues/1823)) ([43fe9ce](https://github.com/FSM1/cipher-box/commit/43fe9ce8822f82b66a4ea583357f648e074a279a))
+* **engine:** evict the focus refresh stamps and keep a host-queued row on the pass ([#1828](https://github.com/FSM1/cipher-box/issues/1828)) ([690814f](https://github.com/FSM1/cipher-box/commit/690814fe071c45ef7b5c56207cd31e60d2878f28))
+* **engine:** gate revival on a corroborating fan-out answer ([#1824](https://github.com/FSM1/cipher-box/issues/1824)) ([877bdb8](https://github.com/FSM1/cipher-box/commit/877bdb823e218ddbf9c04eafca582751f5d3452f))
+* **engine:** hold the invite-store owner-authority rule once and re-drive a stalled link ([#1837](https://github.com/FSM1/cipher-box/issues/1837)) ([0e1094a](https://github.com/FSM1/cipher-box/commit/0e1094a54effaf25b96998ee79eb621c3a511f98))
+* reclaim the interior write-names a post-flip rotation crash left registered ([#1841](https://github.com/FSM1/cipher-box/issues/1841)) ([918b97f](https://github.com/FSM1/cipher-box/commit/918b97fd83ff028e81973078b1b958d57e5b3d03))
+* refuse a grant whose parent scope the pointer re-pointed ([#1852](https://github.com/FSM1/cipher-box/issues/1852)) ([df9f10e](https://github.com/FSM1/cipher-box/commit/df9f10e179ce3fbd48f8734ca3c8d7fc6e869915))
+* report an ascent link this parent seed cannot derive as availability, not abuse ([#1826](https://github.com/FSM1/cipher-box/issues/1826)) ([e4cd634](https://github.com/FSM1/cipher-box/commit/e4cd634de1627424f44081ce4ab0a9a5902c2648))
+* separate sweep version skew from trust and report rotation carried-set cuts ([#1827](https://github.com/FSM1/cipher-box/issues/1827)) ([e10eace](https://github.com/FSM1/cipher-box/commit/e10eace1bf834b799cbb477e39bec955ab71d03a))
+
+
+### Performance Improvements
+
+* consult the queue memo before enumerating the durable op queue ([#1853](https://github.com/FSM1/cipher-box/issues/1853)) ([acb8603](https://github.com/FSM1/cipher-box/commit/acb86030de24afda4698b0b71764d4ac362727b3))
+* hold a grant to one parent resolve and one read per moved node ([#1845](https://github.com/FSM1/cipher-box/issues/1845)) ([d7434bb](https://github.com/FSM1/cipher-box/commit/d7434bbe285ed3a3bacd8645478646771c5db0aa))
+
 ## [2.0.3](https://github.com/FSM1/cipher-box/compare/v2.0.2...v2.0.3) (2026-09-13)
 
 
