@@ -31,10 +31,15 @@ timing profile.
 - a node the owner's **mount** creates and then deletes inside that same
   promoted root, on the device that minted no grant, read both ways at the
   owner's tab and at the grantee
+- a file the mount writes, rendered at the tab with its own size and date, and a
+  file the tab uploads, read back byte for byte and sized at the mount
 - a write made at the mount while the API is away, and the tab that converges on
   it once the API is back
 - the leader tab dying mid-flow: a follower is promoted, its work still reaches
   the record plane, and the mount reads it
+- a second session over a vault that already carries content: the mount quits
+  and starts again on the state it left, and a fresh tab cold-starts onto the
+  same vault; both list the two files the two devices wrote
 
 ## The leg that is not here yet
 
@@ -52,12 +57,6 @@ The promoted scope's write plane is not the cause:
 granted folder on that same mount. The engine owes a scope-exit rotation for a
 move that leaves a granted scope, and it does not classify the crossing that
 owes it. That blocks the leg, and there is no scenario for it yet.
-
-## A limit the offline scenario works around
-
-A tab that cold-starts onto a vault a mount already published does not converge
-on it. The offline scenario therefore holds its second host up across the
-outage.
 
 ## The slice that lives elsewhere
 

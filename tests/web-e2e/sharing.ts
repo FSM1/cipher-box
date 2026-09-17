@@ -22,18 +22,21 @@ export async function mint(page: Page, folder: string): Promise<URL> {
   return link;
 }
 
+/** How a claimant takes a session, which is the only leg a caller varies. */
+export interface ClaimSignIn {
+  /** The account the claim is spent under. The panel must name it. */
+  account: string;
+  /** Starts a session in the tab, which is already on the claim route. */
+  start(): Promise<void>;
+}
+
 /**
- * Spends `link` under a second account, in its own browser context.
+ * Spends `link` in `page`.
  *
- * A second page of the owner's context would share the origin's
- * `BroadcastChannel` and `navigator.locks`, which is what makes two tabs one
- * session — and a claim has to come from a second account, not a second tab.
- * The claim route must also survive a tab that holds no session: the fragment is
- * the capability, so it has to outlive the sign-in.
+ * The claim route must survive a tab that holds no session: the fragment is the
+ * capability, so it has to outlive the sign-in.
  */
-export async function claim(browser: Browser, link: URL): Promise<Page> {
-  const context = await browser.newContext();
-  const page = await context.newPage();
+export async function claimHere(page: Page, link: URL, how: ClaimSignIn): Promise<void> {
   const invite = new InvitePage(page);
   const vault = new VaultPage(page);
 
@@ -43,15 +46,31 @@ export async function claim(browser: Browser, link: URL): Promise<Page> {
   await expect(invite.confirm).toHaveCount(0);
 
   await vault.ready();
-  const account = `claimant-${crypto.randomUUID()}`;
-  await vault.signInHere(account);
+  await how.start();
 
   await invite.expectState('ready');
-  await expect(invite.account).toContainText(account);
+  await expect(invite.account).toContainText(how.account);
   await invite.claim();
   await invite.expectState('claimed');
   // The claim takes the capability out of the address, so a reload cannot spend
   // it a second time.
   expect(new URL(page.url()).hash).toBe('');
+}
+
+/**
+ * Spends `link` under a second account of its own, in its own browser context.
+ *
+ * A second page of the owner's context would share the origin's
+ * `BroadcastChannel` and `navigator.locks`, which is what makes two tabs one
+ * session — and a claim has to come from a second account, not a second tab.
+ */
+export async function claim(browser: Browser, link: URL): Promise<Page> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const account = `claimant-${crypto.randomUUID()}`;
+  await claimHere(page, link, {
+    account,
+    start: () => new VaultPage(page).signInHere(account),
+  });
   return page;
 }

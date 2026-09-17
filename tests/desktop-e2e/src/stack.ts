@@ -38,7 +38,7 @@ export class Stack {
       options.apiEntry,
       `the built API is absent at ${options.apiEntry}. Run "pnpm --filter @cipherbox/api build" first.`
     );
-    if (await answers(options.apiUrl)) {
+    if (await answers(options.apiUrl, HEALTH)) {
       throw new Error(
         `another process already answers ${options.apiUrl}. This suite owns the API, because ` +
           `the offline scenario stops it. Stop that process and run again.`
@@ -102,7 +102,7 @@ export class Stack {
       }
     );
     await poll(
-      () => answers(this.options.apiUrl),
+      () => answers(this.options.apiUrl, HEALTH),
       (up) => !up,
       {
         what: `the API to go silent at ${this.options.apiUrl}`,
@@ -114,11 +114,18 @@ export class Stack {
 }
 
 const PROBE_TIMEOUT_MS = 2_000;
+/** The API's liveness route. It is static and answers nothing else. */
+const HEALTH = '/health';
 
-/** Liveness: a process holds the port. `/health` is static and answers nothing else. */
-async function answers(apiUrl: string): Promise<boolean> {
+/**
+ * Liveness: a process holds the port and serves `path` there.
+ *
+ * Every process this suite owns is probed through this one call, so a port a
+ * stranger holds reads the same way whichever server was meant to hold it.
+ */
+export async function answers(baseUrl: string, path: string): Promise<boolean> {
   try {
-    const response = await fetch(new URL('/health', apiUrl), {
+    const response = await fetch(new URL(path, baseUrl), {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     return response.ok;
@@ -136,7 +143,7 @@ async function answers(apiUrl: string): Promise<boolean> {
  * state behind.
  */
 export async function serves(apiUrl: string): Promise<boolean> {
-  if (!(await answers(apiUrl))) return false;
+  if (!(await answers(apiUrl, HEALTH))) return false;
   try {
     const response = await fetch(new URL('/auth/challenge', apiUrl), {
       method: 'POST',

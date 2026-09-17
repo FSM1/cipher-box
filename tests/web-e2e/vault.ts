@@ -49,12 +49,7 @@ export async function coldStart(
   const vault = new VaultPage(page);
   const files = new FilesPage(page);
   await vault.open();
-  // A save streams only while the worker controls the tab, and falls back to a
-  // buffered read until it does — which would leave the specs asserting a path
-  // they did not mean to take.
-  await expect
-    .poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null))
-    .toBe(true);
+  await vault.controlled();
   const accountId = await vault.coldStart();
   await vault.settled();
   await expect(files.browser).toBeVisible();

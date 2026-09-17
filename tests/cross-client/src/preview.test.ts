@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { packageManager, previewArguments } from './preview';
+import { previewArguments } from '../../web-e2e/preview';
+import { packageManager } from './preview';
 
 describe('packageManager', () => {
   it('names the Windows wrapper on Windows, which has no extensionless entry', () => {
