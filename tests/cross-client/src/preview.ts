@@ -15,6 +15,8 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { poll } from '../../desktop-e2e/src/poll';
 import type { Deadlines } from '../../desktop-e2e/src/profile';
+import { answers } from '../../desktop-e2e/src/stack';
+import { previewArguments } from '../../web-e2e/preview';
 
 export interface PreviewOptions {
   /** The repository root, so the child runs where the workspace filter works. */
@@ -31,20 +33,9 @@ export function packageManager(platform: string): string {
   return platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 }
 
-/** The argv that serves one built directory on one port. */
-export function previewArguments(outDir: string, port: number): string[] {
-  return [
-    '--filter',
-    '@cipherbox/web',
-    'exec',
-    'vite',
-    'preview',
-    '--outDir',
-    outDir,
-    '--port',
-    String(port),
-    '--strictPort',
-  ];
+/** The bundle's index, which is what proves a server holds the port. */
+function served(url: string): Promise<boolean> {
+  return answers(url, '/');
 }
 
 /** One `vite preview` child, owned by the orchestrator. */
@@ -65,7 +56,7 @@ export class Preview {
    */
   static async start(options: PreviewOptions): Promise<Preview> {
     const url = `http://localhost:${options.port}`;
-    if (await answers(url)) {
+    if (await served(url)) {
       throw new Error(
         `another process already answers ${url}. This suite serves the bundle under ` +
           'test there. Stop that process and run again.'
@@ -111,7 +102,7 @@ export class Preview {
     try {
       await poll(
         async () => {
-          const up = await answers(url);
+          const up = await served(url);
           if (died) throw died;
           return up;
         },
@@ -141,7 +132,7 @@ export class Preview {
       }
     }
     await poll(
-      () => answers(this.url),
+      () => served(this.url),
       (up) => !up,
       {
         what: `the web bundle to stop answering ${this.url}`,
@@ -149,14 +140,5 @@ export class Preview {
         intervalMs: this.budget.intervalMs,
       }
     );
-  }
-}
-
-async function answers(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-    return response.ok;
-  } catch {
-    return false;
   }
 }

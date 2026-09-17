@@ -14,6 +14,7 @@
 //
 // `retries: 0` is policy in every slice, not tuning: a flaky test is a defect.
 import { defineConfig, devices } from '@playwright/test';
+import { previewCommand } from './preview';
 
 const suite = process.env.E2E_SUITE ?? 'smoke';
 // Reject an unrecognized value rather than silently running the smaller slice.
@@ -34,7 +35,7 @@ const url = (port: number) => `http://localhost:${port}`;
  * answers on that port would make the hook-absence assertion meaningless.
  */
 const preview = (outDir: string, port: number, reuse = false) => ({
-  command: `pnpm --filter @cipherbox/web exec vite preview --outDir ${outDir} --port ${port} --strictPort`,
+  command: previewCommand(outDir, port),
   url: url(port),
   reuseExistingServer: reuse && !isCi,
   timeout: 60_000,

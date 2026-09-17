@@ -11,11 +11,10 @@
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 import { FilesPage } from '../../web-e2e/page-objects/files.page';
-import { InvitePage } from '../../web-e2e/page-objects/invite.page';
 import { SharePage } from '../../web-e2e/page-objects/share.page';
 import { SharedPage } from '../../web-e2e/page-objects/shared.page';
 import { VaultPage } from '../../web-e2e/page-objects/vault.page';
-import { poll } from '../../desktop-e2e/src/poll';
+import { claimHere } from '../../web-e2e/sharing';
 import type { Deadlines } from '../../desktop-e2e/src/profile';
 
 const DIAGNOSTIC_LINES = 40;
@@ -56,7 +55,7 @@ export class WebHost {
     const { page, context, diagnostics } = await tab(options);
     const vault = new VaultPage(page);
     await vault.open();
-    await controlled(page, options.deadlines);
+    await vault.controlled(options.deadlines.mountMs);
     await signIn(page, options.secretHex, options.accountId);
     await page.waitForURL('**/files');
     const host = WebHost.build(options, context, page, vault, diagnostics);
@@ -65,23 +64,17 @@ export class WebHost {
     return host;
   }
 
-  /**
-   * Signs in on the claim route and spends the link there. `/invite` sits
-   * outside the authenticated shell and holds the capability in its fragment,
-   * so the claimant signs in where it landed rather than on the vault first.
-   */
+  /** Spends `link` on the claim route, signed in on this host's own secret. */
   static async claim(options: WebHostOptions & { link: URL }): Promise<WebHost> {
     const { page, context, diagnostics } = await tab(options);
-    const invite = new InvitePage(page);
     const vault = new VaultPage(page);
-    await invite.open(options.link);
-    await invite.expectState('waiting');
-    await vault.ready();
-    await controlled(page, options.deadlines);
-    await signIn(page, options.secretHex, options.accountId);
-    await invite.expectState('ready');
-    await invite.claim();
-    await invite.expectState('claimed');
+    await claimHere(page, options.link, {
+      account: options.accountId,
+      start: async () => {
+        await vault.controlled(options.deadlines.mountMs);
+        await signIn(page, options.secretHex, options.accountId);
+      },
+    });
     return WebHost.build(options, context, page, vault, diagnostics);
   }
 
@@ -165,22 +158,6 @@ async function tab(
     if (message.type() === 'error') diagnostics.push(`${options.name} console: ${message.text()}`);
   });
   return { context, page, diagnostics };
-}
-
-/**
- * A save streams only while the Service Worker controls the tab, and falls back
- * to a buffered read until it does.
- */
-async function controlled(page: Page, budget: Deadlines): Promise<void> {
-  await poll(
-    () => page.evaluate(() => navigator.serviceWorker.controller !== null),
-    (yes) => yes,
-    {
-      what: 'the Service Worker to control the tab',
-      timeoutMs: budget.mountMs,
-      intervalMs: budget.intervalMs,
-    }
-  );
 }
 
 /**

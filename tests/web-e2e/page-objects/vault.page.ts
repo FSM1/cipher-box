@@ -22,6 +22,19 @@ export class VaultPage {
   }
 
   /**
+   * Waits until the Service Worker controls the tab. A save streams only while
+   * it does, and falls back to a buffered read until then — which would leave a
+   * caller asserting a path it did not mean to take.
+   */
+  async controlled(timeoutMs?: number): Promise<void> {
+    await expect
+      .poll(() => this.page.evaluate(() => navigator.serviceWorker.controller !== null), {
+        timeout: timeoutMs,
+      })
+      .toBe(true);
+  }
+
+  /**
    * Cold-starts a vault nobody else in the run shares and follows the app's own
    * redirect onto it. The login secret is a fresh 32-byte scalar, and the API
    * creates its account on first challenge login — so per-test isolation costs
