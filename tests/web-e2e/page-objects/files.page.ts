@@ -56,6 +56,39 @@ export class FilesPage {
     await this.row(name).dblclick();
   }
 
+  /**
+   * The size and modified cells one row paints. A child whose own record the
+   * listing has not resolved yet paints `...` in both, so a caller that reads
+   * them tells a converged row from a named one.
+   */
+  async cells(name: string): Promise<{ size: string; modified: string }> {
+    const row = this.row(name);
+    const [size, modified] = await Promise.all([
+      row.locator('.file-list-item-size').innerText(),
+      row.locator('.file-list-item-date').innerText(),
+    ]);
+    return { size: size.trim(), modified: modified.trim() };
+  }
+
+  /**
+   * How the modified cell renders each of `timestamps`. That cell carries a
+   * date at day granularity in the tab's own locale, so a window assertion
+   * compares the labels of the window's bounds rather than a parsed time.
+   */
+  renderedDays(timestamps: number[]): Promise<string[]> {
+    return this.page.evaluate(
+      (millis) =>
+        millis.map((value) =>
+          new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          }).format(new Date(value))
+        ),
+      timestamps
+    );
+  }
+
   async createFolder(name: string): Promise<void> {
     await this.page.getByTestId('new-folder-button').click();
     const dialog = this.page.getByTestId('create-folder-dialog');

@@ -21,10 +21,12 @@ import { Stack, requireFile } from '../../desktop-e2e/src/stack';
 import { Preview } from './preview';
 import { USAGE, webPort } from './options';
 import { isLoginSecret, type Scenario, type ScenarioContext } from './scenario';
+import { fileRoundTrip } from './scenarios/fileRoundTrip';
 import { leaderFailover } from './scenarios/leaderFailover';
 import { mountWriteInPromotedScope } from './scenarios/mountWriteInPromotedScope';
 import { nestedScopeUnderMount } from './scenarios/nestedScopeUnderMount';
 import { offlineConvergence } from './scenarios/offlineConvergence';
+import { secondSession } from './scenarios/secondSession';
 import { shareGrantCut } from './scenarios/shareGrantCut';
 import { WebHost } from './web';
 
@@ -32,8 +34,10 @@ const SCENARIOS: Scenario[] = [
   shareGrantCut,
   nestedScopeUnderMount,
   mountWriteInPromotedScope,
+  fileRoundTrip,
   offlineConvergence,
   leaderFailover,
+  secondSession,
 ];
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -213,11 +217,11 @@ function scenarioContext(options: ContextOptions): ScenarioContext {
     deadlines: budget,
     stack,
     secret,
-    desktop: async (name, secretHex) =>
+    desktop: async (name, secretHex, device = name) =>
       hold(
         await startInstance({
           name: `${scenario.name}-${name}`,
-          home: join(home, name),
+          home: join(home, device),
           devKey: secretHex,
           binary,
           logDir,

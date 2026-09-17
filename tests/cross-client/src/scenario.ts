@@ -17,8 +17,12 @@ export interface ScenarioContext {
   stack: Stack;
   /** A fresh 32-byte login secret as 64 lowercase hex characters. */
   secret(): string;
-  /** A mounted desktop host on `secretHex`. */
-  desktop(name: string, secretHex: string): Promise<Instance>;
+  /**
+   * A mounted desktop host on `secretHex`. `device` names the local state the
+   * instance starts from and defaults to `name`, so a second instance can start
+   * on the state the first one left behind.
+   */
+  desktop(name: string, secretHex: string, device?: string): Promise<Instance>;
   /** A web host on `secretHex`, landed on the vault browser. */
   web(name: string, secretHex: string): Promise<WebHost>;
   /** A web host that signs in on the claim route and spends `link`. */
@@ -36,6 +40,11 @@ const LOGIN_SECRET = /^[0-9a-f]{64}$/;
 
 export function isLoginSecret(value: string): boolean {
   return LOGIN_SECRET.test(value);
+}
+
+/** A byte pattern no text transfer survives, so a mangled read cannot pass. */
+export function fileBytes(length: number): Uint8Array {
+  return Uint8Array.from({ length }, (_, index) => (index * 7 + 1) % 256);
 }
 
 /** The mount's own listing of one directory. */
