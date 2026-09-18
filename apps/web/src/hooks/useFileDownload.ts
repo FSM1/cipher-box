@@ -49,31 +49,56 @@ export function useFileDownload(): FileDownload {
   const media = useMediaService();
   const [error, setError] = useState<string | null>(null);
   const tickets = useRef(new Set<string>());
-  const revokes = useRef(new Map<ReturnType<typeof setTimeout>, string>());
+  const deferred = useRef(new Map<ReturnType<typeof setTimeout>, () => void>());
+  /** The release the last streamed save deferred, so a batch can wait it out. */
+  const settling = useRef<Promise<void>>(Promise.resolve());
   const mounted = useRef(true);
 
-  const releaseBlobUrls = useCallback(() => {
-    for (const [timer, url] of revokes.current) {
+  /** Runs every deferred release now, for a hook that has nothing left to wait for. */
+  const releaseDeferred = useCallback(() => {
+    for (const [timer, release] of deferred.current) {
       clearTimeout(timer);
-      URL.revokeObjectURL(url);
+      release();
     }
-    revokes.current.clear();
+    deferred.current.clear();
   }, []);
 
+  /**
+   * Holds a release back for `REVOKE_AFTER_MS`, and resolves once it has run.
+   * The browser commits a save a task or two after the navigation or the click
+   * that raised it, and a source withdrawn inside that window cancels the save
+   * with no error to report.
+   */
+  const deferRelease = useCallback(
+    (release: () => void): Promise<void> =>
+      new Promise<void>((released) => {
+        const run = (): void => {
+          release();
+          released();
+        };
+        const timer = setTimeout(() => {
+          deferred.current.delete(timer);
+          run();
+        }, REVOKE_AFTER_MS);
+        deferred.current.set(timer, run);
+      }),
+    []
+  );
+
   // Unmount cuts a transfer that is still running, and its ticket has no timer
-  // of its own to fall back on. A deferred revoke left behind outlives the hook
-  // that owns it: it holds the plaintext blob alive, and it fires against
-  // whatever `URL.revokeObjectURL` is installed a second later.
+  // of its own to fall back on. A deferred release left behind outlives the hook
+  // that owns it: it holds plaintext alive, and it fires against whatever the
+  // document and `URL.revokeObjectURL` are a second later.
   useEffect(() => {
     const held = tickets.current;
     mounted.current = true;
     return () => {
       mounted.current = false;
+      releaseDeferred();
       for (const url of held) media?.revokeStreamUrl(url);
       held.clear();
-      releaseBlobUrls();
     };
-  }, [media, releaseBlobUrls]);
+  }, [media, releaseDeferred]);
 
   const save = useCallback(
     async ({ node, name, size }: SaveRequest): Promise<SaveOutcome> => {
@@ -100,11 +125,17 @@ export function useFileDownload(): FileDownload {
             }
             return 'saved';
           } finally {
-            // The browser owns the transfer once the read settles, so dropping
-            // the frame cannot cut it.
-            frame.remove();
-            tickets.current.delete(ticket);
-            media.revokeStreamUrl(ticket);
+            // The read settling is the tab having pushed the last window, not
+            // the browser having committed the save. A batch starts its next
+            // save in the same task, so an immediate teardown here is what
+            // leaves one file of a batch empty or under a name of the
+            // browser's choosing.
+            settling.current = deferRelease(() => {
+              frame.remove();
+              tickets.current.delete(ticket);
+              media.revokeStreamUrl(ticket);
+            });
+            if (!mounted.current) releaseDeferred();
           }
         }
       }
@@ -113,20 +144,16 @@ export function useFileDownload(): FileDownload {
         const bytes = await client.facade.download(node);
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
         saveBlobToDisk(url, name);
-        const timer = setTimeout(() => {
-          revokes.current.delete(timer);
-          URL.revokeObjectURL(url);
-        }, REVOKE_AFTER_MS);
-        revokes.current.set(timer, url);
+        deferRelease(() => URL.revokeObjectURL(url));
         // The cleanup this timer is owned by has already run.
-        if (!mounted.current) releaseBlobUrls();
+        if (!mounted.current) releaseDeferred();
         return 'saved';
       } catch (failure: unknown) {
         setError(errorMessage(failure));
         return 'failed';
       }
     },
-    [client, media, releaseBlobUrls]
+    [client, media, deferRelease, releaseDeferred]
   );
 
   const saveAll = useCallback(
@@ -137,6 +164,9 @@ export function useFileDownload(): FileDownload {
         // A browser that blocks the second download blocks every one after it.
         if (outcome === 'refused') break;
         if (outcome === 'failed') failed.push(displayName(file.name));
+        // One live ticket and one frame at a time, however long the selection:
+        // the next navigation waits out the grace this save commits in.
+        await settling.current;
       }
       if (failed.length === 0) return;
       // Each save clears the banner the one before it set, so the batch reports

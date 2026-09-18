@@ -202,11 +202,24 @@ export class FilesPage {
    * listing order, so the caller says how many it expects.
    */
   async saveSelected(count: number): Promise<Download[]> {
-    const downloads = Promise.all(
-      Array.from({ length: count }, () => this.page.waitForEvent('download'))
-    );
-    await this.page.getByTestId('selection-download').click();
-    return downloads;
+    // One listener collecting `count` events, not `count` waiters: parallel
+    // `waitForEvent` calls all settle on the first download, so a batch that
+    // raised one save would still answer with `count` copies of it.
+    const collected: Download[] = [];
+    let enough = (): void => undefined;
+    const done = new Promise<void>((resolve) => (enough = resolve));
+    const collect = (download: Download): void => {
+      collected.push(download);
+      if (collected.length >= count) enough();
+    };
+    this.page.on('download', collect);
+    try {
+      await this.page.getByTestId('selection-download').click();
+      await done;
+    } finally {
+      this.page.off('download', collect);
+    }
+    return collected;
   }
 
   /** Moves every selected row into `destination`. */

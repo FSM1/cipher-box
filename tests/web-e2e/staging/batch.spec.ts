@@ -3,6 +3,7 @@
  * writes, so this is where concurrent publishes meet the real name store.
  */
 
+import { readFile } from 'node:fs/promises';
 import { FilesPage } from '../page-objects/files.page';
 import { expect, published, signIn, test } from './fixtures';
 import { filler } from './media';
@@ -14,8 +15,11 @@ test('a batch moves, downloads and deletes every selected row', async ({ page })
   const files = new FilesPage(page);
   await signIn(page);
 
+  const sent = new Map<string, Uint8Array>();
   for (const [index, name] of FILES.entries()) {
-    await files.upload(name, filler(1_024 * (index + 1)));
+    const bytes = filler(1_024 * (index + 1));
+    sent.set(name, bytes);
+    await files.upload(name, bytes);
     await expect(files.row(name)).toBeVisible({ timeout: 180_000 });
   }
   await files.createFolder(DESTINATION);
@@ -31,12 +35,18 @@ test('a batch moves, downloads and deletes every selected row', async ({ page })
   for (const name of FILES) await files.select(name);
   await expect(files.selectionCount).toHaveText('3 files selected');
 
-  // One download per selected file, which is the batch semantic this profile
-  // owns. The bytes are not compared here: a batch save can deliver an empty
-  // body, so the byte-for-byte read-back lives in the size-matrix profile,
-  // which saves one file at a time.
+  // One download per selected file, each carrying its own name and its own
+  // bytes: a batch used to tear each save down before the browser committed it,
+  // which delivered an empty or a misnamed file with nothing to report.
   const downloads = await files.saveSelected(FILES.length);
-  expect(downloads).toHaveLength(FILES.length);
+  expect(downloads.map((download) => download.suggestedFilename()).sort()).toEqual(
+    [...FILES].sort()
+  );
+  for (const download of downloads) {
+    const saved = await download.path();
+    const name = download.suggestedFilename();
+    expect(new Uint8Array(await readFile(saved)), `${name} read back`).toEqual(sent.get(name));
+  }
 
   await files.moveSelected(DESTINATION);
   for (const name of FILES) await expect(files.row(name)).toHaveCount(0);
