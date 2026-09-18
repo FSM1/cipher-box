@@ -87,6 +87,9 @@ where
         // at this same name, so the two must be compared.
         match self.adopter.probe_read_scope_seed(name, &bytes).await {
             Ok(Some(recovered)) if ct_eq(&recovered, read_scope_seed) => GenesisRoot::Adopted,
+            // A foreign root is never adopted here, so its cut epoch stays
+            // unrecorded until this device resolves that scope — the probe
+            // spends nothing ([`Adopter::probe_read_scope_seed`]).
             Ok(_) => GenesisRoot::Foreign,
             Err(_) => GenesisRoot::Unclaimed,
         }
@@ -383,6 +386,11 @@ mod tests {
             genesis_root(&device, true, Some([0x77; 32])),
             GenesisRoot::Foreign,
             "a rotated vault at the derived name is never this run's genesis root",
+        );
+        assert!(
+            device.floor_store.sequence_keys().is_empty()
+                && device.floor_store.epoch_keys().is_empty(),
+            "a foreign sighting spends no floor",
         );
     }
 

@@ -95,7 +95,9 @@ pub trait Adopter {
     ///
     /// A discarded sighting spends nothing: the name's sequence floor, the
     /// scope's read-epoch floor and the scope's cut-epoch floor all stay where
-    /// the probe found them.
+    /// the probe found them. The restrictive cut-epoch floor included — a
+    /// caller that keeps the probed root adopts it, and the adopt files that
+    /// floor ([`PendingAdoption`]).
     async fn probe_read_scope_seed(
         &self,
         name: &IpnsName,

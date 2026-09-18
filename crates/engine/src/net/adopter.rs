@@ -831,6 +831,7 @@ mod tests {
     use crate::content::root_block_cid;
 
     use crate::content::GatewaySource;
+    use crate::gate::read_cut_epoch_floor;
     use crate::net::resolve::{ResolveOutcome, resolve_gated};
     use crate::seams::{EndpointId, HttpResponse};
     use crate::session::SessionIdentity;
@@ -841,7 +842,7 @@ mod tests {
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_SCOPE_SEED,
         OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, block_on, owner_root_fixture,
-        owner_root_pseudonym, padding,
+        owner_root_pseudonym, padding, with_cut_epoch,
     };
 
     const TTL_NANOS: u64 = 2_000_000_000;
@@ -868,10 +869,32 @@ mod tests {
             Self::build(None)
         }
 
+        /// The same root with its grant set re-signed at `cut_epoch` — the
+        /// commitment a cut of this scope publishes, and the value an adopt
+        /// files as this scope's cut-epoch floor.
+        fn cut(mut self, cut_epoch: u64) -> Self {
+            let recut = with_cut_epoch(
+                OwnerRootFixture {
+                    name: self.name.clone(),
+                    grant_section: self.grant_section.clone(),
+                    envelope: self.envelope.clone(),
+                    head_block: self.head_block.clone(),
+                    head_cid_str: self.head_cid_str.clone(),
+                },
+                &owner_identity(),
+                cut_epoch,
+            );
+            self.grant_section = recut.grant_section;
+            self.envelope = recut.envelope;
+            self.head_block = recut.head_block;
+            self.head_cid_str = recut.head_cid_str;
+            self
+        }
+
         /// Build the fixture, optionally authoring a real owner-write-blob at
         /// `owb_write_epoch` (the write plane's own clock).
         fn build(owb_write_epoch: Option<u64>) -> Self {
-            let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+            let owner_identity = owner_identity();
             // Distinct recipient key per authored write epoch — the owner-write-blob's
             // HPKE key derives from `owner_enc` alone under a fixed ephemeral
             // ([`OwnerRootSpec`]), so one key across epochs reuses the keystream.
@@ -962,6 +985,11 @@ mod tests {
                 self.scope_id,
             )
         }
+    }
+
+    /// The signer behind every fixture's grant-set commitment.
+    fn owner_identity() -> EcdsaSigner {
+        EcdsaSigner::from_scalar(&[0x11; 32]).unwrap()
     }
 
     fn gateway() -> Gateway {
@@ -1167,6 +1195,46 @@ mod tests {
             outcome.read_scope_seed.as_deref(),
             Some(&[0x66u8; 32]),
             "a gate pass surfaces the owner-blob scope read seed"
+        );
+    }
+
+    /// A probe spends nothing ([`Adopter::probe_read_scope_seed`]). The second
+    /// leg adopts the same bytes, so the untouched floors are the probe's doing
+    /// and not a fixture that moves no floor.
+    #[test]
+    fn a_probe_advances_neither_floor() {
+        const CUT_EPOCH: u64 = 7;
+        let fx = Fixture::new().cut(CUT_EPOCH);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let seed = block_on(adopter.probe_read_scope_seed(&fx.name, &fx.record(3)))
+            .expect("the owner root passes the gate");
+        assert!(
+            seed.is_some(),
+            "the probe hands back the seed the gate recovered"
+        );
+        assert!(
+            floors.sequence_keys().is_empty() && floors.epoch_keys().is_empty(),
+            "a sighting raises no floor at all",
+        );
+
+        let outcome =
+            block_on(adopter.adopt(&fx.name, &fx.record(3))).expect("the owner root adopts");
+        committed(outcome.pass, &floors);
+        assert_eq!(
+            block_on(floors.sequence_floor(fx.name.as_str().as_bytes())).unwrap(),
+            Some(3),
+            "the adopt of those same bytes raises the sequence floor",
+        );
+        assert_eq!(
+            block_on(read_cut_epoch_floor(&floors, &fx.scope_id)).unwrap(),
+            CUT_EPOCH,
+            "and files the commitment's cut epoch as the scope's floor",
         );
     }
 
