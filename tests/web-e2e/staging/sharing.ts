@@ -44,13 +44,19 @@ export async function grant(
   await expect(recipientFiles.row(RECIPIENT_FOLDER)).toBeVisible();
   await published(recipient);
 
+  const owner = new SharePage(page);
+  await owner.open(OWNER_FOLDER);
+  const ownerCode = await owner.readOwnContactCode();
+
+  // Both directions: the recipient drops a mailbox item whose sender its own
+  // contact book does not anchor, so the owner's code must be imported there
+  // before the grant is posted.
   const recipientShare = new SharePage(recipient);
   await recipientShare.open(RECIPIENT_FOLDER);
+  await recipientShare.importContact(ownerCode);
   const code = await recipientShare.readOwnContactCode();
   await recipientShare.close();
 
-  const owner = new SharePage(page);
-  await owner.open(OWNER_FOLDER);
   const started = Date.now();
   await owner.grantTo(code, permission);
 
