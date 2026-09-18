@@ -157,6 +157,7 @@ const WARNING_LABELS: Record<VaultWarningKind, string> = {
   withheldUpdateEscalation: 'A shared folder is being kept from its latest update',
   renewalFailed: 'CipherBox could not renew a record, so it may expire',
   scopeExitCutOwed: 'CipherBox could not rotate a shared folder a move left',
+  unjournaledWrites: 'CipherBox could not save changes the disconnected drive still held',
 };
 
 /** Shown until a sign-in mints the vault; nothing publishes before then. */

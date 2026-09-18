@@ -890,6 +890,20 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
     }
 
+    /// How many handles still owe the queue the bytes a `write` acked: what a
+    /// [`quiesce_writes`](Self::quiesce_writes) pass could not journal, because
+    /// the host's budget cut the pass short or the engine refused a file.
+    ///
+    /// The host reports this and unmounts rather than retaining it. A spill's
+    /// key is minted per handle and lives only in memory (`crate::spill`), so
+    /// state held past the unmount is unopenable ciphertext, not a retry.
+    pub fn dirty_writes(&self) -> usize {
+        self.pending
+            .values()
+            .filter(|pending| pending.dirty)
+            .count()
+    }
+
     /// Tear the mount down: every pinned stream released and every cached
     /// plaintext block zeroized. Writes still dirty here die with their spill —
     /// unopenable ciphertext and no half-formed op — so an orderly teardown

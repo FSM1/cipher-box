@@ -202,16 +202,23 @@ impl Projection {
     /// reach the op queue, then the handles and cached plaintext it held go.
     /// The engine goes on running.
     ///
+    /// Answers the handles that never reached the queue, which the host raises
+    /// as a warning — the budget below cuts the pass short rather than holding
+    /// the session, and a write lost that way may not be lost in silence
+    /// (blueprint/engine.md: never a silent failure).
+    ///
     /// Awaited by the host rather than inside [`next`](Self::next), which is
     /// cancel-safe and carries no network leg.
-    pub async fn quiesce_detached(&mut self) {
-        if let Self::Projected {
+    pub async fn quiesce_detached(&mut self) -> usize {
+        let Self::Projected {
             core, mount: None, ..
         } = self
-        {
-            journal_acked_writes(core).await;
-            core.unmount();
-        }
+        else {
+            return 0;
+        };
+        let owed = journal_acked_writes(core).await;
+        core.unmount();
+        owed
     }
 
     /// Answer one operation from the operation core.
@@ -256,7 +263,12 @@ impl Projection {
                 if let Some(mount) = mount.as_mut() {
                     mount.quiesce();
                 }
-                journal_acked_writes(&mut core).await;
+                let owed = journal_acked_writes(&mut core).await;
+                if owed > 0 {
+                    // The window is already going; stderr is the only surface a
+                    // quit still has.
+                    eprintln!("{owed} file changes did not reach the queue before the quit");
+                }
                 drop(mount);
                 core.unmount();
             }
@@ -266,15 +278,18 @@ impl Projection {
 }
 
 /// Journal what the mount acked and the kernel never flushed, ahead of the
-/// release that would drop it.
+/// release that would drop it, and answer the handles that still owe the queue.
 ///
 /// A `write` acks the bytes it took, and the SMB client behind FUSE-T can defer
 /// the close by tens of seconds, so a mount that goes away with a handle still
 /// dirty owes the queue those bytes (blueprint/desktop.md "Lifecycle"). Bounded
 /// like the mount that is still being made: a base block the journal has to
-/// fetch must not hold the session.
-async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalidator>) {
+/// fetch must not hold the session. What the bound or a refusal leaves behind is
+/// reported rather than retained — the spill key is per handle and memory-only,
+/// so it does not survive to be retried.
+async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalidator>) -> usize {
     let _ = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes()).await;
+    core.dirty_writes()
 }
 
 /// Mount at `at`, naming the mount point in whatever refused it — the member's

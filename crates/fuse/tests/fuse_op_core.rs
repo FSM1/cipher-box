@@ -2132,6 +2132,38 @@ fn a_teardown_journals_every_dirty_handle_and_not_the_first_one_only() {
 }
 
 #[test]
+fn what_the_quiesce_could_not_journal_is_countable_before_the_unmount() {
+    // The host bounds the quiesce and reports what the pass left behind, so the
+    // count has to answer the acked bytes that never became ops.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging) = mount_spilling_into(dir.path());
+    let mut handles = Vec::new();
+    for name in ["first.txt", "second.txt"] {
+        let (_attrs, handle) =
+            block_on(core.create(ROOT_INO, name, Access::ReadWrite)).expect("the create");
+        handles.push(handle);
+    }
+    assert_eq!(core.dirty_writes(), 0, "a create owes the queue nothing");
+    for handle in &handles {
+        block_on(core.write(*handle, 0, b"SECRET-1")).expect("the write lands");
+    }
+
+    assert_eq!(
+        core.dirty_writes(),
+        handles.len(),
+        "every acked write the kernel never flushed is owed"
+    );
+
+    block_on(core.quiesce_writes());
+
+    assert_eq!(
+        core.dirty_writes(),
+        0,
+        "a pass that journals everything leaves nothing to report"
+    );
+}
+
+#[test]
 fn a_teardown_journal_tells_the_kernel_nothing() {
     // The kernel session is going down, and a notify pushed after the quiesce
     // holds the unmount open.
