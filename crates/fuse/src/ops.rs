@@ -870,12 +870,16 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// defers it by tens of seconds — so this is what turns an acked write into
     /// an op rather than losing it with no error on any path.
     pub async fn quiesce_writes(&mut self) {
-        let dirty: Vec<HandleId> = self
+        let mut dirty: Vec<HandleId> = self
             .pending
             .iter()
             .filter(|(_, pending)| pending.dirty)
             .map(|(handle, _)| *handle)
             .collect();
+        // `pending` is a hash map. Sorted, so the budget the host puts on this
+        // pass cuts at the same place on every run, and the handle that has
+        // owed the longest is the one journalled first.
+        dirty.sort_unstable();
         for handle in dirty {
             // Journalled without the invalidation `commit` pairs with: the
             // kernel session is going down, and a notify pushed after the
