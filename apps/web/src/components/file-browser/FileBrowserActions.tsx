@@ -72,8 +72,9 @@ export function FileBrowserActions({
   const failure = actions.error ?? downloads.error;
   // A scope the engine reports read-only under an already-open dialog takes the
   // dialog down with it: its confirm is a write, and a gated menu entry does not
-  // reach one the user opened while the scope was still writable.
-  const open = dialog !== null && !writable && MUTATIONS.has(dialog.kind) ? null : dialog;
+  // reach one the user opened while the scope was still writable. The state goes
+  // with it, so a scope that turns writable again raises nothing of its own.
+  if (dialog !== null && !writable && MUTATIONS.has(dialog.kind)) setDialog(null);
 
   const close = () => setDialog(null);
   /**
@@ -205,7 +206,7 @@ export function FileBrowserActions({
         />
       )}
 
-      {open?.kind === 'create' && folder !== null && (
+      {dialog?.kind === 'create' && folder !== null && (
         <NamePromptDialog
           title="new folder"
           fieldLabel="folder name"
@@ -219,23 +220,23 @@ export function FileBrowserActions({
           onConfirm={(name) => closeOnSuccess(actions.createFolder(folder, name))}
         />
       )}
-      {open?.kind === 'rename' && (
+      {dialog?.kind === 'rename' && (
         <NamePromptDialog
-          title={`rename ${open.row.name}`}
+          title={`rename ${dialog.row.name}`}
           fieldLabel="new name"
-          initialName={open.row.storedName}
+          initialName={dialog.row.storedName}
           confirmLabel="rename"
           busyLabel="renaming..."
           testId="rename"
           onClose={close}
           busy={actions.busy === 'rename'}
           error={actions.error}
-          onConfirm={(name) => closeOnSuccess(actions.rename(open.row.id, name))}
+          onConfirm={(name) => closeOnSuccess(actions.rename(dialog.row.id, name))}
         />
       )}
-      {open?.kind === 'move' && (
+      {dialog?.kind === 'move' && (
         <MoveDialog
-          rows={open.rows}
+          rows={dialog.rows}
           parent={folder}
           onClose={close}
           busy={actions.busy === 'relink'}
@@ -243,32 +244,32 @@ export function FileBrowserActions({
           onConfirm={(newParent) =>
             closeOnBatch(
               actions.move(
-                open.rows.map((row) => row.id),
+                dialog.rows.map((row) => row.id),
                 newParent
               )
             )
           }
         />
       )}
-      {open?.kind === 'delete' && (
+      {dialog?.kind === 'delete' && (
         <ConfirmDeleteDialog
-          rows={open.rows}
+          rows={dialog.rows}
           onClose={close}
           busy={actions.busy === 'delete'}
           error={actions.error}
-          onConfirm={() => closeOnBatch(actions.remove(open.rows.map((row) => row.id)))}
+          onConfirm={() => closeOnBatch(actions.remove(dialog.rows.map((row) => row.id)))}
         />
       )}
-      {open?.kind === 'share' && <ShareDialog row={open.row} onClose={close} />}
-      {open?.kind === 'details' && (
-        <DetailsDialog row={open.row} writable={writable} onClose={close} />
+      {dialog?.kind === 'share' && <ShareDialog row={dialog.row} onClose={close} />}
+      {dialog?.kind === 'details' && (
+        <DetailsDialog row={dialog.row} writable={writable} onClose={close} />
       )}
-      {open?.kind === 'edit' && <TextEditorDialog row={open.row} onClose={close} />}
-      {open?.kind === 'preview' && (
+      {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
+      {dialog?.kind === 'preview' && (
         <FilePreviewDialog
-          row={open.row}
+          row={dialog.row}
           onClose={close}
-          onDownload={() => void downloads.save(saveRequest(open.row))}
+          onDownload={() => void downloads.save(saveRequest(dialog.row))}
         />
       )}
     </>

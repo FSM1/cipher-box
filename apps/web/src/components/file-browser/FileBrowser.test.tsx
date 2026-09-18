@@ -177,6 +177,18 @@ describe('the vault browser', () => {
     await screen.findByTestId('read-only-scope');
 
     expect(screen.queryByTestId('rename-dialog')).toBeNull();
+
+    // The dialog state goes with the dialog, so a scope the engine reports
+    // writable again raises nothing the member did not ask for.
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[2].resolve(view(ROOT_ID, 'fresh', 2));
+    });
+    await screen.findByTestId('new-folder-button');
+
+    expect(screen.queryByTestId('rename-dialog')).toBeNull();
   });
 
   it('re-drives the pull from the recoverable notice', async () => {
