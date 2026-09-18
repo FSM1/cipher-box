@@ -55,6 +55,7 @@ test('a hand-exchanged contact code carries a grant to the second client', async
   const row = shared.row(scope);
   await expect(row).toHaveCount(1);
   await expect(row.getByTestId('shared-standing')).toHaveAttribute('data-resolution', 'granted');
+  await expect(row.getByTestId('shared-permission')).toHaveText('read');
   await expect(shared.error).toHaveCount(0);
 
   await context.close();
