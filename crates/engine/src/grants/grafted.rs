@@ -380,6 +380,45 @@ pub(crate) async fn evict_grafted_read_seeds<F: FloorStore>(
     }
 }
 
+/// The same eviction for a grafted scope's cached **write** seed, which a write
+/// grantee's own drain pass publishes under.
+///
+/// Measured against the granting identity's read-epoch floor, not a write-epoch
+/// floor: a grantee's write capability arrives in the same grant blob as its
+/// read seed, so the owner's read-epoch rotation is what revokes it, and no
+/// grantee ever raises a write-epoch floor on a scope it does not own.
+///
+/// Own scopes are skipped outright rather than measured. Their write seeds are
+/// this vault's own material on its own ratchet, and reading them against a
+/// read-epoch floor would evict a seed that floor does not bound.
+pub(crate) async fn evict_grafted_write_seeds<F: FloorStore>(
+    floors: &F,
+    sharers: &GraftedSharers,
+    contact_label_seed: &SecretBytes,
+    own_root: &[u8; 16],
+    own_descendants: &BTreeSet<NodeId>,
+    write_seeds: &RefCell<ScopeSeeds>,
+) {
+    let held: Vec<[u8; 16]> = write_seeds.borrow().keys().copied().collect();
+    for scope_id in held {
+        if is_own_scope(own_root, own_descendants, &scope_id) {
+            continue;
+        }
+        match sharers.get(&scope_id) {
+            Some(sharer) => {
+                let view = SharerScopedFloorStore::granted_by(
+                    floors,
+                    ContactLabel::of(contact_label_seed, sharer),
+                );
+                refresh_seed_floor(&view, write_seeds, &scope_id, SeedFloor::Read).await;
+            }
+            None => {
+                write_seeds.borrow_mut().remove(&scope_id);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -999,5 +1038,81 @@ mod tests {
         ));
 
         assert!(seeds.borrow().contains_key(&OWN_ROOT));
+    }
+
+    /// A write grantee's capability rides the grant blob its read seed rides,
+    /// so the granting identity's read-epoch rotation is what revokes it.
+    #[test]
+    fn a_floor_rise_under_the_granting_identity_evicts_the_grafted_write_seed() {
+        let floors = InMemoryFloorStore::default();
+        let seeds = seeded(SCOPE, 1);
+
+        block_on(evict_grafted_write_seeds(
+            &floors,
+            &grafted(),
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::new(),
+            &seeds,
+        ));
+        assert!(
+            seeds.borrow().contains_key(&SCOPE),
+            "an unmoved floor evicts nothing"
+        );
+
+        block_on(
+            SharerScopedFloorStore::granted_by(&floors, ContactLabel::of(&label_seed(), &SHARER))
+                .raise_epoch_floor(&SCOPE, 2),
+        )
+        .expect("the floor raises");
+        block_on(evict_grafted_write_seeds(
+            &floors,
+            &grafted(),
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::new(),
+            &seeds,
+        ));
+
+        assert!(!seeds.borrow().contains_key(&SCOPE));
+    }
+
+    /// An own scope's write seed sits in the same cell and rides this vault's
+    /// own write-epoch ratchet, which a sharer's read-epoch floor does not bound.
+    #[test]
+    fn an_own_scopes_write_seed_is_left_to_its_own_leg() {
+        let floors = InMemoryFloorStore::default();
+        let seeds = seeded(SCOPE, 1);
+        block_on(floors.raise_epoch_floor(&SCOPE, 9)).expect("the floor raises");
+
+        block_on(evict_grafted_write_seeds(
+            &floors,
+            &GraftedSharers::new(),
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::from([NodeId(SCOPE)]),
+            &seeds,
+        ));
+
+        assert!(seeds.borrow().contains_key(&SCOPE));
+    }
+
+    /// A grafted write seed no identity answers for any more is dropped, exactly
+    /// as its read counterpart is.
+    #[test]
+    fn a_write_seed_whose_scope_left_the_map_is_dropped() {
+        let floors = InMemoryFloorStore::default();
+        let seeds = seeded(SCOPE, 1);
+
+        block_on(evict_grafted_write_seeds(
+            &floors,
+            &GraftedSharers::new(),
+            &label_seed(),
+            &OWN_ROOT,
+            &BTreeSet::new(),
+            &seeds,
+        ));
+
+        assert!(!seeds.borrow().contains_key(&SCOPE));
     }
 }

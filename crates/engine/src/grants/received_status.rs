@@ -25,7 +25,9 @@ use zeroize::Zeroizing;
 
 use crate::content::Gateway;
 use crate::entropy::Entropy;
-use crate::facade::{Event, NodeId, NodeKind, ScopeSeeds, deposit_seed, emit_trust_violation};
+use crate::facade::{
+    Event, NodeId, NodeKind, ScopeSeeds, deposit_seed, deposit_write_seed, emit_trust_violation,
+};
 use crate::gate::floor;
 use crate::gate::{
     Candidate, ReaderContext, RejectionReason, SeedBlob, adopt, read_cut_epoch_floor,
@@ -50,7 +52,7 @@ use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, ContestedNodes, GraftedPlane,
-    GraftedSharers, in_own_tree,
+    GraftedSharers, in_own_tree, is_own_scope,
 };
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
@@ -98,6 +100,15 @@ pub(crate) struct ScopeRender<'a> {
     pub base: &'a BaseSnapshot,
     /// Scope id -> the recovered read scope seed.
     pub read_seeds: &'a RefCell<ScopeSeeds>,
+    /// Scope id -> the recovered write scope seed, which a write grantee's own
+    /// drain pass derives every name and signer it publishes under.
+    pub write_seeds: &'a RefCell<ScopeSeeds>,
+    /// This vault's own root scope, and the scope roots a boundary walk proved
+    /// below it — the pair [`is_own_scope`] decides a grafted deposit against,
+    /// so a sharer-authored `scopeId` cannot land on an own scope's cell.
+    pub own_root: &'a [u8; 16],
+    /// See [`own_root`](Self::own_root).
+    pub own_descendants: &'a RefCell<BTreeSet<NodeId>>,
     /// Which identity granted each scope root the tree holds by graft — the
     /// floor namespace every leg below such a root must read in.
     pub grafted_sharers: &'a RefCell<GraftedSharers>,
@@ -380,13 +391,36 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     }
                     if renderable.contains(&share.scope_id) {
                         if let Some(open) = self
-                            .open(candidate, share, contact, floors.epoch, render)
+                            .open(candidate, share, contact, floors.epoch, permission, render)
                             .await
                         {
                             opened.push(open);
                         }
                     }
                 }
+            }
+            // A sharer authors the id it bookmarks under, so none of this
+            // reaches a scope this vault owns.
+            let grafted = !is_own_scope(
+                render.own_root,
+                &render.own_descendants.borrow(),
+                &share.scope_id,
+            );
+            // The live set commits this device nowhere, so the capability lapses
+            // on the pass that sees that rather than at a read-epoch floor a
+            // write-only cut never raises. In memory only: the commitment covers
+            // each row and not the blob set, so a stripped blob must destroy
+            // nothing at rest ([`ResolutionClass::RevocationSignal`]), and a
+            // later granted pass re-deposits both seeds.
+            if grafted && class == ResolutionClass::RevocationSignal {
+                permission = Permission::Read;
+                render.read_seeds.borrow_mut().remove(&share.scope_id);
+            }
+            // The cached write seed is held under the live permission alone, on
+            // every arm — including the ones that reach no blob at all, where
+            // [`Self::open`] never runs to drop it.
+            if grafted && permission != Permission::Write {
+                render.write_seeds.borrow_mut().remove(&share.scope_id);
             }
             refreshed.insert(
                 key,
@@ -539,9 +573,16 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         Some((candidate, SharedScopeFloors { epoch, cut_epoch }))
     }
 
-    /// Open the accepted scope's own folder body, and cache the read scope seed
-    /// the leg below its root reads with. `None` leaves the render tree as the
-    /// last pass left it.
+    /// Open the accepted scope's own folder body, and cache the scope seeds the
+    /// legs below its root run on: the read seed every read leg unseals with,
+    /// and — under a committed `Write` — the write seed this device's own drain
+    /// pass derives each published name and signer from. `None` leaves the
+    /// render tree as the last pass left it.
+    ///
+    /// Both seeds come off the record this pass just resolved, never off the
+    /// bookmark: a grant the owner has since cut yields no blob at this
+    /// device's tag, so the capability lapses with the grant instead of
+    /// outliving it at rest.
     ///
     /// Two records may render, and no third. A strictly-newer one adopts through
     /// the gate. One at exactly the durable sequence floor, at or above the
@@ -556,6 +597,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         share: &'s ReceivedShare,
         contact: &Contact,
         epoch_floor: u64,
+        permission: Permission,
         render: &ScopeRender<'_>,
     ) -> Option<Opened<'s>> {
         // A scope root is the node its own scope is named for, and the bookmark
@@ -637,6 +679,34 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             Zeroizing::new(*grant.read_scope_seed()),
             Some(epoch),
         );
+        if !is_own_scope(
+            render.own_root,
+            &render.own_descendants.borrow(),
+            &share.scope_id,
+        ) {
+            match (permission == Permission::Write)
+                .then(|| grant.write_scope_seed())
+                .flatten()
+            {
+                // Stamped with the read seed's epoch, which is the epoch the
+                // blob that carried both belongs to: an owner's rotation raises
+                // the read-epoch floor past it and evicts the write capability
+                // with the read one.
+                Some(write_scope_seed) => deposit_write_seed(
+                    render.write_seeds,
+                    share.scope_id,
+                    Zeroizing::new(*write_scope_seed),
+                    scope_name(&share.scope_root_name).ok().as_ref(),
+                    Some(epoch),
+                ),
+                // The blob this pass opened is the whole of the capability, so
+                // an owner that re-sealed the grant down to read cuts the write
+                // plane on this pass rather than at the next floor rise.
+                None => {
+                    render.write_seeds.borrow_mut().remove(&share.scope_id);
+                }
+            }
+        }
         Some(Opened {
             share,
             children,
@@ -1469,8 +1539,10 @@ mod tests {
         }
     }
 
-    /// The sharer's scope root serving `children`, granting this vault read.
-    fn shared_scope_fixture(children: Vec<ChildRef>) -> OwnerRootFixture {
+    /// The sharer's scope root serving `children`, granting this vault
+    /// `permission`. A `Write` row wraps the scope write seed into the blob, as
+    /// a real owner's re-seal does.
+    fn shared_scope_fixture(children: Vec<ChildRef>, permission: Permission) -> OwnerRootFixture {
         let sharer = sharer_signer();
         let grants = vec![
             mint_grant_row(
@@ -1481,7 +1553,7 @@ mod tests {
                 &my_enc().public(),
                 &SCOPE,
                 scope_root_name().as_str().as_bytes(),
-                Permission::Read,
+                permission,
             )
             .expect("a contributory recipient key"),
         ];
@@ -1532,11 +1604,16 @@ mod tests {
         entropy: RefCell<SeededEntropy>,
         base: BaseSnapshot,
         read_seeds: RefCell<ScopeSeeds>,
+        write_seeds: RefCell<ScopeSeeds>,
+        vault_root: [u8; 16],
+        own_descendants: RefCell<BTreeSet<NodeId>>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
         permissions: RefCell<BookmarkedPermissions>,
         claims: RefCell<ClaimRecord>,
         verdicts: RefCell<ReceivedVerdicts>,
+        /// The permission the served commitment grants, so a republish keeps it.
+        granted: Permission,
         /// Whether the last pass attributed abuse to the sharer.
         reported: Cell<bool>,
     }
@@ -1548,7 +1625,12 @@ mod tests {
 
         /// The same world, with this vault's own root anchored at `vault_root`.
         fn rooted_at(children: Vec<ChildRef>, vault_root: [u8; 16]) -> Self {
-            let fixture = shared_scope_fixture(children);
+            Self::granting(children, vault_root, Permission::Read)
+        }
+
+        /// The same world under a grant of `permission`.
+        fn granting(children: Vec<ChildRef>, vault_root: [u8; 16], permission: Permission) -> Self {
+            let fixture = shared_scope_fixture(children, permission);
             let records = InMemoryRecordStore::new(vec![EndpointId::new("e0")]);
             seed_scope_root(&records, &fixture, 1);
             let fx = Self {
@@ -1565,11 +1647,15 @@ mod tests {
                 entropy: RefCell::new(SeededEntropy::new(9)),
                 base: BaseSnapshot::new(Snapshot::new(NodeId(vault_root))),
                 read_seeds: RefCell::new(ScopeSeeds::new()),
+                write_seeds: RefCell::new(ScopeSeeds::new()),
+                vault_root,
+                own_descendants: RefCell::new(BTreeSet::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
                 permissions: RefCell::new(BookmarkedPermissions::new()),
                 claims: RefCell::new(ClaimRecord::default()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
+                granted: permission,
                 reported: Cell::new(false),
             };
             block_on(
@@ -1672,8 +1758,22 @@ mod tests {
         /// Answer the same name with `children` at `sequence` from now on — the
         /// republish the owner makes when it adds a file after the grant.
         fn republish(&mut self, children: Vec<ChildRef>, sequence: u64) {
-            self.fixture = shared_scope_fixture(children);
+            self.fixture = shared_scope_fixture(children, self.granted);
             seed_scope_root(&self.records, &self.fixture, sequence);
+        }
+
+        /// Answer the same name with a set that commits another recipient
+        /// alone — the owner's cut of this vault's own row, with no floor moved.
+        fn cut(&mut self, sequence: u64) {
+            self.fixture = published(&sharer_signer(), &[&someone_else()]);
+            seed_scope_root(&self.records, &self.fixture, sequence);
+        }
+
+        /// Re-seal the grant at `permission` and republish — the owner's
+        /// downgrade of a share this vault already accepted.
+        fn regrant(&mut self, permission: Permission, children: Vec<ChildRef>, sequence: u64) {
+            self.granted = permission;
+            self.republish(children, sequence);
         }
 
         /// One poll-cadence received-share pass, with the head block its resolve
@@ -1711,6 +1811,9 @@ mod tests {
                     &ScopeRender {
                         base: &self.base,
                         read_seeds: &self.read_seeds,
+                        write_seeds: &self.write_seeds,
+                        own_root: &self.vault_root,
+                        own_descendants: &self.own_descendants,
                         grafted_sharers: &self.grafted_sharers,
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
@@ -1840,6 +1943,159 @@ mod tests {
         assert!(
             fx.read_seeds.borrow().contains_key(&SCOPE),
             "the subtree below the root has read material to resolve with"
+        );
+        assert!(
+            fx.write_seeds.borrow().is_empty(),
+            "and a read grant leaves no write material behind"
+        );
+    }
+
+    /// A write grantee authors under the scope's own write plane, so the focus
+    /// leg has to leave the write seed where that device's own drain pass reads
+    /// it. The seed rides the same grant blob as the read seed.
+    #[test]
+    fn a_write_granted_scope_caches_the_write_seed_its_pass_publishes_under() {
+        let fx = RenderedScope::granting(
+            vec![shared_child(0xa1, "photos")],
+            VAULT_ROOT,
+            Permission::Write,
+        );
+        fx.bookmark_at(Permission::Write);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert!(
+            fx.write_seeds.borrow().contains_key(&SCOPE),
+            "the grafted scope has write material to publish under"
+        );
+    }
+
+    /// The committed permission is the owner's word and the bookmark's is only
+    /// the accept's snapshot of it. A bookmark that claims write against a
+    /// commitment that grants read must leave no write material.
+    #[test]
+    fn a_bookmark_claiming_write_over_a_read_commitment_caches_no_write_seed() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark_at(Permission::Write);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert!(
+            fx.write_seeds.borrow().is_empty(),
+            "the commitment decides, not the bookmark"
+        );
+    }
+
+    /// The owner cuts a write grant by re-sealing the blob down to read, which
+    /// need not move any floor. The cached write seed is the whole of the
+    /// capability, so the pass that reads the smaller blob has to drop it.
+    #[test]
+    fn an_owner_downgrade_to_read_drops_the_cached_write_seed() {
+        let mut fx = RenderedScope::granting(
+            vec![shared_child(0xa1, "photos")],
+            VAULT_ROOT,
+            Permission::Write,
+        );
+        fx.bookmark_at(Permission::Write);
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        assert!(fx.write_seeds.borrow().contains_key(&SCOPE));
+
+        fx.regrant(Permission::Read, vec![shared_child(0xa1, "photos")], 2);
+
+        assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
+        assert!(
+            fx.write_seeds.borrow().is_empty(),
+            "the write plane closes on the pass that reads the cut, not at the next floor rise"
+        );
+    }
+
+    /// A cut need move no floor, so the eviction pass that measures a grafted
+    /// seed against the granting identity's read-epoch floor never reaches this
+    /// one. The revoked row must therefore lose both cached seeds and its
+    /// permission on the pass that reads the cut, or the next tick builds a
+    /// write pass out of state the owner has withdrawn.
+    #[test]
+    fn a_revoked_share_loses_the_cached_capability_on_the_pass_that_reads_the_cut() {
+        let mut fx = RenderedScope::granting(
+            vec![shared_child(0xa1, "photos")],
+            VAULT_ROOT,
+            Permission::Write,
+        );
+        fx.bookmark_at(Permission::Write);
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        assert!(fx.write_seeds.borrow().contains_key(&SCOPE));
+
+        fx.cut(2);
+
+        assert_eq!(fx.forced_pass(1_000), ResolutionClass::RevocationSignal);
+        assert!(
+            fx.read_seeds.borrow().is_empty(),
+            "the capability lapses with the grant rather than outliving it"
+        );
+        assert!(fx.write_seeds.borrow().is_empty(), "the write plane too");
+        assert_eq!(
+            fx.permissions.borrow().get(&SCOPE),
+            Some(&Permission::Read),
+            "and the host gates no write affordance on a revoked row"
+        );
+    }
+
+    /// A scope no pass may render reaches no grant blob, so the deposit's own
+    /// removal arm never runs on it. The cached write seed follows the live
+    /// permission on every arm instead, or a scope two sharers contest keeps a
+    /// write capability this pass never re-established.
+    #[test]
+    fn a_scope_the_pass_never_opens_loses_a_write_seed_no_permission_holds() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark_sharers(&[
+            sharer_signer().verifying_key().to_sec1(),
+            OTHER_SHARER_IDENTITY_PK,
+        ]);
+        deposit_seed(&fx.write_seeds, SCOPE, Zeroizing::new([0x33; 32]), Some(0));
+
+        fx.pass(0);
+
+        assert!(fx.write_seeds.borrow().is_empty());
+    }
+
+    /// The sharer authors the `scopeId` it bookmarks under, so a revocation on
+    /// a scope this vault owns is a stripped row of the sharer's own set and
+    /// says nothing about this vault's material. Clearing on it would let any
+    /// contact cut this vault off its own plane.
+    #[test]
+    fn a_revocation_over_an_own_scope_id_clears_no_own_material() {
+        let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+        fx.own_descendants.borrow_mut().insert(NodeId(SCOPE));
+        for cell in [&fx.read_seeds, &fx.write_seeds] {
+            deposit_seed(cell, SCOPE, Zeroizing::new([0x33; 32]), Some(0));
+        }
+
+        fx.cut(2);
+
+        assert_eq!(fx.forced_pass(1_000), ResolutionClass::RevocationSignal);
+        assert!(fx.read_seeds.borrow().contains_key(&SCOPE));
+        assert!(fx.write_seeds.borrow().contains_key(&SCOPE));
+    }
+
+    /// A sharer authors its own `scopeId`, so one may name a scope this vault
+    /// already owns. The write-seed cell is keyed by that id alone, and taking
+    /// the deposit would hand this vault's own pass a key the sharer holds.
+    #[test]
+    fn a_write_grant_over_an_own_scope_id_is_refused_the_deposit() {
+        let fx = RenderedScope::granting(
+            vec![shared_child(0xa1, "photos")],
+            VAULT_ROOT,
+            Permission::Write,
+        );
+        fx.bookmark_at(Permission::Write);
+        fx.own_descendants.borrow_mut().insert(NodeId(SCOPE));
+
+        fx.pass(0);
+
+        assert!(
+            fx.write_seeds.borrow().is_empty(),
+            "an own scope's write plane is never a sharer's to supply"
         );
     }
 
@@ -2206,6 +2462,8 @@ mod tests {
         entropy: RefCell<SeededEntropy>,
         base: BaseSnapshot,
         read_seeds: RefCell<ScopeSeeds>,
+        write_seeds: RefCell<ScopeSeeds>,
+        own_descendants: RefCell<BTreeSet<NodeId>>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
         permissions: RefCell<BookmarkedPermissions>,
@@ -2261,6 +2519,8 @@ mod tests {
                 entropy: RefCell::new(SeededEntropy::new(9)),
                 base: BaseSnapshot::new(Snapshot::new(NodeId(VAULT_ROOT))),
                 read_seeds: RefCell::new(ScopeSeeds::new()),
+                write_seeds: RefCell::new(ScopeSeeds::new()),
+                own_descendants: RefCell::new(BTreeSet::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
                 permissions: RefCell::new(BookmarkedPermissions::new()),
@@ -2373,6 +2633,9 @@ mod tests {
                     &ScopeRender {
                         base: &self.base,
                         read_seeds: &self.read_seeds,
+                        write_seeds: &self.write_seeds,
+                        own_root: &VAULT_ROOT,
+                        own_descendants: &self.own_descendants,
                         grafted_sharers: &self.grafted_sharers,
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
@@ -2733,6 +2996,8 @@ mod tests {
         }
         let base = BaseSnapshot::new(snapshot);
         let read_seeds = RefCell::new(ScopeSeeds::new());
+        let write_seeds = RefCell::new(ScopeSeeds::new());
+        let own_descendants = RefCell::new(BTreeSet::new());
         let grafted_sharers = RefCell::new(GraftedSharers::new());
         let scope_roots = RefCell::new(BookmarkedScopeRoots::from([SCOPE]));
         let permissions = RefCell::new(BookmarkedPermissions::new());
@@ -2744,6 +3009,9 @@ mod tests {
             &ScopeRender {
                 base: &base,
                 read_seeds: &read_seeds,
+                write_seeds: &write_seeds,
+                own_root: &VAULT_ROOT,
+                own_descendants: &own_descendants,
                 grafted_sharers: &grafted_sharers,
                 scope_roots: &scope_roots,
                 permissions: &permissions,
