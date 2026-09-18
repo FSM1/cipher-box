@@ -399,6 +399,25 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     }
                 }
             }
+            // The live set commits this device nowhere, so the capability
+            // lapses on the pass that sees that rather than at a read-epoch
+            // floor a write-only cut never raises. In memory only: the
+            // commitment covers each row and not the blob set, so a stripped
+            // blob must destroy nothing at rest
+            // ([`ResolutionClass::RevocationSignal`]), and a later granted pass
+            // re-deposits both seeds. An own scope is left alone, because a
+            // sharer authors the id it bookmarks under.
+            if class == ResolutionClass::RevocationSignal
+                && !is_own_scope(
+                    render.own_root,
+                    &render.own_descendants.borrow(),
+                    &share.scope_id,
+                )
+            {
+                permission = Permission::Read;
+                render.read_seeds.borrow_mut().remove(&share.scope_id);
+                render.write_seeds.borrow_mut().remove(&share.scope_id);
+            }
             refreshed.insert(
                 key,
                 ReceivedVerdict {
@@ -1739,6 +1758,13 @@ mod tests {
             seed_scope_root(&self.records, &self.fixture, sequence);
         }
 
+        /// Answer the same name with a set that commits another recipient
+        /// alone — the owner's cut of this vault's own row, with no floor moved.
+        fn cut(&mut self, sequence: u64) {
+            self.fixture = published(&sharer_signer(), &[&someone_else()]);
+            seed_scope_root(&self.records, &self.fixture, sequence);
+        }
+
         /// Re-seal the grant at `permission` and republish — the owner's
         /// downgrade of a share this vault already accepted.
         fn regrant(&mut self, permission: Permission, children: Vec<ChildRef>, sequence: u64) {
@@ -1977,6 +2003,57 @@ mod tests {
             fx.write_seeds.borrow().is_empty(),
             "the write plane closes on the pass that reads the cut, not at the next floor rise"
         );
+    }
+
+    /// A cut need move no floor, so the eviction pass that measures a grafted
+    /// seed against the granting identity's read-epoch floor never reaches this
+    /// one. The revoked row must therefore lose both cached seeds and its
+    /// permission on the pass that reads the cut, or the next tick builds a
+    /// write pass out of state the owner has withdrawn.
+    #[test]
+    fn a_revoked_share_loses_the_cached_capability_on_the_pass_that_reads_the_cut() {
+        let mut fx = RenderedScope::granting(
+            vec![shared_child(0xa1, "photos")],
+            VAULT_ROOT,
+            Permission::Write,
+        );
+        fx.bookmark_at(Permission::Write);
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        assert!(fx.write_seeds.borrow().contains_key(&SCOPE));
+
+        fx.cut(2);
+
+        assert_eq!(fx.forced_pass(1_000), ResolutionClass::RevocationSignal);
+        assert!(
+            fx.read_seeds.borrow().is_empty(),
+            "the capability lapses with the grant rather than outliving it"
+        );
+        assert!(fx.write_seeds.borrow().is_empty(), "the write plane too");
+        assert_eq!(
+            fx.permissions.borrow().get(&SCOPE),
+            Some(&Permission::Read),
+            "and the host gates no write affordance on a revoked row"
+        );
+    }
+
+    /// The sharer authors the `scopeId` it bookmarks under, so a revocation on
+    /// a scope this vault owns is a stripped row of the sharer's own set and
+    /// says nothing about this vault's material. Clearing on it would let any
+    /// contact cut this vault off its own plane.
+    #[test]
+    fn a_revocation_over_an_own_scope_id_clears_no_own_material() {
+        let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+        fx.own_descendants.borrow_mut().insert(NodeId(SCOPE));
+        for cell in [&fx.read_seeds, &fx.write_seeds] {
+            deposit_seed(cell, SCOPE, Zeroizing::new([0x33; 32]), Some(0));
+        }
+
+        fx.cut(2);
+
+        assert_eq!(fx.forced_pass(1_000), ResolutionClass::RevocationSignal);
+        assert!(fx.read_seeds.borrow().contains_key(&SCOPE));
+        assert!(fx.write_seeds.borrow().contains_key(&SCOPE));
     }
 
     /// A sharer authors its own `scopeId`, so one may name a scope this vault

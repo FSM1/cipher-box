@@ -4291,8 +4291,17 @@ fn install_descendant_scopes(
             cell.borrow_mut().remove(&scope.0);
         }
     }
+    let promoted: BTreeSet<NodeId> = reached.difference(&known.borrow()).copied().collect();
     known.borrow_mut().extend(reached);
     for scope in proved {
+        // Past this boundary the eviction pass reads the scope as this vault's
+        // own and stops measuring its write seed against a granting identity's
+        // floor (`evict_grafted_write_seeds`). A seed the graft left behind
+        // would therefore be resident for good, so the promotion keeps only
+        // what this walk itself proved.
+        if promoted.contains(&NodeId(scope.scope_id)) {
+            write_seeds.borrow_mut().remove(&scope.scope_id);
+        }
         deposit_seed(
             read_seeds,
             scope.scope_id,
@@ -11308,9 +11317,12 @@ mod tests {
         use super::*;
 
         use cipherbox_core::kdf;
+        use cipherbox_core::seal::PreservedFields;
         use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
+        use crate::gate::Adopted;
         use crate::grants::grafted::GraftedSharers;
+        use crate::net::rotation::{ScopeWritePlane, WritePlaneDark};
         use crate::sync::model::NodeMeta;
         use crate::sync::model::Snapshot;
 
@@ -11423,6 +11435,85 @@ mod tests {
                     "{case}",
                 );
             }
+        }
+
+        /// One level as a boundary walk proved it, with `write` as the caller
+        /// gives it.
+        fn proved(write: Result<ScopeWritePlane, WritePlaneDark>) -> DescendantScopeRoot {
+            DescendantScopeRoot {
+                scope_id: SHARED,
+                name: derive_write_name(&WRITE_SCOPE_SEED, &SHARED),
+                parent_node_seed: Zeroizing::new([0x21; 32]),
+                adopted: Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: PreservedFields::new(),
+                    },
+                    sequence: 1,
+                    epoch: 3,
+                },
+                read_scope_seed: Zeroizing::new(READ_SCOPE_SEED),
+                write,
+            }
+        }
+
+        /// A scope a walk promotes into this vault's own set leaves its grafted
+        /// write seed behind. Past that boundary the eviction pass never
+        /// measures the entry again, so a seed the promotion cannot re-prove
+        /// would publish under a sharer's material on this vault's own plane.
+        ///
+        /// The clear is the promotion's alone: a scope the set already holds
+        /// keeps the seed of its last proved write plane through a pass that
+        /// merely could not open one.
+        #[test]
+        fn a_promotion_that_proves_no_write_plane_drops_the_grafted_write_seed() {
+            for (case, already_known, held) in [
+                ("the walk promotes the scope", false, false),
+                ("the set already holds the scope", true, true),
+            ] {
+                let known = RefCell::new(match already_known {
+                    true => BTreeSet::from([NodeId(SHARED)]),
+                    false => BTreeSet::new(),
+                });
+                let write_seeds = seeds(SHARED, WRITE_SCOPE_SEED);
+                let (events, _rx) = mpsc::unbounded();
+
+                install_descendant_scopes(
+                    &known,
+                    &seeds(SHARED, READ_SCOPE_SEED),
+                    &write_seeds,
+                    &base(),
+                    &events,
+                    &[proved(Err(WritePlaneDark::Keyless))],
+                );
+
+                assert_eq!(write_seeds.borrow().contains_key(&SHARED), held, "{case}",);
+            }
+        }
+
+        /// A promotion the walk did prove a write plane for keeps that plane:
+        /// the clear above is the stale graft's, not the proved material's.
+        #[test]
+        fn a_promotion_that_proves_a_write_plane_holds_the_proved_seed() {
+            let known = RefCell::new(BTreeSet::new());
+            let write_seeds = RefCell::new(ScopeSeeds::new());
+            let (events, _rx) = mpsc::unbounded();
+
+            install_descendant_scopes(
+                &known,
+                &seeds(SHARED, READ_SCOPE_SEED),
+                &write_seeds,
+                &base(),
+                &events,
+                &[proved(Ok(ScopeWritePlane {
+                    seed: Zeroizing::new(WRITE_SCOPE_SEED),
+                    epoch: 2,
+                }))],
+            );
+
+            assert!(write_seeds.borrow().contains_key(&SHARED));
         }
 
         /// A scope the render tree does not hold has no name to publish under:

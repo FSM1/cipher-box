@@ -8220,29 +8220,41 @@ mod tests {
             ("the pass lists the grafted root", vec![HARNESS_ROOT], true),
             ("the pass lists the vault root only", vec![VAULT], false),
         ] {
-            let mut harness = drain_harness(Some(harness_root_envelope()));
-            harness.base = BaseSnapshot::new(grafted.clone());
-            harness.scope_roots = roots;
-            let drain = harness.drain();
-            let scope = harness.scope();
-            let mut pass = Pass {
-                root: HARNESS_ROOT,
-                epoch: OWNER_ROOT_EPOCH,
-                history_links: Vec::new(),
-                second_ratchet: None,
-                folders: Vec::new(),
-                journalled: Vec::new(),
-            };
+            for (target, target_case) in [
+                (HARNESS_ROOT, "at the grafted root"),
+                (FOLDER, "below the grafted root"),
+            ] {
+                let mut harness = drain_harness(Some(harness_root_envelope()));
+                harness.base = BaseSnapshot::new(grafted.clone());
+                harness.scope_roots = roots.clone();
+                let drain = harness.drain();
+                let scope = harness.scope();
+                let mut pass = Pass {
+                    root: HARNESS_ROOT,
+                    epoch: OWNER_ROOT_EPOCH,
+                    history_links: Vec::new(),
+                    second_ratchet: None,
+                    folders: Vec::new(),
+                    journalled: Vec::new(),
+                };
 
-            let plane = block_on(drain.ensure_folder(&scope, &mut pass, HARNESS_ROOT));
+                let plane = block_on(drain.ensure_folder(&scope, &mut pass, target));
 
-            match routed {
-                true => assert_eq!(
-                    plane.map(|plane| plane.end.root).ok(),
-                    Some(HARNESS_ROOT),
-                    "{case}",
-                ),
-                false => assert_eq!(plane.err(), Some(Halt::Unclassified), "{case}"),
+                if target == HARNESS_ROOT {
+                    match routed {
+                        true => assert_eq!(
+                            plane.map(|plane| plane.end.root).ok(),
+                            Some(HARNESS_ROOT),
+                            "{case}",
+                        ),
+                        false => assert_eq!(plane.err(), Some(Halt::Unclassified), "{case}"),
+                    }
+                }
+                // The routing is the nearest listed root over the whole ancestor
+                // chain, not the target itself: a folder below the parentless
+                // root opens that root too. This harness serves no body for the
+                // folder, so the root the pass holds is what the chain proves.
+                assert_eq!(pass.holds(HARNESS_ROOT), routed, "{case}, {target_case}");
             }
         }
     }
