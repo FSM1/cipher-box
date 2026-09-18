@@ -9,9 +9,10 @@ import { SharedPage } from '../page-objects/shared.page';
 import { expect, published, test } from './fixtures';
 import { grant, OWNER_FOLDER } from './sharing';
 
-// Held out of the run: on the deployed front a grant never reaches the
-// recipient's `/shared`, so the profile cannot pass whatever it waits. It runs
-// again as soon as a grant is delivered.
+// Held out of the run past the grant: the write grant now reaches the recipient
+// and the recipient opens the folder, but the recipient's own upload into that
+// folder never renders a row. The write leg is what stands; the delivery leg no
+// longer does.
 test.fixme();
 
 const WRITTEN = 'written-by-the-recipient.bin';

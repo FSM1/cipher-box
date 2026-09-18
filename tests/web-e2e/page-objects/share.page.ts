@@ -138,10 +138,7 @@ export class SharePage {
    * the placeholder.
    */
   async grantTo(code: string, permission: 'read' | 'write'): Promise<void> {
-    await this.openImport();
-    await this.contactCode.fill(code);
-    await this.importConfirm.click();
-    await expect(this.importForm).toHaveCount(0);
+    await this.importContact(code);
 
     await this.recipientChoice.selectOption({ index: 1 });
     await this.permissionChoice.selectOption(permission);
@@ -150,6 +147,18 @@ export class SharePage {
     // plane the row lands well after the click.
     await expect(this.grantRows).toHaveCount(1, { timeout: 180_000 });
     await expect(this.permission).toHaveText(permission);
+  }
+
+  /**
+   * Imports `code` into this member's contact book, without granting. A grant
+   * is delivered over the mailbox, and the recipient drops an item whose sender
+   * its own book does not anchor, so both sides import before either grants.
+   */
+  async importContact(code: string): Promise<void> {
+    await this.openImport();
+    await this.contactCode.fill(code);
+    await this.importConfirm.click();
+    await expect(this.importForm).toHaveCount(0);
   }
 
   /** This member's own code, read off the import step it is shown beside. */
