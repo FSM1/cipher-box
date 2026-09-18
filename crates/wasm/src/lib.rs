@@ -901,7 +901,7 @@ impl SnapshotView {
 
     /// Whether the listed folder stands in a scope another vault granted this
     /// one, which the write plane cannot author under.
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(getter, js_name = receivedShare)]
     pub fn received_share(&self) -> bool {
         self.inner.received_share
     }
