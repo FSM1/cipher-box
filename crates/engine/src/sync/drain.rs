@@ -8199,6 +8199,54 @@ mod tests {
         );
     }
 
+    /// A grafted scope root is planted parentless, so the ancestor chain of
+    /// anything below it never reaches the vault root and no walk from that
+    /// root can prove it. The pass routes by its own listed roots, so the
+    /// grafted root has to be one of them: without it the op halts
+    /// unclassified, and the wide outage budget retries that halt while it
+    /// holds the strict FIFO head.
+    #[test]
+    fn a_parentless_scope_root_classifies_only_when_the_pass_routes_by_it() {
+        const VAULT: NodeId = NodeId([0x01; 16]);
+        const FOLDER: NodeId = NodeId([0x6b; 16]);
+
+        let mut grafted = Snapshot::new(VAULT);
+        for (id, name) in [(HARNESS_ROOT, "shared"), (FOLDER, "sub")] {
+            grafted.upsert_node(NodeMeta::new(id, name, crate::facade::NodeKind::Folder));
+        }
+        grafted.link_next(HARNESS_ROOT, FOLDER);
+
+        for (case, roots, routed) in [
+            ("the pass lists the grafted root", vec![HARNESS_ROOT], true),
+            ("the pass lists the vault root only", vec![VAULT], false),
+        ] {
+            let mut harness = drain_harness(Some(harness_root_envelope()));
+            harness.base = BaseSnapshot::new(grafted.clone());
+            harness.scope_roots = roots;
+            let drain = harness.drain();
+            let scope = harness.scope();
+            let mut pass = Pass {
+                root: HARNESS_ROOT,
+                epoch: OWNER_ROOT_EPOCH,
+                history_links: Vec::new(),
+                second_ratchet: None,
+                folders: Vec::new(),
+                journalled: Vec::new(),
+            };
+
+            let plane = block_on(drain.ensure_folder(&scope, &mut pass, HARNESS_ROOT));
+
+            match routed {
+                true => assert_eq!(
+                    plane.map(|plane| plane.end.root).ok(),
+                    Some(HARNESS_ROOT),
+                    "{case}",
+                ),
+                false => assert_eq!(plane.err(), Some(Halt::Unclassified), "{case}"),
+            }
+        }
+    }
+
     /// The bin sweep runs once per proved scope, so a per-pass bound would let
     /// a tick stage its whole share again for every scope the owner holds.
     #[test]
