@@ -399,23 +399,27 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     }
                 }
             }
-            // The live set commits this device nowhere, so the capability
-            // lapses on the pass that sees that rather than at a read-epoch
-            // floor a write-only cut never raises. In memory only: the
-            // commitment covers each row and not the blob set, so a stripped
-            // blob must destroy nothing at rest
-            // ([`ResolutionClass::RevocationSignal`]), and a later granted pass
-            // re-deposits both seeds. An own scope is left alone, because a
-            // sharer authors the id it bookmarks under.
-            if class == ResolutionClass::RevocationSignal
-                && !is_own_scope(
-                    render.own_root,
-                    &render.own_descendants.borrow(),
-                    &share.scope_id,
-                )
-            {
+            // A sharer authors the id it bookmarks under, so none of this
+            // reaches a scope this vault owns.
+            let grafted = !is_own_scope(
+                render.own_root,
+                &render.own_descendants.borrow(),
+                &share.scope_id,
+            );
+            // The live set commits this device nowhere, so the capability lapses
+            // on the pass that sees that rather than at a read-epoch floor a
+            // write-only cut never raises. In memory only: the commitment covers
+            // each row and not the blob set, so a stripped blob must destroy
+            // nothing at rest ([`ResolutionClass::RevocationSignal`]), and a
+            // later granted pass re-deposits both seeds.
+            if grafted && class == ResolutionClass::RevocationSignal {
                 permission = Permission::Read;
                 render.read_seeds.borrow_mut().remove(&share.scope_id);
+            }
+            // The cached write seed is held under the live permission alone, on
+            // every arm — including the ones that reach no blob at all, where
+            // [`Self::open`] never runs to drop it.
+            if grafted && permission != Permission::Write {
                 render.write_seeds.borrow_mut().remove(&share.scope_id);
             }
             refreshed.insert(
@@ -2034,6 +2038,24 @@ mod tests {
             Some(&Permission::Read),
             "and the host gates no write affordance on a revoked row"
         );
+    }
+
+    /// A scope no pass may render reaches no grant blob, so the deposit's own
+    /// removal arm never runs on it. The cached write seed follows the live
+    /// permission on every arm instead, or a scope two sharers contest keeps a
+    /// write capability this pass never re-established.
+    #[test]
+    fn a_scope_the_pass_never_opens_loses_a_write_seed_no_permission_holds() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark_sharers(&[
+            sharer_signer().verifying_key().to_sec1(),
+            OTHER_SHARER_IDENTITY_PK,
+        ]);
+        deposit_seed(&fx.write_seeds, SCOPE, Zeroizing::new([0x33; 32]), Some(0));
+
+        fx.pass(0);
+
+        assert!(fx.write_seeds.borrow().is_empty());
     }
 
     /// The sharer authors the `scopeId` it bookmarks under, so a revocation on
