@@ -183,6 +183,13 @@ export interface SnapshotDescriptor {
   folder: Uint8Array;
   /** The listed folder's own name, empty at the root. */
   folderName: string;
+  /**
+   * What this vault may do in the scope the listed folder belongs to. A
+   * received share carries the permission its accepted grant recorded; every
+   * other scope is this vault's own. A host refuses a write at the gesture on
+   * this, rather than leaving the drain to refuse it.
+   */
+  permission: Permission;
   children: SnapshotChildDescriptor[];
   ancestors: BreadcrumbDescriptor[];
   deadLetters: DeadLetterDescriptor[];

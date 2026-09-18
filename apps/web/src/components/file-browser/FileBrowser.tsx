@@ -19,6 +19,10 @@ export function FileBrowser() {
   // interrupted; anything else is a verdict and blanks it.
   const recoverable = error !== null && isRecoverable(error) ? error : null;
   const settled = !isLoading && (error === null || (recoverable !== null && folder !== null));
+  // The engine's own verdict for the open scope, read closed: a read grant
+  // still queues a write here and dead-letters it at the drain, so nothing but
+  // a reported write offers one.
+  const writable = view?.permission === 'write';
 
   return (
     <div className="file-browser" data-testid="file-browser">
@@ -49,11 +53,18 @@ export function FileBrowser() {
       )}
       {/* Mounted whatever the route says, so a running upload survives a folder
           change; only its drop target waits for a folder that can take one. */}
-      <UploadPanel folder={settled ? folder : null} />
+      <UploadPanel folder={settled && writable ? folder : null} />
+      {settled && !writable && (
+        <p className="file-browser-notice" role="status" data-testid="read-only-scope">
+          this folder was shared with you to read. you can open and download what is in it, but you
+          cannot change it.
+        </p>
+      )}
       {settled && (
         <FileBrowserActions
           rows={rows}
           folder={folder}
+          writable={writable}
           showParentRow={!isRoot}
           onOpen={navigateTo}
           onNavigateUp={navigateUp}

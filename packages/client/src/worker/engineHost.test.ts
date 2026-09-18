@@ -52,6 +52,7 @@ const emptyView = {
   root: new Uint8Array(16),
   folder: new Uint8Array(16),
   folderName: '',
+  permission: fakeWasmEnums.Permission.Write,
   children: [],
   ancestors: [],
   deadLetters: [],

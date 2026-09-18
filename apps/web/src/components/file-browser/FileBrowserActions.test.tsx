@@ -56,6 +56,7 @@ function folderView(overrides: Partial<SnapshotDescriptor> = {}): SnapshotDescri
     root: ROOT,
     folder: ROOT,
     folderName: '',
+    permission: 'write',
     children: [],
     ancestors: [],
     deadLetters: [],

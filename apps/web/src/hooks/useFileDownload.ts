@@ -144,7 +144,7 @@ export function useFileDownload(): FileDownload {
         const bytes = await client.facade.download(node);
         const url = URL.createObjectURL(new Blob([bytes], { type: OPAQUE }));
         saveBlobToDisk(url, name);
-        deferRelease(() => URL.revokeObjectURL(url));
+        void deferRelease(() => URL.revokeObjectURL(url));
         // The cleanup this timer is owned by has already run.
         if (!mounted.current) releaseDeferred();
         return 'saved';

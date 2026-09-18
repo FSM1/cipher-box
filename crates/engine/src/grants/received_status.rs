@@ -48,7 +48,8 @@ use super::accept::{BookmarkKey, ReceivedShare};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::grafted::{
-    BookmarkedScopeRoots, ClaimRecord, ContestedNodes, GraftedPlane, GraftedSharers, in_own_tree,
+    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, ContestedNodes, GraftedPlane,
+    GraftedSharers, in_own_tree,
 };
 use super::ledger::{recipient_blinded_tag, self_locate_signed};
 use super::received_share_store::StagingReceivedShareStore;
@@ -98,6 +99,10 @@ pub(crate) struct ScopeRender<'a> {
     /// The bookmarked scope-root set every leg below a grafted root applies its
     /// cross-plane rule against ([`GraftedPlane`]).
     pub scope_roots: &'a RefCell<BookmarkedScopeRoots>,
+    /// What each bookmarked scope's accepted grant permits this vault to do,
+    /// which is what a host gates its write affordances on
+    /// ([`BookmarkedPermissions`]).
+    pub permissions: &'a RefCell<BookmarkedPermissions>,
     /// What each renderable scope's body last named — the per-node claim this
     /// pass folds its scope-root bodies into, and every leg below a grafted
     /// root reads.
@@ -282,6 +287,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             verdicts.borrow_mut().clear();
             render.grafted_sharers.borrow_mut().clear();
             render.scope_roots.borrow_mut().clear();
+            render.permissions.borrow_mut().clear();
             render.claims.borrow_mut().clear();
             return;
         }
@@ -308,6 +314,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .map(|granted| granted.scope_id)
             .collect();
         *render.scope_roots.borrow_mut() = received.iter().map(|share| share.scope_id).collect();
+        *render.permissions.borrow_mut() = received
+            .iter()
+            .map(|share| (share.scope_id, share.permission))
+            .collect();
         // Rebuilt each pass, like the verdicts. It covers every renderable
         // scope and not only the ones this pass grafts: a revoked share keeps
         // the listing it last rendered, and the leg below it must keep reading
@@ -1410,6 +1420,7 @@ mod tests {
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
+        permissions: RefCell<BookmarkedPermissions>,
         claims: RefCell<ClaimRecord>,
         verdicts: RefCell<ReceivedVerdicts>,
         /// Whether the last pass attributed abuse to the sharer.
@@ -1484,6 +1495,7 @@ mod tests {
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
+                permissions: RefCell::new(BookmarkedPermissions::new()),
                 claims: RefCell::new(ClaimRecord::default()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
                 reported: Cell::new(false),
@@ -1597,6 +1609,7 @@ mod tests {
                         read_seeds: &self.read_seeds,
                         grafted_sharers: &self.grafted_sharers,
                         scope_roots: &self.scope_roots,
+                        permissions: &self.permissions,
                         claims: &self.claims,
                         events: &events,
                     },
@@ -1666,6 +1679,21 @@ mod tests {
         assert!(
             fx.read_seeds.borrow().contains_key(&SCOPE),
             "the subtree below the root has read material to resolve with"
+        );
+    }
+
+    /// A host refuses a write at the gesture on the permission the accept
+    /// recorded, so the pass has to leave it where a folder read can find it.
+    #[test]
+    fn an_accepted_scope_records_the_permission_it_was_granted_under() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+
+        fx.pass(0);
+
+        assert_eq!(
+            fx.permissions.borrow().get(&SCOPE).copied(),
+            Some(Permission::Read)
         );
     }
 
@@ -1983,6 +2011,7 @@ mod tests {
         read_seeds: RefCell<ScopeSeeds>,
         grafted_sharers: RefCell<GraftedSharers>,
         scope_roots: RefCell<BookmarkedScopeRoots>,
+        permissions: RefCell<BookmarkedPermissions>,
         claims: RefCell<ClaimRecord>,
         verdicts: RefCell<ReceivedVerdicts>,
     }
@@ -2037,6 +2066,7 @@ mod tests {
                 read_seeds: RefCell::new(ScopeSeeds::new()),
                 grafted_sharers: RefCell::new(GraftedSharers::new()),
                 scope_roots: RefCell::new(BookmarkedScopeRoots::new()),
+                permissions: RefCell::new(BookmarkedPermissions::new()),
                 claims: RefCell::new(ClaimRecord::default()),
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
             };
@@ -2147,6 +2177,7 @@ mod tests {
                         read_seeds: &self.read_seeds,
                         grafted_sharers: &self.grafted_sharers,
                         scope_roots: &self.scope_roots,
+                        permissions: &self.permissions,
                         claims: &self.claims,
                         events: &events,
                     },
@@ -2506,6 +2537,7 @@ mod tests {
         let read_seeds = RefCell::new(ScopeSeeds::new());
         let grafted_sharers = RefCell::new(GraftedSharers::new());
         let scope_roots = RefCell::new(BookmarkedScopeRoots::from([SCOPE]));
+        let permissions = RefCell::new(BookmarkedPermissions::new());
         let claims = RefCell::new(ClaimRecord::default());
         let (events, _rx) = mpsc::unbounded();
 
@@ -2516,6 +2548,7 @@ mod tests {
                 read_seeds: &read_seeds,
                 grafted_sharers: &grafted_sharers,
                 scope_roots: &scope_roots,
+                permissions: &permissions,
                 claims: &claims,
                 events: &events,
             },

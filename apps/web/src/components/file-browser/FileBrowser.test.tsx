@@ -72,6 +72,49 @@ describe('the vault browser', () => {
     expect(screen.queryAllByTestId('file-list-item')).toHaveLength(0);
   });
 
+  /**
+   * A read grant still queues a write, which the drain then dead-letters, so
+   * the refusal has to happen at the gesture rather than after the loss.
+   */
+  it('offers no write affordance in a scope held on a read grant', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve({ ...view(ROOT_ID, 'fresh', 2), permission: 'read' });
+    });
+    await screen.findByTestId('read-only-scope');
+
+    expect(screen.getAllByTestId('file-list-item')).toHaveLength(2);
+    expect(screen.queryByTestId('new-folder-button')).toBeNull();
+    expect(screen.queryByTestId('upload-zone')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('file-list-item-menu')[0]);
+    });
+    const labels = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(labels).toEqual(['download', 'details']);
+  });
+
+  it('offers the write affordances in a scope this vault writes', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve(view(ROOT_ID, 'fresh', 2));
+    });
+    await screen.findByTestId('new-folder-button');
+
+    expect(screen.queryByTestId('read-only-scope')).toBeNull();
+    expect(screen.getByTestId('upload-zone')).toBeTruthy();
+  });
+
   it('re-drives the pull from the recoverable notice', async () => {
     const engine = await listedThenFailed(
       new EngineRequestError('too many read streams are already open', 'tooManyStreams')

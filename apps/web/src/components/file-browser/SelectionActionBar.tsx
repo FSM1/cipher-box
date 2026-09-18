@@ -6,6 +6,8 @@ interface SelectionActionBarProps {
   rows: ListingRow[];
   /** True while a command is in flight, which disables every action. */
   busy: boolean;
+  /** False in a scope this vault only holds a read grant over. */
+  writable: boolean;
   onClear: () => void;
   onDownload: () => void;
   onMove: () => void;
@@ -16,6 +18,7 @@ interface SelectionActionBarProps {
 export function SelectionActionBar({
   rows,
   busy,
+  writable,
   onClear,
   onDownload,
   onMove,
@@ -46,24 +49,28 @@ export function SelectionActionBar({
             [DOWNLOAD]
           </button>
         )}
-        <button
-          type="button"
-          className="file-browser-toolbar-button"
-          onClick={onMove}
-          disabled={busy}
-          data-testid="selection-move"
-        >
-          [MOVE]
-        </button>
-        <button
-          type="button"
-          className="file-browser-toolbar-button selection-action-bar-delete"
-          onClick={onDelete}
-          disabled={busy}
-          data-testid="selection-delete"
-        >
-          [DELETE]
-        </button>
+        {writable && (
+          <>
+            <button
+              type="button"
+              className="file-browser-toolbar-button"
+              onClick={onMove}
+              disabled={busy}
+              data-testid="selection-move"
+            >
+              [MOVE]
+            </button>
+            <button
+              type="button"
+              className="file-browser-toolbar-button selection-action-bar-delete"
+              onClick={onDelete}
+              disabled={busy}
+              data-testid="selection-delete"
+            >
+              [DELETE]
+            </button>
+          </>
+        )}
         <button
           type="button"
           className="selection-action-bar-clear"

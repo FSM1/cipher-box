@@ -311,6 +311,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         root: facade::NodeId([1u8; 16]),
         folder: facade::NodeId([2u8; 16]),
         folder_name: "holiday".into(),
+        permission: facade::Permission::Write,
         children: vec![
             facade::SnapshotChild {
                 id: facade::NodeId([3u8; 16]),
@@ -515,6 +516,7 @@ fn a_settings_queue_hold_crosses_with_its_check_and_no_byte_figure() {
         root: facade::NodeId([1u8; 16]),
         folder: facade::NodeId([1u8; 16]),
         folder_name: String::new(),
+        permission: facade::Permission::Write,
         children: Vec::new(),
         ancestors: Vec::new(),
         dead_letters: Vec::new(),

@@ -16,6 +16,19 @@ export class FilesPage {
     return this.page.getByTestId('breadcrumbs');
   }
 
+  get newFolderButton(): Locator {
+    return this.page.getByTestId('new-folder-button');
+  }
+
+  get uploadZone(): Locator {
+    return this.page.getByTestId('upload-zone');
+  }
+
+  /** The notice a scope this vault only reads renders in place of the writes. */
+  get readOnlyNotice(): Locator {
+    return this.page.getByTestId('read-only-scope');
+  }
+
   get status(): Locator {
     return this.page.getByTestId('status-indicator');
   }

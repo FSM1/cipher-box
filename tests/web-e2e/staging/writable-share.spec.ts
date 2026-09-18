@@ -58,4 +58,12 @@ test('a write grant lets a second identity build inside the folder', async ({
   await list.open();
   await list.awaitStanding('granted', 600_000);
   await expect(list.rows.getByTestId('shared-permission')).toHaveText('read');
+
+  // The downgrade has to reach the browser too: a write offered here queues an
+  // op the drain can only dead-letter.
+  const scope = await list.rows.getAttribute('data-scope');
+  await list.openShare(scope ?? '');
+  await expect(recipientFiles.readOnlyNotice).toBeVisible({ timeout: 60_000 });
+  await expect(recipientFiles.newFolderButton).toHaveCount(0);
+  await expect(recipientFiles.uploadZone).toHaveCount(0);
 });

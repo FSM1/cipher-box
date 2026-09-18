@@ -58,8 +58,8 @@ use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprov
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
-    BookmarkedScopeRoots, ClaimRecord, GraftedSharers, evict_grafted_read_seeds, floor_view,
-    is_own_scope,
+    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, GraftedSharers,
+    evict_grafted_read_seeds, floor_view, is_own_scope,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{
@@ -770,6 +770,11 @@ pub struct SnapshotView {
     /// `ancestors` (which starts at the parent) and must not cache a name across
     /// a navigation, so the view carries it.
     pub folder_name: String,
+    /// What this vault may do in the scope the listed folder belongs to. A
+    /// received share carries the permission its accepted grant recorded; every
+    /// other scope is this vault's own, which it writes by ownership. A host
+    /// refuses a write at the gesture on this, rather than at the drain.
+    pub permission: Permission,
     /// Direct children, deterministically ordered by node id.
     pub children: Vec<SnapshotChild>,
     /// Ancestor trail from the folder's parent up to and including the root,
@@ -791,6 +796,7 @@ impl fmt::Debug for SnapshotView {
             .field("root", &self.root)
             .field("folder", &self.folder)
             .field("folder_name", &RedactedText::of(&self.folder_name))
+            .field("permission", &self.permission)
             .field("children", &self.children)
             .field("ancestors", &self.ancestors)
             .field("dead_letters", &self.dead_letters)
@@ -4605,6 +4611,10 @@ pub struct Engine<T: SeamTypes> {
     /// leg applies below a grafted root
     /// ([`GraftedPlane`](crate::grants::grafted::GraftedPlane)).
     bookmarked_scope_roots: Rc<RefCell<BookmarkedScopeRoots>>,
+    /// Rebuilt by the same pass: what each bookmarked scope's accepted grant
+    /// permits this vault to do, which is what [`snapshot`](Self::snapshot)
+    /// reports so a host can refuse a write at the gesture.
+    bookmarked_permissions: Rc<RefCell<BookmarkedPermissions>>,
     /// Folded by the same pass: what each renderable grafted scope's body
     /// named, which decides the ids no plane may render.
     grafted_claims: Rc<RefCell<ClaimRecord>>,
@@ -4797,6 +4807,7 @@ impl<T: SeamTypes> Engine<T> {
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
+                bookmarked_permissions: Rc::new(RefCell::new(BookmarkedPermissions::new())),
                 grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
                 minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 pending_invite_links: Rc::new(RefCell::new(BTreeMap::new())),
@@ -5172,6 +5183,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut roots) = self.bookmarked_scope_roots.try_borrow_mut() {
             roots.clear();
+        }
+        if let Ok(mut permissions) = self.bookmarked_permissions.try_borrow_mut() {
+            permissions.clear();
         }
         if let Ok(mut claims) = self.grafted_claims.try_borrow_mut() {
             claims.clear();
@@ -5911,6 +5925,7 @@ where {
         let received_verdicts = self.received_verdicts.clone();
         let grafted_sharers = self.grafted_sharers.clone();
         let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
+        let bookmarked_permissions = self.bookmarked_permissions.clone();
         let grafted_claims = self.grafted_claims.clone();
         let consult_keys = self.sweep_keys.clone();
         let minted_roots = self.minted_scope_roots.clone();
@@ -6583,6 +6598,7 @@ where {
                             read_seeds: &scope_read_seeds,
                             grafted_sharers: &grafted_sharers,
                             scope_roots: &bookmarked_scope_roots,
+                            permissions: &bookmarked_permissions,
                             claims: &grafted_claims,
                             events: &events,
                         },
@@ -9571,10 +9587,18 @@ where {
             })
             .collect();
         let folder_name = rendered_name(&rendered, folder);
+        let scope = scope_of(&rendered, folder, &self.authored_scope_roots());
+        let permission = self
+            .bookmarked_permissions
+            .borrow()
+            .get(&scope.0)
+            .copied()
+            .map_or(Permission::Write, Permission::from);
         Ok(SnapshotView {
             root: rendered.root,
             folder,
             folder_name,
+            permission,
             children,
             ancestors,
             dead_letters: self.retained_dead_letters(),
@@ -11568,6 +11592,7 @@ mod tests {
             root: NodeId([0; 16]),
             folder: NodeId([2; 16]),
             folder_name: FOLDER.to_string(),
+            permission: Permission::Write,
             children: vec![SnapshotChild {
                 id: NodeId([3; 16]),
                 name: NAME.to_string(),
@@ -14701,6 +14726,53 @@ mod tests {
             assert_eq!(
                 view.folder_name, "sub",
                 "the listed folder names itself; the trail starts at its parent"
+            );
+        }
+
+        /// The recipient of a read grant is offered no write affordance, so the
+        /// permission the grant recorded has to reach the folder view.
+        #[test]
+        fn a_read_granted_scope_reports_read_for_the_whole_scope() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "shared", NodeKind::Folder);
+            let shared = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "shared")
+                .unwrap()
+                .id;
+            create(&mut engine, shared, "inside", NodeKind::Folder);
+            let inside = block_on(engine.view())
+                .unwrap()
+                .lookup(shared, "inside")
+                .unwrap()
+                .id;
+
+            assert_eq!(
+                block_on(engine.snapshot(shared)).unwrap().permission,
+                Permission::Write,
+                "a folder of this vault's own plane is written by ownership"
+            );
+
+            engine.bookmarked_scope_roots.borrow_mut().insert(shared.0);
+            engine
+                .bookmarked_permissions
+                .borrow_mut()
+                .insert(shared.0, cipherbox_core::seal::Permission::Read);
+
+            assert_eq!(
+                block_on(engine.snapshot(shared)).unwrap().permission,
+                Permission::Read
+            );
+            assert_eq!(
+                block_on(engine.snapshot(inside)).unwrap().permission,
+                Permission::Read,
+                "the grant covers the scope, not only its root"
+            );
+            assert_eq!(
+                block_on(engine.snapshot(root)).unwrap().permission,
+                Permission::Write,
+                "the vault's own root is outside the granted scope"
             );
         }
 

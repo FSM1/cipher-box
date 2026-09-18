@@ -38,6 +38,8 @@ interface FileBrowserActionsProps {
   rows: ListingRow[];
   /** The folder on screen, or `null` before the first snapshot lands. */
   folder: Uint8Array | null;
+  /** False in a scope this vault only holds a read grant over. */
+  writable: boolean;
   showParentRow: boolean;
   onOpen: (node: Uint8Array) => void;
   onNavigateUp: () => void;
@@ -46,6 +48,7 @@ interface FileBrowserActionsProps {
 export function FileBrowserActions({
   rows,
   folder,
+  writable,
   showParentRow,
   onOpen,
   onNavigateUp,
@@ -108,7 +111,7 @@ export function FileBrowserActions({
       if (kind !== 'none') {
         items.push({ label: 'preview', onSelect: () => setDialog({ kind: 'preview', row }) });
       }
-      if (kind === 'text') {
+      if (kind === 'text' && writable) {
         items.push({ label: 'edit', onSelect: () => setDialog({ kind: 'edit', row }) });
       }
       items.push({
@@ -116,38 +119,45 @@ export function FileBrowserActions({
         onSelect: () => void downloads.save(saveRequest(row)),
       });
     }
-    items.push(
-      { label: 'rename', onSelect: () => setDialog({ kind: 'rename', row }) },
-      { label: 'move to...', onSelect: () => setDialog({ kind: 'move', rows: [row] }) },
-      ...(row.kind === 'folder'
-        ? [{ label: 'share...', onSelect: () => setDialog({ kind: 'share' as const, row }) }]
-        : []),
-      { label: 'details', onSelect: () => setDialog({ kind: 'details', row }) },
-      {
+    if (writable) {
+      items.push(
+        { label: 'rename', onSelect: () => setDialog({ kind: 'rename', row }) },
+        { label: 'move to...', onSelect: () => setDialog({ kind: 'move', rows: [row] }) },
+        ...(row.kind === 'folder'
+          ? [{ label: 'share...', onSelect: () => setDialog({ kind: 'share' as const, row }) }]
+          : [])
+      );
+    }
+    items.push({ label: 'details', onSelect: () => setDialog({ kind: 'details', row }) });
+    if (writable) {
+      items.push({
         label: 'delete',
         destructive: true,
         onSelect: () => setDialog({ kind: 'delete', rows: [row] }),
-      }
-    );
+      });
+    }
     return items;
   };
 
   return (
     <>
-      <div className="file-browser-toolbar">
-        <button
-          type="button"
-          className="file-browser-toolbar-button"
-          onClick={() => setDialog({ kind: 'create' })}
-          disabled={folder === null}
-          data-testid="new-folder-button"
-        >
-          [+ NEW FOLDER]
-        </button>
-      </div>
+      {writable && (
+        <div className="file-browser-toolbar">
+          <button
+            type="button"
+            className="file-browser-toolbar-button"
+            onClick={() => setDialog({ kind: 'create' })}
+            disabled={folder === null}
+            data-testid="new-folder-button"
+          >
+            [+ NEW FOLDER]
+          </button>
+        </div>
+      )}
       <SelectionActionBar
         rows={selection.rows}
         busy={actions.busy !== null || downloading}
+        writable={writable}
         onClear={selection.clear}
         onDownload={() => void downloadSelection()}
         onMove={() => setDialog({ kind: 'move', rows: selection.rows })}
