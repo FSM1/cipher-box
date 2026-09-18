@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/FSM1/cipher-box/compare/v2.1.0...v2.1.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **desktop:** journal an acked write when the mount tears down ([#1875](https://github.com/FSM1/cipher-box/issues/1875)) ([53998c3](https://github.com/FSM1/cipher-box/commit/53998c3b18a170e31bad45d408818e949ed9f4d6))
+
 ## [2.1.0](https://github.com/FSM1/cipher-box/compare/v2.0.3...v2.1.0) (2026-09-17)
 
 
