@@ -2105,6 +2105,65 @@ fn an_orderly_teardown_journals_a_write_the_kernel_never_flushed() {
 }
 
 #[test]
+fn a_teardown_journals_every_dirty_handle_and_not_the_first_one_only() {
+    // An unmount from outside the app takes the whole mount at once, so the
+    // queue is owed every handle the mount left dirty.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let mut handles = Vec::new();
+    for name in ["first.txt", "second.txt", "third.txt"] {
+        let (_attrs, handle) =
+            block_on(core.create(ROOT_INO, name, Access::ReadWrite)).expect("the create");
+        handles.push(handle);
+    }
+    let after_creates = queued(&staging);
+    for handle in &handles {
+        block_on(core.write(*handle, 0, b"SECRET-1")).expect("the write lands");
+    }
+
+    block_on(core.quiesce_writes());
+    core.unmount();
+
+    assert_eq!(
+        queued(&staging),
+        after_creates + handles.len(),
+        "every handle the mount left dirty reaches the queue"
+    );
+}
+
+#[test]
+fn what_the_quiesce_could_not_journal_is_countable_before_the_unmount() {
+    // The host bounds the quiesce and reports what the pass left behind, so the
+    // count has to answer the acked bytes that never became ops.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging) = mount_spilling_into(dir.path());
+    let mut handles = Vec::new();
+    for name in ["first.txt", "second.txt"] {
+        let (_attrs, handle) =
+            block_on(core.create(ROOT_INO, name, Access::ReadWrite)).expect("the create");
+        handles.push(handle);
+    }
+    assert_eq!(core.dirty_writes(), 0, "a create owes the queue nothing");
+    for handle in &handles {
+        block_on(core.write(*handle, 0, b"SECRET-1")).expect("the write lands");
+    }
+
+    assert_eq!(
+        core.dirty_writes(),
+        handles.len(),
+        "every acked write the kernel never flushed is owed"
+    );
+
+    block_on(core.quiesce_writes());
+
+    assert_eq!(
+        core.dirty_writes(),
+        0,
+        "a pass that journals everything leaves nothing to report"
+    );
+}
+
+#[test]
 fn a_teardown_journal_tells_the_kernel_nothing() {
     // The kernel session is going down, and a notify pushed after the quiesce
     // holds the unmount open.

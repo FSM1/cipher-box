@@ -175,6 +175,30 @@ impl Warnings {
             },
             _ => return,
         };
+        self.push(warning);
+    }
+
+    /// Raises what an unmount left unjournaled: `owed` handles whose acked bytes
+    /// the quiesce could not turn into ops, because its budget cut the pass
+    /// short or the engine refused the file. The bytes are gone with the spill,
+    /// so this line is all the member gets — and it may not be silent
+    /// (blueprint/engine.md). A count names no record.
+    fn record_unjournaled(&mut self, owed: usize) {
+        if owed == 0 {
+            return;
+        }
+        let files = if owed == 1 {
+            "1 file".to_owned()
+        } else {
+            format!("{owed} files")
+        };
+        self.push(VaultWarning {
+            kind: "unjournaledWrites",
+            detail: Some(files),
+        });
+    }
+
+    fn push(&mut self, warning: VaultWarning) {
         // A condition that keeps firing must not evict the others.
         if self.0.contains(&warning) {
             return;
@@ -649,6 +673,8 @@ async fn serve(
             }
             Woke::Mount(FromMount::Op(op)) => projection.answer(op).await,
             Woke::Mount(FromMount::Ended) => {
+                let owed = projection.quiesce_detached().await;
+                warnings.record_unjournaled(owed);
                 repaint(&shell, &mut projection, &warnings, &mut parked).await;
             }
             Woke::Mount(FromMount::Landed(landed)) => {
@@ -1143,6 +1169,31 @@ mod tests {
             retained.last().and_then(|w| w.detail.clone()),
             Some(format!("refusal {}", MAX_WARNINGS * 2 - 1)),
             "the newest warning is always retained",
+        );
+    }
+
+    /// A write the unmount could not journal is gone with its spill, so the line
+    /// the window renders is all the member gets. A pass that journaled
+    /// everything raises nothing.
+    #[test]
+    fn writes_an_unmount_could_not_journal_are_never_silent() {
+        let mut warnings = Warnings::default();
+        warnings.record_unjournaled(0);
+        assert!(warnings.list().is_empty(), "nothing owed raises nothing");
+
+        warnings.record_unjournaled(1);
+        warnings.record_unjournaled(3);
+        let retained = warnings.list();
+
+        assert_eq!(
+            retained
+                .iter()
+                .map(|warning| (warning.kind, warning.detail.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("unjournaledWrites", Some("1 file")),
+                ("unjournaledWrites", Some("3 files")),
+            ],
         );
     }
 

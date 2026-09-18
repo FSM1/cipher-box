@@ -21,7 +21,8 @@ export type VaultWarningKind =
   | 'attributableAbuse'
   | 'withheldUpdateEscalation'
   | 'renewalFailed'
-  | 'scopeExitCutOwed';
+  | 'scopeExitCutOwed'
+  | 'unjournaledWrites';
 
 export interface VaultWarning {
   kind: VaultWarningKind;
