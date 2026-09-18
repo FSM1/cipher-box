@@ -482,5 +482,6 @@ export interface EngineWasm {
     readonly CrossingUnauthorable: number;
     readonly BinIndexStrandedMint: number;
     readonly TargetLinkedAcrossScopes: number;
+    readonly GraftedScopeVaultSurface: number;
   };
 }

@@ -58,6 +58,7 @@ use crate::facade::{
 };
 use crate::gate::GateStage;
 use crate::gate::{Adopted, GateError, RejectionReason, floor};
+use crate::grants::grafted::FloorNamespace;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
     AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
@@ -80,7 +81,8 @@ use crate::record_plane::DefaultsReason;
 use crate::rotation::{ScopeExitRotator, derive_write_name, seed_at_epoch};
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
-    RetireLedger, Scheduler, SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
+    UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision, SettingsRefusal};
@@ -485,8 +487,12 @@ fn halt_below_another_scope_root(
 /// then take [`Halt::Unclassified`] from every pass and hold the strict-FIFO
 /// head on the wide outage budget, which reports a stall no outage explains
 /// (ADR 0012 D6).
+///
+/// Never a grafted pass: the budget answers for an op under a keyless root of
+/// **this vault's** own boundary set, which a pass over a scope another identity
+/// owns proves nothing about.
 pub(crate) fn charge_the_identity_to_one_pass(scopes: &mut [DrainScope<'_>]) {
-    if let Some(first) = scopes.first_mut() {
+    if let Some(first) = scopes.iter_mut().find(|scope| !scope.is_grafted()) {
         first.charges_the_identity = true;
     }
 }
@@ -772,9 +778,17 @@ pub(crate) struct ScopeEnd<'a> {
     /// ([`RootAdopter::under_parent_node_seed`]). `None` at the vault root,
     /// which carries no ascent link.
     pub(crate) ascent_node_seed: Option<&'a Zeroizing<[u8; 32]>>,
+    /// Whose namespace this end's epoch floors ratchet in, as
+    /// [`floor_namespace`] picked it for this scope id.
+    pub(crate) floor_namespace: FloorNamespace,
 }
 
 impl<'a> ScopeEnd<'a> {
+    /// The floor namespace every epoch floor of this end ratchets in.
+    fn floors<'f, F>(&self, floors: &'f F) -> SharerScopedFloorStore<'f, F> {
+        self.floor_namespace.view(floors)
+    }
+
     /// This end bound to the read epoch its records carry — everything one
     /// record's seal needs.
     fn at(self, epoch: u64) -> SealPlane<'a> {
@@ -860,6 +874,30 @@ pub(crate) struct DrainScope<'a> {
 }
 
 impl<'a> DrainScope<'a> {
+    /// Whether this pass authors in a scope another identity owns and granted.
+    ///
+    /// Such a pass holds the sharer's two scope seeds and no vault root write
+    /// seed, so every surface of **this** vault above the grafted root is out of
+    /// its reach ([`Self::refuse_vault_surface`]).
+    fn is_grafted(&self) -> bool {
+        matches!(self.source.floor_namespace, FloorNamespace::GrantedBy(_))
+    }
+
+    /// Refuse a grafted pass a surface that belongs to this vault rather than to
+    /// the granted scope: the owner's bin index, the identity's retire ledger
+    /// and doomed-name journal, and the cuts this vault owes on its own scopes.
+    ///
+    /// The grant carries no key for any of them — the bin index is owner-only by
+    /// construction (CONTEXT.md), and every name in the ledger derives from the
+    /// vault root's own write seed — so the same bytes are refused on every
+    /// retry. Release-active and never a `debug_assert!` (AGENTS.md rule 8).
+    fn refuse_vault_surface(&self) -> Result<(), Halt> {
+        if self.is_grafted() {
+            return Err(Halt::Permanent(DeadLetterReason::GraftedScopeVaultSurface));
+        }
+        Ok(())
+    }
+
     /// The second end, or a refusal for a pair this pass may not seal under.
     ///
     /// Two ends rooted at one node name one scope under two sets of material,
@@ -1797,6 +1835,12 @@ where
     /// anchor: a pass anchored on a granted scope root would otherwise drop that
     /// scope's own owed cut as if it were the escalation.
     async fn cut_exited_scopes<R: ScopeExitRotator>(&self, scope: &DrainScope<'_>, exits: &R) {
+        // The debt set is this vault's own, and the cut is a rotation of a scope
+        // this vault owns. A grafted pass holds no material for one and would
+        // spend the debt's only retry.
+        if scope.is_grafted() {
+            return;
+        }
         let vault_root = self.base.borrow().root;
         let still_owed = settle_owed_cuts(
             self.staging,
@@ -2122,7 +2166,7 @@ where
         // at-floor gate call covers both floors (encode-side of the gate's
         // stage-5 reject; security rule 8).
         floor::check(
-            self.floors,
+            &source.floors(self.floors),
             source.root_name.as_str().as_bytes(),
             &source.root.0,
             sequence,
@@ -2178,12 +2222,13 @@ where
     fn root_adopter<'e>(
         &'e self,
         scope: &'e DrainScope<'_>,
+        floors: &'e SharerScopedFloorStore<'e, F>,
         end: &ScopeEnd<'_>,
-    ) -> RootAdopter<'e, H, F> {
+    ) -> RootAdopter<'e, H, SharerScopedFloorStore<'e, F>> {
         let adopter = RootAdopter::new(
             self.gateway,
             self.http,
-            self.floors,
+            floors,
             scope.enc_secret,
             scope.owner_identity,
             end.root.0,
@@ -2206,7 +2251,8 @@ where
         scope: &DrainScope<'_>,
         end: &ScopeEnd<'_>,
     ) -> Result<Vec<u8>, Halt> {
-        let adopter = self.root_adopter(scope, end);
+        let floors = end.floors(self.floors);
+        let adopter = self.root_adopter(scope, &floors, end);
         let resolved = resolve(
             self.transport,
             self.snapshot_cache,
@@ -2251,10 +2297,11 @@ where
         mode: ResolveMode,
     ) -> Result<LoadedNode, Halt> {
         let name = plane.end.write_name(&node.0);
+        let floors = plane.end.floors(self.floors);
         let adopter = ChildAdopter::new(
             self.gateway,
             self.http,
-            self.floors,
+            &floors,
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             node.0,
@@ -2309,7 +2356,7 @@ where
         &self,
         plane: &SealPlane<'_>,
         anchor: Anchor<'_>,
-        adopter: &ChildAdopter<'_, H, F>,
+        adopter: &ChildAdopter<'_, H, SharerScopedFloorStore<'_, F>>,
         name: &IpnsName,
         record_bytes: &[u8],
         lagging: Option<u64>,
@@ -2702,6 +2749,10 @@ where
         applied: &AppliedOp,
         to_bin: bool,
     ) -> Result<(), Halt> {
+        // Both branches end on a surface of this vault: the soft branch on the
+        // owner's bin index, the hard branch on the identity's retire ledger and
+        // the registry rows the sharer's account holds.
+        scope.refuse_vault_surface()?;
         let target = applied.op.target;
         let mut unlink_from = Vec::new();
         let mut named = None;
@@ -2835,6 +2886,7 @@ where
         rebased: &Snapshot,
         into: NodeId,
     ) -> Result<(), Halt> {
+        scope.refuse_vault_surface()?;
         let target = applied.op.target;
         let Some((entry, binned_under)) = self.bin_entry(scope, pass, target).await? else {
             // The entry left with an attempt that got past the drop below.
@@ -2920,6 +2972,7 @@ where
         applied: &AppliedOp,
         deleted_at: u64,
     ) -> Result<(), Halt> {
+        scope.refuse_vault_surface()?;
         let target = applied.op.target;
         let Some((entry, binned_under)) = self.bin_entry(scope, pass, target).await? else {
             return Ok(());
@@ -3152,6 +3205,12 @@ where
         budget: &mut JournalBudget,
     ) -> BTreeSet<[u8; 16]> {
         let mut owed_now = BTreeSet::new();
+        // The journal and the retire ledger are the identity's, and every name
+        // in them derives from a write seed of this vault's own. A grafted pass
+        // settles neither, and spends none of the tick's budget looking.
+        if scope.is_grafted() {
+            return owed_now;
+        }
         let mut mine = budget.replays.share();
         // Another scope's entry is that scope's to settle: its names derive from
         // a write seed this end does not hold, so every verdict here would be a
@@ -3363,6 +3422,14 @@ where
         if taken.is_empty() {
             return;
         }
+        // The bin index and the bin's held key are this vault's own, so binning
+        // a node of a granted scope would re-key the sharer's node under a key
+        // the sharer never derives. The captures are dropped rather than put
+        // back: no pass of this vault will ever adopt them, and the owner's own
+        // device bins what it unlinked.
+        if scope.is_grafted() {
+            return;
+        }
         let Ok(root) = self.load_scope_root(&scope.source).await else {
             self.return_captures(taken);
             return;
@@ -3432,6 +3499,9 @@ where
     /// Reads the index rather than writing it, so a degraded load costs a tick
     /// and never an entry.
     async fn expire_bin_entries(&self, scope: &DrainScope<'_>, queued: &[NodeId]) {
+        if scope.is_grafted() {
+            return;
+        }
         let now = self.scheduler.now();
         let Some(cutoff) = bin_expiry_cutoff(now, self.bin_retention_days) else {
             return;
@@ -3527,11 +3597,10 @@ where
         let mut taken = Vec::new();
         set.retain(|unlinked| {
             // A capture belongs to whichever pass names its scope. One that no
-            // proved root names — a grafted root's focus leg captures these,
-            // and no pass ever drains a grafted root — is a capture no pass
-            // will ever adopt, and holding it starves the bounded set. A proved
-            // scope this tick could not drain keeps its captures for the tick
-            // that can, at the cost of a share of that bound.
+            // listed root names is a capture no pass will ever adopt, and
+            // holding it starves the bounded set. A listed scope this tick
+            // could not drain keeps its captures for the tick that can, at the
+            // cost of a share of that bound.
             if unlinked.scope_id != scope.source.root.0 {
                 return scope.scope_roots.contains(&NodeId(unlinked.scope_id));
             }
@@ -4887,6 +4956,7 @@ where
         target: NodeId,
         doomed: &[ContentVersion],
     ) -> Result<(), Halt> {
+        scope.refuse_vault_surface()?;
         let owed = self.prune_debt(target, doomed).await?;
         StagingRetireLedger::new(self.staging, self.bookkeeping_seal(scope))
             .owe(&owner_tag(scope.enc_secret), &owed)
@@ -5740,8 +5810,9 @@ where
         }
         // The record is live from here: everything below is a local step.
         let local = local_head(&head);
+        let floors = plane.end.floors(self.floors);
         let pass = if is_scope_root {
-            let adopter = self.root_adopter(scope, &plane.end);
+            let adopter = self.root_adopter(scope, &floors, &plane.end);
             adopter.hold_local_head(local);
             adopter
                 .adopt(name, &record_bytes)
@@ -5751,7 +5822,7 @@ where
             let adopter = ChildAdopter::new(
                 self.gateway,
                 self.http,
-                self.floors,
+                &floors,
                 plane.end.root.0,
                 plane.end.read_scope_seed.clone(),
                 node.0,
@@ -5772,7 +5843,7 @@ where
         // Durable-first: the floor moves on the self-adopt that also left these
         // bytes as last-known-good.
         let sequence = pass
-            .commit(self.floors)
+            .commit(&floors)
             .await
             .map_err(|e| PublishHalt::past_the_put(seam(e)))?
             .sequence;
@@ -5811,7 +5882,7 @@ where
         } = publish_record(
             self.transport,
             self.api,
-            self.floors,
+            &plane.end.floors(self.floors),
             self.scheduler,
             self.profile,
             &RecordPublishRequest {
@@ -6045,7 +6116,8 @@ where
             return Ok(false);
         }
         let name = plane.end.write_name(&target.0);
-        if floor::sequence_floor(self.floors, name.as_str().as_bytes())
+        let floors = plane.end.floors(self.floors);
+        if floor::sequence_floor(&floors, name.as_str().as_bytes())
             .await
             .map_err(seam)?
             .is_some()
@@ -6055,7 +6127,7 @@ where
         let adopter = ChildAdopter::new(
             self.gateway,
             self.http,
-            self.floors,
+            &floors,
             plane.end.root.0,
             plane.end.read_scope_seed.clone(),
             target.0,
@@ -6598,6 +6670,7 @@ mod tests {
                 read_scope_seed: &self.read_scope_seed,
                 write_scope_seed: &self.write_scope_seed,
                 ascent_node_seed: None,
+                floor_namespace: FloorNamespace::Own,
             }
         }
     }
@@ -7786,10 +7859,14 @@ mod tests {
     // the pass's own reject arms are drivable from where they live.
     // -----------------------------------------------------------------------
 
+    use core::time::Duration;
+
     use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::seal::{encode_envelope, set_grant_section};
+    use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 
     use crate::content::DAG_ROOT_CODEC;
+    use crate::rotation::{RotateError, RotationOutcome};
     use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
     use crate::testkit::fakes::{
         InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache,
@@ -7856,6 +7933,8 @@ mod tests {
         /// Held open: an events channel whose receiver dropped refuses sends.
         _event_stream: mpsc::UnboundedReceiver<Event>,
         bin_keys: BinIndexKeys,
+        /// The owner's bin retention, which the expiry sweep acts only on.
+        bin_retention_days: Option<u32>,
         dead_letters: RefCell<RetainedDeadLetters>,
         observed_unlinks: RefCell<Vec<UnlinkedChild>>,
         pending_scope_exits: RefCell<BTreeSet<NodeId>>,
@@ -7866,6 +7945,9 @@ mod tests {
         keyless_roots: Vec<NodeId>,
         enc_secret: X25519Secret,
         owner_identity: EcdsaVerifier,
+        /// The namespace every pass this harness hands out ratchets its epoch
+        /// floors in. `GrantedBy` makes each pass a grafted one.
+        floor_namespace: FloorNamespace,
     }
 
     impl DrainHarness {
@@ -7897,7 +7979,7 @@ mod tests {
                 cancels: &self.cancels,
                 events: &self.events,
                 bin_keys: &self.bin_keys,
-                bin_retention_days: None,
+                bin_retention_days: self.bin_retention_days,
                 retention: RetentionPolicy::KeepAll,
                 dead_letters: &self.dead_letters,
                 established_bin_index: RefCell::new(None),
@@ -7915,6 +7997,7 @@ mod tests {
                     read_scope_seed: &self.read_scope_seed,
                     write_scope_seed: &self.write_scope_seed,
                     ascent_node_seed: None,
+                    floor_namespace: self.floor_namespace,
                 },
                 destination: None,
                 scope_roots: &self.scope_roots,
@@ -8041,6 +8124,7 @@ mod tests {
             events,
             _event_stream,
             bin_keys: BinIndexKeys::derive(&HARNESS_SECRET),
+            bin_retention_days: None,
             dead_letters: RefCell::new(RetainedDeadLetters::new()),
             observed_unlinks: RefCell::new(Vec::new()),
             pending_scope_exits: RefCell::new(BTreeSet::new()),
@@ -8053,7 +8137,15 @@ mod tests {
             owner_identity: EcdsaSigner::from_scalar(&HARNESS_SECRET)
                 .expect("valid scalar")
                 .verifying_key(),
+            floor_namespace: FloorNamespace::Own,
         }
+    }
+
+    /// The same harness whose pass runs over a scope another identity granted.
+    fn grafted_harness() -> DrainHarness {
+        let mut harness = drain_harness(Some(harness_root_envelope()));
+        harness.floor_namespace = FloorNamespace::GrantedBy(sharer_label());
+        harness
     }
 
     /// The control the two reject arms are read against: the intact fixture
@@ -8362,5 +8454,409 @@ mod tests {
             "a refusal of these bytes still spends the tighter budget",
         );
         assert_eq!(refused.report.dead_letters.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // A grafted pass reaches no surface of this vault above its grafted root.
+    // -----------------------------------------------------------------------
+
+    /// A contact whose grant this vault holds, and the label its floors ratchet
+    /// under.
+    const SHARER_IDENTITY_PK: [u8; IDENTITY_PUBLIC_LEN] = [0x02; IDENTITY_PUBLIC_LEN];
+
+    fn sharer_label() -> crate::seams::ContactLabel {
+        crate::seams::ContactLabel::of(
+            &kdf::contact_label_seed(&HARNESS_SECRET),
+            &SHARER_IDENTITY_PK,
+        )
+    }
+
+    /// An empty pass anchored on the harness's root, for the plans that refuse
+    /// before they read anything.
+    fn harness_pass() -> Pass {
+        Pass {
+            root: HARNESS_ROOT,
+            epoch: OWNER_ROOT_EPOCH,
+            history_links: Vec::new(),
+            second_ratchet: None,
+            folders: Vec::new(),
+            journalled: Vec::new(),
+        }
+    }
+
+    fn applied(op: Op, effective_name: Option<&str>) -> AppliedOp {
+        AppliedOp {
+            op_id: OpId(1),
+            op,
+            effective_name: effective_name.map(str::to_owned),
+            suffixed: false,
+            vacated: None,
+        }
+    }
+
+    /// Every op plan that ends on a surface of this vault above the grafted
+    /// root: the owner's bin index (soft delete, restore, purge) and the
+    /// identity's retire ledger and doomed-name journal (hard delete). The
+    /// refusal is a plain `Err` return rather than an assertion, so it fires in
+    /// every build profile (AGENTS.md rule 8).
+    #[test]
+    fn a_grafted_pass_is_refused_every_vault_level_op_plan() {
+        const TARGET: NodeId = NodeId([0x41; 16]);
+        let plans = [
+            ("a soft delete writes the owner's bin index", {
+                Op::delete(TARGET, 1, UnixMillis(0), 1, true)
+            }),
+            ("a hard delete owes the identity's retire ledger", {
+                Op::delete(TARGET, 1, UnixMillis(0), 1, false)
+            }),
+            (
+                "a restore reads the bin index and drops its entry",
+                Op::restore(
+                    TARGET,
+                    HARNESS_ROOT,
+                    "restored.txt",
+                    crate::facade::NodeKind::File,
+                    1,
+                    UnixMillis(0),
+                ),
+            ),
+            (
+                "a purge reads the bin index and reclaims from it",
+                Op::purge(TARGET, 7, 1, UnixMillis(0)),
+            ),
+        ];
+
+        for (case, op) in plans {
+            let grafted = grafted_harness();
+            let refused = block_on(grafted.drain().publish_applied(
+                &grafted.scope(),
+                &mut harness_pass(),
+                &applied(op.clone(), Some("restored.txt")),
+                &Snapshot::new(HARNESS_ROOT),
+            ));
+            assert_eq!(
+                refused.err(),
+                Some(Halt::Permanent(DeadLetterReason::GraftedScopeVaultSurface)),
+                "{case}",
+            );
+
+            let own = drain_harness(Some(harness_root_envelope()));
+            let reached = block_on(own.drain().publish_applied(
+                &own.scope(),
+                &mut harness_pass(),
+                &applied(op, Some("restored.txt")),
+                &Snapshot::new(HARNESS_ROOT),
+            ));
+            assert_ne!(
+                reached.err(),
+                Some(Halt::Permanent(DeadLetterReason::GraftedScopeVaultSurface)),
+                "an own-vault pass still reaches the surface: {case}",
+            );
+        }
+    }
+
+    /// The version plans reach the same ledger through their own door, ahead of
+    /// the shortened history they journal for.
+    #[test]
+    fn a_grafted_pass_journals_no_retire_debt() {
+        const TARGET: NodeId = NodeId([0x42; 16]);
+
+        let grafted = grafted_harness();
+        assert_eq!(
+            block_on(
+                grafted
+                    .drain()
+                    .journal_retire_debt(&grafted.scope(), TARGET, &[])
+            )
+            .err(),
+            Some(Halt::Permanent(DeadLetterReason::GraftedScopeVaultSurface)),
+        );
+
+        let own = drain_harness(Some(harness_root_envelope()));
+        block_on(own.drain().journal_retire_debt(&own.scope(), TARGET, &[]))
+            .expect("an own-vault pass owes its own ledger");
+    }
+
+    /// One unlink a poll leg observed, named under the scope root's own write
+    /// seed so [`Drain::take_captures`] admits it.
+    fn capture(write_scope_seed: &[u8; 32]) -> UnlinkedChild {
+        const NODE: NodeId = NodeId([0x43; 16]);
+        UnlinkedChild {
+            scope_id: HARNESS_ROOT.0,
+            parent: NodeId([0x44; 16]),
+            node: NODE,
+            name: "departed.txt".to_owned(),
+            kind: NodeKind::File,
+            ipns_name: derive_write_name(write_scope_seed, &NODE.0)
+                .as_str()
+                .as_bytes()
+                .to_vec(),
+            deleted_at: 9,
+        }
+    }
+
+    /// A departure inside a granted scope reaches the owner capture path now
+    /// that a grafted root is a pass of its own. Binning it would seal the
+    /// sharer's node under this vault's own held key, so the capture is dropped
+    /// rather than adopted — and dropped rather than put back, because no pass
+    /// of this vault will ever take it.
+    #[test]
+    fn a_grafted_pass_bins_no_capture_and_starves_no_set() {
+        let grafted = grafted_harness();
+        *grafted.observed_unlinks.borrow_mut() = vec![capture(&grafted.write_scope_seed)];
+        block_on(grafted.drain().adopt_observed_unlinks(&grafted.scope()));
+        assert!(
+            grafted.observed_unlinks.borrow().is_empty(),
+            "the capture leaves the bounded set rather than being held for ever",
+        );
+        assert!(
+            !grafted.held.borrow().contains_key(&HeldKey::BinIndex),
+            "no bin index record was published",
+        );
+
+        let own = drain_harness(Some(harness_root_envelope()));
+        *own.observed_unlinks.borrow_mut() = vec![capture(&own.write_scope_seed)];
+        block_on(own.drain().adopt_observed_unlinks(&own.scope()));
+        assert_eq!(
+            own.observed_unlinks.borrow().len(),
+            1,
+            "an own-vault pass keeps the capture for the tick that can bin it",
+        );
+    }
+
+    /// The retention sweep reads the owner's bin index and stages purges off it.
+    #[test]
+    fn a_grafted_pass_stages_no_bin_expiry() {
+        const BINNED: NodeId = NodeId([0x45; 16]);
+
+        let staged_purges = |harness: &DrainHarness| {
+            let mut index = BinIndex::new(1);
+            index.entries.push(BinEntry::new(
+                BINNED.0,
+                derive_write_name(&harness.write_scope_seed, &BINNED.0)
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
+                NodeKind::File,
+                HARNESS_ROOT.0,
+                "binned.txt".to_owned(),
+                0,
+                HARNESS_ROOT.0,
+                None,
+            ));
+            let drain = harness.drain();
+            drain.establish_bin_index(index);
+            block_on(drain.expire_bin_entries(&harness.scope(), &[]));
+            harness.queued_op_ids().len()
+        };
+
+        let mut grafted = grafted_harness();
+        let mut own = drain_harness(Some(harness_root_envelope()));
+        for harness in [&mut grafted, &mut own] {
+            harness.bin_retention_days = Some(1);
+            harness
+                .scheduler
+                .advance(Duration::from_secs(60 * 60 * 24 * 30));
+        }
+
+        assert_eq!(staged_purges(&grafted), 0);
+        assert_eq!(
+            staged_purges(&own),
+            1,
+            "an own-vault pass still enforces the owner's retention",
+        );
+    }
+
+    /// A rotator that records every root a pass asked it to cut.
+    struct RecordingRotator(RefCell<Vec<NodeId>>);
+
+    impl ScopeExitRotator for RecordingRotator {
+        async fn rotate_on_scope_exit(
+            &self,
+            scope_root: NodeId,
+        ) -> Result<RotationOutcome, RotateError> {
+            self.0.borrow_mut().push(scope_root);
+            Ok(RotationOutcome {
+                new_read_epoch: 2,
+                epoch_floor: 2,
+            })
+        }
+    }
+
+    /// A scope-exit cut is a rotation of a scope this vault owns, driven off a
+    /// session-wide debt set every pass of a tick reaches. A grafted pass holds
+    /// no material for one and would spend the debt's only retry.
+    #[test]
+    fn a_grafted_pass_drives_none_of_this_vaults_owed_cuts() {
+        const EXITED: NodeId = NodeId([0x46; 16]);
+
+        let cut_roots = |harness: &DrainHarness| {
+            harness.pending_scope_exits.borrow_mut().insert(EXITED);
+            let exits = RecordingRotator(RefCell::new(Vec::new()));
+            block_on(harness.drain().cut_exited_scopes(&harness.scope(), &exits));
+            exits.0.into_inner()
+        };
+
+        assert!(cut_roots(&grafted_harness()).is_empty());
+        assert_eq!(
+            cut_roots(&drain_harness(Some(harness_root_envelope()))),
+            vec![EXITED],
+            "an own-vault pass still drives the cuts this session owes",
+        );
+    }
+
+    /// The doomed-name journal is the identity's, keyed by its owner tag, and
+    /// every name an entry holds derives from a write seed of this vault's own.
+    /// A grafted pass replays none of it and spends none of the tick's bounded
+    /// open budget looking for entries it could not settle.
+    #[test]
+    fn a_grafted_pass_replays_none_of_the_identitys_doomed_journal() {
+        const TARGET: NodeId = NodeId([0x47; 16]);
+
+        let opens_spent = |harness: &DrainHarness| {
+            let drain = harness.drain();
+            let scope = harness.scope();
+            let owner = owner_tag(&harness.enc_secret);
+            let seal = drain.bookkeeping_seal(&scope);
+            let key = doomed_journal_key(&owner, HARNESS_ROOT, TARGET);
+            let reclamation = Reclamation {
+                doomed: vec![(
+                    TARGET,
+                    derive_write_name(&harness.write_scope_seed, &TARGET.0)
+                        .as_str()
+                        .to_owned(),
+                )],
+                ..Reclamation::default()
+            };
+            assert!(
+                block_on(drain.journal_doomed(seal, &key, TARGET, &reclamation)),
+                "the entry journals",
+            );
+            let staged = block_on(harness.staging.staged_keys()).expect("the keys list");
+            let mut budget = JournalBudget::new(1);
+            let before = budget.opens;
+            block_on(drain.settle_journalled_deletes(
+                &scope,
+                seal,
+                &owner,
+                &staged,
+                &[],
+                &mut budget,
+            ));
+            before - budget.opens
+        };
+
+        assert_eq!(opens_spent(&grafted_harness()), 0);
+        assert_eq!(
+            opens_spent(&drain_harness(Some(harness_root_envelope()))),
+            1,
+            "an own-vault pass still replays what it journaled",
+        );
+    }
+
+    /// The refusal is per surface, not a blanket refusal of the grafted pass: an
+    /// op that stays inside the sharer's own scope reaches the publish path.
+    #[test]
+    fn a_grafted_pass_is_refused_no_op_that_stays_in_the_sharers_scope() {
+        let grafted = grafted_harness();
+
+        let halt = block_on(grafted.drain().publish_applied(
+            &grafted.scope(),
+            &mut harness_pass(),
+            &applied(
+                Op::rename(NodeId([0x48; 16]), "renamed.txt", 1, UnixMillis(0)),
+                Some("renamed.txt"),
+            ),
+            &Snapshot::new(HARNESS_ROOT),
+        ));
+
+        assert_ne!(
+            halt.err(),
+            Some(Halt::Permanent(DeadLetterReason::GraftedScopeVaultSurface)),
+        );
+    }
+
+    /// The identity-wide charge answers for a keyless root of this vault's own
+    /// boundary set, which a grafted pass proves nothing about.
+    #[test]
+    fn the_identity_wide_charge_never_lands_on_a_grafted_pass() {
+        let own = drain_harness(Some(harness_root_envelope()));
+        let grafted = grafted_harness();
+        let mut passes = vec![grafted.scope(), own.scope()];
+
+        charge_the_identity_to_one_pass(&mut passes);
+
+        assert!(
+            !passes[0].charges_the_identity,
+            "the facade appends the grafted passes after the charge is assigned",
+        );
+    }
+
+    /// The floor namespace half: a grafted end raises and reads its epoch floors
+    /// under the granting contact's label, which is the namespace every read leg
+    /// below that root already uses (`grants::grafted::floor_namespace`). An own end
+    /// is a pass-through, so this vault's own floors are byte-for-byte where
+    /// they were.
+    #[test]
+    fn a_grafted_end_ratchets_where_the_read_legs_read_and_an_own_end_does_not_move() {
+        const SHARED: [u8; 16] = [0x6a; 16];
+
+        let harness = grafted_harness();
+        let scope = harness.scope();
+        let view = scope.source.floors(&harness.floors);
+
+        block_on(view.raise_epoch_floor(&SHARED, 9)).expect("the floor raises");
+
+        let read_leg = SharerScopedFloorStore::granted_by(&harness.floors, sharer_label());
+        assert_eq!(
+            block_on(read_leg.epoch_floor(&SHARED)).expect("floor read"),
+            Some(9),
+            "a read leg below the grafted root reads the floor the pass raised",
+        );
+        assert_eq!(
+            block_on(SharerScopedFloorStore::own(&harness.floors).epoch_floor(&SHARED))
+                .expect("floor read"),
+            None,
+            "and this vault's own namespace is untouched by it",
+        );
+
+        let own = drain_harness(Some(harness_root_envelope()));
+        let own_scope = own.scope();
+        block_on(
+            own_scope
+                .source
+                .floors(&own.floors)
+                .raise_epoch_floor(&SHARED, 4),
+        )
+        .expect("the floor raises");
+        assert_eq!(
+            block_on(own.floors.epoch_floor(&SHARED)).expect("floor read"),
+            Some(4),
+            "an own pass keeps the plain scope-id key every other owner-side caller reads",
+        );
+    }
+
+    /// The sequence namespace is shared by construction, so a grafted pass's
+    /// post-publish raise bars a replay of the same record for every leg that
+    /// reads that name.
+    #[test]
+    fn a_grafted_end_shares_one_sequence_ratchet_with_every_leg() {
+        const NAME: &[u8] = b"k51-granted-scope-root";
+
+        let harness = grafted_harness();
+        let scope = harness.scope();
+
+        block_on(
+            scope
+                .source
+                .floors(&harness.floors)
+                .raise_sequence_floor(NAME, 6),
+        )
+        .expect("the floor raises");
+
+        assert_eq!(
+            block_on(harness.floors.sequence_floor(NAME)).expect("floor read"),
+            Some(6),
+        );
     }
 }

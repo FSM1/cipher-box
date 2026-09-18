@@ -29,6 +29,8 @@ const REASONS: Record<DeadLetterReason, string> = {
     'this device cannot read your bin, and its own first attempt to set one up did not finish, so it cannot move this item there; sign in on another device to repair the bin, or delete this item permanently',
   targetLinkedAcrossScopes:
     'this item is also in a shared folder that CipherBox cannot save in the same step; remove it from that shared folder first, then delete it',
+  graftedScopeVaultSurface:
+    'this change is inside a folder someone shared with you, and it needs your own bin or your own storage bookkeeping, which the share does not reach; copy the item into your own vault first, then make the change there',
 };
 
 /**

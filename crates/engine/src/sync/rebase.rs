@@ -209,6 +209,13 @@ pub enum DeadLetterReason {
     /// because nothing is being moved and the remedy is the member's own:
     /// remove the link the other scope's folder holds, then delete.
     TargetLinkedAcrossScopes,
+    /// An op inside a scope another identity granted this vault reached a
+    /// surface of **this** vault above the grafted root: the owner's bin index,
+    /// the identity's retire ledger, or its doomed-name journal. A write grant
+    /// carries no key for any of them — the bin index is owner-only by
+    /// construction — so no pass authors them on the sharer's plane and no retry
+    /// changes it. The member's remedy is to work on a copy in their own vault.
+    GraftedScopeVaultSurface,
 }
 
 /// One applied op, resolved for republish.

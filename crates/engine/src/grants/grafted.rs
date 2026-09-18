@@ -318,14 +318,53 @@ pub(crate) fn is_own_scope(
     scope_id == own_root || own_descendants.contains(&NodeId(*scope_id))
 }
 
-/// The floor namespace `scope_id`'s read leg must use, or `None` when no
-/// authority answers for the id and the leg may not run at all.
+/// Whose namespace one scope's epoch floors ratchet in.
+///
+/// Carries no `Debug`: the label it holds is the cross-scope correlator the
+/// blinded tag exists to deny ([`ContactLabel`]).
+#[derive(Clone, Copy)]
+pub(crate) enum FloorNamespace {
+    /// A scope this identity answers for, measured in its own namespace.
+    Own,
+    /// A scope another identity granted, measured under that identity's label.
+    GrantedBy(ContactLabel),
+}
+
+impl FloorNamespace {
+    /// This namespace over a floor store. Sequence floors pass through either
+    /// arm unprefixed, so one name keeps one ratchet whichever leg reads it.
+    pub(crate) fn view<F>(self, floors: &F) -> SharerScopedFloorStore<'_, F> {
+        match self {
+            Self::Own => SharerScopedFloorStore::own(floors),
+            Self::GrantedBy(sharer) => SharerScopedFloorStore::granted_by(floors, sharer),
+        }
+    }
+}
+
+/// The floor namespace `scope_id`'s legs must use, or `None` when no authority
+/// answers for the id and no leg may run at all.
 ///
 /// Fail-closed on the unknown arm: the owner plane is this vault's own
 /// namespace, so answering with it for a scope this vault does not own would
 /// measure a foreign record against a floor no sharer ever raised. The owned
 /// arm is decided ahead of the map, so a bookmark that names one of this
 /// vault's own roots cannot redirect that root's leg.
+pub(crate) fn floor_namespace(
+    sharers: &GraftedSharers,
+    contact_label_seed: &SecretBytes,
+    own_root: &[u8; 16],
+    own_descendants: &BTreeSet<NodeId>,
+    scope_id: &[u8; 16],
+) -> Option<FloorNamespace> {
+    if is_own_scope(own_root, own_descendants, scope_id) {
+        return Some(FloorNamespace::Own);
+    }
+    sharers
+        .get(scope_id)
+        .map(|sharer| FloorNamespace::GrantedBy(ContactLabel::of(contact_label_seed, sharer)))
+}
+
+/// [`floor_namespace`] over a floor store, for the legs that read one scope.
 pub(crate) fn floor_view<'a, F>(
     floors: &'a F,
     sharers: &GraftedSharers,
@@ -334,12 +373,14 @@ pub(crate) fn floor_view<'a, F>(
     own_descendants: &BTreeSet<NodeId>,
     scope_id: &[u8; 16],
 ) -> Option<SharerScopedFloorStore<'a, F>> {
-    if is_own_scope(own_root, own_descendants, scope_id) {
-        return Some(SharerScopedFloorStore::own(floors));
-    }
-    sharers.get(scope_id).map(|sharer| {
-        SharerScopedFloorStore::granted_by(floors, ContactLabel::of(contact_label_seed, sharer))
-    })
+    floor_namespace(
+        sharers,
+        contact_label_seed,
+        own_root,
+        own_descendants,
+        scope_id,
+    )
+    .map(|namespace| namespace.view(floors))
 }
 
 /// Evict every grafted scope's cached read seed that its granting identity's

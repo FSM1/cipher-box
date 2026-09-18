@@ -432,6 +432,10 @@ pub enum DeadLetterReason {
     /// A delete whose target is also in a folder of a shared folder this
     /// device cannot write in the same pass.
     TargetLinkedAcrossScopes,
+    /// An op inside a folder somebody shared with write access needed the
+    /// account's own bin or its own reclaim bookkeeping, which the share does
+    /// not reach.
+    GraftedScopeVaultSurface,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -466,6 +470,9 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             }
             facade::DeadLetterReason::TargetLinkedAcrossScopes => {
                 DeadLetterReason::TargetLinkedAcrossScopes
+            }
+            facade::DeadLetterReason::GraftedScopeVaultSurface => {
+                DeadLetterReason::GraftedScopeVaultSurface
             }
         }
     }
