@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.2.0](https://github.com/FSM1/cipher-box/compare/v2.1.2...v2.2.0) (2026-09-18)
+
+
+### Features
+
+* **engine:** carry the grafted write scope seed to its own drain pass ([#1893](https://github.com/FSM1/cipher-box/issues/1893)) ([3ae5c6a](https://github.com/FSM1/cipher-box/commit/3ae5c6aca2b2cbe3c39c123a38b2edf1c25c97dc))
+
+
+### Bug Fixes
+
+* **desktop:** journal an acked write when the volume is unmounted from outside ([#1889](https://github.com/FSM1/cipher-box/issues/1889)) ([65db679](https://github.com/FSM1/cipher-box/commit/65db679f613a9d127f4d0c6906e5b86893c1a207))
+* **engine:** re-resolve every received share on a forced refresh ([#1892](https://github.com/FSM1/cipher-box/issues/1892)) ([ad7a3a7](https://github.com/FSM1/cipher-box/commit/ad7a3a78ffade4acc2b1c0ebd8b82a9541cc7bb5))
+
 ## [2.1.2](https://github.com/FSM1/cipher-box/compare/v2.1.1...v2.1.2) (2026-09-18)
 
 
