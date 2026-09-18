@@ -57,9 +57,18 @@ class Started {
     return Promise.allSettled(this.instances.map((instance) => instance.abandon()));
   }
 
-  /** Tabs first: a context that outlives its vault holds the mount's session. */
-  async release(): Promise<string[]> {
-    const tails = this.hosts.map((host) => `${host.name}: ${host.tail()}`);
+  /**
+   * Tabs first: a context that outlives its vault holds the mount's session.
+   *
+   * A failed scenario also reports what each tab's engine held, which a console
+   * tail does not carry.
+   */
+  async release(failed: boolean): Promise<string[]> {
+    const tails: string[] = [];
+    for (const host of this.hosts) {
+      tails.push(`${host.name}: ${host.tail()}`);
+      if (failed) tails.push(`${host.name} engine: ${await host.state()}`);
+    }
     for (const host of this.hosts.reverse()) await host.close().catch(() => undefined);
     for (const instance of this.instances.reverse()) {
       await instance.stop().catch(() => undefined);
@@ -149,18 +158,20 @@ async function main(): Promise<number> {
 
       process.stdout.write(`- ${scenario.name}\n`);
       const began = Date.now();
+      let failed = false;
       try {
         await withDeadline(scenario.run(context), budget.scenarioMs, scenario.name, () =>
           started.abandon()
         );
         process.stdout.write(`  passed in ${Date.now() - began}ms\n`);
       } catch (error) {
+        failed = true;
         failures.push({ name: scenario.name, error });
         process.stdout.write(`  FAILED after ${Date.now() - began}ms\n`);
         process.stdout.write(`  ${describe(error)}\n`);
         process.stdout.write(`  the host logs are under ${scenarioLogs}\n`);
       } finally {
-        for (const tail of await started.release()) process.stdout.write(`  ${tail}\n`);
+        for (const tail of await started.release(failed)) process.stdout.write(`  ${tail}\n`);
         // A scenario may leave the API down. Restore it for the next one.
         await stack.startApi();
       }

@@ -52,8 +52,15 @@ export class FilesPage {
       .filter({ has: this.page.getByRole('checkbox', { name: `select ${name}`, exact: true }) });
   }
 
+  /**
+   * Opens a folder and waits for the listing of that folder to land. The trail
+   * names the folder only once the engine has reported a view of it, and the
+   * surfaces that take a write mount on that same view: a picker driven before
+   * it lands belongs to the folder just left, and the file it takes is lost.
+   */
   async open(name: string): Promise<void> {
     await this.row(name).dblclick();
+    await expect(this.breadcrumbs.locator('[aria-current="page"]')).toHaveText(name);
   }
 
   /**
