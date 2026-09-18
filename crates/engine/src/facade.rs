@@ -14210,6 +14210,10 @@ mod tests {
             .id;
         // The cut a grant makes: the folder answers as a scope root of its own.
         engine.descendant_scope_roots.borrow_mut().insert(shared);
+        // Two floors that differ, so a blob that read the wrong scope's floor
+        // carries a distinguishable epoch.
+        block_on(engine.seams.floor_store.raise_epoch_floor(&root.0, 3)).unwrap();
+        block_on(engine.seams.floor_store.raise_epoch_floor(&shared.0, 7)).unwrap();
 
         write_file(
             &mut engine,
@@ -14234,11 +14238,12 @@ mod tests {
         assert_eq!(
             staged
                 .iter()
-                .map(|content| content.scope)
+                .map(|content| (content.scope, content.epoch))
                 .collect::<Vec<_>>(),
-            vec![root, shared],
+            vec![(root, 3), (shared, 7)],
             "the vault-root write binds the vault root, and the write inside the \
-             cut folder binds that folder"
+             cut folder binds that folder — each with that scope's own read-epoch \
+             floor"
         );
     }
 
