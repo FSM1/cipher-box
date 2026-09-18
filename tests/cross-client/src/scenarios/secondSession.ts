@@ -41,7 +41,9 @@ export const secondSession: Scenario = {
 
     await tab.files.open(FOLDER);
     await tab.files.upload(FROM_TAB, fileBytes(TAB_BYTES));
-    await tab.vault.settled();
+    // The tab's own listing first: a write the tab never made reads at the
+    // mount exactly like one the mount never received.
+    await listsInFolder(context, tab, FOLDER, FROM_TAB);
     await converges(context, first, FROM_TAB, join(first.mountRoot, FOLDER));
     context.log(`both devices wrote into ${FOLDER}`);
 

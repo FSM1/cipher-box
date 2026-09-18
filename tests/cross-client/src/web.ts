@@ -19,6 +19,9 @@ import type { Deadlines } from '../../desktop-e2e/src/profile';
 
 const DIAGNOSTIC_LINES = 40;
 
+/** How many engine events a failure report carries per tab. */
+const ENGINE_EVENTS = 30;
+
 export interface WebHostOptions {
   browser: Browser;
   /** Where the built bundle is served. */
@@ -140,6 +143,21 @@ export class WebHost {
   /** What the browser said, for a failure that names only the call in flight. */
   tail(): string {
     return this.diagnostics.slice(-DIAGNOSTIC_LINES).join('\n') || '(nothing)';
+  }
+
+  /**
+   * What this tab's engine holds, as one line. A console tail names nothing
+   * when a write never reaches the wire, and the mount logs cannot tell a write
+   * the tab refused from one it never made.
+   */
+  async state(): Promise<string> {
+    const read = await this.page
+      .evaluate(async (limit) => {
+        const engine = window.__CIPHERBOX_ENGINE__!;
+        return { view: await engine.snapshot(), events: engine.events().slice(-limit) };
+      }, ENGINE_EVENTS)
+      .catch((error: unknown) => ({ unreadable: error instanceof Error ? error.message : error }));
+    return JSON.stringify(read);
   }
 
   close(): Promise<void> {
