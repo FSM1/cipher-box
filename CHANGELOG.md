@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.2](https://github.com/FSM1/cipher-box/compare/v2.1.1...v2.1.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **web:** gate write affordances on the scope permission and hold a batch save open ([#1878](https://github.com/FSM1/cipher-box/issues/1878)) ([4fd1a58](https://github.com/FSM1/cipher-box/commit/4fd1a5882257a5a6c0772af5cf0b3da542ef032d))
+
 ## [2.1.1](https://github.com/FSM1/cipher-box/compare/v2.1.0...v2.1.1) (2026-09-18)
 
 
