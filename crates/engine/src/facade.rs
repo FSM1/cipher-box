@@ -6603,6 +6603,7 @@ where {
                         floors: &floors,
                         enc_secret: &enc_subkey,
                         contact_label_seed: &contact_label_seed,
+                        mode,
                     }
                     .refresh(
                         &staging,

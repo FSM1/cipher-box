@@ -42,7 +42,7 @@ use crate::seams::{
 use crate::sync::model::{NodeMeta, node_id_label};
 use crate::sync::project::project_folder_partial;
 use crate::sync::render::BaseSnapshot;
-use crate::sync::tick::on_access_refresh_due;
+use crate::sync::tick::{ResolveMode, on_access_refresh_due};
 
 use super::accept::ReceivedShareStore;
 use super::accept::{BookmarkKey, ReceivedShare};
@@ -253,17 +253,25 @@ pub(crate) struct ReceivedShareStatus<'a, T, H, F> {
     /// This account's contact-label seed — what a share's sharer is labelled
     /// under before it keys that scope's durable epoch floor.
     pub contact_label_seed: &'a SecretBytes,
+    /// How this pass paces its re-resolves
+    /// ([`refresh`](ReceivedShareStatus::refresh)).
+    pub mode: ResolveMode,
 }
 
 impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F> {
     /// Re-classify the bookmarked shared scope roots that are due, into
     /// `verdicts`.
     ///
-    /// Paced by [`on_access_refresh_due`], the same damper the focus window's
-    /// folder leg uses, and capped at [`MAX_RESOLVES_PER_PASS`]: an undamped
-    /// pass over a full bookmark list would not finish inside its own tick, and
-    /// the legs after it would never run. A verdict not re-reached this pass is
-    /// carried forward.
+    /// The poll leg is paced by [`on_access_refresh_due`], the same damper the
+    /// focus window's folder leg uses; a forced pass ([`ResolveMode::NoCache`])
+    /// re-resolves every share. This leg alone resolves a grafted scope root —
+    /// the focus window drops it, because a scope's own root never resolves
+    /// through the child gate — so a damped forced pass would report a listing
+    /// it did not re-read (blueprint/engine.md "Sync core").
+    ///
+    /// Both legs are capped at [`MAX_RESOLVES_PER_PASS`]: a pass over a full
+    /// bookmark list would not finish inside its own tick, and the legs after it
+    /// would never run. A verdict not re-reached this pass is carried forward.
     ///
     /// Rebuilt each pass, so a share the list no longer holds leaves no verdict
     /// behind. A store failure leaves the last pass's verdicts standing rather
@@ -335,7 +343,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         for share in received.iter() {
             let key = share.key();
             let held = verdicts.borrow().get(&key).copied();
-            let due = held.is_none_or(|held| on_access_refresh_due(now, held.at, profile));
+            let due = self.mode == ResolveMode::NoCache
+                || held.is_none_or(|held| on_access_refresh_due(now, held.at, profile));
             if !due || budget == 0 {
                 if let Some(held) = held {
                     refreshed.insert(key, held);
@@ -717,6 +726,7 @@ mod tests {
     };
 
     use crate::name::{MAX_NODE_NAME_BYTES, is_emittable};
+    use crate::sync::tick::ResolveMode;
 
     use super::super::accept::{ReceivedShareStoreError, ReceivedSharesList};
     use super::super::ledger::mint_grant_row;
@@ -1029,6 +1039,7 @@ mod tests {
                     floors,
                     enc_secret: &my_enc(),
                     contact_label_seed: &label_seed(),
+                    mode: ResolveMode::CacheFirst,
                 }
                 .classified(
                     share,
@@ -1458,6 +1469,56 @@ mod tests {
         }
     }
 
+    /// The sharer's scope root serving `children`, granting this vault read.
+    fn shared_scope_fixture(children: Vec<ChildRef>) -> OwnerRootFixture {
+        let sharer = sharer_signer();
+        let grants = vec![
+            mint_grant_row(
+                &sharer,
+                &sharer_enc(),
+                &OWNER_ROOT_POINTER_READ_KEY,
+                sharer.verifying_key().to_sec1(),
+                &my_enc().public(),
+                &SCOPE,
+                scope_root_name().as_str().as_bytes(),
+                Permission::Read,
+            )
+            .expect("a contributory recipient key"),
+        ];
+        owner_root_fixture(OwnerRootSpec {
+            writer_pseudonym: &owner_root_pseudonym(),
+            pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
+            owner_identity: &sharer,
+            owner_enc: &sharer_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children,
+            child_scope_index: Vec::new(),
+            grants,
+            parent_node_seed: None,
+            owner_write_blob_epoch: None,
+            write_history_link: Vec::new(),
+        })
+    }
+
+    /// Serve `fixture` at the scope root's name, at `sequence`.
+    fn seed_scope_root(records: &InMemoryRecordStore, fixture: &OwnerRootFixture, sequence: u64) {
+        records.seed_record(
+            &EndpointId::new("e0"),
+            fixture.name.as_str(),
+            IpnsRecord::create_v2(
+                &kdf::ipns_keypair(
+                    kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
+                ),
+                format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+                sequence,
+                2_000_000_000,
+                "2099-01-01T00:00:00Z",
+            )
+            .marshal(),
+        );
+    }
+
     /// The whole grantee side: the sharer's published scope root serving
     /// `children`, this vault's durable bookmark and contact book, and the render
     /// tree a focus reads.
@@ -1487,51 +1548,9 @@ mod tests {
 
         /// The same world, with this vault's own root anchored at `vault_root`.
         fn rooted_at(children: Vec<ChildRef>, vault_root: [u8; 16]) -> Self {
-            let sharer = sharer_signer();
-            let name = scope_root_name();
-            let grants = vec![
-                mint_grant_row(
-                    &sharer,
-                    &sharer_enc(),
-                    &OWNER_ROOT_POINTER_READ_KEY,
-                    sharer.verifying_key().to_sec1(),
-                    &my_enc().public(),
-                    &SCOPE,
-                    name.as_str().as_bytes(),
-                    Permission::Read,
-                )
-                .expect("a contributory recipient key"),
-            ];
-            let fixture = owner_root_fixture(OwnerRootSpec {
-                writer_pseudonym: &owner_root_pseudonym(),
-                pointer_read_key: OWNER_ROOT_POINTER_READ_KEY,
-                owner_identity: &sharer,
-                owner_enc: &sharer_enc().public(),
-                scope_id: SCOPE,
-                root_id: SCOPE,
-                children,
-                child_scope_index: Vec::new(),
-                grants,
-                parent_node_seed: None,
-                owner_write_blob_epoch: None,
-                write_history_link: Vec::new(),
-            });
-            let endpoint = EndpointId::new("e0");
-            let records = InMemoryRecordStore::new(vec![endpoint.clone()]);
-            records.seed_record(
-                &endpoint,
-                fixture.name.as_str(),
-                IpnsRecord::create_v2(
-                    &kdf::ipns_keypair(
-                        kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &SCOPE).as_bytes(),
-                    ),
-                    format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
-                    1,
-                    2_000_000_000,
-                    "2099-01-01T00:00:00Z",
-                )
-                .marshal(),
-            );
+            let fixture = shared_scope_fixture(children);
+            let records = InMemoryRecordStore::new(vec![EndpointId::new("e0")]);
+            seed_scope_root(&records, &fixture, 1);
             let fx = Self {
                 fixture,
                 records,
@@ -1650,9 +1669,25 @@ mod tests {
             self.persist(&list).expect("the bookmarks persist");
         }
 
-        /// One received-share pass, with the head block its resolve fetches
-        /// served.
+        /// Answer the same name with `children` at `sequence` from now on — the
+        /// republish the owner makes when it adds a file after the grant.
+        fn republish(&mut self, children: Vec<ChildRef>, sequence: u64) {
+            self.fixture = shared_scope_fixture(children);
+            seed_scope_root(&self.records, &self.fixture, sequence);
+        }
+
+        /// One poll-cadence received-share pass, with the head block its resolve
+        /// fetches served.
         fn pass(&self, at_millis: u64) -> ResolutionClass {
+            self.pass_in(at_millis, ResolveMode::CacheFirst)
+        }
+
+        /// One `Command::ManualRefresh` pass — the forced, nocache leg.
+        fn forced_pass(&self, at_millis: u64) -> ResolutionClass {
+            self.pass_in(at_millis, ResolveMode::NoCache)
+        }
+
+        fn pass_in(&self, at_millis: u64, mode: ResolveMode) -> ResolutionClass {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
@@ -1667,6 +1702,7 @@ mod tests {
                     floors: &self.floors,
                     enc_secret: &my_enc(),
                     contact_label_seed: &label_seed(),
+                    mode,
                 }
                 .refresh(
                     &self.staging,
@@ -1705,6 +1741,63 @@ mod tests {
                 .map(|child| child.name().to_owned())
                 .collect()
         }
+    }
+
+    /// A read grantee reads the live folder, not the listing that was current
+    /// when the grant was cut. This leg is the only one that resolves a grafted
+    /// scope root, so a forced pass the damper skips leaves the owner's later
+    /// file unrendered for as long as the recipient keeps refreshing.
+    #[test]
+    fn a_forced_pass_renders_a_file_the_owner_added_after_the_grant() {
+        let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+
+        fx.republish(
+            vec![
+                shared_child(0xa1, "photos"),
+                shared_child(0xa2, "after-the-grant"),
+            ],
+            2,
+        );
+
+        assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
+        assert_eq!(
+            fx.listing(),
+            vec!["photos".to_owned(), "after-the-grant".to_owned()],
+        );
+    }
+
+    /// The poll leg keeps its damper, so a bookmark list does not re-resolve on
+    /// every tick of a cadence shorter than the staleness threshold.
+    #[test]
+    fn a_poll_pass_inside_the_staleness_threshold_carries_its_verdict_forward() {
+        let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        fx.republish(
+            vec![
+                shared_child(0xa1, "photos"),
+                shared_child(0xa2, "after-the-grant"),
+            ],
+            2,
+        );
+
+        assert_eq!(fx.pass(1_000), ResolutionClass::Granted);
+        assert_eq!(
+            fx.listing(),
+            vec!["photos".to_owned()],
+            "the damped pass re-read nothing",
+        );
+
+        assert_eq!(fx.pass(60_000), ResolutionClass::Granted);
+        assert_eq!(
+            fx.listing(),
+            vec!["photos".to_owned(), "after-the-grant".to_owned()],
+            "and the pass past the threshold renders the owner's addition",
+        );
     }
 
     /// The gap this leg closes: a member could read a share's standing but never
@@ -2271,6 +2364,7 @@ mod tests {
                     floors: &self.floors,
                     enc_secret: &my_enc(),
                     contact_label_seed: &label_seed(),
+                    mode: ResolveMode::CacheFirst,
                 }
                 .refresh(
                     &self.staging,

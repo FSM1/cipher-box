@@ -10,12 +10,6 @@ import { expect, published, test } from './fixtures';
 import { grant, OWNER_FOLDER } from './sharing';
 import { recordJourneys } from './timing';
 
-// Held out of the run past the grant: the grant now reaches the recipient, and
-// the recipient opens the folder, but a file the owner adds after the grant
-// does not appear on the recipient within the budget. The live-read leg is what
-// stands; the delivery leg no longer does.
-test.fixme();
-
 const AFTER_GRANT = 'after-the-grant.bin';
 
 test('a grant reaches a second identity, and a revoke cuts it', async ({
