@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ChildRef, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob, open_read_body,
+    AadContext, ChildRef, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob,
+    open_read_body,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SecretBytes;
@@ -69,6 +70,10 @@ pub(crate) struct ReceivedVerdict {
     pub class: ResolutionClass,
     /// When the pass that reached it ran.
     pub at: UnixMillis,
+    /// What the owner's live commitment last permitted this vault in the scope.
+    /// The bookmark's own copy is the accept's snapshot of it, and a downgrade
+    /// republishes the demoted set without delivering a fresh pointer.
+    pub permission: Permission,
 }
 
 /// The durable bars a verdict on one bookmarked shared scope is measured
@@ -314,10 +319,6 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .map(|granted| granted.scope_id)
             .collect();
         *render.scope_roots.borrow_mut() = received.iter().map(|share| share.scope_id).collect();
-        *render.permissions.borrow_mut() = received
-            .iter()
-            .map(|share| (share.scope_id, share.permission))
-            .collect();
         // Rebuilt each pass, like the verdicts. It covers every renderable
         // scope and not only the ones this pass grafts: a revoked share keeps
         // the listing it last rendered, and the leg below it must keep reading
@@ -344,12 +345,14 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             budget -= 1;
             // Both anchors are contact-held, so a forgotten sharer leaves no
             // verified identity to hold the record to.
+            let carried = held.map_or(share.permission, |held| held.permission);
             let Some(contact) = by_identity.get(&share.sharer_identity_pk) else {
                 refreshed.insert(
                     key,
                     ReceivedVerdict {
                         class: ResolutionClass::Unresolvable,
                         at: now,
+                        permission: carried,
                     },
                 );
                 continue;
@@ -357,18 +360,43 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             // One resolve serves both legs: the verdict this row renders, and
             // the subtree a browse of it opens.
             let (class, resolved) = self.classified(share, contact).await;
-            if class == ResolutionClass::Granted && renderable.contains(&share.scope_id) {
+            let mut permission = carried;
+            if class == ResolutionClass::Granted {
                 if let Some((candidate, floors)) = &resolved {
-                    if let Some(open) = self
-                        .open(candidate, share, contact, floors.epoch, render)
-                        .await
-                    {
-                        opened.push(open);
+                    // Only a `Granted` verdict has cleared the commitment's
+                    // whole of stage 2, so only there is the committed
+                    // permission the owner's word rather than the record's.
+                    if let Some(committed) = self.committed_permission(candidate, share, contact) {
+                        permission = committed;
+                    }
+                    if renderable.contains(&share.scope_id) {
+                        if let Some(open) = self
+                            .open(candidate, share, contact, floors.epoch, render)
+                            .await
+                        {
+                            opened.push(open);
+                        }
                     }
                 }
             }
-            refreshed.insert(key, ReceivedVerdict { class, at: now });
+            refreshed.insert(
+                key,
+                ReceivedVerdict {
+                    class,
+                    at: now,
+                    permission,
+                },
+            );
         }
+        *render.permissions.borrow_mut() = received
+            .iter()
+            .map(|share| {
+                let permission = refreshed
+                    .get(&share.key())
+                    .map_or(share.permission, |verdict| verdict.permission);
+                (share.scope_id, permission)
+            })
+            .collect();
         *verdicts.borrow_mut() = refreshed;
 
         let contested = claim_contest(&mut opened, &renderable, render);
@@ -378,6 +406,31 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         for open in &opened {
             merge_grafted(open, &contested, render);
         }
+    }
+
+    /// What the owner's live commitment permits this vault in `share`'s scope,
+    /// read at the blinded tag the resolved record's own name folds in.
+    ///
+    /// The caller must have classified the record `Granted`, which is the whole
+    /// of the gate's stage 2 over this commitment plus a blob at that tag.
+    fn committed_permission(
+        &self,
+        candidate: &Candidate,
+        share: &ReceivedShare,
+        contact: &Contact,
+    ) -> Option<Permission> {
+        let tag = recipient_blinded_tag(
+            self.enc_secret,
+            &contact.enc_subkey(),
+            &share.scope_root_name,
+        )?;
+        candidate
+            .grant_section
+            .commitment
+            .entries
+            .iter()
+            .find(|entry| entry.tag == tag)
+            .map(|entry| entry.permission)
     }
 
     /// `share`'s floors, filed under the identity that granted it.
@@ -1513,6 +1566,21 @@ mod tests {
             self.bookmark_sharers(&[sharer_signer().verifying_key().to_sec1()]);
         }
 
+        /// The same bookmark, recording `permission` — the accept's snapshot of
+        /// what the commitment permitted then.
+        fn bookmark_at(&self, permission: Permission) {
+            let mut list = ReceivedSharesList::new();
+            list.reconcile(ReceivedShare {
+                scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
+                scope_id: SCOPE,
+                sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                display_name: "shared-folder".to_owned(),
+                permission,
+                pointer_read_key: SecretBytes::new([0x9a; 32]),
+            });
+            self.persist(&list).expect("the bookmark persists");
+        }
+
         /// The same bookmark, under a label the sharer chose.
         fn bookmark_labelled(&self, display_name: &str) {
             self.try_bookmark_labelled(display_name)
@@ -1690,6 +1758,42 @@ mod tests {
         fx.bookmark();
 
         fx.pass(0);
+
+        assert_eq!(
+            fx.permissions.borrow().get(&SCOPE).copied(),
+            Some(Permission::Read)
+        );
+    }
+
+    /// A downgrade republishes the demoted set and rotates the write plane
+    /// alone; it delivers no fresh pointer, so the bookmark keeps the permission
+    /// the accept recorded. The permission a host gates on is the owner's live
+    /// commitment, never the bookmark's superseded copy of it.
+    #[test]
+    fn a_downgraded_commitment_supersedes_the_permission_the_bookmark_kept() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark_at(Permission::Write);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+
+        assert_eq!(
+            fx.permissions.borrow().get(&SCOPE).copied(),
+            Some(Permission::Read),
+            "the served commitment demoted this recipient"
+        );
+    }
+
+    /// The damper leaves most scopes unresolved on most passes. A permission the
+    /// live commitment already superseded must not return with the bookmark's
+    /// copy the moment a pass skips the scope.
+    #[test]
+    fn a_pass_that_re_resolves_nothing_keeps_the_superseded_permission() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark_at(Permission::Write);
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        // Too soon for the damper, so the pass carries the last verdict forward.
+        fx.pass(1);
 
         assert_eq!(
             fx.permissions.borrow().get(&SCOPE).copied(),

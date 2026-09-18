@@ -376,6 +376,12 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     );
 
     assert_eq!(
+        get(&view, "permission"),
+        JsValue::from(Permission::Write),
+        "permission must cross under that JS name"
+    );
+
+    assert_eq!(
         get(&view, "retainedRecords").as_f64(),
         Some(0.0),
         "retainedRecords must cross under that JS name"
