@@ -241,6 +241,9 @@ impl Projection {
                 if let Some(mount) = mount.as_mut() {
                     mount.quiesce();
                 }
+                // Bounded like the mount that is still being made: a base block
+                // this read has to fetch must not hold the quit open.
+                let _ = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes()).await;
                 drop(mount);
                 core.unmount();
             }
