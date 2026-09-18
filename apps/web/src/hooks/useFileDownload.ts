@@ -167,6 +167,9 @@ export function useFileDownload(): FileDownload {
         // One live ticket and one frame at a time, however long the selection:
         // the next navigation waits out the grace this save commits in.
         await settling.current;
+        // Unmount resolves that grace early, and `save` mints its ticket with no
+        // owner left to revoke it.
+        if (!mounted.current) break;
       }
       if (failed.length === 0) return;
       // Each save clears the banner the one before it set, so the batch reports

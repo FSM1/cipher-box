@@ -298,6 +298,32 @@ describe('bounding the tickets a streamed save leaves live', () => {
       vi.useRealTimers();
     }
   });
+
+  it('abandons the rest of a batch when the tab drops the hook mid-grace', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result, unmount } = mount(fakeEngine());
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        void result.current.saveAll(batch(['a.bin', 'b.bin']));
+        await Promise.resolve();
+      });
+      await pipe.finish('/stream/ticket-1');
+      await settled();
+      expect(pipe.minted).toEqual(['/stream/ticket-1']);
+
+      unmount();
+      await settled();
+      await advance(REVOKE_AFTER_MS);
+
+      expect(pipe.minted).toEqual(['/stream/ticket-1']);
+      expect(pipe.live.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('saving a selection', () => {

@@ -115,6 +115,41 @@ describe('the vault browser', () => {
     expect(screen.getByTestId('upload-zone')).toBeTruthy();
   });
 
+  /**
+   * A gated menu entry does not reach a dialog the user opened while the scope
+   * was still writable, and that dialog's confirm is a write.
+   */
+  it('takes an open write dialog down when the scope turns read-only', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve(view(ROOT_ID, 'fresh', 2));
+    });
+    await screen.findByTestId('new-folder-button');
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('file-list-item-menu')[0]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText('rename'));
+    });
+    expect(screen.getByTestId('rename-dialog')).toBeTruthy();
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[1].resolve({ ...view(ROOT_ID, 'fresh', 2), permission: 'read' });
+    });
+    await screen.findByTestId('read-only-scope');
+
+    expect(screen.queryByTestId('rename-dialog')).toBeNull();
+  });
+
   it('re-drives the pull from the recoverable notice', async () => {
     const engine = await listedThenFailed(
       new EngineRequestError('too many read streams are already open', 'tooManyStreams')

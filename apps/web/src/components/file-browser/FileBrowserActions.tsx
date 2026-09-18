@@ -34,6 +34,16 @@ type Dialog =
   | { kind: 'rename' | 'details' | 'preview' | 'edit' | 'share'; row: ListingRow }
   | { kind: 'move' | 'delete'; rows: ListingRow[] };
 
+/** The dialogs whose confirm dispatches a write. The rest only read. */
+const MUTATIONS: ReadonlySet<Dialog['kind']> = new Set([
+  'create',
+  'rename',
+  'move',
+  'delete',
+  'share',
+  'edit',
+]);
+
 interface FileBrowserActionsProps {
   rows: ListingRow[];
   /** The folder on screen, or `null` before the first snapshot lands. */
@@ -60,6 +70,10 @@ export function FileBrowserActions({
   const downloads = useFileDownload();
   const selection = useSelection(rows, folder);
   const failure = actions.error ?? downloads.error;
+  // A scope the engine reports read-only under an already-open dialog takes the
+  // dialog down with it: its confirm is a write, and a gated menu entry does not
+  // reach one the user opened while the scope was still writable.
+  const open = dialog !== null && !writable && MUTATIONS.has(dialog.kind) ? null : dialog;
 
   const close = () => setDialog(null);
   /**
@@ -191,7 +205,7 @@ export function FileBrowserActions({
         />
       )}
 
-      {dialog?.kind === 'create' && folder !== null && (
+      {open?.kind === 'create' && folder !== null && (
         <NamePromptDialog
           title="new folder"
           fieldLabel="folder name"
@@ -205,23 +219,23 @@ export function FileBrowserActions({
           onConfirm={(name) => closeOnSuccess(actions.createFolder(folder, name))}
         />
       )}
-      {dialog?.kind === 'rename' && (
+      {open?.kind === 'rename' && (
         <NamePromptDialog
-          title={`rename ${dialog.row.name}`}
+          title={`rename ${open.row.name}`}
           fieldLabel="new name"
-          initialName={dialog.row.storedName}
+          initialName={open.row.storedName}
           confirmLabel="rename"
           busyLabel="renaming..."
           testId="rename"
           onClose={close}
           busy={actions.busy === 'rename'}
           error={actions.error}
-          onConfirm={(name) => closeOnSuccess(actions.rename(dialog.row.id, name))}
+          onConfirm={(name) => closeOnSuccess(actions.rename(open.row.id, name))}
         />
       )}
-      {dialog?.kind === 'move' && (
+      {open?.kind === 'move' && (
         <MoveDialog
-          rows={dialog.rows}
+          rows={open.rows}
           parent={folder}
           onClose={close}
           busy={actions.busy === 'relink'}
@@ -229,30 +243,30 @@ export function FileBrowserActions({
           onConfirm={(newParent) =>
             closeOnBatch(
               actions.move(
-                dialog.rows.map((row) => row.id),
+                open.rows.map((row) => row.id),
                 newParent
               )
             )
           }
         />
       )}
-      {dialog?.kind === 'delete' && (
+      {open?.kind === 'delete' && (
         <ConfirmDeleteDialog
-          rows={dialog.rows}
+          rows={open.rows}
           onClose={close}
           busy={actions.busy === 'delete'}
           error={actions.error}
-          onConfirm={() => closeOnBatch(actions.remove(dialog.rows.map((row) => row.id)))}
+          onConfirm={() => closeOnBatch(actions.remove(open.rows.map((row) => row.id)))}
         />
       )}
-      {dialog?.kind === 'share' && <ShareDialog row={dialog.row} onClose={close} />}
-      {dialog?.kind === 'details' && <DetailsDialog row={dialog.row} onClose={close} />}
-      {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
-      {dialog?.kind === 'preview' && (
+      {open?.kind === 'share' && <ShareDialog row={open.row} onClose={close} />}
+      {open?.kind === 'details' && <DetailsDialog row={open.row} onClose={close} />}
+      {open?.kind === 'edit' && <TextEditorDialog row={open.row} onClose={close} />}
+      {open?.kind === 'preview' && (
         <FilePreviewDialog
-          row={dialog.row}
+          row={open.row}
           onClose={close}
-          onDownload={() => void downloads.save(saveRequest(dialog.row))}
+          onDownload={() => void downloads.save(saveRequest(open.row))}
         />
       )}
     </>
