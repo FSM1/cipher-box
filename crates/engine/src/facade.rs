@@ -59,7 +59,7 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, GraftedSharers,
-    evict_grafted_read_seeds, floor_view, is_own_scope,
+    evict_grafted_read_seeds, evict_grafted_write_seeds, floor_view, is_own_scope,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{
@@ -4036,7 +4036,7 @@ pub(crate) fn seed_names(
 /// drain mint every new node's `ipnsName` and signer from a key that party also
 /// holds. A seed that cannot name our own root is not our scope's — held
 /// keyless, never a trust verdict.
-fn deposit_write_seed(
+pub(crate) fn deposit_write_seed(
     cell: &RefCell<ScopeSeeds>,
     scope_id: [u8; 16],
     seed: Zeroizing<[u8; 32]>,
@@ -6091,6 +6091,15 @@ where {
                         &scope_read_seeds,
                     )
                     .await;
+                    evict_grafted_write_seeds(
+                        &floors,
+                        &grafted,
+                        &contact_label_seed,
+                        &root_id,
+                        &proved_before,
+                        &scope_write_seeds,
+                    )
+                    .await;
                     let adopter = RootAdopter::new(
                         &gateway,
                         &http,
@@ -6612,6 +6621,9 @@ where {
                         &ScopeRender {
                             base: &base,
                             read_seeds: &scope_read_seeds,
+                            write_seeds: &scope_write_seeds,
+                            own_root: &root_id,
+                            own_descendants: &descendant_roots,
                             grafted_sharers: &grafted_sharers,
                             scope_roots: &bookmarked_scope_roots,
                             permissions: &bookmarked_permissions,

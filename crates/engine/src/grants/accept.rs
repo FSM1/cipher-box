@@ -271,11 +271,13 @@ impl ReceivedSharesList {
     }
 
     /// Those same scope roots, restricted to the ones this device can **write**
-    /// — the granted half of a sweep round
-    /// ([`run_sweep_job`](crate::rotation::run_sweep_job)). The lazy wave
-    /// re-seals and republishes, so it is "runnable by any write-capable client"
+    /// — the granted half of a sweep round. The lazy wave re-seals and
+    /// republishes, so it is "runnable by any write-capable client"
     /// (blueprint/engine.md "sweep"); sweeping a read-only share could only fail
     /// to publish, once per cadence, forever.
+    ///
+    /// No production caller takes this half yet: the sweep still runs over the
+    /// owner's own scopes alone.
     pub fn writable_scope_refs(&self) -> Vec<GrantedScopeRoot> {
         self.paired(|share| share.permission == Permission::Write)
     }
@@ -946,8 +948,10 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
 
     // Gate the record but DEFER the floor-law advance so the durable sequence
     // floor never moves ahead of the bookmark it accepts (see `PendingAdoption`).
-    // The share-accept flow does not hold the scope for liveness here, so the
-    // write-grantee seed the gate surfaces is dropped (the `_`).
+    // The write-grantee seed the gate surfaces is dropped (the `_`): the focus
+    // leg recovers it from this same blob on every pass
+    // ([`ReceivedShareStatus::open`](super::received_status)), so keeping it
+    // would only store a capability at rest that outlives the grant.
     let pending = match adopt_deferred(floors, &reader, candidate).await {
         Ok((pending, _)) => pending,
         Err(e) => {
