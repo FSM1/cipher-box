@@ -990,7 +990,9 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// correct the kernel for the pages that version replaced.
     async fn commit(&mut self, handle: HandleId) -> Result<(), VfsError> {
         let node = self.handles.get(handle).ok_or(VfsError::BadHandle)?.node;
-        self.journal(handle).await?;
+        if !self.journal(handle).await? {
+            return Ok(());
+        }
         let ino = self.inodes.ino_for(node);
         // Nothing re-binds this inode, so the pages this commit replaced would
         // stay live.
@@ -999,14 +1001,14 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// Journal what a handle holds, and tell the kernel nothing. A handle that
-    /// owes nothing journals nothing.
-    async fn journal(&mut self, handle: HandleId) -> Result<(), VfsError> {
+    /// owes nothing journals nothing. Reports whether an op was committed.
+    async fn journal(&mut self, handle: HandleId) -> Result<bool, VfsError> {
         let open = self.handles.get(handle).ok_or(VfsError::BadHandle)?;
         let Some(pending) = self.pending.get(&handle) else {
-            return Ok(());
+            return Ok(false);
         };
         if !pending.dirty {
-            return Ok(());
+            return Ok(false);
         }
         let len = pending.len;
         let write = self
@@ -1027,7 +1029,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if let Some(pending) = self.pending.get_mut(&handle) {
             pending.dirty = false;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Feed the whole version through the open write handle, one block at a

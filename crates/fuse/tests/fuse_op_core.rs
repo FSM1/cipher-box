@@ -2140,6 +2140,26 @@ fn a_flush_still_corrects_the_kernel_for_the_pages_it_replaced() {
 }
 
 #[test]
+fn a_flush_of_a_clean_handle_tells_the_kernel_nothing() {
+    // No version replaced the pages the kernel holds, so an invalidation here
+    // only makes it re-read what it already has.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging, adapter) = mount_spilling_into_watched(dir.path());
+    let handle = writing_handle(&mut core);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    block_on(core.flush(handle)).expect("the flush journals the write");
+    adapter.drain();
+
+    block_on(core.flush(handle)).expect("a flush with nothing new");
+
+    assert_eq!(
+        adapter.drain(),
+        Vec::new(),
+        "a flush that journals nothing raises no invalidation"
+    );
+}
+
+#[test]
 fn a_teardown_with_every_write_flushed_journals_nothing_more() {
     let dir = tempfile::tempdir().expect("a spill dir");
     let (mut core, staging) = mount_spilling_into(dir.path());
