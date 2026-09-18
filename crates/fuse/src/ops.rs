@@ -861,9 +861,39 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         committed
     }
 
+    /// Journal what every dirty handle owes, ahead of the unmount
+    /// (blueprint/desktop.md "Lifecycle": an acked-but-unpublished op is
+    /// journaled before the engine stops).
+    ///
+    /// `write` acks the bytes it took, and a kernel may hold the handle open
+    /// long past the `close(2)` its caller made — the SMB client behind FUSE-T
+    /// defers it by tens of seconds — so this is what turns an acked write into
+    /// an op rather than losing it with no error on any path.
+    pub async fn quiesce_writes(&mut self) {
+        let mut dirty: Vec<HandleId> = self
+            .pending
+            .iter()
+            .filter(|(_, pending)| pending.dirty)
+            .map(|(handle, _)| *handle)
+            .collect();
+        // `pending` is a hash map. Sorted, so the budget the host puts on this
+        // pass cuts at the same place on every run, and the handle that has
+        // owed the longest is the one journalled first.
+        dirty.sort_unstable();
+        for handle in dirty {
+            // Journalled without the invalidation `commit` pairs with: the
+            // kernel session is going down, and a notify pushed after the
+            // quiesce holds the unmount open.
+            //
+            // Per handle: one file the engine refuses must not strand the rest.
+            let _ = self.journal(handle).await;
+        }
+    }
+
     /// Tear the mount down: every pinned stream released and every cached
-    /// plaintext block zeroized. Writes a handle never flushed die with their
-    /// spill — unopenable ciphertext and no half-formed op.
+    /// plaintext block zeroized. Writes still dirty here die with their spill —
+    /// unopenable ciphertext and no half-formed op — so an orderly teardown
+    /// runs [`quiesce_writes`](Self::quiesce_writes) first.
     pub fn unmount(&mut self) {
         for open in self.handles.drain() {
             self.release_stream(open.stream);
@@ -956,15 +986,29 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(())
     }
 
-    /// Turn what a handle holds into exactly one `updateContent` op. A handle
-    /// that owes nothing journals nothing.
+    /// Turn what a handle holds into exactly one `updateContent` op, and
+    /// correct the kernel for the pages that version replaced.
     async fn commit(&mut self, handle: HandleId) -> Result<(), VfsError> {
+        let node = self.handles.get(handle).ok_or(VfsError::BadHandle)?.node;
+        if !self.journal(handle).await? {
+            return Ok(());
+        }
+        let ino = self.inodes.ino_for(node);
+        // Nothing re-binds this inode, so the pages this commit replaced would
+        // stay live.
+        self.content_changed(ino);
+        Ok(())
+    }
+
+    /// Journal what a handle holds, and tell the kernel nothing. A handle that
+    /// owes nothing journals nothing. Reports whether an op was committed.
+    async fn journal(&mut self, handle: HandleId) -> Result<bool, VfsError> {
         let open = self.handles.get(handle).ok_or(VfsError::BadHandle)?;
         let Some(pending) = self.pending.get(&handle) else {
-            return Ok(());
+            return Ok(false);
         };
         if !pending.dirty {
-            return Ok(());
+            return Ok(false);
         }
         let len = pending.len;
         let write = self
@@ -985,11 +1029,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         if let Some(pending) = self.pending.get_mut(&handle) {
             pending.dirty = false;
         }
-        let ino = self.inodes.ino_for(open.node);
-        // Nothing re-binds this inode, so the pages this commit replaced would
-        // stay live.
-        self.content_changed(ino);
-        Ok(())
+        Ok(true)
     }
 
     /// Feed the whole version through the open write handle, one block at a

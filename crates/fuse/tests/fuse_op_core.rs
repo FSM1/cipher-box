@@ -1779,14 +1779,22 @@ fn a_read_through_a_write_only_handle_is_refused() {
 /// A mount spilling into `dir`, plus the durable queue behind it. The dir is
 /// the caller's, so a test can look at the ciphertext a write leaves there.
 fn mount_spilling_into(dir: &Path) -> (Core, QueueGenerationStore<InMemoryStagingStore>) {
-    let (engine, _root, staging) = started_engine_with_staging();
-    let core = OperationCore::new(
-        engine,
-        RecordingAdapter::push_capable(),
-        CacheBudget::CI,
-        spill_area_at(dir),
-    );
+    let (core, staging, _adapter) = mount_spilling_into_watched(dir);
     (core, staging)
+}
+
+/// The same mount, plus the adapter that records what it tells the kernel.
+fn mount_spilling_into_watched(
+    dir: &Path,
+) -> (
+    Core,
+    QueueGenerationStore<InMemoryStagingStore>,
+    RecordingAdapter,
+) {
+    let (engine, _root, staging) = started_engine_with_staging();
+    let adapter = RecordingAdapter::push_capable();
+    let core = OperationCore::new(engine, adapter.clone(), CacheBudget::CI, spill_area_at(dir));
+    (core, staging, adapter)
 }
 
 /// How many ops the durable queue holds.
@@ -2071,6 +2079,101 @@ fn a_crash_between_the_spill_and_the_release_loses_the_write() {
     assert!(
         spill_files(dir.path()).is_empty(),
         "nothing openable survives the mount"
+    );
+}
+
+#[test]
+fn an_orderly_teardown_journals_a_write_the_kernel_never_flushed() {
+    // The mount acked the bytes, and a kernel may hold the handle open long
+    // past the `close(2)` its caller made, so the teardown is what turns them
+    // into the op the next session drains.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core);
+    let after_create = queued(&staging);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+
+    block_on(core.quiesce_writes());
+    core.unmount();
+    drop(core);
+
+    assert_eq!(
+        queued(&staging),
+        after_create + 1,
+        "an acked write reaches the queue before the engine stops"
+    );
+}
+
+#[test]
+fn a_teardown_journal_tells_the_kernel_nothing() {
+    // The kernel session is going down, and a notify pushed after the quiesce
+    // holds the unmount open.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging, adapter) = mount_spilling_into_watched(dir.path());
+    let handle = writing_handle(&mut core);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    adapter.drain();
+
+    block_on(core.quiesce_writes());
+
+    assert_eq!(
+        adapter.drain(),
+        Vec::new(),
+        "a teardown journal raises no invalidation"
+    );
+}
+
+#[test]
+fn a_flush_still_corrects_the_kernel_for_the_pages_it_replaced() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging, adapter) = mount_spilling_into_watched(dir.path());
+    let handle = writing_handle(&mut core);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    adapter.drain();
+
+    block_on(core.flush(handle)).expect("the flush journals the write");
+
+    assert!(
+        !adapter.drain().is_empty(),
+        "a flush under a live kernel session still invalidates"
+    );
+}
+
+#[test]
+fn a_flush_of_a_clean_handle_tells_the_kernel_nothing() {
+    // No version replaced the pages the kernel holds, so an invalidation here
+    // only makes it re-read what it already has.
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, _staging, adapter) = mount_spilling_into_watched(dir.path());
+    let handle = writing_handle(&mut core);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    block_on(core.flush(handle)).expect("the flush journals the write");
+    adapter.drain();
+
+    block_on(core.flush(handle)).expect("a flush with nothing new");
+
+    assert_eq!(
+        adapter.drain(),
+        Vec::new(),
+        "a flush that journals nothing raises no invalidation"
+    );
+}
+
+#[test]
+fn a_teardown_with_every_write_flushed_journals_nothing_more() {
+    let dir = tempfile::tempdir().expect("a spill dir");
+    let (mut core, staging) = mount_spilling_into(dir.path());
+    let handle = writing_handle(&mut core);
+    block_on(core.write(handle, 0, b"SECRET-1")).expect("the write lands");
+    block_on(core.flush(handle)).expect("the flush journals the write");
+    let after_flush = queued(&staging);
+
+    block_on(core.quiesce_writes());
+
+    assert_eq!(
+        queued(&staging),
+        after_flush,
+        "a handle that owes nothing journals nothing"
     );
 }
 
