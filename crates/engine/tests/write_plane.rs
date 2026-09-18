@@ -2617,6 +2617,7 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
                 root_cid: root_cid.clone(),
                 plaintext_size: 40,
                 sealed_content_key: b"not a key blob".to_vec(),
+                scope: NodeId([0; 16]),
                 epoch: EPOCH,
             },
             // The create published no version, so this edit follows none.
@@ -8344,6 +8345,7 @@ fn a_refused_dead_letter_retires_its_blocks_before_it_releases_them() {
                 root_cid: root_cid.clone(),
                 plaintext_size: 40,
                 sealed_content_key: b"never opened".to_vec(),
+                scope: NodeId([0; 16]),
                 epoch: EPOCH,
             },
             None,
@@ -9738,6 +9740,7 @@ fn a_dead_lettered_ops_blocks_survive_a_cold_start_and_a_gc_pass() {
                 root_cid: root_cid.clone(),
                 plaintext_size: 40,
                 sealed_content_key: b"never opened".to_vec(),
+                scope: NodeId([0; 16]),
                 epoch: EPOCH,
             },
             None,

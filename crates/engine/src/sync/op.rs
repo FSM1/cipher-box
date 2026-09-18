@@ -65,6 +65,11 @@ pub struct StagedContent {
     /// from the login secret, so it is epoch-independent and available on
     /// exactly the sessions that can run a drain.
     pub sealed_content_key: Vec<u8>,
+    /// The scope the version was authored in, bound into the key blob's AAD.
+    /// Carried for the same reason `epoch` is: the render the drain opens the
+    /// blob against may place the target in another scope by then, and the op
+    /// record seals this value, so it is as trustworthy as the blob it opens.
+    pub scope: NodeId,
     /// The scope epoch bound into the key blob's AAD. Carried because the blob
     /// is opened at drain time, when the live scope epoch may have moved on.
     pub epoch: u64,
@@ -79,6 +84,7 @@ impl fmt::Debug for StagedContent {
                 "sealed_content_key",
                 &RedactedBytes::of(&self.sealed_content_key),
             )
+            .field("scope", &self.scope)
             .field("epoch", &self.epoch)
             .finish()
     }
@@ -761,6 +767,7 @@ mod tests {
             root_cid: root.to_vec(),
             plaintext_size,
             sealed_content_key: b"sealed-key-blob".to_vec(),
+            scope: NodeId([0; 16]),
             epoch: 3,
         }
     }

@@ -181,6 +181,7 @@ mod tests {
             root_cid,
             plaintext_size,
             sealed_content_key: b"sealed-key-blob".to_vec(),
+            scope: NodeId([0; 16]),
             epoch: 1,
         }
     }

@@ -157,6 +157,7 @@ mod tests {
             root_cid: b"k".to_vec(),
             plaintext_size: 7,
             sealed_content_key: b"sealed-key-blob".to_vec(),
+            scope: NodeId([0; 16]),
             epoch: 1,
         }
     }
