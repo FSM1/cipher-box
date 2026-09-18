@@ -72,6 +72,125 @@ describe('the vault browser', () => {
     expect(screen.queryAllByTestId('file-list-item')).toHaveLength(0);
   });
 
+  /**
+   * A received share is grafted in with no parent link, so the engine refuses
+   * the write at the journal call. The browser must refuse at the gesture
+   * instead of offering one the engine will not take.
+   */
+  it('offers no write affordance in a scope another vault shared', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve({
+        ...view(ROOT_ID, 'fresh', 2),
+        permission: 'read',
+        receivedShare: true,
+      });
+    });
+    await screen.findByTestId('read-only-scope');
+
+    expect(screen.getAllByTestId('file-list-item')).toHaveLength(2);
+    expect(screen.queryByTestId('new-folder-button')).toBeNull();
+    expect(screen.queryByTestId('upload-zone')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('file-list-item-menu')[0]);
+    });
+    const labels = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(labels).toEqual(['download', 'details']);
+  });
+
+  /**
+   * The write plane cannot author under any grafted root, so a write grant is
+   * gated exactly like a read grant until that capability lands.
+   */
+  it('offers no write affordance in a share granted for writing either', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve({
+        ...view(ROOT_ID, 'fresh', 2),
+        permission: 'write',
+        receivedShare: true,
+      });
+    });
+    await screen.findByTestId('read-only-scope');
+
+    expect(screen.queryByTestId('new-folder-button')).toBeNull();
+    expect(screen.queryByTestId('upload-zone')).toBeNull();
+  });
+
+  it('offers the write affordances in a scope this vault writes', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve(view(ROOT_ID, 'fresh', 2));
+    });
+    await screen.findByTestId('new-folder-button');
+
+    expect(screen.queryByTestId('read-only-scope')).toBeNull();
+    expect(screen.getByTestId('upload-zone')).toBeTruthy();
+  });
+
+  /**
+   * A gated menu entry does not reach a dialog the user opened while the scope
+   * was still writable, and that dialog's confirm is a write.
+   */
+  it('takes an open write dialog down when the browse enters a shared scope', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve(view(ROOT_ID, 'fresh', 2));
+    });
+    await screen.findByTestId('new-folder-button');
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('file-list-item-menu')[0]);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText('rename'));
+    });
+    expect(screen.getByTestId('rename-dialog')).toBeTruthy();
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[1].resolve({ ...view(ROOT_ID, 'fresh', 2), receivedShare: true });
+    });
+    await screen.findByTestId('read-only-scope');
+
+    expect(screen.queryByTestId('rename-dialog')).toBeNull();
+
+    // The dialog state goes with the dialog, so a scope the engine reports
+    // writable again raises nothing the member did not ask for.
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[2].resolve(view(ROOT_ID, 'fresh', 2));
+    });
+    await screen.findByTestId('new-folder-button');
+
+    expect(screen.queryByTestId('rename-dialog')).toBeNull();
+  });
+
   it('re-drives the pull from the recoverable notice', async () => {
     const engine = await listedThenFailed(
       new EngineRequestError('too many read streams are already open', 'tooManyStreams')

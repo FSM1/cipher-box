@@ -6,7 +6,7 @@
 use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::seal::ChildRef;
+use cipherbox_core::seal::{ChildRef, Permission};
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 
@@ -26,6 +26,11 @@ pub(crate) type GraftedSharers = BTreeMap<[u8; 16], [u8; IDENTITY_PUBLIC_LEN]>;
 /// A contested id renders for nobody, so no leg may link it either: the sharer
 /// that linked it would hold it the moment the contest resolves.
 pub(crate) type BookmarkedScopeRoots = BTreeSet<[u8; 16]>;
+
+/// Scope id -> the permission this vault holds over that bookmarked scope, as
+/// the accepted grant recorded it. A scope absent here is this vault's own
+/// plane, which it writes by ownership rather than by grant.
+pub(crate) type BookmarkedPermissions = BTreeMap<[u8; 16], Permission>;
 
 /// Which body a claim-record entry came from: the scope it is sealed under, and
 /// the node whose body it is. A scope root's own body is keyed at its scope id.

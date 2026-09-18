@@ -311,6 +311,8 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         root: facade::NodeId([1u8; 16]),
         folder: facade::NodeId([2u8; 16]),
         folder_name: "holiday".into(),
+        permission: facade::Permission::Write,
+        received_share: true,
         children: vec![
             facade::SnapshotChild {
                 id: facade::NodeId([3u8; 16]),
@@ -372,6 +374,18 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         get(&view, "folderName").as_string().as_deref(),
         Some("holiday"),
         "folderName must cross under that JS name"
+    );
+
+    assert_eq!(
+        get(&view, "permission"),
+        JsValue::from(Permission::Write),
+        "permission must cross under that JS name"
+    );
+
+    assert_eq!(
+        get(&view, "receivedShare").as_bool(),
+        Some(true),
+        "receivedShare must cross under that JS name"
     );
 
     assert_eq!(
@@ -515,6 +529,8 @@ fn a_settings_queue_hold_crosses_with_its_check_and_no_byte_figure() {
         root: facade::NodeId([1u8; 16]),
         folder: facade::NodeId([1u8; 16]),
         folder_name: String::new(),
+        permission: facade::Permission::Write,
+        received_share: false,
         children: Vec::new(),
         ancestors: Vec::new(),
         dead_letters: Vec::new(),

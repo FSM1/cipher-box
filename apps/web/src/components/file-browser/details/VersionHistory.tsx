@@ -11,6 +11,8 @@ interface VersionHistoryProps {
   entries: readonly VersionEntryDescriptor[] | null;
   /** A command is in flight, so no entry may dispatch a second one. */
   busy: boolean;
+  /** False in a scope this vault only holds a read grant over. */
+  writable: boolean;
   /** The last version command's failure. */
   error: string | null;
   onDownload: (entry: VersionEntryDescriptor) => void;
@@ -25,6 +27,7 @@ interface VersionHistoryProps {
 export function VersionHistory({
   entries,
   busy,
+  writable,
   error,
   onDownload,
   onRestore,
@@ -66,24 +69,28 @@ export function VersionHistory({
                 >
                   dl
                 </button>
-                <button
-                  type="button"
-                  className="details-version-button"
-                  disabled={busy}
-                  onClick={() => onRestore(entry)}
-                  aria-label={`restore version ${named}`}
-                >
-                  restore
-                </button>
-                <button
-                  type="button"
-                  className="details-version-button details-version-button--danger"
-                  disabled={busy}
-                  onClick={() => onDelete(entry)}
-                  aria-label={`delete version ${named}`}
-                >
-                  rm
-                </button>
+                {writable && (
+                  <>
+                    <button
+                      type="button"
+                      className="details-version-button"
+                      disabled={busy}
+                      onClick={() => onRestore(entry)}
+                      aria-label={`restore version ${named}`}
+                    >
+                      restore
+                    </button>
+                    <button
+                      type="button"
+                      className="details-version-button details-version-button--danger"
+                      disabled={busy}
+                      onClick={() => onDelete(entry)}
+                      aria-label={`delete version ${named}`}
+                    >
+                      rm
+                    </button>
+                  </>
+                )}
               </span>
             </li>
           );

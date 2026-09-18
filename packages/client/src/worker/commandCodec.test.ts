@@ -1123,6 +1123,8 @@ function baseView(): WasmSnapshotView {
     root: new Uint8Array(16),
     folder: new Uint8Array(16),
     folderName: '',
+    permission: fakeWasmEnums.Permission.Write,
+    receivedShare: false,
     children: [],
     ancestors: [],
     deadLetters: [],
@@ -1137,6 +1139,8 @@ describe('readSnapshot', () => {
       root: new Uint8Array(16).fill(1),
       folder: new Uint8Array(16).fill(2),
       folderName: 'holiday',
+      permission: fakeWasmEnums.Permission.Read,
+      receivedShare: true,
       children: [
         {
           id: new Uint8Array(16).fill(3),
@@ -1183,6 +1187,8 @@ describe('readSnapshot', () => {
       root: new Uint8Array(16).fill(1),
       folder: new Uint8Array(16).fill(2),
       folderName: 'holiday',
+      permission: 'read',
+      receivedShare: true,
       children: [
         {
           id: new Uint8Array(16).fill(3),

@@ -19,6 +19,11 @@ export function FileBrowser() {
   // interrupted; anything else is a verdict and blanks it.
   const recoverable = error !== null && isRecoverable(error) ? error : null;
   const settled = !isLoading && (error === null || (recoverable !== null && folder !== null));
+  // A received share is grafted in with no parent link, so the engine refuses
+  // every write under it at the journal call, whatever the grant permits. Until
+  // the write plane can author there, only this vault's own scope gets a write
+  // affordance — `view.permission` reports the grant and does not decide this.
+  const writable = view !== null && view !== undefined && !view.receivedShare;
 
   return (
     <div className="file-browser" data-testid="file-browser">
@@ -49,11 +54,18 @@ export function FileBrowser() {
       )}
       {/* Mounted whatever the route says, so a running upload survives a folder
           change; only its drop target waits for a folder that can take one. */}
-      <UploadPanel folder={settled ? folder : null} />
+      <UploadPanel folder={settled && writable ? folder : null} />
+      {settled && !writable && (
+        <p className="file-browser-notice" role="status" data-testid="read-only-scope">
+          this folder was shared with you. you can open and download what is in it. changes to a
+          shared folder are not supported yet.
+        </p>
+      )}
       {settled && (
         <FileBrowserActions
           rows={rows}
           folder={folder}
+          writable={writable}
           showParentRow={!isRoot}
           onOpen={navigateTo}
           onNavigateUp={navigateUp}

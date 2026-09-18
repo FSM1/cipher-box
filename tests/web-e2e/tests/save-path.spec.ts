@@ -25,6 +25,9 @@ const NAME = 'notes — édition 1.md';
  */
 const LONG = PAYLOAD.repeat(40_000);
 
+/** Distinct names and distinct lengths, so no save can pass for another. */
+const BATCH = ['batch-one.md', 'batch-two.md', 'batch-three.md'];
+
 test('a saved file is its own bytes, not the app shell', { tag: '@full' }, async ({ page }) => {
   const { vault, files } = await coldStart(page);
 
@@ -42,6 +45,38 @@ test('a saved file is its own bytes, not the app shell', { tag: '@full' }, async
 
   const saved = await download.path();
   expect(new Uint8Array(await readFile(saved))).toEqual(bytes);
+  await expect(page.getByTestId('vault-action-error')).toHaveCount(0);
+});
+
+/**
+ * The batch defect: each save used to drop its frame and withdraw its ticket in
+ * the task the read settled in, while the next save navigated in that same task.
+ * The browser commits a save a beat later, so one file of the batch landed empty
+ * or under a name of the browser's choosing, with nothing reported.
+ */
+test('a batch save lands every file under its own name', { tag: '@full' }, async ({ page }) => {
+  const { vault, files } = await coldStart(page);
+
+  const sent = new Map<string, Uint8Array>();
+  for (const [index, name] of BATCH.entries()) {
+    const bytes = new TextEncoder().encode(PAYLOAD.repeat(index + 1));
+    sent.set(name, bytes);
+    await files.upload(name, bytes);
+    await expect(files.row(name)).toBeVisible();
+  }
+  await drained(files, vault);
+
+  for (const name of BATCH) await files.select(name);
+  const downloads = await files.saveSelected(BATCH.length);
+
+  expect(downloads.map((download) => download.suggestedFilename()).sort()).toEqual(
+    [...BATCH].sort()
+  );
+  for (const download of downloads) {
+    const name = download.suggestedFilename();
+    const saved = await download.path();
+    expect(new Uint8Array(await readFile(saved)), `${name} read back`).toEqual(sent.get(name));
+  }
   await expect(page.getByTestId('vault-action-error')).toHaveCount(0);
 });
 

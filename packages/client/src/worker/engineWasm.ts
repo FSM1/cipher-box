@@ -127,6 +127,8 @@ export interface WasmSnapshotView {
   readonly root: Uint8Array;
   readonly folder: Uint8Array;
   readonly folderName: string;
+  readonly permission: number;
+  readonly receivedShare: boolean;
   readonly children: WasmSnapshotChild[];
   readonly ancestors: WasmBreadcrumb[];
   readonly deadLetters: readonly WasmDeadLetter[];

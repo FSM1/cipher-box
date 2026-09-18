@@ -15,13 +15,15 @@ interface FileDetailsProps {
   row: ListingRow;
   /** This file's prior versions, read beside the snapshot the row carries. */
   versions: FileVersions;
+  /** False in a scope this vault only holds a read grant over. */
+  writable: boolean;
   /** A write confirms before it dispatches, which the dialog owns. */
   onRestore: (entry: VersionEntryDescriptor) => void;
   onDelete: (entry: VersionEntryDescriptor) => void;
 }
 
 /** One file's current version, as the engine snapshot reports it, and its past ones. */
-export function FileDetails({ row, versions, onRestore, onDelete }: FileDetailsProps) {
+export function FileDetails({ row, versions, writable, onRestore, onDelete }: FileDetailsProps) {
   return (
     <>
       <dl className="details-list" data-testid="file-details">
@@ -48,6 +50,7 @@ export function FileDetails({ row, versions, onRestore, onDelete }: FileDetailsP
       <VersionHistory
         entries={versions.entries}
         busy={versions.busy !== null}
+        writable={writable}
         error={versions.error}
         onDownload={(entry) => void versions.download(entry.contentCid)}
         onRestore={onRestore}

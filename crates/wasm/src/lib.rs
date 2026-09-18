@@ -893,6 +893,19 @@ impl SnapshotView {
         self.inner.folder_name.clone()
     }
 
+    /// What this vault may do in the scope the listed folder belongs to.
+    #[wasm_bindgen(getter)]
+    pub fn permission(&self) -> Permission {
+        self.inner.permission.into()
+    }
+
+    /// Whether the listed folder stands in a scope another vault granted this
+    /// one, which the write plane cannot author under.
+    #[wasm_bindgen(getter, js_name = receivedShare)]
+    pub fn received_share(&self) -> bool {
+        self.inner.received_share
+    }
+
     /// Direct children, deterministically ordered by node id.
     #[wasm_bindgen(getter)]
     pub fn children(&self) -> Vec<SnapshotChild> {
@@ -2584,6 +2597,8 @@ mod tests {
             root: facade::NodeId([1u8; 16]),
             folder: facade::NodeId([2u8; 16]),
             folder_name: "holiday".into(),
+            permission: facade::Permission::Read,
+            received_share: false,
             children: vec![
                 facade::SnapshotChild {
                     id: facade::NodeId([3u8; 16]),
@@ -2634,6 +2649,8 @@ mod tests {
         assert_eq!(view.root(), vec![1u8; 16]);
         assert_eq!(view.folder(), vec![2u8; 16]);
         assert_eq!(view.folder_name(), "holiday");
+        assert_eq!(view.permission(), Permission::Read);
+        assert!(!view.received_share());
         let dead_letters = view.dead_letters();
         assert_eq!(
             dead_letters
