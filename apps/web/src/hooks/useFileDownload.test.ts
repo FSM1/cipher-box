@@ -193,6 +193,41 @@ describe('bounding the tickets a streamed save leaves live', () => {
     }
   });
 
+  /**
+   * A row's own download stays reachable while a selection saves, so it can be
+   * raised inside the grace period the batch is waiting out.
+   */
+  it('holds a save raised during a batch back until that batch grace ends', async () => {
+    const pipe = fakePipe();
+    mediaControl.create = () => pipe.service;
+    const { result } = mount(fakeEngine());
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        void result.current.saveAll(batch(['a.bin']));
+        await Promise.resolve();
+      });
+      await pipe.finish('/stream/ticket-1');
+      await settled();
+      expect(pipe.minted).toEqual(['/stream/ticket-1']);
+
+      await act(async () => {
+        void result.current.save(file('direct.bin'));
+        await Promise.resolve();
+      });
+
+      expect(pipe.minted).toEqual(['/stream/ticket-1']);
+      expect([...pipe.live]).toEqual(['/stream/ticket-1']);
+
+      await advance(REVOKE_AFTER_MS);
+      expect(pipe.minted).toEqual(['/stream/ticket-1', '/stream/ticket-2']);
+      expect([...pipe.live]).toEqual(['/stream/ticket-2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports a save the browser never fetched, and says so', async () => {
     const pipe = fakePipe();
     mediaControl.create = () => pipe.service;

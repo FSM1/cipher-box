@@ -260,7 +260,9 @@ export function FileBrowserActions({
         />
       )}
       {open?.kind === 'share' && <ShareDialog row={open.row} onClose={close} />}
-      {open?.kind === 'details' && <DetailsDialog row={open.row} onClose={close} />}
+      {open?.kind === 'details' && (
+        <DetailsDialog row={open.row} writable={writable} onClose={close} />
+      )}
       {open?.kind === 'edit' && <TextEditorDialog row={open.row} onClose={close} />}
       {open?.kind === 'preview' && (
         <FilePreviewDialog

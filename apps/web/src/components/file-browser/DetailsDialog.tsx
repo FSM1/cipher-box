@@ -10,6 +10,8 @@ import { shortCid } from './details/VersionHistory';
 
 interface DetailsDialogProps {
   row: ListingRow;
+  /** False in a scope this vault only holds a read grant over. */
+  writable: boolean;
   onClose: () => void;
 }
 
@@ -20,7 +22,7 @@ interface PendingWrite {
 }
 
 /** What the engine reports about one node, verbatim. */
-export function DetailsDialog({ row, onClose }: DetailsDialogProps) {
+export function DetailsDialog({ row, writable, onClose }: DetailsDialogProps) {
   const isFile = row.kind === 'file';
   const node = isFile ? row.id : null;
   const versions = useFileVersions(node, row.storedName);
@@ -36,7 +38,9 @@ export function DetailsDialog({ row, onClose }: DetailsDialogProps) {
   // swap retires it, so a result from a display the dialog has left can never
   // answer for a later confirmation, not even one of the same node.
   const answered = useRef<PendingWrite | null>(null);
-  if (shown.current !== node) {
+  // The details themselves only read, so this dialog outlives a scope the engine
+  // turns read-only. The confirmation does not: restore and delete are writes.
+  if (shown.current !== node || (!writable && pending !== null)) {
     shown.current = node;
     answered.current = null;
     setPending(null);
@@ -71,6 +75,7 @@ export function DetailsDialog({ row, onClose }: DetailsDialogProps) {
             <FileDetails
               row={row}
               versions={versions}
+              writable={writable}
               onRestore={(entry) => setPending({ command: 'restore', entry })}
               onDelete={(entry) => setPending({ command: 'delete', entry })}
             />

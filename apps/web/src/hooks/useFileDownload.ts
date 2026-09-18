@@ -50,8 +50,14 @@ export function useFileDownload(): FileDownload {
   const [error, setError] = useState<string | null>(null);
   const tickets = useRef(new Set<string>());
   const deferred = useRef(new Map<ReturnType<typeof setTimeout>, () => void>());
-  /** The release the last streamed save deferred, so a batch can wait it out. */
+  /** The release the last streamed save deferred, so the next one can wait it out. */
   const settling = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * The tail of the one lane every save runs in. One ticket and one frame are
+   * live at a time however the saves are raised: a save the member starts from
+   * a row while a batch runs would otherwise mint into the batch's grace period.
+   */
+  const lane = useRef<Promise<unknown>>(Promise.resolve());
   const mounted = useRef(true);
 
   /** Runs every deferred release now, for a hook that has nothing left to wait for. */
@@ -100,7 +106,7 @@ export function useFileDownload(): FileDownload {
     };
   }, [media, releaseDeferred]);
 
-  const save = useCallback(
+  const runSave = useCallback(
     async ({ node, name, size }: SaveRequest): Promise<SaveOutcome> => {
       if (client === null) {
         setError('the engine is not ready yet');
@@ -126,10 +132,9 @@ export function useFileDownload(): FileDownload {
             return 'saved';
           } finally {
             // The read settling is the tab having pushed the last window, not
-            // the browser having committed the save. A batch starts its next
-            // save in the same task, so an immediate teardown here is what
-            // leaves one file of a batch empty or under a name of the
-            // browser's choosing.
+            // the browser having committed the save. The next save starts in
+            // the same task, so an immediate teardown here is what leaves one
+            // file empty or under a name of the browser's choosing.
             settling.current = deferRelease(() => {
               frame.remove();
               tickets.current.delete(ticket);
@@ -156,6 +161,20 @@ export function useFileDownload(): FileDownload {
     [client, media, deferRelease, releaseDeferred]
   );
 
+  /**
+   * The caller has its bytes once the read settles; the lane is not free until
+   * the grace that save commits in has run, so the tail waits it out as well.
+   */
+  const save = useCallback(
+    (file: SaveRequest): Promise<SaveOutcome> => {
+      const outcome = lane.current.then(() => runSave(file));
+      const settled = (): Promise<void> => settling.current;
+      lane.current = outcome.then(settled, settled);
+      return outcome;
+    },
+    [runSave]
+  );
+
   const saveAll = useCallback(
     async (files: readonly SaveRequest[]): Promise<void> => {
       const failed: string[] = [];
@@ -164,11 +183,9 @@ export function useFileDownload(): FileDownload {
         // A browser that blocks the second download blocks every one after it.
         if (outcome === 'refused') break;
         if (outcome === 'failed') failed.push(displayName(file.name));
-        // One live ticket and one frame at a time, however long the selection:
-        // the next navigation waits out the grace this save commits in.
-        await settling.current;
-        // Unmount resolves that grace early, and `save` mints its ticket with no
-        // owner left to revoke it.
+        await lane.current;
+        // Unmount resolves the grace early, and the next save would mint its
+        // ticket with no owner left to revoke it.
         if (!mounted.current) break;
       }
       if (failed.length === 0) return;
