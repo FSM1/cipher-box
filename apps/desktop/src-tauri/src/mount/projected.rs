@@ -189,13 +189,28 @@ impl Projection {
         }
     }
 
-    /// The kernel session has ended — an unmount from outside the app. The
-    /// handles and cached plaintext this mount held go with it; the engine goes
-    /// on running.
+    /// The kernel session has ended — an unmount from outside the app. Only the
+    /// mount is dropped here, so this stays a plain wake;
+    /// [`quiesce_detached`](Self::quiesce_detached) is what releases the rest.
     fn detach(&mut self) {
-        if let Self::Projected { core, mount, .. } = self {
-            core.unmount();
+        if let Self::Projected { mount, .. } = self {
             *mount = None;
+        }
+    }
+
+    /// Ends what an external unmount left standing: the writes the mount acked
+    /// reach the op queue, then the handles and cached plaintext it held go.
+    /// The engine goes on running.
+    ///
+    /// Awaited by the host rather than inside [`next`](Self::next), which is
+    /// cancel-safe and carries no network leg.
+    pub async fn quiesce_detached(&mut self) {
+        if let Self::Projected {
+            core, mount: None, ..
+        } = self
+        {
+            journal_acked_writes(core).await;
+            core.unmount();
         }
     }
 
@@ -241,15 +256,25 @@ impl Projection {
                 if let Some(mount) = mount.as_mut() {
                     mount.quiesce();
                 }
-                // Bounded like the mount that is still being made: a base block
-                // this read has to fetch must not hold the quit open.
-                let _ = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes()).await;
+                journal_acked_writes(&mut core).await;
                 drop(mount);
                 core.unmount();
             }
             Self::Detached { .. } => {}
         }
     }
+}
+
+/// Journal what the mount acked and the kernel never flushed, ahead of the
+/// release that would drop it.
+///
+/// A `write` acks the bytes it took, and the SMB client behind FUSE-T can defer
+/// the close by tens of seconds, so a mount that goes away with a handle still
+/// dirty owes the queue those bytes (blueprint/desktop.md "Lifecycle"). Bounded
+/// like the mount that is still being made: a base block the journal has to
+/// fetch must not hold the session.
+async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalidator>) {
+    let _ = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes()).await;
 }
 
 /// Mount at `at`, naming the mount point in whatever refused it — the member's

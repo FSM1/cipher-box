@@ -649,6 +649,7 @@ async fn serve(
             }
             Woke::Mount(FromMount::Op(op)) => projection.answer(op).await,
             Woke::Mount(FromMount::Ended) => {
+                projection.quiesce_detached().await;
                 repaint(&shell, &mut projection, &warnings, &mut parked).await;
             }
             Woke::Mount(FromMount::Landed(landed)) => {
