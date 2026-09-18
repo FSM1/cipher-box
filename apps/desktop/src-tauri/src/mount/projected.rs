@@ -289,6 +289,9 @@ impl Projection {
 /// so it does not survive to be retried.
 async fn journal_acked_writes(core: &mut OperationCore<DesktopSeamTypes, Invalidator>) -> usize {
     let _ = tokio::time::timeout(SHUTDOWN_WITHIN, core.quiesce_writes()).await;
+    // The bound drops the pass mid-journal, which is the one exit the journal
+    // cannot abort its own write handle on.
+    core.release_stranded_write().await;
     core.dirty_writes()
 }
 

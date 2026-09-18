@@ -273,6 +273,15 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     /// The node the last read-path operation found past the staleness
     /// threshold, if any.
     refresh_hint: Option<NodeId>,
+    /// The write handle [`journal`](Self::journal) has open right now.
+    ///
+    /// Recorded because a host bounds the quiesce and drops the future when the
+    /// budget runs out, which is the one exit `journal` cannot abort on its own.
+    /// A write handle holds its staging reservation until it commits, fails, or
+    /// aborts ([`Engine::begin_write`]), so an unreleased one is budget this
+    /// session never gets back. [`release_stranded_write`](
+    /// Self::release_stranded_write) is what returns it.
+    journaling: Option<WriteHandle>,
 }
 
 impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
@@ -294,6 +303,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             walks: HashMap::new(),
             next_walk: FIRST_HANDLE,
             refresh_hint: None,
+            journaling: None,
         }
     }
 
@@ -904,6 +914,21 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             .count()
     }
 
+    /// Abort the write a dropped [`quiesce_writes`](Self::quiesce_writes) left
+    /// open, so its staging reservation and the blocks it staged go back to the
+    /// session. Idempotent, and a no-op when the pass ran to its end.
+    ///
+    /// The host calls this after the budget it put on the pass expires: the
+    /// engine goes on running past an unmount from outside the app, and a
+    /// reservation nobody released refuses a later write room that is free.
+    pub async fn release_stranded_write(&mut self) {
+        let Some(write) = self.journaling else {
+            return;
+        };
+        self.engine.abort_write(write).await;
+        self.journaling = None;
+    }
+
     /// Tear the mount down: every pinned stream released and every cached
     /// plaintext block zeroized. Writes still dirty here die with their spill —
     /// unopenable ciphertext and no half-formed op — so an orderly teardown
@@ -1035,11 +1060,17 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
                 len,
             )
             .await?;
+        self.journaling = Some(write);
         if let Err(error) = self.push_version(handle, write, len).await {
+            // Cleared after the abort, never before: a handle dropped from the
+            // slot while its abort is still owed is one nothing releases.
             self.engine.abort_write(write).await;
+            self.journaling = None;
             return Err(error);
         }
-        self.engine.commit_write(write).await?;
+        let committed = self.engine.commit_write(write).await;
+        self.journaling = None;
+        committed?;
         if let Some(pending) = self.pending.get_mut(&handle) {
             pending.dirty = false;
         }
