@@ -3,10 +3,14 @@
  * real session: a record publish the browser never completes, and a read answer
  * the browser is told it may reuse.
  *
- * The last three cases are the proof that those checks fail red: they answer
- * the same requests with a broken front and assert the check refuses them.
+ * The cases after the first are the proof of what those checks do with an
+ * answer they did not see in the real session: three answer the same requests
+ * with a broken front and assert the check refuses them, and the last holds the
+ * check to a publish the front answered whose answer the browser then dropped.
  */
 
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { Page } from '@playwright/test';
 import { FilesPage } from '../page-objects/files.page';
 import { expect, signIn, test } from './fixtures';
@@ -87,6 +91,52 @@ test('the check refuses a front that answers the record publish with a refusal',
 
   await expect.poll(() => log.refusedPublishes).not.toEqual([]);
   expect(log.publishes, 'a refused publish is never counted as a publish').toEqual([]);
+});
+
+/**
+ * A front of its own, whose publish answer carries a body it never finishes, so
+ * a caller that drops that body leaves an answered request the browser reports
+ * as failed. `page.route` cannot stage this: it serves a whole body.
+ */
+async function slowAnsweringFront(): Promise<{ origin: string; close: () => Promise<void> }> {
+  const server = createServer((request, response) => {
+    if (request.url === '/') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<!doctype html><title>routing front</title>');
+      return;
+    }
+    response.writeHead(200, { 'content-type': 'text/plain', 'content-length': '20000000' });
+    const pump = setInterval(() => response.write('x'.repeat(64_000)), 50);
+    response.on('close', () => clearInterval(pump));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+test('the check accepts a publish whose answer the browser dropped', async ({ page }) => {
+  const front = await slowAnsweringFront();
+  try {
+    const log = watchRoutingFront(page, front.origin);
+    const failed: string[] = [];
+    page.on('requestfailed', (request) => failed.push(request.url()));
+
+    await page.goto(`${front.origin}/`);
+    await page.evaluate(async (url) => {
+      // What the record transport does with a publish answer: it reads the
+      // status and never the body.
+      const answer = await fetch(url, { method: 'PUT', body: new Uint8Array([1, 2, 3]) });
+      await answer.body?.cancel();
+    }, `${front.origin}/routing/v1/ipns/${ABSENT}`);
+
+    await expect.poll(() => failed).not.toEqual([]);
+    expect(log.publishes, 'the front answered the publish').not.toEqual([]);
+    expect(log.refusedPublishes, 'an answered publish is never refused').toEqual([]);
+  } finally {
+    await front.close();
+  }
 });
 
 test('the check refuses a cacheable vacancy', async ({ page, baseURL }) => {

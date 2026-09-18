@@ -5,10 +5,10 @@
  * two days, so a vacancy probe's answer would outlive the publish that fills it.
  */
 
-import type { Page } from '@playwright/test';
+import type { Page, Request } from '@playwright/test';
 
 export interface RoutingFrontLog {
-  /** Record PUTs that did not land, with the network error or the status. */
+  /** Record PUTs the front never answered 2xx, with the network error or the status. */
   readonly refusedPublishes: string[];
   /** Read answers the browser was told it may reuse, with the header. */
   readonly cacheableReads: string[];
@@ -48,6 +48,12 @@ export function watchRoutingFront(page: Page, routingOrigin: string): RoutingFro
     publishes: [],
   };
   const mine = (url: string) => url.startsWith(routingOrigin);
+  /**
+   * Publishes the front answered 2xx. The record transport never reads a
+   * publish answer's body, so the browser drops it and reports the request as
+   * failed after the answer. The record is on the front either way.
+   */
+  const landed = new WeakSet<Request>();
 
   page.on('response', (response) => {
     const request = response.request();
@@ -55,8 +61,12 @@ export function watchRoutingFront(page: Page, routingOrigin: string): RoutingFro
     if (request.method() === 'PUT') {
       // The front can answer a publish and still refuse it; only a 2xx lands.
       const status = response.status();
-      if (status >= 200 && status < 300) log.publishes.push(request.url());
-      else log.refusedPublishes.push(`${request.url()} status: ${status}`);
+      if (status >= 200 && status < 300) {
+        landed.add(request);
+        log.publishes.push(request.url());
+      } else {
+        log.refusedPublishes.push(`${request.url()} status: ${status}`);
+      }
       return;
     }
     if (request.method() !== 'GET') return;
@@ -68,7 +78,7 @@ export function watchRoutingFront(page: Page, routingOrigin: string): RoutingFro
   });
 
   page.on('requestfailed', (request) => {
-    if (!mine(request.url()) || request.method() !== 'PUT') return;
+    if (!mine(request.url()) || request.method() !== 'PUT' || landed.has(request)) return;
     log.refusedPublishes.push(`${request.url()} ${request.failure()?.errorText ?? ''}`);
   });
 
