@@ -73,10 +73,11 @@ describe('the vault browser', () => {
   });
 
   /**
-   * A read grant still queues a write, which the drain then dead-letters, so
-   * the refusal has to happen at the gesture rather than after the loss.
+   * A received share is grafted in with no parent link, so the engine refuses
+   * the write at the journal call. The browser must refuse at the gesture
+   * instead of offering one the engine will not take.
    */
-  it('offers no write affordance in a scope held on a read grant', async () => {
+  it('offers no write affordance in a scope another vault shared', async () => {
     const engine = fakeEngine();
     draw(engine.client);
 
@@ -84,7 +85,11 @@ describe('the vault browser', () => {
       engine.emit({ kind: 'snapshotUpdated' });
     });
     await act(async () => {
-      engine.pulls[0].resolve({ ...view(ROOT_ID, 'fresh', 2), permission: 'read' });
+      engine.pulls[0].resolve({
+        ...view(ROOT_ID, 'fresh', 2),
+        permission: 'read',
+        receivedShare: true,
+      });
     });
     await screen.findByTestId('read-only-scope');
 
@@ -97,6 +102,30 @@ describe('the vault browser', () => {
     });
     const labels = screen.getAllByRole('menuitem').map((item) => item.textContent);
     expect(labels).toEqual(['download', 'details']);
+  });
+
+  /**
+   * The write plane cannot author under any grafted root, so a write grant is
+   * gated exactly like a read grant until that capability lands.
+   */
+  it('offers no write affordance in a share granted for writing either', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve({
+        ...view(ROOT_ID, 'fresh', 2),
+        permission: 'write',
+        receivedShare: true,
+      });
+    });
+    await screen.findByTestId('read-only-scope');
+
+    expect(screen.queryByTestId('new-folder-button')).toBeNull();
+    expect(screen.queryByTestId('upload-zone')).toBeNull();
   });
 
   it('offers the write affordances in a scope this vault writes', async () => {
@@ -119,7 +148,7 @@ describe('the vault browser', () => {
    * A gated menu entry does not reach a dialog the user opened while the scope
    * was still writable, and that dialog's confirm is a write.
    */
-  it('takes an open write dialog down when the scope turns read-only', async () => {
+  it('takes an open write dialog down when the browse enters a shared scope', async () => {
     const engine = fakeEngine();
     draw(engine.client);
 
@@ -143,7 +172,7 @@ describe('the vault browser', () => {
       engine.emit({ kind: 'snapshotUpdated' });
     });
     await act(async () => {
-      engine.pulls[1].resolve({ ...view(ROOT_ID, 'fresh', 2), permission: 'read' });
+      engine.pulls[1].resolve({ ...view(ROOT_ID, 'fresh', 2), receivedShare: true });
     });
     await screen.findByTestId('read-only-scope');
 

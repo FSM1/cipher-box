@@ -24,7 +24,7 @@ export class FilesPage {
     return this.page.getByTestId('upload-zone');
   }
 
-  /** The notice a scope this vault only reads renders in place of the writes. */
+  /** The notice a scope another vault shared renders in place of the writes. */
   get readOnlyNotice(): Locator {
     return this.page.getByTestId('read-only-scope');
   }

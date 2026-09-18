@@ -775,6 +775,13 @@ pub struct SnapshotView {
     /// other scope is this vault's own, which it writes by ownership. A host
     /// refuses a write at the gesture on this, rather than at the drain.
     pub permission: Permission,
+    /// Whether the listed folder stands in a scope another vault granted this
+    /// one. A grafted scope root is planted with no parent link, so the write
+    /// plane cannot author under it whatever the grant permits: a journal call
+    /// there is refused with
+    /// [`ScopeExitRefused`](EngineError::ScopeExitRefused). A host offers a
+    /// write affordance only where this reads false.
+    pub received_share: bool,
     /// Direct children, deterministically ordered by node id.
     pub children: Vec<SnapshotChild>,
     /// Ancestor trail from the folder's parent up to and including the root,
@@ -797,6 +804,7 @@ impl fmt::Debug for SnapshotView {
             .field("folder", &self.folder)
             .field("folder_name", &RedactedText::of(&self.folder_name))
             .field("permission", &self.permission)
+            .field("received_share", &self.received_share)
             .field("children", &self.children)
             .field("ancestors", &self.ancestors)
             .field("dead_letters", &self.dead_letters)
@@ -2759,15 +2767,22 @@ fn ascent_node_seed(
 /// A node the render does not hold at all keeps its existing verdict — the
 /// rebase decides what a stale target means, and that is not this check's call.
 fn refuse_outside_vault(rendered: &Snapshot, node: NodeId) -> Result<(), EngineError> {
-    if rendered.contains(node)
-        && node != rendered.root
-        && !rendered.ancestors(node).contains(&rendered.root)
-    {
+    if outside_vault(rendered, node) {
         return Err(EngineError::ScopeExitRefused {
             message: "that item is not in this session's scope".to_owned(),
         });
     }
     Ok(())
+}
+
+/// Whether `node` stands in a grafted scope rather than in the tree this
+/// session publishes under — the condition [`refuse_outside_vault`] refuses a
+/// write target on, which [`Engine::snapshot`] also reports so a host can refuse
+/// the gesture instead of the journal call.
+fn outside_vault(rendered: &Snapshot, node: NodeId) -> bool {
+    rendered.contains(node)
+        && node != rendered.root
+        && !rendered.ancestors(node).contains(&rendered.root)
 }
 
 /// The name a bin row carries for the unlinked node.
@@ -9599,6 +9614,7 @@ where {
             folder,
             folder_name,
             permission,
+            received_share: outside_vault(&rendered, folder),
             children,
             ancestors,
             dead_letters: self.retained_dead_letters(),
@@ -11593,6 +11609,7 @@ mod tests {
             folder: NodeId([2; 16]),
             folder_name: FOLDER.to_string(),
             permission: Permission::Write,
+            received_share: false,
             children: vec![SnapshotChild {
                 id: NodeId([3; 16]),
                 name: NAME.to_string(),
@@ -14774,6 +14791,44 @@ mod tests {
                 Permission::Write,
                 "the vault's own root is outside the granted scope"
             );
+        }
+
+        /// The write plane cannot author under a grafted root whatever the grant
+        /// permits, so the view has to say which folders are grafted. Every
+        /// folder of this vault's own tree reaches the render root; a grafted
+        /// one is planted with no parent link and reaches nothing.
+        #[test]
+        fn a_folder_under_a_grafted_root_reports_itself_a_received_share() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "mine", NodeKind::Folder);
+            let mine = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "mine")
+                .unwrap()
+                .id;
+            assert!(!block_on(engine.snapshot(mine)).unwrap().received_share);
+            assert!(!block_on(engine.snapshot(root)).unwrap().received_share);
+
+            // A graft plants the scope root with no parent link, exactly as the
+            // received-share pass does.
+            let grafted = NodeId([0x5c; 16]);
+            engine.snapshot.borrow_mut().upsert_node(NodeMeta::new(
+                grafted,
+                "shared",
+                NodeKind::Folder,
+            ));
+            engine.bookmarked_scope_roots.borrow_mut().insert(grafted.0);
+
+            assert!(block_on(engine.snapshot(grafted)).unwrap().received_share);
+            assert!(matches!(
+                block_on(engine.command(Command::Create {
+                    parent: grafted,
+                    name: "note.txt".to_owned(),
+                    kind: NodeKind::File,
+                })),
+                Err(EngineError::ScopeExitRefused { .. }),
+            ));
         }
 
         #[test]

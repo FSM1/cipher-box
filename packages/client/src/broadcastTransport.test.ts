@@ -611,6 +611,7 @@ describe('broadcast transport ↔ leader relay', () => {
       folder: new Uint8Array(16).fill(2),
       folderName: 'holiday',
       permission: 'read',
+      receivedShare: true,
       children: [
         {
           id: new Uint8Array(16).fill(3),

@@ -59,8 +59,8 @@ test('a write grant lets a second identity build inside the folder', async ({
   await list.awaitStanding('granted', 600_000);
   await expect(list.rows.getByTestId('shared-permission')).toHaveText('read');
 
-  // The downgrade has to reach the browser too: a write offered here queues an
-  // op the drain can only dead-letter.
+  // A received share offers no write at all: the engine refuses one under a
+  // grafted root, so the browser must not present the gesture.
   const scope = await list.rows.getAttribute('data-scope');
   await list.openShare(scope ?? '');
   await expect(recipientFiles.readOnlyNotice).toBeVisible({ timeout: 60_000 });

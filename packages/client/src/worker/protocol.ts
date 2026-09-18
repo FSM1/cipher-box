@@ -190,6 +190,13 @@ export interface SnapshotDescriptor {
    * this, rather than leaving the drain to refuse it.
    */
   permission: Permission;
+  /**
+   * Whether the listed folder stands in a scope another vault granted this one.
+   * A grafted scope root is planted with no parent link, so the write plane
+   * cannot author under it whatever the grant permits, and a journal call there
+   * is refused. A host offers a write affordance only where this reads false.
+   */
+  receivedShare: boolean;
   children: SnapshotChildDescriptor[];
   ancestors: BreadcrumbDescriptor[];
   deadLetters: DeadLetterDescriptor[];

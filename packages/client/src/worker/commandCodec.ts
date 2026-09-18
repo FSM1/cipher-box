@@ -616,6 +616,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
     folder: view.folder,
     folderName: view.folderName,
     permission: permissionFrom(wasm, view.permission),
+    receivedShare: view.receivedShare,
     children: view.children.map((child) => ({
       id: child.id,
       name: child.name,

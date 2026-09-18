@@ -116,6 +116,7 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
     folder,
     folderName: '',
     permission: 'write',
+    receivedShare: false,
     children: [],
     ancestors: [],
     deadLetters: [],
