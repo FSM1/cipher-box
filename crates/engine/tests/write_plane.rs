@@ -2074,6 +2074,140 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
     );
 }
 
+/// Queue a folder create under `parent`.
+fn create_under(engine: &mut Engine<FakeSeamTypes>, parent: NodeId, name: &str) -> OpId {
+    block_on(engine.command(Command::Create {
+        parent,
+        name: name.into(),
+        kind: NodeKind::Folder,
+    }))
+    .expect("a metadata create stages")
+    .op_id()
+    .expect("a create queues an op")
+}
+
+/// Publish a folder, then republish it under an edit, so its sequence floor
+/// stands above its first record. Answers the folder and that first record.
+fn a_folder_published_twice(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (NodeId, Vec<u8>) {
+    create(engine, "photos");
+    tick(world, engine, tasks);
+    let photos = child_id(engine, ROOT, "photos");
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let first = world
+        .record_store
+        .record_at(&endpoint, write_name(photos).as_str())
+        .expect("the folder published");
+    create_under(engine, photos, "2025");
+    tick(world, engine, tasks);
+    (photos, first)
+}
+
+/// A folder the record plane rolls back under a queued edit is the gate's
+/// verdict on that edit: reported to the member, and charged so the op leaves
+/// the queue head on the attempt budget rather than after an hour of outage.
+#[test]
+fn a_rolled_back_folder_under_a_queued_edit_is_reported_and_charged() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, first) = a_folder_published_twice(&world, &mut engine, &mut tasks);
+
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(photos).as_str(), first.clone());
+    }
+    let op_id = create_under(&mut engine, photos, "2026");
+    let _ = events_so_far(&mut events);
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }]
+    );
+    assert!(
+        !accused_nobody(&mut events),
+        "the rollback reaches the member as a trust violation"
+    );
+}
+
+/// The last-known-good copy a silent record plane leaves the drain on is held
+/// to the same floor: a copy below it is refused and reported, never
+/// re-authored on.
+#[test]
+fn a_cached_folder_below_its_floor_under_a_queued_edit_is_reported() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, first) = a_folder_published_twice(&world, &mut engine, &mut tasks);
+
+    let name = write_name(photos);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), Vec::new());
+    }
+    block_on(alice.snapshot_cache.put(name.as_str().as_bytes(), &first))
+        .expect("the cache takes the record");
+    let op_id = create_under(&mut engine, photos, "2026");
+    let _ = events_so_far(&mut events);
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }]
+    );
+    assert!(
+        !accused_nobody(&mut events),
+        "the refused copy reaches the member as a trust violation"
+    );
+}
+
+/// The control: a folder the record plane does not answer for is an outage.
+/// The edit waits on the outage budget, and nobody is accused.
+#[test]
+fn a_dark_folder_under_a_queued_edit_waits_and_accuses_nobody() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    create(&mut engine, "photos");
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_endpoint(&endpoint);
+    }
+    create_under(&mut engine, photos, "2026");
+    let _ = events_so_far(&mut events);
+    for _ in 0..10 {
+        tick(&world, &engine, &mut tasks);
+    }
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "an outage does not spend the attempt budget"
+    );
+    assert!(accused_nobody(&mut events));
+}
+
 /// A head over the block ceiling is refused identically on every retry: a fresh
 /// nonce moves the sealed bytes and never their count, so no re-author shrinks
 /// it. Uncharged it would hold the strict-FIFO queue head forever with nothing
