@@ -216,6 +216,26 @@ pub struct CreateGrantOutcome {
     pub tag: [u8; 32],
     /// The parent's direct-child-scope index after the reparent + insert.
     pub parent_child_index: Vec<ChildScopeRef>,
+    /// The minted scope's read material, which the owner's own reads of the
+    /// re-sealed interior open under.
+    pub read_scope: GrantedReadScope,
+}
+
+/// A granted scope's read (override) seed and the read epoch it belongs to.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GrantedReadScope {
+    /// The scope's read seed.
+    pub seed: Zeroizing<[u8; SECRET_LEN]>,
+    /// The read epoch `seed` belongs to.
+    pub epoch: u64,
+}
+
+impl fmt::Debug for GrantedReadScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantedReadScope")
+            .field("epoch", &self.epoch)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A read-grant creation failure.
@@ -1352,6 +1372,10 @@ where
         scope_id: grantee.scope_id,
         tag,
         parent_child_index: parent_index,
+        read_scope: GrantedReadScope {
+            seed: override_seed,
+            epoch: grantee_record.read_epoch,
+        },
     })
 }
 

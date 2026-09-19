@@ -455,11 +455,15 @@ fn write_file(
 /// Grant `node` to the imported recipient — the cut that promotes a folder to a
 /// nested scope root.
 fn grant_to_recipient(engine: &mut Engine<FakeSeamTypes>, node: NodeId) {
+    grant_to_recipient_at(engine, node, Permission::Read);
+}
+
+fn grant_to_recipient_at(engine: &mut Engine<FakeSeamTypes>, node: NodeId, permission: Permission) {
     assert_eq!(
         block_on(engine.command(Command::Grant {
             node,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
-            permission: Permission::Read,
+            permission,
         })),
         Ok(CommandOutcome::Done),
         "the grant cuts the folder into a scope root of its own"
@@ -656,6 +660,263 @@ fn a_folder_that_predates_a_grant_lists_on_the_owners_second_device() {
         ["2026"],
         "the promoted root's own children still render on a device that only read them"
     );
+}
+
+/// A file with two versions under `parent`: `bodies[0]` then `bodies[1]`, each
+/// drained to the record plane.
+fn file_with_two_versions(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    parent: NodeId,
+    name: &str,
+    bodies: &[Vec<u8>; 2],
+) -> NodeId {
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent,
+            name: name.into(),
+        },
+        &bodies[0],
+    )
+    .expect("the first version commits");
+    tick(world, engine, tasks);
+    let node = listed(engine, parent)
+        .into_iter()
+        .find(|(child_name, _)| child_name == name)
+        .unwrap_or_else(|| panic!("no file named {name}"))
+        .1;
+    write_file(
+        engine,
+        WriteTarget::Version {
+            node,
+            expected_version: None,
+        },
+        &bodies[1],
+    )
+    .expect("the second version commits");
+    for _ in 0..4 {
+        tick(world, engine, tasks);
+    }
+    node
+}
+
+/// The owner reads `file` whole, lists its prior version, and reads that
+/// version, all on `engine`.
+fn assert_reads_both_versions(
+    engine: &Engine<FakeSeamTypes>,
+    file: NodeId,
+    bodies: &[Vec<u8>; 2],
+    who: &str,
+) {
+    assert_eq!(
+        block_on(engine.read_content(file)).map_err(|e| e.to_string()),
+        Ok(bodies[1].clone()),
+        "{who} reads the head version"
+    );
+    let versions = block_on(engine.file_versions(file)).expect("the version history reads");
+    assert_eq!(versions.len(), 1, "{who} lists the one prior version");
+    assert_eq!(
+        block_on(engine.read_version_content(file, &versions[0].content_cid))
+            .map_err(|e| e.to_string()),
+        Ok(bodies[0].clone()),
+        "{who} reads the prior version"
+    );
+}
+
+fn two_bodies(salt: u8) -> [Vec<u8>; 2] {
+    [
+        (0..90u8).map(|byte| byte ^ salt).collect(),
+        (0..70u8).map(|byte| byte ^ salt.wrapping_add(1)).collect(),
+    ]
+}
+
+/// A grant re-seals the granted folder's interior into the scope it mints, so
+/// the owner's own read of a file there opens under that scope's read seed.
+#[test]
+fn the_owner_reads_a_file_inside_a_folder_it_granted() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let before = two_bodies(3);
+    let early = file_with_two_versions(
+        &world,
+        &mut engine_t,
+        &mut tasks_t,
+        shared,
+        "early.bin",
+        &before,
+    );
+
+    import_recipient(&mut engine_t);
+    grant_to_recipient(&mut engine_t, shared);
+    assert_reads_both_versions(&engine_t, early, &before, "the granting device, at once");
+    for _ in 0..4 {
+        tick(&world, &engine_t, &mut tasks_t);
+    }
+    assert_reads_both_versions(&engine_t, early, &before, "the granting device");
+
+    let after = two_bodies(9);
+    let late = file_with_two_versions(
+        &world,
+        &mut engine_t,
+        &mut tasks_t,
+        shared,
+        "late.bin",
+        &after,
+    );
+    assert_reads_both_versions(&engine_t, late, &after, "the granting device");
+
+    let mount = world.device(b"mounted-desktop");
+    let (engine_m, _events_m, _tasks_m) = mounted_reader(&world, &blocks, &mount, shared);
+    assert_reads_both_versions(&engine_m, early, &before, "the owner's second device");
+    assert_reads_both_versions(&engine_m, late, &after, "the owner's second device");
+}
+
+/// A share hands its own device the minted scope's read seed, so a read needs
+/// no boundary walk to prove the scope first, and the passes that run while no
+/// walk can reach the network keep that seed. Both gestures that mint a scope:
+/// a contact grant, and an invite link on a write share, whose cut moves the
+/// scope's names but not its read plane.
+#[test]
+fn the_owner_reads_a_shared_folder_no_walk_has_proved() {
+    for by_link in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+        let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+        let before = two_bodies(7);
+        let file = file_with_two_versions(
+            &world,
+            &mut engine_t,
+            &mut tasks_t,
+            shared,
+            "early.bin",
+            &before,
+        );
+
+        if by_link {
+            assert!(
+                matches!(
+                    block_on(engine_t.command(Command::CreateInviteLink {
+                        node: shared,
+                        permission: Permission::Write,
+                        expires_at: None,
+                    })),
+                    Ok(CommandOutcome::InviteLinkMinted(_))
+                ),
+                "the link mints the folder's scope"
+            );
+        } else {
+            import_recipient(&mut engine_t);
+            grant_to_recipient(&mut engine_t, shared);
+        }
+        let who = if by_link {
+            "the linking device"
+        } else {
+            "the granting device"
+        };
+        assert_reads_both_versions(&engine_t, file, &before, who);
+
+        for endpoint in world.record_store.endpoints() {
+            world.record_store.fail_endpoint(&endpoint);
+        }
+        for _ in 0..4 {
+            tick(&world, &engine_t, &mut tasks_t);
+        }
+        for endpoint in world.record_store.endpoints() {
+            world.record_store.heal_endpoint(&endpoint);
+        }
+        assert_reads_both_versions(&engine_t, file, &before, who);
+    }
+}
+
+/// The recipient's own session: a vault of its own, the owner imported as a
+/// contact, and the passes run until the owner's share is grafted in.
+fn recipient_with_the_share(
+    world: &FakeWorld,
+    blocks: &Blocks,
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    let device = world.device(&recipient_identity().verifying_key().to_sec1());
+    serve_http(&device, blocks, 2_000);
+    let (mut engine, events) = engine_on_api(&device, 21);
+    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+        .expect("the recipient's own session starts");
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    let owner = ContactCode::create(&owner_identity(), kdf::enc_subkey(&SECRET).public()).encode();
+    block_on(engine.command(Command::ImportContact {
+        contact_code: owner,
+    }))
+    .expect("the owner's code imports");
+    for _ in 0..4 {
+        world.scheduler.advance(SyncTimingProfile::CI.stale_after);
+        poll_tasks_until_parked(&mut tasks);
+    }
+    let rows = block_on(engine.received_shares()).expect("the list reads");
+    assert_eq!(rows.len(), 1, "the recipient accepted the one share");
+    (engine, events, tasks)
+}
+
+/// The id the recipient's render lists `name` under, below the grafted root.
+fn grafted_child(engine: &Engine<FakeSeamTypes>, root: NodeId, name: &str) -> NodeId {
+    listed(engine, root)
+        .into_iter()
+        .find(|(child_name, _)| child_name == name)
+        .unwrap_or_else(|| panic!("the grafted root lists no {name}"))
+        .1
+}
+
+/// A file below a grafted root is sealed under the granted scope, so the
+/// recipient opens it under that scope's read seed and the sharer's floors,
+/// whether the owner wrote it before or after the grant, on a read grant and
+/// on a write grant alike.
+#[test]
+fn the_recipient_reads_a_file_below_a_grafted_root() {
+    for permission in [Permission::Read, Permission::Write] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+        let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+        let before = two_bodies(5);
+        file_with_two_versions(
+            &world,
+            &mut engine_t,
+            &mut tasks_t,
+            shared,
+            "early.bin",
+            &before,
+        );
+        import_recipient(&mut engine_t);
+        grant_to_recipient_at(&mut engine_t, shared, permission);
+        let after = two_bodies(11);
+        file_with_two_versions(
+            &world,
+            &mut engine_t,
+            &mut tasks_t,
+            shared,
+            "late.bin",
+            &after,
+        );
+
+        let (engine_r, _events_r, _tasks_r) = recipient_with_the_share(&world, &blocks);
+        let who = format!("the {permission:?} recipient");
+        let early = grafted_child(&engine_r, shared, "early.bin");
+        assert_reads_both_versions(&engine_r, early, &before, &who);
+        let late = grafted_child(&engine_r, shared, "late.bin");
+        assert_reads_both_versions(&engine_r, late, &after, &who);
+    }
 }
 
 // ---------------------------------------------------------------------------

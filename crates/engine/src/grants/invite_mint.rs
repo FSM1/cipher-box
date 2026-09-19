@@ -34,8 +34,8 @@ use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher,
 use crate::seams::UnixMillis;
 
 use super::create::{
-    CreateGrantError, GrantSubtree, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan,
-    converge_grant_subtree, mint_grantee_scope,
+    CreateGrantError, GrantSubtree, GrantedReadScope, GranteeScopePlan, OwnerGrantKeys,
+    ParentScopePlan, converge_grant_subtree, mint_grantee_scope,
 };
 use super::invite::{EphemeralInvitee, InviteError, InviteFragment, mint_invite_grant};
 use super::invite_store::{InviteStore, InviteStoreError};
@@ -155,6 +155,7 @@ impl std::error::Error for InviteMintError {}
 ///
 /// The caller runs any write-scope cut the plan owes and then
 /// [`PendingInviteLink::seal`], which is what hands out the bearer capability.
+/// The minted scope's read material rides alongside, for the owner's own reads.
 ///
 /// Owner-only by construction, exactly as [`create_grant`](super::create_grant)
 /// is: the scope this publishes is signed under the owner's writer pseudonym and
@@ -166,7 +167,7 @@ pub async fn mint_invite_link<E, N, S, V>(
     store: &S,
     owner: &OwnerGrantKeys<'_>,
     plan: &InviteMintPlan<'_>,
-) -> Result<PendingInviteLink, InviteMintError>
+) -> Result<(PendingInviteLink, GrantedReadScope), InviteMintError>
 where
     E: Entropy,
     N: MintNet,
@@ -219,11 +220,11 @@ where
         .await
         .map_err(InviteMintError::Store)?;
 
-    mint_grantee_scope(entropy, net, voucher, converged, &minted.row, owner)
+    let outcome = mint_grantee_scope(entropy, net, voucher, converged, &minted.row, owner)
         .await
         .map_err(InviteMintError::Create)?;
 
-    Ok(pending)
+    Ok((pending, outcome.read_scope))
 }
 
 #[cfg(test)]
@@ -658,6 +659,7 @@ mod tests {
                     expires_at,
                 },
             ))
+            .map(|(pending, _)| pending)
         }
 
         /// The links a later session recovers: a fresh handle over the same
