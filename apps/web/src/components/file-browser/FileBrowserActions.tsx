@@ -50,6 +50,11 @@ interface FileBrowserActionsProps {
   folder: Uint8Array | null;
   /** False in a scope this vault only holds a read grant over. */
   writable: boolean;
+  /**
+   * True in a scope another vault shared. A write there stays inside it, so the
+   * owner-only actions — sharing, version restore and delete — are not offered.
+   */
+  receivedShare: boolean;
   showParentRow: boolean;
   onOpen: (node: Uint8Array) => void;
   onNavigateUp: () => void;
@@ -59,6 +64,7 @@ export function FileBrowserActions({
   rows,
   folder,
   writable,
+  receivedShare,
   showParentRow,
   onOpen,
   onNavigateUp,
@@ -138,7 +144,7 @@ export function FileBrowserActions({
       items.push(
         { label: 'rename', onSelect: () => setDialog({ kind: 'rename', row }) },
         { label: 'move to...', onSelect: () => setDialog({ kind: 'move', rows: [row] }) },
-        ...(row.kind === 'folder'
+        ...(row.kind === 'folder' && !receivedShare
           ? [{ label: 'share...', onSelect: () => setDialog({ kind: 'share' as const, row }) }]
           : [])
       );
@@ -262,7 +268,7 @@ export function FileBrowserActions({
       )}
       {dialog?.kind === 'share' && <ShareDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'details' && (
-        <DetailsDialog row={dialog.row} writable={writable} onClose={close} />
+        <DetailsDialog row={dialog.row} writable={writable && !receivedShare} onClose={close} />
       )}
       {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'preview' && (

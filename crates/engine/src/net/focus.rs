@@ -178,11 +178,15 @@ where
                 *modified_at,
             );
             report.changed |= merged.changed;
-            report.departed.extend(merged.observed_unlinks(
-                self.scope_id,
-                *folder,
-                self.observed_at,
-            ));
+            // A departure below a grafted root is the sharer's to bin: no pass
+            // of this vault adopts it, and holding it starves the bounded set.
+            if self.plane.is_none() {
+                report.departed.extend(merged.observed_unlinks(
+                    self.scope_id,
+                    *folder,
+                    self.observed_at,
+                ));
+            }
         }
         report
     }
@@ -648,10 +652,9 @@ mod tests {
         assert_eq!(leg.parent_of(CONTESTED), Some(NodeId(FOLDER)));
         assert_eq!(leg.name_of(CONTESTED), "still-mine");
         assert!(!leg.holds(DROPPED), "an unnamed child still departs");
-        assert_eq!(
-            *leg.captured.borrow(),
-            vec![NodeId(DROPPED)],
-            "a withheld id is no departure, so the bin never captures it"
+        assert!(
+            leg.captured.borrow().is_empty(),
+            "a departure below a grafted root feeds no capture: the sharer bins it"
         );
     }
 

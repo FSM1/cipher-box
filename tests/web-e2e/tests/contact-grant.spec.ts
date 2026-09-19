@@ -11,53 +11,23 @@
 
 import { expect, test } from '../fixtures';
 import { FilesPage } from '../page-objects/files.page';
-import { SharePage } from '../page-objects/share.page';
 import { SharedPage } from '../page-objects/shared.page';
-import { coldStart, nodeOf } from '../vault';
+import { grantByCode } from '../sharing';
 
 const OWNER_FOLDER = 'granted-by-code';
-const RECIPIENT_FOLDER = 'recipient-own';
 const AFTER_GRANT = 'after-the-grant.bin';
 
 test('a hand-exchanged contact code carries a grant to the second client', async ({
   page,
   browser,
 }) => {
-  const { files: ownerFiles, vault: owner } = await coldStart(page);
-  await ownerFiles.createFolder(OWNER_FOLDER);
-  const scope = nodeOf((await owner.settled()).view, OWNER_FOLDER);
-
-  const ownerShare = new SharePage(page);
-  await ownerShare.open(OWNER_FOLDER);
-  const ownerCode = await ownerShare.readOwnContactCode();
-
-  // A second context, because a second page of this one shares the origin's
-  // `BroadcastChannel` and `navigator.locks` and is therefore the same session.
-  const context = await browser.newContext();
-  const second = await context.newPage();
-  const { files: recipientFiles, vault: recipient } = await coldStart(second);
-  await recipientFiles.createFolder(RECIPIENT_FOLDER);
-  await recipient.settled();
-
-  const recipientShare = new SharePage(second);
-  await recipientShare.open(RECIPIENT_FOLDER);
-  await recipientShare.importContact(ownerCode);
-  const recipientCode = await recipientShare.readOwnContactCode();
-  await recipientShare.close();
-
-  await ownerShare.grantTo(recipientCode, 'read');
-  await ownerShare.close();
-
-  // The recipient's mailbox leg rides the nocache pass, so one refresh both
-  // accepts the delivered pointer and classifies it.
-  await recipient.refresh();
-  const shared = new SharedPage(second);
-  await shared.open();
-  await shared.readStanding(scope, 'granted');
-  const row = shared.row(scope);
-  await expect(row).toHaveCount(1);
-  await expect(row.getByTestId('shared-permission')).toHaveText('read');
-  await expect(shared.error).toHaveCount(0);
+  const { ownerFiles, recipient, recipientPage, recipientContext, scope } = await grantByCode(
+    page,
+    browser,
+    OWNER_FOLDER,
+    'read'
+  );
+  const shared = new SharedPage(recipientPage);
 
   // A file the owner adds after the grant publishes into the scope root the
   // grant cut, and the recipient reads the live folder rather than the listing
@@ -70,7 +40,7 @@ test('a hand-exchanged contact code carries a grant to the second client', async
   await expect(added).toBeVisible();
 
   await shared.openShare(scope);
-  const recipientListing = new FilesPage(second);
+  const recipientListing = new FilesPage(recipientPage);
   await expect(recipientListing.breadcrumbs).toBeVisible();
   await expect
     .poll(
@@ -81,6 +51,8 @@ test('a hand-exchanged contact code carries a grant to the second client', async
       { timeout: 60_000, intervals: [2_000] }
     )
     .toBe(1);
+  await expect(recipientListing.readOnlyNotice).toBeVisible();
+  await expect(recipientListing.newFolderButton).toHaveCount(0);
 
-  await context.close();
+  await recipientContext.close();
 });

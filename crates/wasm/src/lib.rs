@@ -900,14 +900,14 @@ impl SnapshotView {
         self.inner.folder_name.clone()
     }
 
-    /// What this vault may do in the scope the listed folder belongs to.
+    /// What this vault may do now in the scope the listed folder belongs to.
     #[wasm_bindgen(getter)]
     pub fn permission(&self) -> Permission {
         self.inner.permission.into()
     }
 
     /// Whether the listed folder stands in a scope another vault granted this
-    /// one, which the write plane cannot author under.
+    /// one. A write there stays inside that scope.
     #[wasm_bindgen(getter, js_name = receivedShare)]
     pub fn received_share(&self) -> bool {
         self.inner.received_share
