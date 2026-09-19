@@ -4356,6 +4356,22 @@ fn install_descendant_scopes(
     }
 }
 
+/// Record the boundaries one walk named without material, and release every
+/// root the same walk proved: a proved root reads on its own leg from now on,
+/// and a stale entry here would skip it as unreachable for the rest of the
+/// session.
+fn install_unproved_scopes(
+    unproved: &RefCell<BTreeSet<NodeId>>,
+    proved: impl IntoIterator<Item = NodeId>,
+    named: BTreeSet<NodeId>,
+) {
+    let mut unproved = unproved.borrow_mut();
+    for scope in proved {
+        unproved.remove(&scope);
+    }
+    unproved.extend(named);
+}
+
 /// Drop the proved-descendant set a session leaves behind.
 ///
 /// Unconditional, unlike the best-effort clears it sits among: this set decides
@@ -4651,8 +4667,9 @@ pub struct Engine<T: SeamTypes> {
     /// Scope roots the same walk named but proved no material for: a folder
     /// publishing under a name its parent scope's write seed does not derive is
     /// a scope root of its own, whether or not the parent's child-scope index
-    /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grow-only within
-    /// a session. A boundary with no material still splits the focus window
+    /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grows within a
+    /// session until a walk proves the root ([`install_unproved_scopes`]). A
+    /// boundary with no material still splits the focus window
     /// ([`focus_scope_roots`]) and still names a crossing a relocation is
     /// classified against
     /// ([`relocation_scope_roots`](Self::relocation_scope_roots)).
@@ -6301,7 +6318,11 @@ where {
                                 &walked.proved,
                             );
                             install_walked_read_epochs(&walked_read_epochs, &walked.proved);
-                            unproved_roots.borrow_mut().extend(walked.unproved);
+                            install_unproved_scopes(
+                                &unproved_roots,
+                                walked.proved.iter().map(|s| NodeId(s.scope_id)),
+                                walked.unproved,
+                            );
                             descendants = walked.proved;
                         }
                         // The boundary set a rejection leaves is incomplete, and
@@ -11399,6 +11420,20 @@ mod tests {
         clear_proved_scope_roots(&roots);
 
         assert!(roots.borrow().is_empty());
+    }
+
+    /// A boundary a later walk proves reads on its own leg, so it must leave the
+    /// unproved set; the focus leg skips every root that set still holds.
+    #[test]
+    fn a_walk_that_proves_an_unproved_boundary_releases_it() {
+        let released = NodeId([3; 16]);
+        let still_named = NodeId([4; 16]);
+        let not_named = NodeId([5; 16]);
+        let unproved = RefCell::new(BTreeSet::from([released, not_named]));
+
+        install_unproved_scopes(&unproved, [released], BTreeSet::from([still_named]));
+
+        assert_eq!(*unproved.borrow(), BTreeSet::from([still_named, not_named]));
     }
 
     /// And a clear it cannot make is reported rather than skipped: a set that
@@ -17005,12 +17040,9 @@ mod tests {
             );
         }
 
-        /// A boundary the walk named and proved no material for is a boundary
-        /// all the same. Grouping its rows onto the enclosing scope reads each
-        /// of them under a seed that cannot open them, and the child gate
-        /// answers a wrong-scope record with a trust verdict, so an honest
-        /// writer is reported as abuse. The cause is the walk, so the class is
-        /// unreachable and nothing under the boundary is read at all.
+        /// A boundary the walk named and proved no material for is an outage on
+        /// its own leg, not abuse, and nothing under it is read
+        /// ([`focus_scope_roots`]).
         #[test]
         fn a_row_under_a_boundary_the_walk_could_not_prove_is_not_read_as_abuse() {
             // The boundary's own material, which this session never proved.
