@@ -102,6 +102,22 @@ impl DefaultsReason {
             Self::FloorUnreadable => "floor-unreadable",
         }
     }
+
+    /// Whether the load refused bytes the plane actually served, rather than
+    /// failing to reach it (blueprint/engine.md "Bin index record"). A caller
+    /// that retries on availability must not retry on a verdict, and a verdict
+    /// reaches the member as a trust violation.
+    pub(crate) fn is_verdict(self) -> bool {
+        match self {
+            Self::RolledBack { .. } | Self::RevisionRolledBack { .. } | Self::Unreadable => true,
+            Self::UnprovenFirstRun
+            | Self::Suppressed
+            | Self::StrandedMint
+            | Self::Expired
+            | Self::TimedOut
+            | Self::FloorUnreadable => false,
+        }
+    }
 }
 
 /// The verdict a load reaches when no endpoint served a record, from the three

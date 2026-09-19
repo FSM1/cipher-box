@@ -208,25 +208,8 @@ fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
     match reason {
         DefaultsReason::StrandedMint => Halt::Permanent(DeadLetterReason::BinIndexStrandedMint),
-        _ if bin_load_is_a_verdict(reason) => Halt::Attempt,
+        _ if reason.is_verdict() => Halt::Attempt,
         _ => Halt::HeldByBinIndex(reason),
-    }
-}
-
-/// Whether a bin index load refused bytes the plane actually served, rather
-/// than failing to reach it (blueprint/engine.md "Bin index record"). A caller
-/// that retries on availability must not retry on a verdict.
-pub(crate) fn bin_load_is_a_verdict(reason: DefaultsReason) -> bool {
-    match reason {
-        DefaultsReason::RolledBack { .. }
-        | DefaultsReason::RevisionRolledBack { .. }
-        | DefaultsReason::Unreadable => true,
-        DefaultsReason::UnprovenFirstRun
-        | DefaultsReason::Suppressed
-        | DefaultsReason::StrandedMint
-        | DefaultsReason::Expired
-        | DefaultsReason::TimedOut
-        | DefaultsReason::FloorUnreadable => false,
     }
 }
 

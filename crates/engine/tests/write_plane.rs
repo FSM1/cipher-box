@@ -11704,6 +11704,38 @@ fn tick_past_the_settings_recheck(
     }
 }
 
+/// A running session's settings re-check that meets a replayed record rests
+/// on what it holds, and the member hears of the refusal.
+#[test]
+fn a_settings_recheck_that_meets_a_replayed_record_reports_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::External);
+    let name = settings_name(&SECRET);
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let first = world
+        .record_store
+        .record_at(&endpoint, name.as_str())
+        .expect("the settings record published");
+
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    seed_settings(&world, &alice, &blocks, PinMode::Hosted);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), first.clone());
+    }
+    let _ = events_so_far(&mut events);
+    tick_past_the_settings_recheck(&world, &engine, &mut tasks);
+
+    assert!(
+        !accused_nobody(&mut events),
+        "the replayed settings record is reported"
+    );
+}
+
 /// The version blocks one node published, sorted and deduped — the set a
 /// placement assertion compares a destination against.
 fn version_blocks(device: &FakeDevice, engine: &Engine<FakeSeamTypes>, name: &str) -> Vec<String> {

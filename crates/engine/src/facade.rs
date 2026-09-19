@@ -119,9 +119,9 @@ use crate::seams::{
 use crate::session::SessionIdentity;
 use crate::settings::{
     DEFAULT_BIN_RETENTION_DAYS, Placement, PlacementRefusal, PlacementSource, SessionPlacement,
-    SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary, decide_placement,
-    load_settings, load_settings_at, placement_of, publish_settings, redecide_placement,
-    resolve_kept_bearer, summarize_settings,
+    SettingsLoad, SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary,
+    decide_placement, load_settings, load_settings_at, placement_of, publish_settings,
+    redecide_placement, resolve_kept_bearer, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -129,8 +129,8 @@ use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
     BookkeepingCursors, Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd,
-    SealPlane, TickShare, bin_load_is_a_verdict, charge_the_identity_to_one_pass, hold_captures,
-    owner_scoped_key, published_op_mark,
+    SealPlane, TickShare, charge_the_identity_to_one_pass, hold_captures, owner_scoped_key,
+    published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -3830,6 +3830,22 @@ pub(crate) fn emit_trust_violation(
     });
 }
 
+/// Report a settings load that refused bytes the record plane served. The load
+/// already rests on last-known-good or the defaults; the member still hears of
+/// the refusal, as the bin plane's reader does.
+fn report_settings_verdict(events: &mpsc::UnboundedSender<Event>, load: &SettingsLoad) {
+    let (SettingsLoad::Stale { reason, .. } | SettingsLoad::Defaults(reason)) = load else {
+        return;
+    };
+    if reason.is_verdict() {
+        emit_trust_violation(
+            events,
+            "vault-settings",
+            format!("vault settings refused: {}", reason.check()),
+        );
+    }
+}
+
 /// Report one grant row whose recipient binding the owner never signed.
 ///
 /// Any committed write grantee authors the write body a ledger rides in, so a
@@ -5200,6 +5216,7 @@ impl<T: SeamTypes> Engine<T> {
         )
         .await
         .enrol(&self.held_records, observed);
+        report_settings_verdict(&self.events, &settings);
         *self.placement.borrow_mut() = Some(decide_placement(&settings));
         *self.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
         // The secret zeroizes on drop here, at its terminal owner.
@@ -6286,6 +6303,7 @@ where {
                             return TickControl::Stop;
                         }
                         let load = read.enrol(&held, observed);
+                        report_settings_verdict(&events, &load);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
                             adopt_settings_summary(
@@ -11464,7 +11482,7 @@ where {
             BinIndexLoad::Resolved(_) => return Ok(load),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,
         };
-        if bin_load_is_a_verdict(reason) {
+        if reason.is_verdict() {
             let message = format!("bin index refused: {reason:?}");
             emit_trust_violation(&self.events, keys.name().as_str(), message.clone());
             return Err(EngineError::TrustViolation { message });
