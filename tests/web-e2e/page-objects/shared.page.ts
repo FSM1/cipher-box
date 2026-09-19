@@ -74,6 +74,26 @@ export class SharedPage {
       .toBe(resolution);
   }
 
+  /**
+   * Re-reads the list, and nothing else, until the row for `scope` reports
+   * `resolution`. A manual refresh answers at its read legs, ahead of the
+   * share legs of the same pass, so the verdict that pass records can land
+   * after the refresh returns.
+   */
+  async readStanding(scope: string, resolution: string, timeout = 10_000): Promise<void> {
+    await expect
+      .poll(
+        async () => {
+          await this.readAgain();
+          const standing = this.row(scope).getByTestId('shared-standing');
+          if ((await standing.count()) !== 1) return 'no row';
+          return standing.getAttribute('data-resolution');
+        },
+        { timeout, intervals: [250] }
+      )
+      .toBe(resolution);
+  }
+
   /** The row for the scope root `scope`, as lowercase hex. */
   row(scope: string): Locator {
     return this.page.locator(`[data-testid="shared-row"][data-scope="${scope}"]`);
