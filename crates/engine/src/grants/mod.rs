@@ -44,10 +44,10 @@ pub use contact_store::{
 pub(crate) use create::commits_write_grant;
 pub use create::{
     ConvergedSubtree, CreateGrantError, CreateGrantOutcome, GrantRecipient, GrantResumeResolver,
-    GrantSubtree, GranteeScopePlan, InteriorRecord, InteriorResealer, MintNet, MovingChild,
-    OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, PromotedSubtree, ScopePointerVoucher,
-    ScopeRootPromoter, converge_grant_subtree, create_grant, mint_grantee_scope,
-    post_share_pointer, resume_grantee_scope,
+    GrantSubtree, GrantedReadScope, GranteeScopePlan, InteriorRecord, InteriorResealer, MintNet,
+    MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, PromotedSubtree,
+    ScopePointerVoucher, ScopeRootPromoter, converge_grant_subtree, create_grant,
+    mint_grantee_scope, post_share_pointer, resume_grantee_scope,
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedLink, CommittedScope, ConvertedClaim,

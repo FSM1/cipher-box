@@ -755,6 +755,7 @@ fn the_owner_reads_a_file_inside_a_folder_it_granted() {
 
     import_recipient(&mut engine_t);
     grant_to_recipient(&mut engine_t, shared);
+    assert_reads_both_versions(&engine_t, early, &before, "the granting device, at once");
     for _ in 0..4 {
         tick(&world, &engine_t, &mut tasks_t);
     }
@@ -775,6 +776,67 @@ fn the_owner_reads_a_file_inside_a_folder_it_granted() {
     let (engine_m, _events_m, _tasks_m) = mounted_reader(&world, &blocks, &mount, shared);
     assert_reads_both_versions(&engine_m, early, &before, "the owner's second device");
     assert_reads_both_versions(&engine_m, late, &after, "the owner's second device");
+}
+
+/// A share hands its own device the minted scope's read seed, so a read needs
+/// no boundary walk to prove the scope first, and the passes that run while no
+/// walk can reach the network keep that seed. Both gestures that mint a scope:
+/// a contact grant, and an invite link on a write share, whose cut moves the
+/// scope's names but not its read plane.
+#[test]
+fn the_owner_reads_a_shared_folder_no_walk_has_proved() {
+    for by_link in [false, true] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+        let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+        let before = two_bodies(7);
+        let file = file_with_two_versions(
+            &world,
+            &mut engine_t,
+            &mut tasks_t,
+            shared,
+            "early.bin",
+            &before,
+        );
+
+        if by_link {
+            assert!(
+                matches!(
+                    block_on(engine_t.command(Command::CreateInviteLink {
+                        node: shared,
+                        permission: Permission::Write,
+                        expires_at: None,
+                    })),
+                    Ok(CommandOutcome::InviteLinkMinted(_))
+                ),
+                "the link mints the folder's scope"
+            );
+        } else {
+            import_recipient(&mut engine_t);
+            grant_to_recipient(&mut engine_t, shared);
+        }
+        let who = if by_link {
+            "the linking device"
+        } else {
+            "the granting device"
+        };
+        assert_reads_both_versions(&engine_t, file, &before, who);
+
+        for endpoint in world.record_store.endpoints() {
+            world.record_store.fail_endpoint(&endpoint);
+        }
+        for _ in 0..4 {
+            tick(&world, &engine_t, &mut tasks_t);
+        }
+        for endpoint in world.record_store.endpoints() {
+            world.record_store.heal_endpoint(&endpoint);
+        }
+        assert_reads_both_versions(&engine_t, file, &before, who);
+    }
 }
 
 /// The recipient's own session: a vault of its own, the owner imported as a

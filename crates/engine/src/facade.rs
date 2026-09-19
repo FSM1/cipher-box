@@ -68,15 +68,16 @@ use crate::grants::received_status::{
 };
 use crate::grants::{
     ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
-    ConvertedClaimRecord, CreateGrantError, EphemeralInvitee, GrantRecipient, GranteeScopePlan,
-    InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan, InviteStore,
-    InviteStoreError, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
-    PendingInviteLink, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
-    ResolutionClass, SharePointer, StagingContactStore, StagingInviteStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, commits_write_grant, convert_invite_claim,
-    create_grant, enforce_committed_ledger, import_contact, insert_child, link_budget_full,
-    locate_invite_link, mint_invite_link, partition_scope_links, post_invite_claim,
-    post_share_pointer, recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    ConvertedClaimRecord, CreateGrantError, EphemeralInvitee, GrantRecipient, GrantedReadScope,
+    GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
+    InviteStore, InviteStoreError, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
+    ParentScopePlan, PendingInviteLink, PublishedGrantBlob, ReceivedShareStore,
+    ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
+    StagingInviteStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, commits_write_grant,
+    convert_invite_claim, create_grant, enforce_committed_ledger, import_contact, insert_child,
+    link_budget_full, locate_invite_link, mint_invite_link, partition_scope_links,
+    post_invite_claim, post_share_pointer, recipient_blinded_tag, resolve_recipient,
+    row_is_owner_attested,
 };
 use crate::mailbox::{poll_verified, post_sealed};
 use crate::name::{NameError, is_emittable, validate_name};
@@ -4157,6 +4158,16 @@ pub(crate) async fn refresh_seed_floor<F: FloorStore>(
     durable
 }
 
+/// The scope roots below the vault root this session owns: the ones a gated
+/// descent proved and the ones its own grants minted, which is this vault's
+/// floor namespace before any walk re-proves them.
+fn own_descendant_scopes(
+    proved: &RefCell<BTreeSet<NodeId>>,
+    minted: &RefCell<BTreeSet<NodeId>>,
+) -> BTreeSet<NodeId> {
+    proved.borrow().union(&minted.borrow()).copied().collect()
+}
+
 /// Deposit a recovered scope seed under `stamp`, which must be **at or below the
 /// epoch the seed belongs to** — the seed's own epoch where the recovery names it
 /// (an adopted record's `epoch`, a re-point's vouched floors), else the durable
@@ -4703,8 +4714,9 @@ pub struct Engine<T: SeamTypes> {
     /// never crossing the facade (security rules 1/3); the child read pipeline
     /// derives per-node read keys from them (`node-seed` → `read-key`).
     ///
-    /// Every key is the vault root scope id or a grafted scope id. The eviction
-    /// pass reads that as an invariant: it drops a seed under any other key,
+    /// Every key is the vault root scope id, a scope root below it this vault
+    /// owns, or a grafted scope id. The eviction pass reads that as an
+    /// invariant: it drops a seed under any other key,
     /// because no floor namespace answers for one
     /// ([`evict_grafted_read_seeds`](crate::grants::grafted::evict_grafted_read_seeds)).
     scope_read_seeds: Rc<RefCell<ScopeSeeds>>,
@@ -6235,13 +6247,13 @@ where {
                     )
                     .await;
                     let grafted = grafted_sharers.borrow().clone();
-                    let proved_before = descendant_roots.borrow().clone();
+                    let own_before = own_descendant_scopes(&descendant_roots, &minted_roots);
                     evict_grafted_read_seeds(
                         &floors,
                         &grafted,
                         &contact_label_seed,
                         &root_id,
-                        &proved_before,
+                        &own_before,
                         &scope_read_seeds,
                     )
                     .await;
@@ -6250,7 +6262,7 @@ where {
                         &grafted,
                         &contact_label_seed,
                         &root_id,
-                        &proved_before,
+                        &own_before,
                         &scope_write_seeds,
                     )
                     .await;
@@ -7992,12 +8004,12 @@ where {
             }
             _ => (None, None),
         };
-        let resumed_write_scope_seed = match resume_recipient {
-            Some((identity_pk, enc_pub)) => {
-                self.resumable_write_share(node, &current, identity_pk, &enc_pub, api, owner_keys())
-                    .await
-            }
-            None => None,
+        let (resumed_write_scope_seed, resumed_read_scope) = match resume_recipient {
+            Some((identity_pk, enc_pub)) => self
+                .resumable_write_share(node, &current, identity_pk, &enc_pub, api, owner_keys())
+                .await
+                .unzip(),
+            None => (None, None),
         };
         let resuming = resumed_write_scope_seed.is_some();
         if !resuming && let Some(check) = checks.refusal(standing) {
@@ -8092,6 +8104,7 @@ where {
             held: &self.held_records,
             payload_version: POINTER_PAYLOAD_VERSION,
         };
+        let mut granted_read_scope = resumed_read_scope;
         let pending = match &share {
             ScopeShare::Contact(contact) => {
                 let recipient = GrantRecipient {
@@ -8101,7 +8114,7 @@ where {
                 // A resume finishes a scope the mint already published; minting
                 // again would replace the seed every published blob carries.
                 if !resuming {
-                    create_grant(
+                    let outcome = create_grant(
                         &mut SharedEntropy(&self.entropy),
                         &net,
                         &voucher,
@@ -8112,6 +8125,7 @@ where {
                     )
                     .await
                     .map_err(|e| EngineError::from_share_mint(e, checks))?;
+                    granted_read_scope = Some(outcome.read_scope);
                 }
                 PendingShare::SharePointer(recipient)
             }
@@ -8123,31 +8137,31 @@ where {
                     // link at one node.
                     Some(link) => link,
                     None => {
-                        let link = Rc::new(
-                            mint_invite_link(
-                                &mut SharedEntropy(&self.entropy),
-                                &net,
-                                &voucher,
-                                &StagingInviteStore::new(
-                                    &self.seams.staging_store,
-                                    session.enc_subkey(),
-                                    &self.entropy,
-                                ),
-                                &owner,
-                                &InviteMintPlan {
-                                    grantee: &grantee,
-                                    parent: &parent_plan,
-                                    expires_at: *expires_at,
-                                },
-                            )
-                            .await
-                            .map_err(|e| match e {
-                                InviteMintError::Create(create) => {
-                                    EngineError::from_share_mint(create, checks)
-                                }
-                                other => EngineError::from_invite_mint(other),
-                            })?,
-                        );
+                        let (link, read_scope) = mint_invite_link(
+                            &mut SharedEntropy(&self.entropy),
+                            &net,
+                            &voucher,
+                            &StagingInviteStore::new(
+                                &self.seams.staging_store,
+                                session.enc_subkey(),
+                                &self.entropy,
+                            ),
+                            &owner,
+                            &InviteMintPlan {
+                                grantee: &grantee,
+                                parent: &parent_plan,
+                                expires_at: *expires_at,
+                            },
+                        )
+                        .await
+                        .map_err(|e| match e {
+                            InviteMintError::Create(create) => {
+                                EngineError::from_share_mint(create, checks)
+                            }
+                            other => EngineError::from_invite_mint(other),
+                        })?;
+                        granted_read_scope = Some(read_scope);
+                        let link = Rc::new(link);
                         self.pending_invite_links
                             .borrow_mut()
                             .insert(node, link.clone());
@@ -8158,6 +8172,11 @@ where {
         };
 
         self.minted_scope_roots.borrow_mut().insert(node);
+        // The grant re-sealed the folder's interior under this seed, so the
+        // owner's reads there need it now, not after a boundary walk proves it.
+        if let Some(read) = granted_read_scope {
+            deposit_seed(&self.scope_read_seeds, node.0, read.seed, Some(read.epoch));
+        }
 
         if let ScopeShare::Contact(contact) = &share {
             // The grant this mint published is one no claim conversion recorded,
@@ -8288,7 +8307,7 @@ where {
         recipient_enc_pub: &X25519Public,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         keys: OwnerRotationKeys<'_>,
-    ) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
+    ) -> Option<(Zeroizing<[u8; SECRET_LEN]>, GrantedReadScope)> {
         let session = self.session.as_ref()?;
         let indexed = parent
             .direct_child_scope_index
@@ -8324,7 +8343,15 @@ where {
             &node.0,
             &parent_derived,
         )
-        .then_some(granted.write_scope_seed)
+        .then(|| {
+            (
+                granted.write_scope_seed,
+                GrantedReadScope {
+                    seed: granted.override_seed,
+                    epoch: granted.current_read_epoch,
+                },
+            )
+        })
     }
 
     /// The write-scope cut a write grant owes, over the scope the mint just
@@ -9067,7 +9094,7 @@ where {
             &self.grafted_sharers.borrow(),
             session.contact_label_seed(),
             &self.snapshot.borrow().root.0,
-            &self.descendant_scope_roots.borrow(),
+            &own_descendant_scopes(&self.descendant_scope_roots, &self.minted_scope_roots),
             scope_id,
         )
     }
