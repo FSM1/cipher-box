@@ -7124,11 +7124,12 @@ fn sweep_folder(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId) 
     publish_next_record(records, blocks, folder, &head);
 }
 
-/// Epoch lag is sweep-pending staleness, not abuse (CONTEXT.md "Epoch lag"): a
-/// focused folder the lazy wave has not swept yet rejects fail-closed, but the
-/// owner's own rotation must not read as an attack on the host's abuse channel.
+/// Epoch lag is not abuse (CONTEXT.md "Epoch lag"): a focused folder the lazy
+/// wave has not swept yet reads under the seed the scope root's ratchet reaches
+/// for its epoch (ADR 0021), so a child its writer added at that epoch renders
+/// and the owner's own rotation accuses nobody.
 #[test]
-fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
+fn an_epoch_lagged_focus_folder_renders_without_raising_abuse() {
     let DeepCreate {
         world,
         blocks,
@@ -7156,23 +7157,12 @@ fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
 
     assert_eq!(
         listed_names(&engine_b, photos),
-        ["2026"],
-        "last-known-good stays pinned"
+        ["2026", "2027"],
+        "the lagging folder opens at its own epoch",
     );
     assert!(
         accused_nobody(&mut events_b),
         "an unswept folder is not an attacker"
-    );
-
-    // The control: the same children, re-sealed at the current epoch, do
-    // render — so the leg above ran and rejected.
-    sweep_folder(&world.record_store, &blocks, photos);
-    tick(&world, &engine_b, &mut tasks_b);
-
-    assert_eq!(
-        listed_names(&engine_b, photos),
-        ["2026", "2027"],
-        "the wave's re-seal at the current epoch is adopted"
     );
 }
 
@@ -14544,6 +14534,97 @@ fn a_version_retained_across_a_key_regression_epoch_still_opens() {
         bodies[0],
         "a version written before the cut opens under the epoch it regressed to",
     );
+}
+
+/// A cut raises the read-epoch floor at once, so every file no write has
+/// re-sealed lags it. A read opens such a file under the seed the scope root's
+/// ratchet reaches for its epoch (ADR 0021). The file cannot be fetched until
+/// the reads, so no idle sweep reads or re-seals it first. On the device
+/// that cut and on a second device that never read the file, the content, the
+/// version list and a prior version read, the read-epoch floor stays where the
+/// cut left it, and the file's sequence floor holds the record the read opened.
+#[test]
+fn a_file_the_wave_has_not_reached_reads_after_a_cut() {
+    use cipherbox_engine::gate::floor;
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let bodies: Vec<Vec<u8>> = (0..2u8)
+        .map(|version| (0..45u8).map(|byte| byte ^ (version + 7)).collect())
+        .collect();
+    let file = file_with_history(&world, &mut engine_a, &mut tasks, &bodies);
+    let prior = published_versions(&world.record_store, &blocks, file)[1]
+        .content_cid
+        .clone();
+    let (sequence, _) = published(&world.record_store, file);
+    let file_name = write_name(file);
+    let bob = world.device(b"alice-second-device");
+    let (engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+
+    world.record_store.fail_get_for(file_name.as_str());
+    block_on(engine_a.command(Command::RotateNow { node: ROOT })).expect("the cut lands");
+    tick(&world, &engine_a, &mut tasks);
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(
+        published(&world.record_store, file).0,
+        sequence,
+        "no write and no sweep re-sealed the file",
+    );
+    let floors_b = bob.floors(&SECRET);
+    assert_eq!(
+        block_on(floor::sequence_floor(
+            &floors_b,
+            file_name.as_str().as_bytes()
+        ))
+        .expect("the floor reads"),
+        None,
+        "the second device has not read the file yet",
+    );
+    world.record_store.heal_get_for(file_name.as_str());
+
+    for (device, engine) in [(&alice, &engine_a), (&bob, &engine_b)] {
+        let floors = device.floors(&SECRET);
+        let cut_floor = block_on(floor::read_epoch_floor(&floors, &SCOPE))
+            .expect("the floor reads")
+            .expect("the adopted cut raised the read-epoch floor");
+        assert!(
+            cut_floor > EPOCH,
+            "the cut moved the scope past the file's epoch"
+        );
+
+        assert_eq!(
+            block_on(engine.read_content(file)).expect("the lagging head reads"),
+            bodies[1],
+        );
+        assert_eq!(
+            block_on(engine.file_versions(file))
+                .expect("the lagging history lists")
+                .len(),
+            1,
+        );
+        assert_eq!(
+            block_on(engine.read_version_content(file, &prior)).expect("the prior version reads"),
+            bodies[0],
+        );
+        assert_eq!(
+            block_on(floor::read_epoch_floor(&floors, &SCOPE)).expect("the floor reads"),
+            Some(cut_floor),
+            "a lagging read moves no read-epoch floor",
+        );
+        assert_eq!(
+            block_on(floor::sequence_floor(
+                &floors,
+                file_name.as_str().as_bytes()
+            ))
+            .expect("the floor reads"),
+            Some(sequence),
+            "and it holds the replay bar at the record it opened",
+        );
+    }
 }
 
 /// A version list is authored by anyone holding the scope's write seed, so a

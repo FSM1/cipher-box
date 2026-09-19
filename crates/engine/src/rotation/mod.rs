@@ -70,6 +70,7 @@ pub use reseal::{
     ScopeRootIdentity, WriteHistory, published_override_seed, reseal_at_current_epoch,
     reseal_scope_root, seed_at_epoch,
 };
+pub(crate) use reseal::{LaggingSeedMiss, lagging_read_seed};
 pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
 pub(crate) use rotate::complete_cut;
 pub use rotate::{

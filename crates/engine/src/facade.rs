@@ -3742,6 +3742,20 @@ fn nodes_in_scope(
         .collect()
 }
 
+/// The record name of scope root `scope_id`, which a lagging child read walks
+/// the ratchet back from: the session's vault root name, or the name the base
+/// carries for a scope root below it.
+fn scope_root_record_name(
+    base: &Snapshot,
+    vault_root_name: Option<&IpnsName>,
+    scope_id: &[u8; 16],
+) -> Option<IpnsName> {
+    if *scope_id == base.root.0 {
+        return vault_root_name.cloned();
+    }
+    scope_name(base.node(NodeId(*scope_id))?.ipns_name.as_deref()?).ok()
+}
+
 /// The share of the focus file queue one leg of a pass may spend: `queued` less
 /// what the pass attempted on an earlier leg, and no more than the budget
 /// [`MAX_FOCUS_FILES`] leaves.
@@ -6843,6 +6857,8 @@ where {
                         ) else {
                             continue;
                         };
+                        let scope_root_name =
+                            scope_root_record_name(&base.borrow(), Some(&root_name), &scope_root.0);
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
@@ -6853,6 +6869,7 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
+                            scope_root_name: scope_root_name.as_ref(),
                             plane: (!own).then_some(GraftedLeg {
                                 scope_roots: &scope_roots,
                                 claims: &grafted_claims,
@@ -9687,6 +9704,7 @@ where {
             ),
         );
         let scope_read_seed = self.scope_read_seed(&root.0).await;
+        let root_name = self.current_root_name.borrow().clone();
         let leg = scope_read_seed
             .as_ref()
             .map(|scope_read_seed| FolderRefresh {
@@ -9699,6 +9717,7 @@ where {
                 events: &self.events,
                 scope_id: root.0,
                 scope_read_seed,
+                scope_root_name: root_name.as_ref(),
                 plane: None,
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
@@ -11148,6 +11167,11 @@ where {
                 .ok_or_else(no_seed)?
                 .0
         };
+        let scope_root_name = scope_root_record_name(
+            &self.snapshot.borrow(),
+            self.current_root_name.borrow().as_ref(),
+            &scope_id,
+        );
         let scope_read_seed = self.scope_read_seed(&scope_id).await.ok_or_else(no_seed)?;
         let floors = self.scope_floors(&scope_id).ok_or_else(no_seed)?;
         let adopter = ChildAdopter::new(
@@ -11163,6 +11187,7 @@ where {
             &self.seams.snapshot_cache,
             &adopter,
             &name,
+            scope_root_name.as_ref(),
             ResolveMode::CacheFirst,
         )
         .await
