@@ -132,6 +132,19 @@ impl InMemoryRecordStore {
             .and_then(|records| records.get(routing_key).cloned())
     }
 
+    /// Every routing key `endpoint` holds a record at, sorted.
+    pub fn routing_keys(&self, endpoint: &EndpointId) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .inner
+            .lock()
+            .expect("lock")
+            .get(endpoint)
+            .map(|records| records.keys().cloned().collect())
+            .unwrap_or_default();
+        keys.sort();
+        keys
+    }
+
     /// Make `endpoint` return a transport error on every GET/PUT until
     /// [`heal_endpoint`](Self::heal_endpoint) clears it.
     pub fn fail_endpoint(&self, endpoint: &EndpointId) {

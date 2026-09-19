@@ -920,6 +920,193 @@ fn the_recipient_reads_a_file_below_a_grafted_root() {
 }
 
 // ---------------------------------------------------------------------------
+// The lazy wave a cut leaves behind
+// ---------------------------------------------------------------------------
+
+/// Every record every endpoint holds, as `(endpoint, routing key, record)`.
+fn records(world: &FakeWorld) -> Vec<(String, String, Vec<u8>)> {
+    let store = &world.record_store;
+    store
+        .endpoints()
+        .into_iter()
+        .flat_map(|endpoint| {
+            store.routing_keys(&endpoint).into_iter().map(move |key| {
+                let record = store.record_at(&endpoint, &key);
+                (
+                    endpoint.0.clone(),
+                    key,
+                    record.expect("a listed key holds a record"),
+                )
+            })
+        })
+        .collect()
+}
+
+/// The highest epoch any record on the plane carries for `node` sealed in
+/// `scope`, whatever name it publishes under.
+fn epoch_in_scope(world: &FakeWorld, blocks: &Blocks, scope: NodeId, node: NodeId) -> u64 {
+    records(world)
+        .into_iter()
+        .filter_map(|(_, key, bytes)| {
+            let name = IpnsName::parse(&key).ok()?;
+            let record = IpnsRecord::unmarshal(&bytes).ok()?.verify(&name).ok()?;
+            let cid = core::str::from_utf8(&record.value)
+                .ok()?
+                .strip_prefix("/ipfs/")?
+                .to_owned();
+            let envelope = decode_envelope(&blocks.get(&cid)?).ok()?;
+            (envelope.id == node.0 && envelope.scope == scope.0).then_some(envelope.epoch)
+        })
+        .max()
+        .unwrap_or_else(|| panic!("no record of the node in the scope"))
+}
+
+/// Run the tasks a command spawned until each ends, one poll cadence apart.
+fn run_to_end(world: &FakeWorld, mut spawned: Vec<BoxedTask>, step: core::time::Duration) {
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..16 {
+        spawned.retain_mut(|task| task.as_mut().poll(&mut cx).is_pending());
+        if spawned.is_empty() {
+            return;
+        }
+        world.scheduler.advance(step);
+    }
+    panic!("a spawned task never ended");
+}
+
+/// Advance the clock one poll cadence at a time, `times` times, polling `tasks`.
+fn drive(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask], times: u32) {
+    for _ in 0..times {
+        tick(world, engine, tasks);
+    }
+}
+
+/// A cut enqueues the lazy wave. The spawned task re-seals the interior folder
+/// the cut left at the old epoch, before any idle round or write reaches it.
+#[test]
+fn the_sweep_a_cut_enqueues_re_seals_the_folder_it_left_behind() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let device = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 42);
+    let reports = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+
+    assert_eq!(
+        block_on(engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done)
+    );
+    let cut = published_epoch(&world, &blocks, ROOT);
+    assert!(
+        published_epoch(&world, &blocks, reports) < cut,
+        "the cut leaves the folder at the old epoch"
+    );
+
+    // The clock does not move, so neither the tick nor the idle job wakes.
+    let mut spawned = world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut spawned);
+
+    assert_eq!(published_epoch(&world, &blocks, reports), cut);
+}
+
+/// A cut whose own sweep failed leaves the folder behind, and nothing of the
+/// wave is durable. After a restart the idle sweep job finds the scope past its
+/// genesis epoch and converges the folder with no write to it.
+#[test]
+fn after_a_restart_the_idle_sweep_converges_what_a_failed_sweep_left() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let device = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &device, 42);
+    let shared = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "shared");
+    let inner = create_published_folder(&world, &mut engine, &mut tasks, shared, "inner");
+    import_recipient(&mut engine);
+    grant_to_recipient(&mut engine, shared);
+
+    assert_eq!(
+        block_on(engine.command(Command::RotateNow { node: shared })),
+        Ok(CommandOutcome::Done)
+    );
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_endpoint(&endpoint);
+    }
+    run_to_end(
+        &world,
+        world.scheduler.take_spawned_tasks(),
+        engine.profile().poll_cadence,
+    );
+    drive(&world, &engine, &mut tasks, 4);
+    drop(tasks);
+    drop(engine);
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.heal_endpoint(&endpoint);
+    }
+    let cut = epoch_in_scope(&world, &blocks, shared, shared);
+    assert!(
+        epoch_in_scope(&world, &blocks, shared, inner) < cut,
+        "no sweep landed before the restart"
+    );
+
+    let (restarted, _events, mut tasks) = boot(&world, &blocks, &device, 43);
+    assert!(
+        epoch_in_scope(&world, &blocks, shared, inner) < cut,
+        "a cold start alone re-seals nothing"
+    );
+    let cadence = restarted.profile().sweep_cadence;
+    let polls = u32::try_from(cadence.as_secs() / restarted.profile().poll_cadence.as_secs())
+        .expect("a small ratio");
+    drive(&world, &restarted, &mut tasks, 2 * polls);
+
+    assert_eq!(epoch_in_scope(&world, &blocks, shared, inner), cut);
+}
+
+/// A read grantee holds no write seed for the scope, so its session never
+/// sweeps it: the folder a cut left behind stays behind, and no record on the
+/// plane changes, until the owner's own idle job re-seals it.
+#[test]
+fn a_read_only_member_never_runs_the_wave() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let inner = create_published_folder(&world, &mut engine_t, &mut tasks_t, shared, "inner");
+    import_recipient(&mut engine_t);
+    grant_to_recipient(&mut engine_t, shared);
+    let (engine_r, _events_r, mut tasks_r) = recipient_with_the_share(&world, &blocks);
+
+    assert_eq!(
+        block_on(engine_t.command(Command::RotateNow { node: shared })),
+        Ok(CommandOutcome::Done)
+    );
+    drop(world.scheduler.take_spawned_tasks());
+    let cut = epoch_in_scope(&world, &blocks, shared, shared);
+    assert!(
+        epoch_in_scope(&world, &blocks, shared, inner) < cut,
+        "the cut leaves the folder at the old epoch"
+    );
+
+    let before = records(&world);
+    let cadence = engine_r.profile().sweep_cadence;
+    let polls = u32::try_from(cadence.as_secs() / engine_r.profile().poll_cadence.as_secs())
+        .expect("a small ratio");
+    drive(&world, &engine_r, &mut tasks_r, 3 * polls);
+    assert!(
+        records(&world) == before,
+        "the read-only member publishes nothing"
+    );
+
+    drive(&world, &engine_t, &mut tasks_t, 2 * polls);
+    assert_eq!(
+        epoch_in_scope(&world, &blocks, shared, inner),
+        cut,
+        "the owner's idle job carries the wave"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // A write staged across a cut that re-keyed its scope
 // ---------------------------------------------------------------------------
 

@@ -323,7 +323,7 @@ impl SweepOutcome {
     /// lost race whose winner may not have advanced the epoch, or a node the
     /// pass could not read for a reason a retry clears. A node no seed opens and
     /// a record the gate refused are settled — another pass answers identically.
-    fn worth_another_pass(&self) -> bool {
+    pub(crate) fn worth_another_pass(&self) -> bool {
         !self.dropped_lost_race.is_empty()
             || self
                 .unreachable
@@ -861,28 +861,26 @@ where
 
 /// Drive the lazy wave as the blueprint's idle-cadence [`Scheduler`] job: idle
 /// one `cadence`, sweep every scope `round` names, hand each result to `report`,
-/// and repeat until a round answers `None` — session end (blueprint/engine.md
-/// "sweep"). Determinism law: the only time source is `scheduler.sleep`.
+/// and repeat until a round or a sweep answers `None` — session end
+/// (blueprint/engine.md "sweep"). Determinism law: the only time source is
+/// `scheduler.sleep`.
 ///
 /// The idle comes **first**, so a freshly spawned job never sweeps in the same
 /// wake as the cut or the poll tick that spawned it.
 ///
-/// Each scope gets **one** pass per round. The round is itself the retry: the
-/// wave is idempotent and comes back every `cadence`, so spending in-round
-/// passes on a contested scope would only stall every other scope behind it.
-/// `report` is how the index self-heal and the residual buckets reach a host
-/// that has no return value to read.
-pub async fn run_sweep_job<S, R, P>(
+/// `sweep` runs **one** pass per scope per round. The round is itself the
+/// retry: the wave is idempotent and comes back every `cadence`, so spending
+/// in-round passes on a contested scope would only stall every other scope
+/// behind it. `report` is how the index self-heal and the residual buckets
+/// reach a host that has no return value to read.
+pub async fn run_sweep_job<S, J>(
     scheduler: &S,
-    resolver: &R,
-    publisher: &P,
     cadence: Duration,
-    mut round: impl AsyncFnMut() -> Option<Vec<ChildScopeRef>>,
-    report: impl Fn(&ChildScopeRef, &Result<SweepOutcome, SweepError>),
+    mut round: impl AsyncFnMut() -> Option<Vec<J>>,
+    mut sweep: impl AsyncFnMut(&J) -> Option<Result<SweepOutcome, SweepError>>,
+    mut report: impl FnMut(&J, &Result<SweepOutcome, SweepError>),
 ) where
     S: Scheduler,
-    R: SweepResolver,
-    P: SweepPublisher,
 {
     loop {
         scheduler.sleep(cadence).await;
@@ -890,9 +888,9 @@ pub async fn run_sweep_job<S, R, P>(
             return;
         };
         for scope in &scopes {
-            // The job's session boundary is `round()` answering `None`.
-            let result =
-                run_sweep(scheduler, resolver, publisher, scope, cadence, 1, &|| true).await;
+            let Some(result) = sweep(scope).await else {
+                return;
+            };
             report(scope, &result);
         }
     }

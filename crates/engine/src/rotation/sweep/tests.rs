@@ -752,10 +752,11 @@ fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualSche
     let seen: Reported = Reported::default();
     block_on(run_sweep_job(
         &scheduler,
-        net,
-        net,
         cadence,
         rounds(count),
+        async |scope: &ChildScopeRef| {
+            Some(run_sweep(&scheduler, net, net, scope, cadence, 1, &|| true).await)
+        },
         |scope: &ChildScopeRef, result: &Result<SweepOutcome, SweepError>| {
             seen.borrow_mut().push((scope.scope_id, result.clone()));
         },
@@ -872,10 +873,22 @@ fn the_job_parks_across_a_focus_window_poll_tick() {
         async move {
             run_sweep_job(
                 &scheduler,
-                &net,
-                &net,
                 profile.sweep_cadence,
                 rounds(1),
+                async |scope: &ChildScopeRef| {
+                    Some(
+                        run_sweep(
+                            &scheduler,
+                            &net,
+                            &net,
+                            scope,
+                            profile.sweep_cadence,
+                            1,
+                            &|| true,
+                        )
+                        .await,
+                    )
+                },
                 |_: &ChildScopeRef, _: &Result<SweepOutcome, SweepError>| {},
             )
             .await;
