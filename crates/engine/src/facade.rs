@@ -11423,6 +11423,7 @@ mod tests {
         use crate::gate::Adopted;
         use crate::grants::grafted::GraftedSharers;
         use crate::net::rotation::{ScopeWritePlane, WritePlaneDark};
+        use crate::seams::ContactLabel;
         use crate::sync::model::NodeMeta;
         use crate::sync::model::Snapshot;
 
@@ -11505,6 +11506,25 @@ mod tests {
                         .verifying_key()
                 ),
                 "the pass publishes under the name the shared root itself answers at",
+            );
+
+            let store = crate::testkit::fakes::InMemoryFloorStore::default();
+            crate::testkit::block_on(pass.floors.view(&store).raise_epoch_floor(&SHARED, 9))
+                .expect("the floor raises");
+            let sharer_label = ContactLabel::of(&label_seed(), &sharer().verifying_key().to_sec1());
+            assert_eq!(
+                crate::testkit::block_on(
+                    SharerScopedFloorStore::granted_by(&store, sharer_label).epoch_floor(&SHARED)
+                )
+                .expect("floor read"),
+                Some(9),
+                "the pass ratchets its epoch floors under the granting identity's label",
+            );
+            assert_eq!(
+                crate::testkit::block_on(SharerScopedFloorStore::own(&store).epoch_floor(&SHARED))
+                    .expect("floor read"),
+                None,
+                "and never in this vault's own namespace",
             );
         }
 
