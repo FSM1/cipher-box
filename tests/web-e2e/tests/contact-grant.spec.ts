@@ -10,12 +10,14 @@
  */
 
 import { expect, test } from '../fixtures';
+import { FilesPage } from '../page-objects/files.page';
 import { SharePage } from '../page-objects/share.page';
 import { SharedPage } from '../page-objects/shared.page';
 import { coldStart, nodeOf } from '../vault';
 
 const OWNER_FOLDER = 'granted-by-code';
 const RECIPIENT_FOLDER = 'recipient-own';
+const AFTER_GRANT = 'after-the-grant.bin';
 
 test('a hand-exchanged contact code carries a grant to the second client', async ({
   page,
@@ -57,6 +59,28 @@ test('a hand-exchanged contact code carries a grant to the second client', async
   await expect(row.getByTestId('shared-standing')).toHaveAttribute('data-resolution', 'granted');
   await expect(row.getByTestId('shared-permission')).toHaveText('read');
   await expect(shared.error).toHaveCount(0);
+
+  // A file the owner adds after the grant publishes into the scope root the
+  // grant cut, and the recipient reads the live folder rather than the listing
+  // that was current at the grant.
+  await ownerFiles.open(OWNER_FOLDER);
+  await ownerFiles.upload(AFTER_GRANT, new Uint8Array(512).fill(9));
+  const added = ownerFiles.row(AFTER_GRANT);
+  await expect(added).toBeVisible();
+  await expect(added.locator('.file-list-item-status')).toHaveCount(0, { timeout: 60_000 });
+  // A dead-lettered write also clears its pending mark, by leaving the listing.
+  await expect(page.getByTestId('dead-letter-notice')).toHaveCount(0);
+  await expect(added).toBeVisible();
+
+  await shared.openShare(scope);
+  const recipientListing = new FilesPage(second);
+  await expect(recipientListing.breadcrumbs).toBeVisible();
+  await expect
+    .poll(async () => {
+      await recipient.refresh();
+      return recipientListing.row(AFTER_GRANT).count();
+    })
+    .toBe(1);
 
   await context.close();
 });
