@@ -35,7 +35,7 @@ use cipherbox_core::seal::{
     Version, decode_grant_section, grant_section_bytes, open_content_key, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
@@ -58,7 +58,7 @@ use crate::facade::{
 };
 use crate::gate::GateStage;
 use crate::gate::{Adopted, GateError, RejectionReason, floor};
-use crate::grants::grafted::FloorNamespace;
+use crate::grants::grafted::{FloorNamespace, GraftedPlane};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
     AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
@@ -97,7 +97,9 @@ use crate::sync::doomed::{
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::project::{UnlinkedChild, project_child_version, project_folder};
+use crate::sync::project::{
+    UnlinkedChild, project_child_version, project_folder, project_folder_partial,
+};
 use crate::sync::rebase::{
     AppliedOp, DeadLetterReason, decode_queue, enclosing_scope_root, replay,
 };
@@ -871,6 +873,24 @@ pub(crate) struct DrainScope<'a> {
     pub(crate) enc_secret: &'a X25519Secret,
     /// The contact-anchored owner identity the gate verifies against.
     pub(crate) owner_identity: &'a EcdsaVerifier,
+    /// What a pass over a scope another identity granted carries beyond an own
+    /// pass, and the one fact every grafted refusal reads. `None` on this
+    /// vault's own planes; `Some` exactly when the source end ratchets under
+    /// [`FloorNamespace::GrantedBy`].
+    pub(crate) granted: Option<GrantedPass<'a>>,
+}
+
+/// The two facts a grafted pass reads that an own pass has no use for.
+#[derive(Clone, Copy)]
+pub(crate) struct GrantedPass<'a> {
+    /// The granting contact's encryption subkey. This device's seed for the
+    /// scope sits in the grant blob that contact's ECDH tag locates, not in an
+    /// owner blob, so the pass self-adopts its own publish through it.
+    pub(crate) sharer_enc: &'a X25519Public,
+    /// The cross-plane rule every read leg below the grafted root applies. A
+    /// repaint of a sharer-authored listing goes through it too, or the drain
+    /// would link an id another plane holds.
+    pub(crate) plane: GraftedPlane<'a>,
 }
 
 impl<'a> DrainScope<'a> {
@@ -880,7 +900,7 @@ impl<'a> DrainScope<'a> {
     /// seed, so every surface of **this** vault above the grafted root is out of
     /// its reach ([`Self::refuse_vault_surface`]).
     fn is_grafted(&self) -> bool {
-        matches!(self.source.floor_namespace, FloorNamespace::GrantedBy(_))
+        self.granted.is_some()
     }
 
     /// Refuse a grafted pass a surface that belongs to this vault rather than to
@@ -2106,7 +2126,15 @@ where
     /// Open a pass anchored on the scope root, whose epoch every record this
     /// pass seals is bound to.
     async fn open_pass(&self, scope: &DrainScope<'_>) -> Result<Pass, Halt> {
-        let root = self.load_scope_root(&scope.source).await?;
+        // A grafted root's own read leg runs after the drain in a tick, so the
+        // pass resolves the root itself rather than read a cache that leg
+        // never fills.
+        let root = if scope.is_grafted() {
+            let record_bytes = self.resolve_scope_root(scope, &scope.source).await?;
+            self.open_root_record(&scope.source, &record_bytes).await?
+        } else {
+            self.load_scope_root(&scope.source).await?
+        };
         let mut pass = Pass {
             root: scope.source.root,
             epoch: root.epoch,
@@ -2117,6 +2145,7 @@ where
         };
         let state = root.state;
         self.repaint_folder(
+            scope,
             scope.source.root,
             &state.children,
             state.sequence,
@@ -2225,14 +2254,25 @@ where
         floors: &'e SharerScopedFloorStore<'e, F>,
         end: &ScopeEnd<'_>,
     ) -> RootAdopter<'e, H, SharerScopedFloorStore<'e, F>> {
-        let adopter = RootAdopter::new(
-            self.gateway,
-            self.http,
-            floors,
-            scope.enc_secret,
-            scope.owner_identity,
-            end.root.0,
-        );
+        let adopter = match scope.granted {
+            Some(GrantedPass { sharer_enc, .. }) => RootAdopter::for_grantee(
+                self.gateway,
+                self.http,
+                floors,
+                scope.enc_secret,
+                sharer_enc,
+                scope.owner_identity,
+                end.root.0,
+            ),
+            None => RootAdopter::new(
+                self.gateway,
+                self.http,
+                floors,
+                scope.enc_secret,
+                scope.owner_identity,
+                end.root.0,
+            ),
+        };
         match end.ascent_node_seed {
             Some(seed) => adopter.under_parent_node_seed(seed.clone()),
             None => adopter,
@@ -2429,7 +2469,13 @@ where
                 self.load_child_folder(&plane, pass.anchor_for(&plane)?, node)
                     .await?
             };
-            self.repaint_folder(node, &state.children, state.sequence, state.modified_at);
+            self.repaint_folder(
+                scope,
+                node,
+                &state.children,
+                state.sequence,
+                state.modified_at,
+            );
             pass.insert(node, state);
         }
         Ok(plane)
@@ -4654,7 +4700,13 @@ where
             self.load_child_folder(&plane, pass.anchor_for(&plane)?, folder)
                 .await?
         };
-        self.repaint_folder(folder, &state.children, state.sequence, state.modified_at);
+        self.repaint_folder(
+            scope,
+            folder,
+            &state.children,
+            state.sequence,
+            state.modified_at,
+        );
         *pass.folder_mut(folder)? = state;
         Ok(())
     }
@@ -5747,7 +5799,7 @@ where
         state.sequence = published.sequence;
         state.modified_at = modified_at;
         let children = state.children.clone();
-        self.repaint_folder(folder, &children, published.sequence, modified_at);
+        self.repaint_folder(scope, folder, &children, published.sequence, modified_at);
         self.hold(folder.0, published.held);
         Ok(published.sequence)
     }
@@ -5909,21 +5961,33 @@ where
         }
     }
 
-    /// Merge one folder's published children into the base snapshot.
+    /// Merge one folder's published children into the base snapshot, under
+    /// the cross-plane rule when the pass is grafted.
     fn repaint_folder(
         &self,
+        scope: &DrainScope<'_>,
         folder: NodeId,
         children: &[ChildRef],
         sequence: u64,
         modified_at: u64,
     ) {
-        project_folder(
-            &mut self.base.borrow_mut(),
-            folder,
-            children,
-            sequence,
-            modified_at,
-        );
+        let mut base = self.base.borrow_mut();
+        match scope.granted {
+            Some(GrantedPass { plane, .. }) => {
+                let split = plane.split(&base, children);
+                project_folder_partial(
+                    &mut base,
+                    folder,
+                    &split.linkable,
+                    &split.withheld,
+                    sequence,
+                    modified_at,
+                );
+            }
+            None => {
+                project_folder(&mut base, folder, children, sequence, modified_at);
+            }
+        }
     }
 
     /// Insert a just-published record into the live held set so the liveness
@@ -6714,6 +6778,7 @@ mod tests {
             charges_the_identity: true,
             enc_secret: &seams.enc_secret,
             owner_identity: &seams.identity,
+            granted: None,
         }
     }
 
@@ -7865,6 +7930,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 
     use crate::content::DAG_ROOT_CODEC;
+    use crate::grants::grafted::{BookmarkedScopeRoots, ContestedNodes};
     use crate::rotation::{RotateError, RotationOutcome};
     use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore};
     use crate::testkit::fakes::{
@@ -7947,6 +8013,10 @@ mod tests {
         /// The namespace every pass this harness hands out ratchets its epoch
         /// floors in. `GrantedBy` makes each pass a grafted one.
         floor_namespace: FloorNamespace,
+        /// What a grafted pass carries, read only under `GrantedBy`.
+        sharer_enc: X25519Public,
+        bookmarked_roots: BookmarkedScopeRoots,
+        contested: ContestedNodes,
     }
 
     impl DrainHarness {
@@ -8004,6 +8074,16 @@ mod tests {
                 charges_the_identity: false,
                 enc_secret: &self.enc_secret,
                 owner_identity: &self.owner_identity,
+                granted: matches!(self.floor_namespace, FloorNamespace::GrantedBy(_)).then_some(
+                    GrantedPass {
+                        sharer_enc: &self.sharer_enc,
+                        plane: GraftedPlane {
+                            scope_id: HARNESS_ROOT.0,
+                            scope_roots: &self.bookmarked_roots,
+                            contested: &self.contested,
+                        },
+                    },
+                ),
             }
         }
 
@@ -8137,6 +8217,9 @@ mod tests {
                 .expect("valid scalar")
                 .verifying_key(),
             floor_namespace: FloorNamespace::Own,
+            sharer_enc: kdf::enc_subkey(&[0x31; 32]).public(),
+            bookmarked_roots: BookmarkedScopeRoots::new(),
+            contested: ContestedNodes::new(),
         }
     }
 
