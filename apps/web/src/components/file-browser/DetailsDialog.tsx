@@ -12,6 +12,8 @@ interface DetailsDialogProps {
   row: ListingRow;
   /** False in a scope this vault only holds a read grant over. */
   writable: boolean;
+  /** True in a scope another vault shared, where a version delete is the owner's. */
+  receivedShare?: boolean;
   onClose: () => void;
 }
 
@@ -22,7 +24,12 @@ interface PendingWrite {
 }
 
 /** What the engine reports about one node, verbatim. */
-export function DetailsDialog({ row, writable, onClose }: DetailsDialogProps) {
+export function DetailsDialog({
+  row,
+  writable,
+  receivedShare = false,
+  onClose,
+}: DetailsDialogProps) {
   const isFile = row.kind === 'file';
   const node = isFile ? row.id : null;
   const versions = useFileVersions(node, row.storedName);
@@ -76,6 +83,7 @@ export function DetailsDialog({ row, writable, onClose }: DetailsDialogProps) {
               row={row}
               versions={versions}
               writable={writable}
+              receivedShare={receivedShare}
               onRestore={(entry) => setPending({ command: 'restore', entry })}
               onDelete={(entry) => setPending({ command: 'delete', entry })}
             />

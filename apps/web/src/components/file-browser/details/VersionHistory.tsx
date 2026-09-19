@@ -13,6 +13,8 @@ interface VersionHistoryProps {
   busy: boolean;
   /** False in a scope this vault only holds a read grant over. */
   writable: boolean;
+  /** True in a scope another vault shared: a restore stays inside it, a delete does not. */
+  receivedShare: boolean;
   /** The last version command's failure. */
   error: string | null;
   onDownload: (entry: VersionEntryDescriptor) => void;
@@ -28,6 +30,7 @@ export function VersionHistory({
   entries,
   busy,
   writable,
+  receivedShare,
   error,
   onDownload,
   onRestore,
@@ -70,26 +73,26 @@ export function VersionHistory({
                   dl
                 </button>
                 {writable && (
-                  <>
-                    <button
-                      type="button"
-                      className="details-version-button"
-                      disabled={busy}
-                      onClick={() => onRestore(entry)}
-                      aria-label={`restore version ${named}`}
-                    >
-                      restore
-                    </button>
-                    <button
-                      type="button"
-                      className="details-version-button details-version-button--danger"
-                      disabled={busy}
-                      onClick={() => onDelete(entry)}
-                      aria-label={`delete version ${named}`}
-                    >
-                      rm
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    className="details-version-button"
+                    disabled={busy}
+                    onClick={() => onRestore(entry)}
+                    aria-label={`restore version ${named}`}
+                  >
+                    restore
+                  </button>
+                )}
+                {writable && !receivedShare && (
+                  <button
+                    type="button"
+                    className="details-version-button details-version-button--danger"
+                    disabled={busy}
+                    onClick={() => onDelete(entry)}
+                    aria-label={`delete version ${named}`}
+                  >
+                    rm
+                  </button>
                 )}
               </span>
             </li>

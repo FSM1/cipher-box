@@ -7344,10 +7344,11 @@ where {
                     .await
             }
             Command::RestoreVersion { node, content_cid } => {
-                // The version history is read under this vault's own root scope
-                // (`resolve_versions`), which a grafted file is not sealed under.
+                // A reorder of the file's own history, which a write pass may
+                // author like a new version: it drops no version and touches no
+                // bin.
                 let rendered = self.render().await?;
-                refuse_graft(self.write_home(&rendered, node, TargetRole::Node)?)?;
+                self.write_home(&rendered, node, TargetRole::Node)?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.version_position(node, &content_cid).await?;
                 self.stage_and_notify(&Op::restore_version(node, content_cid, seq, authored_at))
@@ -18614,7 +18615,7 @@ mod tests {
 
         /// Every write a proved write pass admits journals through the facade
         /// and publishes in the granted scope: a create, an upload, a new
-        /// version, a rename, a move and a relink inside it.
+        /// version, a version restore, a rename, a move and a relink inside it.
         #[test]
         fn a_write_grantee_authors_every_admitted_write_inside_the_granted_scope() {
             let photos = shared_child(PHOTOS, "photos", CoreNodeKind::Folder);
@@ -18667,7 +18668,31 @@ mod tests {
             )
             .expect("a new version journals");
             grantee.settle();
-            assert_ne!(head(&grantee), Some(first), "the new version is the head");
+            let second = head(&grantee).expect("the new version is published");
+            assert_ne!(second, first, "the new version is the head");
+
+            grantee
+                .command(Command::RestoreVersion {
+                    node: notes,
+                    content_cid: first.clone(),
+                })
+                .expect("a version restore journals");
+            grantee.settle();
+            assert_eq!(
+                head(&grantee),
+                Some(first),
+                "the restored version is the head"
+            );
+            let prior: Vec<Vec<u8>> = block_on(grantee.engine.file_versions(notes))
+                .expect("the history reads")
+                .into_iter()
+                .map(|version| version.content_cid)
+                .collect();
+            assert_eq!(
+                prior,
+                [second],
+                "the outgoing head is the newest prior version"
+            );
 
             grantee
                 .command(Command::Rename {
@@ -18730,7 +18755,7 @@ mod tests {
 
         /// The refusals a write pass keeps: the grafted root itself, a move
         /// into or out of the granted scope, and every command that acts on
-        /// the owner's bin or version history. Nothing reaches the queue.
+        /// the owner's bin or drops a version. Nothing reaches the queue.
         #[test]
         fn a_write_grantee_is_refused_what_leaves_the_scope_or_reaches_the_owners_surfaces() {
             let photos = shared_child(PHOTOS, "photos", CoreNodeKind::File);
@@ -18837,13 +18862,6 @@ mod tests {
                 (
                     "a version delete",
                     Command::DeleteVersion {
-                        node: photos,
-                        content_cid: vec![0; CONTENT_CID_LEN],
-                    },
-                ),
-                (
-                    "a version restore",
-                    Command::RestoreVersion {
                         node: photos,
                         content_cid: vec![0; CONTENT_CID_LEN],
                     },

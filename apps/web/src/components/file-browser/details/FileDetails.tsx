@@ -17,13 +17,22 @@ interface FileDetailsProps {
   versions: FileVersions;
   /** False in a scope this vault only holds a read grant over. */
   writable: boolean;
+  /** True in a scope another vault shared. */
+  receivedShare: boolean;
   /** A write confirms before it dispatches, which the dialog owns. */
   onRestore: (entry: VersionEntryDescriptor) => void;
   onDelete: (entry: VersionEntryDescriptor) => void;
 }
 
 /** One file's current version, as the engine snapshot reports it, and its past ones. */
-export function FileDetails({ row, versions, writable, onRestore, onDelete }: FileDetailsProps) {
+export function FileDetails({
+  row,
+  versions,
+  writable,
+  receivedShare,
+  onRestore,
+  onDelete,
+}: FileDetailsProps) {
   return (
     <>
       <dl className="details-list" data-testid="file-details">
@@ -51,6 +60,7 @@ export function FileDetails({ row, versions, writable, onRestore, onDelete }: Fi
         entries={versions.entries}
         busy={versions.busy !== null}
         writable={writable}
+        receivedShare={receivedShare}
         error={versions.error}
         onDownload={(entry) => void versions.download(entry.contentCid)}
         onRestore={onRestore}

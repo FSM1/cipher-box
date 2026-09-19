@@ -919,6 +919,50 @@ fn the_recipient_reads_a_file_below_a_grafted_root() {
     }
 }
 
+/// A version restore reorders the file's own history and drops no version, so
+/// a write grantee may make one below the grafted root. The owner then reads
+/// the restored content as the head, and the outgoing head as the prior
+/// version.
+#[test]
+fn a_write_grantees_version_restore_reaches_the_owner() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let bodies = two_bodies(7);
+    let file = file_with_two_versions(
+        &world,
+        &mut engine_t,
+        &mut tasks_t,
+        shared,
+        "doc.bin",
+        &bodies,
+    );
+    import_recipient(&mut engine_t);
+    grant_to_recipient_at(&mut engine_t, shared, Permission::Write);
+
+    let (mut engine_r, _events_r, mut tasks_r) = recipient_with_the_share(&world, &blocks);
+    assert_eq!(grafted_child(&engine_r, shared, "doc.bin"), file);
+    let prior = block_on(engine_r.file_versions(file)).expect("the grantee reads the history");
+    assert_eq!(prior.len(), 1);
+    block_on(engine_r.command(Command::RestoreVersion {
+        node: file,
+        content_cid: prior[0].content_cid.clone(),
+    }))
+    .expect("a version restore below a proved write root journals");
+    drive(&world, &engine_r, &mut tasks_r, 4);
+
+    drive(&world, &engine_t, &mut tasks_t, 4);
+    assert_reads_both_versions(
+        &engine_t,
+        file,
+        &[bodies[1].clone(), bodies[0].clone()],
+        "the owner",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The lazy wave a cut leaves behind
 // ---------------------------------------------------------------------------

@@ -252,6 +252,24 @@ describe('the version history', () => {
     expect(screen.queryByLabelText(`delete version ${clamped(OLDEST_CID)}`)).toBeNull();
   });
 
+  it('offers a restore and no delete in a share granted for writing', async () => {
+    const engine = versionEngine({ entries: [OLDER, OLDEST] });
+    renderWithEngine(
+      <DetailsDialog row={fileRow()} writable receivedShare onClose={() => undefined} />,
+      engine.client
+    );
+
+    await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
+    // A restore reorders the file's own history; a delete drops a version the owner keeps.
+    expect(control('download', OLDER_CID)).toBeDefined();
+    fireEvent.click(control('restore', OLDER_CID));
+    fireEvent.click(screen.getByTestId('version-restore-confirm'));
+    await waitFor(() =>
+      expect(engine.facade.restoreVersion).toHaveBeenCalledWith(NODE, OLDER.contentCid)
+    );
+    expect(screen.queryByLabelText(`delete version ${clamped(OLDEST_CID)}`)).toBeNull();
+  });
+
   it('retires an unanswered confirmation when the scope turns read-only', async () => {
     const engine = openDetails({ entries: [OLDER, OLDEST] });
     await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
