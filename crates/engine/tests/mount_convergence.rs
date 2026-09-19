@@ -5,7 +5,9 @@
 //! Every assertion lands on published bytes, a drained queue, or a rendered
 //! view — what the other device would see.
 
+use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
+use core::time::Duration;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
@@ -563,7 +565,16 @@ fn command_on_the_clock(
     command: Command,
 ) -> Result<CommandOutcome, EngineError> {
     let cadence = engine.profile().poll_cadence;
-    let mut pending = Box::pin(engine.command(command));
+    settle_on_the_clock(world, cadence, &mut Box::pin(engine.command(command)))
+}
+
+/// Poll `pending` to completion, advancing the virtual clock by `cadence`
+/// between polls; a bounded number of steps, so a hung command fails.
+fn settle_on_the_clock<O>(
+    world: &FakeWorld,
+    cadence: Duration,
+    pending: &mut Pin<Box<impl Future<Output = O>>>,
+) -> O {
     let mut cx = Context::from_waker(Waker::noop());
     for _ in 0..64 {
         if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
@@ -571,45 +582,66 @@ fn command_on_the_clock(
         }
         world.scheduler.advance(cadence);
     }
-    panic!("the command never settled on the virtual clock");
+    panic!("the command did not settle in 64 steps of {cadence:?} on the virtual clock");
 }
 
-/// The anchor is out of reach for the whole cut: the root lands, the anchor
-/// does not, and the cut reports it. This device must still start, and the
-/// start that sees the network again must bring the anchor up to the cut root.
-#[test]
-fn a_cut_whose_anchor_never_landed_still_starts_and_converges() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_vault(&world, &blocks);
-    let anchor = vault_pointer_name(&SECRET, 0);
+/// Whether `events` carries a `RenewalFailed` at `name`.
+fn renewal_failed_at(events: &mut EventStream, name: &IpnsName) -> bool {
+    events_so_far(events).into_iter().any(|event| {
+        matches!(event, Event::RenewalFailed { routing_key, .. } if routing_key == name.as_str())
+    })
+}
 
-    let owner = world.device(&owner_identity().verifying_key().to_sec1());
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
-    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
-    world.record_store.fail_get_for(anchor.as_str());
+/// The epoch-floor reads of the vault root a start makes before the catch-up
+/// reads it: the cold seed's and the adopt's.
+const CATCH_UP_FLOOR_READ: u64 = 2;
+
+/// Run one cut of the vault root that lands its root and runs out of retries
+/// before its vouch lands. Returns the epoch it published.
+fn cut_whose_vouch_runs_out(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    engine: &mut Engine<FakeSeamTypes>,
+) -> u64 {
+    let anchor = vault_pointer_name(&SECRET, 0);
     world.record_store.fail_put_for(anchor.as_str());
-    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    let cut = command_on_the_clock(world, engine, Command::RotateNow { node: ROOT });
     assert!(
         matches!(cut, Err(EngineError::Seam { .. })),
         "a cut that could not vouch its epoch is not reported done: {cut:?}"
     );
     drop(world.scheduler.take_spawned_tasks());
-    let cut_epoch = published_epoch(&world, &blocks, ROOT);
-    assert_eq!(cut_epoch, EPOCH + 1, "one cut, not one per attempt");
+    world.record_store.heal_put_for(anchor.as_str());
+    let published = published_epoch(world, blocks, ROOT);
+    assert_eq!(published, EPOCH + 1);
+    assert_eq!(vouched_min_read_epoch(world), EPOCH);
+    published
+}
+
+/// The anchor refuses every publish of the cut: the root lands, the anchor
+/// does not, and the cut reports it. The next start that adopts the cut root
+/// vouches its epoch, and the owner device then starts again.
+#[test]
+fn a_cut_whose_anchor_never_landed_converges_at_the_next_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
     drop((engine, tasks));
 
-    world.record_store.heal_get_for(anchor.as_str());
-    world.record_store.heal_put_for(anchor.as_str());
-    assert_eq!(vouched_min_read_epoch(&world), EPOCH);
-    let (engine, _events, tasks) = boot(&world, &blocks, &owner, 43);
-    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+    let mount = world.device(b"mounted-desktop");
+    let (second, _events_m, _tasks_m) = boot(&world, &blocks, &mount, 7);
+    assert_eq!(listed_names(&second, ROOT), ["reports"]);
     assert_eq!(
         vouched_min_read_epoch(&world),
         cut_epoch,
         "the start that adopted the cut root vouches its epoch"
     );
-    drop((engine, tasks));
+    drop(second);
 
     let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 44);
     assert_eq!(listed_names(&engine, ROOT), ["reports"]);
@@ -625,19 +657,38 @@ fn a_start_that_cannot_vouch_the_adopted_epoch_surfaces_it() {
 
     let owner = world.device(&owner_identity().verifying_key().to_sec1());
     let (mut engine, _events, _tasks) = boot(&world, &blocks, &owner, 42);
-    world.record_store.fail_get_for(anchor.as_str());
     world.record_store.fail_put_for(anchor.as_str());
     let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
     assert!(cut.is_err(), "{cut:?}");
     drop(world.scheduler.take_spawned_tasks());
-    world.record_store.heal_get_for(anchor.as_str());
+    assert_eq!(published_epoch(&world, &blocks, ROOT), EPOCH + 1);
 
     let mount = world.device(b"mounted-desktop");
     let (_second, mut events, _tasks) = boot(&world, &blocks, &mount, 7);
-    let surfaced = events_so_far(&mut events).into_iter().any(|event| {
-        matches!(event, Event::RenewalFailed { routing_key, .. } if routing_key == anchor.as_str())
-    });
-    assert!(surfaced, "the failed vouch is surfaced, never silent");
+    assert!(
+        renewal_failed_at(&mut events, &anchor),
+        "the failed vouch is surfaced, never silent"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH);
+}
+
+/// A cut that cannot read the anchor cannot vouch at it, so it publishes no
+/// root that would leave the floor ahead of the anchor.
+#[test]
+fn a_cut_that_cannot_read_the_anchor_publishes_no_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let anchor = vault_pointer_name(&SECRET, 0);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &owner, 42);
+    world.record_store.fail_get_for(anchor.as_str());
+    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    assert!(matches!(cut, Err(EngineError::Seam { .. })), "{cut:?}");
+    drop(world.scheduler.take_spawned_tasks());
+    world.record_store.heal_get_for(anchor.as_str());
+    assert_eq!(published_epoch(&world, &blocks, ROOT), EPOCH);
     assert_eq!(vouched_min_read_epoch(&world), EPOCH);
 }
 
@@ -694,8 +745,8 @@ fn republish_vault_pointer(world: &FakeWorld, repoint: &RepointObject, sequence:
     }
 }
 
-/// The standing re-point names a root this cut never read, so the cut proved
-/// nothing about that root's read epoch and must not vouch one for it.
+/// The standing re-point names a root this cut never read, so the cut could
+/// not vouch its epoch there and must not cut.
 #[test]
 fn a_cut_refuses_to_vouch_for_a_root_the_vault_pointer_does_not_name() {
     let world = FakeWorld::new();
@@ -721,16 +772,16 @@ fn a_cut_refuses_to_vouch_for_a_root_the_vault_pointer_does_not_name() {
     drop(world.scheduler.take_spawned_tasks());
     assert_eq!(
         published_epoch(&world, &blocks, ROOT),
-        EPOCH + 1,
-        "the root landed before the vouch was refused"
+        EPOCH,
+        "nothing was cut"
     );
     assert_eq!(vouched_min_read_epoch(&world), EPOCH, "nothing was vouched");
 }
 
-/// The resumed vouch meets a floor that rose above the epoch it would vouch:
-/// the cold start would refuse that re-point, so it is never signed.
+/// The retry meets a floor that rose above the root the cut published: that
+/// root no longer passes the gate, so no vouch of its epoch is signed.
 #[test]
-fn a_resumed_vouch_below_the_durable_floor_is_refused() {
+fn a_retry_below_the_durable_floor_vouches_nothing() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_vault(&world, &blocks);
@@ -753,18 +804,80 @@ fn a_resumed_vouch_below_the_durable_floor_is_refused() {
         EPOCH + 5,
     ))
     .expect("the floor rises");
-    let settled = loop {
-        world.scheduler.advance(cadence);
-        if let Poll::Ready(settled) = cut.as_mut().poll(&mut cx) {
-            break settled;
-        }
-    };
+    let settled = settle_on_the_clock(&world, cadence, &mut cut);
     assert!(
         matches!(settled, Err(EngineError::TrustViolation { .. })),
         "{settled:?}"
     );
     drop(world.scheduler.take_spawned_tasks());
     assert_eq!(vouched_min_read_epoch(&world), EPOCH, "nothing was vouched");
+}
+
+/// A caller retry after a cut that published its root and not its vouch
+/// finishes that cut: it vouches the published epoch and mints no other root.
+#[test]
+fn a_retried_cut_of_the_vault_root_completes_the_outstanding_vouch() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+
+    let retry = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    assert_eq!(retry, Ok(CommandOutcome::Done));
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(
+        published_epoch(&world, &blocks, ROOT),
+        cut_epoch,
+        "the retry mints no new root"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), cut_epoch);
+    drop((engine, tasks));
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// The start that adopts a cut root cannot read its own floor to vouch it: it
+/// says so, and a later cut of the vault root in the same session finishes the
+/// vouch.
+#[test]
+fn a_start_whose_floor_read_fails_surfaces_it_and_a_later_cut_vouches() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let anchor = vault_pointer_name(&SECRET, 0);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    drop((engine, tasks));
+
+    let mount = world.device(b"mounted-desktop");
+    mount
+        .floor_store
+        .fail_epoch_floor_reads_after(&SCOPE, CATCH_UP_FLOOR_READ);
+    let (mut second, mut events, _tasks) = boot(&world, &blocks, &mount, 7);
+    mount.floor_store.heal_floors();
+    assert!(
+        renewal_failed_at(&mut events, &anchor),
+        "the unread floor is surfaced, never silent"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH);
+
+    let later = command_on_the_clock(&world, &mut second, Command::RotateNow { node: ROOT });
+    assert_eq!(later, Ok(CommandOutcome::Done));
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(published_epoch(&world, &blocks, ROOT), cut_epoch);
+    assert_eq!(vouched_min_read_epoch(&world), cut_epoch);
+    drop(second);
+
+    let (second, _events, _tasks) = boot(&world, &blocks, &mount, 8);
+    assert_eq!(listed_names(&second, ROOT), ["reports"]);
 }
 
 /// Every other owner action that could reach the vault root is refused there or

@@ -2,7 +2,7 @@
 //! the root, then vouches its epoch here, then raises the floor
 //! (blueprint/engine.md "Pointer planes"; [`floor::repoint_regression`]).
 
-use core::cell::{Cell, RefCell};
+use core::cell::RefCell;
 
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -39,9 +39,19 @@ pub(crate) struct VaultPointerVoucher<'a, T, H: Http, C: CredentialStore, F, Sch
     /// The session's root scope — the scope the vault pointer names.
     pub scope_id: [u8; 16],
     pub payload_version: u64,
-    /// The epoch a cut landed at the root. A retry finishes that cut: a re-cut
-    /// would adopt the root and raise the floor past the anchor.
-    pub landed: Cell<Option<u64>>,
+}
+
+/// The re-point the vault pointer carries now, and the sequence it sits at.
+pub(crate) struct StandingVouch {
+    sequence: u64,
+    repoint: RepointObject,
+}
+
+impl StandingVouch {
+    /// The read epoch the vault pointer vouches.
+    pub(crate) fn min_read_epoch(&self) -> u64 {
+        self.repoint.min_read_epoch
+    }
 }
 
 impl<T, H: Http, C: CredentialStore, F, Sch, E> VaultPointerVoucher<'_, T, H, C, F, Sch, E>
@@ -58,17 +68,22 @@ where
 
     /// Raise the vault pointer's `minReadEpoch` to `read_epoch` for the root at
     /// `root_name`, carrying every other field of the standing re-point.
-    ///
-    /// Refused when the standing re-point names another root: this pass proved
-    /// nothing about that root's read epoch. A standing re-point already at or
-    /// past `read_epoch` is left alone.
     pub(crate) async fn vouch_read_epoch(
         &self,
         root_name: &[u8],
         read_epoch: u64,
     ) -> Result<(), RotationPublishError> {
-        let name = self.name();
-        let standing = match fanout_get_classified(self.transport, &name).await {
+        let standing = self.standing(root_name).await?;
+        self.vouch_over(standing, read_epoch).await
+    }
+
+    /// The standing re-point, refused when it names a root other than
+    /// `root_name`: a vouch over it would prove nothing about that root.
+    pub(crate) async fn standing(
+        &self,
+        root_name: &[u8],
+    ) -> Result<StandingVouch, RotationPublishError> {
+        let standing = match fanout_get_classified(self.transport, &self.name()).await {
             FanoutRecord::Found(record, _) => record,
             FanoutRecord::Absent => return Err(RotationPublishError::Rejected),
             FanoutRecord::Unavailable => return Err(RotationPublishError::NotPublished),
@@ -84,12 +99,25 @@ where
         if vouched.current_root.as_str().as_bytes() != root_name {
             return Err(RotationPublishError::Rejected);
         }
-        if vouched.min_read_epoch >= read_epoch {
+        Ok(StandingVouch {
+            sequence: standing.sequence,
+            repoint: vouched,
+        })
+    }
+
+    /// Raise `standing`'s `minReadEpoch` to `read_epoch` under a CAS over its
+    /// sequence. A standing re-point already at or past it is left alone.
+    pub(crate) async fn vouch_over(
+        &self,
+        standing: StandingVouch,
+        read_epoch: u64,
+    ) -> Result<(), RotationPublishError> {
+        if standing.repoint.min_read_epoch >= read_epoch {
             return Ok(());
         }
         let repoint = RepointObject {
             min_read_epoch: read_epoch,
-            ..vouched
+            ..standing.repoint
         };
         // Rule 8, through the predicate the cold start reads it with.
         if floor::repoint_regression(
@@ -124,7 +152,7 @@ where
                 scheduler: self.scheduler,
                 profile: self.profile,
             },
-            &name,
+            &self.name(),
             &self.signer,
             &block,
             standing.sequence,
@@ -159,7 +187,8 @@ where
         let Some(anchor) = self.anchor else {
             return Ok(());
         };
-        anchor.landed.set(Some(record.read_epoch));
+        // A fresh read, not the cut's refusal check: the CAS bar must follow
+        // the root publish, or another device's re-point in between is lost.
         anchor
             .vouch_read_epoch(&record.ipns_name, record.read_epoch)
             .await
