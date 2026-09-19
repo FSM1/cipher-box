@@ -56,6 +56,36 @@ describe('IdbFloorStore', () => {
     expect(stores.get('sequence')?.get('ab')).toBe(stored);
   });
 
+  const unrepresentable = [
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    -1,
+    1.5,
+    2 ** 53,
+  ];
+
+  it.each(unrepresentable)('refuses to raise a floor to %s', async (requested) => {
+    const stores = stubIndexedDb({ epoch: { ab: 5 }, sequence: { ab: 5 } });
+    const floors = new IdbFloorStore('floors');
+    await expect(floors.raiseEpochFloor(KEY, requested)).rejects.toThrow(RangeError);
+    await expect(floors.raiseSequenceFloor(KEY, requested)).rejects.toThrow(RangeError);
+    expect(stores.get('epoch')?.get('ab')).toBe(5);
+    expect(stores.get('sequence')?.get('ab')).toBe(5);
+  });
+
+  it('raises both floors to the largest safe integer', async () => {
+    const stores = stubIndexedDb({ epoch: { ab: 5 } });
+    const floors = new IdbFloorStore('floors');
+    const max = Number.MAX_SAFE_INTEGER;
+    expect(await floors.raiseEpochFloor(KEY, max)).toBe(max);
+    expect(await floors.raiseSequenceFloor(KEY, max)).toBe(max);
+    expect(stores.get('epoch')?.get('ab')).toBe(max);
+    expect(stores.get('sequence')?.get('ab')).toBe(max);
+    expect(await floors.epochFloor(KEY)).toBe(max);
+    expect(await floors.sequenceFloor(KEY)).toBe(max);
+  });
+
   it('reads an absent floor as null and raises a readable floor to the max', async () => {
     stubIndexedDb({ epoch: { ab: 9 } });
     const floors = new IdbFloorStore('floors');
