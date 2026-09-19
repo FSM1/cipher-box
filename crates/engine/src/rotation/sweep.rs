@@ -859,7 +859,7 @@ where
     }
 }
 
-/// What one sweep of the idle job answers.
+/// What one [`run_sweep`] of a session's sweeper answers.
 #[derive(Debug)]
 pub enum SweepRun {
     /// The sweep ran to this result.
@@ -893,14 +893,14 @@ pub async fn run_sweep_job<S, J>(
 {
     loop {
         scheduler.sleep(cadence).await;
-        let Some(scopes) = round().await else {
+        let Some(targets) = round().await else {
             return;
         };
-        for scope in &scopes {
-            let SweepRun::Swept(result) = sweep(scope).await else {
+        for target in &targets {
+            let SweepRun::Swept(result) = sweep(target).await else {
                 return;
             };
-            report(scope, &result);
+            report(target, &result);
         }
     }
 }

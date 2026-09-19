@@ -1139,8 +1139,9 @@ fn a_read_only_member_never_runs_the_wave() {
     let before = records(&world);
     let polls = polls_per_sweep(&engine_r);
     tick_n(&world, &engine_r, &mut tasks_r, 3 * polls);
-    assert!(
-        records(&world) == before,
+    assert_eq!(
+        records(&world),
+        before,
         "the read-only member publishes nothing"
     );
 

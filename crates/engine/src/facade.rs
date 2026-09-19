@@ -6145,7 +6145,7 @@ where {
     ///
     /// Nothing about the wave is durable, so a restart starts with every such
     /// scope due: a cut whose own enqueued sweep failed, or that a restart cut
-    /// short, converges here. The job walks only the scopes this vault owns.
+    /// short, converges here.
     fn spawn_sweep_job(&self, sweeper: Sweeper)
     where
         T::FloorStore: Clone + 'static,
@@ -6177,19 +6177,20 @@ where {
                         &write_seeds,
                     );
                     let mut due = Vec::new();
-                    for mut target in owned {
-                        if target.epoch.is_none() {
-                            target.epoch = floors
+                    for target in owned {
+                        let epoch = match target.epoch {
+                            Some(epoch) => Some(epoch),
+                            None => floors
                                 .epoch_floor(&target.scope.scope_id)
                                 .await
                                 .ok()
-                                .flatten();
-                        }
+                                .flatten(),
+                        };
                         let settled = read_epoch_converged_at
                             .borrow()
                             .get(&target.scope.scope_id)
                             .copied();
-                        if target.epoch.is_some_and(|epoch| {
+                        if epoch.is_some_and(|epoch| {
                             epoch > GENESIS_EPOCH && settled.is_none_or(|at| at < epoch)
                         }) {
                             due.push(target);
@@ -7345,9 +7346,8 @@ where {
                     .await
             }
             Command::RestoreVersion { node, content_cid } => {
-                // A restore publishes a new record whose head is the prior
-                // version and never rewinds history, so a write pass may author
-                // it like a new version.
+                // A restore never rewinds history (CONTEXT.md "Version
+                // history"), so a write pass may author it like a new version.
                 let rendered = self.render().await?;
                 self.write_home(&rendered, node, TargetRole::Node)?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);
