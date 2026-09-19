@@ -80,7 +80,8 @@ export type DeadLetterReason =
   | 'binIndexFull'
   | 'crossingUnauthorable'
   | 'binIndexStrandedMint'
-  | 'targetLinkedAcrossScopes';
+  | 'targetLinkedAcrossScopes'
+  | 'graftedScopeVaultSurface';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {

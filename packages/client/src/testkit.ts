@@ -86,6 +86,7 @@ export const fakeWasmEnums = {
     CrossingUnauthorable: 15,
     BinIndexStrandedMint: 16,
     TargetLinkedAcrossScopes: 17,
+    GraftedScopeVaultSurface: 18,
   },
 } as const;
 

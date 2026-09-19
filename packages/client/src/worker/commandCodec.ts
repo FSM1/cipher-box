@@ -501,6 +501,8 @@ function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLet
       return 'binIndexStrandedMint';
     case wasm.DeadLetterReason.TargetLinkedAcrossScopes:
       return 'targetLinkedAcrossScopes';
+    case wasm.DeadLetterReason.GraftedScopeVaultSurface:
+      return 'graftedScopeVaultSurface';
     default:
       // Fail closed: an unmapped (or absent) value means a JS/WASM version
       // mismatch, not a dead letter safe to report without its reason.

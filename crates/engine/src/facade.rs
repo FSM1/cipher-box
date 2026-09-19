@@ -58,8 +58,8 @@ use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprov
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
-    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, GraftedSharers,
-    evict_grafted_read_seeds, evict_grafted_write_seeds, floor_view, is_own_scope,
+    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedSharers,
+    evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace, floor_view, is_own_scope,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{
@@ -4237,6 +4237,10 @@ struct GraftedWritePass {
     /// The granting identity, which is the owner a grafted record's commitment
     /// and grant section verify under — never this vault's own.
     sharer_identity: EcdsaVerifier,
+    /// The namespace this scope's epoch floors ratchet in, as
+    /// [`floor_namespace`] picked it — the granting identity's on every pass a
+    /// grafted root reaches here.
+    floors: FloorNamespace,
 }
 
 /// Every grafted scope whose accepted grant the last pass found write-capable
@@ -4246,10 +4250,16 @@ struct GraftedWritePass {
 /// owner's committed permission, both seeds, the sharer the floor namespace
 /// answers under, and the name the graft rendered the root with. A scope short
 /// of any of them drains nothing this tick and waits for the pass that has them.
+///
+/// `namespace` is [`floor_namespace`] bound to this pass's own root and proved
+/// set, so a bookmark that names one of this vault's own roots yields no grafted
+/// pass rather than a pass that would ratchet an own scope's floors under a
+/// sharer.
 fn grafted_write_passes(
     base: &BaseSnapshot,
     permissions: &BookmarkedPermissions,
     sharers: &GraftedSharers,
+    namespace: impl Fn(&[u8; 16]) -> Option<FloorNamespace>,
     read_seeds: &RefCell<ScopeSeeds>,
     write_seeds: &RefCell<ScopeSeeds>,
 ) -> Vec<GraftedWritePass> {
@@ -4260,12 +4270,17 @@ fn grafted_write_passes(
         .filter_map(|(scope_id, _)| {
             let root = NodeId(*scope_id);
             let name = base.node(root)?.ipns_name.as_deref()?;
+            let floors = match namespace(scope_id)? {
+                FloorNamespace::Own => return None,
+                granted @ FloorNamespace::GrantedBy(_) => granted,
+            };
             Some(GraftedWritePass {
                 root,
                 name: IpnsName::parse(core::str::from_utf8(name).ok()?).ok()?,
                 read_scope_seed: cached_seed(read_seeds, scope_id)?,
                 write_scope_seed: cached_seed(write_seeds, scope_id)?,
                 sharer_identity: EcdsaVerifier::from_sec1(sharers.get(scope_id)?)?,
+                floors,
             })
         })
         .collect()
@@ -6492,13 +6507,25 @@ where {
                     // root, so no walk from that root proves it: it joins the
                     // routing set from the bookmark instead, or an op below a
                     // shared folder reaches no root at all.
-                    let grafted = grafted_write_passes(
-                        &base,
-                        &bookmarked_permissions.borrow(),
-                        &grafted_sharers.borrow(),
-                        &scope_read_seeds,
-                        &scope_write_seeds,
-                    );
+                    let grafted = {
+                        let sharers = grafted_sharers.borrow();
+                        grafted_write_passes(
+                            &base,
+                            &bookmarked_permissions.borrow(),
+                            &sharers,
+                            |scope_id| {
+                                floor_namespace(
+                                    &sharers,
+                                    &contact_label_seed,
+                                    &root_id,
+                                    &proved_scope_ids,
+                                    scope_id,
+                                )
+                            },
+                            &scope_read_seeds,
+                            &scope_write_seeds,
+                        )
+                    };
                     let proved_roots: Vec<NodeId> = core::iter::once(NodeId(root_id))
                         .chain(proved_scope_ids.iter().copied())
                         .chain(grafted.iter().map(|pass| pass.root))
@@ -6576,6 +6603,7 @@ where {
                                 write_scope_seed: write_seed,
                                 // The vault root carries no ascent link.
                                 ascent_node_seed: None,
+                                floor_namespace: FloorNamespace::Own,
                             },
                             destination: second.as_ref().map(|end| SealPlane {
                                 end: ScopeEnd {
@@ -6584,6 +6612,7 @@ where {
                                     read_scope_seed: &end.material.read_scope_seed,
                                     write_scope_seed: &end.material.write_scope_seed,
                                     ascent_node_seed: end.ascent.as_ref(),
+                                    floor_namespace: FloorNamespace::Own,
                                 },
                                 epoch: end.material.read_epoch,
                             }),
@@ -6601,6 +6630,10 @@ where {
                             read_scope_seed: &scope.read_scope_seed,
                             write_scope_seed: &write.seed,
                             ascent_node_seed: Some(&scope.parent_node_seed),
+                            // A grant cut mints an interior scope root out of
+                            // this vault's own tree, so its floors are this
+                            // identity's own.
+                            floor_namespace: FloorNamespace::Own,
                         },
                         destination: None,
                         scope_roots: &proved_roots,
@@ -6626,6 +6659,7 @@ where {
                             // A grantee enters by its own grant blob and holds
                             // no ancestor seed to derive an ascent keypair from.
                             ascent_node_seed: None,
+                            floor_namespace: pass.floors,
                         },
                         destination: None,
                         scope_roots: &proved_roots,
@@ -11389,6 +11423,7 @@ mod tests {
         use crate::gate::Adopted;
         use crate::grants::grafted::GraftedSharers;
         use crate::net::rotation::{ScopeWritePlane, WritePlaneDark};
+        use crate::seams::ContactLabel;
         use crate::sync::model::NodeMeta;
         use crate::sync::model::Snapshot;
 
@@ -11426,6 +11461,25 @@ mod tests {
             cell
         }
 
+        fn label_seed() -> SecretBytes {
+            kdf::contact_label_seed(&[0x4c; 32])
+        }
+
+        /// The namespace picker over a vault whose own tree holds the vault root
+        /// alone, which is every case but the owned-arm test below.
+        fn own_namespace(sharers: &GraftedSharers) -> impl Fn(&[u8; 16]) -> Option<FloorNamespace> {
+            let sharers = sharers.clone();
+            move |scope_id| {
+                floor_namespace(
+                    &sharers,
+                    &label_seed(),
+                    &VAULT_ROOT.0,
+                    &BTreeSet::new(),
+                    scope_id,
+                )
+            }
+        }
+
         /// The whole point of the pass: a write grantee publishes under the
         /// shared scope's own material, so both seeds and the granting identity
         /// have to reach the drain.
@@ -11435,6 +11489,7 @@ mod tests {
                 &base(),
                 &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
                 &sharers(),
+                own_namespace(&sharers()),
                 &seeds(SHARED, READ_SCOPE_SEED),
                 &seeds(SHARED, WRITE_SCOPE_SEED),
             );
@@ -11451,6 +11506,25 @@ mod tests {
                         .verifying_key()
                 ),
                 "the pass publishes under the name the shared root itself answers at",
+            );
+
+            let store = crate::testkit::fakes::InMemoryFloorStore::default();
+            crate::testkit::block_on(pass.floors.view(&store).raise_epoch_floor(&SHARED, 9))
+                .expect("the floor raises");
+            let sharer_label = ContactLabel::of(&label_seed(), &sharer().verifying_key().to_sec1());
+            assert_eq!(
+                crate::testkit::block_on(
+                    SharerScopedFloorStore::granted_by(&store, sharer_label).epoch_floor(&SHARED)
+                )
+                .expect("floor read"),
+                Some(9),
+                "the pass ratchets its epoch floors under the granting identity's label",
+            );
+            assert_eq!(
+                crate::testkit::block_on(SharerScopedFloorStore::own(&store).epoch_floor(&SHARED))
+                    .expect("floor read"),
+                None,
+                "and never in this vault's own namespace",
             );
         }
 
@@ -11496,8 +11570,52 @@ mod tests {
                 ),
             ] {
                 assert!(
-                    grafted_write_passes(&base(), &permissions, &sharers, read_seeds, write_seeds)
-                        .is_empty(),
+                    grafted_write_passes(
+                        &base(),
+                        &permissions,
+                        &sharers,
+                        own_namespace(&sharers),
+                        read_seeds,
+                        write_seeds,
+                    )
+                    .is_empty(),
+                    "{case}",
+                );
+            }
+        }
+
+        /// The floor namespace is `floor_namespace`'s verdict, and its owned arm
+        /// is decided ahead of the sharer map. A bookmark that names a scope
+        /// root this vault owns therefore yields no grafted pass, so no pass
+        /// ratchets an own scope's epoch floors under a contact label.
+        #[test]
+        fn a_bookmark_that_names_a_scope_this_vault_owns_drains_no_grafted_pass() {
+            for (case, own_root, own_descendants) in [
+                ("the vault root itself", SHARED, BTreeSet::new()),
+                (
+                    "a proved descendant scope root",
+                    VAULT_ROOT.0,
+                    BTreeSet::from([NodeId(SHARED)]),
+                ),
+            ] {
+                assert!(
+                    grafted_write_passes(
+                        &base(),
+                        &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
+                        &sharers(),
+                        |scope_id| {
+                            floor_namespace(
+                                &sharers(),
+                                &label_seed(),
+                                &own_root,
+                                &own_descendants,
+                                scope_id,
+                            )
+                        },
+                        &seeds(SHARED, READ_SCOPE_SEED),
+                        &seeds(SHARED, WRITE_SCOPE_SEED),
+                    )
+                    .is_empty(),
                     "{case}",
                 );
             }
@@ -11591,6 +11709,7 @@ mod tests {
                     &BaseSnapshot::new(Snapshot::new(VAULT_ROOT)),
                     &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
                     &sharers(),
+                    own_namespace(&sharers()),
                     &seeds(SHARED, READ_SCOPE_SEED),
                     &seeds(SHARED, WRITE_SCOPE_SEED),
                 )

@@ -190,6 +190,7 @@ fn reason_tag(reason: DeadLetterReason) -> u8 {
         DeadLetterReason::CrossingUnauthorable => 16,
         DeadLetterReason::BinIndexStrandedMint => 17,
         DeadLetterReason::TargetLinkedAcrossScopes => 18,
+        DeadLetterReason::GraftedScopeVaultSurface => 19,
     }
 }
 
@@ -216,6 +217,7 @@ fn reason_of_tag(tag: u8) -> Option<DeadLetterReason> {
         16 => DeadLetterReason::CrossingUnauthorable,
         17 => DeadLetterReason::BinIndexStrandedMint,
         18 => DeadLetterReason::TargetLinkedAcrossScopes,
+        19 => DeadLetterReason::GraftedScopeVaultSurface,
         _ => return None,
     })
 }
@@ -2209,6 +2211,7 @@ mod tests {
             DeadLetterReason::CrossingUnauthorable,
             DeadLetterReason::BinIndexStrandedMint,
             DeadLetterReason::TargetLinkedAcrossScopes,
+            DeadLetterReason::GraftedScopeVaultSurface,
         ];
         for reason in reasons {
             assert_eq!(
