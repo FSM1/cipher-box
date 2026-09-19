@@ -130,16 +130,28 @@ pub fn with_cut_epoch(
     owner_identity: &EcdsaSigner,
     cut_epoch: u64,
 ) -> OwnerRootFixture {
+    reencoded(fixture, |_, section| {
+        section.commitment.cut_epoch = cut_epoch;
+        section.commitment_sig = sign_grant_set(owner_identity, &section.commitment)
+            .unwrap()
+            .to_compact();
+    })
+}
+
+/// `fixture` with `edit` applied to its envelope and grant section, and its
+/// head block re-encoded around them — a record whose author signed exactly
+/// what the edit left.
+pub fn reencoded(
+    fixture: OwnerRootFixture,
+    edit: impl FnOnce(&mut Envelope, &mut GrantSection),
+) -> OwnerRootFixture {
     let OwnerRootFixture {
         name,
         mut grant_section,
         mut envelope,
         ..
     } = fixture;
-    grant_section.commitment.cut_epoch = cut_epoch;
-    grant_section.commitment_sig = sign_grant_set(owner_identity, &grant_section.commitment)
-        .unwrap()
-        .to_compact();
+    edit(&mut envelope, &mut grant_section);
     set_grant_section(&mut envelope, encode_grant_section(&grant_section).unwrap());
     let head_block = encode_envelope(&envelope).unwrap();
     let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));

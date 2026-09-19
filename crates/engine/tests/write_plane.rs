@@ -10756,14 +10756,7 @@ fn seed_folder_and_file(
 
 /// Stage a folder create under the root and hand back its durable queue id.
 fn create(engine: &mut Engine<FakeSeamTypes>, name: &str) -> OpId {
-    block_on(engine.command(Command::Create {
-        parent: ROOT,
-        name: name.into(),
-        kind: NodeKind::Folder,
-    }))
-    .expect("a metadata create stages")
-    .op_id()
-    .expect("a create queues an op")
+    create_under(engine, ROOT, name)
 }
 
 /// Every event the engine has emitted and not yet been read.

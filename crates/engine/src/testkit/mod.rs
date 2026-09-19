@@ -49,6 +49,6 @@ pub use owner_root::{
     CARRIED_WRITE_HISTORY_LINK, OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY,
     OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED,
     OwnerRootFixture, OwnerRootSpec, owner_root_fixture, owner_root_fixture_at,
-    owner_root_pseudonym, with_cut_epoch,
+    owner_root_pseudonym, reencoded, with_cut_epoch,
 };
 pub use world::{FakeDevice, FakeSeamTypes, FakeWorld};

@@ -592,19 +592,20 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // still committed this device and pin the verdict at `Granted`. Read the
         // durable bar only; a body this pass never unsealed may not raise it
         // (the floor law's provenance rule).
-        let sequence_floor = floor::sequence_floor(self.floors, &share.scope_root_name)
-            .await
-            .ok()?;
-        if let Some(floor) = sequence_floor.filter(|floor| verified.sequence < *floor) {
-            let rejection = GateRejection {
-                stage: GateStage::Sequence,
-                reason: RejectionReason::SequenceNotNewer {
-                    floor,
-                    sequence: verified.sequence,
-                },
-            };
-            report_refusal(events, share, &rejection);
-            return None;
+        match floor::check_sequence(
+            self.floors,
+            &share.scope_root_name,
+            verified.sequence,
+            floor::Strictness::AtOrAboveFloor,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(GateError::Rejected(rejection)) => {
+                report_refusal(events, share, &rejection);
+                return None;
+            }
+            Err(GateError::Seam(_)) => return None,
         }
         let candidate = assemble_candidate(self.gateway, self.http, &name, &record_bytes, None)
             .await
@@ -644,7 +645,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // opens under that id. The reader-scope bind is stage 6's, so state it
         // here too: the equal-floor arm below unseals without reaching stage 6.
         if candidate.envelope.id != share.scope_id || candidate.envelope.scope != share.scope_id {
-            return Ok(None);
+            return Err(GateRejection {
+                stage: GateStage::Unseal,
+                reason: RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
+            });
         }
         // The scope root is a node id like any other, and a sharer authors it.
         // One this vault's own tree holds would be renamed here and pruned to the
@@ -840,14 +844,12 @@ mod tests {
     use crate::testkit::fakes::InMemoryFloorStore;
     use crate::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore, ScriptedHttp};
     use crate::testkit::requested_cid;
-    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
-    use cipherbox_core::seal::{encode_envelope, encode_grant_section, set_grant_section};
+    use cipherbox_core::seal::{Envelope, GrantSection};
 
-    use crate::content::DAG_ROOT_CODEC;
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED,
         OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
-        owner_root_pseudonym, with_cut_epoch,
+        owner_root_pseudonym, reencoded, with_cut_epoch,
     };
 
     use crate::name::{MAX_NODE_NAME_BYTES, is_emittable};
@@ -3202,47 +3204,36 @@ mod tests {
         );
     }
 
-    /// `fixture` with its owner blob's structure signature broken: stage 2
-    /// still passes, so the row classifies, and the gate's stage 3 refuses.
-    fn with_forged_owner_blob(fixture: OwnerRootFixture) -> OwnerRootFixture {
-        let OwnerRootFixture {
-            name,
-            mut grant_section,
-            mut envelope,
-            ..
-        } = fixture;
-        grant_section.owner_blob.signature[0] ^= 0x01;
-        set_grant_section(
-            &mut envelope,
-            encode_grant_section(&grant_section).expect("the section encodes"),
-        );
-        let head_block = encode_envelope(&envelope).expect("the envelope encodes");
-        let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
-        OwnerRootFixture {
-            name,
-            grant_section,
-            envelope,
-            head_block,
-            head_cid_str,
-        }
-    }
+    /// An edit a sharer or a write grantee makes to a published scope root.
+    type Forgery = fn(&mut Envelope, &mut GrantSection);
 
     /// A scope root the gate refuses is a trust violation: the row fails, the
-    /// member hears of it, and nothing of the refused body renders.
+    /// member hears of it, and nothing of the refused body renders. Stage 2
+    /// passes in each case, so the row classifies before the refusal.
     #[test]
     fn a_scope_root_the_gate_refuses_is_reported_and_never_rendered() {
-        let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
-        fx.fixture = with_forged_owner_blob(shared_scope_fixture(
-            vec![shared_child(0xa1, "photos")],
-            Permission::Read,
-        ));
-        seed_scope_root(&fx.records, &fx.fixture, 1);
-        fx.bookmark();
+        let forgeries: [(&str, Forgery); 2] = [
+            ("a broken owner blob signature", |_, section| {
+                section.owner_blob.signature[0] ^= 0x01;
+            }),
+            ("a root at another node id", |envelope, _| {
+                envelope.id = [0x11; 16];
+            }),
+        ];
+        for (forgery, edit) in forgeries {
+            let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+            fx.fixture = reencoded(
+                shared_scope_fixture(vec![shared_child(0xa1, "photos")], Permission::Read),
+                edit,
+            );
+            seed_scope_root(&fx.records, &fx.fixture, 1);
+            fx.bookmark();
 
-        assert_eq!(fx.pass(0), ResolutionClass::Unresolvable);
-        assert!(fx.reported.get(), "a gate refusal is a trust verdict");
-        assert!(fx.listing().is_empty());
-        assert!(!fx.read_seeds.borrow().contains_key(&SCOPE));
+            assert_eq!(fx.pass(0), ResolutionClass::Unresolvable, "{forgery}");
+            assert!(fx.reported.get(), "{forgery} is a trust verdict");
+            assert!(fx.listing().is_empty(), "{forgery}");
+            assert!(!fx.read_seeds.borrow().contains_key(&SCOPE), "{forgery}");
+        }
     }
 
     /// A floor store that cannot commit the adoption is availability: nothing

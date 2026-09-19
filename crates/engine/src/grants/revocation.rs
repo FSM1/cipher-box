@@ -72,19 +72,6 @@ pub struct ResolutionFacts {
     pub epoch_floor: u64,
 }
 
-impl ResolutionFacts {
-    /// The facts a resolve that reached no fresh owner-signed record supports:
-    /// absent, and absent is never a removal.
-    pub fn unresolved(epoch_floor: u64) -> Self {
-        Self {
-            owner_signed_record: false,
-            blob_present: false,
-            record_epoch: 0,
-            epoch_floor,
-        }
-    }
-}
-
 /// Classify a resolve outcome into the revocation triple (or `Granted`).
 ///
 /// Order matters: absence of a fresh owner-signed record is *unresolvable*

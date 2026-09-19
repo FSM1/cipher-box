@@ -845,9 +845,8 @@ impl std::error::Error for AcceptError {}
 /// accept redelivers and re-runs idempotently (the bookmark self-heals). If a
 /// redelivery's strict-sequence anti-replay reject, at exactly the floor, names a
 /// scope already in the durable bookmark (a prior ack that failed after the
-/// floor advanced), the flow
-/// idempotently re-acks that item without re-adopting — clearing a mailbox item
-/// that could otherwise redeliver forever.
+/// floor advanced), the flow idempotently re-acks that item without re-adopting
+/// — clearing a mailbox item that could otherwise redeliver forever.
 ///
 /// `candidate` is the resolved record (hand-fed here; the resolve pipeline is a
 /// sibling slice); `grant_blobs` is its published grant section for self-
