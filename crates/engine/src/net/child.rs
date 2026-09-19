@@ -17,14 +17,19 @@ use core::cell::RefCell;
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{Envelope, ReadBody, has_grant_section, open_read_body};
+use cipherbox_core::seal::{
+    Envelope, ReadBody, SignedSealed, decode_grant_section, grant_section_bytes, has_grant_section,
+    open_read_body,
+};
 use zeroize::Zeroizing;
 
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
+use super::fanout::fanout_get_verify;
 use super::last_known_good::keep_newest_last_known_good;
 use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve};
 use crate::content::Gateway;
-use crate::gate::{Adopted, GateError, GateStage, floor};
+use crate::gate::{Adopted, GateError, GateStage, RejectionReason, floor};
+use crate::rotation::lagging_read_seed;
 use crate::seams::{FloorStore, Http, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::tick::ResolveMode;
 
@@ -239,13 +244,11 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
     /// carrying the lazy wave can re-seal the body forward at the scope's
     /// current epoch (CONTEXT.md "Lazy wave").
     ///
-    /// Skips the scope's read-epoch floor, on the argument the sweep's own
-    /// interior read is documented under
-    /// ([`OwnerRotationNet::interior_node`](crate::net::OwnerRotationNet)).
-    /// Two conditions of that argument are this path's to hold:
-    /// [`assemble_envelope`](Self::assemble_envelope) refuses a record carrying
-    /// a grant section, so nothing gated as a scope root arrives here, and this
-    /// path moves no floor, like the other re-open paths.
+    /// Skips the scope's read-epoch floor
+    /// ([`floor::Strictness::AtOrAboveFloor`]). Two conditions are this path's
+    /// to hold: [`assemble_envelope`](Self::assemble_envelope) refuses a record
+    /// carrying a grant section, so nothing gated as a scope root arrives here,
+    /// and this path moves no read-epoch floor.
     pub(crate) async fn open_interior_under(
         &self,
         name: &IpnsName,
@@ -277,6 +280,68 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
             envelope,
         ))
     }
+
+    /// The scope root record at `root_name` this device's root gate adopted,
+    /// which the floors identify. A lagging record sits below the read-epoch
+    /// floor, so every walk from this anchor opens at least one history link
+    /// under the held seed, and that AEAD binds the seed to the anchor's epoch.
+    async fn gated_anchor<T: RecordTransport, S: SnapshotCache>(
+        &self,
+        transport: &T,
+        snapshot_cache: &S,
+        root_name: &IpnsName,
+    ) -> Option<LaggingAnchor> {
+        let cached = snapshot_cache
+            .get(root_name.as_str().as_bytes())
+            .await
+            .ok()
+            .flatten();
+        if let Some(anchor) = self.anchor_from(root_name, cached.as_deref()).await {
+            return Some(anchor);
+        }
+        let fetched = fanout_get_verify(transport, root_name).await;
+        self.anchor_from(
+            root_name,
+            fetched.as_ref().map(|(_, bytes)| bytes.as_slice()),
+        )
+        .await
+    }
+
+    /// [`Self::gated_anchor`]'s checks over one copy of the root record.
+    async fn anchor_from(
+        &self,
+        root_name: &IpnsName,
+        record_bytes: Option<&[u8]>,
+    ) -> Option<LaggingAnchor> {
+        let (sequence, envelope, _) =
+            assemble_head_envelope(self.gateway, self.http, root_name, record_bytes?, None)
+                .await
+                .ok()?;
+        if envelope.id != self.scope_id || envelope.scope != self.scope_id {
+            return None;
+        }
+        floor::check(
+            self.floors,
+            root_name.as_str().as_bytes(),
+            &self.scope_id,
+            sequence,
+            envelope.epoch,
+            floor::Strictness::AtFloor,
+        )
+        .await
+        .ok()?;
+        let section = decode_grant_section(grant_section_bytes(&envelope)?).ok()?;
+        Some(LaggingAnchor {
+            epoch: envelope.epoch,
+            history_links: section.history_links,
+        })
+    }
+}
+
+/// The gated scope root's epoch and carried history links.
+struct LaggingAnchor {
+    epoch: u64,
+    history_links: Vec<SignedSealed>,
 }
 
 /// Why a child-record resolve produced no adopted body.
@@ -289,7 +354,9 @@ pub(crate) enum ChildResolveError {
 
 /// One child record's cache-first gated resolve: the child gate on a strictly
 /// newer record, then an at-floor re-open of the current or cached bytes so a
-/// process starting over durable floors still renders.
+/// process starting over durable floors still renders. A record either leg
+/// finds below the read-epoch floor is read under `scope_root`'s ratchet
+/// ([`read_lagging`]).
 ///
 /// Both read paths that descend below the scope root — a file's content read
 /// and the focus-window folder refresh — walk this one function, so neither can
@@ -299,6 +366,7 @@ pub(crate) async fn resolve_child<T, S, H, F>(
     snapshot_cache: &S,
     adopter: &ChildAdopter<'_, H, F>,
     name: &IpnsName,
+    scope_root: Option<&IpnsName>,
     mode: ResolveMode,
 ) -> Result<Adopted, ChildResolveError>
 where
@@ -311,10 +379,27 @@ where
     let resolved = resolve(transport, snapshot_cache, adopter, name, mode)
         .await
         .map_err(unavailable)?;
+    let lagging = async |record_bytes: &[u8], epoch| {
+        read_lagging(
+            transport,
+            snapshot_cache,
+            adopter,
+            name,
+            scope_root,
+            record_bytes,
+            epoch,
+        )
+        .await
+    };
     let (record_bytes, current) = match resolved.outcome {
         ResolveOutcome::Adopted(adopted) => return Ok(adopted),
         ResolveOutcome::TrustViolation(rejection) => {
-            return Err(ChildResolveError::Gate(GateError::Rejected(rejection)));
+            let fetched = adopter.assembled_record_bytes(name);
+            return match (lagging_epoch(&rejection.reason), fetched) {
+                (Some(epoch), Some(bytes)) => lagging(&bytes, epoch).await,
+                (Some(epoch), None) => Err(lagging_unreachable(epoch, "its bytes are not held")),
+                (None, _) => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
+            };
         }
         ResolveOutcome::Current { record_bytes } => (record_bytes, true),
         ResolveOutcome::NoUpdate => {
@@ -326,16 +411,121 @@ where
             (cached, false)
         }
     };
-    let adopted = adopter
-        .open_at_floor(name, &record_bytes)
-        .await
-        .map_err(ChildResolveError::Gate)?;
+    let adopted = match adopter.open_at_floor(name, &record_bytes).await {
+        Ok(adopted) => adopted,
+        Err(GateError::Rejected(rejection)) => {
+            return match lagging_epoch(&rejection.reason) {
+                Some(epoch) => lagging(&record_bytes, epoch).await,
+                None => Err(ChildResolveError::Gate(GateError::Rejected(rejection))),
+            };
+        }
+        Err(seam) => return Err(ChildResolveError::Gate(seam)),
+    };
     if current {
         keep_newest_last_known_good(snapshot_cache, name, &record_bytes)
             .await
             .map_err(unavailable)?;
     }
     Ok(adopted)
+}
+
+/// The record's epoch when the gate refused it for lagging the read-epoch
+/// floor alone.
+fn lagging_epoch(reason: &RejectionReason) -> Option<u64> {
+    match reason {
+        RejectionReason::EpochBelowFloor { epoch, .. } => Some(*epoch),
+        _ => None,
+    }
+}
+
+/// The child resolve's lagging read ([`floor::Strictness::AtOrAboveFloor`],
+/// ADR 0021): open an interior record under the seed the gated scope root's
+/// ratchet reaches for its epoch, then raise its sequence floor as an adopt
+/// does (D4). No read-epoch floor moves.
+///
+/// No anchor, or an epoch the ratchet does not reach, is unreachable. Every
+/// refusal of the record itself stays a trust verdict.
+async fn read_lagging<T, S, H, F>(
+    transport: &T,
+    snapshot_cache: &S,
+    adopter: &ChildAdopter<'_, H, F>,
+    name: &IpnsName,
+    scope_root: Option<&IpnsName>,
+    record_bytes: &[u8],
+    record_epoch: u64,
+) -> Result<Adopted, ChildResolveError>
+where
+    T: RecordTransport,
+    S: SnapshotCache,
+    H: Http,
+    F: FloorStore,
+{
+    let anchor = match scope_root {
+        Some(root_name) => {
+            adopter
+                .gated_anchor(transport, snapshot_cache, root_name)
+                .await
+        }
+        None => None,
+    }
+    .ok_or_else(|| lagging_unreachable(record_epoch, "no gated scope root is held"))?;
+    open_under_anchor(
+        snapshot_cache,
+        adopter,
+        name,
+        &anchor,
+        record_bytes,
+        record_epoch,
+    )
+    .await
+}
+
+/// [`read_lagging`] once the anchor is in hand.
+async fn open_under_anchor<S, H, F>(
+    snapshot_cache: &S,
+    adopter: &ChildAdopter<'_, H, F>,
+    name: &IpnsName,
+    anchor: &LaggingAnchor,
+    record_bytes: &[u8],
+    record_epoch: u64,
+) -> Result<Adopted, ChildResolveError>
+where
+    S: SnapshotCache,
+    H: Http,
+    F: FloorStore,
+{
+    // Only a walk that opens a link binds the held seed to the anchor's epoch,
+    // so an anchor that is not strictly newer than the record proves nothing.
+    if record_epoch >= anchor.epoch {
+        return Err(lagging_unreachable(
+            record_epoch,
+            "the gated scope root is not newer than the record",
+        ));
+    }
+    let seed = lagging_read_seed(
+        adopter.scope_id,
+        &adopter.scope_read_seed,
+        anchor.epoch,
+        &anchor.history_links,
+        record_epoch,
+    )
+    .map_err(|_| lagging_unreachable(record_epoch, "no held history link reaches the epoch"))?;
+    let (adopted, _) = adopter
+        .open_interior_under(name, record_bytes, &seed)
+        .await
+        .map_err(ChildResolveError::Gate)?;
+    let seam = |e: SeamError| ChildResolveError::Unavailable(e.message().to_owned());
+    keep_newest_last_known_good(snapshot_cache, name, record_bytes)
+        .await
+        .map_err(seam)?;
+    floor::advance_sequence_on_unseal(adopter.floors, name.as_str().as_bytes(), adopted.sequence)
+        .await
+        .map_err(seam)?;
+    Ok(adopted)
+}
+
+fn lagging_unreachable(record_epoch: u64, why: &str) -> ChildResolveError {
+    ChildResolveError::Unavailable(format!("lagging record at epoch {record_epoch}: {why}"))
 }
 
 impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
@@ -404,13 +594,16 @@ mod tests {
     use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::seal::{
-        PreservedFields, encode_envelope, seal_read_body, set_grant_section,
+        AadContext, GrantSection, GrantSetCommitment, HistoryLinkPayload, PreservedFields,
+        STRUCT_TAG_HISTORY_LINK, SignedOwnerBlob, encode_envelope, encode_grant_section,
+        seal_history_link, seal_read_body, set_grant_section,
     };
 
     use crate::content::{DAG_ROOT_CODEC, GatewaySource};
     use crate::gate::{GateRejection, RejectionReason};
+    use crate::net::author::ENVELOPE_V;
     use crate::net::resolve::resolve_gated;
-    use crate::seams::EndpointId;
+    use crate::seams::{EndpointId, HttpResponse};
     use crate::testkit::block_on;
     use crate::testkit::fakes::{
         InMemoryFloorStore, InMemoryRecordStore, InMemorySnapshotCache, ScriptedHttp,
@@ -456,6 +649,8 @@ mod tests {
         epoch: u64,
         /// Attach a grant section, the marker that makes a record a scope root.
         scope_root: bool,
+        /// The epoch whose seed seals the body, when it is not the label.
+        seal_epoch: Option<u64>,
     }
 
     impl Default for Spec {
@@ -466,6 +661,7 @@ mod tests {
                 sequence: SEQUENCE,
                 epoch: LAGGING_EPOCH,
                 scope_root: false,
+                seal_epoch: None,
             }
         }
     }
@@ -487,7 +683,7 @@ mod tests {
     /// Publish `spec` at its own epoch, under that epoch's scope read seed.
     fn publish(spec: Spec) -> Published {
         let nonce = fixture_nonce(&spec);
-        let seed = scope_seed(spec.epoch);
+        let seed = scope_seed(spec.seal_epoch.unwrap_or(spec.epoch));
         let node_seed = kdf::node_seed(&seed, &spec.node_id);
         let read_key = kdf::read_key(node_seed.as_bytes());
         let body = ReadBody::Folder {
@@ -920,6 +1116,7 @@ mod tests {
             cache,
             &seeded_adopter(&gw, &http, floors, published, NODE, LAGGING_EPOCH),
             &published.name,
+            None,
             ResolveMode::CacheFirst,
         ))
     }
@@ -997,6 +1194,430 @@ mod tests {
         let offline = resolve_under(&offline(), &cache, &floors, &published)
             .unwrap_or_else(|_| panic!("the refreshed copy opens offline"));
         assert_eq!(offline.sequence, SEQUENCE);
+    }
+
+    /// The gated scope root at [`CURRENT_EPOCH`], carrying the history links
+    /// for the epochs from `oldest_link` up to it, each sealed under its own
+    /// epoch's structure key as a cut mints it.
+    fn anchor(oldest_link: u64) -> LaggingAnchor {
+        LaggingAnchor {
+            epoch: CURRENT_EPOCH,
+            history_links: history_links(oldest_link, CURRENT_EPOCH),
+        }
+    }
+
+    /// The history links a scope root at `newest` carries, back to the one
+    /// minted at `oldest_link`.
+    fn history_links(oldest_link: u64, newest: u64) -> Vec<SignedSealed> {
+        (oldest_link..=newest)
+            .map(|epoch| {
+                let key = kdf::structure_key(&scope_seed(epoch), STRUCT_TAG_HISTORY_LINK);
+                let ctx = AadContext {
+                    v: ENVELOPE_V,
+                    id: SCOPE,
+                    scope: SCOPE,
+                    epoch,
+                    struct_tag: STRUCT_TAG_HISTORY_LINK,
+                };
+                let payload = HistoryLinkPayload::new(scope_seed(epoch - 1), epoch - 1);
+                SignedSealed {
+                    sealed: seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload)
+                        .expect("the link seals"),
+                    signature: [0x01; 64],
+                    unknown: PreservedFields::new(),
+                }
+            })
+            .collect()
+    }
+
+    /// The sequence the scope root publishes at, and this device's floor for it.
+    const ROOT_SEQUENCE: u64 = 9;
+
+    /// A scope root at `epoch` carrying `history_links`, sealed under that
+    /// epoch's seed and published at [`ROOT_SEQUENCE`]. The section's other
+    /// structures are placeholders: the anchor reads only the links.
+    fn publish_root(epoch: u64, history_links: Vec<SignedSealed>) -> Published {
+        let node_seed = kdf::node_seed(&scope_seed(epoch), &SCOPE);
+        let read_key = kdf::read_key(node_seed.as_bytes());
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let mut envelope = seal_read_body(
+            read_key.as_bytes(),
+            &[0x33; 24],
+            V,
+            SCOPE,
+            SCOPE,
+            epoch,
+            &body,
+        )
+        .expect("the root body seals");
+        let placeholder = || SignedSealed {
+            sealed: vec![0x5b; 48],
+            signature: [0x02; 64],
+            unknown: PreservedFields::new(),
+        };
+        let section = GrantSection {
+            commitment: GrantSetCommitment {
+                ipns_name: vec![0x01],
+                owner_pseudonym_pk: [0x03; 32],
+                cut_epoch: 0,
+                entries: Vec::new(),
+                unknown: PreservedFields::new(),
+            },
+            commitment_sig: [0x04; 64],
+            grant_blobs: Vec::new(),
+            owner_blob: SignedOwnerBlob {
+                enc: [0x05; 32],
+                ciphertext: vec![0x06; 48],
+                signature: [0x07; 64],
+                unknown: PreservedFields::new(),
+            },
+            owner_write_blob: None,
+            ascent_link: None,
+            history_links,
+            write_body: placeholder(),
+            unknown: PreservedFields::new(),
+        };
+        set_grant_section(
+            &mut envelope,
+            encode_grant_section(&section).expect("the section encodes"),
+        );
+        let block = encode_envelope(&envelope).expect("the root envelope encodes");
+        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+        let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &SCOPE);
+        let signer = kdf::ipns_keypair(write_seed.as_bytes());
+        Published {
+            name: IpnsName::from_public_key(&signer.verifying_key()),
+            record_bytes: IpnsRecord::create_v2(
+                &signer,
+                format!("/ipfs/{cid}").as_bytes(),
+                ROOT_SEQUENCE,
+                TTL_NANOS,
+                EOL,
+            )
+            .marshal(),
+            head: LocalHead { cid, block },
+        }
+    }
+
+    /// The whole lagging read of `published`, anchored on `root` as this
+    /// device's cache holds it, with the record plane offline.
+    fn read_lagging_anchored_on(
+        published: &Published,
+        root: &Published,
+        floors: &InMemoryFloorStore,
+    ) -> Result<Adopted, ChildResolveError> {
+        block_on(floors.raise_sequence_floor(root.name.as_str().as_bytes(), ROOT_SEQUENCE))
+            .expect("the root's floor raises");
+        let cache = InMemorySnapshotCache::default();
+        block_on(cache.put(root.name.as_str().as_bytes(), &root.record_bytes))
+            .expect("the root is last-known-good");
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: root.head.block.clone(),
+        });
+        block_on(read_lagging(
+            &offline(),
+            &cache,
+            &adopter(&gw, &http, floors, published, NODE),
+            &published.name,
+            Some(&root.name),
+            &published.record_bytes,
+            LAGGING_EPOCH,
+        ))
+    }
+
+    /// The anchor is the cached scope root this device's gate adopted.
+    #[test]
+    fn a_lagging_read_anchors_on_the_cached_scope_root() {
+        let published = publish(Spec::default());
+        let root = publish_root(
+            CURRENT_EPOCH,
+            history_links(LAGGING_EPOCH + 1, CURRENT_EPOCH),
+        );
+        let floors = floors_after_a_cut();
+
+        let adopted = read_lagging_anchored_on(&published, &root, &floors)
+            .unwrap_or_else(|_| panic!("the cached root anchors the walk"));
+
+        assert_eq!(adopted.epoch, LAGGING_EPOCH);
+        assert_eq!(sequence_floor(&floors, &published.name), SEQUENCE);
+    }
+
+    /// A cached root below the read-epoch floor is not an anchor: at the
+    /// record's own epoch it would hand back the current seed for an older
+    /// epoch, and the record would fail its unseal and be accused.
+    #[test]
+    fn a_scope_root_below_the_read_epoch_floor_anchors_nothing() {
+        let published = publish(Spec::default());
+        let root = publish_root(LAGGING_EPOCH, Vec::new());
+        let floors = floors_after_a_cut();
+
+        let result = read_lagging_anchored_on(&published, &root, &floors);
+
+        assert!(
+            matches!(result, Err(ChildResolveError::Unavailable(_))),
+            "a pre-cut root anchors no lagging read",
+        );
+        assert_eq!(sequence_floor(&floors, &published.name), 0);
+    }
+
+    /// Read `published`, labelled `epoch`, through the lagging arm over
+    /// `anchor`, as the session that holds the seed of [`CURRENT_EPOCH`] does.
+    fn read_lagging_under(
+        published: &Published,
+        epoch: u64,
+        anchor: &LaggingAnchor,
+        floors: &InMemoryFloorStore,
+        cache: &InMemorySnapshotCache,
+    ) -> Result<Adopted, ChildResolveError> {
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        let adopter = adopter(&gw, &http, floors, published, NODE);
+        block_on(open_under_anchor(
+            cache,
+            &adopter,
+            &published.name,
+            anchor,
+            &published.record_bytes,
+            epoch,
+        ))
+    }
+
+    /// The trust verdict a lagging read earned, or a panic naming what it
+    /// earned instead.
+    fn lagging_refusal(result: Result<Adopted, ChildResolveError>) -> GateRejection {
+        match result {
+            Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => rejection,
+            Err(ChildResolveError::Unavailable(message)) => {
+                panic!("expected a trust verdict, got unavailable: {message}")
+            }
+            Err(ChildResolveError::Gate(GateError::Seam(e))) => {
+                panic!("expected a trust verdict, got seam {e}")
+            }
+            Ok(_) => panic!("expected a trust verdict, the record opened"),
+        }
+    }
+
+    /// ADR 0021 D1, D2, D4: a record the ratchet reaches opens under the seed
+    /// of its own epoch, is cached, and raises its sequence floor. The
+    /// read-epoch floor stays where the cut left it.
+    #[test]
+    fn a_lagging_record_the_ratchet_reaches_opens_and_raises_only_its_sequence_floor() {
+        let published = publish(Spec::default());
+        let floors = floors_after_a_cut();
+        let cache = InMemorySnapshotCache::default();
+
+        let adopted = read_lagging_under(
+            &published,
+            LAGGING_EPOCH,
+            &anchor(LAGGING_EPOCH + 1),
+            &floors,
+            &cache,
+        )
+        .unwrap_or_else(|_| panic!("the ratchet reaches the record's epoch"));
+
+        assert_eq!(adopted.epoch, LAGGING_EPOCH);
+        assert!(matches!(adopted.read_body, ReadBody::Folder { .. }));
+        assert_eq!(sequence_floor(&floors, &published.name), SEQUENCE);
+        assert_eq!(read_epoch_floor(&floors), Some(CURRENT_EPOCH));
+        assert_eq!(
+            cache.peek(published.name.as_str().as_bytes()).as_deref(),
+            Some(&published.record_bytes[..]),
+            "the bytes are cached before the floor moves",
+        );
+    }
+
+    /// ADR 0021 D5: a record tagged above the anchor, or at an epoch no held
+    /// link reaches, is unreachable. Neither is a verdict on the record, and
+    /// neither moves a floor.
+    #[test]
+    fn a_lagging_record_the_ratchet_does_not_reach_is_unreachable() {
+        let above = publish(Spec {
+            epoch: UNOBSERVED_EPOCH,
+            ..Spec::default()
+        });
+        let behind_the_window = publish(Spec::default());
+        for (published, epoch, anchor) in [
+            (&above, UNOBSERVED_EPOCH, anchor(LAGGING_EPOCH + 1)),
+            (&behind_the_window, LAGGING_EPOCH, anchor(CURRENT_EPOCH)),
+        ] {
+            let floors = floors_after_a_cut();
+            let result = read_lagging_under(
+                published,
+                epoch,
+                &anchor,
+                &floors,
+                &InMemorySnapshotCache::default(),
+            );
+            assert!(
+                matches!(result, Err(ChildResolveError::Unavailable(_))),
+                "an epoch the ratchet does not reach is unreachable",
+            );
+            assert_eq!(sequence_floor(&floors, &published.name), 0);
+            assert_eq!(read_epoch_floor(&floors), Some(CURRENT_EPOCH));
+        }
+    }
+
+    /// An anchor that opens no history link binds nothing, so neither one at
+    /// the record's own epoch nor one whose links were minted at another epoch
+    /// hands the held seed to the record: both are unreachable, and nobody is
+    /// accused.
+    #[test]
+    fn an_anchor_no_history_link_binds_to_the_held_seed_is_unreachable() {
+        let published = publish(Spec::default());
+        for anchor in [
+            LaggingAnchor {
+                epoch: LAGGING_EPOCH,
+                history_links: Vec::new(),
+            },
+            LaggingAnchor {
+                epoch: UNOBSERVED_EPOCH,
+                history_links: history_links(LAGGING_EPOCH + 1, CURRENT_EPOCH),
+            },
+        ] {
+            let floors = floors_after_a_cut();
+            let result = read_lagging_under(
+                &published,
+                LAGGING_EPOCH,
+                &anchor,
+                &floors,
+                &InMemorySnapshotCache::default(),
+            );
+            assert!(
+                matches!(result, Err(ChildResolveError::Unavailable(_))),
+                "anchor at epoch {} opens nothing",
+                anchor.epoch,
+            );
+            assert_eq!(sequence_floor(&floors, &published.name), 0);
+        }
+    }
+
+    /// ADR 0021 D5: a record sealed at an epoch other than its label opens under
+    /// no seed the ratchet reaches for the label, so it is a trust verdict.
+    #[test]
+    fn a_relabelled_lagging_record_is_a_trust_verdict() {
+        let published = publish(Spec {
+            seal_epoch: Some(LAGGING_EPOCH + 1),
+            ..Spec::default()
+        });
+        let floors = floors_after_a_cut();
+
+        let refused = lagging_refusal(read_lagging_under(
+            &published,
+            LAGGING_EPOCH,
+            &anchor(LAGGING_EPOCH + 1),
+            &floors,
+            &InMemorySnapshotCache::default(),
+        ));
+
+        assert_eq!(refused.stage, GateStage::Unseal);
+        assert_eq!(sequence_floor(&floors, &published.name), 0);
+    }
+
+    /// ADR 0021 D5: the lagging arm keeps the replay bar, the grant-section
+    /// refusal and the transplant bindings, each a trust verdict.
+    #[test]
+    fn the_lagging_arm_keeps_every_refusal_of_the_record_itself() {
+        let replayed = publish(Spec::default());
+        let scope_root = publish(Spec {
+            scope_root: true,
+            ..Spec::default()
+        });
+        let other_node = publish(Spec {
+            node_id: [0x66; 16],
+            ..Spec::default()
+        });
+        let cases = [
+            (&replayed, SEQUENCE + 1, GateStage::Sequence),
+            (&scope_root, 0, GateStage::GrantSection),
+            (&other_node, 0, GateStage::Unseal),
+        ];
+        for (published, sequence_bar, stage) in cases {
+            let floors = floors_after_a_cut();
+            block_on(floors.raise_sequence_floor(published.name.as_str().as_bytes(), sequence_bar))
+                .expect("the floor raises");
+            let refused = lagging_refusal(read_lagging_under(
+                published,
+                LAGGING_EPOCH,
+                &anchor(LAGGING_EPOCH + 1),
+                &floors,
+                &InMemorySnapshotCache::default(),
+            ));
+            assert_eq!(refused.stage, stage);
+            assert_eq!(read_epoch_floor(&floors), Some(CURRENT_EPOCH));
+        }
+    }
+
+    /// The resolve reaches the lagging arm from a fresh adopt, from the current
+    /// record at the floor, and from the cached copy offline. With no anchor
+    /// held, each reports the record unreachable rather than accusing it.
+    #[test]
+    fn a_lagging_record_with_no_anchor_held_is_unreachable_on_every_path() {
+        let published = publish(Spec::default());
+        let gw = gateway();
+        for (transport, sequence_bar) in [
+            (serving(&published), None),
+            (serving(&published), Some(SEQUENCE)),
+            (offline(), Some(SEQUENCE)),
+        ] {
+            let floors = floors_after_a_cut();
+            if let Some(bar) = sequence_bar {
+                block_on(floors.raise_sequence_floor(published.name.as_str().as_bytes(), bar))
+                    .expect("the floor raises");
+            }
+            let cache = InMemorySnapshotCache::default();
+            block_on(cache.put(published.name.as_str().as_bytes(), &published.record_bytes))
+                .expect("seed last-known-good");
+            let http = ScriptedHttp::default();
+            let result = block_on(resolve_child(
+                &transport,
+                &cache,
+                &adopter(&gw, &http, &floors, &published, NODE),
+                &published.name,
+                None,
+                ResolveMode::CacheFirst,
+            ));
+            assert!(
+                matches!(result, Err(ChildResolveError::Unavailable(_))),
+                "a lagging record is not a trust verdict (bar {sequence_bar:?})",
+            );
+            assert_eq!(
+                sequence_floor(&floors, &published.name),
+                sequence_bar.unwrap_or(0),
+            );
+        }
+    }
+
+    /// A lagging record that carries a grant section never reaches the arm: the
+    /// resolve refuses it before any floor stage, as a trust verdict.
+    #[test]
+    fn a_lagging_record_carrying_a_grant_section_stays_a_trust_verdict() {
+        let published = publish(Spec {
+            scope_root: true,
+            ..Spec::default()
+        });
+        let floors = floors_after_a_cut();
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+
+        let refused = lagging_refusal(block_on(resolve_child(
+            &serving(&published),
+            &InMemorySnapshotCache::default(),
+            &adopter(&gw, &http, &floors, &published, NODE),
+            &published.name,
+            None,
+            ResolveMode::CacheFirst,
+        )));
+
+        assert_eq!(refused.stage, GateStage::GrantSection);
     }
 
     /// The durable per-name sequence floor, zero where none was raised.
