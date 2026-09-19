@@ -217,7 +217,9 @@ mod tests {
     use crate::content::{Gateway, GatewaySource};
     use crate::mailbox::post_sealed;
     use crate::rotation::derive_write_name;
-    use crate::seams::{EndpointId, HttpResponse};
+    use crate::seams::{
+        ContactLabel, EndpointId, FloorStore, HttpResponse, SharerScopedFloorStore,
+    };
     use crate::testkit::fakes::{
         InMemoryFloorStore, InMemoryMailbox, InMemoryMailboxHub, InMemoryRecordStore,
         InMemoryStagingStore, ScriptedHttp,
@@ -614,7 +616,7 @@ mod tests {
         fx.pull();
 
         fx.post(&sharer(), &fx.pointer(), "share-2");
-        fx.pull();
+        let events = fx.pull();
 
         assert_eq!(
             fx.bookmarked(),
@@ -622,5 +624,39 @@ mod tests {
             "a re-accept bookmarks nothing new"
         );
         assert_eq!(fx.inbox_len(), 0, "and the redelivery is retired");
+        assert!(!accuses(&events), "a redelivery accuses nobody");
+    }
+
+    /// A redelivery that resolves a record below the floor is a replay, not the
+    /// share this vault already holds: it is reported and never acked.
+    #[test]
+    fn a_redelivered_pointer_over_a_replayed_record_is_reported_and_kept() {
+        let fx = Inbox::new();
+        fx.import(&sharer(), &sharer_enc());
+        fx.post(&sharer(), &fx.pointer(), "share-1");
+        fx.pull();
+        block_on(
+            SharerScopedFloorStore::granted_by(
+                &fx.floors,
+                ContactLabel::of(
+                    &kdf::contact_label_seed(&[0x4c; 32]),
+                    &sharer().verifying_key().to_sec1(),
+                ),
+            )
+            .raise_sequence_floor(scope_root_name().as_str().as_bytes(), 2),
+        )
+        .expect("the floor store answers");
+
+        fx.post(&sharer(), &fx.pointer(), "share-2");
+        let events = fx.pull();
+
+        assert!(accuses(&events), "the replay is a trust verdict");
+        assert_eq!(fx.inbox_len(), 1, "and the item is never acked");
+    }
+
+    fn accuses(events: &[Event]) -> bool {
+        events
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. }))
     }
 }
