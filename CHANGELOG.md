@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.4.0](https://github.com/FSM1/cipher-box/compare/v2.3.0...v2.4.0) (2026-09-19)
+
+
+### Features
+
+* **engine:** admit a write target below a proved grafted write root ([#1910](https://github.com/FSM1/cipher-box/issues/1910)) ([bc49321](https://github.com/FSM1/cipher-box/commit/bc49321b5f397e50c0506b70782875c57b5d0964))
+* **engine:** hold a child the grantee published in a grafted base ([#1904](https://github.com/FSM1/cipher-box/issues/1904)) ([d1f05ee](https://github.com/FSM1/cipher-box/commit/d1f05ee307ac639162d160c6a7a666870cd4de8a))
+
+
+### Bug Fixes
+
+* **engine:** act on the Greptile findings that landed after five merges ([#1905](https://github.com/FSM1/cipher-box/issues/1905)) ([801ea55](https://github.com/FSM1/cipher-box/commit/801ea5561a0502cebfd55a0563b6f7f0b54bd1e5))
+* **engine:** cache what the write wave adopts before its floor moves ([#1914](https://github.com/FSM1/cipher-box/issues/1914)) ([8d449b3](https://github.com/FSM1/cipher-box/commit/8d449b3f9aa20255f961547b6cabed9ada26f83d))
+* **engine:** read a file under the scope it sits in ([#1912](https://github.com/FSM1/cipher-box/issues/1912)) ([00e24aa](https://github.com/FSM1/cipher-box/commit/00e24aada2181000ca673748b221f1b037325a8e))
+* **engine:** run the sweep as an idle job and admit a grafted version restore ([#1917](https://github.com/FSM1/cipher-box/issues/1917)) ([f4d6aa9](https://github.com/FSM1/cipher-box/commit/f4d6aa9d4bc1536a0d2cc0ce54e418f9bfd33a5c))
+* **wasm:** fail the web floor store closed on a value it cannot read ([#1907](https://github.com/FSM1/cipher-box/issues/1907)) ([b4ffb2f](https://github.com/FSM1/cipher-box/commit/b4ffb2fa687630ed6b92498d3c9aec8db6a413d4))
+
 ## [2.3.0](https://github.com/FSM1/cipher-box/compare/v2.2.0...v2.3.0) (2026-09-19)
 
 
