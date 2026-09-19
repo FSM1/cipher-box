@@ -14538,7 +14538,8 @@ fn a_version_retained_across_a_key_regression_epoch_still_opens() {
 
 /// A cut raises the read-epoch floor at once, so every file no write has
 /// re-sealed lags it. A read opens such a file under the seed the scope root's
-/// ratchet reaches for its epoch (ADR 0021). No sweep runs here. On the device
+/// ratchet reaches for its epoch (ADR 0021). The file cannot be fetched until
+/// the reads, so no idle sweep reads or re-seals it first. On the device
 /// that cut and on a second device that never read the file, the content, the
 /// version list and a prior version read, the read-epoch floor stays where the
 /// cut left it, and the file's sequence floor holds the record the read opened.
@@ -14564,6 +14565,7 @@ fn a_file_the_wave_has_not_reached_reads_after_a_cut() {
     let bob = world.device(b"alice-second-device");
     let (engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
 
+    world.record_store.fail_get_for(file_name.as_str());
     block_on(engine_a.command(Command::RotateNow { node: ROOT })).expect("the cut lands");
     tick(&world, &engine_a, &mut tasks);
     tick(&world, &engine_b, &mut tasks_b);
@@ -14582,6 +14584,7 @@ fn a_file_the_wave_has_not_reached_reads_after_a_cut() {
         None,
         "the second device has not read the file yet",
     );
+    world.record_store.heal_get_for(file_name.as_str());
 
     for (device, engine) in [(&alice, &engine_a), (&bob, &engine_b)] {
         let floors = device.floors(&SECRET);

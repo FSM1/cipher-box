@@ -119,6 +119,9 @@ pub(crate) struct NetState {
     /// The published index, once a repair lands.
     pub(crate) repaired_index: Option<Vec<ChildScopeRef>>,
     pub(crate) index_repair_fault: Option<RotationPublishError>,
+    /// The next `n` index repairs lose the CAS to a writer that leaves the
+    /// index as it was.
+    pub(crate) index_repair_lost_race_next: u32,
     /// `(parent, child)` pairs the parent names at a caller-chosen `ipnsName`.
     pub(crate) child_names: HashMap<(u8, u8), Vec<u8>>,
 }
@@ -402,6 +405,10 @@ impl SweepPublisher for FakeNet {
         let mut state = self.state.borrow_mut();
         if let Some(error) = state.index_repair_fault.clone() {
             return Err(error);
+        }
+        if state.index_repair_lost_race_next > 0 {
+            state.index_repair_lost_race_next -= 1;
+            return Err(RotationPublishError::LostRace);
         }
         state.repaired_index = Some(index.to_vec());
         Ok(())

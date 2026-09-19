@@ -6,12 +6,11 @@ import { ConfirmDangerDialog } from '../ui/ConfirmDangerDialog';
 import { Modal } from '../ui/Modal';
 import { FileDetails } from './details/FileDetails';
 import { FolderDetails } from './details/FolderDetails';
-import { shortCid } from './details/VersionHistory';
+import { offers, type ScopeAccess, shortCid } from './details/VersionHistory';
 
 interface DetailsDialogProps {
   row: ListingRow;
-  /** False in a scope this vault only holds a read grant over. */
-  writable: boolean;
+  access: ScopeAccess;
   onClose: () => void;
 }
 
@@ -22,7 +21,7 @@ interface PendingWrite {
 }
 
 /** What the engine reports about one node, verbatim. */
-export function DetailsDialog({ row, writable, onClose }: DetailsDialogProps) {
+export function DetailsDialog({ row, access, onClose }: DetailsDialogProps) {
   const isFile = row.kind === 'file';
   const node = isFile ? row.id : null;
   const versions = useFileVersions(node, row.storedName);
@@ -38,9 +37,9 @@ export function DetailsDialog({ row, writable, onClose }: DetailsDialogProps) {
   // swap retires it, so a result from a display the dialog has left can never
   // answer for a later confirmation, not even one of the same node.
   const answered = useRef<PendingWrite | null>(null);
-  // The details themselves only read, so this dialog outlives a scope the engine
-  // turns read-only. The confirmation does not: restore and delete are writes.
-  if (shown.current !== node || (!writable && pending !== null)) {
+  // The details themselves only read, so this dialog outlives an access change.
+  // A confirmation for a write the access no longer offers does not.
+  if (shown.current !== node || (pending !== null && !offers(access, pending.command))) {
     shown.current = node;
     answered.current = null;
     setPending(null);
@@ -75,7 +74,7 @@ export function DetailsDialog({ row, writable, onClose }: DetailsDialogProps) {
             <FileDetails
               row={row}
               versions={versions}
-              writable={writable}
+              access={access}
               onRestore={(entry) => setPending({ command: 'restore', entry })}
               onDelete={(entry) => setPending({ command: 'delete', entry })}
             />

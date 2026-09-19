@@ -54,7 +54,7 @@ describe('the details panel', () => {
   });
 
   it('renders the snapshot fields of a file', () => {
-    render(<DetailsDialog row={fileRow()} writable onClose={() => undefined} />);
+    render(<DetailsDialog row={fileRow()} access="owner" onClose={() => undefined} />);
 
     expect(screen.getByTestId('file-details')).toBeDefined();
     expect(rowText('name')).toContain('notes.txt');
@@ -68,7 +68,7 @@ describe('the details panel', () => {
   });
 
   it('renders the folder variant, which carries no content of its own', () => {
-    render(<DetailsDialog row={folderRow()} writable onClose={() => undefined} />);
+    render(<DetailsDialog row={folderRow()} access="owner" onClose={() => undefined} />);
 
     expect(screen.getByTestId('folder-details')).toBeDefined();
     expect(rowText('type')).toBe('[DIR]');
@@ -81,7 +81,7 @@ describe('the details panel', () => {
     render(
       <DetailsDialog
         row={fileRow({ bytes: null, size: '...', contentVersion: null })}
-        writable
+        access="owner"
         onClose={() => undefined}
       />
     );
@@ -95,7 +95,7 @@ describe('the details panel', () => {
     render(
       <DetailsDialog
         row={fileRow({ pending: 'content', deadLetter: true })}
-        writable
+        access="owner"
         onClose={() => undefined}
       />
     );
@@ -108,7 +108,7 @@ describe('the details panel', () => {
     const writeText = vi.fn(() => Promise.resolve());
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
 
-    render(<DetailsDialog row={fileRow()} writable onClose={() => undefined} />);
+    render(<DetailsDialog row={fileRow()} access="owner" onClose={() => undefined} />);
     fireEvent.click(screen.getByLabelText('copy node id'));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('abababab'));
@@ -123,7 +123,7 @@ describe('the details panel', () => {
     const held = 'a'.repeat(200);
     const row = fileRow({ name: 'a'.repeat(96) + '…', storedName: held });
 
-    render(<DetailsDialog row={row} writable onClose={() => undefined} />);
+    render(<DetailsDialog row={row} access="owner" onClose={() => undefined} />);
 
     expect(rowText('name')).toContain('…');
     fireEvent.click(screen.getByLabelText('copy name'));
@@ -135,7 +135,7 @@ describe('the details panel', () => {
     const writeText = vi.fn(() => Promise.reject(new Error('denied')));
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
 
-    render(<DetailsDialog row={fileRow()} writable onClose={() => undefined} />);
+    render(<DetailsDialog row={fileRow()} access="owner" onClose={() => undefined} />);
     fireEvent.click(screen.getByLabelText('copy name'));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
