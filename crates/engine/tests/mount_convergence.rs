@@ -993,41 +993,18 @@ enum WriteShare {
     InviteLink,
 }
 
-/// A folder holding one file with two versions, published and drained, then
-/// shared with write permission. Answers the folder and the file.
+/// A folder holding one file with `bodies` as its two versions, published and
+/// drained, then shared with write permission. Answers the folder and the file.
 fn file_under_a_write_share(
     world: &FakeWorld,
     blocks: &Blocks,
     tab: &FakeDevice,
     share: WriteShare,
+    bodies: &[Vec<u8>; 2],
 ) -> (Engine<FakeSeamTypes>, NodeId, NodeId) {
     let (mut engine, _events, mut tasks) = boot(world, blocks, tab, 42);
     let shared = create_published_folder(world, &mut engine, &mut tasks, ROOT, "shared");
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: shared,
-            name: "notes.bin".into(),
-        },
-        b"first",
-    )
-    .expect("the first version commits");
-    tick(world, &engine, &mut tasks);
-    let file = listed(&engine, shared)
-        .into_iter()
-        .find(|(name, _)| name == "notes.bin")
-        .expect("the file lists")
-        .1;
-    write_file(
-        &mut engine,
-        WriteTarget::Version {
-            node: file,
-            expected_version: None,
-        },
-        b"second",
-    )
-    .expect("the second version commits");
-    tick(world, &engine, &mut tasks);
+    let file = file_with_two_versions(world, &mut engine, &mut tasks, shared, "notes.bin", bodies);
     assert_eq!(queued(tab), 0, "both versions drain before the share");
 
     let outcome = match share {
@@ -1072,7 +1049,8 @@ fn a_write_share_leaves_every_record_it_touches_cached_at_its_sequence_floor() {
         let blocks = Blocks::default();
         seed_vault(&world, &blocks);
         let tab = world.device(&owner_identity().verifying_key().to_sec1());
-        let (_engine, shared, file) = file_under_a_write_share(&world, &blocks, &tab, share);
+        let (_engine, shared, file) =
+            file_under_a_write_share(&world, &blocks, &tab, share, &two_bodies(5));
 
         for node in [ROOT, shared, file] {
             let name = write_name(node);
@@ -1089,5 +1067,25 @@ fn a_write_share_leaves_every_record_it_touches_cached_at_its_sequence_floor() {
                 "{share:?}: the cached record of {node:?} sits at the floor the share raised"
             );
         }
+    }
+}
+
+/// After a write share, a read that finds no record source opens the file
+/// from its last-known-good: the head content, the version list, and a prior
+/// version.
+#[test]
+fn a_file_under_a_write_share_reads_with_every_record_endpoint_down() {
+    for share in [WriteShare::Contact, WriteShare::InviteLink] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let bodies = two_bodies(11);
+        let (engine, _shared, file) =
+            file_under_a_write_share(&world, &blocks, &tab, share, &bodies);
+        for endpoint in world.record_store.endpoints() {
+            world.record_store.fail_endpoint(&endpoint);
+        }
+        assert_reads_both_versions(&engine, file, &bodies, &format!("{share:?}, offline"));
     }
 }
