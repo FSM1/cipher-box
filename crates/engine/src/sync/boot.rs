@@ -437,7 +437,7 @@ mod tests {
             &self,
             _name: &IpnsName,
             _record_bytes: &[u8],
-        ) -> Result<Option<crate::net::OwnScopeMaterial>, crate::seams::SeamError> {
+        ) -> Result<Option<crate::net::OwnScopeMaterial>, GateError> {
             Ok(self.recovered.map(|child| crate::net::OwnScopeMaterial {
                 node_id: [0u8; 16],
                 read_scope_seed: zeroize::Zeroizing::new([0u8; 32]),

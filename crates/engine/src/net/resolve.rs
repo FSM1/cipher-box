@@ -77,15 +77,14 @@ pub trait Adopter {
 
     /// Recover the OWNER's own scope material for an equal-floor `Current` own
     /// record: the read seed the child pipeline and the drain seal under, and
-    /// the write seed the liveness loop renews with. `Ok(None)` when the record
-    /// is not our own or its owner blob will not open. Fail-OPEN: returns a
-    /// [`SeamError`], never a `Rejected` verdict (a `Current` must never harden
-    /// into a trust error). The default suits every non-owner adopter stub.
+    /// the write seed the liveness loop renews with. `Ok(None)` when there is
+    /// nothing to re-check; a stage the record fails is a `Rejected` verdict,
+    /// as it is on an adopt. The default suits every non-owner adopter stub.
     async fn recover_own_scope_material(
         &self,
         _name: &IpnsName,
         _record_bytes: &[u8],
-    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
+    ) -> Result<Option<OwnScopeMaterial>, GateError> {
         Ok(None)
     }
 
@@ -352,35 +351,44 @@ where
             // record re-fetched — no update, never a violation; its verified
             // bytes ride out so the liveness loop holds them without a re-fetch.
             // A strictly older sequence is a replay/rollback and stays a
-            // fail-closed trust violation, as does every other gate rejection.
+            // fail-closed trust violation, as does every other gate rejection —
+            // including one the equal-floor recovery reaches.
             Err(GateError::Rejected(rejection)) => match &rejection.reason {
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
                     // Our own current root at exactly the floor: recover the
-                    // owner's own scope seeds (fail-open) so the liveness loop
-                    // can hold+renew it before its EOL lapses and the write
-                    // plane keeps the keys it seals under across a session
-                    // that adopts nothing. A non-owner record yields neither.
-                    let material = adopter.recover_own_scope_material(name, &bytes).await?;
-                    if material.is_some() {
-                        keep_newest_last_known_good(snapshot_cache, name, &bytes).await?;
+                    // owner's own scope seeds so the liveness loop can
+                    // hold+renew it before its EOL lapses and the write plane
+                    // keeps the keys it seals under across a session that
+                    // adopts nothing. A non-owner adopter yields neither.
+                    match adopter.recover_own_scope_material(name, &bytes).await {
+                        Ok(material) => {
+                            if material.is_some() {
+                                keep_newest_last_known_good(snapshot_cache, name, &bytes).await?;
+                            }
+                            let recovered = material.map(|material| GatedParts {
+                                hold: material
+                                    .write_scope_seed
+                                    .map(|seed| (material.node_id, seed)),
+                                held_record: None,
+                                read_scope_seed: Some(material.read_scope_seed),
+                                current_at_floor: Some(material.at_floor),
+                            });
+                            (
+                                ResolveOutcome::Current {
+                                    record_bytes: bytes.clone(),
+                                },
+                                GatedParts {
+                                    held_record: Some((verified, bytes)),
+                                    ..recovered.unwrap_or_default()
+                                },
+                            )
+                        }
+                        Err(GateError::Rejected(refused)) => (
+                            ResolveOutcome::TrustViolation(refused),
+                            GatedParts::default(),
+                        ),
+                        Err(GateError::Seam(error)) => return Err(error),
                     }
-                    let recovered = material.map(|material| GatedParts {
-                        hold: material
-                            .write_scope_seed
-                            .map(|seed| (material.node_id, seed)),
-                        held_record: None,
-                        read_scope_seed: Some(material.read_scope_seed),
-                        current_at_floor: Some(material.at_floor),
-                    });
-                    (
-                        ResolveOutcome::Current {
-                            record_bytes: bytes.clone(),
-                        },
-                        GatedParts {
-                            held_record: Some((verified, bytes)),
-                            ..recovered.unwrap_or_default()
-                        },
-                    )
                 }
                 _ => (
                     ResolveOutcome::TrustViolation(rejection),
@@ -696,7 +704,7 @@ mod tests {
             &self,
             _name: &IpnsName,
             _record_bytes: &[u8],
-        ) -> Result<Option<OwnScopeMaterial>, crate::seams::SeamError> {
+        ) -> Result<Option<OwnScopeMaterial>, GateError> {
             Ok(self.own_seed.map(|(node_id, seed)| OwnScopeMaterial {
                 node_id,
                 read_scope_seed: Zeroizing::new([0u8; 32]),
