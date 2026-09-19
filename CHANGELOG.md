@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.0](https://github.com/FSM1/cipher-box/compare/v2.2.0...v2.3.0) (2026-09-19)
+
+
+### Features
+
+* **engine:** bind the content key AAD to the scope the write target sits in ([#1900](https://github.com/FSM1/cipher-box/issues/1900)) ([eaeaebb](https://github.com/FSM1/cipher-box/commit/eaeaebb07ecad449982a4878876aba5a963101f2))
+
+
+### Bug Fixes
+
+* split the focus window at a boundary the walk could not prove ([#1899](https://github.com/FSM1/cipher-box/issues/1899)) ([f95370d](https://github.com/FSM1/cipher-box/commit/f95370d6f849c424d13a0ae9c92d1a0ea52101d1))
+
 ## [2.2.0](https://github.com/FSM1/cipher-box/compare/v2.1.2...v2.2.0) (2026-09-18)
 
 
