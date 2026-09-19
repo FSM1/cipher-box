@@ -69,10 +69,19 @@ pub struct StagedContent {
     /// Carried for the same reason `epoch` is: the render the drain opens the
     /// blob against may place the target in another scope by then, and the op
     /// record seals this value, so it is as trustworthy as the blob it opens.
+    ///
+    /// A build before this field bound every blob to the vault root and wrote
+    /// no `scope`, so an absent one decodes as that root. The open still checks
+    /// the value against the AAD.
+    #[serde(default = "vault_root_scope")]
     pub scope: NodeId,
     /// The scope epoch bound into the key blob's AAD. Carried because the blob
     /// is opened at drain time, when the live scope epoch may have moved on.
     pub epoch: u64,
+}
+
+fn vault_root_scope() -> NodeId {
+    NodeId::VAULT_ROOT
 }
 
 impl fmt::Debug for StagedContent {
@@ -827,6 +836,27 @@ mod tests {
         for op in ops {
             assert_eq!(Op::decode_body(&op.encode_body()).unwrap(), op);
         }
+    }
+
+    /// A content op journaled by a build that carried no `scope` must still
+    /// drain after an upgrade: that build bound its blob to the vault root.
+    #[test]
+    fn a_content_op_written_before_the_scope_field_decodes_at_the_vault_root() {
+        let mut content = staged(b"stage", 11);
+        content.scope = NodeId([0x5c; 16]);
+        let op = Op::update_content(id(5), content, None, 8, at(1_004));
+        let mut body: serde_json::Value = serde_json::from_slice(&op.encode_body()).unwrap();
+        body["kind"]["UpdateContent"]["content"]
+            .as_object_mut()
+            .expect("the staged content encodes as an object")
+            .remove("scope")
+            .expect("the current grammar writes the scope");
+
+        let decoded = Op::decode_body(&serde_json::to_vec(&body).unwrap()).unwrap();
+
+        let content = decoded.staged_content().unwrap();
+        assert_eq!(content.scope, NodeId::VAULT_ROOT);
+        assert_eq!(content.epoch, 3);
     }
 
     #[test]

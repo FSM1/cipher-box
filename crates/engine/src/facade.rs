@@ -175,6 +175,12 @@ use crate::sync::tick::{
 )]
 pub struct NodeId(pub [u8; 16]);
 
+impl NodeId {
+    /// The vault root: every session anchors its render on this id, so it is
+    /// also the vault root scope's id.
+    pub(crate) const VAULT_ROOT: Self = Self([0; 16]);
+}
+
 /// A live write handle, minted by [`Engine::begin_write`].
 ///
 /// Content never crosses the facade as one buffer: the client slices the file
@@ -4356,6 +4362,23 @@ fn install_descendant_scopes(
     }
 }
 
+/// Record the boundaries one walk named without material, and release every
+/// root the same walk proved: a proved root reads on its own leg from now on,
+/// and a stale entry here would skip it as unreachable for the rest of the
+/// session. Proof wins over a name: one parent's stale body can name a root
+/// another parent's index proves in the same walk.
+fn install_unproved_scopes(
+    unproved: &RefCell<BTreeSet<NodeId>>,
+    proved: impl IntoIterator<Item = NodeId>,
+    named: BTreeSet<NodeId>,
+) {
+    let mut unproved = unproved.borrow_mut();
+    unproved.extend(named);
+    for scope in proved {
+        unproved.remove(&scope);
+    }
+}
+
 /// Drop the proved-descendant set a session leaves behind.
 ///
 /// Unconditional, unlike the best-effort clears it sits among: this set decides
@@ -4651,8 +4674,9 @@ pub struct Engine<T: SeamTypes> {
     /// Scope roots the same walk named but proved no material for: a folder
     /// publishing under a name its parent scope's write seed does not derive is
     /// a scope root of its own, whether or not the parent's child-scope index
-    /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grow-only within
-    /// a session. A boundary with no material still splits the focus window
+    /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grows within a
+    /// session until a walk proves the root ([`install_unproved_scopes`]). A
+    /// boundary with no material still splits the focus window
     /// ([`focus_scope_roots`]) and still names a crossing a relocation is
     /// classified against
     /// ([`relocation_scope_roots`](Self::relocation_scope_roots)).
@@ -4886,7 +4910,7 @@ impl<T: SeamTypes> Engine<T> {
                 // Shared by every account on purpose: a well-known anchor, never
                 // an account discriminator — separation lives in the KDFs and in
                 // the per-identity seam views that consume it.
-                snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId([0u8; 16])))),
+                snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId::VAULT_ROOT))),
                 render_memo: RefCell::new(RenderMemo::default()),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
@@ -6301,7 +6325,11 @@ where {
                                 &walked.proved,
                             );
                             install_walked_read_epochs(&walked_read_epochs, &walked.proved);
-                            unproved_roots.borrow_mut().extend(walked.unproved);
+                            install_unproved_scopes(
+                                &unproved_roots,
+                                walked.proved.iter().map(|s| NodeId(s.scope_id)),
+                                walked.unproved,
+                            );
                             descendants = walked.proved;
                         }
                         // The boundary set a rejection leaves is incomplete, and
@@ -11401,6 +11429,32 @@ mod tests {
         assert!(roots.borrow().is_empty());
     }
 
+    /// A boundary a later walk proves reads on its own leg, so it must leave the
+    /// unproved set; the focus leg skips every root that set still holds.
+    #[test]
+    fn a_walk_that_proves_an_unproved_boundary_releases_it() {
+        let released = NodeId([3; 16]);
+        let still_named = NodeId([4; 16]);
+        let not_named = NodeId([5; 16]);
+        let unproved = RefCell::new(BTreeSet::from([released, not_named]));
+
+        install_unproved_scopes(&unproved, [released], BTreeSet::from([still_named]));
+
+        assert_eq!(*unproved.borrow(), BTreeSet::from([still_named, not_named]));
+    }
+
+    /// One parent's stale body can name a root another parent's index proves in
+    /// the same walk; the proof wins.
+    #[test]
+    fn a_root_one_walk_both_proves_and_names_stays_released() {
+        let both = NodeId([6; 16]);
+        let unproved = RefCell::new(BTreeSet::from([both]));
+
+        install_unproved_scopes(&unproved, [both], BTreeSet::from([both]));
+
+        assert!(unproved.borrow().is_empty());
+    }
+
     /// And a clear it cannot make is reported rather than skipped: a set that
     /// outlives its session would hand a later account's grafted scope the
     /// owner floor plane.
@@ -14442,6 +14496,46 @@ mod tests {
         );
     }
 
+    /// The pending read opens a queued version under the pair its op carries,
+    /// whichever scope the target sits in by the time the read runs.
+    #[test]
+    fn a_pending_version_reads_back_across_a_scope_boundary_change() {
+        for promote_before_write in [true, false] {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "shared", NodeKind::Folder);
+            let shared = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "shared")
+                .unwrap()
+                .id;
+            if promote_before_write {
+                engine.descendant_scope_roots.borrow_mut().insert(shared);
+            }
+            write_file(
+                &mut engine,
+                WriteTarget::NewFile {
+                    parent: shared,
+                    name: "inside.bin".into(),
+                },
+                &[9u8; 32],
+            )
+            .expect("the write commits");
+            engine.descendant_scope_roots.borrow_mut().insert(shared);
+            let file = block_on(engine.view())
+                .unwrap()
+                .lookup(shared, "inside.bin")
+                .unwrap()
+                .id;
+
+            assert_eq!(
+                block_on(engine.read_content(file)).expect("the pending version opens"),
+                vec![9u8; 32],
+                "promoted before the write: {promote_before_write}",
+            );
+        }
+    }
+
     /// A grafted scope's floors live in the granting identity's namespace, so a
     /// write inside one must not read this vault's own floor for that id.
     #[test]
@@ -17005,12 +17099,9 @@ mod tests {
             );
         }
 
-        /// A boundary the walk named and proved no material for is a boundary
-        /// all the same. Grouping its rows onto the enclosing scope reads each
-        /// of them under a seed that cannot open them, and the child gate
-        /// answers a wrong-scope record with a trust verdict, so an honest
-        /// writer is reported as abuse. The cause is the walk, so the class is
-        /// unreachable and nothing under the boundary is read at all.
+        /// A boundary the walk named and proved no material for is an outage on
+        /// its own leg, not abuse, and nothing under it is read
+        /// ([`focus_scope_roots`]).
         #[test]
         fn a_row_under_a_boundary_the_walk_could_not_prove_is_not_read_as_abuse() {
             // The boundary's own material, which this session never proved.

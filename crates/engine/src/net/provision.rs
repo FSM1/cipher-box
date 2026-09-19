@@ -87,9 +87,7 @@ where
         // at this same name, so the two must be compared.
         match self.adopter.probe_read_scope_seed(name, &bytes).await {
             Ok(Some(recovered)) if ct_eq(&recovered, read_scope_seed) => GenesisRoot::Adopted,
-            // A foreign root is never adopted here, so its cut epoch stays
-            // unrecorded until this device resolves that scope — the probe
-            // spends nothing ([`Adopter::probe_read_scope_seed`]).
+            // A probe spends nothing ([`Adopter::probe_read_scope_seed`]).
             Ok(_) => GenesisRoot::Foreign,
             Err(_) => GenesisRoot::Unclaimed,
         }

@@ -5385,9 +5385,8 @@ where
         if content.size() != staged.plaintext_size {
             return Err(CONTENT_LOST);
         }
-        // Opened under the `{scope, epoch}` the op record seals beside the blob,
-        // not under this pass's root: the version was authored where it was
-        // authored, and a later relocation must not strand its key.
+        // Opened under the carried pair, never this pass's root
+        // ([`StagedContent::scope`]).
         //
         // A blob this build cannot *interpret* — one a newer build wrote — is
         // retained and retried, never destroyed: the same rule the op record

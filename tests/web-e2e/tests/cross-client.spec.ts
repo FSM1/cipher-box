@@ -38,10 +38,9 @@ test('a grant reaches the second client on one nocache refresh', async ({ page, 
   await grantee.refresh();
 
   await shared.open();
-  await shared.readAgain();
+  await shared.readStanding(scope, 'granted');
   const row = shared.row(scope);
   await expect(row).toHaveCount(1);
-  await expect(row.getByTestId('shared-standing')).toHaveAttribute('data-resolution', 'granted');
   await expect(shared.error).toHaveCount(0);
 
   await claimant.context().close();

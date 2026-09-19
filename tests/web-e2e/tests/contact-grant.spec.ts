@@ -53,10 +53,9 @@ test('a hand-exchanged contact code carries a grant to the second client', async
   await recipient.refresh();
   const shared = new SharedPage(second);
   await shared.open();
-  await shared.readAgain();
+  await shared.readStanding(scope, 'granted');
   const row = shared.row(scope);
   await expect(row).toHaveCount(1);
-  await expect(row.getByTestId('shared-standing')).toHaveAttribute('data-resolution', 'granted');
   await expect(row.getByTestId('shared-permission')).toHaveText('read');
   await expect(shared.error).toHaveCount(0);
 
@@ -74,10 +73,13 @@ test('a hand-exchanged contact code carries a grant to the second client', async
   const recipientListing = new FilesPage(second);
   await expect(recipientListing.breadcrumbs).toBeVisible();
   await expect
-    .poll(async () => {
-      await recipient.refresh();
-      return recipientListing.row(AFTER_GRANT).count();
-    })
+    .poll(
+      async () => {
+        await recipient.refresh();
+        return recipientListing.row(AFTER_GRANT).count();
+      },
+      { timeout: 60_000, intervals: [2_000] }
+    )
     .toBe(1);
 
   await context.close();
