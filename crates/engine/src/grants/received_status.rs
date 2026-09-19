@@ -12,6 +12,7 @@
 use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+use cipherbox_core::error::TrustViolation;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildRef, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob,
@@ -30,8 +31,8 @@ use crate::facade::{
 };
 use crate::gate::floor;
 use crate::gate::{
-    Candidate, ReaderContext, RejectionReason, SeedBlob, adopt, read_cut_epoch_floor,
-    record_cut_epoch_floor, verify_commitment_in_force,
+    Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
+    adopt, read_cut_epoch_floor, record_cut_epoch_floor, verify_commitment_in_force,
 };
 use crate::name::validate_name;
 use crate::net::rotation::scope_name;
@@ -202,6 +203,19 @@ pub(crate) fn grafted_root_name(display_name: &str, root: NodeId) -> Zeroizing<S
         Ok(()) => Zeroizing::new(display_name.to_owned()),
         Err(_) => Zeroizing::new(node_id_label(root)),
     }
+}
+
+/// Report a gate refusal of the record `share`'s scope root answered with.
+fn report_refusal(
+    events: &mpsc::UnboundedSender<Event>,
+    share: &ReceivedShare,
+    rejection: &GateRejection,
+) {
+    emit_trust_violation(
+        events,
+        grafted_root_name(&share.display_name, NodeId(share.scope_id)).as_str(),
+        rejection,
+    );
 }
 
 /// Merge one opened scope root into the render tree, under the cross-plane rule
@@ -379,7 +393,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             // One resolve serves both legs: the verdict this row renders, and
             // the subtree a browse of it opens.
-            let (class, resolved) = self.classified(share, contact).await;
+            let (mut class, resolved) = self.classified(share, contact, render.events).await;
             let mut permission = carried;
             if class == ResolutionClass::Granted {
                 if let Some((candidate, floors)) = &resolved {
@@ -390,11 +404,16 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                         permission = committed;
                     }
                     if renderable.contains(&share.scope_id) {
-                        if let Some(open) = self
+                        match self
                             .open(candidate, share, contact, floors.epoch, permission, render)
                             .await
                         {
-                            opened.push(open);
+                            Ok(Some(open)) => opened.push(open),
+                            Ok(None) => {}
+                            Err(rejection) => {
+                                report_refusal(render.events, share, &rejection);
+                                class = ResolutionClass::Unresolvable;
+                            }
                         }
                     }
                 }
@@ -508,18 +527,25 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         &self,
         share: &ReceivedShare,
         contact: &Contact,
+        events: &mpsc::UnboundedSender<Event>,
     ) -> (ResolutionClass, Option<(Candidate, SharedScopeFloors)>) {
-        let Some((candidate, floors)) = self.resolved(share).await else {
+        let Some((candidate, floors)) = self.resolved(share, events).await else {
             return (ResolutionClass::Unresolvable, None);
         };
-        let facts = facts_from(
+        let facts = match facts_from(
             &candidate,
             share,
             self.enc_secret,
             &contact.identity_pk(),
             &contact.enc_subkey(),
             floors,
-        );
+        ) {
+            Ok(facts) => facts,
+            Err(rejection) => {
+                report_refusal(events, share, &rejection);
+                return (ResolutionClass::Unresolvable, None);
+            }
+        };
         let cut_epoch = candidate.grant_section.commitment.cut_epoch;
         // Only a cut this device has not recorded is written, so a scope in its
         // steady state costs the store nothing. A cut this pass could not record
@@ -538,10 +564,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     }
 
     /// The record `share`'s scope root answers with now, and the durable bars
-    /// every verdict on it is measured against. `None` is absence — an
-    /// unparsable bookmark, an unresolvable name, an unassemblable record, or a
-    /// floor this pass could not read — never a removal.
-    async fn resolved(&self, share: &ReceivedShare) -> Option<(Candidate, SharedScopeFloors)> {
+    /// every verdict on it is measured against. `None` is never a removal: it
+    /// is absence — an unparsable bookmark, an unresolvable name, an
+    /// unassemblable record, or a floor this pass could not read — or a replay
+    /// below the sequence floor, which is reported on `events` first.
+    async fn resolved(
+        &self,
+        share: &ReceivedShare,
+        events: &mpsc::UnboundedSender<Event>,
+    ) -> Option<(Candidate, SharedScopeFloors)> {
         // A floor this pass could not read is availability, not a verdict: with
         // no floor neither bar can fire, so a superseded or stale record would
         // read as granted. Absent (`Ok(None)`) is a genuine zero.
@@ -564,7 +595,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         let sequence_floor = floor::sequence_floor(self.floors, &share.scope_root_name)
             .await
             .ok()?;
-        if sequence_floor.is_some_and(|floor| verified.sequence < floor) {
+        if let Some(floor) = sequence_floor.filter(|floor| verified.sequence < *floor) {
+            let rejection = GateRejection {
+                stage: GateStage::Sequence,
+                reason: RejectionReason::SequenceNotNewer {
+                    floor,
+                    sequence: verified.sequence,
+                },
+            };
+            report_refusal(events, share, &rejection);
             return None;
         }
         let candidate = assemble_candidate(self.gateway, self.http, &name, &record_bytes, None)
@@ -576,8 +615,9 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     /// Open the accepted scope's own folder body, and cache the scope seeds the
     /// legs below its root run on: the read seed every read leg unseals with,
     /// and — under a committed `Write` — the write seed this device's own drain
-    /// pass derives each published name and signer from. `None` leaves the
-    /// render tree as the last pass left it.
+    /// pass derives each published name and signer from. `Ok(None)` leaves the
+    /// render tree as the last pass left it, and so does a gate refusal, which
+    /// the caller reports.
     ///
     /// Both seeds come off the record this pass just resolved, never off the
     /// bookmark: a grant the owner has since cut yields no blob at this
@@ -599,12 +639,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         epoch_floor: u64,
         permission: Permission,
         render: &ScopeRender<'_>,
-    ) -> Option<Opened<'s>> {
+    ) -> Result<Option<Opened<'s>>, GateRejection> {
         // A scope root is the node its own scope is named for, and the bookmark
         // opens under that id. The reader-scope bind is stage 6's, so state it
         // here too: the equal-floor arm below unseals without reaching stage 6.
         if candidate.envelope.id != share.scope_id || candidate.envelope.scope != share.scope_id {
-            return None;
+            return Ok(None);
         }
         // The scope root is a node id like any other, and a sharer authors it.
         // One this vault's own tree holds would be renamed here and pruned to the
@@ -613,14 +653,16 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // and refusing on that alone would let one contact deny another contact's
         // share for good.
         if in_own_tree(&render.base.borrow(), NodeId(share.scope_id)) {
-            return None;
+            return Ok(None);
         }
-        let tag = recipient_blinded_tag(
+        let Some(blob) = recipient_blinded_tag(
             self.enc_secret,
             &contact.enc_subkey(),
             &share.scope_root_name,
-        )?;
-        let blob = self_locate_signed(&candidate.grant_section.grant_blobs, &tag)?;
+        )
+        .and_then(|tag| self_locate_signed(&candidate.grant_section.grant_blobs, &tag)) else {
+            return Ok(None);
+        };
         let aad = AadContext {
             v: candidate.envelope.v,
             id: candidate.envelope.id,
@@ -628,9 +670,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             epoch: candidate.envelope.epoch,
             struct_tag: STRUCT_TAG_GRANT_BLOB,
         };
-        let Ok(grant) = open_grant_blob(self.enc_secret, &blob.enc, &aad, &blob.ciphertext) else {
-            return None;
-        };
+        let grant =
+            open_grant_blob(self.enc_secret, &blob.enc, &aad, &blob.ciphertext).map_err(|e| {
+                GateRejection {
+                    stage: GateStage::Unseal,
+                    reason: RejectionReason::Trust(e),
+                }
+            })?;
         let node_seed = kdf::node_seed(grant.read_scope_seed(), &candidate.envelope.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
         let reader = ReaderContext {
@@ -650,16 +696,17 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // pre-resolve floor, so no record can extend its own seed's residency.
         let body = match adopt(&self.sharer_floors(share), &reader, candidate).await {
             Ok((adopted, _)) => Some((adopted.read_body, adopted.sequence, adopted.epoch)),
-            Err(e) => match e.rejection().map(|r| &r.reason) {
-                Some(RejectionReason::SequenceNotNewer { floor, sequence })
+            Err(GateError::Rejected(rejection)) => match rejection.reason {
+                RejectionReason::SequenceNotNewer { floor, sequence }
                     if sequence == floor && candidate.envelope.epoch >= epoch_floor =>
                 {
                     open_read_body(&candidate.envelope, &read_key)
                         .ok()
-                        .map(|body| (body, *sequence, epoch_floor))
+                        .map(|body| (body, sequence, epoch_floor))
                 }
-                _ => None,
+                _ => return Err(rejection),
             },
+            Err(GateError::Seam(_)) => None,
         };
         let Some((
             ReadBody::Folder {
@@ -671,7 +718,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             epoch,
         )) = body
         else {
-            return None;
+            return Ok(None);
         };
         deposit_seed(
             render.read_seeds,
@@ -707,12 +754,12 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 }
             }
         }
-        Some(Opened {
+        Ok(Some(Opened {
             share,
             children,
             sequence,
             modified_at,
-        })
+        }))
     }
 }
 
@@ -721,7 +768,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 ///
 /// A commitment [`verify_commitment_in_force`] refuses is not a fresh
 /// owner-signed record — a party republishing at that name proves nothing about
-/// your grant, so it classifies as unresolvable rather than as a removal.
+/// your grant, so the row renders unresolvable rather than a removal, and the
+/// refusal itself is the gate's, which the caller reports.
 pub(crate) fn facts_from(
     candidate: &Candidate,
     share: &ReceivedShare,
@@ -729,24 +777,27 @@ pub(crate) fn facts_from(
     sharer_identity: &EcdsaVerifier,
     sharer_enc_pub: &X25519Public,
     floors: SharedScopeFloors,
-) -> ResolutionFacts {
+) -> Result<ResolutionFacts, GateRejection> {
     let scope_root_name = share.scope_root_name.as_slice();
     // The epoch below is measured against `share.scope_id`'s floor, so the
     // record must claim that scope — the binding the adoption gate makes, on a
     // path that reaches no verdict from unsealing.
     if candidate.envelope.scope != share.scope_id {
-        return ResolutionFacts::unresolved(floors.epoch);
+        return Err(GateRejection {
+            stage: GateStage::Unseal,
+            reason: RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
+        });
     }
     let section = &candidate.grant_section;
     // The gate's stage 2 entire, so a browse of this row opens exactly the
     // records the row calls granted. A write-only cut republishes at the scope's
     // unchanged read epoch, so the epoch-lag rung below cannot stand in for the
     // cut bar.
-    if verify_commitment_in_force(sharer_identity, section, scope_root_name, floors.cut_epoch)
-        .is_err()
-    {
-        return ResolutionFacts::unresolved(floors.epoch);
-    }
+    verify_commitment_in_force(sharer_identity, section, scope_root_name, floors.cut_epoch)
+        .map_err(|e| GateRejection {
+            stage: GateStage::CommitmentVerify,
+            reason: RejectionReason::Trust(e),
+        })?;
     // The owner-signed commitment is the authority, so a blob at an uncommitted
     // tag is not a grant: it counts as removal, the same verdict the accept flow
     // reaches by refusing an uncommitted tag.
@@ -755,12 +806,12 @@ pub(crate) fn facts_from(
             section.commitment.entries.iter().any(|e| e.tag == tag)
                 && self_locate_signed(&section.grant_blobs, &tag).is_some()
         });
-    ResolutionFacts {
+    Ok(ResolutionFacts {
         owner_signed_record: true,
         blob_present,
         record_epoch: candidate.envelope.epoch,
         epoch_floor: floors.epoch,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -789,6 +840,10 @@ mod tests {
     use crate::testkit::fakes::InMemoryFloorStore;
     use crate::testkit::fakes::{InMemoryRecordStore, InMemoryStagingStore, ScriptedHttp};
     use crate::testkit::requested_cid;
+    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
+    use cipherbox_core::seal::{encode_envelope, encode_grant_section, set_grant_section};
+
+    use crate::content::DAG_ROOT_CODEC;
     use crate::testkit::{
         OWNER_ROOT_EPOCH, OWNER_ROOT_POINTER_READ_KEY, OWNER_ROOT_WRITE_SCOPE_SEED,
         OwnerRootFixture, OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
@@ -800,7 +855,7 @@ mod tests {
 
     use super::super::accept::{ReceivedShareStoreError, ReceivedSharesList};
     use super::super::ledger::mint_grant_row;
-    use super::super::revocation::{ResolutionClass, classify};
+    use super::super::revocation::{ResolutionClass, ResolutionFacts, classify};
 
     const SCOPE: [u8; 16] = [0x5c; 16];
     /// This vault's own root, which the shared scope is grafted in beside.
@@ -919,14 +974,27 @@ mod tests {
     }
 
     fn classify_at(candidate: &Candidate, sharer: &EcdsaSigner, floor: u64) -> ResolutionClass {
-        classify(&facts_from(
+        classify(&facts_at(candidate, sharer, floor).expect("the record clears stage 2"))
+    }
+
+    fn facts_at(
+        candidate: &Candidate,
+        sharer: &EcdsaSigner,
+        floor: u64,
+    ) -> Result<ResolutionFacts, GateRejection> {
+        facts_from(
             candidate,
             &bookmark(),
             &my_enc(),
             &sharer.verifying_key(),
             &sharer_enc().public(),
             floors_at(floor),
-        ))
+        )
+    }
+
+    /// The stage a refused record's rejection names.
+    fn refused_at(facts: Result<ResolutionFacts, GateRejection>) -> GateStage {
+        facts.expect_err("the gate refuses the record").stage
     }
 
     /// Which durable bar a [`FailingFloorRead`] store refuses to answer. Every
@@ -1035,6 +1103,8 @@ mod tests {
         records: InMemoryRecordStore,
         http: ScriptedHttp,
         gateway: Gateway,
+        /// Whether the last resolve reported a trust violation.
+        reported: Cell<bool>,
     }
 
     impl ServedScopeRoot {
@@ -1056,6 +1126,7 @@ mod tests {
                     public_fallbacks: vec![GatewaySource::public("https://gateway.invalid")],
                     ..Default::default()
                 },
+                reported: Cell::new(false),
             };
             served.seed(sequence);
             served
@@ -1101,7 +1172,8 @@ mod tests {
                 headers: Vec::new(),
                 body: self.fixture.head_block.clone(),
             });
-            block_on(
+            let (events, mut rx) = mpsc::unbounded();
+            let (class, _) = block_on(
                 ReceivedShareStatus {
                     transport: &self.records,
                     gateway: &self.gateway,
@@ -1114,9 +1186,15 @@ mod tests {
                 .classified(
                     share,
                     &Contact::from(&ContactCode::create(sharer, sharer_enc().public())),
+                    &events,
                 ),
-            )
-            .0
+            );
+            drop(events);
+            self.reported.set(
+                core::iter::from_fn(|| rx.try_recv().ok())
+                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+            );
+            class
         }
     }
 
@@ -1139,6 +1217,7 @@ mod tests {
             ResolutionClass::Unresolvable,
             "an unread floor is availability, never a verdict"
         );
+        assert!(!served.reported.get(), "availability accuses nobody");
     }
 
     /// The replay bar is what keeps a suppressing relay from re-serving the
@@ -1147,10 +1226,42 @@ mod tests {
     #[test]
     fn an_unreadable_sequence_floor_reaches_no_verdict() {
         let sharer = sharer_signer();
+        let served = ServedScopeRoot::new(&sharer);
         assert_eq!(
-            ServedScopeRoot::new(&sharer).resolve(&FailingFloorRead(Unreadable::Sequence), &sharer),
+            served.resolve(&FailingFloorRead(Unreadable::Sequence), &sharer),
             ResolutionClass::Unresolvable,
             "an unread replay bar is availability, never a verdict"
+        );
+        assert!(!served.reported.get(), "availability accuses nobody");
+    }
+
+    /// A record below the durable sequence floor is a replay or a rollback: the
+    /// row stays unresolvable, and the member hears of it as a trust violation.
+    #[test]
+    fn a_record_below_the_sequence_floor_is_reported_as_a_trust_violation() {
+        let sharer = sharer_signer();
+        let floors = InMemoryFloorStore::default();
+        block_on(
+            floors.raise_sequence_floor(scope_root_name().as_str().as_bytes(), SERVED_SEQUENCE + 1),
+        )
+        .expect("the floor store answers");
+        let served = ServedScopeRoot::new(&sharer);
+
+        assert_eq!(
+            served.resolve(&floors, &sharer),
+            ResolutionClass::Unresolvable
+        );
+        assert!(served.reported.get(), "a rollback is a trust verdict");
+
+        let at_floor = InMemoryFloorStore::default();
+        block_on(
+            at_floor.raise_sequence_floor(scope_root_name().as_str().as_bytes(), SERVED_SEQUENCE),
+        )
+        .expect("the floor store answers");
+        assert_eq!(served.resolve(&at_floor, &sharer), ResolutionClass::Granted);
+        assert!(
+            !served.reported.get(),
+            "the record this device already adopted is no replay"
         );
     }
 
@@ -1185,6 +1296,10 @@ mod tests {
             served.resolve(&floors, &sharer),
             ResolutionClass::Unresolvable,
             "the served root carries the pre-cut set"
+        );
+        assert!(
+            served.reported.get(),
+            "a replayed pre-cut set is a trust verdict"
         );
     }
 
@@ -1268,6 +1383,7 @@ mod tests {
             ResolutionClass::Unresolvable,
             "an unrecorded cut is availability, never a verdict"
         );
+        assert!(!served.reported.get(), "availability accuses nobody");
         assert_eq!(
             served.resolve(&InMemoryFloorStore::default(), &sharer),
             ResolutionClass::Granted,
@@ -1295,6 +1411,10 @@ mod tests {
             served.resolve(&floors, &sharer),
             ResolutionClass::Unresolvable,
             "the bookmarked identity did not sign this commitment"
+        );
+        assert!(
+            served.reported.get(),
+            "a forged commitment is a trust verdict"
         );
 
         served.serve(
@@ -1385,9 +1505,10 @@ mod tests {
     }
 
     /// The epoch is measured against the bookmarked scope's floor, so a record
-    /// claiming another scope is not evidence about this one.
+    /// claiming another scope is not evidence about this one — it is the scope
+    /// transplant the gate refuses.
     #[test]
-    fn a_record_that_claims_another_scope_is_unresolvable() {
+    fn a_record_that_claims_another_scope_is_refused() {
         let sharer = sharer_signer();
         let candidate = resolved(&sharer, &[&my_enc().public()]);
         let facts = facts_from(
@@ -1401,7 +1522,7 @@ mod tests {
             &sharer_enc().public(),
             floors_at(OWNER_ROOT_EPOCH),
         );
-        assert_eq!(classify(&facts), ResolutionClass::Unresolvable);
+        assert_eq!(refused_at(facts), GateStage::Unseal);
     }
 
     #[test]
@@ -1414,10 +1535,10 @@ mod tests {
         );
     }
 
-    /// A set the owner has since cut is a replay, not a verdict, and a replay is
-    /// never read as a removal.
+    /// A set the owner has since cut is a replay: a gate refusal, never read as
+    /// a removal.
     #[test]
-    fn a_commitment_a_cut_superseded_is_unresolvable() {
+    fn a_commitment_a_cut_superseded_is_refused() {
         let sharer = sharer_signer();
         let candidate = resolved(&sharer, &[&my_enc().public()]);
         let facts = facts_from(
@@ -1431,7 +1552,7 @@ mod tests {
                 cut_epoch: 1,
             },
         );
-        assert_eq!(classify(&facts), ResolutionClass::Unresolvable);
+        assert_eq!(refused_at(facts), GateStage::CommitmentVerify);
     }
 
     /// The definitive removal: the owner republished the committed set without
@@ -1469,7 +1590,8 @@ mod tests {
             &sharer.verifying_key(),
             &sharer_enc().public(),
             floors_at(OWNER_ROOT_EPOCH),
-        );
+        )
+        .expect("the owner's own commitment still verifies");
         assert!(
             facts.owner_signed_record,
             "the owner's own commitment still verifies"
@@ -1478,23 +1600,23 @@ mod tests {
     }
 
     /// A record another party republished at that name proves nothing about your
-    /// grant, so it is never read as a removal.
+    /// grant, so it is refused and never read as a removal.
     #[test]
-    fn a_record_the_sharer_did_not_sign_is_unresolvable_never_a_revocation() {
+    fn a_record_the_sharer_did_not_sign_is_refused_never_a_revocation() {
         let sharer = sharer_signer();
         let candidate = resolved(&sharer, &[&my_enc().public()]);
         let impostor = EcdsaSigner::from_scalar(&[0x71; 32]).expect("valid scalar");
 
         assert_eq!(
-            classify_at(&candidate, &impostor, OWNER_ROOT_EPOCH),
-            ResolutionClass::Unresolvable,
+            refused_at(facts_at(&candidate, &impostor, OWNER_ROOT_EPOCH)),
+            GateStage::CommitmentVerify,
         );
     }
 
     /// The same holds for a commitment bound to some other scope root: it is the
     /// sharer's signature over a different name, not a verdict on this one.
     #[test]
-    fn a_commitment_bound_to_another_name_is_unresolvable() {
+    fn a_commitment_bound_to_another_name_is_refused() {
         let sharer = sharer_signer();
         let candidate = resolved(&sharer, &[&my_enc().public()]);
         let facts = facts_from(
@@ -1508,7 +1630,7 @@ mod tests {
             &sharer_enc().public(),
             floors_at(OWNER_ROOT_EPOCH),
         );
-        assert_eq!(classify(&facts), ResolutionClass::Unresolvable);
+        assert_eq!(refused_at(facts), GateStage::CommitmentVerify);
     }
 
     /// Still committed, but behind the durable read-epoch floor: a sweep-pending
@@ -3074,5 +3196,65 @@ mod tests {
 
         assert_eq!(fx.listing(), vec!["photos".to_owned()]);
         assert!(fx.read_seeds.borrow().contains_key(&SCOPE));
+        assert!(
+            !fx.reported.get(),
+            "the record already adopted is no replay"
+        );
+    }
+
+    /// `fixture` with its owner blob's structure signature broken: stage 2
+    /// still passes, so the row classifies, and the gate's stage 3 refuses.
+    fn with_forged_owner_blob(fixture: OwnerRootFixture) -> OwnerRootFixture {
+        let OwnerRootFixture {
+            name,
+            mut grant_section,
+            mut envelope,
+            ..
+        } = fixture;
+        grant_section.owner_blob.signature[0] ^= 0x01;
+        set_grant_section(
+            &mut envelope,
+            encode_grant_section(&grant_section).expect("the section encodes"),
+        );
+        let head_block = encode_envelope(&envelope).expect("the envelope encodes");
+        let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+        OwnerRootFixture {
+            name,
+            grant_section,
+            envelope,
+            head_block,
+            head_cid_str,
+        }
+    }
+
+    /// A scope root the gate refuses is a trust violation: the row fails, the
+    /// member hears of it, and nothing of the refused body renders.
+    #[test]
+    fn a_scope_root_the_gate_refuses_is_reported_and_never_rendered() {
+        let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.fixture = with_forged_owner_blob(shared_scope_fixture(
+            vec![shared_child(0xa1, "photos")],
+            Permission::Read,
+        ));
+        seed_scope_root(&fx.records, &fx.fixture, 1);
+        fx.bookmark();
+
+        assert_eq!(fx.pass(0), ResolutionClass::Unresolvable);
+        assert!(fx.reported.get(), "a gate refusal is a trust verdict");
+        assert!(fx.listing().is_empty());
+        assert!(!fx.read_seeds.borrow().contains_key(&SCOPE));
+    }
+
+    /// A floor store that cannot commit the adoption is availability: nothing
+    /// renders, and nobody is accused.
+    #[test]
+    fn an_adoption_the_floor_store_cannot_commit_accuses_nobody() {
+        let fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+        fx.floors.fail_floor_commits();
+
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        assert!(!fx.reported.get(), "availability accuses nobody");
+        assert!(fx.listing().is_empty());
     }
 }
