@@ -139,16 +139,7 @@ export async function signIn(page: Page): Promise<number> {
   return Date.now() - started;
 }
 
-/**
- * Waits until the listing carries no unpublished row — the hookless stand-in
- * for the local suite's drained queue, since the chrome marks a row until its
- * write publishes. A dead-lettered write fails here rather than at whatever read
- * used it: its row can leave the listing, which clears the mark too, so the
- * notice is what tells the two apart.
- */
-export async function published(page: Page): Promise<void> {
-  const browser = new FilesPage(page).browser;
-  await expect(browser.locator('.file-list-item-status--dead')).toHaveCount(0);
-  await expect(browser.locator('.file-list-item-status')).toHaveCount(0, { timeout: 180_000 });
-  await expect(page.getByTestId('dead-letter-notice')).toHaveCount(0);
+/** {@link FilesPage.published}, for the page a staging spec holds. */
+export function published(page: Page): Promise<void> {
+  return new FilesPage(page).published();
 }

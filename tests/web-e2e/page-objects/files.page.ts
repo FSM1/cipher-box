@@ -33,6 +33,21 @@ export class FilesPage {
     return this.page.getByTestId('status-indicator');
   }
 
+  /**
+   * Waits until the listing carries no unpublished row — the hookless stand-in
+   * for a drained queue, since the chrome marks a row until its write publishes.
+   * A dead-lettered write fails here rather than at whatever read used it: its
+   * row can leave the listing, which clears the mark too, so the notice is what
+   * tells the two apart.
+   */
+  async published(): Promise<void> {
+    await expect(this.browser.locator('.file-list-item-status--dead')).toHaveCount(0);
+    await expect(this.browser.locator('.file-list-item-status')).toHaveCount(0, {
+      timeout: 180_000,
+    });
+    await expect(this.page.getByTestId('dead-letter-notice')).toHaveCount(0);
+  }
+
   async goto(): Promise<void> {
     await this.page.goto('/files');
   }

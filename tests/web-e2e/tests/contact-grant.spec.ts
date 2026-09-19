@@ -67,9 +67,7 @@ test('a hand-exchanged contact code carries a grant to the second client', async
   await ownerFiles.upload(AFTER_GRANT, new Uint8Array(512).fill(9));
   const added = ownerFiles.row(AFTER_GRANT);
   await expect(added).toBeVisible();
-  await expect(added.locator('.file-list-item-status')).toHaveCount(0, { timeout: 60_000 });
-  // A dead-lettered write also clears its pending mark, by leaving the listing.
-  await expect(page.getByTestId('dead-letter-notice')).toHaveCount(0);
+  await ownerFiles.published();
   await expect(added).toBeVisible();
 
   await shared.openShare(scope);
