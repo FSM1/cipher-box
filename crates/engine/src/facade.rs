@@ -3514,6 +3514,20 @@ fn stamp_focus_refreshed(
     }
 }
 
+/// The boundaries a focus leg groups its targets against: the roots a gated
+/// descent proved, and the roots the same walk named but proved no material for
+/// ([`ScopeWalk::descendant_scope_roots`](crate::net::ScopeWalk::descendant_scope_roots)).
+///
+/// A boundary is a boundary whether or not this session holds its keys, so the
+/// unproved half splits the window too. Grouping its subtree onto the enclosing
+/// scope reads every row under a seed that cannot open it, and the child gate
+/// answers a wrong-scope record with a trust verdict, so an honest writer would
+/// be reported as abuse — availability laundered into a trust verdict (security
+/// rule 6).
+fn focus_scope_roots(proved: &BTreeSet<NodeId>, unproved: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    proved.union(unproved).copied().collect()
+}
+
 /// The subset of `nodes` the scope rooted at `root` seals.
 ///
 /// One leg holds one scope's read material, so a node in a shared scope this
@@ -4623,9 +4637,10 @@ pub struct Engine<T: SeamTypes> {
     /// publishing under a name its parent scope's write seed does not derive is
     /// a scope root of its own, whether or not the parent's child-scope index
     /// still names it ([`ScopeWalk::descendant_scope_roots`]). Grow-only within
-    /// a session, and read by
-    /// [`relocation_scope_roots`](Self::relocation_scope_roots) alone: the legs
-    /// that need material read the proved set above.
+    /// a session. A boundary with no material still splits the focus window
+    /// ([`focus_scope_roots`]) and still names a crossing a relocation is
+    /// classified against
+    /// ([`relocation_scope_roots`](Self::relocation_scope_roots)).
     unproved_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Whether the last boundary walk to reach a verdict met a trust rejection.
     /// While it stands the session refuses every relocation, because a walk
@@ -6306,19 +6321,28 @@ where {
                     let mut folder_verdict = RefreshVerdict::Reconciled;
                     let mut attempted_files: Vec<NodeId> = Vec::new();
                     let proved_scope_ids = descendant_roots.borrow().clone();
+                    let unproved_scope_ids = unproved_roots.borrow().clone();
+                    let focus_scope_ids = focus_scope_roots(&proved_scope_ids, &unproved_scope_ids);
                     let mut by_scope =
-                        focus_by_scope(&base.borrow(), &focus.borrow(), &proved_scope_ids);
+                        focus_by_scope(&base.borrow(), &focus.borrow(), &focus_scope_ids);
                     // A window whose only folder in view is a scope root groups
                     // no folder target of its own, because that root resolves on
                     // its pointer leg. Its scope still needs a pass, so the rows
                     // it lists reach the file leg below.
                     for folder in focus.borrow().folders_in_view() {
                         by_scope
-                            .entry(scope_root_of(&base.borrow(), folder, &proved_scope_ids))
+                            .entry(scope_root_of(&base.borrow(), folder, &focus_scope_ids))
                             .or_default();
                     }
                     let scope_roots = bookmarked_scope_roots.borrow().clone();
                     for (scope_root, targets) in by_scope {
+                        if unproved_scope_ids.contains(&scope_root) {
+                            // No material was ever proved for this boundary, so
+                            // its subtree waits for the walk that proves it
+                            // ([`focus_scope_roots`]).
+                            folder_verdict = folder_verdict.worst(RefreshVerdict::Unreachable);
+                            continue;
+                        }
                         let own = is_own_scope(&root_id, &proved_scope_ids, &scope_root.0);
                         let Some(scope_read_seed) = cached_seed(&scope_read_seeds, &scope_root.0)
                         else {
@@ -6384,7 +6408,7 @@ where {
                             let base_now = base.borrow();
                             let in_view = nodes_in_scope(
                                 &base_now,
-                                &proved_scope_ids,
+                                &focus_scope_ids,
                                 scope_root,
                                 focus.borrow().folders_in_view().collect(),
                             );
@@ -6402,7 +6426,7 @@ where {
                             leg_file_share(
                                 nodes_in_scope(
                                     &base_now,
-                                    &proved_scope_ids,
+                                    &focus_scope_ids,
                                     scope_root,
                                     focus_files(&base_now, &focus.borrow()),
                                 ),
@@ -9040,7 +9064,10 @@ where {
     fn scoped_to(&self, root: NodeId, nodes: Vec<NodeId>) -> Vec<NodeId> {
         nodes_in_scope(
             &self.snapshot.borrow(),
-            &self.descendant_scope_roots.borrow(),
+            &focus_scope_roots(
+                &self.descendant_scope_roots.borrow(),
+                &self.unproved_scope_roots.borrow(),
+            ),
             root,
             nodes,
         )
@@ -16859,6 +16886,130 @@ mod tests {
             );
         }
 
+        /// A boundary the walk named and proved no material for is a boundary
+        /// all the same. Grouping its rows onto the enclosing scope reads each
+        /// of them under a seed that cannot open them, and the child gate
+        /// answers a wrong-scope record with a trust verdict, so an honest
+        /// writer is reported as abuse. The cause is the walk, so the class is
+        /// unreachable and nothing under the boundary is read at all.
+        #[test]
+        fn a_row_under_a_boundary_the_walk_could_not_prove_is_not_read_as_abuse() {
+            // The boundary's own material, which this session never proved.
+            const OTHER_WRITE_SEED: [u8; 32] = [0x5A; 32];
+            const OTHER_READ_SEED: [u8; 32] = [0x5B; 32];
+            let unproved = NodeId([0xE1; 16]);
+            let row = NodeId([0xE2; 16]);
+
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+            let _ = drain(&mut events);
+
+            // Both records are sealed at the boundary's own scope and published
+            // under its own write seed — the shape of every record below a
+            // promoted root.
+            let publish = |node: NodeId, body: &ReadBody| {
+                let node_seed = kdf::node_seed(&OTHER_READ_SEED, &node.0);
+                let envelope = seal_read_body(
+                    kdf::read_key(node_seed.as_bytes()).as_bytes(),
+                    &[node.0[0]; 24],
+                    1,
+                    node.0,
+                    unproved.0,
+                    EPOCH,
+                    body,
+                )
+                .expect("the body seals");
+                let head_block = encode_envelope(&envelope).expect("the envelope encodes");
+                let head_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+                let name = derive_write_name(&OTHER_WRITE_SEED, &node.0);
+                let record = IpnsRecord::create_v2(
+                    &kdf::ipns_keypair(kdf::write_seed(&OTHER_WRITE_SEED, &node.0).as_bytes()),
+                    format!("/ipfs/{head_cid}").as_bytes(),
+                    1,
+                    TTL_NANOS,
+                    EOL,
+                )
+                .marshal();
+                for endpoint in device.record_store.endpoints() {
+                    device
+                        .record_store
+                        .seed_record(&endpoint, name.as_str(), record.clone());
+                }
+                (name, head_block)
+            };
+            let (folder_name, folder_head) = publish(
+                unproved,
+                &ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: Vec::new(),
+                    unknown: PreservedFields::new(),
+                },
+            );
+            let (file_name, file_head) = publish(
+                row,
+                &ReadBody::File {
+                    created_at: 0,
+                    modified_at: 0,
+                    versions: Vec::new(),
+                    unknown: PreservedFields::new(),
+                },
+            );
+            {
+                let mut base = engine.snapshot.borrow_mut();
+                let mut folder = NodeMeta::new(unproved, "unproved", NodeKind::Folder);
+                folder.ipns_name = Some(folder_name.as_str().as_bytes().to_vec());
+                base.upsert_node(folder);
+                let mut file = NodeMeta::new(row, "row.txt", NodeKind::File);
+                file.ipns_name = Some(file_name.as_str().as_bytes().to_vec());
+                base.upsert_node(file);
+                base.link(ROOT, unproved, 1);
+                base.link(unproved, row, 1);
+            }
+            engine.unproved_scope_roots.borrow_mut().insert(unproved);
+            engine.note_focus_access(Some(unproved));
+
+            let forced = engine
+                .file_forced_pass()
+                .expect("a tick loop is running")
+                .expect("the pass is filed");
+            let mut landed = Box::pin(forced.landed());
+            // Every head block this pass could ask for is served, so a pass that
+            // does group these rows onto the vault leg reaches the gate and
+            // raises the abuse this test refuses.
+            let blocks = Blocks::default();
+            let (head_block, _, _) = owner_root();
+            for block in [head_block, folder_head, file_head] {
+                blocks.put(block);
+            }
+            serve_http(&device, &blocks, 8);
+            world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
+            poll_tasks_once(&mut tasks);
+
+            assert!(
+                drain(&mut events)
+                    .into_iter()
+                    .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+                "the writer is honest; the walk is what failed",
+            );
+            assert!(
+                matches!(
+                    landed
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop())),
+                    Poll::Ready(Err(EngineError::RefreshFailed { .. }))
+                ),
+                "a boundary with no material is an outage on its own leg",
+            );
+            assert!(
+                engine.snapshot.borrow().node(row).unwrap().size.is_none(),
+                "and nothing below it was painted from a record read under \
+                 another scope's seed",
+            );
+        }
+
         /// A rotation that raises the scope's durable read-epoch floor revokes
         /// the epoch the cached seed was recovered under, so the seed goes —
         /// least privilege binds retention, not only install.
@@ -18788,6 +18939,46 @@ mod focus_access_tests {
             engine.queued_focus_files(),
             vec![shared_file],
             "it stays queued for the tick's leg for that scope"
+        );
+    }
+
+    /// The same rule holds for a boundary the walk named and proved no material
+    /// for: the navigation leg may no more read its rows under the vault's seed
+    /// than it may read a proved scope's ([`focus_scope_roots`]).
+    #[test]
+    fn the_navigation_file_leg_leaves_an_unproved_boundarys_rows_alone() {
+        let engine = started_engine();
+        let unproved_root = NodeId([9; 16]);
+        let theirs = file_id(1);
+        let mine = file_id(2);
+        {
+            let mut base = engine.snapshot.borrow_mut();
+            let root = base.root;
+            base.upsert_node(NodeMeta::new(unproved_root, "unproved", NodeKind::Folder));
+            base.link(root, unproved_root, 1);
+            base.upsert_node(NodeMeta::new(theirs, "theirs.bin", NodeKind::File));
+            base.link(unproved_root, theirs, 1);
+            base.upsert_node(NodeMeta::new(mine, "mine.bin", NodeKind::File));
+            base.link(root, mine, 1);
+        }
+        engine
+            .unproved_scope_roots
+            .borrow_mut()
+            .insert(unproved_root);
+        engine.note_focus_file(theirs);
+        engine.note_focus_file(mine);
+
+        let now = engine.seams.scheduler.now();
+        block_on(engine.refresh_focus_on_access(now, Some(unproved_root)));
+
+        assert!(
+            !engine.focus_refreshed.borrow().contains_key(&theirs),
+            "the row below the boundary was not resolved under the vault's seed"
+        );
+        assert_eq!(
+            engine.queued_focus_files(),
+            vec![theirs],
+            "it waits for the pass that proves the boundary"
         );
     }
 }
