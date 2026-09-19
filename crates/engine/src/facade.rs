@@ -175,6 +175,12 @@ use crate::sync::tick::{
 )]
 pub struct NodeId(pub [u8; 16]);
 
+impl NodeId {
+    /// The vault root: every session anchors its render on this id, so it is
+    /// also the vault root scope's id.
+    pub(crate) const VAULT_ROOT: Self = Self([0; 16]);
+}
+
 /// A live write handle, minted by [`Engine::begin_write`].
 ///
 /// Content never crosses the facade as one buffer: the client slices the file
@@ -4903,7 +4909,7 @@ impl<T: SeamTypes> Engine<T> {
                 // Shared by every account on purpose: a well-known anchor, never
                 // an account discriminator — separation lives in the KDFs and in
                 // the per-identity seam views that consume it.
-                snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId([0u8; 16])))),
+                snapshot: Rc::new(BaseSnapshot::new(Snapshot::new(NodeId::VAULT_ROOT))),
                 render_memo: RefCell::new(RenderMemo::default()),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 pending_scope_exits: Rc::new(RefCell::new(BTreeSet::new())),
