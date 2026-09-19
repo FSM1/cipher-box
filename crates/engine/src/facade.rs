@@ -14483,6 +14483,46 @@ mod tests {
         );
     }
 
+    /// The pending read opens a queued version under the pair its op carries,
+    /// whichever scope the target sits in by the time the read runs.
+    #[test]
+    fn a_pending_version_reads_back_across_a_scope_boundary_change() {
+        for promote_before_write in [true, false] {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "shared", NodeKind::Folder);
+            let shared = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "shared")
+                .unwrap()
+                .id;
+            if promote_before_write {
+                engine.descendant_scope_roots.borrow_mut().insert(shared);
+            }
+            write_file(
+                &mut engine,
+                WriteTarget::NewFile {
+                    parent: shared,
+                    name: "inside.bin".into(),
+                },
+                &[9u8; 32],
+            )
+            .expect("the write commits");
+            engine.descendant_scope_roots.borrow_mut().insert(shared);
+            let file = block_on(engine.view())
+                .unwrap()
+                .lookup(shared, "inside.bin")
+                .unwrap()
+                .id;
+
+            assert_eq!(
+                block_on(engine.read_content(file)).expect("the pending version opens"),
+                vec![9u8; 32],
+                "promoted before the write: {promote_before_write}",
+            );
+        }
+    }
+
     /// A grafted scope's floors live in the granting identity's namespace, so a
     /// write inside one must not read this vault's own floor for that id.
     #[test]
