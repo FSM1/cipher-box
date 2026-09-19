@@ -34,7 +34,7 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, ContentProfile, DEFAULT_BIN_RETENTION_DAYS,
-    DEFAULT_KEEP_LATEST_VERSIONS, DefaultsReason, Engine, EngineError, EventStream, Gateway,
+    DEFAULT_KEEP_LATEST_VERSIONS, DefaultsReason, Engine, EngineError, Event, EventStream, Gateway,
     GatewayConfig, LoginSecret, MAX_BIN_RETENTION_DAYS, NodeId, OrphanHeads, PlacementRefusal,
     ProviderError, RetentionPolicy, SessionBearer, SettingsLoad, SettingsPublishError,
     SettingsRead, StoragePolicy, SyncTimingProfile, VaultSettings, WriteTarget, load_settings,
@@ -2467,4 +2467,73 @@ fn a_settings_save_the_api_answered_about_another_block_is_a_trust_violation() {
         matches!(outcome, Err(EngineError::TrustViolation { .. })),
         "got {outcome:?}",
     );
+}
+
+/// Whether the events so far accuse anybody.
+fn accused(events: &mut EventStream) -> bool {
+    core::iter::from_fn(|| events.try_next())
+        .any(|event| matches!(event, Event::AttributableAbuse { .. }))
+}
+
+/// A settings record the floor law refuses is the gate's verdict: the start
+/// still rests on the ladder, and the member hears of the refusal.
+#[test]
+fn a_rolled_back_settings_record_is_reported_at_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        3,
+    );
+    block_on(
+        device
+            .floors(&SECRET)
+            .raise_sequence_floor(settings_name(&SECRET).as_str().as_bytes(), 9),
+    )
+    .expect("raise");
+
+    let (_engine, mut events, _tasks) = boot_resolving(&world, &device, &blocks);
+    assert!(
+        accused(&mut events),
+        "a replayed settings record is reported"
+    );
+}
+
+/// The control: no settings record at all is availability, never a verdict.
+#[test]
+fn a_missing_settings_record_accuses_nobody_at_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+
+    let (_engine, mut events, _tasks) = boot_resolving(&world, &device, &blocks);
+    assert!(!accused(&mut events));
+}
+
+/// A body a newer release wrote carries a key this build's schema refuses. The
+/// load rests on the defaults, and an honest newer device is accused of nothing.
+#[test]
+fn a_settings_body_from_a_newer_release_accuses_nobody_at_start() {
+    use cipherbox_core::codec::{Map, Value, encode};
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let mut m = Map::new();
+    m.insert("keepLatest", Value::Null);
+    m.insert("pinMode", Value::Text("hosted".to_owned()));
+    m.insert("revision", Value::Unsigned(1));
+    m.insert("zFutureField", Value::Unsigned(1));
+    seed_settings(
+        &device,
+        &blocks,
+        &encode(&Value::Map(m)).expect("encode"),
+        1,
+    );
+
+    let (_engine, mut events, _tasks) = boot_resolving(&world, &device, &blocks);
+    assert!(!accused(&mut events));
 }
