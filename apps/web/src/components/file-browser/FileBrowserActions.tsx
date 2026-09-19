@@ -270,8 +270,7 @@ export function FileBrowserActions({
       {dialog?.kind === 'details' && (
         <DetailsDialog
           row={dialog.row}
-          writable={writable}
-          receivedShare={receivedShare}
+          access={!writable ? 'read-grant' : receivedShare ? 'write-grant' : 'owner'}
           onClose={close}
         />
       )}

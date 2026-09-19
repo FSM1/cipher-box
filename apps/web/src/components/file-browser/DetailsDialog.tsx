@@ -6,14 +6,11 @@ import { ConfirmDangerDialog } from '../ui/ConfirmDangerDialog';
 import { Modal } from '../ui/Modal';
 import { FileDetails } from './details/FileDetails';
 import { FolderDetails } from './details/FolderDetails';
-import { shortCid } from './details/VersionHistory';
+import { type ScopeAccess, shortCid } from './details/VersionHistory';
 
 interface DetailsDialogProps {
   row: ListingRow;
-  /** False in a scope this vault only holds a read grant over. */
-  writable: boolean;
-  /** True in a scope another vault shared, where a version delete is the owner's. */
-  receivedShare?: boolean;
+  access: ScopeAccess;
   onClose: () => void;
 }
 
@@ -24,12 +21,7 @@ interface PendingWrite {
 }
 
 /** What the engine reports about one node, verbatim. */
-export function DetailsDialog({
-  row,
-  writable,
-  receivedShare = false,
-  onClose,
-}: DetailsDialogProps) {
+export function DetailsDialog({ row, access, onClose }: DetailsDialogProps) {
   const isFile = row.kind === 'file';
   const node = isFile ? row.id : null;
   const versions = useFileVersions(node, row.storedName);
@@ -47,7 +39,7 @@ export function DetailsDialog({
   const answered = useRef<PendingWrite | null>(null);
   // The details themselves only read, so this dialog outlives a scope the engine
   // turns read-only. The confirmation does not: restore and delete are writes.
-  if (shown.current !== node || (!writable && pending !== null)) {
+  if (shown.current !== node || (access === 'read-grant' && pending !== null)) {
     shown.current = node;
     answered.current = null;
     setPending(null);
@@ -82,8 +74,7 @@ export function DetailsDialog({
             <FileDetails
               row={row}
               versions={versions}
-              writable={writable}
-              receivedShare={receivedShare}
+              access={access}
               onRestore={(entry) => setPending({ command: 'restore', entry })}
               onDelete={(entry) => setPending({ command: 'delete', entry })}
             />

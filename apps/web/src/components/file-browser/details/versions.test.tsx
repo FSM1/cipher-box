@@ -40,7 +40,7 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
 function openDetails(options: VersionEngineOptions = {}, onClose = () => undefined) {
   const engine = versionEngine(options);
   const view = renderWithEngine(
-    <DetailsDialog row={fileRow()} writable onClose={onClose} />,
+    <DetailsDialog row={fileRow()} access="owner" onClose={onClose} />,
     engine.client
   );
   return { ...engine, view };
@@ -218,7 +218,7 @@ describe('the version history', () => {
     // entries the previous node answered with.
     engine.facade.fileVersions.mockImplementation(() => new Promise<never>(() => undefined));
     engine.view.rerender(
-      <DetailsDialog row={fileRow({ id: OTHER_NODE })} writable onClose={() => undefined} />
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} access="owner" onClose={() => undefined} />
     );
 
     await waitFor(() => expect(screen.queryByTestId('version-history')).toBeNull());
@@ -232,7 +232,7 @@ describe('the version history', () => {
     expect(screen.getByTestId('version-restore-dialog')).toBeDefined();
 
     engine.view.rerender(
-      <DetailsDialog row={fileRow({ id: OTHER_NODE })} writable onClose={() => undefined} />
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} access="owner" onClose={() => undefined} />
     );
 
     expect(screen.queryByTestId('version-restore-dialog')).toBeNull();
@@ -241,7 +241,7 @@ describe('the version history', () => {
   it('offers no version write in a scope this vault only reads', async () => {
     const engine = versionEngine({ entries: [OLDER, OLDEST] });
     renderWithEngine(
-      <DetailsDialog row={fileRow()} writable={false} onClose={() => undefined} />,
+      <DetailsDialog row={fileRow()} access="read-grant" onClose={() => undefined} />,
       engine.client
     );
 
@@ -255,12 +255,11 @@ describe('the version history', () => {
   it('offers a restore and no delete in a share granted for writing', async () => {
     const engine = versionEngine({ entries: [OLDER, OLDEST] });
     renderWithEngine(
-      <DetailsDialog row={fileRow()} writable receivedShare onClose={() => undefined} />,
+      <DetailsDialog row={fileRow()} access="write-grant" onClose={() => undefined} />,
       engine.client
     );
 
     await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
-    // A restore reorders the file's own history; a delete drops a version the owner keeps.
     expect(control('download', OLDER_CID)).toBeDefined();
     fireEvent.click(control('restore', OLDER_CID));
     fireEvent.click(screen.getByTestId('version-restore-confirm'));
@@ -278,7 +277,7 @@ describe('the version history', () => {
     expect(screen.getByTestId('version-delete-dialog')).toBeDefined();
 
     engine.view.rerender(
-      <DetailsDialog row={fileRow()} writable={false} onClose={() => undefined} />
+      <DetailsDialog row={fileRow()} access="read-grant" onClose={() => undefined} />
     );
 
     expect(screen.queryByTestId('version-delete-dialog')).toBeNull();
@@ -301,7 +300,7 @@ describe('the version history', () => {
     await waitFor(() => expect(engine.facade.deleteVersion).toHaveBeenCalledOnce());
 
     engine.view.rerender(
-      <DetailsDialog row={fileRow({ id: OTHER_NODE })} writable onClose={() => undefined} />
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} access="owner" onClose={() => undefined} />
     );
     await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenCalledTimes(2));
     expect(engine.facade.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE);
@@ -334,10 +333,12 @@ describe('the version history', () => {
     // The dialog leaves the node and is shown it again, while the write is still
     // in flight. Each display reads the list, so the entries come back.
     engine.view.rerender(
-      <DetailsDialog row={fileRow({ id: OTHER_NODE })} writable onClose={() => undefined} />
+      <DetailsDialog row={fileRow({ id: OTHER_NODE })} access="owner" onClose={() => undefined} />
     );
     await waitFor(() => expect(engine.facade.fileVersions).toHaveBeenLastCalledWith(OTHER_NODE));
-    engine.view.rerender(<DetailsDialog row={fileRow()} writable onClose={() => undefined} />);
+    engine.view.rerender(
+      <DetailsDialog row={fileRow()} access="owner" onClose={() => undefined} />
+    );
     await waitFor(() => expect(control('restore', OLDER_CID).hasAttribute('disabled')).toBe(false));
 
     fireEvent.click(control('restore', OLDER_CID));

@@ -6,15 +6,19 @@ import { DetailSection, UNKNOWN } from './DetailsPrimitives';
 const HEAD = 8;
 const TAIL = 6;
 
+/**
+ * What this member may do in the file's scope: `owner` in its own vault,
+ * `write-grant` in a share another vault granted for writing (a restore stays
+ * inside it, a version delete is the owner's), `read-grant` with no write.
+ */
+export type ScopeAccess = 'owner' | 'write-grant' | 'read-grant';
+
 interface VersionHistoryProps {
   /** The engine's prior versions, newest first; `null` before the read lands. */
   entries: readonly VersionEntryDescriptor[] | null;
   /** A command is in flight, so no entry may dispatch a second one. */
   busy: boolean;
-  /** False in a scope this vault only holds a read grant over. */
-  writable: boolean;
-  /** True in a scope another vault shared: a restore stays inside it, a delete does not. */
-  receivedShare: boolean;
+  access: ScopeAccess;
   /** The last version command's failure. */
   error: string | null;
   onDownload: (entry: VersionEntryDescriptor) => void;
@@ -29,8 +33,7 @@ interface VersionHistoryProps {
 export function VersionHistory({
   entries,
   busy,
-  writable,
-  receivedShare,
+  access,
   error,
   onDownload,
   onRestore,
@@ -72,7 +75,7 @@ export function VersionHistory({
                 >
                   dl
                 </button>
-                {writable && (
+                {access !== 'read-grant' && (
                   <button
                     type="button"
                     className="details-version-button"
@@ -83,7 +86,7 @@ export function VersionHistory({
                     restore
                   </button>
                 )}
-                {writable && !receivedShare && (
+                {access === 'owner' && (
                   <button
                     type="button"
                     className="details-version-button details-version-button--danger"
