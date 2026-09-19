@@ -58,8 +58,9 @@ use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprov
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
 use crate::grants::grafted::{
-    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedSharers,
-    evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace, floor_view, is_own_scope,
+    BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedPlane,
+    GraftedSharers, evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace,
+    floor_view, is_own_scope,
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{
@@ -126,8 +127,8 @@ use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_
 use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
-    BookkeepingCursors, Drain, DrainReport, DrainScope, MAX_BIN_EXPIRIES, ScopeEnd, SealPlane,
-    TickShare, bin_load_is_a_verdict, charge_the_identity_to_one_pass, hold_captures,
+    BookkeepingCursors, Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd,
+    SealPlane, TickShare, bin_load_is_a_verdict, charge_the_identity_to_one_pass, hold_captures,
     owner_scoped_key, published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
@@ -4237,6 +4238,9 @@ struct GraftedWritePass {
     /// The granting identity, which is the owner a grafted record's commitment
     /// and grant section verify under — never this vault's own.
     sharer_identity: EcdsaVerifier,
+    /// The granting contact's encryption subkey, which locates this device's
+    /// grant blob in the root the pass publishes and self-adopts.
+    sharer_enc: X25519Public,
     /// The namespace this scope's epoch floors ratchet in, as
     /// [`floor_namespace`] picked it — the granting identity's on every pass a
     /// grafted root reaches here.
@@ -4248,8 +4252,10 @@ struct GraftedWritePass {
 ///
 /// Four facts, all of them from the live resolve rather than the bookmark: the
 /// owner's committed permission, both seeds, the sharer the floor namespace
-/// answers under, and the name the graft rendered the root with. A scope short
-/// of any of them drains nothing this tick and waits for the pass that has them.
+/// answers under, and the name the graft rendered the root with. A fifth, the
+/// granting contact's encryption subkey, comes from the verified contact book
+/// ([`write_grant_sharer_encs`]). A scope short of any of them drains nothing
+/// this tick and waits for the pass that has them.
 ///
 /// `namespace` is [`floor_namespace`] bound to this pass's own root and proved
 /// set, so a bookmark that names one of this vault's own roots yields no grafted
@@ -4259,6 +4265,7 @@ fn grafted_write_passes(
     base: &BaseSnapshot,
     permissions: &BookmarkedPermissions,
     sharers: &GraftedSharers,
+    sharer_encs: &BTreeMap<[u8; 16], X25519Public>,
     namespace: impl Fn(&[u8; 16]) -> Option<FloorNamespace>,
     read_seeds: &RefCell<ScopeSeeds>,
     write_seeds: &RefCell<ScopeSeeds>,
@@ -4280,8 +4287,48 @@ fn grafted_write_passes(
                 read_scope_seed: cached_seed(read_seeds, scope_id)?,
                 write_scope_seed: cached_seed(write_seeds, scope_id)?,
                 sharer_identity: EcdsaVerifier::from_sec1(sharers.get(scope_id)?)?,
+                sharer_enc: *sharer_encs.get(scope_id)?,
                 floors,
             })
+        })
+        .collect()
+}
+
+/// Every write-granted graft, with the identity that granted it.
+fn write_grant_sharers(
+    permissions: &BookmarkedPermissions,
+    sharers: &GraftedSharers,
+) -> Vec<([u8; 16], [u8; IDENTITY_PUBLIC_LEN])> {
+    permissions
+        .iter()
+        .filter(|(_, permission)| **permission == CommittedPermission::Write)
+        .filter_map(|(scope_id, _)| Some((*scope_id, *sharers.get(scope_id)?)))
+        .collect()
+}
+
+/// Each write-granted graft's granting contact encryption subkey, by scope id.
+///
+/// Read from the verified contact book, never from a record, because it is the
+/// ECDH peer that locates this device's grant blob. A sharer the book does not
+/// hold yields no entry, so that scope drains nothing. A vault with no write
+/// grant decodes no contact.
+async fn write_grant_sharer_encs<C: ContactStore>(
+    contacts: &C,
+    grafts: Vec<([u8; 16], [u8; IDENTITY_PUBLIC_LEN])>,
+) -> BTreeMap<[u8; 16], X25519Public> {
+    if grafts.is_empty() {
+        return BTreeMap::new();
+    }
+    let Ok(book) = contacts.contacts().await else {
+        return BTreeMap::new();
+    };
+    grafts
+        .into_iter()
+        .filter_map(|(scope_id, sharer)| {
+            let contact = book
+                .iter()
+                .find(|contact| contact.identity_pk().to_sec1() == sharer)?;
+            Some((scope_id, contact.enc_subkey()))
         })
         .collect()
 }
@@ -6495,6 +6542,15 @@ where {
                     // are required — without them there is no name to publish under
                     // and no key to seal with, so the queue simply waits.
                     let write_seed = cached_seed(&scope_write_seeds, &root_id);
+                    let write_grafts = write_grant_sharers(
+                        &bookmarked_permissions.borrow(),
+                        &grafted_sharers.borrow(),
+                    );
+                    let sharer_encs = write_grant_sharer_encs(
+                        &StagingContactStore::new(&staging, &enc_subkey, &entropy),
+                        write_grafts,
+                    )
+                    .await;
                     // One pass per scope: a pass seals every record it publishes
                     // at one scope root's epoch under that root's seeds.
                     //
@@ -6513,6 +6569,7 @@ where {
                             &base,
                             &bookmarked_permissions.borrow(),
                             &sharers,
+                            &sharer_encs,
                             |scope_id| {
                                 floor_namespace(
                                     &sharers,
@@ -6526,6 +6583,9 @@ where {
                             &scope_write_seeds,
                         )
                     };
+                    // Owned for the drain, which awaits while it holds them.
+                    let grafted_scope_roots = bookmarked_scope_roots.borrow().clone();
+                    let grafted_contested = grafted_claims.borrow().contested().clone();
                     let proved_roots: Vec<NodeId> = core::iter::once(NodeId(root_id))
                         .chain(proved_scope_ids.iter().copied())
                         .chain(grafted.iter().map(|pass| pass.root))
@@ -6621,6 +6681,7 @@ where {
                             charges_the_identity: false,
                             enc_secret: &enc_subkey,
                             owner_identity: &owner_identity,
+                            granted: None,
                         });
                     }
                     scopes.extend(drivable.iter().map(|(scope, write)| DrainScope {
@@ -6641,6 +6702,7 @@ where {
                         charges_the_identity: false,
                         enc_secret: &enc_subkey,
                         owner_identity: &owner_identity,
+                        granted: None,
                     }));
                     // Before the grafted passes below, which never take the
                     // charge: the identity-wide budget answers for an op under
@@ -6667,6 +6729,14 @@ where {
                         charges_the_identity: false,
                         enc_secret: &enc_subkey,
                         owner_identity: &pass.sharer_identity,
+                        granted: Some(GrantedPass {
+                            sharer_enc: &pass.sharer_enc,
+                            plane: GraftedPlane {
+                                scope_id: pass.root.0,
+                                scope_roots: &grafted_scope_roots,
+                                contested: &grafted_contested,
+                            },
+                        }),
                     }));
                     if !scopes.is_empty() {
                         let drain = Drain {
@@ -11455,6 +11525,10 @@ mod tests {
             GraftedSharers::from([(SHARED, sharer().verifying_key().to_sec1())])
         }
 
+        fn encs() -> BTreeMap<[u8; 16], X25519Public> {
+            BTreeMap::from([(SHARED, kdf::enc_subkey(&[0x31; 32]).public())])
+        }
+
         fn seeds(scope_id: [u8; 16], seed: [u8; 32]) -> RefCell<ScopeSeeds> {
             let cell = RefCell::new(ScopeSeeds::new());
             deposit_seed(&cell, scope_id, Zeroizing::new(seed), Some(0));
@@ -11489,6 +11563,7 @@ mod tests {
                 &base(),
                 &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
                 &sharers(),
+                &encs(),
                 own_namespace(&sharers()),
                 &seeds(SHARED, READ_SCOPE_SEED),
                 &seeds(SHARED, WRITE_SCOPE_SEED),
@@ -11528,22 +11603,23 @@ mod tests {
             );
         }
 
-        /// Each of the four facts the pass needs comes from the live resolve.
-        /// A scope short of any one of them drains nothing rather than
-        /// publishing under half a set.
+        /// Each of the five facts the pass needs comes from the live resolve or
+        /// the verified contact book. A scope short of any one of them drains
+        /// nothing rather than publishing under half a set.
         #[test]
-        fn a_graft_short_of_any_of_the_passs_four_facts_drains_nothing() {
+        fn a_graft_short_of_any_of_the_passs_five_facts_drains_nothing() {
             let read = seeds(SHARED, READ_SCOPE_SEED);
             let write = seeds(SHARED, WRITE_SCOPE_SEED);
             let empty = RefCell::new(ScopeSeeds::new());
             let write_permitted =
                 BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]);
 
-            for (case, permissions, sharers, read_seeds, write_seeds) in [
+            for (case, permissions, sharers, sharer_encs, read_seeds, write_seeds) in [
                 (
                     "the commitment grants read",
                     BookmarkedPermissions::from([(SHARED, CommittedPermission::Read)]),
                     sharers(),
+                    encs(),
                     &read,
                     &write,
                 ),
@@ -11551,6 +11627,7 @@ mod tests {
                     "no read seed was recovered",
                     write_permitted.clone(),
                     sharers(),
+                    encs(),
                     &empty,
                     &write,
                 ),
@@ -11558,6 +11635,7 @@ mod tests {
                     "no write seed was recovered",
                     write_permitted.clone(),
                     sharers(),
+                    encs(),
                     &read,
                     &empty,
                 ),
@@ -11565,6 +11643,15 @@ mod tests {
                     "no identity answers for the scope",
                     write_permitted.clone(),
                     GraftedSharers::new(),
+                    encs(),
+                    &read,
+                    &write,
+                ),
+                (
+                    "the contact book holds no key for the sharer",
+                    write_permitted.clone(),
+                    sharers(),
+                    BTreeMap::new(),
                     &read,
                     &write,
                 ),
@@ -11574,6 +11661,7 @@ mod tests {
                         &base(),
                         &permissions,
                         &sharers,
+                        &sharer_encs,
                         own_namespace(&sharers),
                         read_seeds,
                         write_seeds,
@@ -11603,6 +11691,7 @@ mod tests {
                         &base(),
                         &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
                         &sharers(),
+                        &encs(),
                         |scope_id| {
                             floor_namespace(
                                 &sharers(),
@@ -11709,6 +11798,7 @@ mod tests {
                     &BaseSnapshot::new(Snapshot::new(VAULT_ROOT)),
                     &BookmarkedPermissions::from([(SHARED, CommittedPermission::Write)]),
                     &sharers(),
+                    &encs(),
                     own_namespace(&sharers()),
                     &seeds(SHARED, READ_SCOPE_SEED),
                     &seeds(SHARED, WRITE_SCOPE_SEED),
@@ -17402,6 +17492,32 @@ mod tests {
         /// The sharer's scope root at `read_epoch`, committing one read grant to
         /// this vault.
         fn shared_root(read_epoch: u64) -> OwnerRootFixture {
+            shared_root_granting(read_epoch, CorePermission::Read, Vec::new())
+        }
+
+        /// The sharer's scope root at `read_epoch` naming `children`, committing
+        /// one `permission` grant to this vault.
+        fn shared_root_granting(
+            read_epoch: u64,
+            permission: CorePermission,
+            children: Vec<ChildRef>,
+        ) -> OwnerRootFixture {
+            shared_root_committing(
+                read_epoch,
+                permission,
+                children,
+                &kdf::enc_subkey(&CAP_SECRET).public(),
+            )
+        }
+
+        /// The same root, committing its one grant to `recipient`. Any
+        /// recipient but this vault is the sharer's cut of this vault's row.
+        fn shared_root_committing(
+            read_epoch: u64,
+            permission: CorePermission,
+            children: Vec<ChildRef>,
+            recipient: &X25519Public,
+        ) -> OwnerRootFixture {
             let name = derive_write_name(&WRITE_SCOPE_SEED, &SHARED_SCOPE_ROOT);
             let sharer_enc = kdf::enc_subkey(&SHARER_SECRET);
             let row = mint_grant_row(
@@ -17409,10 +17525,10 @@ mod tests {
                 &sharer_enc,
                 &OWNER_ROOT_POINTER_READ_KEY,
                 sharer_identity().verifying_key().to_sec1(),
-                &kdf::enc_subkey(&CAP_SECRET).public(),
+                recipient,
                 &SHARED_SCOPE_ROOT,
                 name.as_str().as_bytes(),
-                CorePermission::Read,
+                permission,
             )
             .expect("a contributory recipient key");
             owner_root_fixture_at(
@@ -17423,7 +17539,7 @@ mod tests {
                     owner_enc: &sharer_enc.public(),
                     scope_id: SHARED_SCOPE_ROOT,
                     root_id: SHARED_SCOPE_ROOT,
-                    children: Vec::new(),
+                    children,
                     child_scope_index: Vec::new(),
                     grants: vec![row],
                     parent_node_seed: None,
@@ -17538,6 +17654,294 @@ mod tests {
                 Some(ResolutionClass::EpochLag),
                 "a record behind the floor the accept raised must leave the row granted"
             );
+        }
+
+        /// A child the sharer's scope root names, under the name the scope's
+        /// write seed derives for it.
+        fn shared_child(id: [u8; 16], name: &str, kind: CoreNodeKind) -> ChildRef {
+            ChildRef {
+                id,
+                name: name.to_owned(),
+                ipns_name: derive_write_name(&WRITE_SCOPE_SEED, &id)
+                    .as_str()
+                    .as_bytes()
+                    .to_vec(),
+                kind,
+                link_counter: 1,
+                unknown: PreservedFields::new(),
+            }
+        }
+
+        /// The folder the grantee creates under the grafted root.
+        const MINE: [u8; 16] = [0xb7; 16];
+
+        /// A grantee session over an accepted write grant, with its loops parked
+        /// and one block store behind both the gateway and the API, so a record
+        /// the grantee's own drain publishes reads back.
+        struct WriteGrantee {
+            world: FakeWorld,
+            device: FakeDevice,
+            blocks: Blocks,
+            engine: Engine<FakeSeamTypes>,
+            _events: EventStream,
+            tasks: Vec<BoxedTask>,
+        }
+
+        impl WriteGrantee {
+            /// Accept a write grant over the sharer's root naming `children` at
+            /// sequence 1, and run the pass that grafts it.
+            fn accepted(children: Vec<ChildRef>) -> Self {
+                let world = FakeWorld::new();
+                let device = world.device(&owner_identity().verifying_key().to_sec1());
+                let granted = shared_root_granting(EPOCH, CorePermission::Write, children);
+                let (head_block, head_cid, root_name) = owner_root();
+                seed_vault_pointer(&device, &root_name);
+                for endpoint in device.record_store.endpoints() {
+                    seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+                }
+                let blocks = Blocks::default();
+                blocks.put(head_block);
+                blocks.put(granted.head_block.clone());
+                serve_http(&device, &blocks, 4_000);
+                let (mut engine, _events) = engine_with_api(
+                    &device,
+                    ApiBaseUrl::parse("http://api.test").expect("a base"),
+                );
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+                    .expect("cold start adopts the owner root");
+                let mut tasks = world.scheduler.take_spawned_tasks();
+                poll_tasks_once(&mut tasks);
+                block_on(
+                    engine.command(Command::ImportContact {
+                        contact_code: ContactCode::create(
+                            &sharer_identity(),
+                            kdf::enc_subkey(&SHARER_SECRET).public(),
+                        )
+                        .encode(),
+                    }),
+                )
+                .expect("the sharer's code imports");
+                seed_shared_record(&device, &granted, 1);
+                block_on(post_sealed(
+                    &world.mailbox_hub.mailbox_for(b"sharer"),
+                    &kdf::enc_subkey(&CAP_SECRET).public(),
+                    &owner_identity().verifying_key(),
+                    &[0x51; 32],
+                    ENVELOPE_V,
+                    &sharer_identity(),
+                    &SharePointer {
+                        scope_root_name: granted.name.as_str().as_bytes().to_vec(),
+                        sharer_identity_pk: sharer_identity().verifying_key().to_sec1(),
+                        display_name: "shared-folder".to_owned(),
+                        permission: CorePermission::Write,
+                    }
+                    .encode(),
+                    "share-1",
+                ))
+                .expect("the sealed pointer posts");
+                let mut grantee = Self {
+                    world,
+                    device,
+                    blocks,
+                    engine,
+                    _events,
+                    tasks,
+                };
+                grantee.pass();
+                assert_eq!(
+                    shared_row_verdict(&grantee.engine),
+                    Some(ResolutionClass::Granted)
+                );
+                assert!(grantee.holds_the_write_seed());
+                grantee
+            }
+
+            /// The same session after its drain published `MINE` under the
+            /// grafted root, at sequence 2.
+            fn with_a_published_child(children: Vec<ChildRef>) -> Self {
+                let mut grantee = Self::accepted(children);
+                grantee.queue_a_create(MINE, "mine");
+                grantee.pass();
+                assert_eq!(grantee.queued(), 0, "the grafted pass drained the op");
+                grantee
+            }
+
+            /// Run one tick past the `/shared` damper, so the received-share
+            /// leg re-resolves on it.
+            fn pass(&mut self) {
+                self.world
+                    .scheduler
+                    .advance(SyncTimingProfile::CI.stale_after);
+                poll_tasks_once(&mut self.tasks);
+            }
+
+            /// Queue a folder create under the grafted root through the staging
+            /// seam: the op the create command journals once the write guard
+            /// admits a grafted target.
+            fn queue_a_create(&self, node: [u8; 16], name: &str) {
+                block_on(stage_op(
+                    &self.device.staging_store,
+                    RecordSeal {
+                        owner_enc_secret: &kdf::enc_subkey(&CAP_SECRET),
+                        ephemeral_scalar: Zeroizing::new([0x5a; 32]),
+                    },
+                    &Op::create(
+                        NodeId(node),
+                        NodeId(SHARED_SCOPE_ROOT),
+                        name,
+                        NewNode::Folder,
+                        1,
+                        UnixMillis(1),
+                    ),
+                ))
+                .expect("the op queues");
+            }
+
+            /// Serve `fixture` at the shared root's name at `sequence`, in place
+            /// of whatever the grantee's own drain published there.
+            fn serve(&self, fixture: &OwnerRootFixture, sequence: u64) {
+                self.blocks.put(fixture.head_block.clone());
+                seed_shared_record(&self.device, fixture, sequence);
+            }
+
+            /// Serve a root the sharer authored, naming `children`.
+            fn sharer_publishes(&self, children: Vec<ChildRef>, sequence: u64) {
+                self.serve(
+                    &shared_root_granting(EPOCH, CorePermission::Write, children),
+                    sequence,
+                );
+            }
+
+            /// The names the render lists under the grafted root, sorted.
+            fn listing(&self) -> Vec<String> {
+                let mut names: Vec<String> = self
+                    .engine
+                    .snapshot
+                    .borrow()
+                    .children(NodeId(SHARED_SCOPE_ROOT))
+                    .into_iter()
+                    .map(|child| child.name().to_owned())
+                    .collect();
+                names.sort();
+                names
+            }
+
+            fn queued(&self) -> usize {
+                block_on(self.device.staging_store.queued_ops())
+                    .expect("the queue reads")
+                    .len()
+            }
+
+            fn holds_the_write_seed(&self) -> bool {
+                self.engine
+                    .scope_write_seeds
+                    .borrow()
+                    .contains_key(&SHARED_SCOPE_ROOT)
+            }
+        }
+
+        /// The grantee's own drain publishes the shared folder with the new
+        /// child in it and repaints the base before the op leaves the queue. The
+        /// publish also raises the sequence floor, so only a record newer than
+        /// it can speak for the listing again, and a departure from that record
+        /// reaches no capture.
+        #[test]
+        fn a_child_the_grantee_published_under_a_grafted_root_outlives_its_op() {
+            let photos = shared_child([0xa1; 16], "photos", CoreNodeKind::File);
+            let mut grantee = WriteGrantee::with_a_published_child(vec![photos.clone()]);
+            let both = vec!["mine".to_owned(), "photos".to_owned()];
+            assert_eq!(
+                grantee.listing(),
+                both,
+                "the repaint holds the drained child"
+            );
+
+            // A relay still serving the sharer's record from before the publish.
+            grantee.sharer_publishes(vec![photos.clone()], 1);
+            grantee.pass();
+            assert_eq!(grantee.listing(), both, "an older record departs nothing");
+
+            // The sharer's next write, rebased onto the grantee's record.
+            let mine = shared_child(MINE, "mine", CoreNodeKind::Folder);
+            grantee.sharer_publishes(vec![photos.clone(), mine], 3);
+            grantee.pass();
+            assert_eq!(grantee.listing(), both, "the named child renders once");
+
+            // The sharer's later write that leaves the child out.
+            grantee.sharer_publishes(vec![photos], 4);
+            grantee.pass();
+            assert_eq!(grantee.listing(), vec!["photos".to_owned()]);
+            assert!(
+                grantee.engine.observed_unlinks.borrow().is_empty(),
+                "a departure in a granted scope feeds no capture",
+            );
+        }
+
+        /// Two authors at one sequence: the record the network serves there is
+        /// not newer than the floor, and the render follows it as the own vault
+        /// does. The departure still reaches no capture.
+        #[test]
+        fn a_sharer_record_at_the_published_sequence_is_the_one_the_render_follows() {
+            let photos = shared_child([0xa1; 16], "photos", CoreNodeKind::File);
+            let mut grantee = WriteGrantee::with_a_published_child(vec![photos.clone()]);
+
+            grantee.sharer_publishes(vec![photos], 2);
+            grantee.pass();
+
+            assert_eq!(grantee.listing(), vec!["photos".to_owned()]);
+            assert!(grantee.engine.observed_unlinks.borrow().is_empty());
+        }
+
+        /// The child holds no standing of its own: the sharer's cut takes the
+        /// write capability it was published under, and a later create under
+        /// the same root waits in the queue rather than publishing.
+        #[test]
+        fn a_cut_grant_takes_the_write_capability_the_child_was_published_under() {
+            let photos = shared_child([0xa1; 16], "photos", CoreNodeKind::File);
+            let mine = shared_child(MINE, "mine", CoreNodeKind::Folder);
+            let mut grantee = WriteGrantee::with_a_published_child(vec![photos.clone()]);
+
+            grantee.serve(
+                &shared_root_committing(
+                    EPOCH,
+                    CorePermission::Write,
+                    vec![photos, mine],
+                    &kdf::enc_subkey(&[0x44; 32]).public(),
+                ),
+                3,
+            );
+            grantee.pass();
+            assert_eq!(
+                shared_row_verdict(&grantee.engine),
+                Some(ResolutionClass::RevocationSignal)
+            );
+            assert!(!grantee.holds_the_write_seed());
+
+            grantee.queue_a_create([0xb8; 16], "later");
+            grantee.pass();
+            assert_eq!(
+                grantee.queued(),
+                1,
+                "no grafted pass runs without the grant"
+            );
+        }
+
+        /// A grafted pass repaints the sharer's listing under the same
+        /// cross-plane rule the read legs apply. A sharer body that names a node
+        /// of this vault's own tree links nothing under the grafted root.
+        #[test]
+        fn a_grafted_drain_links_no_node_of_this_vaults_own_tree() {
+            let own = shared_child(CHILD_ID, "stolen", CoreNodeKind::File);
+            let grantee = WriteGrantee::with_a_published_child(vec![own]);
+
+            let links = grantee
+                .engine
+                .snapshot
+                .borrow()
+                .links_ranked(NodeId(CHILD_ID));
+            assert_eq!(links.len(), 1, "the own node keeps its one link");
+            assert_eq!(links[0].parent, ROOT);
+            assert_eq!(grantee.listing(), vec!["mine".to_owned()]);
         }
 
         /// The `/shared` row and the graft it opens must name the same thing.
