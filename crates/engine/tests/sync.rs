@@ -69,6 +69,7 @@ fn staged(marker: &[u8]) -> StagedContent {
         root_cid: root_cid(marker),
         plaintext_size: marker.len() as u64,
         sealed_content_key: Vec::new(),
+        scope: NodeId([0; 16]),
         epoch: 1,
     }
 }

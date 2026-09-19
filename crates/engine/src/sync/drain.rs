@@ -5315,12 +5315,16 @@ where
         if content.size() != staged.plaintext_size {
             return Err(CONTENT_LOST);
         }
+        // Opened under the `{scope, epoch}` the op record seals beside the blob,
+        // not under this pass's root: the version was authored where it was
+        // authored, and a later relocation must not strand its key.
+        //
         // A blob this build cannot *interpret* — one a newer build wrote — is
         // retained and retried, never destroyed: the same rule the op record
         // itself follows. Only a genuine crypto failure is unrecoverable.
         let key = open_content_key(
             scope.enc_secret,
-            &scope.source.root.0,
+            &staged.scope.0,
             staged.epoch,
             &staged.root_cid,
             &staged.sealed_content_key,

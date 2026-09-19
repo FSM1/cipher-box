@@ -1046,6 +1046,7 @@ mod tests {
             root_cid: content.content_cid().to_vec(),
             plaintext_size: content.size(),
             sealed_content_key: b"sealed-key-blob".to_vec(),
+            scope: NodeId([0; 16]),
             epoch: 1,
         };
         (blocks, root_block, staged)
@@ -1136,6 +1137,7 @@ mod tests {
             root_cid: root_cid.to_vec(),
             plaintext_size: 1,
             sealed_content_key: b"sealed-key-blob".to_vec(),
+            scope: NodeId([0; 16]),
             epoch: 1,
         }
     }

@@ -37,7 +37,7 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, DeadLetterReason, Engine,
     EngineError, Event, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Permission,
-    ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory,
+    ResealSeeds, ScopeRootIdentity, StoragePolicy, SyncTimingProfile, WriteHistory, WriteTarget,
     reseal_scope_root,
 };
 
@@ -439,6 +439,19 @@ fn import_recipient(engine: &mut Engine<FakeSeamTypes>) {
         .expect("the recipient's code imports");
 }
 
+/// Write `plaintext` as one committed version, the way a host does.
+fn write_file(
+    engine: &mut Engine<FakeSeamTypes>,
+    target: WriteTarget,
+    plaintext: &[u8],
+) -> Result<OpId, EngineError> {
+    let handle = block_on(engine.begin_write(target, plaintext.len() as u64))?;
+    for slice in plaintext.chunks(64) {
+        block_on(engine.push_chunk(handle, slice))?;
+    }
+    block_on(engine.commit_write(handle))
+}
+
 /// Grant `node` to the imported recipient — the cut that promotes a folder to a
 /// nested scope root.
 fn grant_to_recipient(engine: &mut Engine<FakeSeamTypes>, node: NodeId) {
@@ -519,6 +532,51 @@ fn a_folder_created_inside_a_granted_scope_root_reaches_the_owners_second_device
         listed_names(&engine_m, shared),
         ["2026"],
         "the owner's second device lists what the tab published inside the cut scope"
+    );
+}
+
+/// The same write with content behind it. The version's key blob binds the scope
+/// the version is authored in, and the pass that drains it opens the blob under
+/// that same pair — a drain that opened it under any other one destroys the
+/// version rather than publishing it.
+#[test]
+fn a_file_written_inside_a_granted_scope_root_publishes_its_version() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, mut events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+
+    import_recipient(&mut engine_t);
+    grant_to_recipient(&mut engine_t, shared);
+
+    let op = write_file(
+        &mut engine_t,
+        WriteTarget::NewFile {
+            parent: shared,
+            name: "notes.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("a write inside the granted folder commits");
+    let _ = events_so_far(&mut events_t);
+    for _ in 0..8 {
+        tick(&world, &engine_t, &mut tasks_t);
+    }
+
+    assert_eq!(
+        dead_letters(&mut events_t, op),
+        Vec::new(),
+        "the version's key blob opens on the pass that publishes it"
+    );
+    assert_eq!(queued(&tab), 0, "the write drains");
+    let scope_seed = owner_scope_seed(&world, &blocks, shared);
+    assert_eq!(
+        published_names(&world, &blocks, &scope_seed, shared),
+        ["notes.bin"],
+        "and the promoted root publishes the file the tab wrote"
     );
 }
 

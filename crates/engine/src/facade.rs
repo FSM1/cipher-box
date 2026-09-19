@@ -112,7 +112,7 @@ use crate::rotation::{
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
     QueueGeneration, QueueGenerationStore, RecordTransport, Scheduler, SeamError, SeamResult,
-    SeamSet, SeamTypes, SnapshotCache, StagingStore, UnixMillis,
+    SeamSet, SeamTypes, SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -8912,6 +8912,37 @@ where {
         cached_seed(&self.scope_read_seeds, scope_id)
     }
 
+    /// The read-epoch floor a version authored in `scope` binds into its content
+    /// key blob, read in the namespace that scope's floors live in.
+    ///
+    /// A grafted scope's floors are the granting identity's
+    /// ([`floor_view`]), and a grafted scope no identity answers for is refused
+    /// rather than measured in this vault's own namespace. Every other root this
+    /// session authors under is this vault's own, including one it minted that
+    /// no descent has re-proved yet.
+    async fn authored_scope_epoch(&self, scope: NodeId) -> Result<u64, EngineError> {
+        let floors = if self.bookmarked_scope_roots.borrow().contains(&scope.0) {
+            let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+            floor_view(
+                &self.seams.floor_store,
+                &self.grafted_sharers.borrow(),
+                session.contact_label_seed(),
+                &self.snapshot.borrow().root.0,
+                &self.descendant_scope_roots.borrow(),
+                &scope.0,
+            )
+            .ok_or_else(|| EngineError::ScopeExitRefused {
+                message: "that item's scope names no granting identity".to_owned(),
+            })?
+        } else {
+            SharerScopedFloorStore::own(&self.seams.floor_store)
+        };
+        Ok(floor::read_epoch_floor(&floors, &scope.0)
+            .await
+            .map_err(EngineError::from_seam)?
+            .unwrap_or(0))
+    }
+
     /// Mint this account's first vault inside a live session, for a `start`
     /// whose own mint did not land.
     ///
@@ -9400,12 +9431,13 @@ where {
                 observed,
             });
         }
+        let scope_roots = self.authored_scope_roots();
+        let rendered = self.render().await?;
         // Re-checked here, not only at `begin_write`: a `NewFile` handle takes no
         // place in the folder until it commits, so handles opened together all
         // see the same free one.
         if let WriteTarget::NewFile { parent, .. } = &target {
-            let rendered = self.render().await?;
-            refuse_full_parent(&rendered, *parent, None, None, &self.authored_scope_roots())?;
+            refuse_full_parent(&rendered, *parent, None, None, &scope_roots)?;
         }
         let finished = writer
             .finish(&mut *self.entropy.borrow_mut())
@@ -9420,12 +9452,19 @@ where {
             .await?;
 
         // The `{scope, epoch}` the key blob's AAD binds — see `seal_content_key`
-        // for why they are values and not key inputs.
-        let scope = self.snapshot.borrow().root;
-        let epoch = floor::read_epoch_floor(&self.seams.floor_store, &scope.0)
-            .await
-            .map_err(EngineError::from_seam)?
-            .unwrap_or(0);
+        // for why they are values and not key inputs. The scope is the one the
+        // version is authored in, which is the one the drain's pass runs under:
+        // a write below a grafted root belongs to the sharer's scope, never to
+        // this vault's root.
+        let scope = scope_of(
+            &rendered,
+            match &target {
+                WriteTarget::NewFile { parent, .. } => *parent,
+                WriteTarget::Version { .. } => node,
+            },
+            &scope_roots,
+        );
+        let epoch = self.authored_scope_epoch(scope).await?;
         // Its own ephemeral, independent of the op record's: two seals to one
         // recipient key must never share one.
         let key_seal = self.record_seal()?;
@@ -9443,6 +9482,7 @@ where {
             root_cid,
             plaintext_size: declared_size,
             sealed_content_key,
+            scope,
             epoch,
         };
         let authored_at = self.seams.scheduler.now();
@@ -10731,10 +10771,9 @@ where {
             return Ok(None);
         };
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let scope = self.snapshot.borrow().root;
         let key = open_content_key(
             session.enc_subkey(),
-            &scope.0,
+            &staged.scope.0,
             staged.epoch,
             &staged.root_cid,
             &staged.sealed_content_key,
@@ -14144,6 +14183,163 @@ mod tests {
                 check: "dag-root-too-large"
             })
         );
+    }
+
+    /// Every version the durable queue stages, in queue order.
+    fn queued_versions(engine: &Engine<FakeSeamTypes>) -> Vec<StagedContent> {
+        block_on(engine.scan_queue())
+            .unwrap()
+            .mine
+            .into_iter()
+            .filter_map(|(_, op)| op.staged_content().cloned())
+            .collect()
+    }
+
+    /// The key blob binds the scope the version is authored in, so the drain
+    /// pass that runs under that scope root opens what the commit sealed. A
+    /// write of this vault's own root keeps naming the vault root.
+    #[test]
+    fn a_write_binds_its_key_blob_to_the_scope_root_it_is_authored_under() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "shared", NodeKind::Folder);
+        let shared = block_on(engine.view())
+            .unwrap()
+            .lookup(root, "shared")
+            .unwrap()
+            .id;
+        // The cut a grant makes: the folder answers as a scope root of its own.
+        engine.descendant_scope_roots.borrow_mut().insert(shared);
+        // Two floors that differ, so a blob that read the wrong scope's floor
+        // carries a distinguishable epoch.
+        block_on(engine.seams.floor_store.raise_epoch_floor(&root.0, 3)).unwrap();
+        block_on(engine.seams.floor_store.raise_epoch_floor(&shared.0, 7)).unwrap();
+
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: root,
+                name: "own.bin".into(),
+            },
+            &[7u8; 32],
+        )
+        .expect("the vault-root write commits");
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: shared,
+                name: "inside.bin".into(),
+            },
+            &[9u8; 32],
+        )
+        .expect("the write inside the cut folder commits");
+
+        let staged = queued_versions(&engine);
+        assert_eq!(
+            staged
+                .iter()
+                .map(|content| (content.scope, content.epoch))
+                .collect::<Vec<_>>(),
+            vec![(root, 3), (shared, 7)],
+            "the vault-root write binds the vault root, and the write inside the \
+             cut folder binds that folder — each with that scope's own read-epoch \
+             floor"
+        );
+    }
+
+    /// The blob is transplant-proof across scopes: it opens under the pair the
+    /// op record carries and under no other.
+    #[test]
+    fn a_key_blob_does_not_open_under_another_scope() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "shared", NodeKind::Folder);
+        let shared = block_on(engine.view())
+            .unwrap()
+            .lookup(root, "shared")
+            .unwrap()
+            .id;
+        engine.descendant_scope_roots.borrow_mut().insert(shared);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: shared,
+                name: "inside.bin".into(),
+            },
+            &[9u8; 32],
+        )
+        .expect("the write commits");
+
+        let staged = queued_versions(&engine).remove(0);
+        let enc = engine.session.as_ref().unwrap().enc_subkey();
+        assert!(
+            open_content_key(
+                enc,
+                &staged.scope.0,
+                staged.epoch,
+                &staged.root_cid,
+                &staged.sealed_content_key,
+            )
+            .is_ok(),
+            "the carried pair opens the blob"
+        );
+        assert!(
+            open_content_key(
+                enc,
+                &root.0,
+                staged.epoch,
+                &staged.root_cid,
+                &staged.sealed_content_key,
+            )
+            .is_err(),
+            "the vault root does not"
+        );
+    }
+
+    /// A grafted scope's floors live in the granting identity's namespace, so a
+    /// write inside one must not read this vault's own floor for that id.
+    #[test]
+    fn a_grafted_scope_reads_its_epoch_in_the_granting_identitys_namespace() {
+        let (engine, _events) = started();
+        let grafted = NodeId([0x5c; 16]);
+        let sharer = [0x21; cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN];
+        engine.bookmarked_scope_roots.borrow_mut().insert(grafted.0);
+        engine
+            .grafted_sharers
+            .borrow_mut()
+            .insert(grafted.0, sharer);
+
+        // The same scope id raised in both namespaces, to different values.
+        let label = crate::seams::ContactLabel::of(
+            engine.session.as_ref().unwrap().contact_label_seed(),
+            &sharer,
+        );
+        block_on(
+            SharerScopedFloorStore::granted_by(&engine.seams.floor_store, label)
+                .raise_epoch_floor(&grafted.0, 9),
+        )
+        .unwrap();
+        block_on(engine.seams.floor_store.raise_epoch_floor(&grafted.0, 4)).unwrap();
+
+        assert_eq!(
+            block_on(engine.authored_scope_epoch(grafted)),
+            Ok(9),
+            "the granting identity's floor is the one the blob binds"
+        );
+    }
+
+    /// Fail closed rather than measure a grafted scope in this vault's own
+    /// namespace: a floor no sharer raised is not this scope's floor.
+    #[test]
+    fn a_grafted_scope_with_no_granting_identity_refuses_the_epoch() {
+        let (engine, _events) = started();
+        let grafted = NodeId([0x5c; 16]);
+        engine.bookmarked_scope_roots.borrow_mut().insert(grafted.0);
+
+        assert!(matches!(
+            block_on(engine.authored_scope_epoch(grafted)),
+            Err(EngineError::ScopeExitRefused { .. })
+        ));
     }
 
     /// A hold is a state that *clears*, so it is read off both surfaces rather
