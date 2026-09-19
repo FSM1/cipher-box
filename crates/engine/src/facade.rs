@@ -106,10 +106,10 @@ use crate::rotation::{
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
     Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnExit, RotateScopePlan,
     RotationOutcome, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError,
-    SweepOutcome, SweepResolveFailure, WalkedReadEpochs, WriteHistory, WriteRevokeKind, bounded,
-    cut_for_write_grant, derive_write_name, install_walked_read_epochs, record_grant_floor,
-    reseal_at_current_epoch, reseal_scope_root, revoke_read_grant, revoke_write_grant,
-    rotate_on_cut, rotate_scope, run_sweep, run_sweep_job,
+    SweepOutcome, SweepResolveFailure, SweepRun, WalkedReadEpochs, WriteHistory, WriteRevokeKind,
+    bounded, cut_for_write_grant, derive_write_name, install_walked_read_epochs,
+    record_grant_floor, reseal_at_current_epoch, reseal_scope_root, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep, run_sweep_job,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
@@ -2813,15 +2813,14 @@ fn owned_sweep_targets(
     write_seeds: &RefCell<ScopeSeeds>,
 ) -> Vec<SweepTarget> {
     let root = base.root;
-    let mut targets: Vec<SweepTarget> = held_vault_root_scope(root, write_seeds, root_name)
-        .ok()
-        .map(|scope| SweepTarget {
+    let mut targets = Vec::new();
+    if let Ok(scope) = held_vault_root_scope(root, write_seeds, root_name) {
+        targets.push(SweepTarget {
             scope,
             ascent: None,
             epoch: None,
-        })
-        .into_iter()
-        .collect();
+        });
+    }
     let Some(root_read_seed) = cached_seed(read_seeds, &root.0) else {
         return targets;
     };
@@ -2832,18 +2831,23 @@ fn owned_sweep_targets(
             continue;
         };
         targets.push(SweepTarget {
-            scope: ChildScopeRef::new(
-                scope_root.0,
-                derive_write_name(&proved.write_scope_seed, &scope_root.0)
-                    .as_str()
-                    .as_bytes()
-                    .to_vec(),
-            ),
+            scope: proved_scope_ref(*scope_root, proved),
             ascent: Some(ascent),
             epoch: Some(proved.read_epoch),
         });
     }
     targets
+}
+
+/// A proved boundary's scope root at the name its write scope seed derives.
+fn proved_scope_ref(scope_root: NodeId, proved: &ScopeMaterial) -> ChildScopeRef {
+    ChildScopeRef::new(
+        scope_root.0,
+        derive_write_name(&proved.write_scope_seed, &scope_root.0)
+            .as_str()
+            .as_bytes()
+            .to_vec(),
+    )
 }
 
 /// Refuse a journal target outside this vault's own tree.
@@ -3015,13 +3019,7 @@ where
         .material
         .get(&scope_root)
         .ok_or(RotateError::Resolve(ResolveFailure::Rejected))?;
-    let scope = ChildScopeRef::new(
-        scope_root.0,
-        derive_write_name(&proved.write_scope_seed, &scope_root.0)
-            .as_str()
-            .as_bytes()
-            .to_vec(),
-    );
+    let scope = proved_scope_ref(scope_root, proved);
     let ascent = ascent_node_seed(
         &arm.boundaries.base.borrow(),
         &arm.boundaries.material,
@@ -4200,7 +4198,7 @@ fn held_vault_root_scope(
     ))
 }
 
-/// [`Engine::vault_root_scope`]'s refusal name.
+/// [`held_vault_root_scope`]'s refusal name.
 const HELD_SEED_NOT_AT_CURRENT_ROOT: &str = "held-write-seed-does-not-name-the-current-root";
 
 /// Whether `seed` derives the scope root's own `ipnsName` — the one proof every
@@ -4790,13 +4788,13 @@ type TickLoopSpawner = Box<dyn FnOnce()>;
 type SweepTaskFactory = Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
 
 /// One [`run_sweep`] over a scope root, the ancestor seed its gate proves under,
-/// and a pass cap. `None` once the session is gone.
+/// and a pass cap.
 type Sweeper = Rc<
     dyn Fn(
         ChildScopeRef,
         Option<Zeroizing<[u8; 32]>>,
         u32,
-    ) -> Pin<Box<dyn Future<Output = Option<Result<SweepOutcome, SweepError>>>>>,
+    ) -> Pin<Box<dyn Future<Output = SweepRun>>>,
 >;
 
 /// One scope the idle sweep job may walk this round.
@@ -6093,7 +6091,9 @@ where {
                 Box::pin(async move {
                     // The pass owns a copy for exactly its own duration; the
                     // engine emptied the cell if the session is already gone.
-                    let keys = held.borrow().clone()?;
+                    let Some(keys) = held.borrow().clone() else {
+                        return SweepRun::SessionEnded;
+                    };
                     let net = OwnerRotationNet {
                         transport: &transport,
                         api: api.as_ref(),
@@ -6121,7 +6121,7 @@ where {
                         swept: SweptScopeState::default(),
                         moved_seed: MovedScopeSeed::default(),
                     };
-                    Some(
+                    SweepRun::Swept(
                         run_sweep(
                             &scheduler,
                             &net,
@@ -6145,8 +6145,7 @@ where {
     ///
     /// Nothing about the wave is durable, so a restart starts with every such
     /// scope due: a cut whose own enqueued sweep failed, or that a restart cut
-    /// short, converges here. A granted scope is never a target: the job walks
-    /// only the scopes this vault owns.
+    /// short, converges here. The job walks only the scopes this vault owns.
     fn spawn_sweep_job(&self, sweeper: Sweeper)
     where
         T::FloorStore: Clone + 'static,
@@ -6162,8 +6161,7 @@ where {
         let write_seeds = self.scope_write_seeds.clone();
         let cadence = self.profile.sweep_cadence;
         self.seams.scheduler.spawn(Box::pin(async move {
-            // Scope id -> the read epoch a pass last left it converged at.
-            let converged: RefCell<BTreeMap<[u8; 16], u64>> = RefCell::default();
+            let read_epoch_converged_at: RefCell<BTreeMap<[u8; 16], u64>> = RefCell::default();
             run_sweep_job(
                 &scheduler,
                 cadence,
@@ -6187,7 +6185,10 @@ where {
                                 .ok()
                                 .flatten();
                         }
-                        let settled = converged.borrow().get(&target.scope.scope_id).copied();
+                        let settled = read_epoch_converged_at
+                            .borrow()
+                            .get(&target.scope.scope_id)
+                            .copied();
                         if target.epoch.is_some_and(|epoch| {
                             epoch > GENESIS_EPOCH && settled.is_none_or(|at| at < epoch)
                         }) {
@@ -6203,7 +6204,7 @@ where {
                     if let Ok(outcome) = result
                         && !outcome.worth_another_pass()
                     {
-                        converged
+                        read_epoch_converged_at
                             .borrow_mut()
                             .insert(target.scope.scope_id, outcome.scope_read_epoch);
                     }
@@ -7344,9 +7345,9 @@ where {
                     .await
             }
             Command::RestoreVersion { node, content_cid } => {
-                // A reorder of the file's own history, which a write pass may
-                // author like a new version: it drops no version and touches no
-                // bin.
+                // A restore publishes a new record whose head is the prior
+                // version and never rewinds history, so a write pass may author
+                // it like a new version.
                 let rendered = self.render().await?;
                 self.write_home(&rendered, node, TargetRole::Node)?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);

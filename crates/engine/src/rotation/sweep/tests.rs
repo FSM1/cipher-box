@@ -745,6 +745,17 @@ fn rounds(count: usize) -> impl AsyncFnMut() -> Option<Vec<ChildScopeRef>> {
     }
 }
 
+/// The job's sweep: one [`run_sweep`] pass over `net`, for a session that never ends.
+fn one_pass<'a>(
+    scheduler: &'a VirtualScheduler,
+    net: &'a FakeNet,
+    cadence: Duration,
+) -> impl AsyncFnMut(&ChildScopeRef) -> SweepRun + 'a {
+    async move |scope: &ChildScopeRef| {
+        SweepRun::Swept(run_sweep(scheduler, net, net, scope, cadence, 1, &|| true).await)
+    }
+}
+
 /// Run the job over `net`'s one scope for `count` rounds on an
 /// auto-advancing clock, then stop it.
 fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualScheduler) {
@@ -754,9 +765,7 @@ fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualSche
         &scheduler,
         cadence,
         rounds(count),
-        async |scope: &ChildScopeRef| {
-            Some(run_sweep(&scheduler, net, net, scope, cadence, 1, &|| true).await)
-        },
+        one_pass(&scheduler, net, cadence),
         |scope: &ChildScopeRef, result: &Result<SweepOutcome, SweepError>| {
             seen.borrow_mut().push((scope.scope_id, result.clone()));
         },
@@ -875,20 +884,7 @@ fn the_job_parks_across_a_focus_window_poll_tick() {
                 &scheduler,
                 profile.sweep_cadence,
                 rounds(1),
-                async |scope: &ChildScopeRef| {
-                    Some(
-                        run_sweep(
-                            &scheduler,
-                            &net,
-                            &net,
-                            scope,
-                            profile.sweep_cadence,
-                            1,
-                            &|| true,
-                        )
-                        .await,
-                    )
-                },
+                one_pass(&scheduler, &net, profile.sweep_cadence),
                 |_: &ChildScopeRef, _: &Result<SweepOutcome, SweepError>| {},
             )
             .await;

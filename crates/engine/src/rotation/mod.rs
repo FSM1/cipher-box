@@ -84,8 +84,8 @@ pub use rotate_write::{
 pub(crate) use scope_material::{WalkedReadEpochs, install_walked_read_epochs};
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
-    SweepResolver, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep, run_sweep_job,
-    sweep_pass,
+    SweepResolver, SweepRun, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep,
+    run_sweep_job, sweep_pass,
 };
 pub use trigger::{
     CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,

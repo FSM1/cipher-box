@@ -919,10 +919,9 @@ fn the_recipient_reads_a_file_below_a_grafted_root() {
     }
 }
 
-/// A version restore reorders the file's own history and drops no version, so
-/// a write grantee may make one below the grafted root. The owner then reads
-/// the restored content as the head, and the outgoing head as the prior
-/// version.
+/// A write grantee restores a prior version below the grafted root. The owner
+/// then reads the restored content as the head, and the outgoing head as the
+/// prior version.
 #[test]
 fn a_write_grantees_version_restore_reaches_the_owner() {
     let world = FakeWorld::new();
@@ -952,9 +951,9 @@ fn a_write_grantees_version_restore_reaches_the_owner() {
         content_cid: prior[0].content_cid.clone(),
     }))
     .expect("a version restore below a proved write root journals");
-    drive(&world, &engine_r, &mut tasks_r, 4);
+    tick_n(&world, &engine_r, &mut tasks_r, 4);
 
-    drive(&world, &engine_t, &mut tasks_t, 4);
+    tick_n(&world, &engine_t, &mut tasks_t, 4);
     assert_reads_both_versions(
         &engine_t,
         file,
@@ -1006,7 +1005,7 @@ fn epoch_in_scope(world: &FakeWorld, blocks: &Blocks, scope: NodeId, node: NodeI
 }
 
 /// Run the tasks a command spawned until each ends, one poll cadence apart.
-fn run_to_end(world: &FakeWorld, mut spawned: Vec<BoxedTask>, step: core::time::Duration) {
+fn run_spawned_to_end(world: &FakeWorld, mut spawned: Vec<BoxedTask>, step: core::time::Duration) {
     let mut cx = Context::from_waker(Waker::noop());
     for _ in 0..16 {
         spawned.retain_mut(|task| task.as_mut().poll(&mut cx).is_pending());
@@ -1018,8 +1017,15 @@ fn run_to_end(world: &FakeWorld, mut spawned: Vec<BoxedTask>, step: core::time::
     panic!("a spawned task never ended");
 }
 
+/// How many poll cadences one idle sweep cadence spans.
+fn polls_per_sweep(engine: &Engine<FakeSeamTypes>) -> u32 {
+    let profile = engine.profile();
+    u32::try_from(profile.sweep_cadence.as_secs() / profile.poll_cadence.as_secs())
+        .expect("a small ratio")
+}
+
 /// Advance the clock one poll cadence at a time, `times` times, polling `tasks`.
-fn drive(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask], times: u32) {
+fn tick_n(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTask], times: u32) {
     for _ in 0..times {
         tick(world, engine, tasks);
     }
@@ -1075,12 +1081,12 @@ fn after_a_restart_the_idle_sweep_converges_what_a_failed_sweep_left() {
     for endpoint in world.record_store.endpoints() {
         world.record_store.fail_endpoint(&endpoint);
     }
-    run_to_end(
+    run_spawned_to_end(
         &world,
         world.scheduler.take_spawned_tasks(),
         engine.profile().poll_cadence,
     );
-    drive(&world, &engine, &mut tasks, 4);
+    tick_n(&world, &engine, &mut tasks, 4);
     drop(tasks);
     drop(engine);
     for endpoint in world.record_store.endpoints() {
@@ -1097,10 +1103,8 @@ fn after_a_restart_the_idle_sweep_converges_what_a_failed_sweep_left() {
         epoch_in_scope(&world, &blocks, shared, inner) < cut,
         "a cold start alone re-seals nothing"
     );
-    let cadence = restarted.profile().sweep_cadence;
-    let polls = u32::try_from(cadence.as_secs() / restarted.profile().poll_cadence.as_secs())
-        .expect("a small ratio");
-    drive(&world, &restarted, &mut tasks, 2 * polls);
+    let polls = polls_per_sweep(&restarted);
+    tick_n(&world, &restarted, &mut tasks, 2 * polls);
 
     assert_eq!(epoch_in_scope(&world, &blocks, shared, inner), cut);
 }
@@ -1133,16 +1137,14 @@ fn a_read_only_member_never_runs_the_wave() {
     );
 
     let before = records(&world);
-    let cadence = engine_r.profile().sweep_cadence;
-    let polls = u32::try_from(cadence.as_secs() / engine_r.profile().poll_cadence.as_secs())
-        .expect("a small ratio");
-    drive(&world, &engine_r, &mut tasks_r, 3 * polls);
+    let polls = polls_per_sweep(&engine_r);
+    tick_n(&world, &engine_r, &mut tasks_r, 3 * polls);
     assert!(
         records(&world) == before,
         "the read-only member publishes nothing"
     );
 
-    drive(&world, &engine_t, &mut tasks_t, 2 * polls);
+    tick_n(&world, &engine_t, &mut tasks_t, 2 * polls);
     assert_eq!(
         epoch_in_scope(&world, &blocks, shared, inner),
         cut,

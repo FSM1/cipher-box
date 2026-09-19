@@ -859,11 +859,20 @@ where
     }
 }
 
+/// What one sweep of the idle job answers.
+#[derive(Debug)]
+pub enum SweepRun {
+    /// The sweep ran to this result.
+    Swept(Result<SweepOutcome, SweepError>),
+    /// The session that owns the sweep is gone; the job stops.
+    SessionEnded,
+}
+
 /// Drive the lazy wave as the blueprint's idle-cadence [`Scheduler`] job: idle
 /// one `cadence`, sweep every scope `round` names, hand each result to `report`,
-/// and repeat until a round or a sweep answers `None` — session end
-/// (blueprint/engine.md "sweep"). Determinism law: the only time source is
-/// `scheduler.sleep`.
+/// and repeat until a round answers `None` or a sweep answers
+/// [`SweepRun::SessionEnded`] — session end (blueprint/engine.md "sweep").
+/// Determinism law: the only time source is `scheduler.sleep`.
 ///
 /// The idle comes **first**, so a freshly spawned job never sweeps in the same
 /// wake as the cut or the poll tick that spawned it.
@@ -877,7 +886,7 @@ pub async fn run_sweep_job<S, J>(
     scheduler: &S,
     cadence: Duration,
     mut round: impl AsyncFnMut() -> Option<Vec<J>>,
-    mut sweep: impl AsyncFnMut(&J) -> Option<Result<SweepOutcome, SweepError>>,
+    mut sweep: impl AsyncFnMut(&J) -> SweepRun,
     mut report: impl FnMut(&J, &Result<SweepOutcome, SweepError>),
 ) where
     S: Scheduler,
@@ -888,7 +897,7 @@ pub async fn run_sweep_job<S, J>(
             return;
         };
         for scope in &scopes {
-            let Some(result) = sweep(scope).await else {
+            let SweepRun::Swept(result) = sweep(scope).await else {
                 return;
             };
             report(scope, &result);
