@@ -186,17 +186,37 @@ fn a_repaired_index_is_not_flagged_again_on_the_next_pass() {
     assert_eq!(net.index_repairs.get(), 1, "no redundant republish");
 }
 
+/// One pass is what the idle job runs per scope per round.
 #[test]
-fn an_index_repair_that_lost_the_cas_is_not_flagged() {
+fn an_index_repair_that_lost_the_cas_is_not_flagged_and_is_worth_another_pass() {
     let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
-    net.state.borrow_mut().index_repair_fault = Some(RotationPublishError::LostRace);
+    net.state.borrow_mut().index_repair_lost_race_next = 1;
 
-    let outcome = run(&net, 0x00).expect("sweep");
+    let outcome = drive(&net, 1, 0).expect("sweep");
     assert!(
         outcome.flagged_indexes.is_empty(),
         "a repair that never landed must not be reported"
     );
     assert_eq!(outcome.skipped_scope_roots, vec![id(0x0a)]);
+    assert!(outcome.index_repair_lost_race);
+    assert!(outcome.worth_another_pass());
+    assert!(net.state.borrow().repaired_index.is_none());
+}
+
+#[test]
+fn the_driver_re_runs_a_lost_index_repair_until_it_lands() {
+    let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
+    net.state.borrow_mut().index_repair_lost_race_next = 1;
+
+    let outcome = drive(&net, 3, 1).expect("the repair lands on the second pass");
+    assert!(!outcome.index_repair_lost_race);
+    assert!(!outcome.worth_another_pass());
+    assert_eq!(outcome.flagged_indexes, vec![id(0x0a)]);
+    assert_eq!(net.index_repairs.get(), 2);
+    assert_eq!(
+        net.state.borrow().repaired_index.clone().expect("repaired"),
+        vec![scope_ref(0x0a)]
+    );
 }
 
 #[test]
