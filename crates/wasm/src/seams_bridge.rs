@@ -14,9 +14,10 @@
 //! nothing more — every trust decision already happened below the facade
 //! (blueprint/engine.md). Numeric seam values (floors, sequence numbers, op
 //! ids, byte totals) cross as `f64`, matching the JS seam signatures
-//! (`packages/client/src/seams/types.ts`); their value domain is far below
-//! `Number.MAX_SAFE_INTEGER`. The facade's own `u64` boundary (op ids, sizes)
-//! crosses as `bigint` and lives in `lib.rs`, not here.
+//! (`packages/client/src/seams/types.ts`). Only a non-negative integer up to
+//! `Number.MAX_SAFE_INTEGER` crosses, in either direction; any other value is a
+//! [`SeamError`], never a rounded or default number. The facade's own `u64`
+//! boundary (op ids, sizes) crosses as `bigint` and lives in `lib.rs`, not here.
 
 use cipherbox_engine::seams::{
     BoxedTask, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http, HttpCredentials,
@@ -45,21 +46,42 @@ pub(crate) fn seam_error(value: JsValue) -> SeamError {
     SeamError::new(message.unwrap_or_else(|| "browser seam rejected".to_string()))
 }
 
-/// `number | null | undefined` → `Option<u64>`.
-pub(crate) fn optional_u64(value: JsValue) -> Option<u64> {
-    if value.is_null() || value.is_undefined() {
-        None
-    } else {
-        value.as_f64().map(|number| number as u64)
+/// `Number.MAX_SAFE_INTEGER`: the largest integer a JS number holds exactly.
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+/// `number` → `u64`. A floor read as "no floor" or 0 lets a replayed record
+/// past the adoption gate, so a value that is not exactly a `u64` is an error.
+pub(crate) fn required_u64(value: JsValue) -> SeamResult<u64> {
+    match value.as_f64() {
+        Some(number)
+            if (0.0..=MAX_SAFE_INTEGER as f64).contains(&number) && number.fract() == 0.0 =>
+        {
+            Ok(number as u64)
+        }
+        _ => Err(SeamError::new(
+            "browser seam returned a value that is not a safe non-negative integer",
+        )),
     }
 }
 
-/// `number` → `u64` (0 if the value is not a number).
-pub(crate) fn required_u64(value: JsValue) -> u64 {
-    value
-        .as_f64()
-        .map(|number| number as u64)
-        .unwrap_or_default()
+/// `number | null | undefined` → `Option<u64>`, under [`required_u64`]'s rule.
+pub(crate) fn optional_u64(value: JsValue) -> SeamResult<Option<u64>> {
+    if value.is_null() || value.is_undefined() {
+        Ok(None)
+    } else {
+        required_u64(value).map(Some)
+    }
+}
+
+/// `u64` → `number`, refusing a value a JS number cannot hold exactly.
+fn js_number(value: u64) -> SeamResult<f64> {
+    if value <= MAX_SAFE_INTEGER {
+        Ok(value as f64)
+    } else {
+        Err(SeamError::new(
+            "value exceeds the safe integer range of the browser seam",
+        ))
+    }
 }
 
 /// `Uint8Array | null | undefined` → `Option<Vec<u8>>`.
@@ -111,36 +133,34 @@ pub(crate) struct FloorStoreAdapter {
 
 impl FloorStore for FloorStoreAdapter {
     async fn epoch_floor(&self, scope_id: &[u8]) -> SeamResult<Option<u64>> {
-        Ok(optional_u64(
-            self.js.epoch_floor(scope_id).await.map_err(seam_error)?,
-        ))
+        optional_u64(self.js.epoch_floor(scope_id).await.map_err(seam_error)?)
     }
 
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
-        Ok(required_u64(
+        required_u64(
             self.js
-                .raise_epoch_floor(scope_id, epoch as f64)
+                .raise_epoch_floor(scope_id, js_number(epoch)?)
                 .await
                 .map_err(seam_error)?,
-        ))
+        )
     }
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
-        Ok(optional_u64(
+        optional_u64(
             self.js
                 .sequence_floor(ipns_name)
                 .await
                 .map_err(seam_error)?,
-        ))
+        )
     }
 
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
-        Ok(required_u64(
+        required_u64(
             self.js
-                .raise_sequence_floor(ipns_name, sequence as f64)
+                .raise_sequence_floor(ipns_name, js_number(sequence)?)
                 .await
                 .map_err(seam_error)?,
-        ))
+        )
     }
 
     async fn clear(&self) -> SeamResult<()> {
@@ -251,9 +271,7 @@ pub(crate) struct StagingStoreAdapter {
 
 impl StagingStore for StagingStoreAdapter {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
-        Ok(OpId(required_u64(
-            self.js.enqueue_op(op).await.map_err(seam_error)?,
-        )))
+        required_u64(self.js.enqueue_op(op).await.map_err(seam_error)?).map(OpId)
     }
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
@@ -266,7 +284,7 @@ impl StagingStore for StagingStoreAdapter {
             let pair: Array = entry
                 .dyn_into()
                 .map_err(|_| SeamError::new("each queued op must be a [id, bytes] pair"))?;
-            let op_id = OpId(required_u64(pair.get(0)));
+            let op_id = OpId(required_u64(pair.get(0))?);
             let bytes = pair.get(1).unchecked_into::<Uint8Array>().to_vec();
             ops.push((op_id, bytes));
         }
@@ -318,9 +336,7 @@ impl StagingStore for StagingStoreAdapter {
     }
 
     async fn staged_bytes_total(&self) -> SeamResult<u64> {
-        Ok(required_u64(
-            self.js.staged_bytes_total().await.map_err(seam_error)?,
-        ))
+        required_u64(self.js.staged_bytes_total().await.map_err(seam_error)?)
     }
 
     async fn clear(&self) -> SeamResult<()> {
@@ -674,11 +690,13 @@ impl Http for HttpAdapter {
     }
 }
 
-/// A byte count off a `CappedHttpResult`, saturating: a count past `usize` is
-/// over any cap either way.
+/// A byte count off a `CappedHttpResult`, saturating: an unreadable count, or
+/// one past `usize`, is over any cap either way.
 fn capped_count(result: &JsValue, field: &str) -> usize {
     let value = Reflect::get(result, &JsValue::from_str(field)).unwrap_or(JsValue::UNDEFINED);
-    usize::try_from(required_u64(value)).unwrap_or(usize::MAX)
+    required_u64(value).map_or(usize::MAX, |count| {
+        usize::try_from(count).unwrap_or(usize::MAX)
+    })
 }
 
 // Capped-fetch boundary tests. Crate-private adapters, so these live here rather
@@ -835,5 +853,103 @@ mod tests {
             .await
             .expect_err("a rejection never yields a response");
         assert!(matches!(err, CappedFetchError::Transport(_)));
+    }
+
+    /// A `JsFloorStoreSeam` double: every read and raise resolves `value`, and
+    /// `calls` counts the calls that reached JS.
+    fn floor_seam_resolving(value: JsValue) -> (FloorStoreAdapter, Rc<Cell<u32>>) {
+        let calls = Rc::new(Cell::new(0));
+        let object = Object::new();
+        for method in [
+            "epochFloor",
+            "sequenceFloor",
+            "raiseEpochFloor",
+            "raiseSequenceFloor",
+        ] {
+            let (value, calls) = (value.clone(), calls.clone());
+            let reply = Closure::<dyn FnMut() -> Promise>::new(move || {
+                calls.set(calls.get() + 1);
+                Promise::resolve(&value)
+            });
+            let _ = Reflect::set(&object, &JsValue::from_str(method), reply.as_ref());
+            reply.forget();
+        }
+        (
+            FloorStoreAdapter {
+                js: object.unchecked_into(),
+            },
+            calls,
+        )
+    }
+
+    /// Two to the 53rd: the first integer past `Number.MAX_SAFE_INTEGER`.
+    const TWO_POW_53: f64 = 9_007_199_254_740_992.0;
+
+    fn unreadable_floor_values() -> Vec<JsValue> {
+        vec![
+            JsValue::from_str("7"),
+            JsValue::TRUE,
+            Object::new().into(),
+            JsValue::from_f64(f64::NAN),
+            JsValue::from_f64(f64::INFINITY),
+            JsValue::from_f64(-1.0),
+            JsValue::from_f64(1.5),
+            JsValue::from_f64(TWO_POW_53),
+        ]
+    }
+
+    #[wasm_bindgen_test]
+    async fn an_unreadable_floor_is_an_error_never_no_floor() {
+        for value in unreadable_floor_values() {
+            let (floors, _) = floor_seam_resolving(value.clone());
+            let epoch = floors.epoch_floor(b"scope").await;
+            assert!(epoch.is_err(), "epoch floor {value:?} read as {epoch:?}");
+            let sequence = floors.sequence_floor(b"name").await;
+            assert!(
+                sequence.is_err(),
+                "sequence floor {value:?} read as {sequence:?}"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    async fn an_unreadable_raise_result_is_an_error_never_zero() {
+        for value in unreadable_floor_values() {
+            let (floors, _) = floor_seam_resolving(value.clone());
+            let epoch = floors.raise_epoch_floor(b"scope", 3).await;
+            assert!(epoch.is_err(), "epoch raise {value:?} read as {epoch:?}");
+            let sequence = floors.raise_sequence_floor(b"name", 3).await;
+            assert!(
+                sequence.is_err(),
+                "sequence raise {value:?} read as {sequence:?}"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    async fn an_absent_floor_is_none_and_a_safe_integer_crosses_exactly() {
+        for absent in [JsValue::NULL, JsValue::UNDEFINED] {
+            let (floors, _) = floor_seam_resolving(absent);
+            assert_eq!(floors.epoch_floor(b"scope").await, Ok(None));
+            assert_eq!(floors.sequence_floor(b"name").await, Ok(None));
+        }
+        let max_safe = (1u64 << 53) - 1;
+        let (floors, _) = floor_seam_resolving(JsValue::from_f64(max_safe as f64));
+        assert_eq!(floors.epoch_floor(b"scope").await, Ok(Some(max_safe)));
+        assert_eq!(floors.raise_sequence_floor(b"name", 1).await, Ok(max_safe));
+    }
+
+    #[wasm_bindgen_test]
+    async fn a_raise_past_the_safe_integer_range_never_reaches_js() {
+        let (floors, calls) = floor_seam_resolving(JsValue::from_f64(1.0));
+        for value in [1u64 << 53, u64::MAX] {
+            assert!(floors.raise_epoch_floor(b"scope", value).await.is_err());
+            assert!(floors.raise_sequence_floor(b"name", value).await.is_err());
+        }
+        assert_eq!(
+            calls.get(),
+            0,
+            "a value JS cannot hold exactly never crosses"
+        );
     }
 }

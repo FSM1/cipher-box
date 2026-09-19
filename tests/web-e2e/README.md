@@ -29,6 +29,9 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
   the refusal
 - an invite link minted by one vault is claimed by a second account in its own
   browser context, and the minter converts that claim into a read grant
+- a write grant made by a hand exchange of contact codes lets the recipient
+  upload, create a folder and delete inside the granted folder; the owner reads
+  the writes back, and the delete lands in the owner's bin
 - a saved settings record reads back off the vault field by field, with the
   provider credential offered for clearing rather than shown
 - two sessions carry a device approval end to end: both devices derive the same

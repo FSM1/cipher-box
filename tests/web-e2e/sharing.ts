@@ -1,14 +1,20 @@
 /**
  * The two halves of a share, shared by the specs that need one: the owner mints
- * a link on a folder, and a second account spends it.
+ * a link on a folder and a second account spends it, or the two accounts
+ * exchange contact codes and the owner grants the folder.
  */
 
-import type { Browser, Page } from '@playwright/test';
+import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { expect } from './fixtures';
+import type { FilesPage } from './page-objects/files.page';
 import { InvitePage } from './page-objects/invite.page';
 import { SharePage } from './page-objects/share.page';
+import { SharedPage } from './page-objects/shared.page';
 import { VaultPage } from './page-objects/vault.page';
-import { coldStart } from './vault';
+import { coldStart, nodeOf } from './vault';
+
+/** The recipient's own folder, whose share dialog carries the contact import. */
+const RECIPIENT_FOLDER = 'recipient-own';
 
 /** Cold-starts a vault, publishes `folder`, and mints a link on it. */
 export async function mint(page: Page, folder: string): Promise<URL> {
@@ -73,4 +79,67 @@ export async function claim(browser: Browser, link: URL): Promise<Page> {
     start: () => new VaultPage(page).signInHere(account),
   });
   return page;
+}
+
+/** Both sides of a grant made by a hand exchange of contact codes. */
+export interface CodeGrant {
+  readonly owner: VaultPage;
+  readonly ownerFiles: FilesPage;
+  readonly recipient: VaultPage;
+  readonly recipientPage: Page;
+  readonly recipientFiles: FilesPage;
+  readonly recipientContext: BrowserContext;
+  /** The granted folder's node id, as the `/shared` row carries it. */
+  readonly scope: string;
+}
+
+/**
+ * Cold-starts two accounts that exchange contact codes by hand, grants `folder`
+ * of the first to the second at `permission`, and waits until the recipient's
+ * `/shared` row reads the grant.
+ *
+ * The recipient gets its own browser context: a second page of the owner's
+ * context shares the origin's `BroadcastChannel` and `navigator.locks` and is
+ * therefore the same session.
+ */
+export async function grantByCode(
+  page: Page,
+  browser: Browser,
+  folder: string,
+  permission: 'read' | 'write'
+): Promise<CodeGrant> {
+  const { files: ownerFiles, vault: owner } = await coldStart(page);
+  await ownerFiles.createFolder(folder);
+  const scope = nodeOf((await owner.settled()).view, folder);
+
+  const ownerShare = new SharePage(page);
+  await ownerShare.open(folder);
+  const ownerCode = await ownerShare.readOwnContactCode();
+
+  const recipientContext = await browser.newContext();
+  const recipientPage = await recipientContext.newPage();
+  const { files: recipientFiles, vault: recipient } = await coldStart(recipientPage);
+  await recipientFiles.createFolder(RECIPIENT_FOLDER);
+  await recipient.settled();
+  const recipientShare = new SharePage(recipientPage);
+  await recipientShare.open(RECIPIENT_FOLDER);
+  await recipientShare.importContact(ownerCode);
+  const recipientCode = await recipientShare.readOwnContactCode();
+  await recipientShare.close();
+
+  await ownerShare.grantTo(recipientCode, permission);
+  await ownerShare.close();
+
+  // The recipient's mailbox leg rides the nocache pass, so one refresh both
+  // accepts the delivered pointer and classifies it.
+  await recipient.refresh();
+  const shared = new SharedPage(recipientPage);
+  await shared.open();
+  await shared.readStanding(scope, 'granted');
+  const row = shared.row(scope);
+  await expect(row).toHaveCount(1);
+  await expect(row.getByTestId('shared-permission')).toHaveText(permission);
+  await expect(shared.error).toHaveCount(0);
+
+  return { owner, ownerFiles, recipient, recipientPage, recipientFiles, recipientContext, scope };
 }

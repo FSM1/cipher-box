@@ -2795,10 +2795,13 @@ where
         applied: &AppliedOp,
         to_bin: bool,
     ) -> Result<(), Halt> {
-        // Both branches end on a surface of this vault: the soft branch on the
-        // owner's bin index, the hard branch on the identity's retire ledger and
-        // the registry rows the sharer's account holds.
-        scope.refuse_vault_surface()?;
+        // The soft branch ends on the owner's bin index, a surface of this
+        // vault. A grafted pass takes neither branch: a grantee's delete only
+        // unlinks, and the owner's engine bins the node by owner capture
+        // (CONTEXT.md), so the records and pins stay the owner's to settle.
+        if to_bin {
+            scope.refuse_vault_surface()?;
+        }
         let target = applied.op.target;
         let mut unlink_from = Vec::new();
         let mut named = None;
@@ -2829,7 +2832,9 @@ where
         // The soft branch earns its bin entry and its re-key before the unlink;
         // the hard branch earns its doomed manifest. Both then unlink and
         // republish every parent, which is where the op completes.
-        let doomed = if to_bin && names_this_scope(&plane.end, &child) {
+        let doomed = if scope.is_grafted() {
+            None
+        } else if to_bin && names_this_scope(&plane.end, &child) {
             let unlinked = UnlinkedChild {
                 scope_id: plane.end.root.0,
                 // The highest-ranked link still standing: the folder a reader
@@ -8576,20 +8581,17 @@ mod tests {
         }
     }
 
-    /// Every op plan that ends on a surface of this vault above the grafted
-    /// root: the owner's bin index (soft delete, restore, purge) and the
-    /// identity's retire ledger and doomed-name journal (hard delete). The
-    /// refusal is a plain `Err` return rather than an assertion, so it fires in
-    /// every build profile (AGENTS.md rule 8).
+    /// Every op plan that ends on the owner's bin index above the grafted root:
+    /// a soft delete, a restore and a purge. A hard delete is a grantee's
+    /// unlink, which reaches no such surface. The refusal is a plain `Err`
+    /// return rather than an assertion, so it fires in every build profile
+    /// (AGENTS.md rule 8).
     #[test]
     fn a_grafted_pass_is_refused_every_vault_level_op_plan() {
         const TARGET: NodeId = NodeId([0x41; 16]);
         let plans = [
             ("a soft delete writes the owner's bin index", {
                 Op::delete(TARGET, 1, UnixMillis(0), 1, true)
-            }),
-            ("a hard delete owes the identity's retire ledger", {
-                Op::delete(TARGET, 1, UnixMillis(0), 1, false)
             }),
             (
                 "a restore reads the bin index and drops its entry",

@@ -5538,3 +5538,101 @@ fn a_write_share_to_another_recipient_over_a_stalled_scope_is_refused() {
         "and the owed wave is still owed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A write grantee's delete, end to end
+// ---------------------------------------------------------------------------
+
+/// The recipient's own session against the configured API, started on their
+/// own login secret, with their loops parked.
+fn recipient_session(fx: &GrantScenario) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+    serve_http(&fx.recipient_device, &fx.blocks, 8_000);
+    let (mut engine, events) = engine_on_api(&fx.recipient_device, 21);
+    block_on(engine.start(LoginSecret::new(RECIPIENT_SECRET.to_vec())))
+        .expect("the recipient's own session starts");
+    let mut tasks = fx.world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    block_on(engine.command(Command::ImportContact {
+        contact_code: contact_code(&SECRET),
+    }))
+    .expect("the owner's code imports");
+    (engine, events, tasks)
+}
+
+/// A write grantee's delete only unlinks the node from its folder in the granted
+/// scope. The owner's engine then bins the node by owner capture, and the
+/// grantee's own bin stays empty (CONTEXT.md "Owner capture").
+#[test]
+fn a_write_grantees_delete_reaches_the_owners_bin_by_owner_capture() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let doomed = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "doomed",
+    );
+    block_on(fx.engine.command(Command::SetFocus {
+        node: Some(fx.folder),
+    }))
+    .expect("the owner opens the granted folder");
+
+    let (mut grantee, _grantee_events, mut grantee_tasks) = recipient_session(&fx);
+    for _ in 0..4 {
+        fx.world.scheduler.advance(grantee.profile().stale_after);
+        poll_tasks_until_parked(&mut grantee_tasks);
+    }
+    let shares = block_on(grantee.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1, "the grantee accepted the share");
+    let shared = shares[0].scope;
+    assert!(
+        block_on(grantee.view())
+            .expect("a rendered view")
+            .children(shared)
+            .iter()
+            .any(|child| child.id == doomed),
+        "the grantee renders the owner's folder"
+    );
+
+    block_on(grantee.command(Command::Delete { node: doomed }))
+        .expect("the grantee's delete journals");
+    for _ in 0..4 {
+        fx.world.scheduler.advance(grantee.profile().poll_cadence);
+        poll_tasks_until_parked(&mut grantee_tasks);
+    }
+    assert!(
+        block_on(grantee.bin())
+            .expect("the grantee's bin reads")
+            .entries
+            .is_empty(),
+        "the grantee wrote no bin entry"
+    );
+
+    assert!(
+        block_on(fx.recipient_device.staging_store.queued_ops())
+            .expect("the queue reads")
+            .is_empty(),
+        "the grantee's grafted pass published the unlink"
+    );
+    for _ in 0..4 {
+        tick(&fx.world, &fx.engine, &mut fx._tasks);
+    }
+    assert!(
+        block_on(fx.engine.view())
+            .expect("a rendered view")
+            .children(fx.folder)
+            .is_empty(),
+        "the owner reads the unlink"
+    );
+    let entries = published_bin_entries(&fx);
+    let entry = entries
+        .iter()
+        .find(|entry| entry.node_id == doomed.0)
+        .expect("the owner's capture binned the grantee's unlink");
+    assert_eq!(entry.scope_id, fx.folder.0);
+    assert_eq!(entry.origin_parent, fx.folder.0);
+}

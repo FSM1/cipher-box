@@ -9,12 +9,6 @@ import { SharedPage } from '../page-objects/shared.page';
 import { expect, published, test } from './fixtures';
 import { grant, OWNER_FOLDER } from './sharing';
 
-// Held out of the run past the grant: the write grant now reaches the recipient
-// and the recipient opens the folder, but the recipient's own upload into that
-// folder never renders a row. The write leg is what stands; the delivery leg no
-// longer does.
-test.fixme();
-
 const WRITTEN = 'written-by-the-recipient.bin';
 const NESTED = 'recipient-subfolder';
 
@@ -59,8 +53,8 @@ test('a write grant lets a second identity build inside the folder', async ({
   await list.awaitStanding('granted', 600_000);
   await expect(list.rows.getByTestId('shared-permission')).toHaveText('read');
 
-  // A received share offers no write at all: the engine refuses one under a
-  // grafted root, so the browser must not present the gesture.
+  // A read grant offers no write: the engine refuses one there, so the browser
+  // must not present the gesture.
   const scope = await list.rows.getAttribute('data-scope');
   await list.openShare(scope ?? '');
   await expect(recipientFiles.readOnlyNotice).toBeVisible({ timeout: 60_000 });
