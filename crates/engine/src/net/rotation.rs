@@ -40,12 +40,15 @@ use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
-use super::adopter::{LocalHead, RootAdopter, fetch_head_block, open_write_scope_seed_at};
+use super::adopter::{
+    LocalHead, RecoveredSeeds, RootAdopter, fetch_head_block, open_write_scope_seed_at,
+};
 use super::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
     author_scope_root_with_section, report_carried_cut,
 };
 use super::child::ChildAdopter;
+use super::last_known_good::keep_newest_last_known_good;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::pointer_fetch::{
     ConsultedPointer, PointerConsult, PointerConsultError, RecordPointerFetch,
@@ -66,7 +69,8 @@ use crate::entropy::{Entropy, SharedEntropy, fresh_nonce};
 use crate::facade::{Event, NodeId, emit_trust_violation, report_unattested_row, seed_names};
 use crate::gate::floor::PointerPlane;
 use crate::gate::{
-    Adopted, GateError, RejectionReason, floor, read_cut_epoch_floor, write_body_signer,
+    Adopted, Candidate, GateError, PendingAdoption, RejectionReason, floor, read_cut_epoch_floor,
+    write_body_signer,
 };
 use crate::grants::child_index::canonicalize;
 use crate::grants::create::ScopePointerVoucher;
@@ -438,7 +442,7 @@ impl RotationAncestry {
 /// the walk allows it ([`ScopeWalk::write_plane`]).
 ///
 /// A descendant's record is bound to its parent by an ascent link the gate
-/// verifies ([`gated_child_root`]) — a `directChildScopeIndex` entry, or one
+/// verifies ([`gate_root_pass`]) — a `directChildScopeIndex` entry, or one
 /// reparented into a grant's subtree. A vault root carries no ascent link, so
 /// requiring one there would refuse every honest record.
 #[derive(Clone, Copy)]
@@ -447,6 +451,17 @@ enum RootAnchor {
     Descendant,
     /// The vault root.
     VaultRoot,
+}
+
+impl RootAnchor {
+    /// The child binding [`gate_root_pass`] checks for a root read under this
+    /// anchor as `scope_id`.
+    fn expected_child(self, scope_id: [u8; 16]) -> Option<[u8; 16]> {
+        match self {
+            Self::Descendant => Some(scope_id),
+            Self::VaultRoot => None,
+        }
+    }
 }
 
 /// One scope root as the adoption gate authenticated it, plus the seeds the
@@ -655,23 +670,71 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     })
 }
 
-/// Gate `record_bytes` as a scope root under the label `adopter` carries,
-/// recovering this reader's own already-adopted record through
-/// [`reread_at_floor`]. The one ladder every rotation arm's root read runs.
-async fn gated_scope_root<H: Http, F: FloorStore>(
+/// A rotation root read the gate passed, with any floor advance not yet
+/// committed.
+enum RootPass {
+    Pending(Box<(Candidate, PendingAdoption, RecoveredSeeds)>),
+    /// This reader's own already-adopted record, recovered at the floor
+    /// ([`reread_at_floor`]): nothing left to commit.
+    AtFloor(Box<GatedScopeRoot>),
+}
+
+impl RootPass {
+    async fn commit<H: Http, F: FloorStore>(
+        self,
+        adopter: &RootAdopter<'_, H, F>,
+    ) -> Result<GatedScopeRoot, RootGateVerdict> {
+        match self {
+            Self::Pending(pass) => {
+                let (candidate, pending, seeds) = *pass;
+                let adopted = adopter
+                    .commit_root(pending)
+                    .await
+                    .map_err(|_| RootGateVerdict::Unavailable)?;
+                Ok(GatedScopeRoot {
+                    envelope: candidate.envelope,
+                    section: candidate.grant_section,
+                    sequence: adopted.sequence,
+                    read_body: adopted.read_body,
+                    read_scope_seed: seeds.read_scope_seed,
+                    write_scope_seed: seeds.write_scope_seed,
+                })
+            }
+            Self::AtFloor(root) => Ok(*root),
+        }
+    }
+}
+
+/// Gate `record_bytes` under the binding `anchor` names, recovering this
+/// reader's own already-adopted record through [`reread_at_floor`]. The one
+/// ladder every rotation arm's root read runs; the floor advance waits on
+/// [`RootPass::commit`], so a binding this refuses raises no floor.
+///
+/// `Some(expected_id)` binds a claimed **child** scope of the one `adopter`
+/// carries the parent node seed for; `None` a vault-anchored root. Two bindings prove it,
+/// and the caller supplies neither: the owner-signed commitment binds the name,
+/// and the **ascent link** — required here, release-active — binds the record
+/// to `nodeSeed(parent read seed, child)`. The gate verifies an ascent link
+/// only when the record carries one and the vault root carries none, so
+/// without this requirement any owner-signed root planted by a committed writer
+/// would gate cleanly as this scope's descendant.
+async fn gate_root_pass<H: Http, F: FloorStore>(
     adopter: &RootAdopter<'_, H, F>,
     name: &IpnsName,
     record_bytes: &[u8],
-) -> Result<GatedScopeRoot, RootGateVerdict> {
-    match adopter.adopt_root(name, record_bytes).await {
-        Ok((candidate, adopted, seeds)) => Ok(GatedScopeRoot {
-            envelope: candidate.envelope,
-            section: candidate.grant_section,
-            sequence: adopted.sequence,
-            read_body: adopted.read_body,
-            read_scope_seed: seeds.read_scope_seed,
-            write_scope_seed: seeds.write_scope_seed,
-        }),
+    expected_child: Option<[u8; 16]>,
+) -> Result<RootPass, RootGateVerdict> {
+    let bound = |envelope: &Envelope, section: &GrantSection| {
+        expected_child
+            .is_none_or(|expected| envelope.id == expected && section.ascent_link.is_some())
+    };
+    match adopter.gate_and_recover(name, record_bytes).await {
+        Ok((candidate, pending, seeds)) => {
+            if !bound(&candidate.envelope, &candidate.grant_section) {
+                return Err(RootGateVerdict::Rejected);
+            }
+            Ok(RootPass::Pending(Box::new((candidate, pending, seeds))))
+        }
         Err(GateError::Seam(_)) => Err(RootGateVerdict::Unavailable),
         Err(GateError::Rejected(rejection))
             if matches!(rejection.reason, RejectionReason::EpochBelowFloor { .. }) =>
@@ -687,47 +750,42 @@ async fn gated_scope_root<H: Http, F: FloorStore>(
             Err(RootGateVerdict::NotResealable)
         }
         Err(GateError::Rejected(rejection)) => {
-            reread_at_floor(adopter, name, record_bytes, &rejection.reason).await
+            let root = reread_at_floor(adopter, name, record_bytes, &rejection.reason).await?;
+            if !bound(&root.envelope, &root.section) {
+                return Err(RootGateVerdict::Rejected);
+            }
+            Ok(RootPass::AtFloor(Box::new(root)))
         }
     }
 }
 
-/// Gate `record_bytes` as the scope root of `expected_id`, a claimed **child**
-/// scope of the one `adopter` carries the parent node seed for.
-///
-/// Two bindings prove it, and the caller supplies neither: the owner-signed
-/// commitment binds the name, and the **ascent link** — required here,
-/// release-active — binds the record to `nodeSeed(parent read seed, child)`. The
-/// gate verifies an ascent link only when the record carries one and the vault
-/// root carries none, so without this requirement any owner-signed root planted
-/// by a committed writer would gate cleanly as this scope's descendant.
-async fn gated_child_root<H: Http, F: FloorStore>(
+/// [`gate_root_pass`], committed.
+async fn gated_root<H: Http, F: FloorStore>(
     adopter: &RootAdopter<'_, H, F>,
     name: &IpnsName,
     record_bytes: &[u8],
-    expected_id: [u8; 16],
+    expected_child: Option<[u8; 16]>,
 ) -> Result<GatedScopeRoot, RootGateVerdict> {
-    let gated = gated_scope_root(adopter, name, record_bytes).await?;
-    if gated.envelope.id != expected_id || gated.section.ascent_link.is_none() {
-        return Err(RootGateVerdict::Rejected);
-    }
-    Ok(gated)
+    gate_root_pass(adopter, name, record_bytes, expected_child)
+        .await?
+        .commit(adopter)
+        .await
 }
 
-/// Gate `record_bytes` under the binding `anchor` names, so an arm that reads a
-/// root twice cannot prove one binding on the first read and another on the
-/// second.
-async fn gated_at_anchor<H: Http, F: FloorStore>(
+/// [`gate_root_pass`], committed after `record_bytes` is left as last-known-good
+/// ([`keep_newest_last_known_good`]).
+async fn gated_root_cached<H: Http, F: FloorStore, S: SnapshotCache>(
     adopter: &RootAdopter<'_, H, F>,
+    snapshot_cache: &S,
     name: &IpnsName,
     record_bytes: &[u8],
-    expected_id: [u8; 16],
-    anchor: RootAnchor,
+    expected_child: Option<[u8; 16]>,
 ) -> Result<GatedScopeRoot, RootGateVerdict> {
-    match anchor {
-        RootAnchor::Descendant => gated_child_root(adopter, name, record_bytes, expected_id).await,
-        RootAnchor::VaultRoot => gated_scope_root(adopter, name, record_bytes).await,
-    }
+    let pass = gate_root_pass(adopter, name, record_bytes, expected_child).await?;
+    keep_newest_last_known_good(snapshot_cache, name, record_bytes)
+        .await
+        .map_err(|_| RootGateVerdict::Unavailable)?;
+    pass.commit(adopter).await
 }
 
 /// The write material a descendant scope root's own write plane runs under.
@@ -1184,14 +1242,15 @@ where
         let (_, record_bytes) = fanout_get_verify(self.transport, &name)
             .await
             .ok_or(WalkFailure::Unavailable)?;
-        let gated = gated_child_root(&adopter, &name, &record_bytes, child.scope_id)
-            .await
-            .map_err(|verdict| walk_verdict(verdict, child.scope_id))?;
-        // Only a gate pass writes the record cache.
-        let _ = self
-            .snapshot_cache
-            .put(name.as_str().as_bytes(), &record_bytes)
-            .await;
+        let gated = gated_root_cached(
+            &adopter,
+            self.snapshot_cache,
+            &name,
+            &record_bytes,
+            Some(child.scope_id),
+        )
+        .await
+        .map_err(|verdict| walk_verdict(verdict, child.scope_id))?;
         let (write, grandchildren) = self
             .write_plane(&gated, &name, child.scope_id, RootAnchor::Descendant)
             .await;
@@ -1353,7 +1412,7 @@ where
     ///
     /// A grant cut promotes an interior folder into a scope root of its own, and
     /// the child gate refuses such a record on every read path. This walk is the
-    /// one descent that opens it: [`Self::descend`] runs [`gated_child_root`],
+    /// one descent that opens it: [`Self::descend`] runs [`gate_root_pass`],
     /// whose ascent-link requirement is release-active, so a root planted at a
     /// derived name by a committed writer is refused.
     ///
@@ -1386,7 +1445,7 @@ where
             self.identity,
             root_scope_id,
         );
-        let gated = gated_scope_root(&adopter, root_name, root_record_bytes)
+        let gated = gated_root(&adopter, root_name, root_record_bytes, None)
             .await
             .map_err(|verdict| walk_verdict(verdict, root_scope_id))?;
         let (root_write, index) = self
@@ -1582,20 +1641,21 @@ where
         let Some((verified, record_bytes)) = fanout_get_verify(self.transport, name).await else {
             return Err(RootGateVerdict::Unavailable);
         };
-        match gated_at_anchor(&adopter, name, &record_bytes, scope_id, anchor).await {
-            Ok(root) => {
-                // Only a gate pass writes the record cache, on the same terms
-                // the read plane writes it — and this arm's own fallback is
-                // what reads it back ([`Self::last_known_good_root`]).
-                let _ = self
-                    .snapshot_cache
-                    .put(name.as_str().as_bytes(), &record_bytes)
-                    .await;
-                Ok(ResealableRoot {
-                    root,
-                    over_sequence: None,
-                })
-            }
+        // This arm's own fallback reads the cached copy back
+        // ([`Self::last_known_good_root`]).
+        match gated_root_cached(
+            &adopter,
+            self.snapshot_cache,
+            name,
+            &record_bytes,
+            anchor.expected_child(scope_id),
+        )
+        .await
+        {
+            Ok(root) => Ok(ResealableRoot {
+                root,
+                over_sequence: None,
+            }),
             Err(RootGateVerdict::NotResealable) => {
                 let stepped_over = self
                     .last_known_good_root(&adopter, name, scope_id, anchor, verified.sequence)
@@ -1654,7 +1714,7 @@ where
         let Ok(Some(cached)) = self.snapshot_cache.get(name.as_str().as_bytes()).await else {
             return Err(RootGateVerdict::Rejected);
         };
-        let root = gated_at_anchor(adopter, name, &cached, scope_id, anchor)
+        let root = gated_root(adopter, name, &cached, anchor.expected_child(scope_id))
             .await
             .map_err(|_| RootGateVerdict::Rejected)?;
         Ok(ResealableRoot {
@@ -2203,7 +2263,7 @@ impl core::fmt::Debug for GrantedScopeRoot {
 }
 
 /// The grantee-arm rotation seams over the live net plane.
-pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// The record-plane transport: fan-out GET for the read, CAS PUT for the
     /// publish.
     pub transport: &'a T,
@@ -2215,6 +2275,8 @@ pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub http: &'a H,
     /// The durable floors the adoption gate reads and advances.
     pub floors: &'a F,
+    /// The durable last-known-good record cache ([`gated_root_cached`]).
+    pub snapshot_cache: &'a S,
     /// The scheduler the publish pipeline's background re-PUT and the cut's
     /// lazy-wave sweep ride.
     pub scheduler: &'a Sch,
@@ -2269,10 +2331,11 @@ fn grant_blob_aad(scope_id: [u8; 16], epoch: u64) -> AadContext {
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> GranteeRotationNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> GranteeRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
+    S: SnapshotCache,
 {
     /// The scope root `scope` names, from the caller-held inventory. A trigger
     /// naming a scope this device holds no grant for is refused rather than read
@@ -2353,7 +2416,7 @@ where
             self.keys.owner_identity,
             granted.scope_id,
         );
-        gated_scope_root(&adopter, name, &record_bytes).await
+        gated_root_cached(&adopter, self.snapshot_cache, name, &record_bytes, None).await
     }
 
     /// Gate the scope root and assemble everything its flat cut re-seals, parking
@@ -2482,11 +2545,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeRootPublisher
-    for GranteeRotationNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> ScopeRootPublisher
+    for GranteeRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
+    S: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
@@ -2529,11 +2593,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeExitRotator
-    for GranteeRotationNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> ScopeExitRotator
+    for GranteeRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
+    S: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
@@ -2688,7 +2753,7 @@ where
     }
 
     /// Prove a walked child really is a descendant scope root **of this scope**
-    /// ([`gated_child_root`]), and report the name it gated current at.
+    /// ([`gate_root_pass`]), and report the name it gated current at.
     ///
     /// The read body is authored by any committed writer, so the `ChildRef` that
     /// led here proves nothing at all.
@@ -2702,9 +2767,15 @@ where
     ) -> Result<SweptChild, SweepResolveFailure> {
         let adopter = self.descendant_adopter(source, child.node_id);
         adopter.hold_local_head(head);
-        gated_child_root(&adopter, name, record_bytes, child.node_id)
-            .await
-            .map_err(SweepResolveFailure::from)?;
+        gated_root_cached(
+            &adopter,
+            self.snapshot_cache,
+            name,
+            record_bytes,
+            Some(child.node_id),
+        )
+        .await
+        .map_err(SweepResolveFailure::from)?;
         Ok(SweptChild::ScopeRoot(ChildScopeRef::new(
             child.node_id,
             name.as_str().as_bytes().to_vec(),
@@ -2734,6 +2805,7 @@ where
         source: &SweptScopeSource,
         child: &NodeRef,
         name: &IpnsName,
+        record_bytes: &[u8],
         sequence: u64,
         envelope: Envelope,
     ) -> Result<SweptNode, SweepResolveFailure> {
@@ -2752,6 +2824,7 @@ where
                     history_links: &source.history_links,
                 },
                 name,
+                record_bytes,
                 sequence,
                 &envelope,
             )
@@ -2774,6 +2847,7 @@ where
         root: &ResealedScopeRoot,
         node: &NodeRef,
         name: &IpnsName,
+        record_bytes: &[u8],
         sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
@@ -2795,6 +2869,7 @@ where
                 history_links: &root.section.history_links,
             },
             name,
+            record_bytes,
             sequence,
             envelope,
         )
@@ -2809,6 +2884,7 @@ where
         &self,
         scope: &InteriorReadScope<'_>,
         name: &IpnsName,
+        record_bytes: &[u8],
         sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
@@ -2843,7 +2919,11 @@ where
         // The floor law's child arm: the per-name sequence floor advances only
         // after an AAD-confirmed unseal (`net/child.rs`), and nothing else on
         // this path raises it — so without this a rolled-back record stays
-        // admissible for as long as the node goes unbrowsed.
+        // admissible for as long as the node goes unbrowsed. The bytes are cached
+        // first ([`keep_newest_last_known_good`]).
+        keep_newest_last_known_good(self.snapshot_cache, name, record_bytes)
+            .await
+            .map_err(|_| SweepResolveFailure::Unavailable)?;
         floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
             .await
             .map_err(|_| SweepResolveFailure::Unavailable)?;
@@ -2991,9 +3071,16 @@ where
                 )
                 .await;
         }
-        self.interior_node(&source, child, &head.name, head.sequence, envelope)
-            .await
-            .map(SweptChild::Interior)
+        self.interior_node(
+            &source,
+            child,
+            &head.name,
+            &head.record_bytes,
+            head.sequence,
+            envelope,
+        )
+        .await
+        .map(SweptChild::Interior)
     }
 }
 
@@ -3280,9 +3367,15 @@ where
             cid: root_block_cid(&block),
             block,
         });
-        let gated = gated_child_root(&adopter, &name, &record_bytes, node.node_id)
-            .await
-            .map_err(ResolveFailure::from)?;
+        let gated = gated_root_cached(
+            &adopter,
+            self.snapshot_cache,
+            &name,
+            &record_bytes,
+            Some(node.node_id),
+        )
+        .await
+        .map_err(ResolveFailure::from)?;
         if gated.envelope.v != ENVELOPE_V {
             return Err(ResolveFailure::Rejected);
         }
@@ -3346,13 +3439,27 @@ where
         }
         if envelope.scope == root.scope_id {
             return self
-                .moved_interior_node(root, node, &head.name, head.sequence, &envelope)
+                .moved_interior_node(
+                    root,
+                    node,
+                    &head.name,
+                    &head.record_bytes,
+                    head.sequence,
+                    &envelope,
+                )
                 .await
                 .map(MovingChild::Moved);
         }
-        self.interior_node(&source, node, &head.name, head.sequence, envelope)
-            .await
-            .map(MovingChild::Pending)
+        self.interior_node(
+            &source,
+            node,
+            &head.name,
+            &head.record_bytes,
+            head.sequence,
+            envelope,
+        )
+        .await
+        .map(MovingChild::Pending)
     }
 }
 
@@ -3395,7 +3502,7 @@ fn moved_versions(body: &ReadBody) -> &[Version] {
 /// rewrites the child names the wave moved, and re-seals under the **unchanged**
 /// read key at the **unchanged** read epoch. The read plane's clock never moves
 /// here (#38 D1).
-pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// The record-plane transport: fan-out GET for the re-resolve, CAS PUT for
     /// the republish.
     pub transport: &'a T,
@@ -3407,6 +3514,8 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub http: &'a H,
     /// The durable floors the adoption gate reads and advances.
     pub floors: &'a F,
+    /// Where an interior record the wave adopts becomes last-known-good.
+    pub snapshot_cache: &'a S,
     /// The scheduler the publish pipeline's background re-PUT rides.
     pub scheduler: &'a Sch,
     /// The publish pipeline's timing policy.
@@ -3732,17 +3841,19 @@ fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
+    S: SnapshotCache,
 {
     /// Gate an interior node's current record and open it for re-authoring.
     ///
     /// The adopt advances the per-name sequence floor, so a wave that already
     /// gated these bytes lands on the at-floor re-open instead — which is also
     /// the only child path that keeps the envelope's preserved fields. The
-    /// wave keeps no snapshot, so it commits the pass's deferred raise itself.
+    /// adopted bytes are cached before that floor moves
+    /// ([`keep_newest_last_known_good`]).
     async fn interior_source(
         &self,
         node_id: [u8; 16],
@@ -3759,6 +3870,9 @@ where
         );
         match adopter.adopt(name, record_bytes).await {
             Ok(outcome) => {
+                keep_newest_last_known_good(self.snapshot_cache, name, record_bytes)
+                    .await
+                    .map_err(|e| wave_verdict(GateError::Seam(e)))?;
                 outcome
                     .pass
                     .commit(self.floors)
@@ -3804,9 +3918,15 @@ where
         resumed_write_epoch: Option<u64>,
     ) -> Result<WaveSource, WritePublishError> {
         let identity = self.owner.verifying_key();
-        let gated = gated_scope_root(&self.root_adopter(&identity), name, record_bytes)
-            .await
-            .map_err(|verdict| wave_read_verdict(verdict.into()))?;
+        let gated = gated_root_cached(
+            &self.root_adopter(&identity),
+            self.snapshot_cache,
+            name,
+            record_bytes,
+            None,
+        )
+        .await
+        .map_err(|verdict| wave_read_verdict(verdict.into()))?;
         let envelope = gated.envelope;
         // The root gate binds `envelope.scope` but not `envelope.id`, and every
         // AAD this republish authors binds the id — so a root whose record claims
@@ -3863,7 +3983,7 @@ where
     /// the grantee this rotation is cutting — so an entry naming an ordinary
     /// in-scope node would carve that node out of the wave and leave it live at
     /// a name the revokee's retired write scope seed still derives.
-    /// [`gated_child_root`] is the proof, over the seed the root's own owner
+    /// [`gate_root_pass`] is the proof, over the seed the root's own owner
     /// blob yielded.
     async fn record_scope_boundary(
         &self,
@@ -3886,9 +4006,15 @@ where
                 child.scope_id,
             )
             .under_parent_node_seed(Zeroizing::new(*parent_node_seed.as_bytes()));
-            gated_child_root(&adopter, &name, &record_bytes, child.scope_id)
-                .await
-                .map_err(ResolveFailure::from)?;
+            gated_root_cached(
+                &adopter,
+                self.snapshot_cache,
+                &name,
+                &record_bytes,
+                Some(child.scope_id),
+            )
+            .await
+            .map_err(ResolveFailure::from)?;
             self.subtree.record_child_scope(child.scope_id);
         }
         Ok(())
@@ -3955,9 +4081,15 @@ where
             return Err(ResolveFailure::Unavailable);
         };
         let identity = self.owner.verifying_key();
-        let gated = gated_scope_root(&self.root_adopter(&identity), name, &record_bytes)
-            .await
-            .map_err(ResolveFailure::from)?;
+        let gated = gated_root_cached(
+            &self.root_adopter(&identity),
+            self.snapshot_cache,
+            name,
+            &record_bytes,
+            None,
+        )
+        .await
+        .map_err(ResolveFailure::from)?;
         if gated.envelope.v != ENVELOPE_V || gated.envelope.id != self.scope_id {
             return Err(ResolveFailure::Rejected);
         }
@@ -4068,7 +4200,7 @@ struct RemintedGrants {
     ledger: Vec<GrantLedgerEntry>,
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
@@ -4510,11 +4642,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteSubtreeResolver
-    for WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteSubtreeResolver
+    for WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
+    S: SnapshotCache,
 {
     async fn resolve_node(
         &self,
@@ -4632,11 +4765,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWavePublisher
-    for WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteWavePublisher
+    for WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
+    S: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
@@ -8247,6 +8381,7 @@ mod tests {
         InMemoryFloorStore,
         VirtualScheduler,
         SeededEntropy,
+        InMemorySnapshotCache,
     >;
 
     /// A staged granted scope root plus everything a grantee net borrows, owned
@@ -8308,6 +8443,7 @@ mod tests {
                 gateway: &self.harness.gateway,
                 http: &self.harness.http,
                 floors: &self.harness.floors,
+                snapshot_cache: &self.harness.cache,
                 scheduler: &self.harness.world.scheduler,
                 profile: &self.harness.profile,
                 entropy: &self.harness.entropy,
@@ -8618,6 +8754,36 @@ mod tests {
         assert!(
             world.cut().is_ok(),
             "the cut still completes over the record this net already adopted",
+        );
+    }
+
+    /// A grantee's scope-root read caches the root before its floor moves, and
+    /// a cache that refuses the bytes leaves the floor unspent.
+    #[test]
+    fn a_grantee_root_read_caches_the_root_before_it_raises_its_floor() {
+        let refused = plain_world(Permission::Write);
+        let key = refused.root.name.as_str().as_bytes();
+        refused.harness.cache.fail_puts();
+        assert_eq!(
+            block_on(refused.net().gated_root(&refused.granted[0])).map(|_| ()),
+            Err(RootGateVerdict::Unavailable),
+        );
+        assert_eq!(
+            sequence_floor_of(&refused.harness, key),
+            None,
+            "no floor without the bytes"
+        );
+
+        let world = plain_world(Permission::Write);
+        block_on(world.net().gated_root(&world.granted[0])).expect("the read adopts");
+        assert_eq!(sequence_floor_of(&world.harness, key), Some(1));
+        assert_eq!(
+            world.harness.cache.peek(key),
+            world.harness.store.record_at(
+                &world.harness.store.endpoints()[0],
+                world.root.name.as_str()
+            ),
+            "the adopted bytes are last-known-good at that floor",
         );
     }
 
@@ -8999,8 +9165,16 @@ mod tests {
         }
     }
 
-    type Wave<'a, T, F = InMemoryFloorStore, E = SeededEntropy> =
-        WriteWaveNet<'a, T, ScriptedHttp, InMemoryCredentialStore, F, VirtualScheduler, E>;
+    type Wave<'a, T, F = InMemoryFloorStore, E = SeededEntropy> = WriteWaveNet<
+        'a,
+        T,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        F,
+        VirtualScheduler,
+        E,
+        InMemorySnapshotCache,
+    >;
 
     /// A stand-in authorized set for a wave whose test republishes no root: only
     /// the root re-seal reads it, and it matches no record, so a test that grows
@@ -9046,6 +9220,7 @@ mod tests {
             gateway: &harness.gateway,
             http: &harness.http,
             floors,
+            snapshot_cache: &harness.cache,
             scheduler: &harness.world.scheduler,
             profile: &harness.profile,
             entropy,
@@ -9117,6 +9292,21 @@ mod tests {
         node_id: [u8; 16],
         body: &ReadBody,
     ) -> IpnsName {
+        stage_node_at(harness, node_id, body, 1)
+    }
+
+    /// The durable sequence floor at `key`.
+    fn sequence_floor_of<T>(harness: &Harness<T>, key: &[u8]) -> Option<u64> {
+        block_on(floor::sequence_floor(&harness.floors, key)).expect("floor read")
+    }
+
+    /// [`stage_node`] at a chosen record sequence.
+    fn stage_node_at<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        node_id: [u8; 16],
+        body: &ReadBody,
+        sequence: u64,
+    ) -> IpnsName {
         let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &node_id);
         let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
         let envelope = seal_read_body(
@@ -9137,7 +9327,7 @@ mod tests {
             .expect("lock")
             .insert(cid.clone(), block);
         let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &node_id);
-        let record = record_for(&node_id, &cid, 1);
+        let record = record_for(&node_id, &cid, sequence);
         for endpoint in harness.store.endpoints() {
             harness
                 .store
@@ -9282,6 +9472,78 @@ mod tests {
             ),
             "the moved name must anchor every block its record names"
         );
+    }
+
+    /// The wave's read of an interior node adopts it, and a read that later
+    /// finds no source opens the cached copy at the floor that adopt raised. So
+    /// the bytes become last-known-good first, and a cache that refuses them
+    /// leaves the floor unspent.
+    #[test]
+    fn the_wave_caches_an_interior_record_before_it_raises_its_floor() {
+        let body = interior_body();
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let node_id = [0x0e; 16];
+
+        let refused = Harness::plain();
+        let old_name = stage_node(&refused, node_id, &body);
+        refused.cache.fail_puts();
+        let net = wave(&refused, &owner, &current_root, &plan);
+        assert_eq!(
+            block_on(net.republish(&order(node_id, &old_name, BTreeMap::new(), false))),
+            Err(WritePublishError::NotLanded),
+        );
+        assert_eq!(
+            sequence_floor_of(&refused, old_name.as_str().as_bytes()),
+            None,
+            "no floor without the bytes"
+        );
+
+        let harness = Harness::plain();
+        let old_name = stage_node(&harness, node_id, &body);
+        let net = wave(&harness, &owner, &current_root, &plan);
+        block_on(net.republish(&order(node_id, &old_name, BTreeMap::new(), false)))
+            .expect("the node republishes");
+        assert_eq!(
+            sequence_floor_of(&harness, old_name.as_str().as_bytes()),
+            Some(1)
+        );
+        assert_eq!(
+            harness.cache.peek(old_name.as_str().as_bytes()),
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], old_name.as_str()),
+            "the adopted bytes are last-known-good at that floor",
+        );
+    }
+
+    /// A pass that cached sequence 7 but failed its floor commit leaves the
+    /// floor at 5, so a later sequence 6 passes the gate. The newer copy stays
+    /// last-known-good, and the floor moves only to what this pass read.
+    #[test]
+    fn the_wave_keeps_a_newer_cached_interior_record() {
+        let body = interior_body();
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let node_id = [0x0e; 16];
+        let harness = Harness::plain();
+        let name = stage_node_at(&harness, node_id, &body, 7);
+        let key = name.as_str().as_bytes();
+        let newer = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], name.as_str())
+            .expect("the newer record");
+        block_on(harness.cache.put(key, &newer)).expect("seed last-known-good");
+        block_on(harness.floors.raise_sequence_floor(key, 5)).expect("the floor raises");
+        stage_node_at(&harness, node_id, &body, 6);
+
+        let net = wave(&harness, &owner, &current_root, &plan);
+        block_on(net.republish(&order(node_id, &name, BTreeMap::new(), false)))
+            .expect("the node republishes");
+        assert_eq!(harness.cache.peek(key), Some(newer));
+        assert_eq!(sequence_floor_of(&harness, key), Some(6),);
     }
 
     /// The version list is a committed writer's. A version naming a block no
@@ -12494,6 +12756,98 @@ mod tests {
             ))
             .expect("floor read"),
             Some(7),
+        );
+        assert_eq!(
+            harness.cache.peek(node_name.as_str().as_bytes()),
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], node_name.as_str()),
+            "and the bytes it read are last-known-good at that floor",
+        );
+    }
+
+    /// A sweep read above the floor keeps a newer cached copy that a failed
+    /// floor commit left behind, and raises the floor only to what it read.
+    #[test]
+    fn an_interior_read_keeps_a_newer_cached_record() {
+        let node_id = [0x01; 16];
+        let (node_name, node_block) = interior_record(node_id, OWNER_ROOT_EPOCH, Vec::new());
+        let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage_node_at(node_id, &node_name, &node_block, 7);
+        let key = node_name.as_str().as_bytes();
+        let newer = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], node_name.as_str())
+            .expect("the newer record");
+        block_on(harness.cache.put(key, &newer)).expect("seed last-known-good");
+        block_on(harness.floors.raise_sequence_floor(key, 5)).expect("the floor raises");
+        harness.stage_node_at(node_id, &node_name, &node_block, 6);
+        let net = harness.net(&[]);
+        let scope = child_ref(SCOPE, &root);
+        let swept = block_on(net.resolve_scope(&scope)).expect("gates");
+        block_on(net.resolve_child(&scope, &swept.children[0])).expect("opens");
+
+        assert_eq!(harness.cache.peek(key), Some(newer));
+        assert_eq!(sequence_floor_of(&harness, key), Some(6),);
+    }
+
+    /// The raise waits on the bytes: a cache that refuses them leaves the floor
+    /// where the read found it, so no read that later finds no source meets a
+    /// floor above its cached copy.
+    #[test]
+    fn an_interior_read_the_cache_refuses_raises_no_floor() {
+        let node_id = [0x01; 16];
+        let (node_name, node_block) = interior_record(node_id, OWNER_ROOT_EPOCH, Vec::new());
+        let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage_node_at(node_id, &node_name, &node_block, 7);
+        let net = harness.net(&[]);
+        let scope = child_ref(SCOPE, &root);
+        let swept = block_on(net.resolve_scope(&scope)).expect("gates");
+        harness.cache.fail_puts();
+
+        assert!(matches!(
+            block_on(net.resolve_child(&scope, &swept.children[0])),
+            Err(SweepResolveFailure::Unavailable)
+        ));
+        assert_eq!(
+            sequence_floor_of(&harness, node_name.as_str().as_bytes()),
+            None
+        );
+    }
+
+    /// A rotation's scope-root read caches the root before its floor moves, and
+    /// a cache that refuses the bytes leaves the floor unspent.
+    #[test]
+    fn a_scope_root_read_caches_the_root_before_it_raises_its_floor() {
+        let root = swept_root(Vec::new(), &[]);
+        let key = root.name.as_str().as_bytes();
+
+        let refused = Harness::plain();
+        refused.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        refused.cache.fail_puts();
+        assert!(matches!(
+            block_on(refused.net(&[]).resolve_scope(&child_ref(SCOPE, &root))),
+            Err(SweepResolveFailure::Unavailable)
+        ));
+        assert_eq!(
+            sequence_floor_of(&refused, key),
+            None,
+            "no floor without the bytes"
+        );
+
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        block_on(harness.net(&[]).resolve_scope(&child_ref(SCOPE, &root))).expect("gates");
+        assert_eq!(sequence_floor_of(&harness, key), Some(1));
+        assert_eq!(
+            harness.cache.peek(key),
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], root.name.as_str()),
         );
     }
 

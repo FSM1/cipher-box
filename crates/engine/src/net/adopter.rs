@@ -428,7 +428,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// Stages 1-7 plus this reader's own write-seed recovery, with the floor-law
     /// advance still deferred — that recovery can fail, and a floor spent on a
     /// record the pass then discards strands the device below its own floor.
-    async fn gate_and_recover(
+    pub(crate) async fn gate_and_recover(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
@@ -456,18 +456,9 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         ))
     }
 
-    /// The gate pass **plus** the candidate it authenticated, for the callers
-    /// that need the record's own grant section (the rotation seams' gated
-    /// scope-root read) rather than only the read-body outcome. A rotation arm
-    /// keeps no last-known-good of its own, so the advance commits here.
-    pub(crate) async fn adopt_root(
-        &self,
-        name: &IpnsName,
-        record_bytes: &[u8],
-    ) -> Result<(Candidate, Adopted, RecoveredSeeds), GateError> {
-        let (candidate, pending, seeds) = self.gate_and_recover(name, record_bytes).await?;
-        let adopted = pending.commit(self.floors).await.map_err(GateError::Seam)?;
-        Ok((candidate, adopted, seeds))
+    /// Commit the floor advance that [`Self::gate_and_recover`] deferred.
+    pub(crate) async fn commit_root(&self, pending: PendingAdoption) -> Result<Adopted, SeamError> {
+        pending.commit(self.floors).await
     }
 
     /// Stages 1-7 with the floor advance still deferred, so a caller that
@@ -508,7 +499,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         };
 
         // Step 7 — the gate owns all trust. The write seed it surfaces for a
-        // write grantee, and the owner-write-blob recovery in `adopt_root`, are
+        // write grantee, and the owner-write-blob recovery in `gate_and_recover`, are
         // the same capability reached through each arm's own material.
         let (pending, _) = match adopt_deferred(self.floors, &reader, &candidate).await {
             Ok(pass) => pass,

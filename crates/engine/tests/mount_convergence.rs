@@ -22,7 +22,7 @@ use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
 use cipherbox_engine::rotation::published_override_seed;
-use cipherbox_engine::seams::{BoxedTask, OpId, RecordTransport, StagingStore};
+use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, StagingStore};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
@@ -980,4 +980,112 @@ fn a_write_staged_across_a_cut_publishes_rather_than_dead_lettering() {
         published_epoch(&world, &blocks, ROOT),
         "the re-authored node is tagged at the epoch its scope root now carries"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A write share, and the last-known-good the wave leaves behind
+// ---------------------------------------------------------------------------
+
+/// How the owner shares the folder with write permission.
+#[derive(Debug, Clone, Copy)]
+enum WriteShare {
+    Contact,
+    InviteLink,
+}
+
+/// A folder holding one file with `bodies` as its two versions, published and
+/// drained, then shared with write permission. Answers the folder and the file.
+fn file_under_a_write_share(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    tab: &FakeDevice,
+    share: WriteShare,
+    bodies: &[Vec<u8>; 2],
+) -> (Engine<FakeSeamTypes>, NodeId, NodeId) {
+    let (mut engine, _events, mut tasks) = boot(world, blocks, tab, 42);
+    let shared = create_published_folder(world, &mut engine, &mut tasks, ROOT, "shared");
+    let file = file_with_two_versions(world, &mut engine, &mut tasks, shared, "notes.bin", bodies);
+    assert_eq!(queued(tab), 0, "both versions drain before the share");
+
+    let outcome = match share {
+        WriteShare::Contact => {
+            import_recipient(&mut engine);
+            block_on(engine.command(Command::Grant {
+                node: shared,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Write,
+            }))
+        }
+        WriteShare::InviteLink => block_on(engine.command(Command::CreateInviteLink {
+            node: shared,
+            permission: Permission::Write,
+            expires_at: None,
+        })),
+    };
+    assert!(
+        outcome.is_ok(),
+        "the {share:?} write share lands: {outcome:?}"
+    );
+    (engine, shared, file)
+}
+
+/// The sequence of the record `bytes` holds, verified under `name`.
+fn record_sequence(name: &IpnsName, bytes: &[u8]) -> u64 {
+    IpnsRecord::unmarshal(bytes)
+        .and_then(|record| record.verify(name))
+        .expect("the cached record verifies under its own name")
+        .sequence
+}
+
+/// A write share re-seals the folder interior and runs the name wave, which
+/// adopts each re-sealed record. No floor it raises may pass the bytes it
+/// leaves as last-known-good: a read that finds no source opens the cached copy
+/// at that floor.
+#[test]
+fn a_write_share_leaves_every_record_it_touches_cached_at_its_sequence_floor() {
+    for share in [WriteShare::Contact, WriteShare::InviteLink] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let (_engine, shared, file) =
+            file_under_a_write_share(&world, &blocks, &tab, share, &two_bodies(5));
+
+        for node in [ROOT, shared, file] {
+            let name = write_name(node);
+            let floor = block_on(tab.floors(&SECRET).sequence_floor(name.as_str().as_bytes()))
+                .expect("the floor store answers")
+                .expect("every record the share touched holds a sequence floor");
+            let cached = tab
+                .snapshot_cache
+                .peek(name.as_str().as_bytes())
+                .expect("every record the share touched is cached");
+            assert_eq!(
+                record_sequence(&name, &cached),
+                floor,
+                "{share:?}: the cached record of {node:?} sits at the floor the share raised"
+            );
+        }
+    }
+}
+
+/// After a write share, a read that finds no record source opens the file
+/// from its last-known-good: the head content, the version list, and a prior
+/// version.
+#[test]
+fn a_file_under_a_write_share_reads_with_every_record_endpoint_down() {
+    for share in [WriteShare::Contact, WriteShare::InviteLink] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let bodies = two_bodies(11);
+        let (engine, _shared, file) =
+            file_under_a_write_share(&world, &blocks, &tab, share, &bodies);
+        for endpoint in world.record_store.endpoints() {
+            world.record_store.fail_endpoint(&endpoint);
+        }
+        assert_reads_both_versions(&engine, file, &bodies, &format!("{share:?}, offline"));
+    }
 }
