@@ -71,6 +71,7 @@ pub use reseal::{
     reseal_scope_root, seed_at_epoch,
 };
 pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
+pub(crate) use rotate::complete_cut;
 pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, RotationPublishError,
     ScopeRootPublisher, rotate_scope,
