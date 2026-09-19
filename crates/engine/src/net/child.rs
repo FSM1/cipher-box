@@ -21,9 +21,11 @@ use cipherbox_core::seal::{Envelope, ReadBody, has_grant_section, open_read_body
 use zeroize::Zeroizing;
 
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
-use super::resolve::{AdoptOutcome, Adopter, GatePass, ResolveOutcome, resolve};
+use super::resolve::{
+    AdoptOutcome, Adopter, GatePass, ResolveOutcome, refresh_last_known_good, resolve,
+};
 use crate::content::Gateway;
-use crate::gate::{Adopted, GateError, GateStage, floor};
+use crate::gate::{Adopted, GateError, GateStage, RejectionReason, floor};
 use crate::seams::{FloorStore, Http, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::tick::ResolveMode;
 
@@ -306,25 +308,58 @@ where
     H: Http,
     F: FloorStore,
 {
+    let unavailable = |e: SeamError| ChildResolveError::Unavailable(e.message().to_owned());
     let resolved = resolve(transport, snapshot_cache, adopter, name, mode)
         .await
-        .map_err(|e| ChildResolveError::Unavailable(e.message().to_owned()))?;
-    let record_bytes = match resolved.outcome {
-        ResolveOutcome::Adopted(adopted) => return Ok(adopted),
+        .map_err(unavailable)?;
+    match resolved.outcome {
+        ResolveOutcome::Adopted(adopted) => Ok(adopted),
         ResolveOutcome::TrustViolation(rejection) => {
-            return Err(ChildResolveError::Gate(GateError::Rejected(rejection)));
+            Err(ChildResolveError::Gate(GateError::Rejected(rejection)))
         }
-        ResolveOutcome::Current { record_bytes } => record_bytes,
-        ResolveOutcome::NoUpdate => resolved.last_known_good.ok_or_else(|| {
-            ChildResolveError::Unavailable(
-                "no record source reachable and no cached record".to_owned(),
+        ResolveOutcome::Current { record_bytes } => {
+            let adopted = adopter
+                .open_at_floor(name, &record_bytes)
+                .await
+                .map_err(ChildResolveError::Gate)?;
+            refresh_last_known_good(
+                snapshot_cache,
+                name,
+                resolved.last_known_good.as_deref(),
+                &record_bytes,
+                adopted.sequence,
             )
-        })?,
-    };
-    adopter
-        .open_at_floor(name, &record_bytes)
-        .await
-        .map_err(ChildResolveError::Gate)
+            .await
+            .map_err(unavailable)?;
+            Ok(adopted)
+        }
+        ResolveOutcome::NoUpdate => {
+            let cached = resolved.last_known_good.ok_or_else(|| {
+                ChildResolveError::Unavailable(
+                    "no record source reachable and no cached record".to_owned(),
+                )
+            })?;
+            adopter
+                .open_at_floor(name, &cached)
+                .await
+                .map_err(|error| match error {
+                    // This device's own earlier gate pass, left behind by a floor
+                    // raised on a pass that cached nothing: stale, not a verdict
+                    // on anyone (rule 6).
+                    GateError::Rejected(rejection)
+                        if matches!(
+                            rejection.reason,
+                            RejectionReason::SequenceNotNewer { floor, sequence } if sequence < floor
+                        ) =>
+                    {
+                        ChildResolveError::Unavailable(format!(
+                            "the cached record is below this name's sequence floor: {rejection}"
+                        ))
+                    }
+                    error => ChildResolveError::Gate(error),
+                })
+        }
+    }
 }
 
 impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
@@ -876,6 +911,122 @@ mod tests {
             None,
             "and the committed raise is the sequence floor alone",
         );
+    }
+
+    /// A transport serving `published` at every endpoint, or none when `None`.
+    fn serving(published: Option<&Published>) -> InMemoryRecordStore {
+        let endpoint = EndpointId::new("e0");
+        let transport = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        if let Some(published) = published {
+            transport.seed_record(
+                &endpoint,
+                published.name.as_str(),
+                published.record_bytes.clone(),
+            );
+        }
+        transport
+    }
+
+    /// Resolve `published`'s name over `transport`, reading it under the seed of
+    /// the epoch it was sealed at.
+    fn resolve_under(
+        transport: &InMemoryRecordStore,
+        cache: &InMemorySnapshotCache,
+        floors: &InMemoryFloorStore,
+        published: &Published,
+    ) -> Result<Adopted, ChildResolveError> {
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+        block_on(resolve_child(
+            transport,
+            cache,
+            &seeded_adopter(&gw, &http, floors, published, NODE, LAGGING_EPOCH),
+            &published.name,
+            ResolveMode::CacheFirst,
+        ))
+    }
+
+    /// A floor raised on a pass that cached nothing leaves an older copy behind.
+    /// That copy is this device's own earlier gate pass, so a read that finds no
+    /// source reports it unavailable, not as a verdict on anyone.
+    #[test]
+    fn a_cached_record_below_the_sequence_floor_is_unavailable_offline() {
+        let published = publish(Spec::default());
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_sequence_floor(published.name.as_str().as_bytes(), SEQUENCE + 1))
+            .expect("the floor raises");
+        let cache = InMemorySnapshotCache::default();
+        block_on(cache.put(published.name.as_str().as_bytes(), &published.record_bytes))
+            .expect("seed last-known-good");
+
+        let result = resolve_under(&serving(None), &cache, &floors, &published);
+        assert!(
+            matches!(result, Err(ChildResolveError::Unavailable(_))),
+            "a stale own cache is availability"
+        );
+    }
+
+    /// Only the sequence stage is staleness: a cached record that opens as
+    /// another node is a transplant whatever the floor says.
+    #[test]
+    fn a_transplanted_cached_record_stays_a_trust_verdict_offline() {
+        let other_node = publish(Spec {
+            node_id: [0x66; 16],
+            ..Spec::default()
+        });
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_sequence_floor(other_node.name.as_str().as_bytes(), SEQUENCE))
+            .expect("the floor raises");
+        let cache = InMemorySnapshotCache::default();
+        block_on(cache.put(
+            other_node.name.as_str().as_bytes(),
+            &other_node.record_bytes,
+        ))
+        .expect("seed last-known-good");
+        let gw = gateway();
+        let http = ScriptedHttp::default();
+
+        let result = block_on(resolve_child(
+            &serving(None),
+            &cache,
+            &seeded_adopter(&gw, &http, &floors, &other_node, NODE, LAGGING_EPOCH),
+            &other_node.name,
+            ResolveMode::CacheFirst,
+        ));
+        let Err(ChildResolveError::Gate(GateError::Rejected(rejection))) = result else {
+            panic!("a transplanted cache entry must stay a fail-closed rejection");
+        };
+        assert_eq!(rejection.stage, GateStage::Unseal);
+    }
+
+    /// The network re-serves the record at the floor while the cache holds an
+    /// older copy: the at-floor open is the gate pass that replaces it, so the
+    /// next read that finds no source opens the current record.
+    #[test]
+    fn a_current_record_replaces_an_older_cached_copy() {
+        let older = publish(Spec {
+            sequence: SEQUENCE - 1,
+            ..Spec::default()
+        });
+        let published = publish(Spec::default());
+        let floors = InMemoryFloorStore::default();
+        block_on(floors.raise_sequence_floor(published.name.as_str().as_bytes(), SEQUENCE))
+            .expect("the floor raises");
+        let cache = InMemorySnapshotCache::default();
+        let key = published.name.as_str().as_bytes();
+        block_on(cache.put(key, &older.record_bytes)).expect("seed the older copy");
+
+        let online = resolve_under(&serving(Some(&published)), &cache, &floors, &published)
+            .unwrap_or_else(|_| panic!("the current record opens at the floor"));
+        assert_eq!(online.sequence, SEQUENCE);
+        assert_eq!(
+            cache.peek(key).as_deref(),
+            Some(&published.record_bytes[..])
+        );
+
+        let offline = resolve_under(&serving(None), &cache, &floors, &published)
+            .unwrap_or_else(|_| panic!("the refreshed copy opens offline"));
+        assert_eq!(offline.sequence, SEQUENCE);
     }
 
     /// The durable per-name sequence floor, zero where none was raised.

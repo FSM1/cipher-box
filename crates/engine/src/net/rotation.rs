@@ -2734,6 +2734,7 @@ where
         source: &SweptScopeSource,
         child: &NodeRef,
         name: &IpnsName,
+        record_bytes: &[u8],
         sequence: u64,
         envelope: Envelope,
     ) -> Result<SweptNode, SweepResolveFailure> {
@@ -2752,6 +2753,7 @@ where
                     history_links: &source.history_links,
                 },
                 name,
+                record_bytes,
                 sequence,
                 &envelope,
             )
@@ -2774,6 +2776,7 @@ where
         root: &ResealedScopeRoot,
         node: &NodeRef,
         name: &IpnsName,
+        record_bytes: &[u8],
         sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
@@ -2795,6 +2798,7 @@ where
                 history_links: &root.section.history_links,
             },
             name,
+            record_bytes,
             sequence,
             envelope,
         )
@@ -2809,6 +2813,7 @@ where
         &self,
         scope: &InteriorReadScope<'_>,
         name: &IpnsName,
+        record_bytes: &[u8],
         sequence: u64,
         envelope: &Envelope,
     ) -> Result<ReadBody, SweepResolveFailure> {
@@ -2843,7 +2848,12 @@ where
         // The floor law's child arm: the per-name sequence floor advances only
         // after an AAD-confirmed unseal (`net/child.rs`), and nothing else on
         // this path raises it — so without this a rolled-back record stays
-        // admissible for as long as the node goes unbrowsed.
+        // admissible for as long as the node goes unbrowsed. The bytes become
+        // last-known-good first, as on the resolve driver's pass.
+        self.snapshot_cache
+            .put(name.as_str().as_bytes(), record_bytes)
+            .await
+            .map_err(|_| SweepResolveFailure::Unavailable)?;
         floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
             .await
             .map_err(|_| SweepResolveFailure::Unavailable)?;
@@ -2991,9 +3001,16 @@ where
                 )
                 .await;
         }
-        self.interior_node(&source, child, &head.name, head.sequence, envelope)
-            .await
-            .map(SweptChild::Interior)
+        self.interior_node(
+            &source,
+            child,
+            &head.name,
+            &head.record_bytes,
+            head.sequence,
+            envelope,
+        )
+        .await
+        .map(SweptChild::Interior)
     }
 }
 
@@ -3346,13 +3363,27 @@ where
         }
         if envelope.scope == root.scope_id {
             return self
-                .moved_interior_node(root, node, &head.name, head.sequence, &envelope)
+                .moved_interior_node(
+                    root,
+                    node,
+                    &head.name,
+                    &head.record_bytes,
+                    head.sequence,
+                    &envelope,
+                )
                 .await
                 .map(MovingChild::Moved);
         }
-        self.interior_node(&source, node, &head.name, head.sequence, envelope)
-            .await
-            .map(MovingChild::Pending)
+        self.interior_node(
+            &source,
+            node,
+            &head.name,
+            &head.record_bytes,
+            head.sequence,
+            envelope,
+        )
+        .await
+        .map(MovingChild::Pending)
     }
 }
 
@@ -3395,7 +3426,7 @@ fn moved_versions(body: &ReadBody) -> &[Version] {
 /// rewrites the child names the wave moved, and re-seals under the **unchanged**
 /// read key at the **unchanged** read epoch. The read plane's clock never moves
 /// here (#38 D1).
-pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// The record-plane transport: fan-out GET for the re-resolve, CAS PUT for
     /// the republish.
     pub transport: &'a T,
@@ -3407,6 +3438,8 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub http: &'a H,
     /// The durable floors the adoption gate reads and advances.
     pub floors: &'a F,
+    /// Where an interior record the wave adopts becomes last-known-good.
+    pub snapshot_cache: &'a S,
     /// The scheduler the publish pipeline's background re-PUT rides.
     pub scheduler: &'a Sch,
     /// The publish pipeline's timing policy.
@@ -3732,17 +3765,20 @@ fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
+    S: SnapshotCache,
 {
     /// Gate an interior node's current record and open it for re-authoring.
     ///
     /// The adopt advances the per-name sequence floor, so a wave that already
     /// gated these bytes lands on the at-floor re-open instead — which is also
     /// the only child path that keeps the envelope's preserved fields. The
-    /// wave keeps no snapshot, so it commits the pass's deferred raise itself.
+    /// adopted bytes become last-known-good before that floor moves, as on the
+    /// resolve driver's pass: a raise past the cached copy leaves a read that
+    /// finds no source nothing it can open.
     async fn interior_source(
         &self,
         node_id: [u8; 16],
@@ -3759,6 +3795,10 @@ where
         );
         match adopter.adopt(name, record_bytes).await {
             Ok(outcome) => {
+                self.snapshot_cache
+                    .put(name.as_str().as_bytes(), record_bytes)
+                    .await
+                    .map_err(|e| wave_verdict(GateError::Seam(e)))?;
                 outcome
                     .pass
                     .commit(self.floors)
@@ -4068,7 +4108,7 @@ struct RemintedGrants {
     ledger: Vec<GrantLedgerEntry>,
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
@@ -4510,11 +4550,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteSubtreeResolver
-    for WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteSubtreeResolver
+    for WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
+    S: SnapshotCache,
 {
     async fn resolve_node(
         &self,
@@ -4632,11 +4673,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWavePublisher
-    for WriteWaveNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> WriteWavePublisher
+    for WriteWaveNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
+    S: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
@@ -8999,8 +9041,16 @@ mod tests {
         }
     }
 
-    type Wave<'a, T, F = InMemoryFloorStore, E = SeededEntropy> =
-        WriteWaveNet<'a, T, ScriptedHttp, InMemoryCredentialStore, F, VirtualScheduler, E>;
+    type Wave<'a, T, F = InMemoryFloorStore, E = SeededEntropy> = WriteWaveNet<
+        'a,
+        T,
+        ScriptedHttp,
+        InMemoryCredentialStore,
+        F,
+        VirtualScheduler,
+        E,
+        InMemorySnapshotCache,
+    >;
 
     /// A stand-in authorized set for a wave whose test republishes no root: only
     /// the root re-seal reads it, and it matches no record, so a test that grows
@@ -9046,6 +9096,7 @@ mod tests {
             gateway: &harness.gateway,
             http: &harness.http,
             floors,
+            snapshot_cache: &harness.cache,
             scheduler: &harness.world.scheduler,
             profile: &harness.profile,
             entropy,
@@ -9281,6 +9332,59 @@ mod tests {
                 RootPlacement::Last,
             ),
             "the moved name must anchor every block its record names"
+        );
+    }
+
+    /// The wave's read of an interior node adopts it, and a read that later
+    /// finds no source opens the cached copy at the floor that adopt raised. So
+    /// the bytes become last-known-good first, and a cache that refuses them
+    /// leaves the floor unspent.
+    #[test]
+    fn the_wave_caches_an_interior_record_before_it_raises_that_names_floor() {
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let node_id = [0x0e; 16];
+        let floor_of = |harness: &Harness<InMemoryRecordStore>, name: &IpnsName| {
+            block_on(floor::sequence_floor(
+                &harness.floors,
+                name.as_str().as_bytes(),
+            ))
+            .expect("floor read")
+        };
+
+        let refused = Harness::plain();
+        let old_name = stage_node(&refused, node_id, &body);
+        refused.cache.fail_puts();
+        let net = wave(&refused, &owner, &current_root, &plan);
+        assert_eq!(
+            block_on(net.republish(&order(node_id, &old_name, BTreeMap::new(), false))),
+            Err(WritePublishError::NotLanded),
+        );
+        assert_eq!(
+            floor_of(&refused, &old_name),
+            None,
+            "no floor without the bytes"
+        );
+
+        let harness = Harness::plain();
+        let old_name = stage_node(&harness, node_id, &body);
+        let net = wave(&harness, &owner, &current_root, &plan);
+        block_on(net.republish(&order(node_id, &old_name, BTreeMap::new(), false)))
+            .expect("the node republishes");
+        assert_eq!(floor_of(&harness, &old_name), Some(1));
+        assert_eq!(
+            harness.cache.peek(old_name.as_str().as_bytes()),
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], old_name.as_str()),
+            "the adopted bytes are last-known-good at that floor",
         );
     }
 
@@ -12494,6 +12598,43 @@ mod tests {
             ))
             .expect("floor read"),
             Some(7),
+        );
+        assert_eq!(
+            harness.cache.peek(node_name.as_str().as_bytes()),
+            harness
+                .store
+                .record_at(&harness.store.endpoints()[0], node_name.as_str()),
+            "and the bytes it read are last-known-good at that floor",
+        );
+    }
+
+    /// The raise waits on the bytes: a cache that refuses them leaves the floor
+    /// where the read found it, so no read that later finds no source meets a
+    /// floor above its cached copy.
+    #[test]
+    fn an_interior_read_the_cache_refuses_raises_no_floor() {
+        let node_id = [0x01; 16];
+        let (node_name, node_block) = interior_record(node_id, OWNER_ROOT_EPOCH, Vec::new());
+        let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage_node_at(node_id, &node_name, &node_block, 7);
+        let net = harness.net(&[]);
+        let scope = child_ref(SCOPE, &root);
+        let swept = block_on(net.resolve_scope(&scope)).expect("gates");
+        harness.cache.fail_puts();
+
+        assert!(matches!(
+            block_on(net.resolve_child(&scope, &swept.children[0])),
+            Err(SweepResolveFailure::Unavailable)
+        ));
+        assert_eq!(
+            block_on(floor::sequence_floor(
+                &harness.floors,
+                node_name.as_str().as_bytes()
+            ))
+            .expect("floor read"),
+            None,
         );
     }
 

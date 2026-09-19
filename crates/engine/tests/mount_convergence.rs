@@ -22,7 +22,7 @@ use cipherbox_engine::net::author::{
     ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
 use cipherbox_engine::rotation::published_override_seed;
-use cipherbox_engine::seams::{BoxedTask, OpId, RecordTransport, StagingStore};
+use cipherbox_engine::seams::{BoxedTask, FloorStore, OpId, RecordTransport, StagingStore};
 use cipherbox_engine::sync::SessionRole;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::account::{
@@ -980,4 +980,114 @@ fn a_write_staged_across_a_cut_publishes_rather_than_dead_lettering() {
         published_epoch(&world, &blocks, ROOT),
         "the re-authored node is tagged at the epoch its scope root now carries"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A write share, and the last-known-good the wave leaves behind
+// ---------------------------------------------------------------------------
+
+/// How the owner shares the folder with write permission.
+#[derive(Debug, Clone, Copy)]
+enum WriteShare {
+    Contact,
+    InviteLink,
+}
+
+/// A folder holding one file with two versions, published and drained, then
+/// shared with write permission. Answers the folder and the file.
+fn file_under_a_write_share(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    tab: &FakeDevice,
+    share: WriteShare,
+) -> (Engine<FakeSeamTypes>, NodeId, NodeId) {
+    let (mut engine, _events, mut tasks) = boot(world, blocks, tab, 42);
+    let shared = create_published_folder(world, &mut engine, &mut tasks, ROOT, "shared");
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: shared,
+            name: "notes.bin".into(),
+        },
+        b"first",
+    )
+    .expect("the first version commits");
+    tick(world, &engine, &mut tasks);
+    let file = listed(&engine, shared)
+        .into_iter()
+        .find(|(name, _)| name == "notes.bin")
+        .expect("the file lists")
+        .1;
+    write_file(
+        &mut engine,
+        WriteTarget::Version {
+            node: file,
+            expected_version: None,
+        },
+        b"second",
+    )
+    .expect("the second version commits");
+    tick(world, &engine, &mut tasks);
+    assert_eq!(queued(tab), 0, "both versions drain before the share");
+
+    let outcome = match share {
+        WriteShare::Contact => {
+            import_recipient(&mut engine);
+            block_on(engine.command(Command::Grant {
+                node: shared,
+                recipient_identity_public_key:
+                    recipient_identity().verifying_key().to_sec1().to_vec(),
+                permission: Permission::Write,
+            }))
+        }
+        WriteShare::InviteLink => block_on(engine.command(Command::CreateInviteLink {
+            node: shared,
+            permission: Permission::Write,
+            expires_at: None,
+        })),
+    };
+    assert!(
+        outcome.is_ok(),
+        "the {share:?} write share lands: {outcome:?}"
+    );
+    (engine, shared, file)
+}
+
+/// The sequence of the record `bytes` holds, verified under `name`.
+fn record_sequence(name: &IpnsName, bytes: &[u8]) -> u64 {
+    IpnsRecord::unmarshal(bytes)
+        .and_then(|record| record.verify(name))
+        .expect("the cached record verifies under its own name")
+        .sequence
+}
+
+/// A write share re-seals the folder interior and runs the name wave, which
+/// adopts each re-sealed record. No floor it raises may pass the bytes it
+/// leaves as last-known-good: a read that finds no source opens the cached copy
+/// at that floor.
+#[test]
+fn a_write_share_leaves_every_record_it_touches_cached_at_its_sequence_floor() {
+    for share in [WriteShare::Contact, WriteShare::InviteLink] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_vault(&world, &blocks);
+        let tab = world.device(&owner_identity().verifying_key().to_sec1());
+        let (_engine, shared, file) = file_under_a_write_share(&world, &blocks, &tab, share);
+
+        for node in [ROOT, shared, file] {
+            let name = write_name(node);
+            let floor = block_on(tab.floors(&SECRET).sequence_floor(name.as_str().as_bytes()))
+                .expect("the floor store answers")
+                .expect("every record the share touched holds a sequence floor");
+            let cached = tab
+                .snapshot_cache
+                .peek(name.as_str().as_bytes())
+                .expect("every record the share touched is cached");
+            assert_eq!(
+                record_sequence(&name, &cached),
+                floor,
+                "{share:?}: the cached record of {node:?} sits at the floor the share raised"
+            );
+        }
+    }
 }

@@ -15,7 +15,7 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
+use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_verify;
@@ -360,6 +360,16 @@ where
                     // plane keeps the keys it seals under across a session
                     // that adopts nothing. A non-owner record yields neither.
                     let material = adopter.recover_own_scope_material(name, &bytes).await?;
+                    if material.is_some() {
+                        refresh_last_known_good(
+                            snapshot_cache,
+                            name,
+                            last_known_good.as_deref(),
+                            &bytes,
+                            verified.sequence,
+                        )
+                        .await?;
+                    }
                     let recovered = material.map(|material| GatedParts {
                         hold: material
                             .write_scope_seed
@@ -403,6 +413,36 @@ where
         held_record,
         read_scope_seed,
     })
+}
+
+/// Leave `record_bytes`, which re-passed the gate at exactly the durable
+/// sequence floor, as last-known-good where the cached copy is older. A pass
+/// that raised that floor without caching (a rotation arm's own read) leaves
+/// the older copy behind, and a read that later finds no source opens the
+/// cached copy at the floor. A copy at the same sequence stays: only an older
+/// one is stale.
+pub(crate) async fn refresh_last_known_good<S: SnapshotCache>(
+    snapshot_cache: &S,
+    name: &IpnsName,
+    last_known_good: Option<&[u8]>,
+    record_bytes: &[u8],
+    sequence: u64,
+) -> Result<(), SeamError> {
+    if last_known_good == Some(record_bytes) {
+        return Ok(());
+    }
+    let cached_sequence = last_known_good.and_then(|cached| {
+        IpnsRecord::unmarshal(cached)
+            .and_then(|record| record.verify(name))
+            .ok()
+            .map(|verified| verified.sequence)
+    });
+    if cached_sequence.is_some_and(|cached| cached >= sequence) {
+        return Ok(());
+    }
+    snapshot_cache
+        .put(name.as_str().as_bytes(), record_bytes)
+        .await
 }
 
 /// The transient insert-time input for a held record: the resolve/gate path has
@@ -566,7 +606,7 @@ mod tests {
     use super::super::eol;
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
     use crate::net::{HeldKey, HeldRecord, HeldRecords, HeldValue};
-    use crate::seams::{RecordTransport, UnixMillis};
+    use crate::seams::{RecordTransport, SnapshotCache, UnixMillis};
     use crate::session::SessionIdentity;
     use crate::testkit::{FakeWorld, block_on};
 
@@ -1037,6 +1077,58 @@ mod tests {
             &Some(PublishOutcome::Published { sequence: 2 }),
             "the held own current root renews at seq+1 under its recovered signer",
         );
+    }
+
+    /// An own root re-read at the floor, where a pass that cached nothing raised
+    /// that floor: the re-read is the gate pass that makes these bytes
+    /// last-known-good. A record the owner recovers nothing from caches nothing.
+    #[test]
+    fn an_own_current_root_replaces_an_older_cached_copy_and_a_foreign_one_does_not() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let write_scope_seed = [5u8; 32];
+        let node_id = [6u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let current = record(&signer, 3);
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), current.clone());
+        }
+        let key = name.as_str().as_bytes();
+        let older = record(&signer, 2);
+
+        for (adopter, mode, cached) in [
+            (
+                StubAdopter::new(Verdict::EqualSequence),
+                ResolveMode::CacheFirst,
+                &older,
+            ),
+            (
+                StubAdopter::own_current(write_scope_seed, node_id),
+                ResolveMode::CacheFirst,
+                &current,
+            ),
+            (
+                StubAdopter::own_current(write_scope_seed, node_id),
+                ResolveMode::NoCache,
+                &current,
+            ),
+        ] {
+            block_on(device.snapshot_cache.put(key, &older)).expect("seed the older copy");
+            let resolved = block_on(resolve_gated(
+                &device.record_store,
+                &device.snapshot_cache,
+                &adopter,
+                &name,
+                mode,
+            ))
+            .expect("the resolve settles")
+            .resolved;
+            assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
+            assert_eq!(device.snapshot_cache.peek(key).as_ref(), Some(cached));
+        }
     }
 
     #[test]
