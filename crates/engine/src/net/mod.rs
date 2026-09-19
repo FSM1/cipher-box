@@ -18,6 +18,7 @@ mod fanout;
 mod focus;
 mod pointer_fetch;
 mod record_accelerator;
+mod vault_pointer;
 
 /// The registry's batch cap: the server refuses a larger array — and a larger
 /// per-entry `contentCids` array — fail-closed with a `400` (blueprint/api.md
@@ -81,3 +82,4 @@ pub use rotation::{
     GrantedScopeRoot, GranteeRotationKeys, GranteeRotationNet, OwnerRotationKeys, OwnerRotationNet,
     PointerConsultArm, WriteWaveNet,
 };
+pub(crate) use vault_pointer::{VaultPointerVoucher, VouchedRoot};
