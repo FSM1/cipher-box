@@ -1,4 +1,5 @@
 import { toHex, type VersionEntryDescriptor } from '@cipherbox/client';
+import type { VersionWrite } from '../../../hooks/useFileVersions';
 import { clampId, formatBytes, formatEpochMillis } from '../../../utils/format';
 import { DetailSection, UNKNOWN } from './DetailsPrimitives';
 
@@ -6,13 +7,25 @@ import { DetailSection, UNKNOWN } from './DetailsPrimitives';
 const HEAD = 8;
 const TAIL = 6;
 
+/**
+ * What this member may do in the file's scope: `owner` in its own vault,
+ * `write-grant` in a share another vault granted for writing (a restore stays
+ * inside it, a version delete is the owner's), `read-only` where the engine
+ * journals no write.
+ */
+export type ScopeAccess = 'owner' | 'write-grant' | 'read-only';
+
+/** Whether `access` offers the version write `command`. */
+export function offers(access: ScopeAccess, command: VersionWrite): boolean {
+  return command === 'restore' ? access !== 'read-only' : access === 'owner';
+}
+
 interface VersionHistoryProps {
   /** The engine's prior versions, newest first; `null` before the read lands. */
   entries: readonly VersionEntryDescriptor[] | null;
   /** A command is in flight, so no entry may dispatch a second one. */
   busy: boolean;
-  /** False in a scope this vault only holds a read grant over. */
-  writable: boolean;
+  access: ScopeAccess;
   /** The last version command's failure. */
   error: string | null;
   onDownload: (entry: VersionEntryDescriptor) => void;
@@ -27,7 +40,7 @@ interface VersionHistoryProps {
 export function VersionHistory({
   entries,
   busy,
-  writable,
+  access,
   error,
   onDownload,
   onRestore,
@@ -69,27 +82,27 @@ export function VersionHistory({
                 >
                   dl
                 </button>
-                {writable && (
-                  <>
-                    <button
-                      type="button"
-                      className="details-version-button"
-                      disabled={busy}
-                      onClick={() => onRestore(entry)}
-                      aria-label={`restore version ${named}`}
-                    >
-                      restore
-                    </button>
-                    <button
-                      type="button"
-                      className="details-version-button details-version-button--danger"
-                      disabled={busy}
-                      onClick={() => onDelete(entry)}
-                      aria-label={`delete version ${named}`}
-                    >
-                      rm
-                    </button>
-                  </>
+                {offers(access, 'restore') && (
+                  <button
+                    type="button"
+                    className="details-version-button"
+                    disabled={busy}
+                    onClick={() => onRestore(entry)}
+                    aria-label={`restore version ${named}`}
+                  >
+                    restore
+                  </button>
+                )}
+                {offers(access, 'delete') && (
+                  <button
+                    type="button"
+                    className="details-version-button details-version-button--danger"
+                    disabled={busy}
+                    onClick={() => onDelete(entry)}
+                    aria-label={`delete version ${named}`}
+                  >
+                    rm
+                  </button>
                 )}
               </span>
             </li>
