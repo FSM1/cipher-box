@@ -135,7 +135,7 @@ use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rende
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
-use crate::sync::project::{UnlinkedChild, map_kind, project_child_version, project_root};
+use crate::sync::project::{UnlinkedChild, map_kind, merge_root, project_child_version};
 use crate::sync::provision::{
     GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
     VaultPointerProbe, provision_vault,
@@ -777,17 +777,16 @@ pub struct SnapshotView {
     /// `ancestors` (which starts at the parent) and must not cache a name across
     /// a navigation, so the view carries it.
     pub folder_name: String,
-    /// What this vault may do in the scope the listed folder belongs to. A
-    /// received share carries the permission its accepted grant recorded; every
-    /// other scope is this vault's own, which it writes by ownership. A host
-    /// refuses a write at the gesture on this, rather than at the drain.
+    /// What this vault may do now in the scope the listed folder belongs to.
+    /// Every scope of this vault's own is written by ownership. A received
+    /// share is written only under a write grant whose write pass this session
+    /// has proved, and reads [`Permission::Read`] otherwise. A host refuses a
+    /// write at the gesture on this, rather than at the drain.
     pub permission: Permission,
     /// Whether the listed folder stands in a scope another vault granted this
-    /// one. A grafted scope root is planted with no parent link, so the write
-    /// plane cannot author under it whatever the grant permits: a journal call
-    /// there is refused with
-    /// [`ScopeExitRefused`](EngineError::ScopeExitRefused). A host offers a
-    /// write affordance only where this reads false.
+    /// one. A write there stays inside that scope: a move to another scope, a
+    /// bin action and a version-history action are refused with
+    /// [`ScopeExitRefused`](EngineError::ScopeExitRefused).
     pub received_share: bool,
     /// Direct children, deterministically ordered by node id.
     pub children: Vec<SnapshotChild>,
@@ -2510,6 +2509,34 @@ fn classify_crossing(
     }))
 }
 
+/// The plan of a relocation with an end below a grafted root.
+///
+/// A move stays inside one received share and crosses no scope inside it. A
+/// move between a received share and this vault's own tree, or between two
+/// received shares, takes a node out of the scope its owner can cut, so it is
+/// refused.
+fn grafted_relocation(
+    rendered: &Snapshot,
+    from: WriteHome,
+    to: WriteHome,
+    from_parent: NodeId,
+    new_parent: NodeId,
+    scope_roots: &[NodeId],
+) -> Result<RelocationPlan, EngineError> {
+    if !rendered.contains(new_parent) {
+        return Err(EngineError::UnknownNode);
+    }
+    if from != to
+        || scope_of(rendered, from_parent, scope_roots)
+            != scope_of(rendered, new_parent, scope_roots)
+    {
+        return Err(EngineError::ScopeExitRefused {
+            message: "a move out of or into a received share is the sharer's to make".to_owned(),
+        });
+    }
+    Ok(RelocationPlan::Direct(ScopeCrossing::Intra))
+}
+
 /// Refuse a crossing whose moved subtree holds a scope root.
 ///
 /// Moving a scope root into another scope is one of the ops that maintains the
@@ -2763,29 +2790,89 @@ fn ascent_node_seed(
     Some(Zeroizing::new(*kdf::node_seed(seed, &scope.0).as_bytes()))
 }
 
-/// Refuse a journal target the write plane cannot author under.
+/// Refuse a journal target outside this vault's own tree.
 ///
 /// An accepted shared scope is grafted into the render tree with no parent link
-/// (`grants::received_status`), so a browse reaches it but the drain cannot:
-/// an op there names a chain that walks to no root this session publishes under.
-/// Refusing at journal time is the only order that works, on the same grounds as
+/// (`grants::received_status`), so no chain below it walks to the vault root.
+/// Only a proved write pass drains an op there ([`write_home`]); every other op
+/// below a grafted root is refused at journal time, on the same grounds as
 /// [`classify_crossing`].
 ///
 /// A node the render does not hold at all keeps its existing verdict — the
 /// rebase decides what a stale target means, and that is not this check's call.
 fn refuse_outside_vault(rendered: &Snapshot, node: NodeId) -> Result<(), EngineError> {
     if outside_vault(rendered, node) {
-        return Err(EngineError::ScopeExitRefused {
-            message: "that item is not in this session's scope".to_owned(),
-        });
+        return Err(out_of_scope());
     }
     Ok(())
 }
 
+fn out_of_scope() -> EngineError {
+    EngineError::ScopeExitRefused {
+        message: "that item is not in this session's scope".to_owned(),
+    }
+}
+
+/// The tree a journal target is authored in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteHome {
+    /// This vault's own tree, or a node the render does not hold, whose verdict
+    /// the rebase gives ([`refuse_outside_vault`]).
+    Vault,
+    /// Below the grafted root of a received write share this session holds a
+    /// write pass for. The drain publishes the op in that scope, so the op must
+    /// touch no surface of this vault (`DrainScope::refuse_vault_surface`).
+    Graft(NodeId),
+}
+
+/// What a journal target is to the op that names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetRole {
+    /// The node the op edits. A grafted root's name and link live in a folder
+    /// of the sharer's that no grant reaches, so a grafted root is refused here.
+    Node,
+    /// The folder the op puts a child into, which a grafted root may be.
+    Parent,
+}
+
+/// Where `node` is authored, or a refusal for a target below a grafted root
+/// that is not in `writable_grafts`: a read grant, or a write grant whose pass
+/// this session has not proved.
+fn write_home(
+    rendered: &Snapshot,
+    node: NodeId,
+    role: TargetRole,
+    writable_grafts: &[NodeId],
+) -> Result<WriteHome, EngineError> {
+    if !outside_vault(rendered, node) {
+        return Ok(WriteHome::Vault);
+    }
+    let graft = rendered.ancestors(node).last().copied().unwrap_or(node);
+    if !writable_grafts.contains(&graft) {
+        return Err(out_of_scope());
+    }
+    if role == TargetRole::Node && node == graft {
+        return Err(EngineError::ScopeExitRefused {
+            message: "a received share's own folder is the sharer's to change".to_owned(),
+        });
+    }
+    Ok(WriteHome::Graft(graft))
+}
+
+/// Refuse a target below a grafted root: an op that acts on this vault's own
+/// bin or version history, or that joins a received share to another scope.
+fn refuse_graft(home: WriteHome) -> Result<(), EngineError> {
+    match home {
+        WriteHome::Vault => Ok(()),
+        WriteHome::Graft(_) => Err(EngineError::ScopeExitRefused {
+            message: "that change inside a received share is the sharer's to make".to_owned(),
+        }),
+    }
+}
+
 /// Whether `node` stands in a grafted scope rather than in the tree this
-/// session publishes under — the condition [`refuse_outside_vault`] refuses a
-/// write target on, which [`Engine::snapshot`] also reports so a host can refuse
-/// the gesture instead of the journal call.
+/// session publishes under, which [`Engine::snapshot`] reports so a host can
+/// tell a received share from its own tree.
 fn outside_vault(rendered: &Snapshot, node: NodeId) -> bool {
     rendered.contains(node)
         && node != rendered.root
@@ -4358,6 +4445,10 @@ fn cached_seed(cell: &RefCell<ScopeSeeds>, scope_id: &[u8; 16]) -> Option<Zeroiz
 /// Each seed is stamped with the epoch its own recovery names: the read seed
 /// with the record's, the write seed with the write-epoch floor its
 /// owner-write-blob opened at (`deposit_seed`).
+///
+/// Answers the children each scope root stopped naming, stamped at
+/// `observed_at`: an unlink a write grantee published at the root of the scope
+/// it holds, which the owner's capture bins (CONTEXT.md "Owner capture").
 fn install_descendant_scopes(
     known: &RefCell<BTreeSet<NodeId>>,
     read_seeds: &RefCell<ScopeSeeds>,
@@ -4365,7 +4456,8 @@ fn install_descendant_scopes(
     base: &BaseSnapshot,
     events: &mpsc::UnboundedSender<Event>,
     proved: &[DescendantScopeRoot],
-) {
+    observed_at: u64,
+) -> Vec<UnlinkedChild> {
     let reached: BTreeSet<NodeId> = proved.iter().map(|s| NodeId(s.scope_id)).collect();
     let unproved: Vec<NodeId> = known.borrow().difference(&reached).copied().collect();
     for scope in unproved {
@@ -4375,6 +4467,7 @@ fn install_descendant_scopes(
     }
     let promoted: BTreeSet<NodeId> = reached.difference(&known.borrow()).copied().collect();
     known.borrow_mut().extend(reached);
+    let mut departed = Vec::new();
     for scope in proved {
         // Past this boundary the eviction pass reads the scope as this vault's
         // own and stops measuring its write seed against a granting identity's
@@ -4399,14 +4492,14 @@ fn install_descendant_scopes(
                 Some(write.epoch),
             );
         }
-        if project_root(
-            &mut base.borrow_mut(),
-            NodeId(scope.scope_id),
-            &scope.adopted,
-        ) {
+        let root = NodeId(scope.scope_id);
+        let merged = merge_root(&mut base.borrow_mut(), root, &scope.adopted);
+        if merged.changed {
             let _ = events.unbounded_send(Event::SnapshotUpdated);
         }
+        departed.extend(merged.observed_unlinks(scope.scope_id, root, observed_at));
     }
+    departed
 }
 
 /// Record the boundaries one walk named without material, and release every
@@ -4784,6 +4877,9 @@ pub struct Engine<T: SeamTypes> {
     /// permits this vault to do, which is what [`snapshot`](Self::snapshot)
     /// reports so a host can refuse a write at the gesture.
     bookmarked_permissions: Rc<RefCell<BookmarkedPermissions>>,
+    /// The grafted roots the last tick built a drain pass for, which is every
+    /// fact a write below one needs ([`grafted_write_passes`]).
+    grafted_write_roots: Rc<RefCell<BTreeSet<NodeId>>>,
     /// Folded by the same pass: what each renderable grafted scope's body
     /// named, which decides the ids no plane may render.
     grafted_claims: Rc<RefCell<ClaimRecord>>,
@@ -4977,6 +5073,7 @@ impl<T: SeamTypes> Engine<T> {
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
                 bookmarked_permissions: Rc::new(RefCell::new(BookmarkedPermissions::new())),
+                grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
                 minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 pending_invite_links: Rc::new(RefCell::new(BTreeMap::new())),
@@ -5355,6 +5452,9 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut permissions) = self.bookmarked_permissions.try_borrow_mut() {
             permissions.clear();
+        }
+        if let Ok(mut roots) = self.grafted_write_roots.try_borrow_mut() {
+            roots.clear();
         }
         if let Ok(mut claims) = self.grafted_claims.try_borrow_mut() {
             claims.clear();
@@ -6095,6 +6195,7 @@ where {
         let grafted_sharers = self.grafted_sharers.clone();
         let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
         let bookmarked_permissions = self.bookmarked_permissions.clone();
+        let grafted_write_roots = self.grafted_write_roots.clone();
         let grafted_claims = self.grafted_claims.clone();
         let consult_keys = self.sweep_keys.clone();
         let minted_roots = self.minted_scope_roots.clone();
@@ -6363,14 +6464,16 @@ where {
                             .as_ref()
                             .map_or_else(|met| Some(*met), |walked| walked.failure);
                         if let Ok(walked) = walked {
-                            install_descendant_scopes(
+                            let departed = install_descendant_scopes(
                                 &descendant_roots,
                                 &scope_read_seeds,
                                 &scope_write_seeds,
                                 &base,
                                 &events,
                                 &walked.proved,
+                                now.0,
                             );
+                            hold_captures(&observed_unlinks, departed);
                             install_walked_read_epochs(&walked_read_epochs, &walked.proved);
                             install_unproved_scopes(
                                 &unproved_roots,
@@ -6611,12 +6714,31 @@ where {
                             &scope_write_seeds,
                         )
                     };
+                    *grafted_write_roots.borrow_mut() =
+                        grafted.iter().map(|pass| pass.root).collect();
+                    // A graft this vault may only read — a read grant, or a write
+                    // grant the sharer cut — publishes an op below it on no
+                    // pass. Listed keyless, so the pass holding the identity's
+                    // charge dead-letters such an op rather than stall the
+                    // strict-FIFO head behind it.
+                    let read_only_grafts: Vec<NodeId> = bookmarked_permissions
+                        .borrow()
+                        .iter()
+                        .filter(|(scope_id, permission)| {
+                            **permission == CommittedPermission::Read
+                                && !is_own_scope(&root_id, &proved_scope_ids, scope_id)
+                                && !minted_roots.borrow().contains(&NodeId(**scope_id))
+                                && !unproved_scope_ids.contains(&NodeId(**scope_id))
+                        })
+                        .map(|(scope_id, _)| NodeId(*scope_id))
+                        .collect();
                     // Owned for the drain, which awaits while it holds them.
                     let grafted_scope_roots = bookmarked_scope_roots.borrow().clone();
                     let grafted_contested = grafted_claims.borrow().contested().clone();
                     let proved_roots: Vec<NodeId> = core::iter::once(NodeId(root_id))
                         .chain(proved_scope_ids.iter().copied())
                         .chain(grafted.iter().map(|pass| pass.root))
+                        .chain(read_only_grafts.iter().copied())
                         .collect();
                     let vault_seeds = read_seed.as_ref().zip(write_seed.as_ref());
                     // Index 0 is the vault root's own pass whenever this holds.
@@ -6631,6 +6753,7 @@ where {
                         .iter()
                         .filter(|scope| matches!(scope.write, Err(WritePlaneDark::Keyless)))
                         .map(|scope| NodeId(scope.scope_id))
+                        .chain(read_only_grafts.iter().copied())
                         .collect();
                     // The vault-root pass's second end, and the cut a scope exit
                     // owes: both read the boundaries this session knows, at the
@@ -6967,7 +7090,7 @@ where {
             Command::Create { parent, name, kind } => {
                 refuse_unlawful_name(&name)?;
                 let rendered = self.render().await?;
-                refuse_outside_vault(&rendered, parent)?;
+                self.write_home(&rendered, parent, TargetRole::Parent)?;
                 refuse_full_parent(&rendered, parent, None, None, &self.authored_scope_roots())?;
                 let target = self.mint_node_id()?;
                 let base_sequence = rendered.record_sequence(parent).unwrap_or(1);
@@ -6979,10 +7102,15 @@ where {
                 self.stage_and_notify(&op).await
             }
             Command::Delete { node } => {
+                let rendered = self.render().await?;
+                // A grantee's delete only unlinks: the owner's engine bins the
+                // node by owner capture (CONTEXT.md), and a grantee never
+                // writes a bin.
+                let home = self.write_home(&rendered, node, TargetRole::Node)?;
+                let to_bin = home == WriteHome::Vault && self.bin_retention_days() > 0;
                 // Both anchors snapshot the target's own sequence for the
                 // conditional-delete rebase rule.
-                let seq = self.base_sequence_for(node).await?;
-                let to_bin = self.bin_retention_days() > 0;
+                let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.stage_and_notify(&Op::delete(node, seq, authored_at, seq, to_bin))
                     .await
             }
@@ -7022,7 +7150,7 @@ where {
             Command::Rename { node, new_name } => {
                 refuse_unlawful_name(&new_name)?;
                 let rendered = self.render().await?;
-                refuse_outside_vault(&rendered, node)?;
+                self.write_home(&rendered, node, TargetRole::Node)?;
                 refuse_over_budget_rename(
                     &rendered,
                     node,
@@ -7034,13 +7162,21 @@ where {
                     .await
             }
             Command::RestoreVersion { node, content_cid } => {
-                let seq = self.base_sequence_for(node).await?;
+                // The version history is read under this vault's own root scope
+                // (`resolve_versions`), which a grafted file is not sealed under.
+                let rendered = self.render().await?;
+                refuse_graft(self.write_home(&rendered, node, TargetRole::Node)?)?;
+                let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.version_position(node, &content_cid).await?;
                 self.stage_and_notify(&Op::restore_version(node, content_cid, seq, authored_at))
                     .await
             }
             Command::DeleteVersion { node, content_cid } => {
-                let seq = self.base_sequence_for(node).await?;
+                // The version history's bytes are reclaimed through this
+                // vault's retire ledger, which no grant reaches.
+                let rendered = self.render().await?;
+                refuse_graft(self.write_home(&rendered, node, TargetRole::Node)?)?;
+                let seq = rendered.record_sequence(node).unwrap_or(1);
                 if self.version_position(node, &content_cid).await? == 0 {
                     return Err(EngineError::UnsupportedTarget {
                         check: "version-delete-target-is-the-current-version",
@@ -7098,6 +7234,9 @@ where {
                     &self.authored_scope_roots(),
                 )?;
                 refuse_non_empty_vacate(&rendered, replacing)?;
+                if let Some(replaced) = replacing {
+                    self.write_home(&rendered, replaced, TargetRole::Node)?;
+                }
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
                     // The conditional-delete anchor: a concurrent edit that
@@ -9298,7 +9437,7 @@ where {
             WriteTarget::NewFile { parent, name } => {
                 refuse_unlawful_name(name)?;
                 let rendered = self.render().await?;
-                refuse_outside_vault(&rendered, *parent)?;
+                self.write_home(&rendered, *parent, TargetRole::Parent)?;
                 refuse_full_parent(&rendered, *parent, None, None, &self.authored_scope_roots())?;
                 None
             }
@@ -9307,7 +9446,7 @@ where {
                 expected_version,
             } => {
                 let rendered = self.render().await?;
-                refuse_outside_vault(&rendered, *node)?;
+                self.write_home(&rendered, *node, TargetRole::Node)?;
                 match rendered.node(*node).map(|meta| meta.kind) {
                     Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
                     Some(_) => match expected_version {
@@ -9647,7 +9786,7 @@ where {
         let authored_at = self.seams.scheduler.now();
         let op = match target {
             WriteTarget::NewFile { parent, name } => {
-                let base_sequence = self.base_sequence_for(parent).await?;
+                let base_sequence = self.base_sequence_for(parent, TargetRole::Parent).await?;
                 Op::create(
                     node,
                     parent,
@@ -9660,7 +9799,7 @@ where {
                 )
             }
             WriteTarget::Version { node, .. } => {
-                let base_sequence = self.base_sequence_for(node).await?;
+                let base_sequence = self.base_sequence_for(node, TargetRole::Node).await?;
                 Op::update_content(node, content, base_version_cid, base_sequence, authored_at)
             }
         };
@@ -9904,12 +10043,19 @@ where {
             .collect();
         let folder_name = rendered_name(&rendered, folder);
         let scope = scope_of(&rendered, folder, &self.authored_scope_roots());
-        let permission = self
-            .bookmarked_permissions
-            .borrow()
-            .get(&scope.0)
-            .copied()
-            .map_or(Permission::Write, Permission::from);
+        let granted = self.bookmarked_permissions.borrow().get(&scope.0).copied();
+        let permission = match granted {
+            None => Permission::Write,
+            Some(_)
+                if matches!(
+                    self.write_home(&rendered, folder, TargetRole::Parent),
+                    Ok(WriteHome::Graft(_))
+                ) =>
+            {
+                Permission::Write
+            }
+            Some(_) => Permission::Read,
+        };
         Ok(SnapshotView {
             root: rendered.root,
             folder,
@@ -10823,6 +10969,56 @@ where {
         roots.into_iter().collect()
     }
 
+    /// The grafted roots whose write pass this session has proved: the last
+    /// tick built a drain pass for the root, and the live permission and the
+    /// in-memory write seed still stand. A restart admits nothing until a tick
+    /// re-proves the pass.
+    fn writable_graft_roots(&self) -> Vec<NodeId> {
+        let permissions = self.bookmarked_permissions.borrow();
+        let seeds = self.scope_write_seeds.borrow();
+        self.grafted_write_roots
+            .borrow()
+            .iter()
+            .filter(|root| {
+                permissions.get(&root.0) == Some(&CommittedPermission::Write)
+                    && seeds.contains_key(&root.0)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// Where `node` is authored ([`write_home`]), refusing a target at or below
+    /// a scope root nested in a received share: a node published under a name
+    /// the share's write seed does not derive. The grafted pass cannot seal
+    /// under that scope, and owner capture bins no scope root, so a grantee's
+    /// unlink of one would be final.
+    fn write_home(
+        &self,
+        rendered: &Snapshot,
+        node: NodeId,
+        role: TargetRole,
+    ) -> Result<WriteHome, EngineError> {
+        let home = write_home(rendered, node, role, &self.writable_graft_roots())?;
+        let WriteHome::Graft(graft) = home else {
+            return Ok(home);
+        };
+        let seed = cached_seed(&self.scope_write_seeds, &graft.0).ok_or_else(out_of_scope)?;
+        let chain = core::iter::once(node).chain(rendered.ancestors(node));
+        for below in chain.take_while(|below| *below != graft) {
+            let Some(published) = rendered.node(below).and_then(|meta| meta.ipns_name.clone())
+            else {
+                continue;
+            };
+            if derive_write_name(&seed, &below.0).as_str().as_bytes() != published.as_slice() {
+                return Err(EngineError::ScopeExitRefused {
+                    message: "a folder the sharer shared on its own is the sharer's to change"
+                        .to_owned(),
+                });
+            }
+        }
+        Ok(home)
+    }
+
     /// Every node this session knows publishes its record **as** a scope root:
     /// the boundaries a relocation names, plus the roots of the shares this
     /// vault received. Both author through `net::author::encode_scope_root`, so
@@ -10861,7 +11057,8 @@ where {
                     .to_owned(),
             });
         }
-        refuse_outside_vault(rendered, node)?;
+        let from = self.write_home(rendered, node, TargetRole::Node)?;
+        let to = self.write_home(rendered, new_parent, TargetRole::Parent)?;
         let Some(from_parent) = rendered.parent_of(node) else {
             // The guard above owns every other unplaced target, so the vault
             // root and a node this render lost are what is left.
@@ -10873,6 +11070,20 @@ where {
                 EngineError::UnknownNode
             });
         };
+        if from != WriteHome::Vault || to != WriteHome::Vault {
+            return Ok((
+                from_parent,
+                rendered.record_sequence(node).unwrap_or(1),
+                grafted_relocation(
+                    rendered,
+                    from,
+                    to,
+                    from_parent,
+                    new_parent,
+                    &self.authored_scope_roots(),
+                )?,
+            ));
+        }
         let scope_roots = self.relocation_scope_roots();
         let plan = classify_crossing(rendered, from_parent, new_parent, &scope_roots)?;
         refuse_moving_a_scope_root(rendered, node, plan, &scope_roots)?;
@@ -11004,9 +11215,9 @@ where {
     /// The base sequence to anchor an op at: the target's own record sequence in
     /// the rendered view, defaulting to 1 for a node not yet in gate-passing
     /// state (a pending create).
-    async fn base_sequence_for(&self, node: NodeId) -> Result<u64, EngineError> {
+    async fn base_sequence_for(&self, node: NodeId, role: TargetRole) -> Result<u64, EngineError> {
         let rendered = self.render().await?;
-        refuse_outside_vault(&rendered, node)?;
+        self.write_home(&rendered, node, role)?;
         Ok(rendered.record_sequence(node).unwrap_or(1))
     }
 
@@ -11136,7 +11347,7 @@ where {
                     op.target,
                     content.clone(),
                     self.write_anchor(op.target).await?,
-                    self.base_sequence_for(op.target).await?,
+                    self.base_sequence_for(op.target, TargetRole::Node).await?,
                     authored_at,
                 )
             }
@@ -11147,7 +11358,7 @@ where {
                     *parent,
                     name.clone(),
                     node.clone(),
-                    self.base_sequence_for(*parent).await?,
+                    self.base_sequence_for(*parent, TargetRole::Parent).await?,
                     authored_at,
                 )
             }
@@ -11814,6 +12025,7 @@ mod tests {
                     &base(),
                     &events,
                     &[proved(Err(WritePlaneDark::Keyless))],
+                    0,
                 );
 
                 assert_eq!(write_seeds.borrow().contains_key(&SHARED), held, "{case}",);
@@ -11838,6 +12050,7 @@ mod tests {
                     seed: Zeroizing::new(WRITE_SCOPE_SEED),
                     epoch: 2,
                 }))],
+                0,
             );
 
             assert!(write_seeds.borrow().contains_key(&SHARED));
@@ -12557,9 +12770,9 @@ mod tests {
     }
 
     /// An accepted shared scope is grafted in parentless, so a browse reaches it
-    /// but the write plane cannot author under it. A mutation there must be
-    /// refused where the caller can still be told, not journaled into a queue
-    /// whose drain can never walk its chain to a root.
+    /// but only a proved write pass drains an op below it. Every other target
+    /// there must be refused where the caller can still be told, not journaled
+    /// into a queue no pass drains.
     #[test]
     fn a_journal_target_outside_this_vaults_tree_is_refused() {
         let root = NodeId([1; 16]);
@@ -12572,19 +12785,112 @@ mod tests {
         rendered.upsert_node(NodeMeta::new(shared_root, "theirs", NodeKind::Folder));
         rendered.upsert_node(NodeMeta::new(shared_child, "theirs/sub", NodeKind::Folder));
         rendered.link_next(shared_root, shared_child);
+        let refused = |home: Result<WriteHome, EngineError>| {
+            matches!(home, Err(EngineError::ScopeExitRefused { .. }))
+        };
 
-        assert!(refuse_outside_vault(&rendered, root).is_ok());
-        assert!(refuse_outside_vault(&rendered, inside).is_ok());
-        assert!(
-            refuse_outside_vault(&rendered, NodeId([9; 16])).is_ok(),
-            "a node the render never held keeps the verdict the rebase gives it"
+        for role in [TargetRole::Node, TargetRole::Parent] {
+            for writable in [&[][..], &[shared_root][..]] {
+                assert_eq!(
+                    write_home(&rendered, root, role, writable),
+                    Ok(WriteHome::Vault)
+                );
+                assert_eq!(
+                    write_home(&rendered, inside, role, writable),
+                    Ok(WriteHome::Vault)
+                );
+                assert_eq!(
+                    write_home(&rendered, NodeId([9; 16]), role, writable),
+                    Ok(WriteHome::Vault),
+                    "a node the render never held keeps the verdict the rebase gives it"
+                );
+            }
+            for node in [shared_root, shared_child] {
+                assert!(
+                    refused(write_home(&rendered, node, role, &[])),
+                    "a graft with no proved write pass takes no op"
+                );
+                assert!(
+                    refused(write_home(&rendered, node, role, &[NodeId([5; 16])])),
+                    "another graft's pass proves nothing about this one"
+                );
+            }
+        }
+
+        let writable = [shared_root];
+        assert_eq!(
+            write_home(&rendered, shared_child, TargetRole::Node, &writable),
+            Ok(WriteHome::Graft(shared_root))
         );
+        assert_eq!(
+            write_home(&rendered, shared_root, TargetRole::Parent, &writable),
+            Ok(WriteHome::Graft(shared_root)),
+            "a child goes into the grafted root"
+        );
+        assert!(
+            refused(write_home(
+                &rendered,
+                shared_root,
+                TargetRole::Node,
+                &writable
+            )),
+            "the grafted root itself is the sharer's"
+        );
+        assert_eq!(refuse_graft(WriteHome::Vault), Ok(()));
+        assert!(matches!(
+            refuse_graft(WriteHome::Graft(shared_root)),
+            Err(EngineError::ScopeExitRefused { .. })
+        ));
+
+        // A restore puts a node of this vault's own bin back, so no graft is a
+        // destination for it.
+        assert!(refuse_outside_vault(&rendered, inside).is_ok());
         for node in [shared_root, shared_child] {
             assert!(matches!(
                 refuse_outside_vault(&rendered, node),
                 Err(EngineError::ScopeExitRefused { .. })
             ));
         }
+    }
+
+    /// A move stays inside one received share and crosses no scope inside it.
+    #[test]
+    fn a_grafted_relocation_stays_inside_one_share() {
+        let root = NodeId([1; 16]);
+        let theirs = NodeId([3; 16]);
+        let sub = NodeId([4; 16]);
+        let other = NodeId([6; 16]);
+        let mut rendered = Snapshot::new(root);
+        for (node, name) in [(theirs, "theirs"), (sub, "sub"), (other, "other")] {
+            rendered.upsert_node(NodeMeta::new(node, name, NodeKind::Folder));
+        }
+        rendered.link_next(theirs, sub);
+        let (a, b) = (WriteHome::Graft(theirs), WriteHome::Graft(other));
+
+        assert_eq!(
+            grafted_relocation(&rendered, a, a, theirs, sub, &[theirs, other]),
+            Ok(RelocationPlan::Direct(ScopeCrossing::Intra))
+        );
+        for (why, from, to, new_parent) in [
+            ("out to this vault", a, WriteHome::Vault, root),
+            ("in from this vault", WriteHome::Vault, a, sub),
+            ("between two shares", a, b, other),
+        ] {
+            assert!(
+                matches!(
+                    grafted_relocation(&rendered, from, to, theirs, new_parent, &[theirs, other]),
+                    Err(EngineError::ScopeExitRefused { .. })
+                ),
+                "{why}"
+            );
+        }
+        assert!(
+            matches!(
+                grafted_relocation(&rendered, a, a, theirs, sub, &[theirs, sub]),
+                Err(EngineError::ScopeExitRefused { .. })
+            ),
+            "a scope root nested in the share is another scope"
+        );
     }
 
     /// The relocation arms read their source off the render, so a destination
@@ -15641,10 +15947,10 @@ mod tests {
             );
         }
 
-        /// The write plane cannot author under a grafted root whatever the grant
-        /// permits, so the view has to say which folders are grafted. Every
-        /// folder of this vault's own tree reaches the render root; a grafted
-        /// one is planted with no parent link and reaches nothing.
+        /// The view says which folders are grafted. Every folder of this
+        /// vault's own tree reaches the render root; a grafted one is planted
+        /// with no parent link and reaches nothing. A graft this session holds
+        /// no write pass for takes no write.
         #[test]
         fn a_folder_under_a_grafted_root_reports_itself_a_received_share() {
             let (mut engine, _events) = started();
@@ -17782,9 +18088,17 @@ mod tests {
             /// Accept a write grant over the sharer's root naming `children` at
             /// sequence 1, and run the pass that grafts it.
             fn accepted(children: Vec<ChildRef>) -> Self {
+                let grantee = Self::accepted_as(CorePermission::Write, children);
+                assert!(grantee.holds_the_write_seed());
+                grantee
+            }
+
+            /// Accept a `permission` grant over the sharer's root naming
+            /// `children` at sequence 1, and run the pass that grafts it.
+            fn accepted_as(permission: CorePermission, children: Vec<ChildRef>) -> Self {
                 let world = FakeWorld::new();
                 let device = world.device(&owner_identity().verifying_key().to_sec1());
-                let granted = shared_root_granting(EPOCH, CorePermission::Write, children);
+                let granted = shared_root_granting(EPOCH, permission, children);
                 let (head_block, head_cid, root_name) = owner_root();
                 seed_vault_pointer(&device, &root_name);
                 for endpoint in device.record_store.endpoints() {
@@ -17824,7 +18138,7 @@ mod tests {
                         scope_root_name: granted.name.as_str().as_bytes().to_vec(),
                         sharer_identity_pk: sharer_identity().verifying_key().to_sec1(),
                         display_name: "shared-folder".to_owned(),
-                        permission: CorePermission::Write,
+                        permission,
                     }
                     .encode(),
                     "share-1",
@@ -17843,7 +18157,9 @@ mod tests {
                     shared_row_verdict(&grantee.engine),
                     Some(ResolutionClass::Granted)
                 );
-                assert!(grantee.holds_the_write_seed());
+                // The pass that grafts the share recovers its seeds; the next
+                // one builds the drain pass a write below the root needs.
+                grantee.pass();
                 grantee
             }
 
@@ -17928,6 +18244,66 @@ mod tests {
                     .scope_write_seeds
                     .borrow()
                     .contains_key(&SHARED_SCOPE_ROOT)
+            }
+
+            fn command(&mut self, command: Command) -> Result<CommandOutcome, EngineError> {
+                block_on(self.engine.command(command))
+            }
+
+            /// Run the pass that drains what the facade journaled, and hold it
+            /// to having drained all of it.
+            fn settle(&mut self) {
+                for _ in 0..40 {
+                    if self.queued() == 0 {
+                        break;
+                    }
+                    self.pass();
+                }
+                assert_eq!(self.queued(), 0, "the grafted pass drained every op");
+                assert!(
+                    self.engine.dead_letters.borrow().is_empty(),
+                    "and parked none of them"
+                );
+            }
+
+            /// The names the render lists under `folder`, sorted.
+            fn names_under(&self, folder: NodeId) -> Vec<String> {
+                let mut names: Vec<String> = self
+                    .engine
+                    .snapshot
+                    .borrow()
+                    .children(folder)
+                    .into_iter()
+                    .map(|child| child.name().to_owned())
+                    .collect();
+                names.sort();
+                names
+            }
+
+            fn child(&self, folder: NodeId, name: &str) -> NodeId {
+                self.engine
+                    .snapshot
+                    .borrow()
+                    .children(folder)
+                    .into_iter()
+                    .find(|child| child.name() == name)
+                    .unwrap_or_else(|| panic!("no child named {name}"))
+                    .id
+            }
+
+            /// The sequence of the record at the shared root's name: what moves
+            /// when a pass publishes in the granted scope.
+            fn shared_sequence(&self) -> u64 {
+                let name = derive_write_name(&WRITE_SCOPE_SEED, &SHARED_SCOPE_ROOT);
+                let bytes = self
+                    .device
+                    .record_store
+                    .record_at(&self.device.record_store.endpoints()[0], name.as_str())
+                    .expect("the shared root is published");
+                IpnsRecord::unmarshal(&bytes)
+                    .and_then(|record| record.verify(&name))
+                    .expect("the record verifies under the shared root's name")
+                    .sequence
             }
         }
 
@@ -18033,6 +18409,373 @@ mod tests {
             assert_eq!(links.len(), 1, "the own node keeps its one link");
             assert_eq!(links[0].parent, ROOT);
             assert_eq!(grantee.listing(), vec!["mine".to_owned()]);
+        }
+
+        const SHARED: NodeId = NodeId(SHARED_SCOPE_ROOT);
+        const PHOTOS: [u8; 16] = [0xa1; 16];
+
+        /// Every write a proved write pass admits journals through the facade
+        /// and publishes in the granted scope: a create, an upload, a new
+        /// version, a rename, a move and a relink inside it.
+        #[test]
+        fn a_write_grantee_authors_every_admitted_write_inside_the_granted_scope() {
+            let photos = shared_child(PHOTOS, "photos", CoreNodeKind::Folder);
+            let mut grantee = WriteGrantee::accepted(vec![photos]);
+            let before = grantee.shared_sequence();
+            let view = block_on(grantee.engine.snapshot(SHARED)).expect("the share lists");
+            assert!(view.received_share);
+            assert_eq!(view.permission, Permission::Write);
+
+            grantee
+                .command(Command::Create {
+                    parent: SHARED,
+                    name: "mine".into(),
+                    kind: NodeKind::Folder,
+                })
+                .expect("a create below a proved write root journals");
+            write_file(
+                &mut grantee.engine,
+                WriteTarget::NewFile {
+                    parent: SHARED,
+                    name: "notes.txt".into(),
+                },
+                &[7; 64],
+            )
+            .expect("an upload below a proved write root journals");
+            grantee.settle();
+            assert_eq!(grantee.names_under(SHARED), ["mine", "notes.txt", "photos"]);
+            assert!(
+                grantee.shared_sequence() > before,
+                "the pass republished the shared root"
+            );
+
+            let notes = grantee.child(SHARED, "notes.txt");
+            let head = |grantee: &WriteGrantee| {
+                grantee
+                    .engine
+                    .snapshot
+                    .borrow()
+                    .node(notes)
+                    .and_then(|meta| meta.head_content_cid.clone())
+            };
+            let first = head(&grantee).expect("the upload's version is the head");
+            write_file(
+                &mut grantee.engine,
+                WriteTarget::Version {
+                    node: notes,
+                    expected_version: None,
+                },
+                &[8; 96],
+            )
+            .expect("a new version journals");
+            grantee.settle();
+            assert_ne!(head(&grantee), Some(first), "the new version is the head");
+
+            grantee
+                .command(Command::Rename {
+                    node: notes,
+                    new_name: "renamed.txt".into(),
+                })
+                .expect("a rename journals");
+            grantee.settle();
+            let mine = grantee.child(SHARED, "mine");
+            grantee
+                .command(Command::Move {
+                    node: notes,
+                    new_parent: mine,
+                    new_name: "moved.txt".into(),
+                    replacing: None,
+                })
+                .expect("a move inside the granted scope journals");
+            grantee.settle();
+            assert_eq!(grantee.names_under(SHARED), ["mine", "photos"]);
+            assert_eq!(grantee.names_under(mine), ["moved.txt"]);
+
+            grantee
+                .command(Command::Relink {
+                    node: notes,
+                    new_parent: SHARED,
+                })
+                .expect("a relink inside the granted scope journals");
+            grantee.settle();
+            assert_eq!(grantee.names_under(SHARED), ["mine", "moved.txt", "photos"]);
+        }
+
+        /// A grantee's delete only unlinks the node from its folder in the
+        /// granted scope. It journals no bin entry even at a retention that
+        /// bins this vault's own deletes, and the pass writes no bin: the
+        /// owner's engine bins the node by owner capture.
+        #[test]
+        fn a_write_grantees_delete_only_unlinks_the_node() {
+            let photos = shared_child(PHOTOS, "photos", CoreNodeKind::File);
+            let mut grantee = WriteGrantee::accepted(vec![photos]);
+            assert!(grantee.engine.bin_retention_days() > 0);
+            let before = grantee.shared_sequence();
+
+            grantee
+                .command(Command::Delete {
+                    node: NodeId(PHOTOS),
+                })
+                .expect("a delete below a proved write root journals");
+            grantee.settle();
+
+            assert!(grantee.names_under(SHARED).is_empty());
+            assert!(grantee.shared_sequence() > before);
+            assert!(
+                block_on(grantee.engine.bin())
+                    .expect("the bin reads")
+                    .entries
+                    .is_empty(),
+                "the grantee's bin holds nothing",
+            );
+        }
+
+        /// The refusals a write pass keeps: the grafted root itself, a move
+        /// into or out of the granted scope, and every command that acts on
+        /// the owner's bin or version history. Nothing reaches the queue.
+        #[test]
+        fn a_write_grantee_is_refused_what_leaves_the_scope_or_reaches_the_owners_surfaces() {
+            let photos = shared_child(PHOTOS, "photos", CoreNodeKind::File);
+            // A folder the sharer granted on: its own scope root, published
+            // under a name the share's write seed does not derive.
+            let nested = NodeId([0xa3; 16]);
+            let mut nested_root = shared_child(nested.0, "nested", CoreNodeKind::Folder);
+            nested_root.ipns_name = derive_write_name(&[0x66; 32], &nested.0)
+                .as_str()
+                .as_bytes()
+                .to_vec();
+            let mut grantee = WriteGrantee::accepted(vec![photos, nested_root]);
+
+            // A node of this vault's own tree, deleted into its own bin, for
+            // the restore case.
+            write_file(
+                &mut grantee.engine,
+                WriteTarget::NewFile {
+                    parent: ROOT,
+                    name: "own.txt".into(),
+                },
+                &[9; 32],
+            )
+            .expect("an own upload journals");
+            grantee.settle();
+            let own = grantee.child(ROOT, "own.txt");
+            grantee
+                .command(Command::Delete { node: own })
+                .expect("an own delete journals");
+            grantee.settle();
+            assert_eq!(
+                block_on(grantee.engine.bin())
+                    .expect("the bin reads")
+                    .entries
+                    .len(),
+                1,
+                "the own delete binned the node",
+            );
+
+            let photos = NodeId(PHOTOS);
+            let cases = [
+                (
+                    "a rename of the grafted root",
+                    Command::Rename {
+                        node: SHARED,
+                        new_name: "mine now".into(),
+                    },
+                ),
+                (
+                    "a delete of the grafted root",
+                    Command::Delete { node: SHARED },
+                ),
+                (
+                    "a delete of a scope root nested in the share",
+                    Command::Delete { node: nested },
+                ),
+                (
+                    "a move that replaces a scope root nested in the share",
+                    Command::Move {
+                        node: photos,
+                        new_parent: SHARED,
+                        new_name: "nested".into(),
+                        replacing: Some(nested),
+                    },
+                ),
+                (
+                    "a create inside a scope root nested in the share",
+                    Command::Create {
+                        parent: nested,
+                        name: "inside".into(),
+                        kind: NodeKind::Folder,
+                    },
+                ),
+                (
+                    "a move of the grafted root",
+                    Command::Relink {
+                        node: SHARED,
+                        new_parent: ROOT,
+                    },
+                ),
+                (
+                    "a move out of the granted scope",
+                    Command::Move {
+                        node: photos,
+                        new_parent: ROOT,
+                        new_name: "photos".into(),
+                        replacing: None,
+                    },
+                ),
+                (
+                    "a relink out of the granted scope",
+                    Command::Relink {
+                        node: photos,
+                        new_parent: ROOT,
+                    },
+                ),
+                (
+                    "a restore into the granted scope",
+                    Command::Restore {
+                        node: own,
+                        into: Some(SHARED),
+                    },
+                ),
+                (
+                    "a version delete",
+                    Command::DeleteVersion {
+                        node: photos,
+                        content_cid: vec![0; CONTENT_CID_LEN],
+                    },
+                ),
+                (
+                    "a version restore",
+                    Command::RestoreVersion {
+                        node: photos,
+                        content_cid: vec![0; CONTENT_CID_LEN],
+                    },
+                ),
+            ];
+            for (case, command) in cases {
+                assert!(
+                    matches!(
+                        grantee.command(command),
+                        Err(EngineError::ScopeExitRefused { .. })
+                    ),
+                    "{case}",
+                );
+            }
+            assert!(
+                grantee.command(Command::Purge { node: photos }).is_err(),
+                "a purge of a node the owner never binned",
+            );
+            assert_eq!(grantee.queued(), 0, "no refused command reached the queue");
+        }
+
+        /// An op the sharer's cut strands below the grafted root never
+        /// publishes. The pass that holds the identity's charge parks it as a
+        /// dead letter, so the queue behind it drains rather than stalling on
+        /// it for ever.
+        #[test]
+        fn an_op_a_cut_grant_strands_parks_rather_than_stalling_the_queue() {
+            let photos = || vec![shared_child(PHOTOS, "photos", CoreNodeKind::File)];
+            let mut grantee = WriteGrantee::accepted(photos());
+            grantee
+                .command(Command::Create {
+                    parent: SHARED,
+                    name: "stranded".into(),
+                    kind: NodeKind::Folder,
+                })
+                .expect("a create below a proved write root journals");
+            grantee.serve(
+                &shared_root_committing(
+                    EPOCH,
+                    CorePermission::Write,
+                    photos(),
+                    &kdf::enc_subkey(&[0x44; 32]).public(),
+                ),
+                3,
+            );
+            grantee
+                .command(Command::Create {
+                    parent: ROOT,
+                    name: "own".into(),
+                    kind: NodeKind::Folder,
+                })
+                .expect("an own create journals");
+
+            for _ in 0..30 {
+                if grantee.queued() == 0 {
+                    break;
+                }
+                grantee.pass();
+            }
+            assert_eq!(
+                grantee.queued(),
+                0,
+                "the queue drained past the stranded op"
+            );
+            assert_eq!(grantee.engine.dead_letters.borrow().len(), 1);
+            assert!(grantee.names_under(ROOT).contains(&"own".to_owned()));
+        }
+
+        /// A read grant, and a write grant whose pass this session has not
+        /// proved, admit no write: every command is refused where the caller
+        /// hears it.
+        #[test]
+        fn a_read_grant_or_an_unproved_write_pass_admits_no_write() {
+            let photos = || vec![shared_child(PHOTOS, "photos", CoreNodeKind::File)];
+            let read = WriteGrantee::accepted_as(CorePermission::Read, photos());
+            let unproved = WriteGrantee::accepted(photos());
+            unproved
+                .engine
+                .scope_write_seeds
+                .borrow_mut()
+                .remove(&SHARED_SCOPE_ROOT);
+
+            for (label, mut grantee) in [("a read grant", read), ("an unproved pass", unproved)] {
+                assert_eq!(
+                    block_on(grantee.engine.snapshot(SHARED))
+                        .expect("the share lists")
+                        .permission,
+                    Permission::Read,
+                    "{label}: the view offers no write",
+                );
+                let commands = [
+                    Command::Create {
+                        parent: SHARED,
+                        name: "mine".into(),
+                        kind: NodeKind::Folder,
+                    },
+                    Command::Rename {
+                        node: NodeId(PHOTOS),
+                        new_name: "renamed".into(),
+                    },
+                    Command::Delete {
+                        node: NodeId(PHOTOS),
+                    },
+                ];
+                for command in commands {
+                    let name = command.name();
+                    assert!(
+                        matches!(
+                            grantee.command(command),
+                            Err(EngineError::ScopeExitRefused { .. })
+                        ),
+                        "{label}: {name}",
+                    );
+                }
+                assert!(
+                    matches!(
+                        write_file(
+                            &mut grantee.engine,
+                            WriteTarget::NewFile {
+                                parent: SHARED,
+                                name: "notes.txt".into(),
+                            },
+                            &[7; 16],
+                        ),
+                        Err(EngineError::ScopeExitRefused { .. })
+                    ),
+                    "{label}: upload",
+                );
+                assert_eq!(grantee.queued(), 0, "{label}");
+            }
         }
 
         /// The `/shared` row and the graft it opens must name the same thing.

@@ -73,11 +73,11 @@ describe('the vault browser', () => {
   });
 
   /**
-   * A received share is grafted in with no parent link, so the engine refuses
-   * the write at the journal call. The browser must refuse at the gesture
-   * instead of offering one the engine will not take.
+   * The engine refuses a write in a read-granted share at the journal call. The
+   * browser must refuse at the gesture instead of offering one the engine will
+   * not take.
    */
-  it('offers no write affordance in a scope another vault shared', async () => {
+  it('offers no write affordance in a scope another vault shared for reading', async () => {
     const engine = fakeEngine();
     draw(engine.client);
 
@@ -105,27 +105,35 @@ describe('the vault browser', () => {
   });
 
   /**
-   * The write plane cannot author under any grafted root, so a write grant is
-   * gated exactly like a read grant until that capability lands.
+   * The engine reports `write` in a share only once it holds the write pass, so
+   * a write grant gets the writes that stay inside the share and none of the
+   * owner's actions.
    */
-  it('offers no write affordance in a share granted for writing either', async () => {
+  it('offers the in-share writes in a share granted for writing', async () => {
     const engine = fakeEngine();
     draw(engine.client);
 
     await act(async () => {
       engine.emit({ kind: 'snapshotUpdated' });
     });
+    const listed = view(ROOT_ID, 'fresh', 1);
     await act(async () => {
       engine.pulls[0].resolve({
-        ...view(ROOT_ID, 'fresh', 2),
+        ...listed,
         permission: 'write',
         receivedShare: true,
+        children: listed.children.map((child) => ({ ...child, kind: 'folder' })),
       });
     });
-    await screen.findByTestId('read-only-scope');
+    await screen.findByTestId('new-folder-button');
 
-    expect(screen.queryByTestId('new-folder-button')).toBeNull();
-    expect(screen.queryByTestId('upload-zone')).toBeNull();
+    expect(screen.queryByTestId('read-only-scope')).toBeNull();
+    expect(screen.getByTestId('upload-zone')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('file-list-item-menu')[0]);
+    });
+    const labels = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(labels).toEqual(['rename', 'move to...', 'details', 'delete']);
   });
 
   it('offers the write affordances in a scope this vault writes', async () => {
@@ -172,7 +180,11 @@ describe('the vault browser', () => {
       engine.emit({ kind: 'snapshotUpdated' });
     });
     await act(async () => {
-      engine.pulls[1].resolve({ ...view(ROOT_ID, 'fresh', 2), receivedShare: true });
+      engine.pulls[1].resolve({
+        ...view(ROOT_ID, 'fresh', 2),
+        permission: 'read',
+        receivedShare: true,
+      });
     });
     await screen.findByTestId('read-only-scope');
 

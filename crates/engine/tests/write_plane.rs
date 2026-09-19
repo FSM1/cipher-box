@@ -14420,10 +14420,10 @@ fn deleting_one_version_makes_it_unresolvable_and_retires_its_blocks() {
     );
 }
 
-/// An accepted shared scope is grafted in parentless, so a browse reaches its
-/// files but the write plane cannot author under them. Both version commands
-/// must refuse there at the caller, not journal an op whose chain the drain can
-/// never walk to a root.
+/// A file below a parentless root this session holds no write pass for takes no
+/// version command: a new version, a restore and a delete all refuse at the
+/// caller rather than journal an op no pass drains. A proved write pass admits
+/// the new version only; the history stays the owner's.
 #[test]
 fn a_version_command_on_a_file_outside_this_vaults_tree_is_refused() {
     let world = FakeWorld::new();
@@ -14462,10 +14462,24 @@ fn a_version_command_on_a_file_outside_this_vaults_tree_is_refused() {
             "{name} outside this vault's tree is refused at the command",
         );
     }
+    assert!(
+        matches!(
+            write_file(
+                &mut engine,
+                WriteTarget::Version {
+                    node: file,
+                    expected_version: None,
+                },
+                &[3; 40],
+            ),
+            Err(EngineError::ScopeExitRefused { .. })
+        ),
+        "a new version outside this vault's tree is refused at the handle",
+    );
     assert_eq!(
         published_versions(&world.record_store, &blocks, file).len(),
         2,
-        "and neither refusal touched the record",
+        "and no refusal touched the record",
     );
 }
 

@@ -185,17 +185,16 @@ export interface SnapshotDescriptor {
   /** The listed folder's own name, empty at the root. */
   folderName: string;
   /**
-   * What this vault may do in the scope the listed folder belongs to. A
-   * received share carries the permission its accepted grant recorded; every
-   * other scope is this vault's own. A host refuses a write at the gesture on
-   * this, rather than leaving the drain to refuse it.
+   * What this vault may do now in the scope the listed folder belongs to. Every
+   * scope of this vault's own is `write`. A received share is `write` only under
+   * a write grant the engine has proved, and `read` otherwise. A host refuses a
+   * write at the gesture on this, rather than leaving the drain to refuse it.
    */
   permission: Permission;
   /**
    * Whether the listed folder stands in a scope another vault granted this one.
-   * A grafted scope root is planted with no parent link, so the write plane
-   * cannot author under it whatever the grant permits, and a journal call there
-   * is refused. A host offers a write affordance only where this reads false.
+   * A write there stays inside that scope, so a host offers no share, version
+   * restore or version delete where this reads true.
    */
   receivedShare: boolean;
   children: SnapshotChildDescriptor[];
