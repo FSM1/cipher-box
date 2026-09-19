@@ -16,6 +16,18 @@ import type { FloorStoreSeam } from './types.js';
 const EPOCH_STORE = 'epoch';
 const SEQUENCE_STORE = 'sequence';
 
+/**
+ * A floor is a non-negative safe integer, so it crosses to the engine exactly.
+ * Any other value is unreadable, never "no floor": that would let a replayed
+ * older record past the adoption gate.
+ */
+function checkedFloor(value: unknown, what: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`FloorStore: ${what} is not a non-negative safe integer`);
+  }
+  return value;
+}
+
 export class IdbFloorStore implements FloorStoreSeam {
   private readonly open: () => Promise<IDBDatabase>;
 
@@ -33,24 +45,21 @@ export class IdbFloorStore implements FloorStoreSeam {
     const floorKey = toHex(key);
     const db = await this.open();
     const tx = db.transaction(store, 'readonly');
-    const value = await requestResult<number | undefined>(tx.objectStore(store).get(floorKey));
+    const value = await requestResult<unknown>(tx.objectStore(store).get(floorKey));
     await transactionDone(tx);
-    return value ?? null;
+    return value === undefined ? null : checkedFloor(value, 'stored floor');
   }
 
   private async raise(store: string, key: Uint8Array, value: number): Promise<number> {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new RangeError(
-        `FloorStore: floor value must be a non-negative safe integer, got ${value}`
-      );
-    }
+    checkedFloor(value, 'floor value');
     // Hex the key before the first await, as in `floor`.
     const hexKey = toHex(key);
     const db = await this.open();
     const tx = db.transaction(store, 'readwrite');
     const objectStore = tx.objectStore(store);
-    const current = await requestResult<number | undefined>(objectStore.get(hexKey));
-    const raised = current === undefined ? value : Math.max(current, value);
+    const stored = await requestResult<unknown>(objectStore.get(hexKey));
+    const raised =
+      stored === undefined ? value : Math.max(checkedFloor(stored, 'stored floor'), value);
     objectStore.put(raised, hexKey);
     await transactionDone(tx);
     return raised;
