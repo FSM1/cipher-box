@@ -2512,3 +2512,28 @@ fn a_missing_settings_record_accuses_nobody_at_start() {
     let (_engine, mut events, _tasks) = boot_resolving(&world, &device, &blocks);
     assert!(!accused(&mut events));
 }
+
+/// A body a newer release wrote carries a key this build's schema refuses. The
+/// load rests on the defaults, and an honest newer device is accused of nothing.
+#[test]
+fn a_settings_body_from_a_newer_release_accuses_nobody_at_start() {
+    use cipherbox_core::codec::{Map, Value, encode};
+
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let mut m = Map::new();
+    m.insert("keepLatest", Value::Null);
+    m.insert("pinMode", Value::Text("hosted".to_owned()));
+    m.insert("revision", Value::Unsigned(1));
+    m.insert("zFutureField", Value::Unsigned(1));
+    seed_settings(
+        &device,
+        &blocks,
+        &encode(&Value::Map(m)).expect("encode"),
+        1,
+    );
+
+    let (_engine, mut events, _tasks) = boot_resolving(&world, &device, &blocks);
+    assert!(!accused(&mut events));
+}

@@ -3830,14 +3830,20 @@ pub(crate) fn emit_trust_violation(
     });
 }
 
-/// Report a settings load that refused bytes the record plane served. The load
-/// already rests on last-known-good or the defaults; the member still hears of
-/// the refusal, as the bin plane's reader does.
+/// Report a settings load that refused a replayed record. The load already
+/// rests on last-known-good or the defaults; the member still hears of it.
+///
+/// [`DefaultsReason::Unreadable`] is not reported here: a body a newer release
+/// wrote carries keys this build's exhaustive schema refuses, and that reads
+/// the same as a body that will not open.
 fn report_settings_verdict(events: &mpsc::UnboundedSender<Event>, load: &SettingsLoad) {
     let (SettingsLoad::Stale { reason, .. } | SettingsLoad::Defaults(reason)) = load else {
         return;
     };
-    if reason.is_verdict() {
+    if matches!(
+        reason,
+        DefaultsReason::RolledBack { .. } | DefaultsReason::RevisionRolledBack { .. }
+    ) {
         emit_trust_violation(
             events,
             "vault-settings",
