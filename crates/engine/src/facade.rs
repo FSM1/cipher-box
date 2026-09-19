@@ -3617,8 +3617,7 @@ fn stamp_focus_refreshed(
 /// unproved half splits the window too. Grouping its subtree onto the enclosing
 /// scope reads every row under a seed that cannot open it, and the child gate
 /// answers a wrong-scope record with a trust verdict, so an honest writer would
-/// be reported as abuse — availability laundered into a trust verdict (security
-/// rule 6).
+/// be reported as abuse.
 fn focus_scope_roots(proved: &BTreeSet<NodeId>, unproved: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
     proved.union(unproved).copied().collect()
 }
@@ -4450,8 +4449,7 @@ fn cached_seed(cell: &RefCell<ScopeSeeds>, scope_id: &[u8; 16]) -> Option<Zeroiz
 /// The promotion set only grows. A promotion a pass cannot prove is an outage on
 /// that scope's own leg, and forgetting it would regroup its whole subtree onto
 /// the enclosing scope's seed, where every record fails its unseal and is
-/// reported as abuse — availability laundered into a trust verdict (security
-/// rule 6).
+/// reported as abuse.
 ///
 /// Each seed is stamped with the epoch its own recovery names: the read seed
 /// with the record's, the write seed with the write-epoch floor its
