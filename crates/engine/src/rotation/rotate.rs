@@ -365,10 +365,29 @@ where
         .await
         .map_err(RotateError::Publish)?;
 
+    complete_cut(
+        floors,
+        scheduler,
+        &plan.identity.scope_id,
+        new_read_epoch,
+        make_sweep_task,
+    )
+    .await
+}
+
+/// Steps 2 and 3 of [`rotate_scope`], once `new_read_epoch` is published at
+/// `scope_id`'s root.
+pub(crate) async fn complete_cut<F: FloorStore, S: Scheduler>(
+    floors: &F,
+    scheduler: &S,
+    scope_id: &[u8; 16],
+    new_read_epoch: u64,
+    make_sweep_task: impl FnOnce() -> BoxedTask,
+) -> Result<RotationOutcome, RotateError> {
     // 2) Raise the durable minReadEpoch floor — only after a confirmed publish, so
     // a crash between the two never demands an unpublished epoch (no lockout).
     let epoch_floor = floors
-        .raise_epoch_floor(&plan.identity.scope_id, new_read_epoch)
+        .raise_epoch_floor(scope_id, new_read_epoch)
         .await
         .map_err(RotateError::Floor)?;
 

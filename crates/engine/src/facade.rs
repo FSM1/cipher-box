@@ -97,9 +97,11 @@ use crate::net::{
     enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at,
     refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
+use crate::net::{VaultPointerVoucher, VouchedRoot};
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
+use crate::rotation::complete_cut;
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
@@ -1455,8 +1457,10 @@ pub enum Event {
         description: String,
     },
     /// A held record's sub-EOL renewal did not land — a lost CAS race or a
-    /// fail-closed publish failure. Surfaced, never silent (blueprint/engine.md
-    /// "never a silent failure"); a later rebase/retry slice acts on it.
+    /// fail-closed publish failure — or a start could not raise the vault
+    /// pointer's `minReadEpoch` to the root epoch it adopted. Surfaced, never
+    /// silent (blueprint/engine.md "never a silent failure"); a later
+    /// rebase/retry slice acts on it.
     RenewalFailed {
         /// The record's routing key (`ipnsName`).
         routing_key: String,
@@ -3058,6 +3062,7 @@ where
     arm.walked_epochs.borrow_mut().remove(&scope_root);
     flat_root_cut(
         &net,
+        None,
         FlatCut {
             scope: &scope,
             ascent: ascent.as_deref(),
@@ -3072,11 +3077,16 @@ where
 /// seed at the next epoch, publish under a compare-and-set, raise the epoch
 /// floor, and enqueue the lazy wave.
 ///
+/// `anchor` is the vault pointer when the scope is the vault root, and the cut
+/// then vouches its epoch there between the publish and the floor raise
+/// ([`VaultPointerVoucher`]).
+///
 /// The one plan a manual rotation and a scope exit share (blueprint/engine.md
 /// "Triggers": both re-seal an unchanged committed set, so neither is the
 /// revocation cascade). Only which scope, whose seams and which sweep differ.
 async fn flat_root_cut<T, H, C, F, Sch, E, S>(
     net: &OwnerRotationNet<'_, T, H, C, F, Sch, E, S>,
+    anchor: Option<&VaultPointerVoucher<'_, T, H, C, F, Sch, E>>,
     cut: FlatCut<'_, impl Fn() -> BoxedTask>,
 ) -> Result<RotationOutcome, RotateError>
 where
@@ -3093,15 +3103,43 @@ where
         ascent,
         make_sweep,
     } = cut;
+    // The resolve reads a cut with no ascent authority as the vault root's, and
+    // that cut owes the vault pointer its epoch before the floor rises.
+    if ascent.is_none() && anchor.is_none() {
+        return Err(RotateError::Resolve(ResolveFailure::Unavailable));
+    }
     let current = net
         .resolve_anchored(scope)
         .await
         .map_err(RotateError::Resolve)?;
+    if let Some(anchor) = anchor {
+        let vouched = anchor
+            .standing(&scope.ipns_name)
+            .await
+            .map_err(RotateError::Publish)?;
+        // A root published above the vouch is an earlier cut that never
+        // vouched: finish that cut, since another would move the floor further
+        // past the anchor.
+        if current.current_read_epoch > vouched.min_read_epoch() {
+            anchor
+                .vouch_over(vouched, current.current_read_epoch)
+                .await
+                .map_err(RotateError::Publish)?;
+            return complete_cut(
+                net.floors,
+                net.scheduler,
+                &scope.scope_id,
+                current.current_read_epoch,
+                make_sweep,
+            )
+            .await;
+        }
+    }
     rotate_scope(
         &mut SharedEntropy(net.entropy),
         net.floors,
         net.scheduler,
-        net,
+        &VouchedRoot { root: net, anchor },
         &RotateScopePlan {
             identity: ScopeRootIdentity {
                 v: current.v,
@@ -3151,6 +3189,17 @@ type OwnerNet<'a, T> = OwnerRotationNet<
     <T as SeamTypes>::Scheduler,
     Box<dyn Entropy>,
     <T as SeamTypes>::SnapshotCache,
+>;
+
+/// The vault pointer voucher over one engine's seam family.
+type VaultPointerVoucherOf<'a, T> = VaultPointerVoucher<
+    'a,
+    RecordAccelerator<<T as SeamTypes>::RecordTransport>,
+    <T as SeamTypes>::Http,
+    <T as SeamTypes>::CredentialStore,
+    OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>,
+    <T as SeamTypes>::Scheduler,
+    Box<dyn Entropy>,
 >;
 
 /// A name a command authors, held to the one name law ([`crate::name`]) — the
@@ -5355,7 +5404,16 @@ impl<T: SeamTypes> Engine<T> {
             } else {
                 None
             };
+        let vouched = outcome
+            .vault_pointer
+            .as_ref()
+            .map(|vp| vp.repoint.min_read_epoch);
         self.install_cold_start(outcome, root_scope_id);
+        if let Some(vouched) = vouched
+            && self.api_base_url.configured().is_some()
+        {
+            self.catch_up_vault_pointer(&api, vouched).await;
+        }
         if let Some(provisioned) = provisioned {
             self.install_mint(provisioned);
         }
@@ -5439,6 +5497,46 @@ impl<T: SeamTypes> Engine<T> {
         }
         *self.snapshot.borrow_mut() = outcome.base;
         root_name.is_some()
+    }
+
+    /// Vouch at the vault pointer the root epoch this start adopted above
+    /// `vouched`: a cut that landed its root and not its vouch. Inline, before
+    /// the loops spawn, so a tick never races the re-point. A failure is
+    /// surfaced: a cut of the vault root in this session finishes the vouch,
+    /// and until one lands this device's next cold seed refuses.
+    async fn catch_up_vault_pointer(
+        &self,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        vouched: u64,
+    ) {
+        let root = self.snapshot.borrow().root.0;
+        // Above `vouched` only through this start's own gated adopt: the cold
+        // seed refused any higher floor that stood before it.
+        let floor = match floor::read_epoch_floor(&self.seams.floor_store, &root).await {
+            Ok(Some(floor)) if floor > vouched => Ok(floor),
+            Ok(_) => return,
+            Err(error) => Err(error),
+        };
+        let root_name = self.current_root_name.borrow().clone();
+        let (Some(root_name), Some(anchor)) = (root_name, self.vault_pointer_voucher(api)) else {
+            return;
+        };
+        let failure = match floor {
+            Ok(floor) => anchor
+                .vouch_read_epoch(root_name.as_str().as_bytes(), floor)
+                .await
+                .err()
+                .map(|error| error.to_string()),
+            Err(error) => Some(format!("the read-epoch floor is unreadable: {error}")),
+        };
+        if let Some(failure) = failure {
+            let _ = self.events.unbounded_send(Event::RenewalFailed {
+                routing_key: anchor.name().as_str().to_owned(),
+                detail: format!(
+                    "the vault pointer does not vouch the adopted read epoch: {failure}"
+                ),
+            });
+        }
     }
 
     /// Deposit a fresh mint's seeds and hold the root name it published. A
@@ -7906,6 +8004,30 @@ where {
         .await
     }
 
+    /// The vault pointer at the index this session adopted, or `None` when the
+    /// session adopted none.
+    fn vault_pointer_voucher<'a>(
+        &'a self,
+        api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
+    ) -> Option<VaultPointerVoucherOf<'a, T>> {
+        let session = self.session.as_ref()?;
+        let index = self.vault_pointer_index.get()?;
+        let scope_id = self.snapshot.borrow().root.0;
+        Some(VaultPointerVoucher {
+            transport: &self.record_transport,
+            api: api.as_ref(),
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            owner: session.identity(),
+            pointer_read_key: session.pointer_read_key(&scope_id),
+            signer: session.vault_pointer_signer(index),
+            scope_id,
+            payload_version: POINTER_PAYLOAD_VERSION,
+        })
+    }
+
     /// Manual hygiene rotate-now over the vault root's scope
     /// (blueprint/engine.md "Triggers": manual rotations re-seal the
     /// **unchanged** committed set, so this is the flat root cut, not the
@@ -7930,6 +8052,13 @@ where {
                 UnindexedScope::Refuse,
             )
             .await?;
+        let anchor = if node == self.snapshot.borrow().root {
+            Some(self.vault_pointer_voucher(api).ok_or_else(|| {
+                EngineError::from_rotate(RotateError::Resolve(ResolveFailure::Unavailable))
+            })?)
+        } else {
+            None
+        };
 
         self.bounded_rotation(async || {
             let net = self.owner_rotation_net(
@@ -7940,6 +8069,7 @@ where {
             );
             flat_root_cut(
                 &net,
+                anchor.as_ref(),
                 FlatCut {
                     scope: &target.scope,
                     ascent: target.parent_node_seed.as_deref(),
@@ -19844,6 +19974,57 @@ mod tests {
                     "the at-floor re-open advanced no epoch floor"
                 );
             }
+        }
+
+        /// Rule 8 at the encode side: a vouch below the durable floor is a
+        /// re-point the cold start refuses, so it is never signed.
+        #[test]
+        fn a_vouch_below_the_durable_floor_publishes_nothing() {
+            let world = FakeWorld::new();
+            let device = world.device(&owner_identity().verifying_key().to_sec1());
+            let (head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+            let blocks = Blocks::default();
+            blocks.put(head_block);
+            serve_http(&device, &blocks, 600);
+            let (mut engine, _events) = engine_with_api(
+                &device,
+                ApiBaseUrl::parse("http://api.test").expect("a base"),
+            );
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+                .expect("cold start adopts the owner root");
+            drop(world.scheduler.take_spawned_tasks());
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_epoch_floor(&SCOPE, EPOCH + 5),
+            )
+            .expect("the floor rises");
+
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            let pointer = vault_pointer_name(&CAP_SECRET, 0);
+            let pointer_records = |device: &FakeDevice| {
+                device
+                    .record_store
+                    .endpoints()
+                    .iter()
+                    .map(|endpoint| device.record_store.record_at(endpoint, pointer.as_str()))
+                    .collect::<Vec<_>>()
+            };
+            let before = pointer_records(&device);
+            let refused =
+                block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
+            assert!(
+                matches!(refused, Err(RotationPublishError::Rejected)),
+                "{refused:?}"
+            );
+            assert_eq!(pointer_records(&device), before, "nothing was published");
         }
     }
 

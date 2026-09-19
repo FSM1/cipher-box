@@ -5,7 +5,9 @@
 //! Every assertion lands on published bytes, a drained queue, or a rendered
 //! view — what the other device would see.
 
+use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
+use core::time::Duration;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
@@ -468,6 +470,458 @@ fn grant_to_recipient_at(engine: &mut Engine<FakeSeamTypes>, node: NodeId, permi
         Ok(CommandOutcome::Done),
         "the grant cuts the folder into a scope root of its own"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A read cut of the vault root and the cold-start anchor
+// ---------------------------------------------------------------------------
+
+/// Cut the vault root's read epoch by hand. The lazy wave the cut spawns is
+/// dropped: these cases assert what a cold start reads, not what the wave
+/// re-seals.
+fn cut_vault_root(world: &FakeWorld, engine: &mut Engine<FakeSeamTypes>) {
+    assert_eq!(
+        block_on(engine.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done),
+        "the owner cuts the vault root's read epoch"
+    );
+    drop(world.scheduler.take_spawned_tasks());
+}
+
+/// The `minReadEpoch` the vault pointer at index 0 vouches.
+fn vouched_min_read_epoch(world: &FakeWorld) -> u64 {
+    let name = vault_pointer_name(&SECRET, 0);
+    let endpoint = world.record_store.endpoints()[0].clone();
+    let bytes = world
+        .record_store
+        .record_at(&endpoint, name.as_str())
+        .expect("the vault pointer is published");
+    let record = IpnsRecord::unmarshal(&bytes).expect("a record");
+    let entry = record.verify(&name).expect("the record verifies");
+    cipherbox_engine::sync::pointer::open_repoint(
+        &owner_pointer_read_key(),
+        POINTER_PAYLOAD_VERSION,
+        &SCOPE,
+        &owner_identity().verifying_key(),
+        &entry.value,
+    )
+    .expect("the owner re-point opens")
+    .min_read_epoch
+}
+
+/// The reproduction: a manual read cut of the vault root raises this device's
+/// durable read floor, so the anchor the next cold start seeds from must vouch
+/// the epoch the cut made durable.
+#[test]
+fn a_read_cut_of_the_vault_root_leaves_the_device_able_to_start_again() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_vault_root(&world, &mut engine);
+    assert_eq!(
+        vouched_min_read_epoch(&world),
+        published_epoch(&world, &blocks, ROOT),
+        "the anchor vouches the epoch the cut published"
+    );
+    tick(&world, &engine, &mut tasks);
+    drop((engine, tasks));
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// A device that never ran the cut adopts the cut root on its first start, which
+/// raises its own floor to the cut epoch: its second start must pass too.
+#[test]
+fn a_second_device_starts_twice_after_a_read_cut_of_the_vault_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    cut_vault_root(&world, &mut engine);
+
+    let mount = world.device(b"mounted-desktop");
+    let (second, _events_m, mut tasks_m) = boot(&world, &blocks, &mount, 7);
+    tick(&world, &second, &mut tasks_m);
+    assert_eq!(listed_names(&second, ROOT), ["reports"]);
+    drop((second, tasks_m));
+
+    let (second, _events_m, _tasks_m) = boot(&world, &blocks, &mount, 8);
+    assert_eq!(listed_names(&second, ROOT), ["reports"]);
+}
+
+/// Drive one command to completion on the virtual clock alone, so its retries
+/// wake while the session's own loops stay parked.
+fn command_on_the_clock(
+    world: &FakeWorld,
+    engine: &mut Engine<FakeSeamTypes>,
+    command: Command,
+) -> Result<CommandOutcome, EngineError> {
+    let cadence = engine.profile().poll_cadence;
+    settle_on_the_clock(world, cadence, &mut Box::pin(engine.command(command)))
+}
+
+/// Poll `pending` to completion, advancing the virtual clock by `cadence`
+/// between polls; a bounded number of steps, so a hung command fails.
+fn settle_on_the_clock<O>(
+    world: &FakeWorld,
+    cadence: Duration,
+    pending: &mut Pin<Box<impl Future<Output = O>>>,
+) -> O {
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..64 {
+        if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
+            return outcome;
+        }
+        world.scheduler.advance(cadence);
+    }
+    panic!("the command did not settle in 64 steps of {cadence:?} on the virtual clock");
+}
+
+/// Whether `events` carries a `RenewalFailed` at `name`.
+fn renewal_failed_at(events: &mut EventStream, name: &IpnsName) -> bool {
+    events_so_far(events).into_iter().any(|event| {
+        matches!(event, Event::RenewalFailed { routing_key, .. } if routing_key == name.as_str())
+    })
+}
+
+/// The epoch-floor reads of the vault root a start makes before the catch-up
+/// reads it: the cold seed's and the adopt's.
+const CATCH_UP_FLOOR_READ: u64 = 2;
+
+/// Run one cut of the vault root that lands its root and runs out of retries
+/// before its vouch lands. Returns the epoch it published.
+fn cut_whose_vouch_runs_out(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    engine: &mut Engine<FakeSeamTypes>,
+) -> u64 {
+    let anchor = vault_pointer_name(&SECRET, 0);
+    world.record_store.fail_put_for(anchor.as_str());
+    let cut = command_on_the_clock(world, engine, Command::RotateNow { node: ROOT });
+    assert!(
+        matches!(cut, Err(EngineError::Seam { .. })),
+        "a cut that could not vouch its epoch is not reported done: {cut:?}"
+    );
+    drop(world.scheduler.take_spawned_tasks());
+    world.record_store.heal_put_for(anchor.as_str());
+    let published = published_epoch(world, blocks, ROOT);
+    assert_eq!(published, EPOCH + 1);
+    assert_eq!(vouched_min_read_epoch(world), EPOCH);
+    published
+}
+
+/// The anchor refuses every publish of the cut: the root lands, the anchor
+/// does not, and the cut reports it. The next start that adopts the cut root
+/// vouches its epoch, and the owner device then starts again.
+#[test]
+fn a_cut_whose_anchor_never_landed_converges_at_the_next_start() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    drop((engine, tasks));
+
+    let mount = world.device(b"mounted-desktop");
+    let (second, _events_m, _tasks_m) = boot(&world, &blocks, &mount, 7);
+    assert_eq!(listed_names(&second, ROOT), ["reports"]);
+    assert_eq!(
+        vouched_min_read_epoch(&world),
+        cut_epoch,
+        "the start that adopted the cut root vouches its epoch"
+    );
+    drop(second);
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 44);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// A start that adopts the cut root and cannot vouch its epoch says so.
+#[test]
+fn a_start_that_cannot_vouch_the_adopted_epoch_surfaces_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let anchor = vault_pointer_name(&SECRET, 0);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &owner, 42);
+    world.record_store.fail_put_for(anchor.as_str());
+    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    assert!(cut.is_err(), "{cut:?}");
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(published_epoch(&world, &blocks, ROOT), EPOCH + 1);
+
+    let mount = world.device(b"mounted-desktop");
+    let (_second, mut events, _tasks) = boot(&world, &blocks, &mount, 7);
+    assert!(
+        renewal_failed_at(&mut events, &anchor),
+        "the failed vouch is surfaced, never silent"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH);
+}
+
+/// A cut that cannot read the anchor cannot vouch at it, so it publishes no
+/// root that would leave the floor ahead of the anchor.
+#[test]
+fn a_cut_that_cannot_read_the_anchor_publishes_no_root() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let anchor = vault_pointer_name(&SECRET, 0);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &owner, 42);
+    world.record_store.fail_get_for(anchor.as_str());
+    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    assert!(matches!(cut, Err(EngineError::Seam { .. })), "{cut:?}");
+    drop(world.scheduler.take_spawned_tasks());
+    world.record_store.heal_get_for(anchor.as_str());
+    assert_eq!(published_epoch(&world, &blocks, ROOT), EPOCH);
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH);
+}
+
+/// The root does not land, so nothing may vouch its epoch: an anchor ahead of
+/// the only root there is would seed every device above it.
+#[test]
+fn a_cut_whose_root_never_landed_leaves_the_anchor_alone() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    world.record_store.fail_put_for(root_name.as_str());
+    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    assert!(cut.is_err(), "the cut did not land: {cut:?}");
+    drop(world.scheduler.take_spawned_tasks());
+    world.record_store.heal_put_for(root_name.as_str());
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH);
+    drop((engine, tasks));
+
+    let second = world.device(b"mounted-desktop");
+    let (engine, _events, _tasks) = boot(&world, &blocks, &second, 7);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// Publish an owner re-point at vault-pointer index 0, above the seeded one.
+fn republish_vault_pointer(world: &FakeWorld, repoint: &RepointObject, sequence: u64) {
+    let block = seal_repoint(
+        SessionRole::Owner,
+        &mut SeededEntropy::new(99),
+        &owner_pointer_read_key(),
+        POINTER_PAYLOAD_VERSION,
+        &owner_identity(),
+        repoint,
+    )
+    .expect("seal the re-point");
+    let record = IpnsRecord::create_v2(
+        &kdf::vault_pointer_index(&SECRET, 0),
+        &block,
+        sequence,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    let name = vault_pointer_name(&SECRET, 0);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// The standing re-point names a root this cut never read, so the cut could
+/// not vouch its epoch there and must not cut.
+#[test]
+fn a_cut_refuses_to_vouch_for_a_root_the_vault_pointer_does_not_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &owner, 42);
+    let elsewhere = RepointObject {
+        scope_id: SCOPE,
+        current_root: write_name(NodeId([0x77; 16])),
+        write_epoch: EPOCH + 1,
+        min_read_epoch: EPOCH,
+        prev_root: Some(root_name),
+    };
+    republish_vault_pointer(&world, &elsewhere, 2);
+
+    let cut = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    assert!(
+        matches!(cut, Err(EngineError::TrustViolation { .. })),
+        "{cut:?}"
+    );
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(
+        published_epoch(&world, &blocks, ROOT),
+        EPOCH,
+        "nothing was cut"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH, "nothing was vouched");
+}
+
+/// The retry meets a floor that rose above the root the cut published: that
+/// root no longer passes the gate, so no vouch of its epoch is signed.
+#[test]
+fn a_retry_below_the_durable_floor_vouches_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let anchor = vault_pointer_name(&SECRET, 0);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &owner, 42);
+    world.record_store.fail_put_for(anchor.as_str());
+    let cadence = engine.profile().poll_cadence;
+    let mut cut = Box::pin(engine.command(Command::RotateNow { node: ROOT }));
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(
+        cut.as_mut().poll(&mut cx).is_pending(),
+        "the first attempt lands the root, fails the vouch and waits to retry"
+    );
+    world.record_store.heal_put_for(anchor.as_str());
+    block_on(cipherbox_engine::seams::FloorStore::raise_epoch_floor(
+        &owner.floors(&SECRET),
+        &SCOPE,
+        EPOCH + 5,
+    ))
+    .expect("the floor rises");
+    let settled = settle_on_the_clock(&world, cadence, &mut cut);
+    assert!(
+        matches!(settled, Err(EngineError::TrustViolation { .. })),
+        "{settled:?}"
+    );
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH, "nothing was vouched");
+}
+
+/// A caller retry after a cut that published its root and not its vouch
+/// finishes that cut: it vouches the published epoch and mints no other root.
+#[test]
+fn a_retried_cut_of_the_vault_root_completes_the_outstanding_vouch() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+
+    let retry = command_on_the_clock(&world, &mut engine, Command::RotateNow { node: ROOT });
+    assert_eq!(retry, Ok(CommandOutcome::Done));
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(
+        published_epoch(&world, &blocks, ROOT),
+        cut_epoch,
+        "the retry mints no new root"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), cut_epoch);
+    drop((engine, tasks));
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
+}
+
+/// The start that adopts a cut root cannot read its own floor to vouch it: it
+/// says so, and a later cut of the vault root in the same session finishes the
+/// vouch.
+#[test]
+fn a_start_whose_floor_read_fails_surfaces_it_and_a_later_cut_vouches() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let anchor = vault_pointer_name(&SECRET, 0);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    let cut_epoch = cut_whose_vouch_runs_out(&world, &blocks, &mut engine);
+    drop((engine, tasks));
+
+    let mount = world.device(b"mounted-desktop");
+    mount
+        .floor_store
+        .fail_epoch_floor_reads_after(&SCOPE, CATCH_UP_FLOOR_READ);
+    let (mut second, mut events, _tasks) = boot(&world, &blocks, &mount, 7);
+    mount.floor_store.heal_floors();
+    assert!(
+        renewal_failed_at(&mut events, &anchor),
+        "the unread floor is surfaced, never silent"
+    );
+    assert_eq!(vouched_min_read_epoch(&world), EPOCH);
+
+    let later = command_on_the_clock(&world, &mut second, Command::RotateNow { node: ROOT });
+    assert_eq!(later, Ok(CommandOutcome::Done));
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(published_epoch(&world, &blocks, ROOT), cut_epoch);
+    assert_eq!(vouched_min_read_epoch(&world), cut_epoch);
+    drop(second);
+
+    let (second, _events, _tasks) = boot(&world, &blocks, &mount, 8);
+    assert_eq!(listed_names(&second, ROOT), ["reports"]);
+}
+
+/// Every other owner action that could reach the vault root is refused there or
+/// leaves its read epoch alone, so none of them owes the anchor a vouch.
+#[test]
+fn no_other_owner_action_moves_the_vault_roots_read_epoch() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let owner = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &owner, 42);
+    let reports = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "reports");
+    import_recipient(&mut engine);
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    for command in [
+        Command::Grant {
+            node: ROOT,
+            recipient_identity_public_key: recipient.clone(),
+            permission: Permission::Write,
+        },
+        Command::Revoke {
+            node: ROOT,
+            recipient_identity_public_key: recipient.clone(),
+        },
+        Command::Downgrade {
+            node: ROOT,
+            recipient_identity_public_key: recipient.clone(),
+        },
+    ] {
+        let name = command.name();
+        let refused = block_on(engine.command(command));
+        assert!(refused.is_err(), "{name} at the vault root: {refused:?}");
+    }
+    grant_to_recipient_at(&mut engine, reports, Permission::Write);
+    for _ in 0..4 {
+        tick(&world, &engine, &mut tasks);
+    }
+    drop(world.scheduler.take_spawned_tasks());
+    assert_eq!(published_epoch(&world, &blocks, ROOT), EPOCH);
+    drop((engine, tasks));
+
+    let (engine, _events, _tasks) = boot(&world, &blocks, &owner, 43);
+    assert_eq!(listed_names(&engine, ROOT), ["reports"]);
 }
 
 // ---------------------------------------------------------------------------
