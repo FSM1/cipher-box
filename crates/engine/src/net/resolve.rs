@@ -15,10 +15,11 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
+use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_verify;
+use super::last_known_good::keep_newest_last_known_good;
 use super::liveness::{HeldKey, HeldRecord, HeldRecords, HeldValue};
 use super::publish::head_cid_from_value;
 use crate::facade::NodeId;
@@ -307,8 +308,8 @@ where
 {
     let cache_key = name.as_str().as_bytes();
     // Cache-first: last-known-good renders immediately, reconcile runs behind
-    // it. Nocache never reads the cache, so only what the record plane serves
-    // this pass can be rendered or reported (#33 D4). A gate-passing record
+    // it. Nocache renders nothing from the cache, so only what the record plane
+    // serves this pass can be rendered or reported (#33 D4). A gate-passing record
     // still writes back either way, so a forced refresh only ever leaves the
     // cache fresher.
     let last_known_good = match mode {
@@ -327,15 +328,7 @@ where
             }) => {
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
-                refresh_last_known_good(
-                    snapshot_cache,
-                    name,
-                    mode,
-                    last_known_good.as_deref(),
-                    &bytes,
-                    verified.sequence,
-                )
-                .await?;
+                keep_newest_last_known_good(snapshot_cache, name, &bytes).await?;
                 // Durable-first: the floors move on the pass that also left the
                 // bytes as last-known-good, never ahead of it.
                 let adopted = match pass {
@@ -369,15 +362,7 @@ where
                     // that adopts nothing. A non-owner record yields neither.
                     let material = adopter.recover_own_scope_material(name, &bytes).await?;
                     if material.is_some() {
-                        refresh_last_known_good(
-                            snapshot_cache,
-                            name,
-                            mode,
-                            last_known_good.as_deref(),
-                            &bytes,
-                            verified.sequence,
-                        )
-                        .await?;
+                        keep_newest_last_known_good(snapshot_cache, name, &bytes).await?;
                     }
                     let recovered = material.map(|material| GatedParts {
                         hold: material
@@ -422,80 +407,6 @@ where
         held_record,
         read_scope_seed,
     })
-}
-
-/// Leave `record_bytes`, which passed the gate at `sequence`, as last-known-good
-/// unless the cached copy already sits at or above that sequence. The floor
-/// and the cached copy drift apart both ways: a pass that raised the floor
-/// without caching leaves an older copy that an at-floor re-read replaces, and
-/// a pass that cached but failed its floor commit leaves a newer copy that a
-/// later gate pass above the floor must not displace.
-pub(crate) async fn cache_last_known_good<S: SnapshotCache>(
-    snapshot_cache: &S,
-    name: &IpnsName,
-    record_bytes: &[u8],
-    sequence: u64,
-) -> Result<(), SeamError> {
-    let cached = snapshot_cache.get(name.as_str().as_bytes()).await?;
-    replace_if_older(
-        snapshot_cache,
-        name,
-        cached.as_deref(),
-        record_bytes,
-        sequence,
-    )
-    .await
-}
-
-/// [`cache_last_known_good`] for a resolve pass: a cache-first pass compares
-/// against the copy it already read, and a nocache pass reads one to compare.
-pub(crate) async fn refresh_last_known_good<S: SnapshotCache>(
-    snapshot_cache: &S,
-    name: &IpnsName,
-    mode: ResolveMode,
-    last_known_good: Option<&[u8]>,
-    record_bytes: &[u8],
-    sequence: u64,
-) -> Result<(), SeamError> {
-    match mode {
-        ResolveMode::CacheFirst => {
-            replace_if_older(
-                snapshot_cache,
-                name,
-                last_known_good,
-                record_bytes,
-                sequence,
-            )
-            .await
-        }
-        ResolveMode::NoCache => {
-            cache_last_known_good(snapshot_cache, name, record_bytes, sequence).await
-        }
-    }
-}
-
-async fn replace_if_older<S: SnapshotCache>(
-    snapshot_cache: &S,
-    name: &IpnsName,
-    cached: Option<&[u8]>,
-    record_bytes: &[u8],
-    sequence: u64,
-) -> Result<(), SeamError> {
-    if cached == Some(record_bytes) {
-        return Ok(());
-    }
-    let cached_sequence = cached.and_then(|cached| {
-        IpnsRecord::unmarshal(cached)
-            .and_then(|record| record.verify(name))
-            .ok()
-            .map(|verified| verified.sequence)
-    });
-    if cached_sequence.is_some_and(|cached| cached >= sequence) {
-        return Ok(());
-    }
-    snapshot_cache
-        .put(name.as_str().as_bytes(), record_bytes)
-        .await
 }
 
 /// The transient insert-time input for a held record: the resolve/gate path has

@@ -17,7 +17,7 @@
 //!   ancestor node seed [`EnvelopeAuthoring`] does not carry, so it is enforced
 //!   where that seed lives, in `rotation/reseal.rs`;
 //! - an interior scope root carrying no ascent link returns `Err`, off the
-//!   presence check `net/rotation.rs::gated_child_root` makes on arrival. The
+//!   presence check `net/rotation.rs::gate_root_pass` makes on arrival. The
 //!   duty comes from the caller's own ancestor material, never from the bytes
 //!   being checked;
 //! - a kind transplant and a non-canonical child-ref `ipnsName` are
@@ -73,7 +73,7 @@ pub enum AuthorError {
     SectionSignatureInvalid,
     /// An interior scope root's carried grant section holds no ascent link —
     /// the binding that proves the record is the descendant its parent names,
-    /// and which `net/rotation.rs::gated_child_root` requires of every record
+    /// and which `net/rotation.rs::gate_root_pass` requires of every record
     /// it gates as a child scope root.
     MissingAscentLink,
     /// Core refused to seal or encode the authored body (a body decode would
@@ -1010,7 +1010,7 @@ mod tests {
     fn an_interior_scope_root_without_its_ascent_link_is_refused() {
         // Release-active: the guard returns `Err`, so a `--release` build
         // refuses these bytes as a debug build does (security rule 8). The
-        // record they would publish is one `gated_child_root` always rejects,
+        // record they would publish is one `gate_root_pass` always rejects,
         // which is v1's revocation bypass on the write side.
         let fixture = owner_root();
         assert!(fixture.grant_section.ascent_link.is_none());

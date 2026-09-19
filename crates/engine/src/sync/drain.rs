@@ -64,6 +64,7 @@ use crate::net::author::{
     AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child, report_carried_cut,
 };
+use crate::net::last_known_good::keep_newest_last_known_good;
 use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
@@ -73,8 +74,9 @@ use crate::net::retire::{
     orphaned_head, retire,
 };
 use crate::net::{
-    Adopter, ChildAdopter, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead, ResolveOutcome,
-    Resolved, RootAdopter, assemble_head_envelope, fanout_get_verify, observed_at, resolve,
+    Adopter, ChildAdopter, GatedResolve, HeldKey, HeldRecord, HeldRecords, HeldValue, LocalHead,
+    ResolveOutcome, RootAdopter, assemble_head_envelope, fanout_get_verify, observed_at, resolve,
+    resolve_gated,
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
@@ -2293,7 +2295,7 @@ where
     ) -> Result<Vec<u8>, Halt> {
         let floors = end.floors(self.floors);
         let adopter = self.root_adopter(scope, &floors, end);
-        let resolved = resolve(
+        let resolved = resolve_gated(
             self.transport,
             self.snapshot_cache,
             &adopter,
@@ -2302,28 +2304,7 @@ where
         )
         .await
         .map_err(seam)?;
-        self.resolved_bytes(end.root_name, resolved).await
-    }
-
-    /// The gate-passing bytes one resolve established.
-    ///
-    /// A gate failure is a trust violation, never staleness: re-authoring on top
-    /// of last-known-good while the record plane serves a rejected record is
-    /// exactly the fail-open rule 6 forbids.
-    async fn resolved_bytes(&self, name: &IpnsName, resolved: Resolved) -> Result<Vec<u8>, Halt> {
-        match resolved.outcome {
-            // An adopt caches its own gate-passing bytes; the other two arms
-            // carry theirs.
-            ResolveOutcome::Adopted(_) => self
-                .snapshot_cache
-                .get(name.as_str().as_bytes())
-                .await
-                .map_err(seam)?
-                .ok_or(Halt::Unclassified),
-            ResolveOutcome::Current { record_bytes } => Ok(record_bytes),
-            ResolveOutcome::NoUpdate => resolved.last_known_good.ok_or(Halt::Unclassified),
-            ResolveOutcome::TrustViolation(_) => Err(Halt::Unclassified),
-        }
+        resolved_bytes(resolved)
     }
 
     /// Resolve one non-root node's own record through the child pipeline and
@@ -2346,14 +2327,14 @@ where
             plane.end.read_scope_seed.clone(),
             node.0,
         );
-        let resolved = resolve(self.transport, self.snapshot_cache, &adopter, &name, mode)
+        let resolved = resolve_gated(self.transport, self.snapshot_cache, &adopter, &name, mode)
             .await
             .map_err(seam)?;
         // A drain publish is an ordinary write, so it carries the lazy wave
         // rather than refusing what a cut left behind: a record the epoch floor
         // rejects is re-read at the epoch it was sealed at, and the publish path
         // re-seals it at this pass's.
-        let (record_bytes, lagging) = match &resolved.outcome {
+        let (record_bytes, lagging) = match &resolved.resolved.outcome {
             ResolveOutcome::TrustViolation(rejection) => match rejection.reason {
                 RejectionReason::EpochBelowFloor { epoch, .. } => (
                     adopter
@@ -2364,7 +2345,7 @@ where
                 // A trust violation or a rollback stays fail-closed.
                 _ => return Err(Halt::Unclassified),
             },
-            _ => (self.resolved_bytes(&name, resolved).await?, None),
+            _ => (resolved_bytes(resolved)?, None),
         };
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, &adopter, &name, &record_bytes, lagging)
@@ -5848,7 +5829,7 @@ where
             // The duty is read off the material this end publishes under, never
             // off the section being carried: an end with an ascent authority is
             // an interior scope root, whose record the child gate refuses
-            // without its link (`net/rotation.rs::gated_child_root`).
+            // without its link (`net/rotation.rs::gate_root_pass`).
             let owes_ascent_link = plane.end.ascent_node_seed.is_some();
             author_scope_root_envelope(authoring, name, scope.owner_identity, owes_ascent_link)
         } else {
@@ -5892,8 +5873,7 @@ where
         .pass;
 
         // Cached implies gate-passing: these bytes just cleared the gate.
-        self.snapshot_cache
-            .put(name.as_str().as_bytes(), &record_bytes)
+        keep_newest_last_known_good(self.snapshot_cache, name, &record_bytes)
             .await
             .map_err(|e| PublishHalt::past_the_put(seam(e)))?;
         // Durable-first: the floor moves on the self-adopt that also left these
@@ -6695,6 +6675,24 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
         .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
 }
 
+/// The gate-passing bytes one resolve established.
+///
+/// A gate failure is a trust violation, never staleness: re-authoring on top
+/// of last-known-good while the record plane serves a rejected record is
+/// exactly the fail-open rule 6 forbids. An adopt carries the bytes this pass
+/// gated, never the cache, which keeps a newer copy this pass did not gate.
+fn resolved_bytes(gated: GatedResolve) -> Result<Vec<u8>, Halt> {
+    match gated.resolved.outcome {
+        ResolveOutcome::Adopted(_) => gated
+            .held_record
+            .map(|(_, bytes)| bytes)
+            .ok_or(Halt::Unclassified),
+        ResolveOutcome::Current { record_bytes } => Ok(record_bytes),
+        ResolveOutcome::NoUpdate => gated.resolved.last_known_good.ok_or(Halt::Unclassified),
+        ResolveOutcome::TrustViolation(_) => Err(Halt::Unclassified),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6820,6 +6818,41 @@ mod tests {
             )],
             journalled: Vec::new(),
         }
+    }
+
+    /// A pass that adopts sequence 6 while the cache keeps a newer 7 authors on
+    /// the 6 it gated, never on the cached copy it did not.
+    #[test]
+    fn an_adopt_authors_on_the_bytes_it_gated_not_the_cache() {
+        let (gated, cached) = (b"record at 6".to_vec(), b"record at 7".to_vec());
+        let resolved = GatedResolve {
+            resolved: crate::net::Resolved {
+                last_known_good: Some(cached),
+                outcome: ResolveOutcome::Adopted(Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: PreservedFields::new(),
+                    },
+                    sequence: 6,
+                    epoch: 0,
+                }),
+                current_at_floor: None,
+            },
+            hold: None,
+            held_record: Some((
+                cipherbox_core::ipns::VerifiedRecord {
+                    value: Vec::new(),
+                    validity: Vec::new(),
+                    sequence: 6,
+                    ttl: 0,
+                },
+                gated.clone(),
+            )),
+            read_scope_seed: None,
+        };
+        assert_eq!(resolved_bytes(resolved), Ok(gated));
     }
 
     /// A granted scope's subtree seals under that scope's own material and never

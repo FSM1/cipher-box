@@ -12117,22 +12117,19 @@ fn the_on_access_file_queue_stops_admitting_past_its_ceiling() {
         engine.note_focus_access(Some(*file));
     }
 
-    // Each queued file costs the pass one cache-first resolve of its own name.
+    // Each queued file costs the pass a resolve of its own name, which reads
+    // that name's cache entry.
     let queued_names: BTreeSet<Vec<u8>> = files
         .iter()
         .map(|file| write_name(*file).as_str().as_bytes().to_vec())
         .collect();
-    let refreshed = |device: &FakeDevice| {
-        device
-            .snapshot_cache
-            .reads()
-            .into_iter()
-            .filter(|key| queued_names.contains(key))
-            .count()
-    };
-    let before = refreshed(&alice);
+    let before = alice.snapshot_cache.reads().len();
     tick(&world, &engine, &mut tasks);
-    let this_pass = refreshed(&alice) - before;
+    let this_pass = alice.snapshot_cache.reads()[before..]
+        .iter()
+        .filter(|key| queued_names.contains(*key))
+        .collect::<BTreeSet<_>>()
+        .len();
     assert!(this_pass > 0, "the pass ran the file leg at all");
     assert!(
         this_pass <= MAX_FOCUS_FILES,
