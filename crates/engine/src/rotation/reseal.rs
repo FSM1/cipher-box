@@ -56,6 +56,7 @@ use crate::content::limits::{MAX_RETAINED_HISTORY_LINK_BYTES, resealable_section
 use crate::entropy::{Entropy, EntropyError, fresh_ephemeral, fresh_nonce};
 use crate::gate::is_committed_write_pseudonym;
 use crate::grants::{enforce_committed_ledger, recipient_blinded_tag};
+use crate::net::author::ENVELOPE_V;
 
 /// How many history links a re-seal carries forward — the ratchet's retained
 /// window, in rotations (blueprint/core.md "History-link retention"). The window
@@ -628,6 +629,44 @@ pub fn seed_at_epoch(
         (seed, epoch) = ratchet_step(v, scope_id, &seed, epoch, link)?;
     }
     (epoch == target_epoch).then_some(seed)
+}
+
+/// Why [`lagging_read_seed`] recovered no seed. Each reader below the
+/// read-epoch floor maps it to its own error type (ADR 0021 D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LaggingSeedMiss {
+    /// The record is tagged above the anchor: an honest race with a fresher
+    /// root, since the ratchet only walks backward.
+    AboveAnchor,
+    /// The anchor's held history links do not walk back to the record's epoch.
+    Unreachable,
+}
+
+/// The scope read seed an interior record the lazy wave has not reached opens
+/// under: `current_seed` walked back from `anchor_epoch`, over the gated scope
+/// root's carried history links, to the epoch the record is tagged with.
+///
+/// The one seed walk of every reader below the read-epoch floor
+/// ([`crate::gate::floor::Strictness::AtOrAboveFloor`]).
+pub(crate) fn lagging_read_seed(
+    scope_id: [u8; 16],
+    current_seed: &[u8; SECRET_LEN],
+    anchor_epoch: u64,
+    history_links: &[SignedSealed],
+    record_epoch: u64,
+) -> Result<Zeroizing<[u8; SECRET_LEN]>, LaggingSeedMiss> {
+    if record_epoch > anchor_epoch {
+        return Err(LaggingSeedMiss::AboveAnchor);
+    }
+    seed_at_epoch(
+        ENVELOPE_V,
+        scope_id,
+        current_seed,
+        anchor_epoch,
+        history_links,
+        record_epoch,
+    )
+    .ok_or(LaggingSeedMiss::Unreachable)
 }
 
 /// Seal one read-plane history link — `prev`'s seed under `seed`'s structure

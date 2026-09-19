@@ -919,6 +919,103 @@ fn the_recipient_reads_a_file_below_a_grafted_root() {
     }
 }
 
+/// The owner's cut raises the recipient's read-epoch floor for the shared
+/// scope, and a read-only recipient can carry no wave. A file no write has
+/// re-sealed still reads, under the seed the gated scope root's ratchet reaches
+/// (ADR 0021).
+#[test]
+fn the_recipient_reads_a_lagging_file_after_the_owner_cuts() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let shared = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "shared");
+    let bodies = two_bodies(5);
+    file_with_two_versions(
+        &world,
+        &mut engine_t,
+        &mut tasks_t,
+        shared,
+        "early.bin",
+        &bodies,
+    );
+    import_recipient(&mut engine_t);
+    grant_to_recipient(&mut engine_t, shared);
+    for _ in 0..4 {
+        tick(&world, &engine_t, &mut tasks_t);
+    }
+    let (engine_r, _events_r, mut tasks_r) = recipient_with_the_share(&world, &blocks);
+    let early = grafted_child(&engine_r, shared, "early.bin");
+    assert_reads_both_versions(&engine_r, early, &bodies, "the recipient before the cut");
+    let epoch_before = published_epoch(&world, &blocks, shared);
+
+    assert_eq!(
+        block_on(engine_t.command(Command::RotateNow { node: shared })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine_t, &mut tasks_t);
+    for _ in 0..4 {
+        world.scheduler.advance(SyncTimingProfile::CI.stale_after);
+        poll_tasks_until_parked(&mut tasks_r);
+    }
+    assert!(
+        published_epoch(&world, &blocks, shared) > epoch_before,
+        "the cut moved the shared scope to a new epoch",
+    );
+
+    assert_reads_both_versions(&engine_r, early, &bodies, "the recipient after the cut");
+}
+
+/// A folder the lazy wave has not re-sealed renders on the focus refresh of a
+/// device that has not listed it before: the refresh opens it under the gated
+/// scope root's ratchet (ADR 0021) and accuses nobody.
+#[test]
+fn the_focus_refresh_lists_a_lagging_folder_after_a_cut() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (mut engine_t, _events_t, mut tasks_t) = boot(&world, &blocks, &tab, 42);
+    let reports = create_published_folder(&world, &mut engine_t, &mut tasks_t, ROOT, "reports");
+    create_published_folder(&world, &mut engine_t, &mut tasks_t, reports, "q3");
+    let mount = world.device(b"mounted-desktop");
+    let (mut engine_m, mut events_m, mut tasks_m) = boot(&world, &blocks, &mount, 7);
+    let reports_epoch = published_epoch(&world, &blocks, reports);
+
+    assert_eq!(
+        block_on(engine_t.command(Command::RotateNow { node: ROOT })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&world, &engine_t, &mut tasks_t);
+    tick(&world, &engine_m, &mut tasks_m);
+    assert!(
+        published_epoch(&world, &blocks, ROOT) > reports_epoch,
+        "the folder lags the scope root",
+    );
+    let _ = events_so_far(&mut events_m);
+
+    block_on(engine_m.command(Command::SetFocus {
+        node: Some(reports),
+    }))
+    .expect("focus moves to the lagging folder");
+    let refreshed = command_while_ticking(&mut engine_m, Command::ManualRefresh, &mut tasks_m);
+    assert!(
+        refreshed.is_ok(),
+        "the refresh reads the lagging folder: {refreshed:?}"
+    );
+
+    assert_eq!(listed_names(&engine_m, reports), ["q3"]);
+    assert!(
+        !events_so_far(&mut events_m)
+            .iter()
+            .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+        "a lagging record is not abuse",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A write staged across a cut that re-keyed its scope
 // ---------------------------------------------------------------------------

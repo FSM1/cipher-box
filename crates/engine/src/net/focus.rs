@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
 use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
-use crate::gate::{Adopted, GateError, RejectionReason};
+use crate::gate::{Adopted, GateError};
 use crate::grants::TooLong;
 use crate::grants::grafted::{BookmarkedScopeRoots, ClaimRecord, GraftedPlane, PlaneSplit};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
@@ -43,26 +43,6 @@ pub(crate) struct FolderRefreshReport {
 impl FolderRefreshReport {
     fn fold(&mut self, verdict: RefreshVerdict) {
         self.verdict = self.verdict.worst(verdict);
-    }
-}
-
-/// What a folder's gate rejection costs the pass, or `None` when it costs it
-/// nothing.
-///
-/// A folder the lazy wave has not swept yet is epoch-lagged (CONTEXT.md): the
-/// plane answered and the gate did its job, and only the sweep re-seals it —
-/// which is why the sweep alone reads below the epoch stage
-/// ([`Strictness::AtOrAboveFloor`](crate::gate::floor::Strictness)). Failing the
-/// pass on it would report a *retryable* verdict for a state no retry clears,
-/// and would fire on every refresh a user makes while a wave is in flight. It is
-/// not abuse either, so nobody is accused. Every other rejection is attributable
-/// and fail-closed.
-fn rejection_verdict(reason: &RejectionReason) -> Option<RefreshVerdict> {
-    match reason {
-        RejectionReason::EpochBelowFloor { .. } => None,
-        RejectionReason::Trust(_)
-        | RejectionReason::SequenceNotNewer { .. }
-        | RejectionReason::ScopeRootNotResealable { .. } => Some(RefreshVerdict::Rejected),
     }
 }
 
@@ -100,6 +80,9 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     /// The scope every focus folder is sealed under.
     pub(crate) scope_id: [u8; 16],
     pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
+    /// The scope root's record name, which a lagging record's read walks the
+    /// ratchet back from ([`resolve_child`]).
+    pub(crate) scope_root_name: Option<&'a IpnsName>,
     /// The plane this leg runs on, or `None` on this vault's own plane
     /// ([`GraftedLeg`]).
     pub(crate) plane: Option<GraftedLeg<'a>>,
@@ -287,6 +270,7 @@ where
             self.snapshot_cache,
             &adopter,
             &name,
+            self.scope_root_name,
             self.mode,
         )
         .await
@@ -300,10 +284,8 @@ where
                 None
             }
             Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
-                if let Some(verdict) = rejection_verdict(&rejection.reason) {
-                    emit_trust_violation(self.events, name.as_str(), rejection);
-                    report.fold(verdict);
-                }
+                emit_trust_violation(self.events, name.as_str(), rejection);
+                report.fold(RefreshVerdict::Rejected);
                 None
             }
         }
@@ -524,6 +506,7 @@ mod tests {
                     events: &events,
                     scope_id,
                     scope_read_seed: &self.read_seed,
+                    scope_root_name: None,
                     plane: plane_roots.map(|scope_roots| GraftedLeg {
                         scope_roots,
                         claims,
@@ -815,20 +798,20 @@ mod tests {
         assert!(leg.listing(FOLDER).is_empty());
     }
 
+    /// A folder the lazy wave has not re-sealed opens under the gated scope
+    /// root's ratchet. With no such root held, the read is unreachable, and the
+    /// honest writer is not accused (ADR 0021 D5).
     #[test]
-    fn only_an_epoch_lagged_folder_costs_the_pass_nothing() {
-        assert_eq!(
-            rejection_verdict(&RejectionReason::EpochBelowFloor { floor: 5, epoch: 4 }),
-            None,
-            "the sweep clears epoch lag; no retry of this pass can, so it fails nothing"
-        );
-        assert_eq!(
-            rejection_verdict(&RejectionReason::SequenceNotNewer {
-                floor: 5,
-                sequence: 4,
-            }),
-            Some(RefreshVerdict::Rejected),
-            "a replay is attributable and fail-closed"
-        );
+    fn a_lagging_folder_with_no_held_anchor_is_unreachable_not_accused() {
+        let leg = FolderLeg::new(SCOPE_A, vec![child_ref(HONEST, "a-photo", 1)]);
+        block_on(leg.floors.raise_epoch_floor(&SCOPE_A, NEWER_EPOCH)).expect("the cut raises");
+        leg.place(SCOPE_A, "from-a", None);
+        leg.place(FOLDER, "a-folder", Some(SCOPE_A));
+
+        let reported = leg.run(SCOPE_A, Some(&scope_roots()));
+
+        assert!(!reported, "a lagging record is not abuse");
+        assert_eq!(leg.verdict.get(), RefreshVerdict::Unreachable);
+        assert!(leg.listing(FOLDER).is_empty());
     }
 }

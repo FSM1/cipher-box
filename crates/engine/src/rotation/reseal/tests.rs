@@ -709,10 +709,15 @@ fn chain_seed(e: u64) -> [u8; 32] {
 /// under its own epoch's structure key and naming the epoch before it —
 /// exactly what `reseal_scope_root` mints, so the walk accepts it.
 fn real_chain(newest: u64) -> Vec<SignedSealed> {
+    real_chain_at(V, newest)
+}
+
+/// [`real_chain`] bound to envelope version `v`.
+fn real_chain_at(v: u64, newest: u64) -> Vec<SignedSealed> {
     (2..=newest)
         .map(|e| {
             let key = kdf::structure_key(&chain_seed(e), STRUCT_TAG_HISTORY_LINK);
-            let ctx = ctx_for(V, SCOPE, e, STRUCT_TAG_HISTORY_LINK);
+            let ctx = ctx_for(v, SCOPE, e, STRUCT_TAG_HISTORY_LINK);
             let payload = HistoryLinkPayload::new(chain_seed(e - 1), e - 1);
             SignedSealed {
                 sealed: seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload).unwrap(),
@@ -2090,6 +2095,23 @@ fn a_link_from_another_scope_breaks_the_walk() {
 fn a_scope_at_epoch_one_resolves_its_own_seed_with_no_links() {
     let seed = seed_at_epoch(V, SCOPE, &chain_seed(1), 1, &[], 1).expect("the current seed");
     assert!(ct_eq(&seed, &chain_seed(1)));
+}
+
+/// The shared lagging walk tells its two misses apart, because each reader
+/// below the floor maps them differently (ADR 0021 D3, D5).
+#[test]
+fn the_lagging_walk_tells_a_raced_record_from_an_unreachable_one() {
+    let links = real_chain_at(ENVELOPE_V, 5);
+    let seed = lagging_read_seed(SCOPE, &chain_seed(5), 5, &links, 3).expect("inside the window");
+    assert!(ct_eq(&seed, &chain_seed(3)));
+    assert_eq!(
+        lagging_read_seed(SCOPE, &chain_seed(5), 5, &links, 6).err(),
+        Some(LaggingSeedMiss::AboveAnchor),
+    );
+    assert_eq!(
+        lagging_read_seed(SCOPE, &chain_seed(5), 5, &links[3..], 2).err(),
+        Some(LaggingSeedMiss::Unreachable),
+    );
 }
 
 /// A new variant that inherits another variant's check name, or is appended out

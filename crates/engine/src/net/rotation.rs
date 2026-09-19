@@ -91,8 +91,8 @@ use crate::rotation::{
     RotateError, RotateScopePlan, RotationOutcome, RotationPublishError, ScopeExitRotator,
     ScopeRootIdentity, ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver,
     SweptChild, SweptNode, SweptScope, WriteHistory, WritePublishError, WriteScopeNode,
-    WriteSubtreeResolver, WriteWavePublisher, derive_write_name, published_override_seed,
-    reseal_scope_root, rotate_scope, seed_at_epoch,
+    WriteSubtreeResolver, WriteWavePublisher, derive_write_name, lagging_read_seed,
+    published_override_seed, reseal_scope_root, rotate_scope,
 };
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
@@ -2896,23 +2896,17 @@ where
         )
         .await
         .map_err(read_verdict)?;
-        // A record above the scope root's epoch is not lagging, and this scope's
-        // ratchet only walks backward, so there is no seed here that opens it —
-        // an honest race with a fresher root, or an epoch label a committed
-        // writer chose freely (the epoch is only AAD). Either way it is this
-        // pass's read that fails, not the record's trust.
-        if envelope.epoch > scope.read_epoch {
-            return Err(SweepResolveFailure::Unreadable);
-        }
-        let seed = seed_at_epoch(
-            envelope.v,
+        // A seed the ratchet does not reach fails this pass's read, not the
+        // record's trust: an epoch above the root is also a label a committed
+        // writer can choose freely (the epoch is only AAD).
+        let seed = lagging_read_seed(
             scope.scope_id,
             scope.read_scope_seed,
             scope.read_epoch,
             scope.history_links,
             envelope.epoch,
         )
-        .ok_or(SweepResolveFailure::Unreadable)?;
+        .map_err(|_| SweepResolveFailure::Unreadable)?;
         let read_key = read_key_for(&seed, &envelope.id);
         let read_body =
             open_read_body(envelope, &read_key).map_err(|_| SweepResolveFailure::Rejected)?;
