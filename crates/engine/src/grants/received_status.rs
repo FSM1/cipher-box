@@ -704,9 +704,13 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 RejectionReason::SequenceNotNewer { floor, sequence }
                     if sequence == floor && candidate.envelope.epoch >= epoch_floor =>
                 {
-                    open_read_body(&candidate.envelope, &read_key)
-                        .ok()
-                        .map(|body| (body, sequence, epoch_floor))
+                    let body = open_read_body(&candidate.envelope, &read_key).map_err(|e| {
+                        GateRejection {
+                            stage: GateStage::Unseal,
+                            reason: RejectionReason::Trust(e),
+                        }
+                    })?;
+                    Some((body, sequence, epoch_floor))
                 }
                 _ => return Err(rejection),
             },
@@ -3234,6 +3238,32 @@ mod tests {
             assert!(fx.listing().is_empty(), "{forgery}");
             assert!(!fx.read_seeds.borrow().contains_key(&SCOPE), "{forgery}");
         }
+    }
+
+    /// The record at the durable floor is re-rendered without a second adopt,
+    /// so its unseal is the gate's own stage 6: a body that will not open is
+    /// reported, never read as an unchanged listing.
+    #[test]
+    fn a_record_at_the_floor_whose_body_will_not_open_is_reported() {
+        let mut fx = RenderedScope::new(vec![shared_child(0xa1, "photos")]);
+        fx.bookmark();
+        assert_eq!(fx.pass(0), ResolutionClass::Granted);
+        assert!(!fx.reported.get());
+
+        fx.fixture = reencoded(
+            shared_scope_fixture(vec![shared_child(0xa1, "photos")], Permission::Read),
+            |envelope, _| {
+                let last = envelope.read_sealed.len() - 1;
+                envelope.read_sealed[last] ^= 0x01;
+            },
+        );
+        seed_scope_root(&fx.records, &fx.fixture, 1);
+
+        assert_eq!(fx.pass(60_000), ResolutionClass::Unresolvable);
+        assert!(
+            fx.reported.get(),
+            "a body that will not open is a trust verdict"
+        );
     }
 
     /// A floor store that cannot commit the adoption is availability: nothing
