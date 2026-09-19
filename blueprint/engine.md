@@ -203,7 +203,9 @@ the FSM1/cipher-box-next#33 pipeline with the FSM1/cipher-box-next#39 D3 seal-au
    epoch like every other structure, though its sealed AAD binds the write
    epoch).
 4. **Sequence** — strictly newer than the durable per-name floor.
-5. **Epoch** — epoch tag at or above the scope's durable epoch floor.
+5. **Epoch** — epoch tag at or above the scope's durable epoch floor. An
+   interior record below the floor is opened only by the three readers that the
+   "sweep" section names.
 6. **Unseal** — success required; core's trust-violation error class carries
    through fail-closed.
 
@@ -722,7 +724,18 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   destination name — one POSIX rename is exactly one `move`, so the whole
   operation is journaled or none of it is. Replay is FIFO
   in performed order through the standard rebase, and rebases only onto
-  gate-passing state (FSM1/cipher-box-next#33 D5–D7).
+  gate-passing state (FSM1/cipher-box-next#33 D5–D7). A build decodes, opens and
+  drains every queue record that the previous release wrote
+  ([ADR 0020](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0020-the-durable-op-queue-reads-the-previous-release.md)).
+  A new field on a queued op takes a decode default equal to the value the older
+  build used, and that default passes every check a written value passes. A
+  change that cannot take such a default — a removed op kind, a changed meaning,
+  a header version bump that stops reading the previous version — needs a
+  migration step that runs before the first drain, or its own ADR. The same rule
+  holds for the staging-store records that finish a queued op, for the
+  owner-local sealed stores that fail closed, and for the value format of a
+  floor; caches and credentials stay out. Every change to such a record carries
+  a test that decodes the previous release's bytes.
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
@@ -790,20 +803,23 @@ Idempotent lazy-wave advancement over a scope's **interior nodes** — not its
 descendant scope roots, which the cascade rotates eagerly (FSM1/cipher-box-next#26 D2,
 [ADR 0003](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0003-sweep-population-and-below-floor-scope-roots.md)).
 The work-list is the epoch-lag predicate: an interior node whose envelope epoch
-is behind its scope's current epoch. Reading one is one of exactly **two**
-paths that run the sequence floor without the read-epoch floor. The other is
+is behind its scope's current epoch. Reading one is one of exactly **three**
+paths that run the sequence floor without the read-epoch floor. The second is
 the drain's re-author of a lagging interior node, which carries the same wave
 for an ordinary write
 ([ADR 0012](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0012-the-drain-carries-the-write-wave-forward.md)).
+The third is the child resolve's read of a lagging interior node, which serves
+a member read before the wave arrives
+([ADR 0021](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0021-a-read-opens-an-epoch-lagged-interior-record.md)).
 A lagging node sits below that floor by construction, and carries no seed,
 grant blob or commitment for the stage to protect; its body opens under the
 seed the scope's history-link ratchet walks back to. The re-seal relabels the
 node's epoch tag: the tag is a key-selection label that names the epoch whose
 read seed opens the body, and no reader treats it as authorship
 ([ADR 0017](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0017-the-epoch-tag-is-a-key-selection-label-not-an-attestation.md)).
-Both paths hold the same conditions: the record carries no grant section, the
-read moves no floor, and the epoch is one the scope root's own ratchet
-reaches. A node the retained
+All three paths hold the same conditions: the record carries no grant section,
+the read moves no read-epoch floor, the sequence bar is the replay bar, and the
+epoch is one the scope root's own ratchet reaches. A node the retained
 window no longer reaches is readable by nobody: it is reported unreachable and
 neither swept nor descended into, never treated as a trust violation of its own
 record. Runnable by any write-capable client; ordinary writes advance it for
