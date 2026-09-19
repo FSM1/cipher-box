@@ -1,4 +1,5 @@
 import { toHex, type VersionEntryDescriptor } from '@cipherbox/client';
+import type { VersionWrite } from '../../../hooks/useFileVersions';
 import { clampId, formatBytes, formatEpochMillis } from '../../../utils/format';
 import { DetailSection, UNKNOWN } from './DetailsPrimitives';
 
@@ -9,9 +10,15 @@ const TAIL = 6;
 /**
  * What this member may do in the file's scope: `owner` in its own vault,
  * `write-grant` in a share another vault granted for writing (a restore stays
- * inside it, a version delete is the owner's), `read-grant` with no write.
+ * inside it, a version delete is the owner's), `read-only` where the engine
+ * journals no write.
  */
-export type ScopeAccess = 'owner' | 'write-grant' | 'read-grant';
+export type ScopeAccess = 'owner' | 'write-grant' | 'read-only';
+
+/** Whether `access` offers the version write `command`. */
+export function offers(access: ScopeAccess, command: VersionWrite): boolean {
+  return command === 'restore' ? access !== 'read-only' : access === 'owner';
+}
 
 interface VersionHistoryProps {
   /** The engine's prior versions, newest first; `null` before the read lands. */
@@ -75,7 +82,7 @@ export function VersionHistory({
                 >
                   dl
                 </button>
-                {access !== 'read-grant' && (
+                {offers(access, 'restore') && (
                   <button
                     type="button"
                     className="details-version-button"
@@ -86,7 +93,7 @@ export function VersionHistory({
                     restore
                   </button>
                 )}
-                {access === 'owner' && (
+                {offers(access, 'delete') && (
                   <button
                     type="button"
                     className="details-version-button details-version-button--danger"

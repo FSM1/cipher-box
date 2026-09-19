@@ -241,7 +241,7 @@ describe('the version history', () => {
   it('offers no version write in a scope this vault only reads', async () => {
     const engine = versionEngine({ entries: [OLDER, OLDEST] });
     renderWithEngine(
-      <DetailsDialog row={fileRow()} access="read-grant" onClose={() => undefined} />,
+      <DetailsDialog row={fileRow()} access="read-only" onClose={() => undefined} />,
       engine.client
     );
 
@@ -277,11 +277,32 @@ describe('the version history', () => {
     expect(screen.getByTestId('version-delete-dialog')).toBeDefined();
 
     engine.view.rerender(
-      <DetailsDialog row={fileRow()} access="read-grant" onClose={() => undefined} />
+      <DetailsDialog row={fileRow()} access="read-only" onClose={() => undefined} />
     );
 
     expect(screen.queryByTestId('version-delete-dialog')).toBeNull();
     expect(engine.facade.deleteVersion).not.toHaveBeenCalled();
+  });
+
+  it('retires a delete confirmation and keeps a restore one when the access drops to a write grant', async () => {
+    const engine = openDetails({ entries: [OLDER, OLDEST] });
+    await waitFor(() => expect(screen.getByTestId('version-history')).toBeDefined());
+
+    fireEvent.click(control('delete', OLDEST_CID));
+    engine.view.rerender(
+      <DetailsDialog row={fileRow()} access="write-grant" onClose={() => undefined} />
+    );
+    expect(screen.queryByTestId('version-delete-dialog')).toBeNull();
+    expect(engine.facade.deleteVersion).not.toHaveBeenCalled();
+
+    engine.view.rerender(
+      <DetailsDialog row={fileRow()} access="owner" onClose={() => undefined} />
+    );
+    fireEvent.click(control('restore', OLDER_CID));
+    engine.view.rerender(
+      <DetailsDialog row={fileRow()} access="write-grant" onClose={() => undefined} />
+    );
+    expect(screen.getByTestId('version-restore-dialog')).toBeDefined();
   });
 
   it('does not re-read for a node the dialog left while its write was in flight', async () => {

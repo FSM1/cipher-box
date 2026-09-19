@@ -6,7 +6,7 @@ import { ConfirmDangerDialog } from '../ui/ConfirmDangerDialog';
 import { Modal } from '../ui/Modal';
 import { FileDetails } from './details/FileDetails';
 import { FolderDetails } from './details/FolderDetails';
-import { type ScopeAccess, shortCid } from './details/VersionHistory';
+import { offers, type ScopeAccess, shortCid } from './details/VersionHistory';
 
 interface DetailsDialogProps {
   row: ListingRow;
@@ -37,9 +37,9 @@ export function DetailsDialog({ row, access, onClose }: DetailsDialogProps) {
   // swap retires it, so a result from a display the dialog has left can never
   // answer for a later confirmation, not even one of the same node.
   const answered = useRef<PendingWrite | null>(null);
-  // The details themselves only read, so this dialog outlives a scope the engine
-  // turns read-only. The confirmation does not: restore and delete are writes.
-  if (shown.current !== node || (access === 'read-grant' && pending !== null)) {
+  // The details themselves only read, so this dialog outlives an access change.
+  // A confirmation for a write the access no longer offers does not.
+  if (shown.current !== node || (pending !== null && !offers(access, pending.command))) {
     shown.current = node;
     answered.current = null;
     setPending(null);
