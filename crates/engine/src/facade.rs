@@ -4365,17 +4365,18 @@ fn install_descendant_scopes(
 /// Record the boundaries one walk named without material, and release every
 /// root the same walk proved: a proved root reads on its own leg from now on,
 /// and a stale entry here would skip it as unreachable for the rest of the
-/// session.
+/// session. Proof wins over a name: one parent's stale body can name a root
+/// another parent's index proves in the same walk.
 fn install_unproved_scopes(
     unproved: &RefCell<BTreeSet<NodeId>>,
     proved: impl IntoIterator<Item = NodeId>,
     named: BTreeSet<NodeId>,
 ) {
     let mut unproved = unproved.borrow_mut();
+    unproved.extend(named);
     for scope in proved {
         unproved.remove(&scope);
     }
-    unproved.extend(named);
 }
 
 /// Drop the proved-descendant set a session leaves behind.
@@ -11440,6 +11441,18 @@ mod tests {
         install_unproved_scopes(&unproved, [released], BTreeSet::from([still_named]));
 
         assert_eq!(*unproved.borrow(), BTreeSet::from([still_named, not_named]));
+    }
+
+    /// One parent's stale body can name a root another parent's index proves in
+    /// the same walk; the proof wins.
+    #[test]
+    fn a_root_one_walk_both_proves_and_names_stays_released() {
+        let both = NodeId([6; 16]);
+        let unproved = RefCell::new(BTreeSet::from([both]));
+
+        install_unproved_scopes(&unproved, [both], BTreeSet::from([both]));
+
+        assert!(unproved.borrow().is_empty());
     }
 
     /// And a clear it cannot make is reported rather than skipped: a set that
