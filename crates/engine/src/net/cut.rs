@@ -365,6 +365,7 @@ where
                 gateway: self.gateway,
                 http: self.http,
                 floors: self.floors,
+                snapshot_cache: self.snapshot_cache,
                 scheduler: self.scheduler,
                 profile: self.profile,
                 entropy: self.entropy,

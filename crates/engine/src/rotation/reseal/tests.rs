@@ -1353,7 +1353,7 @@ fn signer_not_committed_fails_closed_release_active() {
 #[test]
 fn a_descendant_re_sealed_with_no_parent_seed_fails_closed_release_active() {
     // Only `parent_node_seed` mints an ascent link, so a descendant re-sealed
-    // without one would publish a record `gated_child_root` permanently
+    // without one would publish a record `gate_root_pass` permanently
     // rejects — signed, live, and unopenable as anyone's child. The re-seal
     // refuses with a runtime `Err` (not a debug_assert), so a release build
     // cannot mint it. This test is active in release.

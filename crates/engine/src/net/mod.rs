@@ -16,6 +16,7 @@ mod adopter;
 mod child;
 mod fanout;
 mod focus;
+pub(crate) mod last_known_good;
 mod pointer_fetch;
 mod record_accelerator;
 mod vault_pointer;

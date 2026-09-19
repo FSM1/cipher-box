@@ -52,7 +52,7 @@ interface FileBrowserActionsProps {
   writable: boolean;
   /**
    * True in a scope another vault shared. A write there stays inside it, so the
-   * owner-only actions — sharing, version restore and delete — are not offered.
+   * owner-only actions — sharing and version delete — are not offered.
    */
   receivedShare: boolean;
   showParentRow: boolean;
@@ -268,7 +268,11 @@ export function FileBrowserActions({
       )}
       {dialog?.kind === 'share' && <ShareDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'details' && (
-        <DetailsDialog row={dialog.row} writable={writable && !receivedShare} onClose={close} />
+        <DetailsDialog
+          row={dialog.row}
+          access={!writable ? 'read-only' : receivedShare ? 'write-grant' : 'owner'}
+          onClose={close}
+        />
       )}
       {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'preview' && (
