@@ -2263,7 +2263,7 @@ impl core::fmt::Debug for GrantedScopeRoot {
 }
 
 /// The grantee-arm rotation seams over the live net plane.
-pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
+pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E, S> {
     /// The record-plane transport: fan-out GET for the read, CAS PUT for the
     /// publish.
     pub transport: &'a T,
@@ -2275,6 +2275,8 @@ pub struct GranteeRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     pub http: &'a H,
     /// The durable floors the adoption gate reads and advances.
     pub floors: &'a F,
+    /// The durable last-known-good record cache ([`gated_root_cached`]).
+    pub snapshot_cache: &'a S,
     /// The scheduler the publish pipeline's background re-PUT and the cut's
     /// lazy-wave sweep ride.
     pub scheduler: &'a Sch,
@@ -2329,10 +2331,11 @@ fn grant_blob_aad(scope_id: [u8; 16], epoch: u64) -> AadContext {
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> GranteeRotationNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> GranteeRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport,
     F: FloorStore,
+    S: SnapshotCache,
 {
     /// The scope root `scope` names, from the caller-held inventory. A trigger
     /// naming a scope this device holds no grant for is refused rather than read
@@ -2413,7 +2416,7 @@ where
             self.keys.owner_identity,
             granted.scope_id,
         );
-        gated_root(&adopter, name, &record_bytes, None).await
+        gated_root_cached(&adopter, self.snapshot_cache, name, &record_bytes, None).await
     }
 
     /// Gate the scope root and assemble everything its flat cut re-seals, parking
@@ -2542,11 +2545,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeRootPublisher
-    for GranteeRotationNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> ScopeRootPublisher
+    for GranteeRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
+    S: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
@@ -2589,11 +2593,12 @@ where
     }
 }
 
-impl<T, H: Http, C: CredentialStore, F, Sch, E> ScopeExitRotator
-    for GranteeRotationNet<'_, T, H, C, F, Sch, E>
+impl<T, H: Http, C: CredentialStore, F, Sch, E, S> ScopeExitRotator
+    for GranteeRotationNet<'_, T, H, C, F, Sch, E, S>
 where
     T: RecordTransport + Clone + 'static,
     F: FloorStore,
+    S: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
     E: Entropy,
 {
@@ -8376,6 +8381,7 @@ mod tests {
         InMemoryFloorStore,
         VirtualScheduler,
         SeededEntropy,
+        InMemorySnapshotCache,
     >;
 
     /// A staged granted scope root plus everything a grantee net borrows, owned
@@ -8437,6 +8443,7 @@ mod tests {
                 gateway: &self.harness.gateway,
                 http: &self.harness.http,
                 floors: &self.harness.floors,
+                snapshot_cache: &self.harness.cache,
                 scheduler: &self.harness.world.scheduler,
                 profile: &self.harness.profile,
                 entropy: &self.harness.entropy,
@@ -8747,6 +8754,36 @@ mod tests {
         assert!(
             world.cut().is_ok(),
             "the cut still completes over the record this net already adopted",
+        );
+    }
+
+    /// A grantee's scope-root read caches the root before its floor moves, and
+    /// a cache that refuses the bytes leaves the floor unspent.
+    #[test]
+    fn a_grantee_root_read_caches_the_root_before_it_raises_its_floor() {
+        let refused = plain_world(Permission::Write);
+        let key = refused.root.name.as_str().as_bytes();
+        refused.harness.cache.fail_puts();
+        assert_eq!(
+            block_on(refused.net().gated_root(&refused.granted[0])).map(|_| ()),
+            Err(RootGateVerdict::Unavailable),
+        );
+        assert_eq!(
+            sequence_floor_of(&refused.harness, key),
+            None,
+            "no floor without the bytes"
+        );
+
+        let world = plain_world(Permission::Write);
+        block_on(world.net().gated_root(&world.granted[0])).expect("the read adopts");
+        assert_eq!(sequence_floor_of(&world.harness, key), Some(1));
+        assert_eq!(
+            world.harness.cache.peek(key),
+            world.harness.store.record_at(
+                &world.harness.store.endpoints()[0],
+                world.root.name.as_str()
+            ),
+            "the adopted bytes are last-known-good at that floor",
         );
     }
 
@@ -9442,7 +9479,7 @@ mod tests {
     /// the bytes become last-known-good first, and a cache that refuses them
     /// leaves the floor unspent.
     #[test]
-    fn the_wave_caches_an_interior_record_before_it_raises_that_names_floor() {
+    fn the_wave_caches_an_interior_record_before_it_raises_its_floor() {
         let body = interior_body();
         let owner = owner_identity();
         let current_root = old_root_name();
@@ -12785,7 +12822,7 @@ mod tests {
     /// A rotation's scope-root read caches the root before its floor moves, and
     /// a cache that refuses the bytes leaves the floor unspent.
     #[test]
-    fn a_scope_root_read_caches_the_root_before_it_raises_that_names_floor() {
+    fn a_scope_root_read_caches_the_root_before_it_raises_its_floor() {
         let root = swept_root(Vec::new(), &[]);
         let key = root.name.as_str().as_bytes();
 

@@ -2284,10 +2284,10 @@ where
     /// One end's scope root as the record plane now serves it, resolved through
     /// its own gate.
     ///
-    /// The bytes come from the resolve rather than the cache: only an adopt
-    /// writes the cache, so a root this device published through another path —
-    /// a grant mint, a rotation — is current on the plane and stale in the
-    /// cache.
+    /// The bytes come from the resolve rather than the cache: [`resolve_gated`]
+    /// writes the cache only on an adopt or a recovered own-root `Current`, never
+    /// on `NoUpdate`, so a root this device published through another path — a
+    /// grant mint, a rotation — is current on the plane and stale in the cache.
     async fn resolve_scope_root(
         &self,
         scope: &DrainScope<'_>,
