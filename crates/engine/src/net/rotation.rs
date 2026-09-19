@@ -55,6 +55,7 @@ use super::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
 use super::register::register;
+use super::resolve::cache_last_known_good;
 use super::retire::{retire, root_retire_ready};
 use crate::api::{ApiClient, NameRegistration};
 use crate::content::Gateway;
@@ -2850,8 +2851,7 @@ where
         // this path raises it — so without this a rolled-back record stays
         // admissible for as long as the node goes unbrowsed. The bytes become
         // last-known-good first, as on the resolve driver's pass.
-        self.snapshot_cache
-            .put(name.as_str().as_bytes(), record_bytes)
+        cache_last_known_good(self.snapshot_cache, name, record_bytes, sequence)
             .await
             .map_err(|_| SweepResolveFailure::Unavailable)?;
         floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
@@ -3784,6 +3784,7 @@ where
         node_id: [u8; 16],
         name: &IpnsName,
         record_bytes: &[u8],
+        sequence: u64,
     ) -> Result<WaveSource, WritePublishError> {
         let adopter = ChildAdopter::new(
             self.gateway,
@@ -3795,8 +3796,7 @@ where
         );
         match adopter.adopt(name, record_bytes).await {
             Ok(outcome) => {
-                self.snapshot_cache
-                    .put(name.as_str().as_bytes(), record_bytes)
+                cache_last_known_good(self.snapshot_cache, name, record_bytes, sequence)
                     .await
                     .map_err(|e| wave_verdict(GateError::Seam(e)))?;
                 outcome
@@ -4571,14 +4571,15 @@ where
             Some((name, _)) => name.clone(),
             None => self.subtree.name(node_id).ok_or(ResolveFailure::Rejected)?,
         };
-        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &current_name).await else {
+        let Some((verified, record_bytes)) = fanout_get_verify(self.transport, &current_name).await
+        else {
             return Err(ResolveFailure::Unavailable);
         };
         let source = if let Some((_, resumed_write_epoch)) = root {
             self.root_source(&current_name, &record_bytes, resumed_write_epoch)
                 .await
         } else {
-            self.interior_source(*node_id, &current_name, &record_bytes)
+            self.interior_source(*node_id, &current_name, &record_bytes, verified.sequence)
                 .await
         }
         .map_err(subtree_verdict)?;
@@ -4695,12 +4696,17 @@ where
             // author an unproven one.
             None if node.is_root => return Err(WritePublishError::Rejected),
             None => {
-                let record_bytes = fanout_get_verify(self.transport, &node.current_name)
-                    .await
-                    .map(|(_, bytes)| bytes)
-                    .ok_or(WritePublishError::NotLanded)?;
-                self.interior_source(node.node_id, &node.current_name, &record_bytes)
-                    .await?
+                let (verified, record_bytes) =
+                    fanout_get_verify(self.transport, &node.current_name)
+                        .await
+                        .ok_or(WritePublishError::NotLanded)?;
+                self.interior_source(
+                    node.node_id,
+                    &node.current_name,
+                    &record_bytes,
+                    verified.sequence,
+                )
+                .await?
             }
         };
         // The interior path re-opens its own record at the floor, so only the
@@ -9168,6 +9174,16 @@ mod tests {
         node_id: [u8; 16],
         body: &ReadBody,
     ) -> IpnsName {
+        stage_node_at(harness, node_id, body, 1)
+    }
+
+    /// [`stage_node`] at a chosen record sequence.
+    fn stage_node_at<T: RecordTransport + Clone>(
+        harness: &Harness<T>,
+        node_id: [u8; 16],
+        body: &ReadBody,
+        sequence: u64,
+    ) -> IpnsName {
         let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &node_id);
         let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
         let envelope = seal_read_body(
@@ -9188,7 +9204,7 @@ mod tests {
             .expect("lock")
             .insert(cid.clone(), block);
         let name = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &node_id);
-        let record = record_for(&node_id, &cid, 1);
+        let record = record_for(&node_id, &cid, sequence);
         for endpoint in harness.store.endpoints() {
             harness
                 .store
@@ -9385,6 +9401,42 @@ mod tests {
                 .store
                 .record_at(&harness.store.endpoints()[0], old_name.as_str()),
             "the adopted bytes are last-known-good at that floor",
+        );
+    }
+
+    /// A pass that cached sequence 7 but failed its floor commit leaves the
+    /// floor at 5, so a later sequence 6 passes the gate. The newer copy stays
+    /// last-known-good, and the floor moves only to what this pass read.
+    #[test]
+    fn the_wave_keeps_a_newer_cached_interior_record() {
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let owner = owner_identity();
+        let current_root = old_root_name();
+        let plan = no_root_plan();
+        let node_id = [0x0e; 16];
+        let harness = Harness::plain();
+        let name = stage_node_at(&harness, node_id, &body, 7);
+        let key = name.as_str().as_bytes();
+        let newer = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], name.as_str())
+            .expect("the newer record");
+        block_on(harness.cache.put(key, &newer)).expect("seed last-known-good");
+        block_on(harness.floors.raise_sequence_floor(key, 5)).expect("the floor raises");
+        stage_node_at(&harness, node_id, &body, 6);
+
+        let net = wave(&harness, &owner, &current_root, &plan);
+        block_on(net.republish(&order(node_id, &name, BTreeMap::new(), false)))
+            .expect("the node republishes");
+        assert_eq!(harness.cache.peek(key), Some(newer));
+        assert_eq!(
+            block_on(floor::sequence_floor(&harness.floors, key)).expect("floor read"),
+            Some(6),
         );
     }
 
@@ -12605,6 +12657,36 @@ mod tests {
                 .store
                 .record_at(&harness.store.endpoints()[0], node_name.as_str()),
             "and the bytes it read are last-known-good at that floor",
+        );
+    }
+
+    /// A sweep read above the floor keeps a newer cached copy that a failed
+    /// floor commit left behind, and raises the floor only to what it read.
+    #[test]
+    fn an_interior_read_keeps_a_newer_cached_record() {
+        let node_id = [0x01; 16];
+        let (node_name, node_block) = interior_record(node_id, OWNER_ROOT_EPOCH, Vec::new());
+        let root = swept_root(vec![body_ref(node_id, &node_name)], &[]);
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage_node_at(node_id, &node_name, &node_block, 7);
+        let key = node_name.as_str().as_bytes();
+        let newer = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], node_name.as_str())
+            .expect("the newer record");
+        block_on(harness.cache.put(key, &newer)).expect("seed last-known-good");
+        block_on(harness.floors.raise_sequence_floor(key, 5)).expect("the floor raises");
+        harness.stage_node_at(node_id, &node_name, &node_block, 6);
+        let net = harness.net(&[]);
+        let scope = child_ref(SCOPE, &root);
+        let swept = block_on(net.resolve_scope(&scope)).expect("gates");
+        block_on(net.resolve_child(&scope, &swept.children[0])).expect("opens");
+
+        assert_eq!(harness.cache.peek(key), Some(newer));
+        assert_eq!(
+            block_on(floor::sequence_floor(&harness.floors, key)).expect("floor read"),
+            Some(6),
         );
     }
 

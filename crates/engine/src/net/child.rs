@@ -325,6 +325,7 @@ where
             refresh_last_known_good(
                 snapshot_cache,
                 name,
+                mode,
                 resolved.last_known_good.as_deref(),
                 &record_bytes,
                 adopted.sequence,

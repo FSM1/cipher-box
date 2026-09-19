@@ -327,7 +327,15 @@ where
             }) => {
                 // Only gate-passing records touch the snapshot; the same verified
                 // bytes ride out to the liveness hold, so no re-fetch/re-get.
-                snapshot_cache.put(cache_key, &bytes).await?;
+                refresh_last_known_good(
+                    snapshot_cache,
+                    name,
+                    mode,
+                    last_known_good.as_deref(),
+                    &bytes,
+                    verified.sequence,
+                )
+                .await?;
                 // Durable-first: the floors move on the pass that also left the
                 // bytes as last-known-good, never ahead of it.
                 let adopted = match pass {
@@ -364,6 +372,7 @@ where
                         refresh_last_known_good(
                             snapshot_cache,
                             name,
+                            mode,
                             last_known_good.as_deref(),
                             &bytes,
                             verified.sequence,
@@ -415,23 +424,67 @@ where
     })
 }
 
-/// Leave `record_bytes`, which re-passed the gate at exactly the durable
-/// sequence floor, as last-known-good where the cached copy is older. A pass
-/// that raised that floor without caching (a rotation arm's own read) leaves
-/// the older copy behind, and a read that later finds no source opens the
-/// cached copy at the floor. A copy at the same sequence stays: only an older
-/// one is stale.
+/// Leave `record_bytes`, which passed the gate at `sequence`, as last-known-good
+/// unless the cached copy already sits at or above that sequence. The floor
+/// and the cached copy drift apart both ways: a pass that raised the floor
+/// without caching leaves an older copy that an at-floor re-read replaces, and
+/// a pass that cached but failed its floor commit leaves a newer copy that a
+/// later gate pass above the floor must not displace.
+pub(crate) async fn cache_last_known_good<S: SnapshotCache>(
+    snapshot_cache: &S,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    sequence: u64,
+) -> Result<(), SeamError> {
+    let cached = snapshot_cache.get(name.as_str().as_bytes()).await?;
+    replace_if_older(
+        snapshot_cache,
+        name,
+        cached.as_deref(),
+        record_bytes,
+        sequence,
+    )
+    .await
+}
+
+/// [`cache_last_known_good`] for a resolve pass: a cache-first pass compares
+/// against the copy it already read, and a nocache pass reads one to compare.
 pub(crate) async fn refresh_last_known_good<S: SnapshotCache>(
     snapshot_cache: &S,
     name: &IpnsName,
+    mode: ResolveMode,
     last_known_good: Option<&[u8]>,
     record_bytes: &[u8],
     sequence: u64,
 ) -> Result<(), SeamError> {
-    if last_known_good == Some(record_bytes) {
+    match mode {
+        ResolveMode::CacheFirst => {
+            replace_if_older(
+                snapshot_cache,
+                name,
+                last_known_good,
+                record_bytes,
+                sequence,
+            )
+            .await
+        }
+        ResolveMode::NoCache => {
+            cache_last_known_good(snapshot_cache, name, record_bytes, sequence).await
+        }
+    }
+}
+
+async fn replace_if_older<S: SnapshotCache>(
+    snapshot_cache: &S,
+    name: &IpnsName,
+    cached: Option<&[u8]>,
+    record_bytes: &[u8],
+    sequence: u64,
+) -> Result<(), SeamError> {
+    if cached == Some(record_bytes) {
         return Ok(());
     }
-    let cached_sequence = last_known_good.and_then(|cached| {
+    let cached_sequence = cached.and_then(|cached| {
         IpnsRecord::unmarshal(cached)
             .and_then(|record| record.verify(name))
             .ok()
@@ -1128,6 +1181,72 @@ mod tests {
             .resolved;
             assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
             assert_eq!(device.snapshot_cache.peek(key).as_ref(), Some(cached));
+        }
+    }
+
+    /// A pass that cached sequence 7 but failed its floor commit leaves the
+    /// floor below it, so a later sequence 6 adopts. The newer copy stays.
+    #[test]
+    fn an_adopt_keeps_a_newer_cached_copy() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = SessionIdentity::write_name_signer(&[5u8; 32], &[6u8; 16]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record(&signer, 6));
+        }
+        let key = name.as_str().as_bytes();
+        let newer = record(&signer, 7);
+
+        for mode in [ResolveMode::CacheFirst, ResolveMode::NoCache] {
+            block_on(device.snapshot_cache.put(key, &newer)).expect("seed the newer copy");
+            let resolved = block_on(resolve_gated(
+                &device.record_store,
+                &device.snapshot_cache,
+                &StubAdopter::new(Verdict::Accept),
+                &name,
+                mode,
+            ))
+            .expect("the resolve settles")
+            .resolved;
+            assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
+            assert_eq!(device.snapshot_cache.peek(key).as_ref(), Some(&newer));
+        }
+    }
+
+    /// The own at-floor re-read keeps a newer cached copy too, and a forced
+    /// refresh reads the cache for that check although it renders nothing from it.
+    #[test]
+    fn an_own_current_root_keeps_a_newer_cached_copy() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let write_scope_seed = [5u8; 32];
+        let node_id = [6u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record(&signer, 3));
+        }
+        let key = name.as_str().as_bytes();
+        let newer = record(&signer, 4);
+
+        for mode in [ResolveMode::CacheFirst, ResolveMode::NoCache] {
+            block_on(device.snapshot_cache.put(key, &newer)).expect("seed the newer copy");
+            let resolved = block_on(resolve_gated(
+                &device.record_store,
+                &device.snapshot_cache,
+                &StubAdopter::own_current(write_scope_seed, node_id),
+                &name,
+                mode,
+            ))
+            .expect("the resolve settles")
+            .resolved;
+            assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
+            assert_eq!(device.snapshot_cache.peek(key).as_ref(), Some(&newer));
         }
     }
 
