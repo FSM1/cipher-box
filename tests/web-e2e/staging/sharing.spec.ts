@@ -29,6 +29,7 @@ test('a grant reaches a second identity, and a revoke cuts it', async ({
   await ownerFiles.upload(AFTER_GRANT, new Uint8Array(512).fill(9));
   await expect(ownerFiles.row(AFTER_GRANT)).toBeVisible({ timeout: 180_000 });
   await published(page);
+  await expect(ownerFiles.row(AFTER_GRANT)).toBeVisible();
 
   await expect
     .poll(
