@@ -9045,27 +9045,31 @@ where {
     /// floor has risen past the one it was recovered under. Every on-demand
     /// read goes through here; the resolve tick evicts once per pass.
     async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
-        let own_root = self.snapshot.borrow().root.0;
-        let sharers = self.grafted_sharers.borrow().clone();
         // Every arm that serves no seed also drops the one it holds, so no
         // cached seed outlives the authority that entitles it.
-        let Some(session) = self.session.as_ref() else {
-            self.scope_read_seeds.borrow_mut().remove(scope_id);
-            return None;
-        };
-        let Some(floors) = floor_view(
-            &self.seams.floor_store,
-            &sharers,
-            session.contact_label_seed(),
-            &own_root,
-            &self.descendant_scope_roots.borrow(),
-            scope_id,
-        ) else {
+        let Some(floors) = self.scope_floors(scope_id) else {
             self.scope_read_seeds.borrow_mut().remove(scope_id);
             return None;
         };
         refresh_seed_floor(&floors, &self.scope_read_seeds, scope_id, SeedFloor::Read).await;
         cached_seed(&self.scope_read_seeds, scope_id)
+    }
+
+    /// The namespace `scope_id`'s floors live in ([`floor_view`]), or `None`
+    /// when no session is live or no authority answers for the scope.
+    fn scope_floors(
+        &self,
+        scope_id: &[u8; 16],
+    ) -> Option<SharerScopedFloorStore<'_, OwnerScopedFloorStore<T::FloorStore>>> {
+        let session = self.session.as_ref()?;
+        floor_view(
+            &self.seams.floor_store,
+            &self.grafted_sharers.borrow(),
+            session.contact_label_seed(),
+            &self.snapshot.borrow().root.0,
+            &self.descendant_scope_roots.borrow(),
+            scope_id,
+        )
     }
 
     /// The read-epoch floor a version authored in `scope` binds into its content
@@ -10663,21 +10667,29 @@ where {
             .ok_or_else(|| EngineError::TrustViolation {
                 message: "child ipnsName is not a canonical IPNS name".to_owned(),
             })?;
-        // The node's scope is the vault root scope (subscope reads are a later
-        // slice). A clone of the seed keeps the cell borrow from spanning the
-        // awaits below; the clone zeroizes when the adopter drops.
-        let scope_id = self.snapshot.borrow().root.0;
         // No untrusted input was judged here — a missing seed is missing held
         // material (availability), never a trust verdict.
-        let scope_read_seed = self.scope_read_seed(&scope_id).await.ok_or_else(|| {
-            EngineError::ContentUnavailable {
-                message: "no read seed held for the node's scope".to_owned(),
-            }
-        })?;
+        let no_seed = || EngineError::ContentUnavailable {
+            message: "no read seed held for the node's scope".to_owned(),
+        };
+        // The file's record is sealed under the scope it sits in: an interior
+        // scope a grant cut, a grafted root, or the vault root. A node below
+        // none of them has no scope to open under. The clone of the seed
+        // zeroizes when the adopter drops.
+        let scope_id = {
+            let base = self.snapshot.borrow();
+            let mut roots = self.authored_scope_roots();
+            roots.push(base.root);
+            enclosing_scope_root(&base, node, &roots)
+                .ok_or_else(no_seed)?
+                .0
+        };
+        let scope_read_seed = self.scope_read_seed(&scope_id).await.ok_or_else(no_seed)?;
+        let floors = self.scope_floors(&scope_id).ok_or_else(no_seed)?;
         let adopter = ChildAdopter::new(
             &self.gateway,
             &self.seams.http,
-            &self.seams.floor_store,
+            &floors,
             scope_id,
             scope_read_seed,
             node.0,
@@ -18496,6 +18508,46 @@ mod tests {
                 assert!(
                     matches!(err, EngineError::TrustViolation { .. }),
                     "a grant-section-bearing child rejects fail-closed: {err:?}"
+                );
+            }
+
+            /// A published file whose links reach no scope root this session
+            /// holds names no read seed, which is availability, never a
+            /// verdict on a record nobody fetched.
+            #[test]
+            fn a_file_below_no_held_scope_root_is_unavailable() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+                // An honest record the vault root's seed opens, so only the
+                // scope lookup stands between this read and the bytes.
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                {
+                    let mut base = engine.snapshot.borrow_mut();
+                    base.unlink(ROOT, NodeId(CHILD_ID));
+                    base.link_next(NodeId([0xf1; 16]), NodeId(CHILD_ID));
+                }
+
+                assert!(
+                    matches!(
+                        block_on(engine.read_content(NodeId(CHILD_ID))),
+                        Err(EngineError::ContentUnavailable { .. })
+                    ),
+                    "the content read is unavailable"
+                );
+                assert!(
+                    matches!(
+                        block_on(engine.file_versions(NodeId(CHILD_ID))),
+                        Err(EngineError::ContentUnavailable { .. })
+                    ),
+                    "and so is the version history"
                 );
             }
 

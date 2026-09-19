@@ -9,6 +9,8 @@
  * does not anchor — so this drives both directions and reads the row back.
  */
 
+import { readFile } from 'node:fs/promises';
+import type { Download } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { FilesPage } from '../page-objects/files.page';
 import { SharePage } from '../page-objects/share.page';
@@ -18,6 +20,11 @@ import { coldStart, nodeOf } from '../vault';
 const OWNER_FOLDER = 'granted-by-code';
 const RECIPIENT_FOLDER = 'recipient-own';
 const AFTER_GRANT = 'after-the-grant.bin';
+const AFTER_GRANT_BYTES = new Uint8Array(512).fill(9);
+
+async function savedBytes(download: Download): Promise<Uint8Array> {
+  return new Uint8Array(await readFile(await download.path()));
+}
 
 test('a hand-exchanged contact code carries a grant to the second client', async ({
   page,
@@ -63,11 +70,15 @@ test('a hand-exchanged contact code carries a grant to the second client', async
   // grant cut, and the recipient reads the live folder rather than the listing
   // that was current at the grant.
   await ownerFiles.open(OWNER_FOLDER);
-  await ownerFiles.upload(AFTER_GRANT, new Uint8Array(512).fill(9));
+  await ownerFiles.upload(AFTER_GRANT, AFTER_GRANT_BYTES);
   const added = ownerFiles.row(AFTER_GRANT);
   await expect(added).toBeVisible();
   await ownerFiles.published();
   await expect(added).toBeVisible();
+  // The grant re-sealed the folder into its own scope, so the owner's read opens
+  // under that scope rather than the vault root.
+  expect(await savedBytes(await ownerFiles.save(AFTER_GRANT))).toEqual(AFTER_GRANT_BYTES);
+  await expect(page.getByTestId('vault-action-error')).toHaveCount(0);
 
   await shared.openShare(scope);
   const recipientListing = new FilesPage(second);
@@ -81,6 +92,8 @@ test('a hand-exchanged contact code carries a grant to the second client', async
       { timeout: 60_000, intervals: [2_000] }
     )
     .toBe(1);
+  expect(await savedBytes(await recipientListing.save(AFTER_GRANT))).toEqual(AFTER_GRANT_BYTES);
+  await expect(second.getByTestId('vault-action-error')).toHaveCount(0);
 
   await context.close();
 });
