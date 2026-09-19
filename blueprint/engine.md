@@ -736,8 +736,9 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   owner-local sealed stores that fail closed, and for the value format of a
   floor; caches and credentials stay out. Every change to such a record carries
   a test that decodes the previous release's bytes. The retained rule above does
-  not change: a record bearing another identity's tag, or one a newer build
-  wrote, stays retained (ADR 0020 Consequence 4).
+  not change: a record bearing another identity's tag, or a format version or
+  intent grammar this build does not implement, stays retained (ADR 0020
+  Consequence 4).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a
   profile window while other resolves succeed raises the stronger warning
   (FSM1/cipher-box-next#33 D7); it also covers the network-suppression residual on the pointer
