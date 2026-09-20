@@ -1,0 +1,229 @@
+With the latest work done in wave 20 is the staging/writable-share.spec.ts ready to be reenabled on the staging-e2e job?
+
+---
+
+staging e2e failed on the writable share test https://github.com/FSM1/cipher-box/actions/runs/35509804751/job/106080419192
+
+---
+
+<task-notification>
+<task-id>a806a230221695770</task-id>
+<tool-use-id>toolu_01NcvMo6eZkFC9NtXxobKerK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c6afe030-96e2-4d17-a33b-35403074afc4/tasks/a806a230221695770.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace received-share permission" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings.
+
+**Answer: No.** A downgrade does not change the `permission` the received-share list reports. That field is the accept-time bookmark copy. PR #1878's claim is false for this read today.
+
+**Path**
+
+1. `/Users/myankelev/Code/random/cipher-box/apps/web/src/hooks/useReceivedShares.ts:26` calls `facade.receivedShares()`. The facade forwards it as a read intent at `/Users/myankelev/Code/random/cipher-box/packages/client/src/facade.ts:149-151`. The worker host maps each row at `/Users/myankelev/Code/random/cipher-box/packages/client/src/worker/engineHost.ts:391-392`, and the row shape is `/Users/myankelev/Code/random/cipher-box/packages/client/src/worker/protocol.ts:292`. The route paints the field at `/Users/myankelev/Code/random/cipher-box/apps/web/src/routes/SharedPage.tsx:37` and `:84`.
+
+2. The engine call is `Engine::received_shares` at `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:10563`. The row type is `ReceivedShareRow` at `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:591`, with `permission` documented at `:603-604` as "the permission the owner-signed commitment granted at accept". The wasm getter is `/Users/myankelev/Code/random/cipher-box/crates/wasm/src/lib.rs:1205-1209`.
+
+3. The fill site is `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:10580`:
+```rust
+permission: share.permission.into(),
+```
+`share` is one entry of the durable received-shares list loaded at `:10566-10570`. Only `resolution` comes from the live verdict map (`:10581`). So the row's permission is the bookmark copy, not the owner's live commitment.
+
+4. The live permission does exist, but on a different wire. `ReceivedShareStatus::refresh` re-reads the owner's commitment each pass and writes the live value into the verdict and into the render permission map:
+- read of the owner's commitment entry: `/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/received_status.rs:455-477` (`committed_permission`, and `permission = committed` at `:399-401`).
+- revocation-signal demote to `Read`: `:424-427`.
+- verdict store: `ReceivedVerdict.permission` at `:70-80`, written at `:434-440`.
+- render map rebuild: `*render.permissions.borrow_mut() = ...` at `:442-450`.
+
+That map (`bookmarked_permissions`) feeds the folder view, not the `/shared` list: `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:10409-10426` (`SnapshotView.permission`) and the write-affordance gate at `:11354-11360`.
+
+5. The pass. `ReceivedShareStatus::refresh` runs in one place only: the sync tick's reconcile pass, last leg, at `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:7297-7322`, inside the tick loop built at `:6453` (`build_tick_loop_spawner`). The mailbox pull leg `ShareInbox::pull` leads it at `:7285`. Pace comes from `on_access_refresh_due`; a manual tick forces every share through `ResolveMode::NoCache` (`/Users/myankelev/Code/random/cipher-box/crates/engine/src/sync/tick.rs:155-156`). The focus on-access leg is a folder leg only and never resolves a grafted scope root (`/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:9714-9744`, doc note at `received_status.rs:308-313`).
+
+A manual list re-read alone changes nothing: `received_shares()` loads the store and borrows the verdict map, and it starts no resolve. Even a completed tick leaves the row's `permission` unchanged, because the tick writes the live value to the verdict and render maps, never back to the bookmark. `accept.rs` is the only writer of the bookmark permission (`/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/accept.rs:985-1000`, `received.reconcile(...)` then `store.persist`), so only a fresh pointer plus an accept moves it.
+
+**Tests.** No Rust test covers a downgrade reaching the recipient's reported row permission. The two closest tests assert the render permission map instead:
+- `a_downgraded_commitment_supersedes_the_permission_the_bookmark_kept` — `/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/received_status.rs:2250` (asserts `fx.permissions`, not a `received_shares()` row).
+- `a_pass_that_re_resolves_nothing_keeps_the_superseded_permission` — `.../received_status.rs:2267`.
+- `an_owner_downgrade_to_read_drops_the_cached_write_seed` — `.../received_status.rs:2121`.
+- The one test that does assert a `received_shares()` row permission is `received_shares_carry_no_verdict_until_a_pass_reaches_one` — `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:18229`, and it asserts the accept-time value at `:18239`.
+
+**Summary.** Downgrade to the `/shared` row permission without a re-accept: no. Downgrade to the folder view permission and the write affordances: yes, after the sync tick's reconcile pass runs its `ReceivedShareStatus::refresh` leg, and only when the damper or a manual (`NoCache`) tick makes that scope due.</result>
+<usage><subagent_tokens>66974</subagent_tokens><tool_uses>28</tool_uses><duration_ms>127701</duration_ms></usage>
+</task-notification>
+
+---
+
+ok implement the fix as follow up of wave 20, same quality gates (both local and on the PR) as usual. when the pr is merged, you can also merge the follow up release please pr and kick off the staging deployment.
+
+---
+
+ok implement the fix as follow up of wave 20, same quality gates (both local and on the PR) as usual. when the pr is merged, you can also merge the follow up release please pr and kick off the staging deployment.
+
+---
+
+please recreate the brief for the agent yourself before kicking off the job.
+
+---
+
+<task-notification>
+<task-id>a21627a977c6595fa</task-id>
+<tool-use-id>toolu_01BxqWa9GWZg7qsr9NkntvqD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c6afe030-96e2-4d17-a33b-35403074afc4/tasks/a21627a977c6595fa.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: simplification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings, in order of cost.
+
+1. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` **line** 19199-19205 — **summary**: The 4-pass loop and its damper comment duplicate work that `WriteGrantee::pass` already does. **Cost**: `pass()` (line 18563) advances the clock by `stale_after` and its own doc says it runs "one tick past the `/shared` damper". The sibling test at line 18756 serves a new root and reads the new verdict after a single `grantee.pass()`. The comment was copied from line 18428, where the fixture advances by `poll_cadence` on the raw scheduler and therefore does need several ticks. Here the comment states a constraint that does not apply, and the loop hides how many passes the behaviour truly needs. Simpler form: one `grantee.pass();` and no comment.
+
+2. **file** `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/shared.page.ts` **line** 82-94 — **summary**: `awaitPermission` is a verbatim copy of `awaitStanding` (line 63) except for the last expression. **Cost**: 13 lines of duplicated poll body, click sequence, timeout default and interval array. Two copies must stay in step when the nudge gesture or the cadence changes. Simpler form: one private `awaitRow(read: (row: Locator) =&gt; Promise&lt;string | null&gt;, expected: string, timeout)` and two 3-line wrappers, or a single helper that takes the test id plus a reader.
+
+3. **file** `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/shared.page.ts` **line** 77-79 (with call site `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/staging/writable-share.spec.ts` line 53) — **summary**: The doc comment asserts a fact that the code no longer checks. **Cost**: The comment says "An owner downgrade leaves the standing granted", but the diff deleted the `awaitStanding('granted', …)` call and `awaitPermission` never reads `shared-standing`. The comment now justifies a path the helper does not cover. Either drop the sentence or keep the standing check inside the poll.
+
+4. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` **line** 19186-19191 — **summary**: The `row` closure is a 6-line named helper for a body that runs twice. **Cost**: The closure must take `&amp;WriteGrantee` as a parameter, shadowing the outer binding, only to dodge the borrow that `grantee.serve` needs. The same shape inline is two `let` bindings. Simpler form: read the row directly at each of the two points, or keep the closure but drop the `rows.len()` assert, which the two `assert_eq!` on `permission` already prove enough.
+
+5. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` **line** 10581-10584 — **summary**: `.map(|v| v.permission).unwrap_or(share.permission)` is `map_or` written in two steps. **Cost**: One extra combinator and one extra line per read; `verdict.map_or(share.permission, |v| v.permission).into()` says the same thing. Minor, but this is the line the review asks about, and the rest of the closure refactor (binding `verdict` once, so `resolution` reuses the lookup) is a real gain and should stay.
+
+6. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` **line** 605-607, 588-590 and 10559-10561 — **summary**: Three doc edits now state the same rule in three places, plus a fourth copy in the test doc at line 19183 and a fifth in the page object. **Cost**: The field doc at 605 spends three lines on "An owner downgrade is published, never delivered, so only a resolve sees it", which the method doc at 10559 already says for the whole list, and which `resolution`'s own doc implies. The struct doc edit at 588 removes the permission from the sentence and gains nothing, since the method doc is the one a caller reads. Simpler form: keep the rule once, on `received_shares`, and let the field doc say "The owner's committed permission as of the last resolve, or the accept-time copy before the first one."
+
+Nothing else in the 148 lines adds state that is derivable, dead code, or deep nesting.</result>
+<usage><subagent_tokens>41301</subagent_tokens><tool_uses>8</tool_uses><duration_ms>62404</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae16960d47c8bce93</task-id>
+<tool-use-id>toolu_01LJVkjXE49jytJtC3z1Am9W</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c6afe030-96e2-4d17-a33b-35403074afc4/tasks/ae16960d47c8bce93.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: reuse" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Findings
+
+**1. `tests/web-e2e/page-objects/shared.page.ts:82` — `awaitPermission` is a verbatim copy of `awaitStanding` (same file, line 63) apart from the final read expression.**
+
+Both methods hold the identical poll contract: click `status-indicator`, call `readAgain()`, return the sentinel `'no row'` when `rows.count() !== 1`, poll at `intervals: [5_000]`, and compare with `.toBe()`. Only the last statement differs — `getByTestId('shared-standing').getAttribute('data-resolution')` against `getByTestId('shared-permission').textContent()`.
+
+Concrete reuse: add one private poll helper, for example `private async awaitRowField(read: () =&gt; Promise&lt;string | null&gt;, expected: string, timeout: number)`, and reduce `awaitStanding` and `awaitPermission` to one-line callers. `readStanding` (line 102) repeats the same `'no row'` sentinel and poll shape without the sync nudge, so it can take the same helper with a different reader.
+
+Cost: 13 duplicated lines today, and three copies of the nudge-and-reread contract. A change to the nudge (a new test id for the status indicator, a different interval, a different sentinel) must now land in two or three places, and a copy that is missed fails only as a staging timeout at 600 s.
+
+Related note on the same change: `tests/web-e2e/staging/writable-share.spec.ts:53` replaced `awaitStanding('granted', …)` plus a permission assertion with `awaitPermission('read', …)` alone, so the spec no longer asserts the standing. A shared helper that returns both fields, or a second one-line call, keeps that assertion at no extra cost.
+
+**2. `crates/engine/src/facade.rs:19190` — the `row` closure re-implements the existing `shared_row_verdict` helper at `crates/engine/src/facade.rs:18348`.**
+
+Both live in `mod capstone`, so the helper is already in scope. The helper body is `block_on(engine.received_shares())`, `assert_eq!(rows.len(), 1, "one accepted share")`, then the field. The new closure repeats all three steps, including the same assertion message, and differs only in that it returns the whole row instead of `resolution`.
+
+Concrete reuse: widen the existing helper to `fn shared_row(engine: &amp;Engine&lt;FakeSeamTypes&gt;) -&gt; ReceivedShareRow`, and let the four current call sites (lines 18418, 18435, 18542, 18767) read `.resolution` off the returned row. The new test then calls `shared_row(&amp;grantee.engine)` and drops the closure. The closure also takes `&amp;WriteGrantee` where the helper takes `&amp;Engine`; the existing call sites already pass `&amp;grantee.engine`, so no adapter is needed.
+
+Cost: 5 duplicated lines and a second copy of the `"one accepted share"` invariant. Two helpers now describe the same row, so a change to the list read or to the single-row precondition must land twice.
+
+**3. `crates/engine/src/facade.rs:19201-19205` — the damper loop and its comment duplicate `crates/engine/src/facade.rs:18427-18433`.**
+
+The comment text `The /shared refresh is damped, so the pass that re-resolves the … is not the next one.` and the `for _ in 0..4` loop are copied. The bodies differ only because one test drives `world.scheduler.advance` plus `poll_tasks_once` directly and the other calls `grantee.pass()`.
+
+Concrete reuse: name the count once, for example a `const PASSES_PAST_THE_REFRESH_DAMPER: usize = 4;` beside `MAX_RESOLVES_PER_PASS` usage in the test module, or a `WriteGrantee::passes(n)` method, and let both tests refer to it.
+
+Cost: low, about 4 lines, but the literal `4` encodes the damper period from `crates/engine/src/grants/received_status.rs`. If that period rises, two hand-copied loops must be found and raised, and each failure reads as a wrong verdict rather than as a stale constant.</result>
+<usage><subagent_tokens>46390</subagent_tokens><tool_uses>13</tool_uses><duration_ms>69899</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5406fd95e48090ea</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c6afe030-96e2-4d17-a33b-35403074afc4/tasks/a5406fd95e48090ea.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: efficiency" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Findings
+
+**1. `for _ in 0..4 { grantee.pass(); }` runs three passes more than the settle needs**
+- file: `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs`
+- line: 19201-19205
+- summary: The loop copies a comment written for a `poll_cadence` loop, but `pass()` already advances a full `stale_after` tick, which its own doc calls "one tick past the `/shared` damper".
+- cost: Each `pass()` advances the fake clock by `stale_after` and pumps every spawned task (fetch legs, drain, resolve, graft) once. The loop therefore pays 4 whole sync passes where the sibling loop at line 18430 pays 4 cheap `poll_cadence` ticks, and where the re-resolve lands on the first. Roughly 3 unneeded task-pump rounds per run of this test.
+- cheaper alternative: The break-on-settle shape already used at line 19104: `for _ in 0..4 { if row(&amp;grantee).permission == Permission::Read { break; } grantee.pass(); }`, or one `pass()` if the damper claim in the comment is false for `pass()`.
+
+**2. `awaitPermission` polls on a flat 5 s interval inside a 600 s budget**
+- file: `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/shared.page.ts`
+- line: 82-93
+- summary: The poll has a single fixed interval, so the helper adds up to 5 s of dead wait after the downgrade actually lands, and each turn forces a sync pass plus a list reload.
+- cost: One turn costs 4 browser round trips (status-indicator click, reload click, `rows.count()`, `textContent()`). At the 600 s budget used by `writable-share.spec.ts:53` this is up to ~120 turns, about 480 round trips and 120 forced sync passes. The flat interval also means the mean overshoot past the real landing time is 2.5 s on every run.
+- cheaper alternative: A ramped interval array, for example `intervals: [500, 1_000, 2_000, 5_000]`, keeps the same worst case and cuts the typical overshoot by about an order of magnitude. Playwright reuses the last entry once the array runs out.
+
+**3. `awaitPermission` duplicates `awaitStanding` byte for byte except the read**
+- file: `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/shared.page.ts`
+- line: 63-93
+- summary: The two helpers share the same click-click-count body; only the final locator read differs.
+- cost: Two copies of the poll shape, so any interval or nudge change must land twice. No runtime cost, but it doubles the surface of finding 2.
+- cheaper alternative: One private `pollSingleRow(read: (row: Locator) =&gt; Promise&lt;string | null&gt;, expected: string, timeout: number)`, with `awaitStanding` and `awaitPermission` as two-line callers.
+
+**4. Row count and text read as two separate round trips per poll turn**
+- file: `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/shared.page.ts`
+- line: 87-88
+- summary: The helper asks the page for the row count and then for the cell text, in sequence.
+- cost: Two sequential browser IPC calls per turn where one suffices; at 120 turns that is 120 avoidable round trips.
+- cheaper alternative: Read `await this.rows.getByTestId('shared-permission').allTextContents()` once and branch on `length !== 1`, which returns the count and the text in one call.
+
+## Checked, no added cost
+
+- `received_shares()` verdict lookup (`/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:10575-10589`): the diff binds `verdicts.get(&amp;share.key())` once and reads both `permission` and `class` from it. Before the diff the same `get` ran once per row for `resolution` alone, so the per-row map cost is unchanged, not doubled. `BookmarkKey` is a 48-byte `Copy` tuple, so `share.key()` allocates nothing.
+- The `RefCell` borrow held across the map (`facade.rs:10574`): the guard already spanned the whole `map`/`collect` before this diff, and the diff neither widens it nor adds an `await` inside it. Worth knowing that the sync pass at `facade.rs:5688` writes verdicts under `try_borrow_mut` and silently skips on failure, so any future widening of this guard would turn into discarded resolve work; the diff does not widen it.
+- The local `row` closure in the new test captures only `&amp;WriteGrantee` by argument, so it holds no large scope.</result>
+<usage><subagent_tokens>42749</subagent_tokens><tool_uses>10</tool_uses><duration_ms>88800</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aac4dd4579b196561</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c6afe030-96e2-4d17-a33b-35403074afc4/tasks/aac4dd4579b196561.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: altitude" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings, ASD-STE100.
+
+**Verdict on the core fix: the depth is correct.** `received_shares` renders one row per bookmark key `(sharer_identity_pk, scope_id)`, and `ReceivedVerdicts` is keyed the same way (`crates/engine/src/grants/received_status.rs:91-93`, whose own doc says "Two sharers may hold one scope id, and the id alone would collapse their rows onto one verdict cell"). `bookmarked_permissions` is keyed by `scope_id` alone (`crates/engine/src/grants/grafted.rs:33`). The row therefore cannot read the render permission map without collapsing two sharers onto one cell. The verdict map is the only correctly keyed live source.
+
+1. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` · **line** 10583-10586
+   **summary** The unknown-verdict fallback rule is now written twice: here, and at `received_status.rs:456-459` where the render permission map applies the identical `map_or(share.permission, …)`.
+   **Not two sources of truth.** One producer (`refresh`) writes `refreshed`; the permission map is a projection of it under a different key for a different consumer (`writable_graft_roots` at `facade.rs:11362`, `snapshot` at `facade.rs:10411`). The lifetimes match: both are rebuilt each pass, both are cleared together in the session reset (`facade.rs:5688-5699`), and both are cleared on the empty-list early return (`received_status.rs:325-330`). `bookmarked_permissions` does not survive a pass the damper skips any better than the verdict map does — it carries the same value forward through the same `refreshed` entry.
+   **cost** The fallback policy lives in two expressions. A change to it (for example "unknown means Read, to fail closed") must be made in two crates-apart places, and a miss is silent.
+   **deeper change** Put the rule in one function next to the verdict type, for example `pub(crate) fn live_permission(verdicts: &amp;ReceivedVerdicts, share: &amp;ReceivedShare) -&gt; Permission` in `received_status.rs`, and call it from both the map rebuild at line 453 and the row map at `facade.rs:10583`. Roughly ten lines, no behaviour change.
+   **apply** (small, in this PR).
+
+2. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` · **line** 10584-10586
+   **summary** The bookmark fallback sits at the right layer; neither the accept flow nor the store should hold the live value.
+   **evidence** The accept flow already holds the live value at accept time and self-heals on a verified re-accept — `ReceivedShare::same_bookmark` (`crates/engine/src/grants/accept.rs:170-181`) lists `permission` among the fields whose drift makes the fresh metadata authority. A downgrade publishes no fresh pointer, so nothing reaches the accept flow to trigger that. Writing the resolved permission back into the durable bookmark would contradict the stated contract of the verdict state ("a verdict is what a live resolve found, so a restart re-earns it", `facade.rs:5055-5057`) and would persist a value a partial or hostile resolve produced. The durable bookmark as last-verified-at-accept, overlaid by the session's live verdict, is the right split.
+   **cost** None in this PR. One residual: after a reload the row again reports the accept-time permission until a pass resolves. That window is read-only display; the write gate is separate and re-earned per session (`writable_graft_roots`, `facade.rs:11361-11373`, requires `Write` in the map **and** an in-memory write seed).
+   **no change needed.**
+
+3. **file** `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/shared.page.ts` · **line** 77-93
+   **summary** `awaitPermission` is a copy of `awaitStanding` (lines 58-75) with one line changed; `readStanding` (lines 96-114) is a third near-copy. The spec's earlier `awaitStanding('granted', …)` call shows the general shape.
+   **cost** Three copies of the nudge-and-reread loop. The status-indicator click, the `count() !== 1` guard, the `'no row'` sentinel, and the 5-second interval are repeated. The next field to poll adds a fourth copy, and a fix to the nudge must be made in each.
+   **deeper change** One private poll helper parameterised on a field reader, for example `private async awaitField(read: (rows: Locator) =&gt; Promise&lt;string | null&gt;, expected: string, timeout: number, nudge: boolean)`, with `awaitStanding`, `awaitPermission`, and `readStanding` as three one-line wrappers. `readStanding` differs only in the nudge and the interval, so it folds in with two arguments.
+   **apply** (this PR introduced the third copy, so it should collapse them).
+
+4. **file** `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/staging/writable-share.spec.ts` · **line** 53
+   **summary** The replaced line dropped the standing assertion; the new helper checks the permission text only.
+   **cost** The claim in the helper's own docstring — "An owner downgrade leaves the standing granted" — is no longer asserted at the e2e level. A downgrade that also flipped the row to `revocation-signal` now passes this spec. The Rust test asserts it (`facade.rs:19209`), but the browser path does not.
+   **deeper change** After the poll returns, add one expectation: `await expect(list.rows.getByTestId('shared-standing')).toHaveAttribute('data-resolution', 'granted')`. One line, and it keeps the pre-PR coverage.
+   **apply.**
+
+5. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` · **line** 19200-19206
+   **summary** The comment above the four-pass loop is copied from the precedent at line 18428 but does not describe this loop.
+   **cost** The precedent advances `poll_cadence` per turn, so its loop really is waiting the damper out. The new loop calls `grantee.pass()`, which is documented as "Run one tick past the `/shared` damper" (`facade.rs:18561-18568`) and advances `stale_after`. Either one pass suffices and three are noise, or the extra passes wait for something else (the seed or floor convergence) that the comment does not name. A reader cannot tell which, and a future reduction of the count would look safe when it is not.
+   **deeper change** Reduce to the passes the assertion really needs, or name the real reason in the comment.
+   **apply** (comment only, cheap).
+
+6. **file** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` · **line** 10411-10418
+   **summary** Pre-existing: `snapshot` treats a scope absent from `bookmarked_permissions` as `Permission::Write`. After a restart that map is empty until the first pass rebuilds it.
+   **cost** The safety of the `None =&gt; Write` arm rests on a graft not being renderable before the pass that fills the map. This PR makes the row report a live permission while the snapshot still leans on that implicit ordering, so the two surfaces now answer from different guarantees.
+   **deeper change** Make the absent case explicit — either `None` means "own plane" by a separate test rather than by map absence, or fail closed to `Read` for a scope the render tree marks grafted.
+   **out of scope for this PR.**</result>
+<usage><subagent_tokens>55246</subagent_tokens><tool_uses>22</tool_uses><duration_ms>132098</duration_ms></usage>
+</task-notification>
