@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0c756027038f",
+  "strategy": "manual-commit",
+  "branch": "fix/shared-row-live-permission",
+  "checkpoints_count": 242,
+  "files_touched": [
+    "tests/web-e2e/page-objects/shared.page.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0c/756027038f/0/metadata.json",
+      "transcript": "/0c/756027038f/0/full.jsonl",
+      "compact_transcript": "/0c/756027038f/0/transcript.jsonl",
+      "content_hash": "/0c/756027038f/0/content_hash.txt",
+      "prompt": "/0c/756027038f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24348,
+    "cache_creation_tokens": 5950999,
+    "cache_read_tokens": 331131675,
+    "output_tokens": 775527,
+    "api_call_count": 1544
+  }
+}

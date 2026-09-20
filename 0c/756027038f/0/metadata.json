@@ -1,0 +1,318 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0c756027038f",
+  "session_id": "b1d5c60c-1075-4832-b3f5-f08bf37eaf33",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-20T14:02:39.058392Z",
+  "branch": "fix/shared-row-live-permission",
+  "checkpoints_count": 242,
+  "files_touched": [
+    "tests/web-e2e/page-objects/shared.page.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5[1m]",
+  "turn_id": "aa9b34c5a1a5",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 24348,
+    "cache_creation_tokens": 5950999,
+    "cache_read_tokens": 331131675,
+    "output_tokens": 775527,
+    "api_call_count": 1544
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-mattpocock-skills:wait-what-2026-09-19T12:16:35.524617Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "mattpocock-skills:wait-what"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "15117d5b7d3e",
+      "timestamp": "2026-09-19T12:16:35.524617Z",
+      "native": {
+        "command": "/mattpocock-skills:wait-what"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/mattpocock-skills:wait-what",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-mattpocock-skills:wait-what-2026-09-19T23:16:07.376662Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "mattpocock-skills:wait-what"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "bbaed61f90ed",
+      "timestamp": "2026-09-19T23:16:07.376662Z",
+      "native": {
+        "command": "/mattpocock-skills:wait-what"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/mattpocock-skills:wait-what",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HkViSTrzrtc1wnLkPav9Qw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "archify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "aa9b34c5a1a5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 14766,
+        "end": 14767,
+        "entry_ids": [
+          "880634fb-ac87-4fe0-8be4-100195317558"
+        ],
+        "tool_use_id": "toolu_01HkViSTrzrtc1wnLkPav9Qw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HkViSTrzrtc1wnLkPav9Qw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: archify",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 242
+  },
+  "summary": {
+    "intent": "Continue and complete a multi-day autonomous 'wave' orchestration process for the FSM1/cipher-box repository: burn down post-cutover engine/web/desktop issues (wave 19), then a sharing/writable-share feature build and a security-rule (rule 6 gate-verdict) audit and fix (wave 20), using Opus worktree lanes for implementation and a CodeRabbit/Greptile review chain for quality gating, with the orchestrator merging clean PRs and escalating design/security decisions to the user.",
+    "outcome": "Merged 67+ PRs across two waves closing dozens of issues, shipped multiple releases (v2.1.0 through v2.4.0) to staging, found and fixed several serious data-loss/lockout/security defects (content-key AAD scope mismatch, cache-vs-floor ordering, rule 6 trust-violation misclassifications, vault-root cut lockout, sharing delivery bugs), completed the writable-share and ADR 0020/0021 features, and left a small number of decisions (ADR 0021 residual, wave-timing instrumentation, open_pass stall ceiling) and a release PR pending for the user.",
+    "learnings": {
+      "repo": [
+        "Security rule 6 states 'a failure is a fail-closed trust violation, never mere staleness' — multiple lane agents misread this in reverse (treating availability failures as excusable trust violations); the only sanctioned exception is ADR 0021's lagging-record-unreachable case.",
+        "CodeRabbit CLI (`coderabbit review --agent`) now shares the same hourly quota pool as the web PR review (post ~2026-09-18 change) — running it burns the same budget and finds less; stop invoking it in lane briefs.",
+        "Opening a PR in ready (non-draft) state — including docs-only PRs — auto-triggers a CodeRabbit web review, consuming the shared org quota; docs PRs must be opened as draft or include `@coderabbitai ignore` in the body.",
+        "cipher-box (main repo) has `commit.gpgsign=false` deliberately set by the user to let agents commit unsigned; cipher-box-next still has signing on, causing 1Password 'failed to fill whole buffer' errors — commit there with `git -c commit.gpgsign=false commit`.",
+        "Blueprint (`blueprint/*.md`) and `CONTEXT.md` changes require an accepted ADR in cipher-box-next first; ADR acceptance flow is: ADR PR merges as 'Proposed', then after the blueprint reword PR merges, a follow-up PR flips status to 'Accepted — ... in FSM1/cipher-box#NNNN (merged)'.",
+        "Durable client records (op queue, staging store, sealed stores, floor values) must decode records written by the previous release (ADR 0020); a new field needs a `#[serde(default)]` equal to the value older builds implicitly used, or a migration/new ADR is required.",
+        "GraphQL PR reply mutations do NOT expand `@file` syntax in `-f body=@file` — must read the file into a shell variable and pass `-f \"body=$BODY\"`, then read the posted comment back via `gh api` to confirm it rendered as text, not a literal path.",
+        "Squash-merge via `gh pr merge --squash` copies commit trailers from branch commits into the squash message by default — must merge with an explicit `--subject`/`--body-file` to avoid leaking `Co-Authored-By` attribution into main.",
+        "FUSE/desktop host error mapping: `TrustViolation` -> `EIO` (macOS/Linux) / `STATUS_DATA_ERROR` (Windows), no retry, hard I/O error to the app; `ContentUnavailable`/`Unavailable` -> `EAGAIN` / `STATUS_RETRY`, retryable — this makes the rule-6 misclassification bug user-visible as false 'file damaged' errors.",
+        "The name wave (write-plane rotation on grant cut) is NOT parallel/background as the blueprint claims — it runs inline, serially, node-by-node inside the owner command and blocks the caller; it has no durable resume marker, so an interrupted wave leaves an old name alive with no time bound (issue #1923).",
+        "`sweep_cadence` (900s) and other SyncTimingProfile constants are placeholders pending real measurement per `blueprint/testing.md`, but no instrumentation (metrics/events/timers) exists anywhere in the engine to measure wave or sweep convergence time (issue #1924).",
+        "Grant/share scopes ('grafted' scopes) are re-sealed under a new scope root; content reads and version history must resolve the seed/floor from the file's own scope, not the vault root — using the vault root seed for a file under a grafted scope causes 100% read failure for both owner and recipient (issue #1909)."
+      ],
+      "code": [
+        {
+          "path": "crates/wasm/src/seams_bridge.rs",
+          "finding": "optional_u64/required_u64 used f64-as-u64 casts and treated any non-numeric JS value as 'no floor' (fail-open) — a corrupted or malicious floor value in IndexedDB could bypass the rollback bar on web only (desktop stays fail-closed); fixed to fail-closed and refuse values above 2^53-1."
+        },
+        {
+          "path": "crates/engine/src/net/child.rs",
+          "finding": "resolve_child's NoUpdate arm briefly downgraded SequenceNotNewer gate rejections to ContentUnavailable citing rule 6 — this was later reverted (owner decision: option A) since rule 6 requires such rejections to always be TrustViolation."
+        },
+        {
+          "path": "crates/engine/src/net/rotation.rs",
+          "finding": "install_unproved_scopes originally removed proved roots from the unproved set BEFORE adding newly-named roots, causing a scope root proved by one parent to be re-added to the unproved set if a stale second parent named it in the same walk — fixed by reordering (add named, then remove proved)."
+        },
+        {
+          "path": "crates/engine/src/sync/drain.rs",
+          "finding": "WriteWaveNet::interior_source and the owner sweep's open_interior_record raised the sequence floor BEFORE writing adopted bytes to the snapshot cache, so an offline read after a write share could find a stale below-floor cached record — root cause of #1913, fixed via keep_newest_last_known_good with a per-name in-memory lock covering cache-read/compare/write."
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "finding": "flat_root_cut / rotate_now for a vault-root read cut raised the durable read-epoch floor BEFORE the vault pointer was re-vouched at the new epoch; if the vouch failed, the device's own cold-start check refused to start ('vouched N below durable floor N+1'), a permanent single-device lockout — fixed by re-ordering to publish root, then vouch pointer, then raise floor, then sweep (#1916/#1919)."
+        }
+      ],
+      "workflow": [
+        "Establish a shared 'lane brief' document (`w19-common.md`) once and have every worktree agent read it, rather than repeating instructions per-lane — but keep updating it in place as new gotchas are found (CLI quota, foreground vs background skill invocation, no CLI runs, unsigned commits).",
+        "When self-reviewing before opening a PR, invoke code-review/simplify/security-review skills directly in-context rather than delegating to background sub-agents — background review sub-agents' results get orphaned/silently discarded because the parent agent's turn ends when a skill call returns, and a finished skill does not automatically continue the lane's remaining steps unless explicitly told so.",
+        "A skill invocation that spawns its own sub-agents should have those sub-agents run in the foreground, not background, or their reports go to the orchestrator instead of the lane that needs to act on them.",
+        "Before merging a PR whose branch is several commits behind a main that has had semantic (not just textual) conflicts in the same wave, do a full pairwise test-merge with the full test suite rather than trusting a clean git merge — silent semantic conflicts (e.g. two PRs each independently correct but incompatible when combined) broke `main`'s engine test target multiple times this wave despite clean auto-merges.",
+        "After any release-please merge, do not merge anything else to main until a staging deploy tag exists on that exact commit — release workflows resolve main HEAD once at dispatch time, so a later unrelated merge silently strips the release's deployability.",
+        "When an agent's report shows an interim/partial status (e.g. 'waiting for four review agents'), verify via GitHub/branch state whether the agent actually completed before assuming a stall — but also, if a background agent notification implies completion, don't act on its behalf without reading the full state, since the agent may still be running (rate-limited, retrying) and merging in that gap can orphan its in-flight commit/push.",
+        "When evidence for a policy decision is old (e.g., a comparison from ~700 PRs / months ago), explicitly flag and retire it rather than continuing to cite it as current — tooling and quotas change over time."
+      ]
+    },
+    "friction": [
+      "CodeRabbit's free/CLI review quota changed mid-project (CLI now shares the same hourly pool as web reviews), which the orchestrator did not anticipate, causing wasted review slots and a false 'stale' rate-limit diagnosis before the true cause was found.",
+      "Multiple 'stall' incidents where the orchestrator's own background wait-scripts/timers died across session/account restarts, or the orchestrator simply failed to act on a fired timer notification in the same turn, costing review slots (1-2 hours idle each time).",
+      "GitHub API intermittent timeouts and DNS/network egress drops required manual retry loops around nearly every gh call.",
+      "Opening a PR as 'ready' (including docs-only PRs) silently auto-triggers a CodeRabbit review and consumes the shared quota — discovered only after it happened on PR #1915, wasting the slot intended for #1914.",
+      "GraphQL reply mutations with `-f body=@file` silently post the literal file path instead of the file contents — caught only because the user manually inspected a posted comment.",
+      "A background sub-agent's 'simplify'/security-review skill invocation spawned its own nested sub-agents that reported results to the orchestrator instead of the calling lane agent, stalling three separate lanes (G22, G23, G24) until the orchestrator manually relayed the results back.",
+      "Local FUSE-T test mounts left stray SMB server processes running on the user's own machine, producing a disruptive 'Server connections interrupted' system dialog during unrelated lane test runs.",
+      "Disk space exhaustion (down to ~219 MiB free) from accumulated worktree build artifacts (target/ dirs) mid-wave, requiring emergency cleanup.",
+      "archify diagram authoring required 8+ iterations to satisfy viewport-overflow, desktop-readability, and message-spacing validation constraints before a passing artifact was produced."
+    ],
+    "open_items": [
+      "Release PR #1908 (v2.4.0) awaits user merge; per standing rule, no further merges to main until a staging tag points at that commit.",
+      "ADR 0021 residual E2 paragraph (forgery window now reachable via the lagging read arm) — orchestrator recommended adding it, awaiting user go-ahead.",
+      "Read-only measurement of a second device cold-starting immediately after a vault-root cut (may hold no read seed until first tick) — awaiting user approval to run; file issue only if window is real.",
+      "Issue #1920: residual single-device lockout after a failed vault-pointer vouch post-cut — needs an ADR before any code fix (severity low, no UI path reaches root cut today).",
+      "Issue #1923: an interrupted/failed name wave leaves an old (revoked) name alive with no time bound or resume mechanism — needs design work before grant revoke ships to the product.",
+      "Issue #1924: instrumentation slice (wave/sweep timing events, node-lag counts, perf harness scenario) needed to set sweep_cadence from real measurement instead of a placeholder.",
+      "Decision needed: whether to put a ceiling/dead-letter policy on a scope whose queue stalls indefinitely because its scope root is permanently gate-refused (open_pass charge policy) — current behavior judged correct by resolve agent but flagged for owner review.",
+      "#1735 needs a `CONTEXT.md` wording change via the ADR process (currently the only unmet piece of an otherwise-satisfied rule).",
+      "Carried-over ops items: staging sign-in latency >180s occasionally, Grafana deploy step 404 (stack needs periodic manual wake-up), missing IPFS_GATEWAY_TOKEN secret for staging read-accelerator baseline, missing Apple Developer signing secrets blocking #1514/#1516 credentials half.",
+      "#1806 (10 web UI target-state questions) remains postponed indefinitely per user instruction.",
+      "#1890: external unmount on macOS never reported to the app (FUSE-T keeps session open after SMB disconnect) — filed but not fixed.",
+      "Wave 20 backlog not yet started: #1131 (core), #831 (sealed content-block read cache), #1792 (WinFsp mount point, needs Windows session)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-20T14:01:27.461189Z",
+    "agent_lines": 21,
+    "agent_removed": 0,
+    "human_added": 91,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 114,
+    "total_lines_changed": 130,
+    "agent_percentage": 16.153846153846153,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 7393,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "designs/inventory/scratch-epic/INVENTORY-v1.txt": 163,
+        "designs/inventory/scratch-epic/INVENTORY-v2.txt": 220,
+        "designs/inventory/scratch-epic/att.tsv": 146,
+        "designs/inventory/scratch-epic/attachments.tsv": 146,
+        "designs/inventory/scratch-epic/body-att.md": 156,
+        "designs/inventory/scratch-epic/body-final.md": 156,
+        "designs/inventory/scratch-epic/body.md": 155,
+        "designs/inventory/scratch-epic/comments-att/01-login.md": 37,
+        "designs/inventory/scratch-epic/comments-att/02-shell.md": 42,
+        "designs/inventory/scratch-epic/comments-att/03-files.md": 32,
+        "designs/inventory/scratch-epic/comments-att/04-actions.md": 67,
+        "designs/inventory/scratch-epic/comments-att/05-previews.md": 42,
+        "designs/inventory/scratch-epic/comments-att/06-search.md": 7,
+        "designs/inventory/scratch-epic/comments-att/07-shared.md": 47,
+        "designs/inventory/scratch-epic/comments-att/08-bin.md": 27,
+        "designs/inventory/scratch-epic/comments-att/09-settings.md": 52,
+        "designs/inventory/scratch-epic/comments-att/10-invite-narrow.md": 12,
+        "designs/inventory/scratch-epic/comments/01-login.md": 37,
+        "designs/inventory/scratch-epic/comments/02-shell.md": 42,
+        "designs/inventory/scratch-epic/comments/03-files.md": 32,
+        "designs/inventory/scratch-epic/comments/04-actions.md": 67,
+        "designs/inventory/scratch-epic/comments/05-previews.md": 42,
+        "designs/inventory/scratch-epic/comments/06-search.md": 7,
+        "designs/inventory/scratch-epic/comments/07-shared.md": 47,
+        "designs/inventory/scratch-epic/comments/08-bin.md": 27,
+        "designs/inventory/scratch-epic/comments/09-settings.md": 52,
+        "designs/inventory/scratch-epic/comments/10-invite-narrow.md": 12,
+        "designs/inventory/scratch-epic/frame.md": 23,
+        "designs/inventory/scratch-epic/rows.md": 135,
+        "designs/inventory/scratch-epic/table-v1.md": 165,
+        "designs/inventory/scratch-epic/table-v2.md": 222,
+        "designs/inventory/scratch-v1/.wallet-key": 1,
+        "designs/inventory/scratch-v1/.wallet-key-b": 1,
+        "designs/inventory/scratch-v1/.wallet-key-c": 1,
+        "designs/inventory/scratch-v1/.wallet-key-d": 1,
+        "designs/inventory/scratch-v1/.wallet-key-e": 1,
+        "designs/inventory/scratch-v1/capture.mjs": 379,
+        "designs/inventory/scratch-v1/capture2.mjs": 248,
+        "designs/inventory/scratch-v1/capture3.mjs": 215,
+        "designs/inventory/scratch-v1/capture4.mjs": 110,
+        "designs/inventory/scratch-v1/capture5.mjs": 88,
+        "designs/inventory/scratch-v1/capture6.mjs": 246,
+        "designs/inventory/scratch-v1/capture7.mjs": 148,
+        "designs/inventory/scratch-v1/capture8.mjs": 77,
+        "designs/inventory/scratch-v1/lib.mjs": 86,
+        "designs/inventory/scratch-v1/notes.json": 129,
+        "designs/inventory/scratch-v1/notes.txt": 2,
+        "designs/inventory/scratch-v1/notes2.json": 116,
+        "designs/inventory/scratch-v1/notes3.json": 61,
+        "designs/inventory/scratch-v1/notes4.json": 26,
+        "designs/inventory/scratch-v1/notes5.json": 10,
+        "designs/inventory/scratch-v1/notes6.json": 105,
+        "designs/inventory/scratch-v1/notes7.json": 34,
+        "designs/inventory/scratch-v1/notes8.json": 21,
+        "designs/inventory/scratch-v1/probe.mjs": 59,
+        "designs/inventory/scratch-v1/readme.md": 3,
+        "designs/inventory/scratch-v2/capture.mjs": 412,
+        "designs/inventory/scratch-v2/capture2.mjs": 231,
+        "designs/inventory/scratch-v2/capture3.mjs": 40,
+        "designs/inventory/scratch-v2/context-menu-batch.json": 8,
+        "designs/inventory/scratch-v2/context-menu-file.json": 8,
+        "designs/inventory/scratch-v2/context-menu-folder.json": 7,
+        "designs/inventory/scratch-v2/context-menu-text.json": 9,
+        "designs/inventory/scratch-v2/dump-bin-purge.json": 39,
+        "designs/inventory/scratch-v2/dump-bin.json": 33,
+        "designs/inventory/scratch-v2/dump-delete.json": 41,
+        "designs/inventory/scratch-v2/dump-details.json": 41,
+        "designs/inventory/scratch-v2/dump-devices.json": 36,
+        "designs/inventory/scratch-v2/dump-files-empty.json": 33,
+        "designs/inventory/scratch-v2/dump-files-narrow.json": 29,
+        "designs/inventory/scratch-v2/dump-files-populated.json": 35,
+        "designs/inventory/scratch-v2/dump-folder-open.json": 34,
+        "designs/inventory/scratch-v2/dump-forget-device.json": 42,
+        "designs/inventory/scratch-v2/dump-invite.json": 14,
+        "designs/inventory/scratch-v2/dump-login.json": 15,
+        "designs/inventory/scratch-v2/dump-new-folder-dialog.json": 39,
+        "designs/inventory/scratch-v2/dump-offline-live.json": 3,
+        "designs/inventory/scratch-v2/dump-offline.json": 34,
+        "designs/inventory/scratch-v2/dump-recovery-setup.json": 40,
+        "designs/inventory/scratch-v2/dump-recovery-warning.json": 3,
+        "designs/inventory/scratch-v2/dump-selection.json": 39,
+        "designs/inventory/scratch-v2/dump-settings.json": 36,
+        "designs/inventory/scratch-v2/dump-share-minted.json": 45,
+        "designs/inventory/scratch-v2/dump-share.json": 43,
+        "designs/inventory/scratch-v2/dump-shared.json": 30,
+        "designs/inventory/scratch-v2/dump-user-menu.json": 36,
+        "designs/inventory/scratch-v2/dump2-after-upload-collision.json": 23,
+        "designs/inventory/scratch-v2/dump2-batch-delete.json": 35,
+        "designs/inventory/scratch-v2/dump2-batch-move.json": 35,
+        "designs/inventory/scratch-v2/dump2-bin-three.json": 18,
+        "designs/inventory/scratch-v2/dump2-drag-hover.json": 23,
+        "designs/inventory/scratch-v2/dump2-editor-after-save.json": 23,
+        "designs/inventory/scratch-v2/dump2-editor-cancel.json": 23,
+        "designs/inventory/scratch-v2/dump2-editor-dirty.json": 29,
+        "designs/inventory/scratch-v2/dump2-editor-idle.json": 29,
+        "designs/inventory/scratch-v2/dump2-editor-saving.json": 23,
+        "designs/inventory/scratch-v2/dump2-folder-collision.json": 23,
+        "designs/inventory/scratch-v2/dump2-preview-audio.json": 31,
+        "designs/inventory/scratch-v2/dump2-preview-image.json": 29,
+        "designs/inventory/scratch-v2/dump2-preview-pdf.json": 29,
+        "designs/inventory/scratch-v2/dump2-preview-video.json": 31,
+        "designs/inventory/scratch-v2/dump2-selection-three.json": 29,
+        "designs/inventory/scratch-v2/dump2-six-hydrating.json": 25,
+        "designs/inventory/scratch-v2/dump2-six-resolved.json": 23,
+        "designs/inventory/scratch-v2/dump2-upload-collision.json": 25,
+        "designs/inventory/scratch-v2/followup.mjs": 72,
+        "designs/inventory/scratch-v2/log-followup.json": 17,
+        "designs/inventory/scratch-v2/log.json": 187,
+        "designs/inventory/scratch-v2/log2.json": 117,
+        "designs/inventory/scratch-v2/notes.txt": 4,
+        "designs/inventory/scratch-v2/probe.mjs": 32,
+        "designs/inventory/scratch-v2/probe2.mjs": 32,
+        "designs/inventory/scratch-v2/readme.md": 3,
+        "designs/inventory/v1/INVENTORY.md": 163,
+        "designs/inventory/v2/INVENTORY.md": 220
+      }
+    }
+  ]
+}
