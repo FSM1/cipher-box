@@ -282,7 +282,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
-    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
+    ) -> Result<Option<OwnScopeMaterial>, GateError> {
         Ok(self
             .recover_own_scope_root(name, record_bytes)
             .await?
@@ -333,13 +333,15 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// `sequence == floor`); a strictly lower sequence is a replay and never
     /// reaches here.
     ///
-    /// Fail-OPEN, never a trust verdict: anything unproved yields `Ok(None)`
-    /// (a `Current` never hardens — [`Adopter::recover_own_scope_material`]).
+    /// `Ok(None)` where there is nothing to re-check: bytes the caller already
+    /// holds, or no candidate the rejected adopt cached. A stage the recovery
+    /// re-runs and the record fails is the gate's rejection, as it would be on
+    /// an adopt.
     pub(crate) async fn recover_own_scope_root(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
-    ) -> Result<Option<RecoveredScopeRoot>, SeamError> {
+    ) -> Result<Option<RecoveredScopeRoot>, GateError> {
         // Steady state — see [`Self::holding`].
         if self.held_current.as_deref() == Some(record_bytes) {
             return Ok(None);
@@ -362,14 +364,12 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         // the exact sequence floor, so a replay below it recovers nothing, and
         // the read-epoch floor still bars a forgery-window writer re-serving a
         // pre-rotation section at the floor.
-        let Ok(sequence) = IpnsRecord::unmarshal(&candidate.record_bytes)
+        let sequence = IpnsRecord::unmarshal(&candidate.record_bytes)
             .and_then(|record| record.verify(name))
-            .map(|verified| verified.sequence)
-        else {
-            return Ok(None);
-        };
+            .map_err(|e| reject(GateStage::RecordVerify, e))?
+            .sequence;
         let env = &candidate.envelope;
-        if let Err(rejected) = floor::check(
+        floor::check(
             self.floors,
             name.as_str().as_bytes(),
             &self.root_scope_id,
@@ -377,20 +377,17 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             env.epoch,
             floor::Strictness::AtFloor,
         )
-        .await
-        {
-            return match rejected {
-                GateError::Seam(seam) => Err(seam),
-                GateError::Rejected(_) => Ok(None),
-            };
-        }
+        .await?;
         // Stage 6's reader-scope binding, which did not run either.
         if env.scope != self.root_scope_id {
-            return Ok(None);
+            return Err(reject(
+                GateStage::Unseal,
+                TrustViolation::SealOpenFailed.into(),
+            ));
         }
-        let Ok(opened) = self.open_seeds(env, &candidate.grant_section, name) else {
-            return Ok(None);
-        };
+        let opened = self
+            .open_seeds(env, &candidate.grant_section, name)
+            .map_err(|e| reject(GateStage::Unseal, e))?;
         let OpenedSeeds {
             read_scope_seed,
             grant_write_scope_seed,
@@ -401,18 +398,10 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         // this scope's seed.
         let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
-        let Ok(read_body) = open_read_body(env, &read_key) else {
-            return Ok(None);
-        };
-        // Map a recovery seam to availability, never a trust verdict.
-        let write_scope_seed = match self
+        let read_body = open_read_body(env, &read_key).map_err(|e| reject(GateStage::Unseal, e))?;
+        let write_scope_seed = self
             .write_scope_seed(env, &candidate.grant_section, grant_write_scope_seed)
-            .await
-        {
-            Ok(seed) => seed,
-            Err(GateError::Seam(seam)) => return Err(seam),
-            Err(GateError::Rejected(_)) => return Ok(None),
-        };
+            .await?;
         Ok(Some(RecoveredScopeRoot {
             envelope: candidate.envelope,
             sequence,
@@ -1353,7 +1342,7 @@ mod tests {
         adopter: &RootAdopter<'_, ScriptedHttp, InMemoryFloorStore>,
         floors: &InMemoryFloorStore,
         fx: &Fixture,
-    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
+    ) -> Result<Option<OwnScopeMaterial>, GateError> {
         floors
             .raise_sequence_floor(fx.name.as_str().as_bytes(), 1)
             .await
@@ -1376,7 +1365,7 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         let material = block_on(recover_at_floor(&adopter, &floors, &fx))
-            .expect("recovery is fail-open, never an error")
+            .expect("our own current root re-checks clean")
             .expect("the owner recovers its own scope seeds on the Current path");
         assert_eq!(material.node_id, fx.root_id, "keyed by the envelope id");
         assert_eq!(
@@ -1428,14 +1417,14 @@ mod tests {
         );
 
         let recovered = block_on(adopter.recover_own_scope_root(&fx.name, &record))
-            .expect("recovery is fail-open, never an error")
+            .expect("our own current root re-checks clean")
             .expect("our own current root recovers");
         assert_eq!(recovered.read_body, adopted);
     }
 
     /// The recovery enforces its own equal-floor precondition rather than
     /// trusting the caller's reading of the rejection: a record strictly below
-    /// the sequence floor is a replay and recovers no seed.
+    /// the sequence floor is a replay, refused at the sequence stage.
     #[test]
     fn equal_floor_recovery_refuses_a_record_below_the_sequence_floor() {
         let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
@@ -1449,10 +1438,9 @@ mod tests {
 
         let record = fx.record(1);
         assert!(block_on(adopter.adopt(&fx.name, &record)).is_err());
-        assert!(
-            block_on(adopter.recover_own_scope_root(&fx.name, &record))
-                .expect("fail-open")
-                .is_none(),
+        assert_eq!(
+            refused_stage(block_on(adopter.recover_own_scope_root(&fx.name, &record))),
+            GateStage::Sequence,
             "a replay below the floor is not our own current record",
         );
     }
@@ -1482,7 +1470,7 @@ mod tests {
         }
         assert!(
             block_on(adopter.recover_own_scope_root(&fx.name, &record))
-                .expect("fail-open")
+                .expect("our own current root re-checks clean")
                 .is_none(),
             "a candidate that never cleared the commitment stage is not recoverable",
         );
@@ -1503,12 +1491,66 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
 
-        assert!(
-            block_on(recover_at_floor(&adopter, &floors, &fx))
-                .expect("fail-open")
-                .is_none(),
+        assert_eq!(
+            refused_stage(block_on(recover_at_floor(&adopter, &floors, &fx))),
+            GateStage::Epoch,
             "a record below the read-epoch floor recovers no seed"
         );
+    }
+
+    /// What a resolve of our own root at exactly the sequence floor answers,
+    /// with the scope's read-epoch floor at `epoch_floor`.
+    fn resolve_own_root_at_floor(epoch_floor: u64) -> ResolveOutcome {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        block_on(floors.raise_sequence_floor(fx.name.as_str().as_bytes(), 1)).unwrap();
+        block_on(floors.raise_epoch_floor(&fx.scope_id, epoch_floor)).unwrap();
+        let endpoint = EndpointId::new("e0");
+        let transport = InMemoryRecordStore::new(vec![endpoint.clone()]);
+        transport.seed_record(&endpoint, fx.name.as_str(), fx.record(1));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let gw = gateway();
+        block_on(resolve_gated(
+            &transport,
+            &InMemorySnapshotCache::default(),
+            &fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw),
+            &fx.name,
+            ResolveMode::CacheFirst,
+        ))
+        .expect("the resolve reaches a verdict")
+        .resolved
+        .outcome
+    }
+
+    /// A record at the sequence floor that the recovery's own re-check
+    /// refuses is the gate's verdict, never an unchanged `Current`.
+    #[test]
+    fn an_equal_floor_record_the_recovery_refuses_resolves_as_a_trust_violation() {
+        assert!(matches!(
+            resolve_own_root_at_floor(OWNER_ROOT_EPOCH + 1),
+            ResolveOutcome::TrustViolation(GateRejection {
+                stage: GateStage::Epoch,
+                ..
+            })
+        ));
+        assert!(
+            matches!(
+                resolve_own_root_at_floor(OWNER_ROOT_EPOCH),
+                ResolveOutcome::Current { .. }
+            ),
+            "our own current root at the floor is no update"
+        );
+    }
+
+    /// The stage a recovery the gate refused names.
+    fn refused_stage<T>(recovered: Result<T, GateError>) -> GateStage {
+        match recovered {
+            Err(GateError::Rejected(rejection)) => rejection.stage,
+            Err(GateError::Seam(e)) => panic!("expected a rejection, got seam {e}"),
+            Ok(_) => panic!("expected a rejection, got a recovery"),
+        }
     }
 
     #[test]
@@ -1531,7 +1573,7 @@ mod tests {
             Err(GateError::Seam(e)) => panic!("expected a rejection, got seam {e}"),
         }
         let seed = block_on(adopter.recover_own_scope_material(&fx.name, &record))
-            .expect("recovery is fail-open, never an error")
+            .expect("our own current root re-checks clean")
             .expect("the owner recovers its seeds from the reused candidate")
             .write_scope_seed
             .expect("the write seed is recovered");
@@ -1557,7 +1599,7 @@ mod tests {
 
         assert!(
             block_on(recover_at_floor(&adopter, &floors, &fx))
-                .expect("recovery is fail-open, never an error")
+                .expect("our own current root re-checks clean")
                 .is_none(),
             "the caller already holds these bytes and the material behind them",
         );
@@ -1579,7 +1621,7 @@ mod tests {
 
         assert_eq!(
             block_on(recover_at_floor(&adopter, &floors, &fx))
-                .expect("fail-open")
+                .expect("our own current root re-checks clean")
                 .and_then(|material| material.write_scope_seed)
                 .as_deref(),
             Some(&OWNER_ROOT_WRITE_SCOPE_SEED),
@@ -1598,7 +1640,7 @@ mod tests {
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
             block_on(recover_at_floor(&adopter, &floors, &fx))
-                .expect("fail-open")
+                .expect("our own current root re-checks clean")
                 .expect("the read seed still recovers")
                 .write_scope_seed
                 .is_none(),
@@ -1615,7 +1657,7 @@ mod tests {
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
             block_on(recover_at_floor(&adopter, &floors, &fx))
-                .expect("fail-open")
+                .expect("our own current root re-checks clean")
                 .expect("the read seed still recovers")
                 .write_scope_seed
                 .is_none(),
@@ -1633,7 +1675,7 @@ mod tests {
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
             block_on(recover_at_floor(&adopter, &floors, &fx))
-                .expect("fail-open")
+                .expect("our own current root re-checks clean")
                 .expect("the read seed still recovers")
                 .write_scope_seed
                 .is_none(),

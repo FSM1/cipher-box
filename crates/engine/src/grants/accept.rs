@@ -843,10 +843,10 @@ impl std::error::Error for AcceptError {}
 /// failure before the durable persist returns without acking; a persist failure
 /// rolls the in-memory bookmark back and returns un-acked, so an undelivered
 /// accept redelivers and re-runs idempotently (the bookmark self-heals). If a
-/// redelivery's strict-sequence anti-replay reject names a scope already in the
-/// durable bookmark (a prior ack that failed after the floor advanced), the flow
-/// idempotently re-acks that item without re-adopting — clearing a mailbox item
-/// that could otherwise redeliver forever.
+/// redelivery's strict-sequence anti-replay reject, at exactly the floor, names a
+/// scope already in the durable bookmark (a prior ack that failed after the
+/// floor advanced), the flow idempotently re-acks that item without re-adopting
+/// — clearing a mailbox item that could otherwise redeliver forever.
 ///
 /// `candidate` is the resolved record (hand-fed here; the resolve pipeline is a
 /// sibling slice); `grant_blobs` is its published grant section for self-
@@ -955,16 +955,18 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     let pending = match adopt_deferred(floors, &reader, candidate).await {
         Ok((pending, _)) => pending,
         Err(e) => {
-            // Idempotent ack-only short-circuit. A strict-sequence anti-replay
-            // reject for a scope we ALREADY durably hold **under this sharer** is
-            // a redelivery whose floor advance already committed (e.g. a prior
-            // ack failed): the bookmark is proof of prior adoption, so just
-            // re-ack and never re-adopt or downgrade it. Any OTHER rejection, a
-            // scope this sharer did not grant us (a genuine replay), or a
-            // retryable `GateError::Seam` (whose `rejection()` is `None`) falls
-            // through and propagates unchanged — anti-replay stays intact.
-            if let Some(RejectionReason::SequenceNotNewer { floor, .. }) =
+            // Idempotent ack-only short-circuit. The record at exactly the
+            // sequence floor, for a scope we ALREADY durably hold **under this
+            // sharer**, is a redelivery whose floor advance already committed
+            // (e.g. a prior ack failed): the bookmark is proof of prior
+            // adoption, so just re-ack and never re-adopt or downgrade it. A
+            // record below the floor (a replay), any OTHER rejection, a scope
+            // this sharer did not grant us, or a retryable `GateError::Seam`
+            // (whose `rejection()` is `None`) falls through and propagates
+            // unchanged — anti-replay stays intact.
+            if let Some(RejectionReason::SequenceNotNewer { floor, sequence }) =
                 e.rejection().map(|r| &r.reason)
+                && sequence == floor
             {
                 if let Some(permission) = received.find(&bookmark_key).map(|s| s.permission) {
                     mailbox.ack(&item.item_id).await.map_err(AcceptError::Ack)?;

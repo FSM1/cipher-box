@@ -657,8 +657,12 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
     let recovered = adopter
         .recover_own_scope_root(name, record_bytes)
         .await
-        .map_err(|_| RootGateVerdict::Unavailable)?
-        // The recovery is fail-open; the rotation keeps the gate's own verdict.
+        .map_err(|e| match e {
+            GateError::Seam(_) => RootGateVerdict::Unavailable,
+            GateError::Rejected(_) => RootGateVerdict::Rejected,
+        })?
+        // Nothing to re-check is no recovery; the rotation keeps the gate's
+        // own verdict.
         .ok_or(RootGateVerdict::Rejected)?;
     Ok(GatedScopeRoot {
         envelope: recovered.envelope,

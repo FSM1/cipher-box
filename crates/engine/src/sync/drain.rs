@@ -57,7 +57,7 @@ use crate::facade::{
     emit_trust_violation,
 };
 use crate::gate::GateStage;
-use crate::gate::{Adopted, GateError, RejectionReason, floor};
+use crate::gate::{Adopted, GateError, GateRejection, RejectionReason, floor};
 use crate::grants::grafted::{FloorNamespace, GraftedPlane};
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
@@ -208,25 +208,8 @@ fn names_this_scope(end: &ScopeEnd<'_>, child: &ChildRef) -> bool {
 fn halt_for_bin_load(reason: DefaultsReason) -> Halt {
     match reason {
         DefaultsReason::StrandedMint => Halt::Permanent(DeadLetterReason::BinIndexStrandedMint),
-        _ if bin_load_is_a_verdict(reason) => Halt::Attempt,
+        _ if reason.is_verdict() => Halt::Attempt,
         _ => Halt::HeldByBinIndex(reason),
-    }
-}
-
-/// Whether a bin index load refused bytes the plane actually served, rather
-/// than failing to reach it (blueprint/engine.md "Bin index record"). A caller
-/// that retries on availability must not retry on a verdict.
-pub(crate) fn bin_load_is_a_verdict(reason: DefaultsReason) -> bool {
-    match reason {
-        DefaultsReason::RolledBack { .. }
-        | DefaultsReason::RevisionRolledBack { .. }
-        | DefaultsReason::Unreadable => true,
-        DefaultsReason::UnprovenFirstRun
-        | DefaultsReason::Suppressed
-        | DefaultsReason::StrandedMint
-        | DefaultsReason::Expired
-        | DefaultsReason::TimedOut
-        | DefaultsReason::FloorUnreadable => false,
     }
 }
 
@@ -418,6 +401,10 @@ enum Halt {
     /// budget hands back a create's own derived name — the op's target is still
     /// unreachable, so no record a parent links names it.
     UploadAttempt,
+    /// The adoption gate refused a record this op builds on. Reported on the
+    /// event stream, and charged like [`Halt::UploadAttempt`]: re-reading the
+    /// same record repeats the refusal, and nothing reached the transport.
+    RecordRefused,
     /// The authored head is over the block ceiling its own ingress enforces.
     /// Charged like an attempt, since no re-author shrinks it — a fresh nonce
     /// moves the sealed bytes and never their count — and hands back the same
@@ -1931,6 +1918,7 @@ where
             }
             Halt::Attempt
             | Halt::UploadAttempt
+            | Halt::RecordRefused
             | Halt::HeadOversized
             | Halt::ScopeRootNotResealable
             | Halt::UnwritableScope => {
@@ -2299,7 +2287,7 @@ where
         )
         .await
         .map_err(seam)?;
-        resolved_bytes(resolved)
+        resolved_bytes(resolved, end.root_name, self.events)
     }
 
     /// Resolve one non-root node's own record through the child pipeline and
@@ -2337,10 +2325,9 @@ where
                         .ok_or(Halt::EpochLagged)?,
                     Some(epoch),
                 ),
-                // A trust violation or a rollback stays fail-closed.
-                _ => return Err(Halt::Unclassified),
+                _ => return Err(refuse_record(self.events, &name, rejection)),
             },
-            _ => (resolved_bytes(resolved)?, None),
+            _ => (resolved_bytes(resolved, &name, self.events)?, None),
         };
         let (adopted, envelope) = self
             .open_for_reauthor(plane, anchor, &adopter, &name, &record_bytes, lagging)
@@ -2383,7 +2370,7 @@ where
                 Ok(carried) => return Ok(carried),
                 Err(GateError::Rejected(rejection)) => match rejection.reason {
                     RejectionReason::EpochBelowFloor { epoch, .. } => epoch,
-                    _ => return Err(Halt::UploadAttempt),
+                    _ => return Err(refuse_record(self.events, name, &rejection)),
                 },
                 Err(GateError::Seam(_)) => return Err(Halt::UploadAttempt),
             },
@@ -6601,6 +6588,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         Halt::Attempt | Halt::UploadAttempt => {
             Some("the network refused it without a classification")
         }
+        Halt::RecordRefused => Some("a record this change builds on failed verification"),
         Halt::UnwritableScope => {
             Some("this device cannot write to the shared folder this change is in")
         }
@@ -6670,13 +6658,17 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
         .ok_or(Halt::Permanent(DeadLetterReason::PayloadRefused))
 }
 
-/// The gate-passing bytes one resolve established.
+/// The gate-passing bytes one resolve of `name` established.
 ///
 /// A gate failure is a trust violation, never staleness: re-authoring on top
 /// of last-known-good while the record plane serves a rejected record is
 /// exactly the fail-open rule 6 forbids. An adopt carries the bytes this pass
 /// gated, never the cache, which keeps a newer copy this pass did not gate.
-fn resolved_bytes(gated: GatedResolve) -> Result<Vec<u8>, Halt> {
+fn resolved_bytes(
+    gated: GatedResolve,
+    name: &IpnsName,
+    events: &mpsc::UnboundedSender<Event>,
+) -> Result<Vec<u8>, Halt> {
     match gated.resolved.outcome {
         ResolveOutcome::Adopted(_) => gated
             .held_record
@@ -6684,8 +6676,19 @@ fn resolved_bytes(gated: GatedResolve) -> Result<Vec<u8>, Halt> {
             .ok_or(Halt::Unclassified),
         ResolveOutcome::Current { record_bytes } => Ok(record_bytes),
         ResolveOutcome::NoUpdate => gated.resolved.last_known_good.ok_or(Halt::Unclassified),
-        ResolveOutcome::TrustViolation(_) => Err(Halt::Unclassified),
+        ResolveOutcome::TrustViolation(rejection) => Err(refuse_record(events, name, &rejection)),
     }
+}
+
+/// Report the gate's refusal of a record at `name` this pass must build on,
+/// and the halt it takes.
+fn refuse_record(
+    events: &mpsc::UnboundedSender<Event>,
+    name: &IpnsName,
+    rejection: &GateRejection,
+) -> Halt {
+    emit_trust_violation(events, name.as_str(), rejection);
+    Halt::RecordRefused
 }
 
 #[cfg(test)]
@@ -6847,7 +6850,63 @@ mod tests {
             )),
             read_scope_seed: None,
         };
-        assert_eq!(resolved_bytes(resolved), Ok(gated));
+        let (events, _rx) = mpsc::unbounded();
+        assert_eq!(
+            resolved_bytes(resolved, &refused_name(), &events),
+            Ok(gated)
+        );
+    }
+
+    fn refused_name() -> IpnsName {
+        derive_write_name(&[0x21; 32], &[0x22; 16])
+    }
+
+    /// What `resolved_bytes` answers for `outcome` with nothing cached, and
+    /// whether it reported a trust violation.
+    fn resolved_bytes_of(outcome: ResolveOutcome) -> (Result<Vec<u8>, Halt>, bool) {
+        let (events, mut rx) = mpsc::unbounded();
+        let answer = resolved_bytes(
+            GatedResolve {
+                resolved: crate::net::Resolved {
+                    last_known_good: None,
+                    outcome,
+                    current_at_floor: None,
+                },
+                hold: None,
+                held_record: None,
+                read_scope_seed: None,
+            },
+            &refused_name(),
+            &events,
+        );
+        drop(events);
+        let reported = core::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, Event::AttributableAbuse { .. }));
+        (answer, reported)
+    }
+
+    /// A record the gate refuses is a trust verdict on the op that builds on
+    /// it: reported, and charged rather than waited out as an outage.
+    #[test]
+    fn a_refused_record_is_reported_and_charged() {
+        let (answer, reported) = resolved_bytes_of(ResolveOutcome::TrustViolation(GateRejection {
+            stage: GateStage::Sequence,
+            reason: RejectionReason::SequenceNotNewer {
+                floor: 7,
+                sequence: 6,
+            },
+        }));
+        assert_eq!(answer, Err(Halt::RecordRefused));
+        assert!(reported);
+    }
+
+    /// A name that answered nothing is availability: uncharged, and nobody is
+    /// accused.
+    #[test]
+    fn a_name_that_answered_nothing_accuses_nobody() {
+        let (answer, reported) = resolved_bytes_of(ResolveOutcome::NoUpdate);
+        assert_eq!(answer, Err(Halt::Unclassified));
+        assert!(!reported);
     }
 
     /// A granted scope's subtree seals under that scope's own material and never

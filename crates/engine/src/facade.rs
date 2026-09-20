@@ -121,9 +121,9 @@ use crate::seams::{
 use crate::session::SessionIdentity;
 use crate::settings::{
     DEFAULT_BIN_RETENTION_DAYS, Placement, PlacementRefusal, PlacementSource, SessionPlacement,
-    SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary, decide_placement,
-    load_settings, load_settings_at, placement_of, publish_settings, redecide_placement,
-    resolve_kept_bearer, summarize_settings,
+    SettingsLoad, SettingsOrigin, SettingsPublishError, VaultSettings, VaultSettingsSummary,
+    decide_placement, load_settings, load_settings_at, placement_of, publish_settings,
+    redecide_placement, resolve_kept_bearer, summarize_settings,
 };
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -131,8 +131,8 @@ use crate::sync::cancel::UploadCancels;
 use crate::sync::doomed::DOOMED_JOURNAL_PREFIX;
 use crate::sync::drain::{
     BookkeepingCursors, Drain, DrainReport, DrainScope, GrantedPass, MAX_BIN_EXPIRIES, ScopeEnd,
-    SealPlane, TickShare, bin_load_is_a_verdict, charge_the_identity_to_one_pass, hold_captures,
-    owner_scoped_key, published_op_mark,
+    SealPlane, TickShare, charge_the_identity_to_one_pass, hold_captures, owner_scoped_key,
+    published_op_mark,
 };
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
@@ -3719,8 +3719,7 @@ fn stamp_focus_refreshed(
 /// unproved half splits the window too. Grouping its subtree onto the enclosing
 /// scope reads every row under a seed that cannot open it, and the child gate
 /// answers a wrong-scope record with a trust verdict, so an honest writer would
-/// be reported as abuse — availability laundered into a trust verdict (security
-/// rule 6).
+/// be reported as abuse.
 fn focus_scope_roots(proved: &BTreeSet<NodeId>, unproved: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
     proved.union(unproved).copied().collect()
 }
@@ -3945,6 +3944,28 @@ pub(crate) fn emit_trust_violation(
     let _ = events.unbounded_send(Event::AttributableAbuse {
         description: format!("{:?}: {detail}", RedactedText::of(routing_key)),
     });
+}
+
+/// Report a settings load that refused a replayed record. The load already
+/// rests on last-known-good or the defaults; the member still hears of it.
+///
+/// [`DefaultsReason::Unreadable`] is not reported here: a body a newer release
+/// wrote carries keys this build's exhaustive schema refuses, and that reads
+/// the same as a body that will not open.
+fn report_settings_verdict(events: &mpsc::UnboundedSender<Event>, load: &SettingsLoad) {
+    let (SettingsLoad::Stale { reason, .. } | SettingsLoad::Defaults(reason)) = load else {
+        return;
+    };
+    if matches!(
+        reason,
+        DefaultsReason::RolledBack { .. } | DefaultsReason::RevisionRolledBack { .. }
+    ) {
+        emit_trust_violation(
+            events,
+            "vault-settings",
+            format!("vault settings refused: {}", reason.check()),
+        );
+    }
 }
 
 /// Report one grant row whose recipient binding the owner never signed.
@@ -4588,8 +4609,7 @@ fn cached_seed(cell: &RefCell<ScopeSeeds>, scope_id: &[u8; 16]) -> Option<Zeroiz
 /// The promotion set only grows. A promotion a pass cannot prove is an outage on
 /// that scope's own leg, and forgetting it would regroup its whole subtree onto
 /// the enclosing scope's seed, where every record fails its unseal and is
-/// reported as abuse — availability laundered into a trust verdict (security
-/// rule 6).
+/// reported as abuse.
 ///
 /// Each seed is stamped with the epoch its own recovery names: the read seed
 /// with the record's, the write seed with the write-epoch floor its
@@ -5358,6 +5378,7 @@ impl<T: SeamTypes> Engine<T> {
         )
         .await
         .enrol(&self.held_records, observed);
+        report_settings_verdict(&self.events, &settings);
         *self.placement.borrow_mut() = Some(decide_placement(&settings));
         *self.settings_summary.borrow_mut() = Some(summarize_settings(&settings));
         // The secret zeroizes on drop here, at its terminal owner.
@@ -6572,6 +6593,7 @@ where {
                             return TickControl::Stop;
                         }
                         let load = read.enrol(&held, observed);
+                        report_settings_verdict(&events, &load);
                         if let Some(decided) = redecide_placement(&load) {
                             *placement.borrow_mut() = Some(decided);
                             adopt_settings_summary(
@@ -11782,7 +11804,7 @@ where {
             BinIndexLoad::Resolved(_) => return Ok(load),
             BinIndexLoad::Stale { reason, .. } | BinIndexLoad::Empty(reason) => reason,
         };
-        if bin_load_is_a_verdict(reason) {
+        if reason.is_verdict() {
             let message = format!("bin index refused: {reason:?}");
             emit_trust_violation(&self.events, keys.name().as_str(), message.clone());
             return Err(EngineError::TrustViolation { message });
