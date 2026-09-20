@@ -18424,10 +18424,16 @@ mod tests {
                 world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
                 poll_tasks_once(&mut tasks);
             }
+            let lagged = shared_row(&engine);
             assert_eq!(
-                shared_row(&engine).resolution,
+                lagged.resolution,
                 Some(ResolutionClass::EpochLag),
                 "a record behind the floor the accept raised must leave the row granted"
+            );
+            assert_eq!(
+                lagged.permission,
+                Permission::Read,
+                "a lagged record moves the permission neither way"
             );
         }
 
@@ -18756,9 +18762,12 @@ mod tests {
                 3,
             );
             grantee.pass();
+            let revoked = shared_row(&grantee.engine);
+            assert_eq!(revoked.resolution, Some(ResolutionClass::RevocationSignal));
             assert_eq!(
-                shared_row(&grantee.engine).resolution,
-                Some(ResolutionClass::RevocationSignal)
+                revoked.permission,
+                Permission::Read,
+                "a stripped row demotes the reported permission"
             );
             assert!(!grantee.holds_the_write_seed());
 
