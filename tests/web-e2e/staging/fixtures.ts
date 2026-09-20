@@ -118,25 +118,43 @@ function report(
   });
 }
 
+/** How many wallet logins one sign-in spends before it gives up. */
+const SIGN_IN_ATTEMPTS = 3;
+
 /**
  * Signs in through the shipped wallet method and waits for the vault browser.
- * Returns the milliseconds the whole journey took, which is what the timing
- * profile records.
+ * Returns the milliseconds the successful attempt took, which is what the
+ * timing profile records.
+ *
+ * The auth network refuses a login under its own load, which the front door
+ * draws as a banner and not as a navigation, so a refused attempt is retried.
  */
 export async function signIn(page: Page): Promise<number> {
   const login = new LoginPage(page);
   const files = new FilesPage(page);
+  let refusal = '';
 
-  await page.goto('/');
-  await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
+  for (let attempt = 0; attempt < SIGN_IN_ATTEMPTS; attempt += 1) {
+    await page.goto('/');
+    await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
 
-  const started = Date.now();
-  await login.walletButton.click();
-  await page.getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true }).click();
+    const started = Date.now();
+    await login.walletButton.click();
+    await page
+      .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
+      .click();
 
-  await page.waitForURL('**/files', { timeout: 180_000 });
-  await expect(files.browser).toBeVisible({ timeout: 120_000 });
-  return Date.now() - started;
+    const refused = await login.refusal(180_000);
+    if (refused === null) {
+      await expect(files.browser).toBeVisible({ timeout: 120_000 });
+      return Date.now() - started;
+    }
+    refusal = refused;
+  }
+
+  throw new Error(
+    `the wallet login was refused ${SIGN_IN_ATTEMPTS} times; the last refusal read: ${refusal}`
+  );
 }
 
 /** {@link FilesPage.published}, for the page a staging spec holds. */

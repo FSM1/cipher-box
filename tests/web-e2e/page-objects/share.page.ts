@@ -122,6 +122,12 @@ export class SharePage {
     return this.page.getByTestId('share-downgrade');
   }
 
+  /** Clicks the downgrade and waits for the engine's re-read to report `read`. */
+  async downgradeToRead(timeout = 60_000): Promise<void> {
+    await this.downgrade.click();
+    await expect(this.permission).toHaveText('read', { timeout });
+  }
+
   /** What a grant or a mint would carry: `read` or `write`. */
   get permissionChoice(): Locator {
     return this.page.getByLabel('permission');
