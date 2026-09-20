@@ -1,0 +1,387 @@
+<task-notification>
+<task-id>a0316a848055f0fdf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c6afe030-96e2-4d17-a33b-35403074afc4/tasks/a0316a848055f0fdf.output</output-file>
+<status>completed</status>
+<summary>Agent "Security review: find vulns" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Security review: `fix/shared-row-live-permission`
+
+No high-confidence findings.
+
+## Evidence traced
+
+I read the full `main...HEAD` diff. The non-test change is two edits. In `/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/received_status.rs:96-101`, the new `live_permission` helper is an exact extraction of the closure that `refresh` already used at the old lines 452-460 to build `render.permissions`. The call site at `received_status.rs:462-464` passes the same `refreshed` map and the same `share`, so the render permission map — and therefore `bookmarked_permissions` — keeps byte-identical values. The second edit, `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:10581`, makes the row read that same value instead of `share.permission`.
+
+I traced where `ReceivedVerdict.permission` can rise. In `refresh` the value starts as `carried` (the held verdict's permission, or the bookmark copy). The only assignment that can raise it is `permission = committed` inside `if class == ResolutionClass::Granted`, after `self.classified(...)` runs the full stage-2 adoption gate, and `committed_permission` (`received_status.rs:487-509`) reads the entry at `recipient_blinded_tag(enc_secret, contact.enc_subkey(), share.scope_root_name)` — a tag that folds in this device's own encryption secret and the contact-held sharer identity. A forged or replayed record from a party that is not the bookmarked sharer never reaches `Granted`, and a record from a different recipient's tag does not match. The `Unresolvable`, `EpochLag` and `Cut` arms only carry the previous value forward; they cannot raise it. The `RevocationSignal` arm demotes a grafted share to `Read` and drops the read seed, and the following block drops the cached write seed on any arm where the live permission is not `Write`. A permission rise from `Read` to `Write` therefore requires the scope owner to publish a signed commitment naming this recipient — the owner's own authority over their own scope, not escalation by a third party.
+
+I then confirmed the change widens no write capability. The write gate `writable_graft_roots` (`facade.rs:11354-11365`) and the snapshot permission (`facade.rs:10410-10419`) both read `bookmarked_permissions`, never `ReceivedShareRow.permission`, and additionally require a live in-memory write seed plus a `write_home` graft resolution. Neither is touched by the diff. Downstream, the row field crosses the wasm boundary (`crates/wasm/src/lib.rs:1179-1230`, `packages/client/src/worker/commandCodec.ts:887`) into the `/shared` list badge only; no write path consumes it. The effect of the change is that the row's displayed permission now agrees with the value the gate already used, which closes a display/gate divergence rather than opening one. The two test files are e2e and unit only and are out of scope.
+
+One non-security note, offered without a finding: the doc comment left at `/Users/myankelev/Code/random/cipher-box/apps/web/src/wasm/cipherbox_wasm.d.ts:1040` still says "the permission the owner-signed commitment granted at accept", because the checked-in wasm bindings are stale relative to the Rust doc comment.</result>
+<usage><subagent_tokens>42842</subagent_tokens><tool_uses>6</tool_uses><duration_ms>56435</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a83ee5e20f90cd785</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/c6afe030-96e2-4d17-a33b-35403074afc4/tasks/a83ee5e20f90cd785.output</output-file>
+<status>completed</status>
+<summary>Agent "Crypto-privacy review of PR 1926" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># CRYPTO AND PRIVACY REVIEW
+
+## Executive Summary
+
+The diff moves one host-facing field, `ReceivedShareRow.permission`, off the durable accept-time bookmark and onto the live verdict that the last resolve pass wrote. It introduces one helper, `live_permission`, and makes the row and the folder view read that one rule. The change touches no primitive, no KDF edge, no AAD, no nonce, no wire format, and no durable field.
+
+The change is a net security improvement. Before it, an owner downgrade from `Write` to `Read` never reached the `/shared` row, because a downgrade republishes the demoted commitment and delivers no fresh pointer. The row reported a permission the owner had withdrawn. After it, the row reports the commitment the adoption gate last accepted.
+
+The new value is sound at the trust boundary. `ReceivedVerdict.permission` rises only inside the `ResolutionClass::Granted` arm, and only from `committed_permission`, which reads the owner-signed commitment at the recipient-blinded tag. No non-`Granted` arm raises it. `RevocationSignal` demotes it to `Read`. The fallback to the bookmark is safe, because the bookmark copy is itself owner-signed at accept time and never comes from the untrusted pointer.
+
+I found no critical and no high-severity issue.
+
+## Risk Level
+
+**LOW.** The diff narrows an existing display fail-open. It opens no new attack surface. Two informational items and one low item remain, and all three are pre-existing conditions that the diff makes more visible.
+
+## Files Reviewed
+
+| File | Role |
+| --- | --- |
+| `/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/received_status.rs` | The new `live_permission` helper (line 96) and the `refresh` verdict loop (lines 385-465) |
+| `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs` | `received_shares()` (line 10581), `writable_graft_roots()` (line 11354), `snapshot()` permission (line 10405), the new unit test (line 19180) |
+| `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/page-objects/shared.page.ts` | The `awaitRow` poll helper and `awaitPermission` |
+| `/Users/myankelev/Code/random/cipher-box/tests/web-e2e/staging/writable-share.spec.ts` | The staging assertion order |
+
+Read for context, not modified by the diff: `crates/engine/src/grants/revocation.rs`, `crates/engine/src/grants/accept.rs`, `crates/core/src/seal/grant.rs`.
+
+## Lenses Not Applicable
+
+- **Primitives.** The diff calls no seal, no open, no sign, and no verify.
+- **KDF edge catalog.** The diff derives nothing. `recipient_blinded_tag` and `kdf::node_seed` are unchanged callers.
+- **Nonce and AAD.** No nonce or AAD reaches the diff.
+- **Wire format and KAT.** `ReceivedVerdict` is an in-memory type. `ReceivedShare` on disk keeps its `permission` field unchanged.
+- **Zeroization.** Confirmed as not applicable. `Permission` is a two-valued `Copy` enum and holds no secret. `live_permission` copies that enum out of a `BTreeMap`. It borrows no key, no seed, and no `Zeroizing` buffer. No terminal owner changes.
+
+## Findings by Severity
+
+- **Critical:** none.
+- **High:** none.
+- **Medium:** none.
+- **Low:** 1 — `ReceivedSharesList::writable_scope_refs` still reads the bookmark copy.
+- **Informational:** 2.
+
+---
+
+### [LOW] One remaining surface reads the accept-time bookmark copy
+
+**Location:** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/accept.rs:282`
+
+**Code:**
+
+```rust
+pub fn writable_scope_refs(&amp;self) -&gt; Vec&lt;GrantedScopeRoot&gt; {
+    self.paired(|share| share.permission == Permission::Write)
+}
+```
+
+**Issue:**
+This is the one production-shaped surface that still filters on the bookmark's superseded copy of the permission. The doc comment above it states that no production caller takes this half yet, and the sweep runs over the owner's own scopes alone. A grep of the engine confirms that claim: the only other bookmark reads are `accept.rs:971` (the idempotent ack short-circuit, which reports the accept's own outcome and not a live standing) and `received_status.rs:390` (`carried`, which is the correct carry-forward seed value).
+
+**Impact:**
+None today, because no caller exists. On the day the sweep takes the granted half, it would build a write pass for a scope the owner has already demoted to `Read`. The write would not forge anything: an owner cut rotates the write plane, so the stale write seed derives names no reader resolves. The failure mode is a wasted publish per cadence, not a capability escape.
+
+**Recommendation:**
+Leave the function as it is in this diff, and record the constraint where the future caller will read it. When the sweep takes the granted half, feed it `live_permission` against the same `ReceivedVerdicts` map, plus the in-memory write-seed test that `writable_graft_roots` already applies.
+
+**References:** `blueprint/engine.md` "sweep"; AGENTS.md critical rule 6.
+
+---
+
+### [INFO] An `Unresolvable` verdict carries a `Write` permission forward, and keeps the cached write seed
+
+**Location:** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/grants/received_status.rs:390`, `:424-432`
+
+**Issue:**
+`carried = held.map_or(share.permission, |held| held.permission)`. A pass that reaches `Unresolvable` keeps the last permission. An `Unresolvable` pass also never runs `open`, so the write seed survives when the carried permission is `Write`. A relay that suppresses the record therefore pins the row at its last standing.
+
+**Impact:**
+Bounded and intended. The blueprint states that absence is never proof of revocation, so a demote on `Unresolvable` would let any relay strip a live grant. The residual is that a suppressed downgrade leaves a stale `Write` on the row until the record resolves again. The write itself buys the grantee nothing after an owner cut, because the cut rotates the write plane.
+
+**Recommendation:** No change. The row's `resolution` field carries `Unresolvable` alongside the permission, so a host has the fact it needs. Confirm the web row keeps both badges visible together (`apps/web/src/routes/SharedPage.tsx:83` renders `shared-permission`, and the standing badge sits beside it).
+
+---
+
+### [INFO] The `None` arm of the snapshot permission match is fail-open by construction
+
+**Location:** `/Users/myankelev/Code/random/cipher-box/crates/engine/src/facade.rs:10405-10418`
+
+**Code:**
+
+```rust
+let granted = self.bookmarked_permissions.borrow().get(&amp;scope.0).copied();
+let permission = match granted {
+    None =&gt; Permission::Write,
+    ...
+```
+
+**Issue:**
+An absent entry in `bookmarked_permissions` means "not a bookmarked scope", and so means the vault's own plane, which is writable. The diff now writes that map through `live_permission`. The correctness of the fail-open default therefore depends on `render.permissions` being populated in the same pass that merges the graft into the render tree.
+
+**Analysis:**
+The ordering holds. `refresh` writes `*render.permissions.borrow_mut()` at line 460, before `claim_contest` and `merge_grafted` at lines 468-475. A scope that has no permission entry also has no node in the render tree, so `scope_of` cannot return it and the focus cannot reach it. The early return at line 333 clears `permissions` and `scope_roots` together. The contact-store failure return at line 341 leaves both maps at the previous pass's values, which is stale and never raised.
+
+I flag this as a shape to preserve, not as a defect. A future edit that moves the permissions write after `merge_grafted`, or that clears one map without the other, would turn the default into a real write fail-open.
+
+**Recommendation:** No code change. Add the ordering as an assertion in a test rather than as a comment.
+
+---
+
+## Detailed Analysis
+
+### Trust boundary: can a forged, replayed, or lagged record raise the reported permission?
+
+No. The raise path has exactly one entrance, at `received_status.rs:401-408`:
+
+```rust
+if class == ResolutionClass::Granted {
+    if let Some((candidate, floors)) = &amp;resolved {
+        if let Some(committed) = self.committed_permission(candidate, share, contact) {
+            permission = committed;
+        }
+```
+
+Four gates stand in front of that assignment.
+
+1. **Record authenticity.** `resolved` (line 570) reads the sharer-scoped epoch and cut-epoch floors, resolves the name, runs `fanout_get_verify`, then applies `floor::check_sequence` at `Strictness::AtOrAboveFloor`. A replay below the durable sequence floor returns `None` and reports a refusal on `events`. A floor the pass cannot read also returns `None`, because with no floor neither bar can fire.
+
+2. **Owner authenticity and cut freshness.** `facts_from` (line 784) binds `candidate.envelope.scope` to `share.scope_id`, then runs `verify_commitment_in_force` against the **contact-anchored** identity and the durable cut-epoch floor. The identity and the encryption subkey both come from the contact book, never from the resolved record. A record cannot vouch for itself.
+
+3. **Commitment membership.** `blob_present` (line 815) requires both a commitment entry at the recipient-blinded tag **and** a signed blob at that tag. A blob at an uncommitted tag counts as removal.
+
+4. **Epoch floor.** `classify` returns `EpochLag` when `record_epoch &lt; epoch_floor`, and `EpochLag` is not `Granted`, so it reaches no raise.
+
+`committed_permission` (line 470) derives the tag from the identical inputs that `facts_from` uses: `self.enc_secret`, `contact.enc_subkey()`, and `share.scope_root_name`. Because `Granted` implies a commitment entry at that tag, the `None` arm of `committed_permission` is unreachable from the `Granted` branch. I verified that the two tag derivations cannot diverge, since both take the same three arguments in the same pass with the same `contact`.
+
+I also checked the `find` against `any` asymmetry between the two functions. A duplicate-tag commitment would let `find` pick a different entry than `any` matched. `crates/core/src/seal/grant.rs:986` rejects a duplicate tag at decode with `TrustViolation::DuplicateGrantTag`, and `grant.rs:1011` enforces the same invariant at encode with a release-active `Err`. Encode and decode stay symmetric per AGENTS.md rule 8. The asymmetry is therefore not reachable. **No finding.**
+
+### Trust boundary: what does a non-`Granted` verdict carry?
+
+| Class | Permission written | Write seed |
+| --- | --- | --- |
+| `Granted` | The committed value from the owner-signed entry | Deposited only when the value is `Write` (`open`, line 735) |
+| `RevocationSignal` | Forced to `Read` (line 425), when grafted | Removed (line 432) |
+| `Unresolvable` | `carried` | Removed when carried is not `Write` |
+| `EpochLag` | `carried` | Removed when carried is not `Write` |
+| No contact in the book | `carried`, class `Unresolvable` (line 396) | Removed when carried is not `Write` |
+| Budget exhausted or damper not due | The held verdict, unchanged | Untouched |
+
+A stale `Write` cannot survive a `Cut`. An owner cut raises the recipient's durable cut-epoch floor, so a replayed pre-cut set fails `verify_commitment_in_force`, `owner_signed_record` reads false, and `classify` returns `Unresolvable`. The post-cut set that does verify holds no blob at the cut recipient's tag, so `classify` returns `RevocationSignal`, and line 425 forces `Read`. Both arms remove the write seed at line 432.
+
+A stale `Write` also cannot survive a `RevocationSignal`, by the explicit demote at line 424-426. The demote is correctly scoped to `grafted`, so a stripped row in a sharer's own set cannot clear material on a scope this vault owns.
+
+### Fail-closed: the no-verdict fallback
+
+`live_permission` returns `share.permission` when the map holds no verdict. That happens before the first pass, after a restart, when the contact-store read fails, and when the `MAX_RESOLVES_PER_PASS` budget of 16 runs out on a vault that holds more bookmarks than that.
+
+The fallback is acceptable, for three reasons.
+
+1. **The bookmark copy is not attacker-controlled.** `accept.rs:907-913` takes the permission from `candidate.grant_section.commitment.entries`, at the tag the verified contact's subkey locates, and returns `AcceptError::UncommittedTag` when no entry exists. The comment at line 905 states the rule: the untrusted pointer's word is not authority. `reconcile` runs only after `adopt_deferred` succeeds (line 986), so the stored value always passed the gate once.
+
+2. **It is a display value, not a capability.** The write affordance is gated separately and twice over, at `facade.rs:11354`:
+
+```rust
+permissions.get(&amp;root.0) == Some(&amp;CommittedPermission::Write)
+    &amp;&amp; seeds.contains_key(&amp;root.0)
+```
+
+`scope_write_seeds` lives in memory only, and the module comment at `received_status.rs:427` states the rule. A restart therefore admits no write until a tick re-proves the pass, whatever the row says. This satisfies the blueprint's position that a grant blob the pass opened is the whole of the capability.
+
+3. **It degrades toward staleness, not toward forgery.** The fallback is the last owner-signed value this device verified. The failure mode is a row that lags an undelivered downgrade, which is the same residual the whole "revocation is discovered, not delivered" model accepts by design.
+
+I record one honest limitation. A host that renders the permission badge without the standing badge would show `write` with no hint that no pass has resolved the share. The engine gives the host both fields, and `resolution: None` is explicitly documented at `revocation.rs:24` as "not yet known" rather than `Granted`. The obligation sits with the host, and `apps/web/src/routes/SharedPage.tsx` meets it.
+
+### Consistency
+
+The row and the folder view now read one function. I grepped every `.permission` read in `crates/engine/src/grants/` and `crates/engine/src/facade.rs`. Three bookmark reads remain:
+
+- `accept.rs:282` — the low finding above, with no caller.
+- `accept.rs:971` — the idempotent ack short-circuit. This returns the accept leg's own outcome for a redelivered pointer at the sequence floor. It reports what the prior accept committed, not a live standing, and it reaches no host row. Correct as written.
+- `received_status.rs:390` — `carried`. This is the seed value for the carry-forward, and it is the same expression the new helper uses. Correct.
+
+`ReceivedShareRow.permission` and `SnapshotView.permission` now agree by construction. The staging spec at `writable-share.spec.ts:53` asserts both the row permission and the read-only notice in the folder, which is the right cross-check to hold in one test.
+
+### Privacy
+
+The row exposes no new material. `ReceivedShareRow` gains no field. `permission` changes value only. `Permission` is a two-valued enum with a stable wire name and carries no key, no seed, no pseudonym, and no tag. The recipient-blinded tag that locates the commitment entry stays inside `committed_permission` and never leaves the engine. `sharer_identity_public_key` and `display_name` on the row are unchanged, and `grafted_root_name` still normalizes a sharer-authored label before it reaches the host.
+
+The e2e page object reads `textContent()` from the `shared-permission` cell. It asserts against the literal strings `read` and `write`. No secret material reaches a test assertion.
+
+### Zeroization
+
+Confirmed as not applicable, as stated above. No `Zeroizing`, no `SecretBytes`, and no seed crosses the diff. No caller-owned buffer is zeroed by a callee.
+
+### The e2e changes
+
+`awaitRow` is a faithful extraction. `awaitStanding` keeps the pre-existing `nudge: true` and `[5_000]` interval. `readStanding` keeps `nudge: false` and `[250]`, so it stays a post-refresh read rather than a driver of the sync pass. The click on `status-indicator` still runs before `readAgain`, as it did before.
+
+The staging spec's reordering is discriminating. The recipient holds a `write` grant, so the bookmark copy reads `write`. `awaitPermission('read')` therefore fails under the old behavior and passes only when the live commitment reaches the row. The `toHaveAttribute('data-resolution', 'granted')` check that follows is a sound instantaneous assertion, because the permission moves only on a `Granted` verdict, so the standing is already settled once the permission lands.
+
+I initially suspected this assertion was non-discriminating. That was a false positive on my part, and I retract it.
+
+## Test Cases
+
+### Already covered
+
+| Case | Test | Location |
+| --- | --- | --- |
+| A downgrade reaches the row | `an_owner_downgrade_reaches_the_shared_row_permission` | `facade.rs:19180` (new in this diff) |
+| A downgrade reaches the permissions map | `a_downgraded_commitment_supersedes_the_permission_the_bookmark_kept` | `received_status.rs:2253` |
+| A damped pass keeps the superseded permission | `a_pass_that_re_resolves_nothing_keeps_the_superseded_permission` | `received_status.rs:2270` |
+| A `Cut` demotes the map and drops both seeds | `a_revoked_share_loses_the_cached_capability_on_the_pass_that_reads_the_cut` | `received_status.rs:2149` |
+| A `RevocationSignal` drops the write seed at the row level | the `RevocationSignal` assertion in the revoke test | `facade.rs:18757` (asserts `resolution` and `holds_the_write_seed`, not `permission`) |
+| An epoch-lagged record leaves the row granted | the `EpochLag` assertion | `facade.rs:18425` (asserts `resolution` only) |
+| A write-claimed bookmark over a read commitment caches no write seed | `a_bookmark_claiming_write_over_a_read_commitment_caches_no_write_seed` | `received_status.rs:2108` |
+| A downgrade drops the cached write seed | `an_owner_downgrade_to_read_drops_the_cached_write_seed` | `received_status.rs:2124` |
+
+### Gaps to close
+
+Five cases from the brief have no row-level assertion. The `RevocationSignal` and `EpochLag` tests at `facade.rs:18757` and `facade.rs:18425` already call `shared_row`, so each needs one added line rather than a new test.
+
+```rust
+// facade.rs, alongside `an_owner_downgrade_reaches_the_shared_row_permission`.
+
+/// A read grant the owner raises to write must reach the row only on the
+/// pass that classifies the raised commitment `Granted`. The bookmark's copy
+/// may never climb.
+#[test]
+fn an_owner_upgrade_reaches_the_shared_row_only_after_a_granted_verdict() {
+    let photos = || vec![shared_child(PHOTOS, "photos", CoreNodeKind::File)];
+    let mut grantee = WriteGrantee::accepted_as(CorePermission::Read, photos());
+    assert_eq!(shared_row(&amp;grantee.engine).permission, Permission::Read);
+
+    grantee.serve(
+        &amp;shared_root_granting(EPOCH, CorePermission::Write, photos()),
+        3,
+    );
+    grantee.pass();
+
+    let after = shared_row(&amp;grantee.engine);
+    assert_eq!(after.permission, Permission::Write);
+    assert_eq!(after.resolution, Some(ResolutionClass::Granted));
+    assert!(grantee.holds_the_write_seed());
+}
+
+/// A stripped row is the definitive removal, so the row must report `read`
+/// and not the `write` the accept committed.
+#[test]
+fn a_revocation_signal_demotes_the_shared_row_to_read() {
+    // Extend the existing revoke test at facade.rs:18757 with:
+    //   let revoked = shared_row(&amp;grantee.engine);
+    //   assert_eq!(revoked.resolution, Some(ResolutionClass::RevocationSignal));
+    //   assert_eq!(revoked.permission, Permission::Read);
+}
+
+/// A cut supersedes the set the accept adopted, so no replayed pre-cut record
+/// re-grants the row. The carried permission must not climb back to `write`.
+#[test]
+fn a_cut_leaves_the_shared_row_unresolvable_and_raises_no_permission() {
+    let photos = || vec![shared_child(PHOTOS, "photos", CoreNodeKind::File)];
+    let mut grantee = WriteGrantee::accepted(photos());
+    grantee.cut_the_grant(2);
+    grantee.pass();
+    assert_eq!(shared_row(&amp;grantee.engine).permission, Permission::Read);
+
+    // A replay of the pre-cut write set must not restore the capability.
+    grantee.serve(
+        &amp;shared_root_granting(EPOCH, CorePermission::Write, photos()),
+        3,
+    );
+    grantee.pass();
+
+    let after = shared_row(&amp;grantee.engine);
+    assert_ne!(after.resolution, Some(ResolutionClass::Granted));
+    assert_eq!(after.permission, Permission::Read);
+    assert!(!grantee.holds_the_write_seed());
+}
+
+/// A restart holds no verdict, so the row reports the accept's own
+/// owner-signed copy. That value gates no write: the write seed is in memory
+/// only, and a tick must re-prove the pass.
+#[test]
+fn a_restart_before_the_first_pass_reports_the_bookmark_copy_and_admits_no_write() {
+    let photos = || vec![shared_child(PHOTOS, "photos", CoreNodeKind::File)];
+    let grantee = WriteGrantee::accepted(photos());
+    let restarted = grantee.restarted_without_a_pass();
+
+    assert_eq!(shared_row(&amp;restarted.engine).permission, Permission::Write);
+    assert_eq!(shared_row(&amp;restarted.engine).resolution, None);
+    assert!(!restarted.holds_the_write_seed());
+    assert!(restarted.writable_graft_roots().is_empty());
+}
+
+/// A record below the read-epoch floor is sweep-pending staleness. It reaches
+/// no raise, and it triggers no demote either.
+#[test]
+fn an_epoch_lagged_demoted_record_moves_the_shared_row_permission_neither_way() {
+    // Extend the epoch-lag test at facade.rs:18425. Serve a record that is both
+    // below the floor and demoted to read, then assert:
+    //   let lagged = shared_row(&amp;engine);
+    //   assert_eq!(lagged.resolution, Some(ResolutionClass::EpochLag));
+    //   assert_eq!(lagged.permission, Permission::Write, "a lagged record demotes nothing");
+    // And the mirror: a lagged record that claims `write` over a live `read`
+    // commitment must leave the row at `read`.
+}
+```
+
+Two further cases guard the invariants this review leaned on.
+
+```rust
+// received_status.rs, in the `RenderedScope` suite.
+
+/// The resolve budget is 16 per pass. A bookmark the budget never reaches
+/// holds no verdict, so its permission falls back to the accept's copy. That
+/// copy is owner-signed, so the fallback is stale and never forged.
+#[test]
+fn a_bookmark_past_the_resolve_budget_falls_back_to_the_accept_copy() {}
+
+/// A sharer the contact book has forgotten leaves no verified identity, so the
+/// pass classifies `Unresolvable` and carries the last permission. It must not
+/// read a permission off the record.
+#[test]
+fn a_forgotten_sharer_carries_the_permission_and_reads_none_off_the_record() {}
+
+/// The permissions map must be written before the graft merges, or the
+/// snapshot's `None =&gt; Write` default would answer for a grafted scope.
+#[test]
+fn the_permissions_map_is_populated_before_a_graft_reaches_the_render_tree() {}
+```
+
+## Compliance Checklist
+
+| Rule | Verdict |
+| --- | --- |
+| XChaCha20-Poly1305 for all sealing | Not touched |
+| HPKE over X25519 to a person | Not touched |
+| BLAKE3 through the frozen KDF edge catalog only | Not touched. No derivation in the diff |
+| Ed25519 and secp256k1 signing | Not touched |
+| All crypto in `crates/core` | Held. The diff adds engine policy, not crypto |
+| `Vec&lt;u8&gt;` and `Uint8Array` for binary data | Held. No new binary field |
+| Never expose a key or a seed to the server | Held. `Permission` is a two-valued enum |
+| Every resolved record passes the adoption gate | Held. The raise sits inside the `Granted` arm only |
+| A gate failure is a fail-closed trust violation | Held. `report_refusal` and `emit_trust_violation` unchanged |
+| Encode and decode fail-closed symmetry | Not applicable. No encode or decode path in the diff. Verified as already held for the commitment entries the raise reads (`grant.rs:986` and `:1011`) |
+| Zeroize at the terminal owner only | Not applicable. No secret in the diff |
+| No secret material in a test assertion | Held |
+| Determinism is injected | Held. `now`, `profile`, and `entropy` stay parameters |
+| Comments state rationale once, at its home | Held. The doc on `ReceivedShareRow.permission` and the one on `received_shares` both shrank, and the rule now lives on `live_permission` |
+
+## Recommendations
+
+1. Add the five row-level test cases above. Two of them are one added assertion inside a test the diff already touched (`facade.rs:18425` and `facade.rs:18757`), which is the cheapest coverage in the set and closes the `RevocationSignal` and `EpochLag` row gaps.
+2. Record the `writable_scope_refs` constraint (`accept.rs:282`) as a condition on the future sweep caller, so the granted half never ships on the bookmark copy.
+3. Add the ordering test that holds `render.permissions` to a write before `merge_grafted`, so the `None =&gt; Permission::Write` default at `facade.rs:10407` stays unreachable for a grafted scope.</result>
+<usage><subagent_tokens>81946</subagent_tokens><tool_uses>22</tool_uses><duration_ms>251765</duration_ms></usage>
+</task-notification>
