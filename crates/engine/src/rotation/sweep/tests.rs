@@ -186,17 +186,37 @@ fn a_repaired_index_is_not_flagged_again_on_the_next_pass() {
     assert_eq!(net.index_repairs.get(), 1, "no redundant republish");
 }
 
+/// One pass is what the idle job runs per scope per round.
 #[test]
-fn an_index_repair_that_lost_the_cas_is_not_flagged() {
+fn an_index_repair_that_lost_the_cas_is_not_flagged_and_is_worth_another_pass() {
     let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
-    net.state.borrow_mut().index_repair_fault = Some(RotationPublishError::LostRace);
+    net.state.borrow_mut().index_repair_lost_race_next = 1;
 
-    let outcome = run(&net, 0x00).expect("sweep");
+    let outcome = drive(&net, 1, 0).expect("sweep");
     assert!(
         outcome.flagged_indexes.is_empty(),
         "a repair that never landed must not be reported"
     );
     assert_eq!(outcome.skipped_scope_roots, vec![id(0x0a)]);
+    assert!(outcome.index_repair_lost_race);
+    assert!(outcome.worth_another_pass());
+    assert!(net.state.borrow().repaired_index.is_none());
+}
+
+#[test]
+fn the_driver_re_runs_a_lost_index_repair_until_it_lands() {
+    let net = FakeNet::new(5, &[0x0a]).scope_root(0x0a, false);
+    net.state.borrow_mut().index_repair_lost_race_next = 1;
+
+    let outcome = drive(&net, 3, 1).expect("the repair lands on the second pass");
+    assert!(!outcome.index_repair_lost_race);
+    assert!(!outcome.worth_another_pass());
+    assert_eq!(outcome.flagged_indexes, vec![id(0x0a)]);
+    assert_eq!(net.index_repairs.get(), 2);
+    assert_eq!(
+        net.state.borrow().repaired_index.clone().expect("repaired"),
+        vec![scope_ref(0x0a)]
+    );
 }
 
 #[test]
@@ -745,6 +765,17 @@ fn rounds(count: usize) -> impl AsyncFnMut() -> Option<Vec<ChildScopeRef>> {
     }
 }
 
+/// The job's sweep: one [`run_sweep`] pass over `net`, for a session that never ends.
+fn one_pass<'a>(
+    scheduler: &'a VirtualScheduler,
+    net: &'a FakeNet,
+    cadence: Duration,
+) -> impl AsyncFnMut(&ChildScopeRef) -> SweepRun + 'a {
+    async move |scope: &ChildScopeRef| {
+        SweepRun::Swept(run_sweep(scheduler, net, net, scope, cadence, 1, &|| true).await)
+    }
+}
+
 /// Run the job over `net`'s one scope for `count` rounds on an
 /// auto-advancing clock, then stop it.
 fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualScheduler) {
@@ -752,10 +783,9 @@ fn job(net: &FakeNet, count: usize, cadence: Duration) -> (Reported, VirtualSche
     let seen: Reported = Reported::default();
     block_on(run_sweep_job(
         &scheduler,
-        net,
-        net,
         cadence,
         rounds(count),
+        one_pass(&scheduler, net, cadence),
         |scope: &ChildScopeRef, result: &Result<SweepOutcome, SweepError>| {
             seen.borrow_mut().push((scope.scope_id, result.clone()));
         },
@@ -872,10 +902,9 @@ fn the_job_parks_across_a_focus_window_poll_tick() {
         async move {
             run_sweep_job(
                 &scheduler,
-                &net,
-                &net,
                 profile.sweep_cadence,
                 rounds(1),
+                one_pass(&scheduler, &net, profile.sweep_cadence),
                 |_: &ChildScopeRef, _: &Result<SweepOutcome, SweepError>| {},
             )
             .await;

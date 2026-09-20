@@ -316,15 +316,19 @@ pub struct SweepOutcome {
     /// "repaired and flagged" (#38 D6). A repair that loses the CAS is not
     /// flagged; it never landed.
     pub flagged_indexes: Vec<[u8; 16]>,
+    /// The index repair lost the CAS; the next pass re-derives it.
+    pub index_repair_lost_race: bool,
 }
 
 impl SweepOutcome {
     /// Whether re-running the idempotent pass could still convert something: a
-    /// lost race whose winner may not have advanced the epoch, or a node the
-    /// pass could not read for a reason a retry clears. A node no seed opens and
-    /// a record the gate refused are settled — another pass answers identically.
-    fn worth_another_pass(&self) -> bool {
-        !self.dropped_lost_race.is_empty()
+    /// lost race whose winner may not have advanced the epoch or repaired the
+    /// index, or a node the pass could not read for a reason a retry clears. A
+    /// node no seed opens and a record the gate refused are settled — another
+    /// pass answers identically.
+    pub(crate) fn worth_another_pass(&self) -> bool {
+        self.index_repair_lost_race
+            || !self.dropped_lost_race.is_empty()
             || self
                 .unreachable
                 .iter()
@@ -679,7 +683,7 @@ where
                 .flagged_indexes
                 .extend(omitted.iter().map(|root| root.scope_id)),
             // Never landed, so never flagged; the next pass re-derives it.
-            Err(RotationPublishError::LostRace) => {}
+            Err(RotationPublishError::LostRace) => outcome.index_repair_lost_race = true,
             Err(error) => {
                 return Err(SweepError::IndexRepair {
                     scope_id: scope_ref.scope_id,
@@ -799,6 +803,7 @@ impl Cumulative {
             dropped_lost_race: last.dropped_lost_race,
             skipped_scope_roots: last.skipped_scope_roots,
             unreachable: last.unreachable,
+            index_repair_lost_race: last.index_repair_lost_race,
         }
     }
 }
@@ -859,41 +864,48 @@ where
     }
 }
 
+/// What one [`run_sweep`] of a session's sweeper answers.
+#[derive(Debug)]
+pub enum SweepRun {
+    /// The sweep ran to this result.
+    Swept(Result<SweepOutcome, SweepError>),
+    /// The session that owns the sweep is gone; the job stops.
+    SessionEnded,
+}
+
 /// Drive the lazy wave as the blueprint's idle-cadence [`Scheduler`] job: idle
 /// one `cadence`, sweep every scope `round` names, hand each result to `report`,
-/// and repeat until a round answers `None` — session end (blueprint/engine.md
-/// "sweep"). Determinism law: the only time source is `scheduler.sleep`.
+/// and repeat until a round answers `None` or a sweep answers
+/// [`SweepRun::SessionEnded`] — session end (blueprint/engine.md "sweep").
+/// Determinism law: the only time source is `scheduler.sleep`.
 ///
 /// The idle comes **first**, so a freshly spawned job never sweeps in the same
 /// wake as the cut or the poll tick that spawned it.
 ///
-/// Each scope gets **one** pass per round. The round is itself the retry: the
-/// wave is idempotent and comes back every `cadence`, so spending in-round
-/// passes on a contested scope would only stall every other scope behind it.
-/// `report` is how the index self-heal and the residual buckets reach a host
-/// that has no return value to read.
-pub async fn run_sweep_job<S, R, P>(
+/// `sweep` runs **one** pass per scope per round. The round is itself the
+/// retry: the wave is idempotent and comes back every `cadence`, so spending
+/// in-round passes on a contested scope would only stall every other scope
+/// behind it. `report` is how the index self-heal and the residual buckets
+/// reach a host that has no return value to read.
+pub async fn run_sweep_job<S, J>(
     scheduler: &S,
-    resolver: &R,
-    publisher: &P,
     cadence: Duration,
-    mut round: impl AsyncFnMut() -> Option<Vec<ChildScopeRef>>,
-    report: impl Fn(&ChildScopeRef, &Result<SweepOutcome, SweepError>),
+    mut round: impl AsyncFnMut() -> Option<Vec<J>>,
+    mut sweep: impl AsyncFnMut(&J) -> SweepRun,
+    mut report: impl FnMut(&J, &Result<SweepOutcome, SweepError>),
 ) where
     S: Scheduler,
-    R: SweepResolver,
-    P: SweepPublisher,
 {
     loop {
         scheduler.sleep(cadence).await;
-        let Some(scopes) = round().await else {
+        let Some(targets) = round().await else {
             return;
         };
-        for scope in &scopes {
-            // The job's session boundary is `round()` answering `None`.
-            let result =
-                run_sweep(scheduler, resolver, publisher, scope, cadence, 1, &|| true).await;
-            report(scope, &result);
+        for target in &targets {
+            let SweepRun::Swept(result) = sweep(target).await else {
+                return;
+            };
+            report(target, &result);
         }
     }
 }

@@ -80,7 +80,7 @@ use crate::net::{
 };
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
-use crate::rotation::{ScopeExitRotator, derive_write_name, seed_at_epoch};
+use crate::rotation::{LaggingSeedMiss, ScopeExitRotator, derive_write_name, lagging_read_seed};
 use crate::seams::{
     CredentialStore, FloorStore, Http, OpId, OwedRetire, OwingRecord, RecordTransport,
     RetireLedger, Scheduler, SeamResult, SharerScopedFloorStore, SnapshotCache, StagingStore,
@@ -488,31 +488,26 @@ pub(crate) fn charge_the_identity_to_one_pass(scopes: &mut [DrainScope<'_>]) {
     }
 }
 
-/// The scope read seed a node the lazy wave has not reached must be opened
-/// under: the one its own epoch was sealed at, walked back over the scope root's
-/// carried history links (CONTEXT.md "Lazy wave"), or the halt this pass takes
-/// instead of opening it.
+/// The shared lagging seed walk ([`lagging_read_seed`]), or the halt this pass
+/// takes instead of opening the node. A record above this pass's epoch is an
+/// honest race with a fresher root, which the next pass anchors on.
 fn seed_for_lagging(
     scope_id: [u8; 16],
     current_seed: &[u8; 32],
     anchor: Anchor<'_>,
     record_epoch: u64,
 ) -> Result<Zeroizing<[u8; 32]>, Halt> {
-    // A record above this pass's epoch is not lagging, and the ratchet only
-    // walks backward: no seed here opens it. An honest race with a fresher root,
-    // which the next pass anchors on.
-    if record_epoch > anchor.epoch {
-        return Err(Halt::Unclassified);
-    }
-    seed_at_epoch(
-        ENVELOPE_V,
+    lagging_read_seed(
         scope_id,
         current_seed,
         anchor.epoch,
         anchor.history_links,
         record_epoch,
     )
-    .ok_or_else(|| halt_for_unreachable_epoch(anchor.history_links))
+    .map_err(|miss| match miss {
+        LaggingSeedMiss::AboveAnchor => Halt::Unclassified,
+        LaggingSeedMiss::Unreachable => halt_for_unreachable_epoch(anchor.history_links),
+    })
 }
 
 /// The halt a lagging node earns when this pass's backward ratchet cannot reach

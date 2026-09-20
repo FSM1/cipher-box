@@ -91,8 +91,8 @@ use crate::rotation::{
     RotateError, RotateScopePlan, RotationOutcome, RotationPublishError, ScopeExitRotator,
     ScopeRootIdentity, ScopeRootPublisher, SweepPublisher, SweepResolveFailure, SweepResolver,
     SweptChild, SweptNode, SweptScope, WriteHistory, WritePublishError, WriteScopeNode,
-    WriteSubtreeResolver, WriteWavePublisher, derive_write_name, published_override_seed,
-    reseal_scope_root, rotate_scope, seed_at_epoch,
+    WriteSubtreeResolver, WriteWavePublisher, derive_write_name, lagging_read_seed,
+    published_override_seed, reseal_scope_root, rotate_scope,
 };
 use crate::seams::{
     BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, RecordTransport, Scheduler,
@@ -1064,15 +1064,7 @@ where
             &block,
         )
         .await
-        .map_err(|failure| match failure {
-            PointerPublishFailure::Rejected => RotationPublishError::Rejected,
-            PointerPublishFailure::LostRace => RotationPublishError::LostRace,
-            // A full registry stops this cut like any other unlanded publish:
-            // the mint refuses, so nothing retries behind the member's back.
-            PointerPublishFailure::NotLanded | PointerPublishFailure::RegistryFull => {
-                RotationPublishError::NotPublished
-            }
-        })?;
+        .map_err(RotationPublishError::from)?;
         hold_scope_pointer(
             self.held,
             repoint.scope_id,
@@ -1086,12 +1078,12 @@ where
 }
 
 /// The publish pipeline one pointer-plane record rides.
-struct PointerPipeline<'a, T, H: Http, C: CredentialStore, F, Sch> {
-    transport: &'a T,
-    api: &'a ApiClient<H, C>,
-    floors: &'a F,
-    scheduler: &'a Sch,
-    profile: &'a SyncTimingProfile,
+pub(super) struct PointerPipeline<'a, T, H: Http, C: CredentialStore, F, Sch> {
+    pub(super) transport: &'a T,
+    pub(super) api: &'a ApiClient<H, C>,
+    pub(super) floors: &'a F,
+    pub(super) scheduler: &'a Sch,
+    pub(super) profile: &'a SyncTimingProfile,
 }
 
 /// Publish one pointer-plane record at `name` and raise that name's sequence
@@ -1099,14 +1091,41 @@ struct PointerPipeline<'a, T, H: Http, C: CredentialStore, F, Sch> {
 ///
 /// The observed sequence is the CAS bar: a pointer name carries at most one
 /// live record, so a publish that does not beat what is already there is a lost
-/// race rather than a silent overwrite. Both producers of this plane — the
-/// wave's flip and the grant mint's vouch — go through here, so the bar and the
-/// floor raise cannot drift apart.
+/// race rather than a silent overwrite. Every producer of this plane — the
+/// wave's flip, the grant mint's vouch and the read cut's anchor — ends in
+/// [`publish_pointer_over`], so the bar and the floor raise cannot drift apart.
 async fn publish_pointer_inline<T, H, C, F, Sch>(
     pipeline: PointerPipeline<'_, T, H, C, F, Sch>,
     name: &IpnsName,
     signer: &Ed25519Signer,
     block: &[u8],
+) -> Result<Vec<u8>, PointerPublishFailure>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    // A bar of zero on silence is no bar at all: the publish would beat nothing
+    // and overwrite the record it could not read, so an unreadable plane ends
+    // the publish instead ([`FanoutRecord`]).
+    let observed = match fanout_get_classified(pipeline.transport, name).await {
+        FanoutRecord::Found(record, _) => record.sequence,
+        FanoutRecord::Absent => 0,
+        FanoutRecord::Unavailable => return Err(PointerPublishFailure::NotLanded),
+    };
+    publish_pointer_over(pipeline, name, signer, block, observed).await
+}
+
+/// [`publish_pointer_inline`] over a CAS bar the caller already read: the
+/// sequence of the record whose contents the new block was built from.
+pub(super) async fn publish_pointer_over<T, H, C, F, Sch>(
+    pipeline: PointerPipeline<'_, T, H, C, F, Sch>,
+    name: &IpnsName,
+    signer: &Ed25519Signer,
+    block: &[u8],
+    observed: u64,
 ) -> Result<Vec<u8>, PointerPublishFailure>
 where
     T: RecordTransport + Clone + 'static,
@@ -1122,14 +1141,6 @@ where
         scheduler,
         profile,
     } = pipeline;
-    // A bar of zero on silence is no bar at all: the publish would beat nothing
-    // and overwrite the record it could not read, so an unreadable plane ends
-    // the publish instead ([`FanoutRecord`]).
-    let observed = match fanout_get_classified(transport, name).await {
-        FanoutRecord::Found(record, _) => record.sequence,
-        FanoutRecord::Absent => 0,
-        FanoutRecord::Unavailable => return Err(PointerPublishFailure::NotLanded),
-    };
     let receipt = publish_inline(
         transport,
         api,
@@ -1166,11 +1177,25 @@ where
 /// What [`publish_pointer_inline`] reports, on rule 6's retryable-versus-trust
 /// axis. Each caller folds it into the verdict its own arm speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PointerPublishFailure {
+pub(super) enum PointerPublishFailure {
     NotLanded,
     LostRace,
     Rejected,
     RegistryFull,
+}
+
+impl From<PointerPublishFailure> for RotationPublishError {
+    fn from(failure: PointerPublishFailure) -> Self {
+        match failure {
+            PointerPublishFailure::Rejected => RotationPublishError::Rejected,
+            PointerPublishFailure::LostRace => RotationPublishError::LostRace,
+            // A full registry stops a cut like any other unlanded publish, so
+            // nothing retries behind the member's back.
+            PointerPublishFailure::NotLanded | PointerPublishFailure::RegistryFull => {
+                RotationPublishError::NotPublished
+            }
+        }
+    }
 }
 
 /// Hold a published scope pointer for sub-EOL renewal. Its EOL is
@@ -2900,23 +2925,17 @@ where
         )
         .await
         .map_err(read_verdict)?;
-        // A record above the scope root's epoch is not lagging, and this scope's
-        // ratchet only walks backward, so there is no seed here that opens it —
-        // an honest race with a fresher root, or an epoch label a committed
-        // writer chose freely (the epoch is only AAD). Either way it is this
-        // pass's read that fails, not the record's trust.
-        if envelope.epoch > scope.read_epoch {
-            return Err(SweepResolveFailure::Unreadable);
-        }
-        let seed = seed_at_epoch(
-            envelope.v,
+        // A seed the ratchet does not reach fails this pass's read, not the
+        // record's trust: an epoch above the root is also a label a committed
+        // writer can choose freely (the epoch is only AAD).
+        let seed = lagging_read_seed(
             scope.scope_id,
             scope.read_scope_seed,
             scope.read_epoch,
             scope.history_links,
             envelope.epoch,
         )
-        .ok_or(SweepResolveFailure::Unreadable)?;
+        .map_err(|_| SweepResolveFailure::Unreadable)?;
         let read_key = read_key_for(&seed, &envelope.id);
         let read_body =
             open_read_body(envelope, &read_key).map_err(|_| SweepResolveFailure::Rejected)?;

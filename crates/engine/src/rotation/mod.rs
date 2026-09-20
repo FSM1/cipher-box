@@ -70,7 +70,9 @@ pub use reseal::{
     ScopeRootIdentity, WriteHistory, published_override_seed, reseal_at_current_epoch,
     reseal_scope_root, seed_at_epoch,
 };
+pub(crate) use reseal::{LaggingSeedMiss, lagging_read_seed};
 pub use retry::{MAX_ROTATION_ATTEMPTS, Retryable, bounded};
+pub(crate) use rotate::complete_cut;
 pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, RotationPublishError,
     ScopeRootPublisher, rotate_scope,
@@ -84,8 +86,8 @@ pub use rotate_write::{
 pub(crate) use scope_material::{WalkedReadEpochs, install_walked_read_epochs};
 pub use sweep::{
     LaggingNode, NodeRef, SweepError, SweepOutcome, SweepPublisher, SweepResolveFailure,
-    SweepResolver, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep, run_sweep_job,
-    sweep_pass,
+    SweepResolver, SweepRun, SweptChild, SweptNode, SweptScope, converge_subtree, run_sweep,
+    run_sweep_job, sweep_pass,
 };
 pub use trigger::{
     CutRotationReport, CutRotator, GrantCutPlan, RevokeError, RevokedCommittedSet,

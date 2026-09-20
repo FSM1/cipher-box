@@ -97,19 +97,21 @@ use crate::net::{
     enrol_owned_scope_pointers, eol_renew_pass, keyless_re_put, observed_at,
     refresh_base_from_resolved, resolve_and_hold, resolve_child, run_liveness_loop,
 };
+use crate::net::{VaultPointerVoucher, VouchedRoot};
 use crate::owner_keys::{OwnerSeedKeys, OwnerSessionKeys};
 use crate::profile::SyncTimingProfile;
 use crate::record_plane::DefaultsReason;
+use crate::rotation::complete_cut;
 use crate::rotation::scope_material::ScopeMaterial;
 use crate::rotation::{
     AscentAuthority, CascadeTarget, CommittedSet, CutRotationReport, GrantCutPlan,
     MAX_ROTATION_ATTEMPTS, ResealError, ResealSeeds, ResealSite, ResealedScopeRoot, ResolveFailure,
     Retryable, RevokeError, RevokedCommittedSet, RotateError, RotateOnExit, RotateScopePlan,
-    RotationOutcome, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher,
-    SweepResolveFailure, WalkedReadEpochs, WriteHistory, WriteRevokeKind, bounded,
-    cut_for_write_grant, derive_write_name, install_walked_read_epochs, record_grant_floor,
-    reseal_at_current_epoch, reseal_scope_root, revoke_read_grant, revoke_write_grant,
-    rotate_on_cut, rotate_scope, run_sweep,
+    RotationOutcome, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError,
+    SweepOutcome, SweepResolveFailure, SweepRun, WalkedReadEpochs, WriteHistory, WriteRevokeKind,
+    bounded, cut_for_write_grant, derive_write_name, install_walked_read_epochs,
+    record_grant_floor, reseal_at_current_epoch, reseal_scope_root, revoke_read_grant,
+    revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep, run_sweep_job,
 };
 use crate::seams::{
     BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
@@ -138,8 +140,8 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::{UnlinkedChild, map_kind, merge_root, project_child_version};
 use crate::sync::provision::{
-    GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan, ProvisionedVault,
-    VaultPointerProbe, provision_vault,
+    GENESIS_EPOCH, GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan,
+    ProvisionedVault, VaultPointerProbe, provision_vault,
 };
 use crate::sync::rebase::{QueueKey, QueueScan, QueueScanMemo, decode_queue, enclosing_scope_root};
 use crate::sync::record::{RecordClass, record_content_root_cid};
@@ -1455,8 +1457,10 @@ pub enum Event {
         description: String,
     },
     /// A held record's sub-EOL renewal did not land — a lost CAS race or a
-    /// fail-closed publish failure. Surfaced, never silent (blueprint/engine.md
-    /// "never a silent failure"); a later rebase/retry slice acts on it.
+    /// fail-closed publish failure — or a start could not raise the vault
+    /// pointer's `minReadEpoch` to the root epoch it adopted. Surfaced, never
+    /// silent (blueprint/engine.md "never a silent failure"); a later
+    /// rebase/retry slice acts on it.
     RenewalFailed {
         /// The record's routing key (`ipnsName`).
         routing_key: String,
@@ -2791,6 +2795,65 @@ fn ascent_node_seed(
     Some(Zeroizing::new(*kdf::node_seed(seed, &scope.0).as_bytes()))
 }
 
+/// The task a rotation enqueues once its cut is durable: [`SWEEP_MAX_PASSES`]
+/// passes, and whatever it leaves is the idle sweep job's.
+fn sweep_task_factory(sweeper: Sweeper) -> SweepTaskFactory {
+    Rc::new(move |scope, parent_node_seed| {
+        let run = sweeper(scope, parent_node_seed, SWEEP_MAX_PASSES);
+        Box::pin(async move {
+            let _ = run.await;
+        })
+    })
+}
+
+/// The scopes this vault owns that this session can place: the vault root at
+/// its held name, and every boundary the last walk proved, at the epoch the walk
+/// proved it at and under the ascent authority its gate needs.
+fn owned_sweep_targets(
+    base: &Snapshot,
+    root_name: Option<&IpnsName>,
+    walked: &RefCell<WalkedReadEpochs>,
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
+) -> Vec<SweepTarget> {
+    let root = base.root;
+    let mut targets = Vec::new();
+    if let Ok(scope) = held_vault_root_scope(root, write_seeds, root_name) {
+        targets.push(SweepTarget {
+            scope,
+            ascent: None,
+            epoch: None,
+        });
+    }
+    let Some(root_read_seed) = cached_seed(read_seeds, &root.0) else {
+        return targets;
+    };
+    let material = walked_boundary_material(walked, read_seeds, write_seeds);
+    for (scope_root, proved) in &material {
+        let Some(ascent) = ascent_node_seed(base, &material, root, &root_read_seed, *scope_root)
+        else {
+            continue;
+        };
+        targets.push(SweepTarget {
+            scope: proved_scope_ref(*scope_root, proved),
+            ascent: Some(ascent),
+            epoch: Some(proved.read_epoch),
+        });
+    }
+    targets
+}
+
+/// A proved boundary's scope root at the name its write scope seed derives.
+fn proved_scope_ref(scope_root: NodeId, proved: &ScopeMaterial) -> ChildScopeRef {
+    ChildScopeRef::new(
+        scope_root.0,
+        derive_write_name(&proved.write_scope_seed, &scope_root.0)
+            .as_str()
+            .as_bytes()
+            .to_vec(),
+    )
+}
+
 /// Refuse a journal target outside this vault's own tree.
 ///
 /// An accepted shared scope is grafted into the render tree with no parent link
@@ -2960,13 +3023,7 @@ where
         .material
         .get(&scope_root)
         .ok_or(RotateError::Resolve(ResolveFailure::Rejected))?;
-    let scope = ChildScopeRef::new(
-        scope_root.0,
-        derive_write_name(&proved.write_scope_seed, &scope_root.0)
-            .as_str()
-            .as_bytes()
-            .to_vec(),
-    );
+    let scope = proved_scope_ref(scope_root, proved);
     let ascent = ascent_node_seed(
         &arm.boundaries.base.borrow(),
         &arm.boundaries.material,
@@ -3005,6 +3062,7 @@ where
     arm.walked_epochs.borrow_mut().remove(&scope_root);
     flat_root_cut(
         &net,
+        None,
         FlatCut {
             scope: &scope,
             ascent: ascent.as_deref(),
@@ -3019,11 +3077,16 @@ where
 /// seed at the next epoch, publish under a compare-and-set, raise the epoch
 /// floor, and enqueue the lazy wave.
 ///
+/// `anchor` is the vault pointer when the scope is the vault root, and the cut
+/// then vouches its epoch there between the publish and the floor raise
+/// ([`VaultPointerVoucher`]).
+///
 /// The one plan a manual rotation and a scope exit share (blueprint/engine.md
 /// "Triggers": both re-seal an unchanged committed set, so neither is the
 /// revocation cascade). Only which scope, whose seams and which sweep differ.
 async fn flat_root_cut<T, H, C, F, Sch, E, S>(
     net: &OwnerRotationNet<'_, T, H, C, F, Sch, E, S>,
+    anchor: Option<&VaultPointerVoucher<'_, T, H, C, F, Sch, E>>,
     cut: FlatCut<'_, impl Fn() -> BoxedTask>,
 ) -> Result<RotationOutcome, RotateError>
 where
@@ -3040,15 +3103,43 @@ where
         ascent,
         make_sweep,
     } = cut;
+    // The resolve reads a cut with no ascent authority as the vault root's, and
+    // that cut owes the vault pointer its epoch before the floor rises.
+    if ascent.is_none() && anchor.is_none() {
+        return Err(RotateError::Resolve(ResolveFailure::Unavailable));
+    }
     let current = net
         .resolve_anchored(scope)
         .await
         .map_err(RotateError::Resolve)?;
+    if let Some(anchor) = anchor {
+        let vouched = anchor
+            .standing(&scope.ipns_name)
+            .await
+            .map_err(RotateError::Publish)?;
+        // A root published above the vouch is an earlier cut that never
+        // vouched: finish that cut, since another would move the floor further
+        // past the anchor.
+        if current.current_read_epoch > vouched.min_read_epoch() {
+            anchor
+                .vouch_over(vouched, current.current_read_epoch)
+                .await
+                .map_err(RotateError::Publish)?;
+            return complete_cut(
+                net.floors,
+                net.scheduler,
+                &scope.scope_id,
+                current.current_read_epoch,
+                make_sweep,
+            )
+            .await;
+        }
+    }
     rotate_scope(
         &mut SharedEntropy(net.entropy),
         net.floors,
         net.scheduler,
-        net,
+        &VouchedRoot { root: net, anchor },
         &RotateScopePlan {
             identity: ScopeRootIdentity {
                 v: current.v,
@@ -3098,6 +3189,17 @@ type OwnerNet<'a, T> = OwnerRotationNet<
     <T as SeamTypes>::Scheduler,
     Box<dyn Entropy>,
     <T as SeamTypes>::SnapshotCache,
+>;
+
+/// The vault pointer voucher over one engine's seam family.
+type VaultPointerVoucherOf<'a, T> = VaultPointerVoucher<
+    'a,
+    RecordAccelerator<<T as SeamTypes>::RecordTransport>,
+    <T as SeamTypes>::Http,
+    <T as SeamTypes>::CredentialStore,
+    OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>,
+    <T as SeamTypes>::Scheduler,
+    Box<dyn Entropy>,
 >;
 
 /// A name a command authors, held to the one name law ([`crate::name`]) — the
@@ -3639,6 +3741,20 @@ fn nodes_in_scope(
         .collect()
 }
 
+/// The record name of scope root `scope_id`, which a lagging child read walks
+/// the ratchet back from: the session's vault root name, or the name the base
+/// carries for a scope root below it.
+fn scope_root_record_name(
+    base: &Snapshot,
+    vault_root_name: Option<&IpnsName>,
+    scope_id: &[u8; 16],
+) -> Option<IpnsName> {
+    if *scope_id == base.root.0 {
+        return vault_root_name.cloned();
+    }
+    scope_name(base.node(NodeId(*scope_id))?.ipns_name.as_deref()?).ok()
+}
+
 /// The share of the focus file queue one leg of a pass may spend: `queued` less
 /// what the pass attempted on an earlier leg, and no more than the budget
 /// [`MAX_FOCUS_FILES`] leaves.
@@ -4144,7 +4260,29 @@ fn surface_drain_report(
     }
 }
 
-/// [`Engine::vault_root_scope`]'s refusal name.
+/// The vault root's scope at the name this session holds for it, refused where
+/// the held write seed does not derive that name.
+fn held_vault_root_scope(
+    root: NodeId,
+    write_seeds: &RefCell<ScopeSeeds>,
+    root_name: Option<&IpnsName>,
+) -> Result<ChildScopeRef, EngineError> {
+    let write_scope_seed =
+        cached_seed(write_seeds, &root.0).ok_or(EngineError::ContentUnavailable {
+            message: "no write scope seed is held for the vault root".to_owned(),
+        })?;
+    let root_name = root_name
+        .filter(|name| seed_names(&write_scope_seed, &root.0, Some(name)))
+        .ok_or(EngineError::ContentUnavailable {
+            message: HELD_SEED_NOT_AT_CURRENT_ROOT.to_owned(),
+        })?;
+    Ok(ChildScopeRef::new(
+        root.0,
+        root_name.as_str().as_bytes().to_vec(),
+    ))
+}
+
+/// [`held_vault_root_scope`]'s refusal name.
 const HELD_SEED_NOT_AT_CURRENT_ROOT: &str = "held-write-seed-does-not-name-the-current-root";
 
 /// Whether `seed` derives the scope root's own `ipnsName` — the one proof every
@@ -4732,6 +4870,26 @@ type TickLoopSpawner = Box<dyn FnOnce()>;
 /// the ancestor seed it read it under.
 type SweepTaskFactory = Rc<dyn Fn(ChildScopeRef, Option<Zeroizing<[u8; 32]>>) -> BoxedTask>;
 
+/// One [`run_sweep`] over a scope root, the ancestor seed its gate proves under,
+/// and a pass cap.
+type Sweeper = Rc<
+    dyn Fn(
+        ChildScopeRef,
+        Option<Zeroizing<[u8; 32]>>,
+        u32,
+    ) -> Pin<Box<dyn Future<Output = SweepRun>>>,
+>;
+
+/// One scope the idle sweep job may walk this round.
+struct SweepTarget {
+    scope: ChildScopeRef,
+    /// The ancestor node seed an interior scope root's gate proves under;
+    /// `None` for the vault root.
+    ascent: Option<Zeroizing<[u8; 32]>>,
+    /// The read epoch this session knows the scope root at, when it knows one.
+    epoch: Option<u64>,
+}
+
 /// The session material a spawned sweep opens and re-seals under, held in a cell
 /// the engine empties on drop so teardown revokes it rather than waiting out the
 /// task ([`Engine::tick_enc_subkey`] carries the tick loop's on the same terms).
@@ -4741,10 +4899,8 @@ struct SweepKeys {
     scope_keys: OwnerSeedKeys,
 }
 
-/// How many sweep passes one enqueued task runs before it gives up and leaves
-/// the remainder to the next rotation or ordinary write. The idle sweep cadence
-/// is an open edge (blueprint/engine.md "Open edges"), so the task rides
-/// [`SyncTimingProfile::poll_cadence`] until it lands in the profile.
+/// How many sweep passes one enqueued task runs, [`SyncTimingProfile::poll_cadence`]
+/// apart, before it leaves the remainder to the idle sweep job.
 const SWEEP_MAX_PASSES: u32 = 3;
 
 /// The engine — the single stateful brain behind the facade.
@@ -5283,7 +5439,16 @@ impl<T: SeamTypes> Engine<T> {
             } else {
                 None
             };
+        let vouched = outcome
+            .vault_pointer
+            .as_ref()
+            .map(|vp| vp.repoint.min_read_epoch);
         self.install_cold_start(outcome, root_scope_id);
+        if let Some(vouched) = vouched
+            && self.api_base_url.configured().is_some()
+        {
+            self.catch_up_vault_pointer(&api, vouched).await;
+        }
         if let Some(provisioned) = provisioned {
             self.install_mint(provisioned);
         }
@@ -5313,9 +5478,13 @@ impl<T: SeamTypes> Engine<T> {
         .await;
 
         self.spawn_liveness_loop(api.clone());
-        *self.sweep_tasks.borrow_mut() = self.build_sweep_task_factory(api.clone());
+        let sweeper = self.build_sweeper(api.clone());
+        *self.sweep_tasks.borrow_mut() = sweeper.clone().map(sweep_task_factory);
         *self.tick_loop_spawner.borrow_mut() = self.build_tick_loop_spawner(api.clone());
         self.open_tick_loop();
+        if let Some(sweeper) = sweeper {
+            self.spawn_sweep_job(sweeper);
+        }
         self.api = Some(api);
         self.started = true;
         Ok(())
@@ -5363,6 +5532,46 @@ impl<T: SeamTypes> Engine<T> {
         }
         *self.snapshot.borrow_mut() = outcome.base;
         root_name.is_some()
+    }
+
+    /// Vouch at the vault pointer the root epoch this start adopted above
+    /// `vouched`: a cut that landed its root and not its vouch. Inline, before
+    /// the loops spawn, so a tick never races the re-point. A failure is
+    /// surfaced: a cut of the vault root in this session finishes the vouch,
+    /// and until one lands this device's next cold seed refuses.
+    async fn catch_up_vault_pointer(
+        &self,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        vouched: u64,
+    ) {
+        let root = self.snapshot.borrow().root.0;
+        // Above `vouched` only through this start's own gated adopt: the cold
+        // seed refused any higher floor that stood before it.
+        let floor = match floor::read_epoch_floor(&self.seams.floor_store, &root).await {
+            Ok(Some(floor)) if floor > vouched => Ok(floor),
+            Ok(_) => return,
+            Err(error) => Err(error),
+        };
+        let root_name = self.current_root_name.borrow().clone();
+        let (Some(root_name), Some(anchor)) = (root_name, self.vault_pointer_voucher(api)) else {
+            return;
+        };
+        let failure = match floor {
+            Ok(floor) => anchor
+                .vouch_read_epoch(root_name.as_str().as_bytes(), floor)
+                .await
+                .err()
+                .map(|error| error.to_string()),
+            Err(error) => Some(format!("the read-epoch floor is unreadable: {error}")),
+        };
+        if let Some(failure) = failure {
+            let _ = self.events.unbounded_send(Event::RenewalFailed {
+                routing_key: anchor.name().as_str().to_owned(),
+                detail: format!(
+                    "the vault pointer does not vouch the adopted read epoch: {failure}"
+                ),
+            });
+        }
     }
 
     /// Deposit a fresh mint's seeds and hold the root name it published. A
@@ -5966,17 +6175,13 @@ where {
         }
     }
 
-    /// Build the factory for the lazy-wave sweep task every rotation enqueues
-    /// once its cut is durable (blueprint/engine.md "Rotation primitives:
-    /// sweep").
+    /// Build the lazy-wave sweep both a rotation's enqueued task and the idle
+    /// sweep job run (blueprint/engine.md "Rotation primitives: sweep").
     ///
     /// Built here for the reason
     /// [`build_tick_loop_spawner`](Self::build_tick_loop_spawner) is. `None`
     /// when there is no session to derive the owner's two rotation seeds from.
-    fn build_sweep_task_factory(
-        &self,
-        api: Rc<ApiClient<T::Http, T::CredentialStore>>,
-    ) -> Option<SweepTaskFactory>
+    fn build_sweeper(&self, api: Rc<ApiClient<T::Http, T::CredentialStore>>) -> Option<Sweeper>
     where
         T::Http: Clone + 'static,
         T::CredentialStore: Clone + 'static,
@@ -6002,7 +6207,9 @@ where {
         let profile = self.profile;
 
         Some(Rc::new(
-            move |scope: ChildScopeRef, parent_node_seed: Option<Zeroizing<[u8; 32]>>| {
+            move |scope: ChildScopeRef,
+                  parent_node_seed: Option<Zeroizing<[u8; 32]>>,
+                  max_passes: u32| {
                 let held = held.clone();
                 let api = api.clone();
                 let transport = transport.clone();
@@ -6018,7 +6225,7 @@ where {
                     // The pass owns a copy for exactly its own duration; the
                     // engine emptied the cell if the session is already gone.
                     let Some(keys) = held.borrow().clone() else {
-                        return;
+                        return SweepRun::SessionEnded;
                     };
                     let net = OwnerRotationNet {
                         transport: &transport,
@@ -6047,21 +6254,98 @@ where {
                         swept: SweptScopeState::default(),
                         moved_seed: MovedScopeSeed::default(),
                     };
-                    // The wave is idempotent and every later write advances it,
-                    // so a pass that does not converge is left to the next one.
-                    let _ = run_sweep(
-                        &scheduler,
-                        &net,
-                        &net,
-                        &scope,
-                        profile.poll_cadence,
-                        SWEEP_MAX_PASSES,
-                        &|| alive.get() && held.borrow().is_some(),
+                    SweepRun::Swept(
+                        run_sweep(
+                            &scheduler,
+                            &net,
+                            &net,
+                            &scope,
+                            profile.poll_cadence,
+                            max_passes,
+                            &|| alive.get() && held.borrow().is_some(),
+                        )
+                        .await,
                     )
-                    .await;
-                }) as BoxedTask
+                }) as Pin<Box<dyn Future<Output = _>>>
             },
         ))
+    }
+
+    /// Spawn the idle-cadence sweep job (blueprint/engine.md "sweep"): each
+    /// [`SyncTimingProfile::sweep_cadence`], one pass over every scope this vault
+    /// owns that has left its genesis epoch and that no pass this session has
+    /// confirmed converged at the epoch it now sits at.
+    ///
+    /// Nothing about the wave is durable, so a restart starts with every such
+    /// scope due: a cut whose own enqueued sweep failed, or that a restart cut
+    /// short, converges here.
+    fn spawn_sweep_job(&self, sweeper: Sweeper)
+    where
+        T::FloorStore: Clone + 'static,
+    {
+        let scheduler = self.seams.scheduler.clone();
+        let floors = LiveSeam::new(self.seams.floor_store.clone(), self.alive.clone());
+        let alive = self.alive.clone();
+        let keys = self.sweep_keys.clone();
+        let base = self.snapshot.clone();
+        let root_name = self.current_root_name.clone();
+        let walked = self.walked_read_epochs.clone();
+        let read_seeds = self.scope_read_seeds.clone();
+        let write_seeds = self.scope_write_seeds.clone();
+        let cadence = self.profile.sweep_cadence;
+        self.seams.scheduler.spawn(Box::pin(async move {
+            let read_epoch_converged_at: RefCell<BTreeMap<[u8; 16], u64>> = RefCell::default();
+            run_sweep_job(
+                &scheduler,
+                cadence,
+                async || {
+                    if !alive.get() || keys.borrow().is_none() {
+                        return None;
+                    }
+                    let owned = owned_sweep_targets(
+                        &base.borrow(),
+                        root_name.borrow().as_ref(),
+                        &walked,
+                        &read_seeds,
+                        &write_seeds,
+                    );
+                    let mut due = Vec::new();
+                    for target in owned {
+                        let epoch = match target.epoch {
+                            Some(epoch) => Some(epoch),
+                            None => floors
+                                .epoch_floor(&target.scope.scope_id)
+                                .await
+                                .ok()
+                                .flatten(),
+                        };
+                        let settled = read_epoch_converged_at
+                            .borrow()
+                            .get(&target.scope.scope_id)
+                            .copied();
+                        if epoch.is_some_and(|epoch| {
+                            epoch > GENESIS_EPOCH && settled.is_none_or(|at| at < epoch)
+                        }) {
+                            due.push(target);
+                        }
+                    }
+                    Some(due)
+                },
+                async |target: &SweepTarget| {
+                    sweeper(target.scope.clone(), target.ascent.clone(), 1).await
+                },
+                |target: &SweepTarget, result: &Result<SweepOutcome, SweepError>| {
+                    if let Ok(outcome) = result
+                        && !outcome.worth_another_pass()
+                    {
+                        read_epoch_converged_at
+                            .borrow_mut()
+                            .insert(target.scope.scope_id, outcome.scope_read_epoch);
+                    }
+                },
+            )
+            .await;
+        }));
     }
 
     /// Spawn the ~hourly liveness loop (blueprint/engine.md "Liveness"):
@@ -6595,6 +6879,8 @@ where {
                         ) else {
                             continue;
                         };
+                        let scope_root_name =
+                            scope_root_record_name(&base.borrow(), Some(&root_name), &scope_root.0);
                         let refresh = FolderRefresh {
                             transport: &transport,
                             snapshot_cache: &snapshot_cache,
@@ -6605,6 +6891,7 @@ where {
                             events: &events,
                             scope_id: scope_root.0,
                             scope_read_seed: &scope_read_seed,
+                            scope_root_name: scope_root_name.as_ref(),
                             plane: (!own).then_some(GraftedLeg {
                                 scope_roots: &scope_roots,
                                 claims: &grafted_claims,
@@ -7196,10 +7483,10 @@ where {
                     .await
             }
             Command::RestoreVersion { node, content_cid } => {
-                // The version history is read under this vault's own root scope
-                // (`resolve_versions`), which a grafted file is not sealed under.
+                // A restore never rewinds history (CONTEXT.md "Version
+                // history"), so a write pass may author it like a new version.
                 let rendered = self.render().await?;
-                refuse_graft(self.write_home(&rendered, node, TargetRole::Node)?)?;
+                self.write_home(&rendered, node, TargetRole::Node)?;
                 let seq = rendered.record_sequence(node).unwrap_or(1);
                 self.version_position(node, &content_cid).await?;
                 self.stage_and_notify(&Op::restore_version(node, content_cid, seq, authored_at))
@@ -7481,23 +7768,12 @@ where {
     /// so the verdict is the retryable [`EngineError::ContentUnavailable`] the
     /// absent-seed refusal above already answers.
     fn vault_root_scope(&self) -> Result<ChildScopeRef, EngineError> {
-        let scope_id = self.snapshot.borrow().root.0;
-        let write_scope_seed = cached_seed(&self.scope_write_seeds, &scope_id).ok_or(
-            EngineError::ContentUnavailable {
-                message: "no write scope seed is held for the vault root".to_owned(),
-            },
-        )?;
-        let held = self.current_root_name.borrow();
-        if !seed_names(&write_scope_seed, &scope_id, held.as_ref()) {
-            return Err(EngineError::ContentUnavailable {
-                message: HELD_SEED_NOT_AT_CURRENT_ROOT.to_owned(),
-            });
-        }
-        let root_name = held.as_ref().expect("seed_names refuses an absent name");
-        Ok(ChildScopeRef::new(
-            scope_id,
-            root_name.as_str().as_bytes().to_vec(),
-        ))
+        let root = self.snapshot.borrow().root;
+        held_vault_root_scope(
+            root,
+            &self.scope_write_seeds,
+            self.current_root_name.borrow().as_ref(),
+        )
     }
 
     /// The scope root that encloses `node`, the gated record it resolves to, and
@@ -7767,6 +8043,30 @@ where {
         .await
     }
 
+    /// The vault pointer at the index this session adopted, or `None` when the
+    /// session adopted none.
+    fn vault_pointer_voucher<'a>(
+        &'a self,
+        api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
+    ) -> Option<VaultPointerVoucherOf<'a, T>> {
+        let session = self.session.as_ref()?;
+        let index = self.vault_pointer_index.get()?;
+        let scope_id = self.snapshot.borrow().root.0;
+        Some(VaultPointerVoucher {
+            transport: &self.record_transport,
+            api: api.as_ref(),
+            floors: &self.seams.floor_store,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            owner: session.identity(),
+            pointer_read_key: session.pointer_read_key(&scope_id),
+            signer: session.vault_pointer_signer(index),
+            scope_id,
+            payload_version: POINTER_PAYLOAD_VERSION,
+        })
+    }
+
     /// Manual hygiene rotate-now over the vault root's scope
     /// (blueprint/engine.md "Triggers": manual rotations re-seal the
     /// **unchanged** committed set, so this is the flat root cut, not the
@@ -7791,6 +8091,13 @@ where {
                 UnindexedScope::Refuse,
             )
             .await?;
+        let anchor = if node == self.snapshot.borrow().root {
+            Some(self.vault_pointer_voucher(api).ok_or_else(|| {
+                EngineError::from_rotate(RotateError::Resolve(ResolveFailure::Unavailable))
+            })?)
+        } else {
+            None
+        };
 
         self.bounded_rotation(async || {
             let net = self.owner_rotation_net(
@@ -7801,6 +8108,7 @@ where {
             );
             flat_root_cut(
                 &net,
+                anchor.as_ref(),
                 FlatCut {
                     scope: &target.scope,
                     ascent: target.parent_node_seed.as_deref(),
@@ -9418,6 +9726,7 @@ where {
             ),
         );
         let scope_read_seed = self.scope_read_seed(&root.0).await;
+        let root_name = self.current_root_name.borrow().clone();
         let leg = scope_read_seed
             .as_ref()
             .map(|scope_read_seed| FolderRefresh {
@@ -9430,6 +9739,7 @@ where {
                 events: &self.events,
                 scope_id: root.0,
                 scope_read_seed,
+                scope_root_name: root_name.as_ref(),
                 plane: None,
                 mode: ResolveMode::CacheFirst,
                 observed_at: now.0,
@@ -10879,6 +11189,11 @@ where {
                 .ok_or_else(no_seed)?
                 .0
         };
+        let scope_root_name = scope_root_record_name(
+            &self.snapshot.borrow(),
+            self.current_root_name.borrow().as_ref(),
+            &scope_id,
+        );
         let scope_read_seed = self.scope_read_seed(&scope_id).await.ok_or_else(no_seed)?;
         let floors = self.scope_floors(&scope_id).ok_or_else(no_seed)?;
         let adopter = ChildAdopter::new(
@@ -10894,6 +11209,7 @@ where {
             &self.seams.snapshot_cache,
             &adopter,
             &name,
+            scope_root_name.as_ref(),
             ResolveMode::CacheFirst,
         )
         .await
@@ -18477,7 +18793,7 @@ mod tests {
 
         /// Every write a proved write pass admits journals through the facade
         /// and publishes in the granted scope: a create, an upload, a new
-        /// version, a rename, a move and a relink inside it.
+        /// version, a version restore, a rename, a move and a relink inside it.
         #[test]
         fn a_write_grantee_authors_every_admitted_write_inside_the_granted_scope() {
             let photos = shared_child(PHOTOS, "photos", CoreNodeKind::Folder);
@@ -18530,7 +18846,31 @@ mod tests {
             )
             .expect("a new version journals");
             grantee.settle();
-            assert_ne!(head(&grantee), Some(first), "the new version is the head");
+            let second = head(&grantee).expect("the new version is published");
+            assert_ne!(second, first, "the new version is the head");
+
+            grantee
+                .command(Command::RestoreVersion {
+                    node: notes,
+                    content_cid: first.clone(),
+                })
+                .expect("a version restore journals");
+            grantee.settle();
+            assert_eq!(
+                head(&grantee),
+                Some(first),
+                "the restored version is the head"
+            );
+            let prior: Vec<Vec<u8>> = block_on(grantee.engine.file_versions(notes))
+                .expect("the history reads")
+                .into_iter()
+                .map(|version| version.content_cid)
+                .collect();
+            assert_eq!(
+                prior,
+                [second],
+                "the outgoing head is the newest prior version"
+            );
 
             grantee
                 .command(Command::Rename {
@@ -18593,7 +18933,7 @@ mod tests {
 
         /// The refusals a write pass keeps: the grafted root itself, a move
         /// into or out of the granted scope, and every command that acts on
-        /// the owner's bin or version history. Nothing reaches the queue.
+        /// the owner's bin or drops a version. Nothing reaches the queue.
         #[test]
         fn a_write_grantee_is_refused_what_leaves_the_scope_or_reaches_the_owners_surfaces() {
             let photos = shared_child(PHOTOS, "photos", CoreNodeKind::File);
@@ -18700,13 +19040,6 @@ mod tests {
                 (
                     "a version delete",
                     Command::DeleteVersion {
-                        node: photos,
-                        content_cid: vec![0; CONTENT_CID_LEN],
-                    },
-                ),
-                (
-                    "a version restore",
-                    Command::RestoreVersion {
                         node: photos,
                         content_cid: vec![0; CONTENT_CID_LEN],
                     },
@@ -18965,7 +19298,7 @@ mod tests {
         }
 
         #[test]
-        fn two_loops_coexist_and_stop_on_drop() {
+        fn the_session_loops_coexist_and_stop_on_drop() {
             let world = FakeWorld::new();
             let device = world.device(b"alice-pk");
             let (head_block, head_cid, root_name) = owner_root();
@@ -18976,8 +19309,8 @@ mod tests {
             let mut tasks = world.scheduler.take_spawned_tasks();
             assert_eq!(
                 tasks.len(),
-                2,
-                "start spawns the liveness loop and the resolve-tick loop"
+                3,
+                "start spawns the liveness loop, the resolve-tick loop and the idle sweep job"
             );
 
             // Seed the record at only the first endpoint so the keyless re-PUT is
@@ -19006,13 +19339,13 @@ mod tests {
                 "the keyless re-PUT propagated the held record to the second endpoint"
             );
 
-            // Drop clears the alive latch; both loops stop at their next wake.
+            // Drop clears the alive latch; every loop stops at its next wake.
             drop(engine);
             world.scheduler.advance(RE_PUT_INTERVAL);
             let after = poll_tasks_once(&mut tasks);
             assert!(
                 after.iter().all(Poll::is_ready),
-                "both loops stop after the engine drops"
+                "every loop stops after the engine drops"
             );
         }
 
@@ -19688,6 +20021,57 @@ mod tests {
                     "the at-floor re-open advanced no epoch floor"
                 );
             }
+        }
+
+        /// Rule 8 at the encode side: a vouch below the durable floor is a
+        /// re-point the cold start refuses, so it is never signed.
+        #[test]
+        fn a_vouch_below_the_durable_floor_publishes_nothing() {
+            let world = FakeWorld::new();
+            let device = world.device(&owner_identity().verifying_key().to_sec1());
+            let (head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+            let blocks = Blocks::default();
+            blocks.put(head_block);
+            serve_http(&device, &blocks, 600);
+            let (mut engine, _events) = engine_with_api(
+                &device,
+                ApiBaseUrl::parse("http://api.test").expect("a base"),
+            );
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())))
+                .expect("cold start adopts the owner root");
+            drop(world.scheduler.take_spawned_tasks());
+            block_on(
+                device
+                    .floors(&CAP_SECRET)
+                    .raise_epoch_floor(&SCOPE, EPOCH + 5),
+            )
+            .expect("the floor rises");
+
+            let api = engine.api.clone().expect("a started session holds the API");
+            let voucher = engine
+                .vault_pointer_voucher(&api)
+                .expect("the session adopted a vault pointer");
+            let pointer = vault_pointer_name(&CAP_SECRET, 0);
+            let pointer_records = |device: &FakeDevice| {
+                device
+                    .record_store
+                    .endpoints()
+                    .iter()
+                    .map(|endpoint| device.record_store.record_at(endpoint, pointer.as_str()))
+                    .collect::<Vec<_>>()
+            };
+            let before = pointer_records(&device);
+            let refused =
+                block_on(voucher.vouch_read_epoch(root_name.as_str().as_bytes(), EPOCH + 1));
+            assert!(
+                matches!(refused, Err(RotationPublishError::Rejected)),
+                "{refused:?}"
+            );
+            assert_eq!(pointer_records(&device), before, "nothing was published");
         }
     }
 

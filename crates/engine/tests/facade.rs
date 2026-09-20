@@ -594,7 +594,7 @@ fn the_event_stream_ends_when_the_engine_drops() {
 }
 
 #[test]
-fn cold_start_spawns_exactly_the_hourly_liveness_loop() {
+fn cold_start_spawns_the_hourly_liveness_loop_and_the_idle_sweep_job() {
     let world = FakeWorld::new();
     // Auto-advance so the spawned loop's sleep resolves without a manual driver;
     // every clone shares this one inner clock.
@@ -611,21 +611,23 @@ fn cold_start_spawns_exactly_the_hourly_liveness_loop() {
     let tasks = scheduler.take_spawned_tasks();
     assert_eq!(
         tasks.len(),
-        1,
-        "cold-start spawns exactly the liveness loop"
+        2,
+        "cold-start spawns the liveness loop and the idle sweep job"
     );
 
-    // Dropping the engine clears the alive latch, so the loop stops at its next
-    // wake instead of re-PUTting forever after the session is gone.
+    // Dropping the engine clears the alive latch, so each loop stops at its next
+    // wake instead of running forever after the session is gone.
     drop(engine);
-    for task in tasks {
-        block_on(task);
-    }
+    let mut tasks = tasks.into_iter();
+    block_on(tasks.next().expect("the liveness loop"));
     assert_eq!(
         scheduler.now(),
         UnixMillis(u64::try_from(RE_PUT_INTERVAL.as_millis()).unwrap()),
         "the loop slept one hourly interval before the drop latch stopped it"
     );
+    for task in tasks {
+        block_on(task);
+    }
 }
 
 #[test]
