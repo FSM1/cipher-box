@@ -50,8 +50,11 @@ test('a write grant lets a second identity build inside the folder', async ({
 
   const list = new SharedPage(recipient);
   await list.open();
-  await list.awaitStanding('granted', 600_000);
-  await expect(list.rows.getByTestId('shared-permission')).toHaveText('read');
+  await list.awaitPermission('read', 600_000);
+  await expect(list.rows.getByTestId('shared-standing')).toHaveAttribute(
+    'data-resolution',
+    'granted'
+  );
 
   // A read grant offers no write: the engine refuses one there, so the browser
   // must not present the gesture.

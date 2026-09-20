@@ -61,17 +61,30 @@ export class SharedPage {
    * the list.
    */
   async awaitStanding(resolution: string, timeout = 60_000): Promise<void> {
-    await expect
-      .poll(
-        async () => {
-          await this.page.getByTestId('status-indicator').click();
-          await this.readAgain();
-          if ((await this.rows.count()) !== 1) return 'no row';
-          return this.rows.getByTestId('shared-standing').getAttribute('data-resolution');
-        },
-        { timeout, intervals: [5_000] }
-      )
-      .toBe(resolution);
+    await this.awaitRow(
+      async () => {
+        if ((await this.rows.count()) !== 1) return 'no row';
+        return this.rows.getByTestId('shared-standing').getAttribute('data-resolution');
+      },
+      resolution,
+      { timeout, nudge: true, intervals: [5_000] }
+    );
+  }
+
+  /**
+   * Re-reads until the one accepted share reports `permission`. The committed
+   * permission moves on the engine's sync pass, so each turn nudges that pass
+   * as well as the list.
+   */
+  async awaitPermission(permission: string, timeout = 60_000): Promise<void> {
+    await this.awaitRow(
+      async () => {
+        if ((await this.rows.count()) !== 1) return 'no row';
+        return this.rows.getByTestId('shared-permission').textContent();
+      },
+      permission,
+      { timeout, nudge: true, intervals: [5_000] }
+    );
   }
 
   /**
@@ -81,17 +94,36 @@ export class SharedPage {
    * after the refresh returns.
    */
   async readStanding(scope: string, resolution: string, timeout = 10_000): Promise<void> {
+    await this.awaitRow(
+      async () => {
+        const standing = this.row(scope).getByTestId('shared-standing');
+        if ((await standing.count()) !== 1) return 'no row';
+        return standing.getAttribute('data-resolution');
+      },
+      resolution,
+      { timeout, nudge: false, intervals: [250] }
+    );
+  }
+
+  /**
+   * Polls `read` against `expected`, one list re-read per turn. A verdict moves
+   * on the engine's sync pass, which `nudge` forces alongside the re-read.
+   */
+  private async awaitRow(
+    read: () => Promise<string | null>,
+    expected: string,
+    { timeout, nudge, intervals }: { timeout: number; nudge: boolean; intervals: number[] }
+  ): Promise<void> {
     await expect
       .poll(
         async () => {
+          if (nudge) await this.page.getByTestId('status-indicator').click();
           await this.readAgain();
-          const standing = this.row(scope).getByTestId('shared-standing');
-          if ((await standing.count()) !== 1) return 'no row';
-          return standing.getAttribute('data-resolution');
+          return read();
         },
-        { timeout, intervals: [250] }
+        { timeout, intervals }
       )
-      .toBe(resolution);
+      .toBe(expected);
   }
 
   /** The row for the scope root `scope`, as lowercase hex. */

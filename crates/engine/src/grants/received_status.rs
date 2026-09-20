@@ -92,6 +92,14 @@ pub(crate) struct SharedScopeFloors {
 /// alone would collapse their rows onto one verdict cell.
 pub(crate) type ReceivedVerdicts = BTreeMap<BookmarkKey, ReceivedVerdict>;
 
+/// The permission a host reports for `share`: the owner's live commitment as of
+/// the last resolve, or the accept-time copy before any pass reaches one.
+pub(crate) fn live_permission(verdicts: &ReceivedVerdicts, share: &ReceivedShare) -> Permission {
+    verdicts
+        .get(&share.key())
+        .map_or(share.permission, |verdict| verdict.permission)
+}
+
 /// Where an adopted shared scope lands: the render tree a focus reads
 /// (blueprint/web-client.md "/shared": browsing a shared scope is the same
 /// browser over the same snapshot), the per-scope read-seed cache the leg below
@@ -452,12 +460,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         }
         *render.permissions.borrow_mut() = received
             .iter()
-            .map(|share| {
-                let permission = refreshed
-                    .get(&share.key())
-                    .map_or(share.permission, |verdict| verdict.permission);
-                (share.scope_id, permission)
-            })
+            .map(|share| (share.scope_id, live_permission(&refreshed, share)))
             .collect();
         *verdicts.borrow_mut() = refreshed;
 
