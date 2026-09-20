@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.4.0](https://github.com/FSM1/cipher-box/compare/v2.3.0...v2.4.0) (2026-09-20)
+
+
+### Features
+
+* **engine:** admit a write target below a proved grafted write root ([#1910](https://github.com/FSM1/cipher-box/issues/1910)) ([bc49321](https://github.com/FSM1/cipher-box/commit/bc49321b5f397e50c0506b70782875c57b5d0964))
+* **engine:** hold a child the grantee published in a grafted base ([#1904](https://github.com/FSM1/cipher-box/issues/1904)) ([d1f05ee](https://github.com/FSM1/cipher-box/commit/d1f05ee307ac639162d160c6a7a666870cd4de8a))
+* **engine:** read an epoch-lagged record under the scope root ratchet ([#1921](https://github.com/FSM1/cipher-box/issues/1921)) ([c53b326](https://github.com/FSM1/cipher-box/commit/c53b326d0b6103e0cd0a3dc143eb61d9e45e8325))
+
+
+### Bug Fixes
+
+* **engine:** act on the Greptile findings that landed after five merges ([#1905](https://github.com/FSM1/cipher-box/issues/1905)) ([801ea55](https://github.com/FSM1/cipher-box/commit/801ea5561a0502cebfd55a0563b6f7f0b54bd1e5))
+* **engine:** cache what the write wave adopts before its floor moves ([#1914](https://github.com/FSM1/cipher-box/issues/1914)) ([8d449b3](https://github.com/FSM1/cipher-box/commit/8d449b3f9aa20255f961547b6cabed9ada26f83d))
+* **engine:** read a file under the scope it sits in ([#1912](https://github.com/FSM1/cipher-box/issues/1912)) ([00e24aa](https://github.com/FSM1/cipher-box/commit/00e24aada2181000ca673748b221f1b037325a8e))
+* **engine:** report every gate rejection as a trust verdict ([#1922](https://github.com/FSM1/cipher-box/issues/1922)) ([d9e314b](https://github.com/FSM1/cipher-box/commit/d9e314bb2526bf43d0834674e3e6e366baedce27))
+* **engine:** run the sweep as an idle job and admit a grafted version restore ([#1917](https://github.com/FSM1/cipher-box/issues/1917)) ([f4d6aa9](https://github.com/FSM1/cipher-box/commit/f4d6aa9d4bc1536a0d2cc0ce54e418f9bfd33a5c))
+* **engine:** vouch a vault root read cut at the vault pointer ([#1919](https://github.com/FSM1/cipher-box/issues/1919)) ([f2fe158](https://github.com/FSM1/cipher-box/commit/f2fe158f139f4095674d408488977ac2f769bb70))
+* **wasm:** fail the web floor store closed on a value it cannot read ([#1907](https://github.com/FSM1/cipher-box/issues/1907)) ([b4ffb2f](https://github.com/FSM1/cipher-box/commit/b4ffb2fa687630ed6b92498d3c9aec8db6a413d4))
+
 ## [2.3.0](https://github.com/FSM1/cipher-box/compare/v2.2.0...v2.3.0) (2026-09-19)
 
 
