@@ -75,6 +75,25 @@ export class SharedPage {
   }
 
   /**
+   * Re-reads until the one accepted share reports `permission`. An owner
+   * downgrade leaves the standing granted, so the permission is the only field
+   * that moves, and each turn nudges the sync pass as well as the list.
+   */
+  async awaitPermission(permission: string, timeout = 60_000): Promise<void> {
+    await expect
+      .poll(
+        async () => {
+          await this.page.getByTestId('status-indicator').click();
+          await this.readAgain();
+          if ((await this.rows.count()) !== 1) return 'no row';
+          return this.rows.getByTestId('shared-permission').textContent();
+        },
+        { timeout, intervals: [5_000] }
+      )
+      .toBe(permission);
+  }
+
+  /**
    * Re-reads the list, and nothing else, until the row for `scope` reports
    * `resolution`. A manual refresh answers at its read legs, ahead of the
    * share legs of the same pass, so the verdict that pass records can land
