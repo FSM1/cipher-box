@@ -54,6 +54,68 @@
         "label": "Skill: simplify",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01KxyJ7yWi6GRCPN5voEVfCe",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5d55eee47105",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 577,
+        "end": 578,
+        "entry_ids": [
+          "18482bce-8ef7-4a42-8392-1d44e2bf8377"
+        ],
+        "tool_use_id": "toolu_01KxyJ7yWi6GRCPN5voEVfCe"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01KxyJ7yWi6GRCPN5voEVfCe"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HkSH5NKnJTWsdSYtXabGz5",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "crypto-privacy-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5d55eee47105",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 584,
+        "end": 585,
+        "entry_ids": [
+          "75d51111-549c-4877-ad40-f8c84ba22e64"
+        ],
+        "tool_use_id": "toolu_01HkSH5NKnJTWsdSYtXabGz5"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HkSH5NKnJTWsdSYtXabGz5"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: crypto-privacy-review",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
