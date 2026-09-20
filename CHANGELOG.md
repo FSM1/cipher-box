@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.1](https://github.com/FSM1/cipher-box/compare/v2.4.0...v2.4.1) (2026-09-20)
+
+
+### Bug Fixes
+
+* **engine:** report the live committed permission on a shared row ([#1926](https://github.com/FSM1/cipher-box/issues/1926)) ([0181ba9](https://github.com/FSM1/cipher-box/commit/0181ba9672fff9dcafb3e24426124b767ccba7cc))
+
 ## [2.4.0](https://github.com/FSM1/cipher-box/compare/v2.3.0...v2.4.0) (2026-09-20)
 
 
