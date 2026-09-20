@@ -29,6 +29,16 @@ export class FilesPage {
     return this.page.getByTestId('read-only-scope');
   }
 
+  /**
+   * A read grant offers no write: the engine refuses one there, so the browser
+   * must not present the gesture.
+   */
+  async readOnly(timeout = 10_000): Promise<void> {
+    await expect(this.readOnlyNotice).toBeVisible({ timeout });
+    await expect(this.newFolderButton).toHaveCount(0);
+    await expect(this.uploadZone).toHaveCount(0);
+  }
+
   get status(): Locator {
     return this.page.getByTestId('status-indicator');
   }

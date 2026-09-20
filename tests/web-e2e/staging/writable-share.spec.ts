@@ -44,8 +44,7 @@ test('a write grant lets a second identity build inside the folder', async ({
 
   await ownerFiles.openFromSidebar();
   await owner.open(OWNER_FOLDER);
-  await owner.downgrade.click();
-  await expect(owner.permission).toHaveText('read', { timeout: 60_000 });
+  await owner.downgradeToRead();
   await owner.close();
 
   const list = new SharedPage(recipient);
@@ -56,11 +55,7 @@ test('a write grant lets a second identity build inside the folder', async ({
     'granted'
   );
 
-  // A read grant offers no write: the engine refuses one there, so the browser
-  // must not present the gesture.
   const scope = await list.rows.getAttribute('data-scope');
   await list.openShare(scope ?? '');
-  await expect(recipientFiles.readOnlyNotice).toBeVisible({ timeout: 60_000 });
-  await expect(recipientFiles.newFolderButton).toHaveCount(0);
-  await expect(recipientFiles.uploadZone).toHaveCount(0);
+  await recipientFiles.readOnly(60_000);
 });

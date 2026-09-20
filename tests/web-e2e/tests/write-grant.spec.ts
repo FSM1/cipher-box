@@ -5,11 +5,15 @@
  * A grantee's delete only unlinks the node. The owner's engine bins it by owner
  * capture, so the deleted file lands in the owner's bin and never in the
  * recipient's.
+ *
+ * The owner then takes the grant back down to read, and the recipient's side
+ * reports the new permission and offers no write.
  */
 
 import { expect, test } from '../fixtures';
 import { BinPage } from '../page-objects/bin.page';
 import type { FilesPage } from '../page-objects/files.page';
+import { SharePage } from '../page-objects/share.page';
 import { SharedPage } from '../page-objects/shared.page';
 import type { VaultPage } from '../page-objects/vault.page';
 import { grantByCode } from '../sharing';
@@ -76,6 +80,19 @@ test('a write grant lets the second client build inside the folder', async ({ pa
   const recipientBin = new BinPage(grant.recipientPage);
   await recipientBin.open();
   await expect(recipientBin.empty).toBeVisible();
+
+  await ownerFiles.openFromSidebar();
+  const ownerShare = new SharePage(page);
+  await ownerShare.open(OWNER_FOLDER);
+  await ownerShare.downgradeToRead();
+  await ownerShare.close();
+
+  const list = new SharedPage(grant.recipientPage);
+  await list.open();
+  await list.awaitPermission('read');
+  await list.awaitStanding('granted');
+  await list.openShare(grant.scope);
+  await recipientFiles.readOnly();
 
   await grant.recipientContext.close();
 });
