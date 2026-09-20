@@ -64,7 +64,7 @@ use crate::grants::grafted::{
 };
 use crate::grants::inbox::ShareInbox;
 use crate::grants::received_status::{
-    ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name,
+    ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
 };
 use crate::grants::{
     ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
@@ -600,9 +600,8 @@ pub struct ReceivedShareRow {
     pub sharer_identity_public_key: Vec<u8>,
     /// The display label the share was accepted under.
     pub display_name: String,
-    /// The owner's live committed permission as of the last pass that resolved
-    /// this share, and the accept-time copy until a pass reaches one. An owner
-    /// downgrade is published, never delivered, so only a resolve sees it.
+    /// The owner's committed permission as of the last resolve, or the
+    /// accept-time copy before the first one.
     pub permission: Permission,
     /// The engine's classification of this share's latest resolve, or `None`
     /// when no pass has resolved it yet (`crate::grants::revocation`).
@@ -10574,19 +10573,13 @@ where {
         let verdicts = self.received_verdicts.borrow();
         Ok(received
             .iter()
-            .map(|share| {
-                let verdict = verdicts.get(&share.key());
-                ReceivedShareRow {
-                    scope: NodeId(share.scope_id),
-                    sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
-                    display_name: grafted_root_name(&share.display_name, NodeId(share.scope_id))
-                        .to_string(),
-                    permission: verdict
-                        .map(|v| v.permission)
-                        .unwrap_or(share.permission)
-                        .into(),
-                    resolution: verdict.map(|v| v.class),
-                }
+            .map(|share| ReceivedShareRow {
+                scope: NodeId(share.scope_id),
+                sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
+                display_name: grafted_root_name(&share.display_name, NodeId(share.scope_id))
+                    .to_string(),
+                permission: live_permission(&verdicts, share).into(),
+                resolution: verdicts.get(&share.key()).map(|v| v.class),
             })
             .collect())
     }
@@ -18344,11 +18337,11 @@ mod tests {
             }
         }
 
-        /// The verdict this vault's one `/shared` row carries.
-        fn shared_row_verdict(engine: &Engine<FakeSeamTypes>) -> Option<ResolutionClass> {
-            let rows = block_on(engine.received_shares()).expect("the list reads");
+        /// The one `/shared` row this vault carries.
+        fn shared_row(engine: &Engine<FakeSeamTypes>) -> ReceivedShareRow {
+            let mut rows = block_on(engine.received_shares()).expect("the list reads");
             assert_eq!(rows.len(), 1, "one accepted share");
-            rows[0].resolution
+            rows.remove(0)
         }
 
         /// The accept leg and the `/shared` leg of one tick key their durable
@@ -18415,7 +18408,7 @@ mod tests {
             world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
             poll_tasks_once(&mut tasks);
             assert_eq!(
-                shared_row_verdict(&engine),
+                shared_row(&engine).resolution,
                 Some(ResolutionClass::Granted),
                 "the accepted share resolves under the set that commits it"
             );
@@ -18432,7 +18425,7 @@ mod tests {
                 poll_tasks_once(&mut tasks);
             }
             assert_eq!(
-                shared_row_verdict(&engine),
+                shared_row(&engine).resolution,
                 Some(ResolutionClass::EpochLag),
                 "a record behind the floor the accept raised must leave the row granted"
             );
@@ -18539,7 +18532,7 @@ mod tests {
                 };
                 grantee.pass();
                 assert_eq!(
-                    shared_row_verdict(&grantee.engine),
+                    shared_row(&grantee.engine).resolution,
                     Some(ResolutionClass::Granted)
                 );
                 // The pass that grafts the share recovers its seeds; the next
@@ -18764,7 +18757,7 @@ mod tests {
             );
             grantee.pass();
             assert_eq!(
-                shared_row_verdict(&grantee.engine),
+                shared_row(&grantee.engine).resolution,
                 Some(ResolutionClass::RevocationSignal)
             );
             assert!(!grantee.holds_the_write_seed());
@@ -19187,24 +19180,15 @@ mod tests {
         fn an_owner_downgrade_reaches_the_shared_row_permission() {
             let photos = || vec![shared_child(PHOTOS, "photos", CoreNodeKind::File)];
             let mut grantee = WriteGrantee::accepted(photos());
-            let row = |grantee: &WriteGrantee| {
-                let mut rows = block_on(grantee.engine.received_shares()).expect("the list reads");
-                assert_eq!(rows.len(), 1, "one accepted share");
-                rows.remove(0)
-            };
-            assert_eq!(row(&grantee).permission, Permission::Write);
+            assert_eq!(shared_row(&grantee.engine).permission, Permission::Write);
 
             grantee.serve(
                 &shared_root_granting(EPOCH, CorePermission::Read, photos()),
                 3,
             );
-            // The `/shared` refresh is damped, so the pass that re-resolves the
-            // demoted root is not the next one.
-            for _ in 0..4 {
-                grantee.pass();
-            }
+            grantee.pass();
 
-            let after = row(&grantee);
+            let after = shared_row(&grantee.engine);
             assert_eq!(after.permission, Permission::Read);
             assert_eq!(after.resolution, Some(ResolutionClass::Granted));
         }
