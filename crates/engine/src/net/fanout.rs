@@ -99,14 +99,14 @@ pub enum EndpointFailure {
     Unverified,
 }
 
-impl EndpointFailure {
-    fn class(self) -> &'static str {
-        match self {
+impl core::fmt::Display for EndpointFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
             Self::Transport => "transport",
             Self::OverCap => "over-cap",
             Self::Malformed => "malformed",
             Self::Unverified => "unverified",
-        }
+        })
     }
 }
 
@@ -123,7 +123,7 @@ impl core::fmt::Display for EndpointFailures {
             if index > 0 {
                 f.write_str("; ")?;
             }
-            write!(f, "{} {}", endpoint.0, failure.class())?;
+            write!(f, "{} {failure}", endpoint.0)?;
         }
         Ok(())
     }
@@ -192,19 +192,27 @@ pub async fn fanout_get_verify<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> Option<(VerifiedRecord, Vec<u8>)> {
-    match fanout_get_classified(transport, name, VacancyRule::Unanimous).await {
+    match fanout_get_classified(transport, name).await {
         FanoutRecord::Found(verified, bytes) => Some((verified, bytes)),
         FanoutRecord::Absent | FanoutRecord::Unavailable(_) => None,
     }
 }
 
 /// [`fanout_get_verify`] with the two answers it collapses kept apart
-/// ([`FanoutRecord`]). `rule` decides only between `Absent` and `Unavailable`:
-/// a `Found` is the same verified record under either rule.
+/// ([`FanoutRecord`]), under [`VacancyRule::Unanimous`].
 ///
 /// An empty endpoint set falls out as `Unavailable` for the same reason:
 /// zero answers is silence, not vacancy.
 pub async fn fanout_get_classified<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> FanoutRecord {
+    fanout_get_under(transport, name, VacancyRule::Unanimous).await
+}
+
+/// [`fanout_get_classified`] under `rule`, which decides only between `Absent`
+/// and `Unavailable`: a `Found` is the same verified record under either rule.
+pub async fn fanout_get_under<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
     rule: VacancyRule,
@@ -252,11 +260,7 @@ pub async fn fanout_get_classified<T: RecordTransport>(
     if let Some((verified, bytes)) = best {
         return FanoutRecord::Found(verified, bytes);
     }
-    let vacant_by_rule = match rule {
-        VacancyRule::Unanimous => failures.is_empty(),
-        VacancyRule::FirstRun => true,
-    };
-    if vacant > 0 && vacant_by_rule {
+    if vacant > 0 && (rule == VacancyRule::FirstRun || failures.is_empty()) {
         FanoutRecord::Absent
     } else {
         FanoutRecord::Unavailable(EndpointFailures(failures))
@@ -334,11 +338,7 @@ mod tests {
         };
 
         assert!(matches!(
-            block_on(fanout_get_classified(
-                &transport,
-                &name,
-                VacancyRule::Unanimous
-            )),
+            block_on(fanout_get_classified(&transport, &name)),
             FanoutRecord::Unavailable(_)
         ));
     }
@@ -351,7 +351,7 @@ mod tests {
 
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
+                block_on(fanout_get_classified(&store, &name)),
                 FanoutRecord::Absent
             ),
             "every endpoint answers 'no record', so the name is absent"
@@ -362,7 +362,7 @@ mod tests {
         }
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
+                block_on(fanout_get_classified(&store, &name)),
                 FanoutRecord::Unavailable(_)
             ),
             "no endpoint answered at all, so nothing is known about the name"
@@ -380,14 +380,14 @@ mod tests {
         store.fail_endpoint(&eps[1]);
 
         assert!(matches!(
-            block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
+            block_on(fanout_get_classified(&store, &name)),
             FanoutRecord::Unavailable(_)
         ));
 
         store.heal_endpoint(&eps[1]);
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
+                block_on(fanout_get_classified(&store, &name)),
                 FanoutRecord::Absent
             ),
             "unanimity is what makes an absence an answer"
@@ -404,14 +404,14 @@ mod tests {
         store.fail_endpoint(&eps[1]);
 
         assert!(matches!(
-            block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun)),
+            block_on(fanout_get_under(&store, &name, VacancyRule::FirstRun)),
             FanoutRecord::Absent
         ));
 
         store.fail_endpoint(&eps[0]);
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun)),
+                block_on(fanout_get_under(&store, &name, VacancyRule::FirstRun)),
                 FanoutRecord::Unavailable(_)
             ),
             "with no vacant answer there is nothing to read as an absence"
@@ -443,7 +443,7 @@ mod tests {
 
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun)),
+                block_on(fanout_get_under(&store, &name, VacancyRule::FirstRun)),
                 FanoutRecord::Absent
             ),
             "a record that does not verify at the name is a failure, never a find"
@@ -453,7 +453,7 @@ mod tests {
             IpnsRecord::create_v2(&signer, b"genuine", 1, 1, "2099-01-01T00:00:00Z").marshal();
         store.seed_record(&eps[0], name.as_str(), genuine);
         let FanoutRecord::Found(verified, _) =
-            block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun))
+            block_on(fanout_get_under(&store, &name, VacancyRule::FirstRun))
         else {
             panic!("a record that verifies at the name is found under either rule");
         };
@@ -468,8 +468,7 @@ mod tests {
         store.fail_endpoint(&eps[0]);
         store.seed_record(&eps[1], name.as_str(), b"not a record".to_vec());
 
-        let FanoutRecord::Unavailable(failures) =
-            block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous))
+        let FanoutRecord::Unavailable(failures) = block_on(fanout_get_classified(&store, &name))
         else {
             panic!("no endpoint answered usefully");
         };

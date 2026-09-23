@@ -26,9 +26,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
-use super::fanout::{
-    FanoutRecord, VacancyRule, fanout_get_classified, fanout_get_verify, fanout_put,
-};
+use super::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify, fanout_put};
 use super::publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishRequest, publish, publish_inline,
 };
@@ -314,8 +312,7 @@ pub async fn keyless_re_put<T: RecordTransport>(
             continue;
         };
         let mut bytes = parsed.marshal();
-        if let FanoutRecord::Found(live, live_bytes) =
-            fanout_get_classified(transport, &name, VacancyRule::Unanimous).await
+        if let FanoutRecord::Found(live, live_bytes) = fanout_get_classified(transport, &name).await
         {
             if live.sequence > mine.sequence {
                 bytes = live_bytes;

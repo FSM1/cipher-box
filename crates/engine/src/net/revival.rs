@@ -18,7 +18,7 @@
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
-use super::fanout::{FanoutRecord, VacancyRule, fanout_get_classified};
+use super::fanout::{FanoutRecord, fanout_get_classified};
 use super::publish::{PublishError, PublishOutcome, PublishRequest, head_cid_from_value, publish};
 use crate::api::{ApiClient, ApiError};
 use crate::gate::floor;
@@ -103,7 +103,7 @@ where
     // recovery endpoint must not get to pick which side of one is re-minted. A
     // unanimous "no record" is the expected shape of a >EOL lapse and corroborates
     // the recovery endpoint; silence corroborates nothing (fan-out rule 6).
-    let basis = match fanout_get_classified(transport, request.name, VacancyRule::Unanimous).await {
+    let basis = match fanout_get_classified(transport, request.name).await {
         FanoutRecord::Found(observed, _) if observed.sequence >= recovered.sequence => observed,
         FanoutRecord::Found(..) | FanoutRecord::Absent => recovered,
         FanoutRecord::Unavailable(_) => return Err(ReviveError::Uncorroborated),

@@ -10,7 +10,7 @@
 //!
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
-use super::fanout::{FanoutRecord, VacancyRule, fanout_get_classified};
+use super::fanout::{FanoutRecord, VacancyRule, fanout_get_classified, fanout_get_under};
 use super::rotation::OwnerPointerRead;
 use crate::gate::floor;
 use crate::seams::{FloorStore, RecordTransport, SeamResult};
@@ -37,8 +37,7 @@ impl<'a, T> RecordPointerFetch<'a, T> {
         }
     }
 
-    /// Read `name` under the first-run rule: the caller holds the registry's
-    /// word that this account never registered it (ADR 0022).
+    /// Read `name` under [`VacancyRule::FirstRun`].
     #[must_use]
     pub fn first_run_at(mut self, name: Option<&'a IpnsName>) -> Self {
         self.first_run_name = name;
@@ -49,13 +48,11 @@ impl<'a, T> RecordPointerFetch<'a, T> {
 impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
     async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
         let rule = VacancyRule::at(self.first_run_name, name);
-        Ok(
-            match fanout_get_classified(self.transport, name, rule).await {
-                FanoutRecord::Found(verified, _) => PointerRecord::Found(verified.value),
-                FanoutRecord::Absent => PointerRecord::Absent,
-                FanoutRecord::Unavailable(failures) => PointerRecord::Unavailable(failures),
-            },
-        )
+        Ok(match fanout_get_under(self.transport, name, rule).await {
+            FanoutRecord::Found(verified, _) => PointerRecord::Found(verified.value),
+            FanoutRecord::Absent => PointerRecord::Absent,
+            FanoutRecord::Unavailable(failures) => PointerRecord::Unavailable(failures),
+        })
     }
 }
 
@@ -111,12 +108,11 @@ impl PointerConsult<'_> {
         scope_id: &[u8; 16],
     ) -> Result<Option<ConsultedPointer>, PointerConsultError> {
         let pointer = self.scope_keys.pointer_name(scope_id);
-        let (block, record_bytes) =
-            match fanout_get_classified(transport, &pointer, VacancyRule::Unanimous).await {
-                FanoutRecord::Found(verified, record_bytes) => (verified.value, record_bytes),
-                FanoutRecord::Absent => return Ok(None),
-                FanoutRecord::Unavailable(_) => return Err(PointerConsultError::Unavailable),
-            };
+        let (block, record_bytes) = match fanout_get_classified(transport, &pointer).await {
+            FanoutRecord::Found(verified, record_bytes) => (verified.value, record_bytes),
+            FanoutRecord::Absent => return Ok(None),
+            FanoutRecord::Unavailable(_) => return Err(PointerConsultError::Unavailable),
+        };
         let pointer_read_key = self.scope_keys.pointer_read_key(scope_id);
         let repoint = open_repoint(
             &pointer_read_key,

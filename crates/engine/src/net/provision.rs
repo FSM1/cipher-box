@@ -7,7 +7,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 
 use crate::api::{ApiClient, ApiError};
-use crate::net::fanout::{FanoutRecord, VacancyRule, fanout_get_classified, fanout_get_verify};
+use crate::net::fanout::{FanoutRecord, VacancyRule, fanout_get_under, fanout_get_verify};
 use crate::net::publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, publish_inline,
 };
@@ -35,8 +35,7 @@ pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
     pub scheduler: &'a Sch,
     /// The publish pipeline's timing policy.
     pub profile: &'a SyncTimingProfile,
-    /// The vault-pointer name the registry confirmed this account never
-    /// registered, which the vacancy probe reads under [`VacancyRule::FirstRun`].
+    /// The one name the vacancy probe reads under [`VacancyRule::FirstRun`].
     pub first_run_name: Option<&'a IpnsName>,
 }
 
@@ -109,17 +108,12 @@ where
             Err(ApiError::Status { status: 404, .. }) => {}
             Err(_) => return Err(VaultPointerProbe::Indeterminate),
         }
-        // Then the record plane. A tolerated failure is what makes a partial
-        // outage indistinguishable from a vacant name — the endpoint holding the
-        // account's pointer is down while a peer that never saw it answers
-        // `None` — and the mint that follows overwrites the one record naming the
-        // one root whose owner-write blob holds a write scope seed nobody can
-        // re-derive. So unanimity holds unless the registry has said this name
-        // was never registered ([`VacancyRule`]). Only bytes that verify at the
-        // name prove a publication: unverifiable bytes refuse as availability,
-        // so one hostile endpoint cannot forge a permanent verdict.
+        // Then the record plane, by the vacancy rule this name is read under.
+        // Only bytes that verify at the name prove a publication: unverifiable
+        // bytes refuse as availability, so one hostile endpoint cannot forge a
+        // permanent verdict.
         let rule = VacancyRule::at(self.first_run_name, name);
-        match fanout_get_classified(self.transport, name, rule).await {
+        match fanout_get_under(self.transport, name, rule).await {
             FanoutRecord::Found(..) => Err(VaultPointerProbe::AlreadyPublished),
             FanoutRecord::Absent => Ok(()),
             FanoutRecord::Unavailable(failures) => Err(VaultPointerProbe::Unreadable(failures)),

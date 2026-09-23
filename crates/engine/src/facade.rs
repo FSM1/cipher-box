@@ -137,7 +137,7 @@ use crate::sync::drain::{
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::pointer::PointerFetch;
+use crate::sync::pointer::{PointerFetch, vault_pointer_name};
 use crate::sync::project::{UnlinkedChild, map_kind, merge_root, project_child_version};
 use crate::sync::provision::{
     GENESIS_EPOCH, GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan,
@@ -5397,11 +5397,7 @@ impl<T: SeamTypes> Engine<T> {
         // degrades to the anchored root with no error.
         let root = self.snapshot.borrow().root;
         let root_scope_id = root.0;
-        let first_run_name = if self.api_base_url.configured().is_some() {
-            self.first_run_pointer_name(&api, root_scope_id).await
-        } else {
-            None
-        };
+        let first_run_name = self.first_run_pointer_name(&api, root_scope_id).await;
         let first_run_name = first_run_name.as_ref();
         let mut outcome = self.cold_start_or_clear(root, first_run_name).await?;
         // An empty chain is an account that has never published: mint its genesis
@@ -6034,8 +6030,6 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Run [`cold_start_data_path`](Self::cold_start_data_path) over the live
     /// record plane, off the session `start` has already derived.
-    /// `first_run_name` is read under the first-run rule
-    /// ([`Self::first_run_pointer_name`]).
     async fn run_cold_start(
         &self,
         root: NodeId,
@@ -6078,27 +6072,22 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     /// The genesis vault-pointer name, when this device has never walked the
-    /// chain and the registry answers that this account never registered it:
-    /// the one name the walk and the mint's vacancy probe read under the
-    /// first-run rule (ADR 0022). `None` on every other answer and on any
-    /// failure, which keeps unanimity. The answer permits an absence only and
-    /// never adopts a record (D3), so it is held for this pass and not stored.
+    /// chain and the registry answers that it is not registered: the one name
+    /// read under [`VacancyRule::FirstRun`](crate::net::VacancyRule). `None` on
+    /// every other answer, on any failure, and with no API configured.
     async fn first_run_pointer_name(
         &self,
         api: &ApiClient<T::Http, T::CredentialStore>,
         root_scope_id: [u8; 16],
     ) -> Option<IpnsName> {
+        self.api_base_url.configured()?;
         let session = self.session.as_ref()?;
         // A device with an index floor resumes the walk there, never at index 0.
         let floor = floor::vault_pointer_index_floor(&self.seams.floor_store, &root_scope_id).await;
         if !matches!(floor, Ok(None)) {
             return None;
         }
-        let name = IpnsName::from_public_key(
-            &session
-                .vault_pointer_signer(GENESIS_VAULT_POINTER_INDEX)
-                .verifying_key(),
-        );
+        let name = vault_pointer_name(session.login_secret(), GENESIS_VAULT_POINTER_INDEX);
         matches!(api.name_registered(name.as_str()).await, Ok(false)).then_some(name)
     }
 
@@ -13777,10 +13766,13 @@ mod tests {
         );
     }
 
+    /// The registry's answer for a name this account never registered.
+    const UNREGISTERED: (u16, &str) = (200, r#"{"registered":false}"#);
+
     /// A fresh device on a configured API, logged in, with `failed` routing
-    /// endpoints down and the registry answering `registry` for every name.
+    /// endpoints down and the registry answering `(status, body)` for every name.
     fn first_run_engine(
-        registry: Option<u16>,
+        registry: (u16, &str),
         failed: &[&str],
     ) -> (Engine<FakeSeamTypes>, EventStream, FakeDevice) {
         let (engine, events, device) =
@@ -13793,9 +13785,9 @@ mod tests {
             200,
             new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
         ));
-        if let Some(status) = registry {
-            device.name_registry.answer(status);
-        }
+        device
+            .name_registry
+            .reply(registry.0, registry.1.as_bytes().to_vec());
         for endpoint in failed {
             device
                 .record_store
@@ -13817,19 +13809,14 @@ mod tests {
     /// vacant name, and the first run mints.
     #[test]
     fn a_first_run_mints_when_one_endpoint_is_vacant_and_the_other_failed() {
-        let (mut engine, _events, device) = first_run_engine(Some(404), &["fake:public-routing"]);
+        let (mut engine, _events, device) =
+            first_run_engine(UNREGISTERED, &["fake:public-routing"]);
         serve_provisioning(&device);
 
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the first run starts");
 
         assert!(engine.is_provisioned(), "the first run minted its vault");
-        let pointer = IpnsName::from_public_key(
-            &engine
-                .session()
-                .expect("started")
-                .vault_pointer_signer(GENESIS_VAULT_POINTER_INDEX)
-                .verifying_key(),
-        );
+        let pointer = vault_pointer_name(&[7u8; 32], GENESIS_VAULT_POINTER_INDEX);
         assert_eq!(
             device.name_registry.queries(),
             vec![pointer.as_str().to_owned()],
@@ -13843,7 +13830,7 @@ mod tests {
     #[test]
     fn a_first_run_with_every_endpoint_failed_is_the_seam_error() {
         let (mut engine, _events, device) =
-            first_run_engine(Some(404), &["fake:someguy", "fake:public-routing"]);
+            first_run_engine(UNREGISTERED, &["fake:someguy", "fake:public-routing"]);
         serve_provisioning(&device);
 
         let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
@@ -13859,12 +13846,19 @@ mod tests {
         assert!(!registered_any_name(&device), "no mint ran");
     }
 
-    /// ADR 0022 Gates 3 and 4: a registered name, or a registry that does not
-    /// answer 204 or 404, keeps unanimity. One failed endpoint is then the
+    /// ADR 0022 Gates 3 and 4: a registered name, or any registry outcome other
+    /// than `200 {"registered": false}` — a 404 from a missing route too — keeps
+    /// unanimity. One failed endpoint is then the
     /// retryable seam error, and no mint runs.
     #[test]
     fn a_registered_name_or_a_silent_registry_keeps_unanimity() {
-        for registry in [Some(204), None, Some(429), Some(200)] {
+        for registry in [
+            (200, r#"{"registered":true}"#),
+            (404, ""),
+            (503, ""),
+            (429, ""),
+            (200, "{}"),
+        ] {
             let (mut engine, _events, device) =
                 first_run_engine(registry, &["fake:public-routing"]);
             serve_provisioning(&device);
@@ -13891,7 +13885,8 @@ mod tests {
     /// an index floor resumes there, and the query is never sent.
     #[test]
     fn a_device_that_walked_the_chain_before_does_not_ask_the_registry() {
-        let (mut engine, _events, device) = first_run_engine(Some(404), &["fake:public-routing"]);
+        let (mut engine, _events, device) =
+            first_run_engine(UNREGISTERED, &["fake:public-routing"]);
         block_on(floor::advance_vault_pointer_index(
             &device.floors(&[7u8; 32]),
             &[0u8; 16],

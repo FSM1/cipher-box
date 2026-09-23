@@ -408,15 +408,19 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         .await
     }
 
-    /// Whether this account's registry holds `ipns_name`: 204 is `true`, 404 is
-    /// `false`, and every other answer is an error.
+    /// Whether this account's registry holds `ipns_name`: only a 200 carrying a
+    /// boolean `registered` answers, and every other outcome is an error, so a
+    /// missing route must not read as not registered.
     pub async fn name_registered(&self, ipns_name: &str) -> Result<bool, ApiError> {
+        #[derive(serde::Deserialize)]
+        struct Body {
+            registered: bool,
+        }
         let response = self
             .request_authed(HttpMethod::Get, &format!("/registry/names/{ipns_name}"))
             .await?;
         match response.status {
-            204 => Ok(true),
-            404 => Ok(false),
+            200 => decode::<Body>(&response).map(|body| body.registered),
             status if is_success(status) => Err(ApiError::Decode(format!(
                 "a name registration query answered {status}"
             ))),
@@ -1581,37 +1585,44 @@ mod tests {
     }
 
     #[test]
-    fn name_registered_reads_204_as_held_404_as_not_and_the_rest_as_errors() {
+    fn name_registered_reads_only_a_200_boolean_and_errs_on_everything_else() {
         let (http, _creds, client) = fakes();
         login(&http, &client);
-        let empty = |status| HttpResponse {
-            status,
-            headers: Vec::new(),
-            body: Vec::new(),
-        };
-        http.enqueue_response(empty(204));
-        http.enqueue_response(empty(404));
-        http.enqueue_response(empty(200));
-        http.enqueue_response(empty(429));
+        http.enqueue_response(json_response(200, json!({ "registered": true })));
+        http.enqueue_response(json_response(200, json!({ "registered": false })));
 
         assert_eq!(block_on(client.name_registered("k51abc")), Ok(true));
         let request = http.requests().pop().unwrap();
         assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(request.url, "http://api.test/registry/names/k51abc");
         assert!(has_bearer(&request));
-
         assert_eq!(block_on(client.name_registered("k51abc")), Ok(false));
-        assert!(
-            matches!(
-                block_on(client.name_registered("k51abc")),
-                Err(ApiError::Decode(_))
+
+        let raw = |status, body: &[u8]| HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: body.to_vec(),
+        };
+        for (reply, case) in [
+            (raw(404, b""), "a 404 is a missing route, never an answer"),
+            (
+                raw(204, b""),
+                "a 2xx other than 200 is not the registry's answer",
             ),
-            "a 2xx other than 204 is not the registry's answer"
-        );
-        assert!(matches!(
-            block_on(client.name_registered("k51abc")),
-            Err(ApiError::Status { status: 429, .. })
-        ));
+            (raw(200, b"{}"), "a 200 without the field"),
+            (
+                raw(200, br#"{"registered":"false"}"#),
+                "a field that is not a boolean",
+            ),
+            (raw(200, b"not json"), "a malformed body"),
+            (raw(429, b""), "a throttled query"),
+        ] {
+            http.enqueue_response(reply);
+            assert!(
+                block_on(client.name_registered("k51abc")).is_err(),
+                "{case}"
+            );
+        }
     }
 
     #[test]

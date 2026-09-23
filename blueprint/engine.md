@@ -270,14 +270,15 @@ absent only when every routing endpoint answered and every answer was "no
 record". A fresh account has no record at any endpoint, so one failed endpoint
 refuses its sign-up. Before the walk at index 0 — on a device that holds no
 vault-pointer index floor — the cold start asks the registry whether this
-account holds a registration for the index-0 pointer name. On a 404, the walk
-and the mint's vacancy probe read that one name under the first-run rule: a
-fan-out with at least one "no record" answer and every other endpoint failed
-is absent. Every endpoint failed stays unavailable, and a record at the name
-still passes the verify and the adoption gate. A 204, or a query that fails for
-any reason, keeps unanimity. Register-first places the registry row before any
-record reaches the transport, so a 404 means this account never published a
-pointer there. The answer permits availability only: it never adopts a record
+account holds a registration for the index-0 pointer name. When the answer is
+`200 {"registered": false}`, the walk and the mint's vacancy probe read that
+one name under the first-run rule: a fan-out with at least one "no record"
+answer and every other endpoint failed is absent. Every endpoint failed stays
+unavailable, and a record at the name still passes the verify and the adoption
+gate. Every other outcome keeps unanimity, a 404 too, so a missing route never
+reads as "not registered". Register-first places the registry row before any
+record reaches the transport, so "not registered" means this account never
+published a pointer there. The answer permits availability only: it never adopts a record
 or selects a root, and it is not stored.
 
 ## Vault settings load
