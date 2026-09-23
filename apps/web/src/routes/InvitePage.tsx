@@ -36,9 +36,13 @@ export function InvitePage() {
   // not absent.
   const [carriesLink] = useState(() => window.location.hash.length > 1);
 
+  // Latched, so a sign-in in flight keeps the panel, and the progress it holds.
+  const [decided, setDecided] = useState(false);
+  if (isSignedOut && !decided) setDecided(true);
+
   const state: ClaimState =
     progress ??
-    (account !== null ? (carriesLink ? 'ready' : 'noLink') : isSignedOut ? 'waiting' : 'checking');
+    (account !== null ? (carriesLink ? 'ready' : 'noLink') : decided ? 'waiting' : 'checking');
 
   const claim = () => {
     if (progress !== null) return;
@@ -66,6 +70,7 @@ export function InvitePage() {
           {MESSAGES[state]}
         </p>
         {state === 'refused' && <LoginError message={error} />}
+        {/* In place: a navigation away would drop the link with the address. */}
         {state === 'waiting' && <SignInPanel />}
         {state === 'ready' && (
           <>

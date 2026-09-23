@@ -6,7 +6,7 @@ import { BrowserRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebCoreKitSession } from '../auth/coreKit';
 import { authStore } from '../stores/auth.store';
-import { FAKE_PHRASE, fakeCoreKitSession, pageWrapper } from '../test/authFakes';
+import { FAKE_PHRASE, fakeCoreKitSession, pageWrapper, signInByEmail } from '../test/authFakes';
 import { InvitePage } from './InvitePage';
 
 /** Stands in for the engine's opaque capability; the page reads none of it. */
@@ -87,18 +87,6 @@ async function openAt(
 async function claim() {
   await act(async () => {
     fireEvent.click(screen.getByTestId('invite-claim-confirm'));
-  });
-}
-
-/** Signs in by email code, the method that needs no provider window. */
-async function signInByEmail() {
-  fireEvent.change(screen.getByTestId('email-input'), { target: { value: 'user@example.test' } });
-  await act(async () => {
-    fireEvent.click(screen.getByTestId('email-login-button'));
-  });
-  fireEvent.change(screen.getByTestId('email-code-input'), { target: { value: '123456' } });
-  await act(async () => {
-    fireEvent.click(screen.getByTestId('email-verify-button'));
   });
 }
 

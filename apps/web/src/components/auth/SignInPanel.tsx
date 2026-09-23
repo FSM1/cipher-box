@@ -15,11 +15,8 @@ import { WalletLoginButton } from './WalletLoginButton';
 type RecoveryRoute = 'choose' | 'approve' | 'phrase';
 
 /**
- * Every web login method, as the front door and the invite route both render
- * it. Each method completes in the page and never navigates, so a route that
- * holds a capability in its address keeps it across the sign-in. Every method
- * is a first login: each mints a CipherBox identity token and reaches the same
- * derived key (ADR 0008).
+ * Every web login method, completed in place. Each is a first login: it mints
+ * a CipherBox identity token and reaches the same derived key (ADR 0008).
  */
 export function SignInPanel() {
   const {

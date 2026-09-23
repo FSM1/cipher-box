@@ -23,6 +23,7 @@ import type {
   VaultStorageDescriptor,
 } from '@cipherbox/client';
 import { rendezvousTransfer } from '@cipherbox/client';
+import { act, fireEvent, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { WagmiProvider } from 'wagmi';
 import { CoreKitProvider } from '../auth/CoreKitProvider';
@@ -651,7 +652,7 @@ export function authWrapper(
   };
 }
 
-/** `authWrapper` plus the wallet-side providers the login *page* also mounts. */
+/** `authWrapper` plus the wallet-side providers the sign-in panel also mounts. */
 export function pageWrapper(
   client: EngineClient,
   session: WebCoreKitSession,
@@ -670,4 +671,16 @@ export function pageWrapper(
       </WagmiProvider>
     );
   };
+}
+
+/** Signs in through the panel's email form, the method with no provider window. */
+export async function signInByEmail(): Promise<void> {
+  fireEvent.change(screen.getByTestId('email-input'), { target: { value: 'user@example.test' } });
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('email-login-button'));
+  });
+  fireEvent.change(screen.getByTestId('email-code-input'), { target: { value: '123456' } });
+  await act(async () => {
+    fireEvent.click(screen.getByTestId('email-verify-button'));
+  });
 }

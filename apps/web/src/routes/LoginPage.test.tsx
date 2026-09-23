@@ -2,7 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authStore } from '../stores/auth.store';
-import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from '../test/authFakes';
+import {
+  fakeCoreKitSession,
+  fakeEngineClient,
+  pageWrapper,
+  signInByEmail,
+} from '../test/authFakes';
 import { LoginPage } from './LoginPage';
 
 /** The relay the wait screen mints its scoped session from. */
@@ -19,20 +24,29 @@ function installRelay(): void {
   });
 }
 
-/** The front door over a login held at the factor policy. */
-async function heldAtPolicy(): Promise<void> {
-  const engine = fakeEngineClient();
-  const session = fakeCoreKitSession({ needsRecovery: true }).session;
-  authStore.recoveryRequired();
-  const Providers = pageWrapper(engine.client, session);
+/** The front door at `/`, beside a stand-in for the vault it leads to. */
+async function frontDoor(needsRecovery = false): Promise<void> {
+  const Providers = pageWrapper(
+    fakeEngineClient().client,
+    fakeCoreKitSession({ needsRecovery }).session
+  );
   render(
     <Providers>
       <MemoryRouter initialEntries={['/']}>
-        <LoginPage />
+        <Routes>
+          <Route path="/" element={<LoginPage />} />
+          <Route path="/files" element={<p data-testid="files-route" />} />
+        </Routes>
       </MemoryRouter>
     </Providers>
   );
   await act(async () => undefined);
+}
+
+/** The front door over a login held at the factor policy. */
+async function heldAtPolicy(): Promise<void> {
+  authStore.recoveryRequired();
+  await frontDoor(true);
 }
 
 describe('the front door held at the factor policy', () => {
@@ -97,28 +111,9 @@ describe('the front door', () => {
   beforeEach(() => authStore.signedOut());
 
   it('takes a sign-in on the front door to the vault', async () => {
-    const engine = fakeEngineClient();
-    const Providers = pageWrapper(engine.client, fakeCoreKitSession().session);
-    render(
-      <Providers>
-        <MemoryRouter initialEntries={['/']}>
-          <Routes>
-            <Route path="/" element={<LoginPage />} />
-            <Route path="/files" element={<p data-testid="files-route" />} />
-          </Routes>
-        </MemoryRouter>
-      </Providers>
-    );
-    await act(async () => undefined);
+    await frontDoor();
 
-    fireEvent.change(screen.getByTestId('email-input'), { target: { value: 'user@example.test' } });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('email-login-button'));
-    });
-    fireEvent.change(screen.getByTestId('email-code-input'), { target: { value: '123456' } });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('email-verify-button'));
-    });
+    await signInByEmail();
 
     await waitFor(() => expect(screen.getByTestId('files-route')).toBeTruthy());
   });

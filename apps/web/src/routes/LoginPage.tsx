@@ -1,5 +1,4 @@
-import { useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { SignInPanel } from '../components/auth/SignInPanel';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
@@ -8,14 +7,7 @@ import { useEngineAccount } from '../engine/useEngineSession';
 /** The vault's front door. */
 export function LoginPage() {
   const isAuthenticated = useEngineAccount() !== null;
-  const navigate = useNavigate();
-  const { pathname } = useLocation();
-
-  // Only redirect away from the login route itself, so a late settle cannot yank
-  // a user who has already navigated on.
-  useEffect(() => {
-    if (isAuthenticated && pathname === '/') navigate('/files');
-  }, [isAuthenticated, navigate, pathname]);
+  if (isAuthenticated) return <Navigate to="/files" />;
 
   return (
     <>
