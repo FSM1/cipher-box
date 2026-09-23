@@ -368,6 +368,14 @@ export class RegistryService {
   }
 
   /**
+   * Whether the caller's own inventory holds `ipnsName` (ADR 0022 D1). Another
+   * account's row for the same name never counts.
+   */
+  holdsName(accountId: string, ipnsName: string): Promise<boolean> {
+    return this.dataSource.getRepository(NameInventory).existsBy({ accountId, ipnsName });
+  }
+
+  /**
    * The per-account quota (blueprint/api.md). `usedBytes` is the GATED sum the
    * upload gate itself enforces, so a client pre-flight and a server refusal
    * read one number by construction; `pinnedBytes` is the all-rows sum,

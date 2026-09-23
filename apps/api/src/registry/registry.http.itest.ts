@@ -10,6 +10,7 @@ import {
   HttpIntegrationApp,
   seedAccount,
 } from '../testing/http-integration-app';
+import { THROTTLE_SURFACES } from '../ops/throttling';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { AccountController } from './account.controller';
 import { MAX_CONTENT_CIDS } from './dto/registry.dto';
@@ -431,10 +432,85 @@ describe('registry HTTP surface (real Postgres)', () => {
     });
   });
 
+  describe('names — the caller registration query', () => {
+    async function register(token: string, ipnsName: string): Promise<void> {
+      await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${token}`)
+        .send([{ ipnsName, contentCids: [] }])
+        .expect(201);
+    }
+
+    it('answers 204 with an empty body for a name the caller registered', async () => {
+      const acct = await account();
+      await register(acct.token, 'k51heldname');
+      const res = await request(http())
+        .get('/registry/names/k51heldname')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .expect(204);
+      expect(res.text).toBe('');
+    });
+
+    it('answers 404 for a name the caller never registered', async () => {
+      const acct = await account();
+      await register(acct.token, 'k51someothername');
+      await request(http())
+        .get('/registry/names/k51nevername')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .expect(404);
+    });
+
+    it('answers 404 for a name only another account registered', async () => {
+      const owner = await account();
+      const caller = await account();
+      await register(owner.token, 'k51foreignname');
+      await request(http())
+        .get('/registry/names/k51foreignname')
+        .set('Authorization', `Bearer ${caller.token}`)
+        .expect(404);
+    });
+
+    it('answers 404 for a malformed name before any database lookup', async () => {
+      const acct = await account();
+      // Postgres refuses a NUL byte in a text parameter, so this name 500s if
+      // it ever reaches the query.
+      await request(http())
+        .get('/registry/names/k51%00bad')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .expect(404);
+      await request(http())
+        .get(`/registry/names/${'k'.repeat(129)}`)
+        .set('Authorization', `Bearer ${acct.token}`)
+        .expect(404);
+    });
+
+    it('rate-limits the query on its own surface, per account (real 429s)', async () => {
+      const acct = await account();
+      const other = await account();
+      const limit = THROTTLE_SURFACES.registryLookup.default.limit;
+      for (let i = 0; i < limit; i += 1) {
+        await request(http())
+          .get('/registry/names/k51burst')
+          .set('Authorization', `Bearer ${acct.token}`)
+          .expect(404);
+      }
+      await request(http())
+        .get('/registry/names/k51burst')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .expect(429);
+      await request(http())
+        .get('/registry/names/k51burst')
+        .set('Authorization', `Bearer ${other.token}`)
+        .expect(404);
+      await register(acct.token, 'k51afterburst');
+    });
+  });
+
   describe('auth', () => {
     it('requires authentication on every route', async () => {
       await request(http()).post('/registry/register').send([]).expect(401);
       await request(http()).post('/registry/retire').send([]).expect(401);
+      await request(http()).get('/registry/names/k51anyname').expect(401);
       await request(http()).get('/account/quota').expect(401);
       await request(http()).patch('/account/byo').send({ byo: true }).expect(401);
       await request(http()).delete('/account').expect(401);

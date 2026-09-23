@@ -818,6 +818,45 @@
         ]
       }
     },
+    "/registry/names/{ipnsName}": {
+      "get": {
+        "operationId": "RegistryController_holdsName",
+        "parameters": [
+          {
+            "name": "ipnsName",
+            "required": true,
+            "in": "path",
+            "description": "The IPNS name (libp2p-key CID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The caller account holds a registration for this name"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "The caller account holds no registration for this name"
+          },
+          "429": {
+            "description": "Registry lookup rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Answer whether the caller account holds a registration for ipnsName; another account row never counts",
+        "tags": [
+          "Registry"
+        ]
+      }
+    },
     "/account/quota": {
       "get": {
         "operationId": "AccountController_quota",

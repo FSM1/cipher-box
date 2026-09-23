@@ -22,3 +22,10 @@ export const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
  */
 export const CANONICAL_BASE64_RE =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/;
+
+/**
+ * A bare IPNS name token within the `ipns_name` column width. A by-name lookup
+ * matches this first: a malformed name answers "absent" and never reaches the
+ * `varchar` column, so the answer reveals nothing and the query never faults.
+ */
+export const IPNS_NAME_RE = /^[A-Za-z0-9]{1,128}$/;

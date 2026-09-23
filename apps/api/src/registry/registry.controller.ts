@@ -1,16 +1,29 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
   ApiExtraModels,
+  ApiNoContentResponse,
   ApiOperation,
+  ApiParam,
   ApiResponse,
   ApiTags,
   getSchemaPath,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { IPNS_NAME_RE } from '../common/patterns';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import {
   MAX_BATCH,
@@ -26,9 +39,10 @@ import { RegistryService } from './services/registry.service';
 /**
  * The pin/name registry surface (blueprint/api.md, Pin/name registry): the one
  * surface every publish flow traverses, feeding both quota and the republisher
- * inventory. Both routes are authenticated and act on the caller's OWN
- * account; both take a top-level JSON array (single-item batches for ordinary
- * writes, bulk for name waves and sweeps) and are idempotent.
+ * inventory. Every route is authenticated and acts on the caller's OWN
+ * account. Register and retire take a top-level JSON array (single-item
+ * batches for ordinary writes, bulk for name waves and sweeps) and are
+ * idempotent.
  */
 @ApiTags('Registry')
 @ApiBearerAuth()
@@ -94,5 +108,32 @@ export class RegistryController {
     @Req() request: AuthenticatedRequest
   ): Promise<RetireResponseDto> {
     return this.registryService.retire(request.user.userId, entries);
+  }
+
+  @Get('names/:ipnsName')
+  @HttpCode(204)
+  @Throttle(THROTTLE_SURFACES.registryLookup)
+  @ApiOperation({
+    summary:
+      'Answer whether the caller account holds a registration for ipnsName; another account row never counts',
+  })
+  @ApiParam({ name: 'ipnsName', description: 'The IPNS name (libp2p-key CID)' })
+  @ApiNoContentResponse({ description: 'The caller account holds a registration for this name' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
+  @ApiResponse({
+    status: 404,
+    description: 'The caller account holds no registration for this name',
+  })
+  @ApiResponse({ status: 429, description: 'Registry lookup rate limit exceeded' })
+  async holdsName(
+    @Param('ipnsName') ipnsName: string,
+    @Req() request: AuthenticatedRequest
+  ): Promise<void> {
+    if (
+      !IPNS_NAME_RE.test(ipnsName) ||
+      !(await this.registryService.holdsName(request.user.userId, ipnsName))
+    ) {
+      throw new NotFoundException('No registration for this name');
+    }
   }
 }

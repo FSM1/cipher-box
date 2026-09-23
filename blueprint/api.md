@@ -98,6 +98,11 @@ decay) inverted into structure.
   retire `[{ipnsName?, targets[]}]`, where each target is an `ipnsName` or a
   `cid`. Ordinary writes send single-item batches; name waves and sweeps send
   bulk. v1's BYO-only `register-cid` folds into the same register call.
+- **Registration query** ([ADR 0022](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0022-a-first-run-cold-start-tolerates-a-failed-public-routing-endpoint.md)):
+  `GET /registry/names/:ipnsName` answers `204` when the caller's own inventory
+  holds the name and `404` otherwise — another account's row, and a malformed
+  name, answer `404` alike — on its own per-account throttle surface
+  `registryLookup`; the cold start asks it before a first-run pointer walk.
 - **Batch bounds**: both batches cap at **1000 items** (register additionally
   caps `contentCids` at 1000 per entry; retire caps its TOTAL target count
   across the batch at 1000, so splitting into entries buys no extra work),
