@@ -199,6 +199,35 @@ describe('the shared route', () => {
     ]);
   });
 
+  it('reads once more after a burst of updates, not once per update', async () => {
+    const reads: Array<(shares: ReceivedShareDescriptor[]) => void> = [];
+    const engine = await renderShared(
+      () => new Promise<ReceivedShareDescriptor[]>((resolve) => reads.push(resolve))
+    );
+    await act(async () => {
+      reads[0]?.([]);
+    });
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+      engine.emit({ kind: 'snapshotUpdated' });
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    expect(reads).toHaveLength(2);
+
+    await act(async () => {
+      reads[1]?.([]);
+    });
+    expect(reads).toHaveLength(3);
+    await act(async () => {
+      reads[2]?.([share(1, 'granted', 'photos')]);
+    });
+    expect(reads).toHaveLength(3);
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'photos',
+    ]);
+  });
+
   it('keeps the newest list when an older read lands after it', async () => {
     const reads: Array<(shares: ReceivedShareDescriptor[]) => void> = [];
     const engine = await renderShared(

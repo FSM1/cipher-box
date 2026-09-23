@@ -40,11 +40,24 @@ export function useReceivedShares(): ReceivedSharesRead {
   }, [client, reload]);
 
   // The tick grafts a share it accepts and announces the graft as a snapshot
-  // update, so a new share appears here without a timer or a press.
+  // update, so a new share appears here without a timer or a press. The engine
+  // also emits one per op stage, so a burst costs one trailing read.
   useEffect(() => {
     if (client === null) return;
+    let inFlight = false;
+    let again = false;
+    const drain = async (): Promise<void> => {
+      inFlight = true;
+      do {
+        again = false;
+        await reload();
+      } while (again);
+      inFlight = false;
+    };
     return client.facade.subscribe((event) => {
-      if (event.kind === 'snapshotUpdated') void reload();
+      if (event.kind !== 'snapshotUpdated') return;
+      if (inFlight) again = true;
+      else void drain();
     });
   }, [client, reload]);
 

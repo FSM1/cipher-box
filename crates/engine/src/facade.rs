@@ -9553,15 +9553,14 @@ where {
         )
     }
 
-    /// How many counted invite claims wait at the scope root `node`.
-    fn pending_claims_at(&self, node: NodeId) -> u32 {
-        let count = self
-            .pending_invite_claims
-            .borrow()
-            .values()
-            .filter(|scope| **scope == node)
-            .count();
-        u32::try_from(count).unwrap_or(u32::MAX)
+    /// How many counted invite claims wait at each scope root.
+    fn pending_claim_counts(&self) -> BTreeMap<NodeId, u32> {
+        let mut counts: BTreeMap<NodeId, u32> = BTreeMap::new();
+        for scope in self.pending_invite_claims.borrow().values() {
+            let count = counts.entry(*scope).or_default();
+            *count = count.saturating_add(1);
+        }
+        counts
     }
 
     /// Drop the claims a conversion acked from the count, so a host re-read
@@ -10474,6 +10473,7 @@ where {
         }
         let dead = self.dead_letters.borrow();
         let dead_nodes: BTreeSet<NodeId> = dead.values().filter_map(|(node, _)| *node).collect();
+        let claims = self.pending_claim_counts();
         let children = rendered_children(&rendered, folder)
             .iter()
             .map(|child| SnapshotChild {
@@ -10486,7 +10486,7 @@ where {
                 dead_letter: dead_nodes.contains(&child.meta.id),
                 content_version: child.meta.content_version,
                 content_cid: child.meta.head_content_cid.clone(),
-                pending_invite_claims: self.pending_claims_at(child.meta.id),
+                pending_invite_claims: claims.get(&child.meta.id).copied().unwrap_or(0),
             })
             .collect();
         let ancestors = rendered
@@ -10871,7 +10871,11 @@ where {
                 .and_then(|link| link.record.expires_at)
                 .is_some_and(|deadline| now.0 >= deadline.0),
             spent: u32::try_from(split.spent.len()).unwrap_or(u32::MAX),
-            pending_claims: self.pending_claims_at(scope_root),
+            pending_claims: self
+                .pending_claim_counts()
+                .get(&scope_root)
+                .copied()
+                .unwrap_or(0),
         });
 
         let projected = project_grant_ledger(

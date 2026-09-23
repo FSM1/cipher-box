@@ -113,7 +113,7 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
     }
 
     /// The claims on `items` that one of this device's recorded links would
-    /// take. Claims stay un-acked until a conversion, so every pass sees them.
+    /// take.
     async fn pending_claims<St, E>(
         &self,
         items: &[VerifiedMailboxItem],
@@ -125,11 +125,13 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
         St: StagingStore,
         E: Entropy,
     {
-        // Ahead of the seal-open the records cost: most passes carry no claim.
-        if !items
+        // Decoded ahead of the seal-open the records cost: most passes carry no
+        // claim.
+        let claims: Vec<(&VerifiedMailboxItem, InviteClaim)> = items
             .iter()
-            .any(|item| InviteClaim::decode(&item.payload).is_ok())
-        {
+            .filter_map(|item| Some((item, InviteClaim::decode(&item.payload).ok()?)))
+            .collect();
+        if claims.is_empty() {
             return Some(PendingInviteClaims::new());
         }
         let records = StagingInviteStore::new(staging, self.enc_secret, entropy)
@@ -137,10 +139,12 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             .await
             .ok()?;
         Some(
-            items
+            claims
                 .iter()
-                .filter_map(|item| {
-                    let scope = pending_claim_scope(&records.links, &records.claims, item, now)?;
+                .filter_map(|(item, claim)| {
+                    let sender = item.sender_identity.to_sec1();
+                    let scope =
+                        pending_claim_scope(&records.links, &records.claims, &sender, claim, now)?;
                     Some((item.item_id.clone(), NodeId(scope)))
                 })
                 .collect(),
@@ -364,6 +368,17 @@ mod tests {
         })
     }
 
+    /// The owner's record of a link at [`SCOPE`] whose claims `link` signs.
+    fn link_record(link: &EcdsaSigner, expires_at: Option<UnixMillis>) -> RecordedInvite {
+        RecordedInvite {
+            scope_id: SCOPE,
+            tag: [0x63; 32],
+            ephemeral_identity_pk: link.verifying_key().to_sec1(),
+            ephemeral_enc_pk: X25519Secret::from_scalar([0x62; 32]).public().to_bytes(),
+            expires_at,
+        }
+    }
+
     /// The recipient's whole world: the record plane serving the sharer's scope
     /// root, this device's own inbox, and its durable stores.
     struct Inbox {
@@ -480,8 +495,13 @@ mod tests {
                     body: self.fixture.head_block.clone(),
                 });
             }
+            self.pass().0
+        }
+
+        /// One pull pass: the events it emitted and the claims it counted.
+        fn pass(&self) -> (Vec<Event>, Option<PendingInviteClaims>) {
             let (sender, mut events) = mpsc::unbounded();
-            block_on(
+            let claims = block_on(
                 ShareInbox {
                     mailbox: &self.mailbox,
                     transport: &self.records,
@@ -499,7 +519,7 @@ mod tests {
             while let Ok(event) = events.try_recv() {
                 drained.push(event);
             }
-            drained
+            (drained, claims)
         }
 
         /// The scope roots this vault has durably bookmarked.
@@ -524,13 +544,7 @@ mod tests {
         /// mint on this device leaves it.
         fn record_link(&self, link: &EcdsaSigner, expires_at: Option<UnixMillis>) {
             self.record(InviteRecords {
-                links: vec![RecordedInvite {
-                    scope_id: SCOPE,
-                    tag: [0x63; 32],
-                    ephemeral_identity_pk: link.verifying_key().to_sec1(),
-                    ephemeral_enc_pk: X25519Secret::from_scalar([0x62; 32]).public().to_bytes(),
-                    expires_at,
-                }],
+                links: vec![link_record(link, expires_at)],
                 claims: Vec::new(),
             });
         }
@@ -554,22 +568,8 @@ mod tests {
 
         /// The claims one pass counts, per scope.
         fn pending(&self) -> Option<BTreeMap<NodeId, usize>> {
-            let (sender, _events) = mpsc::unbounded();
-            let claims = block_on(
-                ShareInbox {
-                    mailbox: &self.mailbox,
-                    transport: &self.records,
-                    gateway: &self.gateway,
-                    http: &self.http,
-                    floors: &self.floors,
-                    enc_secret: &my_enc(),
-                    contact_label_seed: &kdf::contact_label_seed(&[0x4c; 32]),
-                    vault_root_scope: self.vault_root_scope,
-                }
-                .pull(&self.staging, &self.entropy, V, NOW, &sender),
-            )?;
             let mut counts = BTreeMap::new();
-            for scope in claims.values() {
+            for scope in self.pass().1?.values() {
                 *counts.entry(*scope).or_default() += 1;
             }
             Some(counts)
@@ -797,13 +797,7 @@ mod tests {
         let fx = Inbox::new();
         let link = stranger();
         fx.record(InviteRecords {
-            links: vec![RecordedInvite {
-                scope_id: SCOPE,
-                tag: [0x63; 32],
-                ephemeral_identity_pk: link.verifying_key().to_sec1(),
-                ephemeral_enc_pk: X25519Secret::from_scalar([0x62; 32]).public().to_bytes(),
-                expires_at: None,
-            }],
+            links: vec![link_record(&link, None)],
             claims: vec![ConvertedClaimRecord {
                 claim_id: [0x71; CLAIM_ID_LEN],
                 link_tag: [0x63; 32],

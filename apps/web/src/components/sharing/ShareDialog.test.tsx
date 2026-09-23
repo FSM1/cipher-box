@@ -176,7 +176,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
     ),
     pruneInviteLinks: vi.fn(() =>
       answer('pruneInviteLinks', { kind: 'done' as const }).then((outcome) => {
-        state.links = { ...(state.links ?? NO_LINKS), spent: 0, pendingClaims: 0 };
+        state.links = { ...(state.links ?? NO_LINKS), spent: 0 };
         return outcome;
       })
     ),
@@ -564,9 +564,7 @@ describe('a link the engine already holds', () => {
       )
     );
 
-    expect(screen.getByTestId('share-pending-claims').textContent).toBe(
-      '// 2 claims wait for conversion'
-    );
+    expect(screen.getByTestId('share-pending-claims').textContent).toBe('// 2 claims to convert');
     expect(screen.getByTestId('share-convert-claims')).toBeTruthy();
     expect(screen.queryByTestId('share-no-local-link')).toBeNull();
   });
@@ -579,10 +577,7 @@ describe('a link the engine already holds', () => {
 
   it('offers to forget the records a cut left behind, and stops once pruned', async () => {
     const engine = await share(
-      sharingEngine(
-        {},
-        held([], [], { links: { ...live, spent: 2, pendingClaims: 0 }, standing: 'alreadyAScope' })
-      )
+      sharingEngine({}, held([], [], { links: { ...live, spent: 2 }, standing: 'alreadyAScope' }))
     );
 
     expect(screen.getByTestId('share-prune-links').textContent).toContain('2 spent link records');

@@ -6,6 +6,7 @@ import {
   type LinkLifetime,
 } from '../../sharing/inviteLink';
 import { refusalLabel } from '../../sharing/shareRefusals';
+import { plural } from '../../vault/selection';
 import type { ScopeSharing } from '../../stores/sharing.store';
 
 interface InviteLinkPanelProps {
@@ -41,15 +42,16 @@ export function InviteLinkPanel({
         </p>
       );
 
-    case 'live':
+    case 'live': {
+      const pending = plural(state.links.pendingClaims, 'claim');
       return (
         <div className="dialog-content" data-testid="share-live-link">
           <p className="sharing-note" data-testid="share-live-link-expiry">
             {`// a link stands here — ${expiryLabel(state.links)}`}
           </p>
-          {state.links.pendingClaims > 0 && (
+          {pending !== null && (
             <p className="sharing-note" data-testid="share-pending-claims">
-              {`// ${waitingClaims(state.links.pendingClaims)} for conversion`}
+              {`// ${pending} to convert`}
             </p>
           )}
           <button
@@ -72,6 +74,7 @@ export function InviteLinkPanel({
           </button>
         </div>
       );
+    }
 
     case 'mintable':
       return (
@@ -114,10 +117,6 @@ export function InviteLinkPanel({
         </p>
       );
   }
-}
-
-function waitingClaims(count: number): string {
-  return count === 1 ? '1 claim waits' : `${count} claims wait`;
 }
 
 /** Offers the prune the engine's spent count says there is something to drop. */

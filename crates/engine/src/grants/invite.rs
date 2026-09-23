@@ -797,33 +797,12 @@ pub fn convert_invite_claim(
         return Err(InviteError::ScopeMismatch);
     }
 
-    // The seal's inner sender signature is already verified; binding it to a link
-    // the owner recorded **at this scope** is what makes it a claim rather than a
-    // re-share. Attribution is the recorded scope id, the epoch-stable half, as
-    // [`partition_scope_links`] decides it. Ambiguity is refused rather than
-    // resolved to the first match.
     let sender = item.sender_identity.to_sec1();
-    let mut matches = links
-        .iter()
-        .filter(|l| l.scope_id == *scope.scope_id && l.ephemeral_identity_pk == sender);
-    let link = matches.next().ok_or(InviteError::LinkNotCommitted)?;
-    if matches.next().is_some() {
-        return Err(InviteError::LinkNotCommitted);
-    }
-    if link.expires_at.is_some_and(|deadline| now.0 >= deadline.0) {
-        return Err(InviteError::LinkExpired);
-    }
+    let link = recorded_claim_link(links, converted, scope.scope_id, &sender, &claim, now)?;
     // The tag the set carries for this link, which a write wave re-mints at the
     // name it moves the scope root to.
     let link_tag =
         derived_tag(owner.enc_secret, link, name).ok_or(InviteError::LinkNotCommitted)?;
-    // Bound to a link the owner recorded, so the spent set can be consulted.
-    if claim.claim_id == [0u8; CLAIM_ID_LEN] {
-        return Err(InviteError::ClaimIdIsZero);
-    }
-    if converted.iter().any(|c| c.claim_id == claim.claim_id) {
-        return Err(InviteError::ClaimAlreadyConverted);
-    }
     // The owner-signed entry carries the authoritative permission, and its
     // absence is the link's revocation signal.
     let permission = scope
@@ -926,29 +905,60 @@ pub fn convert_invite_claim(
     })
 }
 
-/// The scope of the one link in `links` that `item` claims, where
-/// [`convert_invite_claim`] would not refuse it on the owner's local records
-/// alone. The record-plane checks run only at conversion, so a claim this counts
-/// can still be refused there.
+/// The one link the owner recorded at `scope_id` that `sender` signs claims
+/// for, where the owner's own records do not already refuse `claim` — the
+/// local half of [`convert_invite_claim`].
+///
+/// The seal's inner sender signature is already verified; binding it to a link
+/// the owner recorded **at this scope** is what makes it a claim rather than a
+/// re-share. Attribution is the recorded scope id, the epoch-stable half, as
+/// [`partition_scope_links`] decides it. Ambiguity is refused rather than
+/// resolved to the first match.
+fn recorded_claim_link<'l>(
+    links: &'l [RecordedInvite],
+    converted: &[ConvertedClaimRecord],
+    scope_id: &[u8; 16],
+    sender: &[u8; IDENTITY_PUBLIC_LEN],
+    claim: &InviteClaim,
+    now: UnixMillis,
+) -> Result<&'l RecordedInvite, InviteError> {
+    let mut matches = links
+        .iter()
+        .filter(|l| l.scope_id == *scope_id && l.ephemeral_identity_pk == *sender);
+    let link = matches.next().ok_or(InviteError::LinkNotCommitted)?;
+    if matches.next().is_some() {
+        return Err(InviteError::LinkNotCommitted);
+    }
+    if link.expires_at.is_some_and(|deadline| now.0 >= deadline.0) {
+        return Err(InviteError::LinkExpired);
+    }
+    // Bound to a link the owner recorded, so the spent set can be consulted.
+    if claim.claim_id == [0u8; CLAIM_ID_LEN] {
+        return Err(InviteError::ClaimIdIsZero);
+    }
+    if converted.iter().any(|c| c.claim_id == claim.claim_id) {
+        return Err(InviteError::ClaimAlreadyConverted);
+    }
+    Ok(link)
+}
+
+/// The scope of the link `claim` names from `sender`, where the owner's local
+/// records would not refuse its conversion. The record-plane checks run only at
+/// conversion, so a claim this counts can still be refused there.
 pub fn pending_claim_scope(
     links: &[RecordedInvite],
     converted: &[ConvertedClaimRecord],
-    item: &VerifiedMailboxItem,
+    sender: &[u8; IDENTITY_PUBLIC_LEN],
+    claim: &InviteClaim,
     now: UnixMillis,
 ) -> Option<[u8; 16]> {
-    let claim = InviteClaim::decode(&item.payload).ok()?;
-    if claim.claim_id == [0u8; CLAIM_ID_LEN]
-        || converted.iter().any(|c| c.claim_id == claim.claim_id)
-    {
-        return None;
-    }
-    let sender = item.sender_identity.to_sec1();
-    let mut matches = links.iter().filter(|l| l.ephemeral_identity_pk == sender);
-    let link = matches.next()?;
-    if matches.next().is_some() || link.expires_at.is_some_and(|deadline| now.0 >= deadline.0) {
-        return None;
-    }
-    Some(link.scope_id)
+    let scope_id = links
+        .iter()
+        .find(|link| link.ephemeral_identity_pk == *sender)?
+        .scope_id;
+    recorded_claim_link(links, converted, &scope_id, sender, claim, now)
+        .ok()
+        .map(|link| link.scope_id)
 }
 
 /// The tag `link`'s own key material derives at `scope_root_name`, from the

@@ -1,4 +1,5 @@
 import type { ListingRow } from '../../vault/listing';
+import { plural } from '../../vault/selection';
 
 interface FileListItemProps {
   row: ListingRow;
@@ -83,15 +84,15 @@ export function FileListItem({ row, selected, onToggle, onOpen, onRowMenu }: Fil
 
 /** Claims on this folder's invite link, which only the owner's press converts. */
 function PendingClaims({ count }: { count: number }) {
-  if (count === 0) return null;
-  const claims = count === 1 ? 'claim' : 'claims';
+  const claims = plural(count, 'claim');
+  if (claims === null) return null;
   return (
     <span
       className="file-list-item-claims"
-      title={`${count} invite ${claims} to convert - open share`}
+      title={`${claims} to convert - open share`}
       data-testid="file-list-item-claims"
     >
-      {`[${count} ${claims}]`}
+      {`[${claims}]`}
     </span>
   );
 }
