@@ -32,8 +32,7 @@ test('a minted link is claimed by a second identity and converted to a grant', a
   const link = await share.mintLink('30 days');
   await share.close();
 
-  // The claimant signs in first: the capability is in the fragment, and the
-  // claim route offers no login of its own.
+  // The claimant signs in first, through the fixture's own login path.
   const { page: claimant } = await secondContext();
   await signIn(claimant);
 

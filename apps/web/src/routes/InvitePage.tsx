@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { LoginError } from '@cipherbox/auth-ui';
 import { useAuth } from '../auth/useAuth';
+import { SignInPanel } from '../components/auth/SignInPanel';
 import { useEngineAccount } from '../engine/useEngineSession';
 import { useCommandRunner } from '../hooks/useCommandRunner';
 
@@ -65,27 +66,7 @@ export function InvitePage() {
           {MESSAGES[state]}
         </p>
         {state === 'refused' && <LoginError message={error} />}
-        {state === 'waiting' && (
-          <>
-            {/* A new tab, because this one holds the link: navigating away from
-                the address drops the capability with it. */}
-            <a className="terminal-btn" href="/" target="_blank" rel="noopener noreferrer">
-              sign in
-            </a>
-            {/* A session belongs to the tab that started it
-                (`EngineClient.signedInAccount`), and this one restores its own
-                once, at load — so a sign-in elsewhere reaches it by reloading,
-                which the address bar carries the link across. */}
-            <button
-              type="button"
-              className="terminal-btn"
-              onClick={() => window.location.reload()}
-              data-testid="invite-recheck"
-            >
-              reload after signing in
-            </button>
-          </>
-        )}
+        {state === 'waiting' && <SignInPanel />}
         {state === 'ready' && (
           <>
             <p className="login-description" data-testid="invite-account">
@@ -118,7 +99,7 @@ export function InvitePage() {
  */
 const MESSAGES: Record<ClaimState, string> = {
   checking: 'checking whether this browser is signed in...',
-  waiting: 'sign in to claim this invite — the link keeps until you do.',
+  waiting: 'sign in here to claim this invite.',
   ready: 'this link shares a folder with you.',
   noLink: 'this address carries no invite link.',
   claiming: 'claiming...',
