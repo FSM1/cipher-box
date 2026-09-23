@@ -2,13 +2,12 @@
 //! ([`crate::sync::provision`]) — the same register-first CAS pipeline every
 //! other write rides, with no crypto and no trust logic added.
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 
 use crate::api::{ApiClient, ApiError};
-use crate::net::MAX_RECORD_BYTES;
-use crate::net::fanout::fanout_get_verify;
+use crate::net::fanout::{FanoutRecord, VacancyRule, fanout_get_classified, fanout_get_verify};
 use crate::net::publish::{
     InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, publish_inline,
 };
@@ -36,6 +35,9 @@ pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
     pub scheduler: &'a Sch,
     /// The publish pipeline's timing policy.
     pub profile: &'a SyncTimingProfile,
+    /// The vault-pointer name the registry confirmed this account never
+    /// registered, which the vacancy probe reads under [`VacancyRule::FirstRun`].
+    pub first_run_name: Option<&'a IpnsName>,
 }
 
 /// Carry a publish failure onto rule 6's axis: only this build's own
@@ -107,50 +109,21 @@ where
             Err(ApiError::Status { status: 404, .. }) => {}
             Err(_) => return Err(VaultPointerProbe::Indeterminate),
         }
-        // Then the record plane, unanimously: **every** endpoint must answer, and
-        // every answer must be "no record". A tolerated failure is what makes a
-        // partial outage indistinguishable from a vacant name — the endpoint
-        // holding the account's pointer is down while a peer that never saw it
-        // answers `None` — and the mint that follows overwrites the one record
-        // naming the one root whose owner-write blob holds a write scope seed
-        // nobody can re-derive. Unanimity costs nothing on the refusing side: a
-        // single `Some` is already decisive.
-        let endpoints = self.transport.endpoints();
-        // The seam contracts this set as never empty; inferring vacancy from zero
-        // answers is the same bug in its degenerate form, so the guard is
-        // release-active rather than an assumption.
-        if endpoints.is_empty() {
-            return Err(VaultPointerProbe::Indeterminate);
+        // Then the record plane. A tolerated failure is what makes a partial
+        // outage indistinguishable from a vacant name — the endpoint holding the
+        // account's pointer is down while a peer that never saw it answers
+        // `None` — and the mint that follows overwrites the one record naming the
+        // one root whose owner-write blob holds a write scope seed nobody can
+        // re-derive. So unanimity holds unless the registry has said this name
+        // was never registered ([`VacancyRule`]). Only bytes that verify at the
+        // name prove a publication: unverifiable bytes refuse as availability,
+        // so one hostile endpoint cannot forge a permanent verdict.
+        let rule = VacancyRule::at(self.first_run_name, name);
+        match fanout_get_classified(self.transport, name, rule).await {
+            FanoutRecord::Found(..) => Err(VaultPointerProbe::AlreadyPublished),
+            FanoutRecord::Absent => Ok(()),
+            FanoutRecord::Unavailable(failures) => Err(VaultPointerProbe::Unreadable(failures)),
         }
-        for endpoint in endpoints {
-            match self
-                .transport
-                .get_record(&endpoint, name.as_str(), MAX_RECORD_BYTES, None)
-                .await
-            {
-                // Only bytes that verify at this name prove a publication. The
-                // endpoint set includes untrusted public endpoints, and the
-                // verdict this feeds is permanent, so unverifiable bytes still
-                // refuse — nothing here reaches `Ok(())` — but as availability,
-                // denying one hostile endpoint the power to forge a permanent
-                // trust verdict against an account that never published.
-                Ok(Some(bytes)) => {
-                    return Err(
-                        if IpnsRecord::unmarshal(&bytes)
-                            .and_then(|record| record.verify(name))
-                            .is_ok()
-                        {
-                            VaultPointerProbe::AlreadyPublished
-                        } else {
-                            VaultPointerProbe::Indeterminate
-                        },
-                    );
-                }
-                Ok(None) => {}
-                Err(_) => return Err(VaultPointerProbe::Indeterminate),
-            }
-        }
-        Ok(())
     }
 
     async fn publish_root_record(
@@ -213,12 +186,14 @@ where
 mod tests {
     use super::*;
 
+    use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
 
     use zeroize::Zeroizing;
 
     use crate::gate::{GateError, GateRejection, GateStage, RejectionReason};
     use crate::net::resolve::AdoptOutcome;
+    use crate::net::{EndpointFailure, EndpointFailures};
     use crate::profile::SyncTimingProfile;
     use crate::seams::{EndpointId, HttpResponse};
     use crate::testkit::fakes::{
@@ -329,6 +304,7 @@ mod tests {
             floors: &device.floor_store,
             scheduler: &device.scheduler,
             profile,
+            first_run_name: None,
         })
     }
 
@@ -337,6 +313,27 @@ mod tests {
         with_net(device, true, Some(DERIVED_SEED), profile, |net| {
             block_on(net.require_vacant_vault_pointer(&pointer_name()))
         })
+    }
+
+    /// Run the production probe over `device` at a name the registry confirmed
+    /// unregistered.
+    fn first_run_probe(device: &FakeDevice) -> Result<(), VaultPointerProbe> {
+        let name = pointer_name();
+        with_net(
+            device,
+            true,
+            Some(DERIVED_SEED),
+            &SyncTimingProfile::CI,
+            |net| {
+                block_on(
+                    VaultProvisionNet {
+                        first_run_name: Some(&name),
+                        ..*net
+                    }
+                    .require_vacant_vault_pointer(&name),
+                )
+            },
+        )
     }
 
     /// Seed a verifiable record at the probed name — the account's own, as an
@@ -443,8 +440,52 @@ mod tests {
 
         assert_eq!(
             probe(&device, &SyncTimingProfile::CI),
-            Err(VaultPointerProbe::Indeterminate),
+            Err(VaultPointerProbe::Unreadable(EndpointFailures(vec![(
+                holder,
+                EndpointFailure::Transport
+            )]))),
             "a silent endpoint is not an absent record",
+        );
+    }
+
+    /// ADR 0022 D2: once the registry has said this account never registered the
+    /// name, one vacant answer beside a failed endpoint admits the mint, and
+    /// failures alone still do not.
+    #[test]
+    fn a_first_run_probe_tolerates_a_failed_endpoint_beside_a_vacant_one() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        device
+            .record_store
+            .fail_endpoint(&EndpointId::new("fake:public-routing"));
+        recovery_reply(&device, 404);
+        assert_eq!(first_run_probe(&device), Ok(()));
+
+        device
+            .record_store
+            .fail_endpoint(&EndpointId::new("fake:someguy"));
+        recovery_reply(&device, 404);
+        assert!(matches!(
+            first_run_probe(&device),
+            Err(VaultPointerProbe::Unreadable(_))
+        ));
+    }
+
+    /// ADR 0022 D3: a record that verifies at the name refuses a first-run mint
+    /// exactly as it refuses any other.
+    #[test]
+    fn a_first_run_probe_still_refuses_on_a_published_record() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        seed_record(&device);
+        device
+            .record_store
+            .fail_endpoint(&EndpointId::new("fake:public-routing"));
+        recovery_reply(&device, 404);
+
+        assert_eq!(
+            first_run_probe(&device),
+            Err(VaultPointerProbe::AlreadyPublished)
         );
     }
 
@@ -496,7 +537,10 @@ mod tests {
 
         assert_eq!(
             probe(&device, &SyncTimingProfile::CI),
-            Err(VaultPointerProbe::Indeterminate),
+            Err(VaultPointerProbe::Unreadable(EndpointFailures(vec![(
+                EndpointId::new("fake:public-routing"),
+                EndpointFailure::Malformed
+            )]))),
             "bytes that do not verify at the name prove nothing, but admit nothing",
         );
     }
@@ -554,6 +598,7 @@ mod tests {
         let world = FakeWorld::new();
         let device = world.device(b"alice");
         recovery_reply(&device, 404);
+        let name = pointer_name();
         let api = ApiClient::new(
             device.http.clone(),
             device.credential_store.clone(),
@@ -569,10 +614,12 @@ mod tests {
             floors: &device.floor_store,
             scheduler: &device.scheduler,
             profile: &SyncTimingProfile::CI,
+            first_run_name: Some(&name),
         };
         assert_eq!(
             block_on(net.require_vacant_vault_pointer(&pointer_name())),
-            Err(VaultPointerProbe::Indeterminate),
+            Err(VaultPointerProbe::Unreadable(EndpointFailures::default())),
+            "zero answers is silence under either vacancy rule",
         );
     }
 

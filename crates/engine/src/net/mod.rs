@@ -45,7 +45,7 @@ pub(crate) use adopter::{assemble_candidate, assemble_head_envelope, fetch_head_
 pub use child::ChildAdopter;
 pub(crate) use child::{ChildResolveError, resolve_child};
 pub(crate) use fanout::fanout_get_verify;
-pub use fanout::{FanoutRecord, MAX_RECORD_BYTES};
+pub use fanout::{EndpointFailure, EndpointFailures, FanoutRecord, MAX_RECORD_BYTES, VacancyRule};
 pub(crate) use focus::{FolderRefresh, FolderRefreshReport, GraftedLeg};
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{

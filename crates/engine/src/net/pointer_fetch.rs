@@ -10,7 +10,7 @@
 //!
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
-use super::fanout::{FanoutRecord, fanout_get_classified};
+use super::fanout::{FanoutRecord, VacancyRule, fanout_get_classified};
 use super::rotation::OwnerPointerRead;
 use crate::gate::floor;
 use crate::seams::{FloorStore, RecordTransport, SeamResult};
@@ -23,22 +23,39 @@ use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 /// transport bytes.
 pub struct RecordPointerFetch<'a, T> {
     transport: &'a T,
+    /// The one name read under [`VacancyRule::FirstRun`]; every other name is
+    /// read under unanimity.
+    first_run_name: Option<&'a IpnsName>,
 }
 
 impl<'a, T> RecordPointerFetch<'a, T> {
     /// Wrap the borrowed `/routing/v1` transport as a pointer fetch.
     pub fn new(transport: &'a T) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            first_run_name: None,
+        }
+    }
+
+    /// Read `name` under the first-run rule: the caller holds the registry's
+    /// word that this account never registered it (ADR 0022).
+    #[must_use]
+    pub fn first_run_at(mut self, name: Option<&'a IpnsName>) -> Self {
+        self.first_run_name = name;
+        self
     }
 }
 
 impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
     async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
-        Ok(match fanout_get_classified(self.transport, name).await {
-            FanoutRecord::Found(verified, _) => PointerRecord::Found(verified.value),
-            FanoutRecord::Absent => PointerRecord::Absent,
-            FanoutRecord::Unavailable => PointerRecord::Unavailable,
-        })
+        let rule = VacancyRule::at(self.first_run_name, name);
+        Ok(
+            match fanout_get_classified(self.transport, name, rule).await {
+                FanoutRecord::Found(verified, _) => PointerRecord::Found(verified.value),
+                FanoutRecord::Absent => PointerRecord::Absent,
+                FanoutRecord::Unavailable(failures) => PointerRecord::Unavailable(failures),
+            },
+        )
     }
 }
 
@@ -94,11 +111,12 @@ impl PointerConsult<'_> {
         scope_id: &[u8; 16],
     ) -> Result<Option<ConsultedPointer>, PointerConsultError> {
         let pointer = self.scope_keys.pointer_name(scope_id);
-        let (block, record_bytes) = match fanout_get_classified(transport, &pointer).await {
-            FanoutRecord::Found(verified, record_bytes) => (verified.value, record_bytes),
-            FanoutRecord::Absent => return Ok(None),
-            FanoutRecord::Unavailable => return Err(PointerConsultError::Unavailable),
-        };
+        let (block, record_bytes) =
+            match fanout_get_classified(transport, &pointer, VacancyRule::Unanimous).await {
+                FanoutRecord::Found(verified, record_bytes) => (verified.value, record_bytes),
+                FanoutRecord::Absent => return Ok(None),
+                FanoutRecord::Unavailable(_) => return Err(PointerConsultError::Unavailable),
+            };
         let pointer_read_key = self.scope_keys.pointer_read_key(scope_id);
         let repoint = open_repoint(
             &pointer_read_key,
@@ -406,5 +424,60 @@ mod tests {
             matches!(err, PointerError::Open(_)),
             "the inner-forge is surfaced verbatim as PointerError::Open, not swallowed"
         );
+    }
+
+    fn walk(
+        fetch: &RecordPointerFetch<'_, InMemoryRecordStore>,
+    ) -> Result<Option<crate::sync::pointer::VaultPointerAdoption>, PointerError> {
+        block_on(resolve_vault_pointer(
+            fetch,
+            &InMemoryFloorStore::default(),
+            SECRET,
+            &owner_signer().verifying_key(),
+            &ROOT_SCOPE,
+            PAYLOAD_VERSION,
+        ))
+    }
+
+    /// ADR 0022 D3: the first-run rule never skips the verify. A record served
+    /// on a first-run walk opens under the owner identity or fails the walk
+    /// closed, exactly as it does under unanimity.
+    #[test]
+    fn a_first_run_walk_still_opens_every_record_it_finds() {
+        let eps = endpoints(2);
+        let store = InMemoryRecordStore::new(eps.clone());
+        store.fail_endpoint(&eps[1]);
+        let genesis = vault_pointer_name(SECRET, 0);
+        let fetch = RecordPointerFetch::new(&store).first_run_at(Some(&genesis));
+
+        let good = seal_block(&owner_signer(), 0, &repoint(1, 1));
+        store.seed_record(&eps[0], genesis.as_str(), record_for(0, &good, 1));
+        assert_eq!(
+            block_on(fetch.fetch(&genesis)).expect("fetch succeeds"),
+            PointerRecord::Found(good)
+        );
+
+        let rogue = EcdsaSigner::from_scalar(&[7u8; 32]).unwrap();
+        let forged = seal_block(&rogue, 1, &repoint(9, 9));
+        store.seed_record(&eps[0], genesis.as_str(), record_for(0, &forged, 2));
+        assert!(matches!(walk(&fetch), Err(PointerError::Open(_))));
+    }
+
+    /// The registry spoke about the genesis name only. Every later index keeps
+    /// unanimity, so a withheld index 1 still refuses the walk rather than
+    /// ending the chain at index 0.
+    #[test]
+    fn the_first_run_rule_reads_only_the_name_the_registry_confirmed() {
+        let eps = endpoints(2);
+        let store = InMemoryRecordStore::new(eps.clone());
+        let genesis = vault_pointer_name(SECRET, 0);
+        let good = seal_block(&owner_signer(), 0, &repoint(1, 1));
+        for endpoint in &eps {
+            store.seed_record(endpoint, genesis.as_str(), record_for(0, &good, 1));
+        }
+        store.fail_endpoint(&eps[1]);
+        let fetch = RecordPointerFetch::new(&store).first_run_at(Some(&genesis));
+
+        assert!(matches!(walk(&fetch), Err(PointerError::Unavailable(_))));
     }
 }

@@ -85,11 +85,78 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
     Fanout { acked, not_acked }
 }
 
+/// Why one endpoint's answer to a fan-out GET counted for nothing. A class
+/// only: the diagnostics that carry it hold no record bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointFailure {
+    /// The transport returned an error: unreachable, refused, non-2xx, or late.
+    Transport,
+    /// The endpoint served more than [`MAX_RECORD_BYTES`].
+    OverCap,
+    /// The bytes did not decode as an IPNS record.
+    Malformed,
+    /// The record did not verify at the name.
+    Unverified,
+}
+
+impl EndpointFailure {
+    fn class(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::OverCap => "over-cap",
+            Self::Malformed => "malformed",
+            Self::Unverified => "unverified",
+        }
+    }
+}
+
+/// Every endpoint that failed one fan-out GET, in endpoint-set order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EndpointFailures(pub Vec<(EndpointId, EndpointFailure)>);
+
+impl core::fmt::Display for EndpointFailures {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("no endpoint answered");
+        }
+        for (index, (endpoint, failure)) in self.0.iter().enumerate() {
+            if index > 0 {
+                f.write_str("; ")?;
+            }
+            write!(f, "{} {}", endpoint.0, failure.class())?;
+        }
+        Ok(())
+    }
+}
+
+/// Which fan-out answers read as "the name is vacant" (ADR 0022).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VacancyRule {
+    /// Every endpoint answered, and every answer was "no record".
+    Unanimous,
+    /// At least one endpoint answered "no record", and every other one failed.
+    /// Only for a vault-pointer name the registry confirmed this account never
+    /// registered: register-first means no record at it can exist to overwrite.
+    FirstRun,
+}
+
+impl VacancyRule {
+    /// [`FirstRun`](Self::FirstRun) at the one name the registry confirmed
+    /// unregistered, [`Unanimous`](Self::Unanimous) at every other name.
+    pub fn at(first_run_name: Option<&IpnsName>, name: &IpnsName) -> Self {
+        if first_run_name == Some(name) {
+            Self::FirstRun
+        } else {
+            Self::Unanimous
+        }
+    }
+}
+
 /// What a fan-out GET found at a name, on rule 6's axis: [`Absent`] is a
 /// statement about the name, [`Unavailable`] is a statement about the endpoints.
 ///
-/// `Absent` needs the endpoint set to be **unanimous**: every endpoint answered,
-/// and every answer was "no record". One endpoint's word against a set of
+/// Under [`VacancyRule::Unanimous`], `Absent` needs every endpoint to answer,
+/// and every answer to be "no record". One endpoint's word against a set of
 /// failures is not evidence about a name, and treating it as such is how a
 /// single hostile accelerator truncates a chain. Even unanimity is not proof —
 /// endpoints can be wrong together — so a caller that must not be steered by an
@@ -100,12 +167,12 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
 pub enum FanoutRecord {
     /// The freshest verifiable record an endpoint served, with its bytes.
     Found(VerifiedRecord, Vec<u8>),
-    /// Every endpoint answered, and every answer was "no record".
+    /// The endpoints agree the name carries no record, by the read's
+    /// [`VacancyRule`].
     Absent,
-    /// No endpoint served a verifiable record and the set did not agree the
-    /// name is vacant: one errored, broke the size cap, or served unverifiable
-    /// bytes. Availability, never a verdict about the name.
-    Unavailable,
+    /// No endpoint served a verifiable record and the vacancy rule did not
+    /// hold. Availability, never a verdict about the name.
+    Unavailable(EndpointFailures),
 }
 
 /// Fan-out GET across the endpoint set and core-verify each returned record
@@ -125,27 +192,28 @@ pub async fn fanout_get_verify<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
 ) -> Option<(VerifiedRecord, Vec<u8>)> {
-    match fanout_get_classified(transport, name).await {
+    match fanout_get_classified(transport, name, VacancyRule::Unanimous).await {
         FanoutRecord::Found(verified, bytes) => Some((verified, bytes)),
-        FanoutRecord::Absent | FanoutRecord::Unavailable => None,
+        FanoutRecord::Absent | FanoutRecord::Unavailable(_) => None,
     }
 }
 
 /// [`fanout_get_verify`] with the two answers it collapses kept apart
-/// ([`FanoutRecord`]).
+/// ([`FanoutRecord`]). `rule` decides only between `Absent` and `Unavailable`:
+/// a `Found` is the same verified record under either rule.
 ///
 /// An empty endpoint set falls out as `Unavailable` for the same reason:
 /// zero answers is silence, not vacancy.
 pub async fn fanout_get_classified<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
+    rule: VacancyRule,
 ) -> FanoutRecord {
     let key = name.as_str();
     let mut best: Option<(VerifiedRecord, Vec<u8>)> = None;
     let mut vacant = 0usize;
-    let mut asked = 0usize;
+    let mut failures = Vec::new();
     for endpoint in transport.endpoints() {
-        asked += 1;
         let bytes = match transport
             .get_record(&endpoint, key, MAX_RECORD_BYTES, None)
             .await
@@ -155,17 +223,23 @@ pub async fn fanout_get_classified<T: RecordTransport>(
                 vacant += 1;
                 continue;
             }
-            Err(_) => continue,
+            Err(_) => {
+                failures.push((endpoint, EndpointFailure::Transport));
+                continue;
+            }
         };
         // Release-active backstop: a transport that ignores its cap must not
         // talk the engine past it (mirrors the WASM bridge's `send_capped`).
         if bytes.len() > MAX_RECORD_BYTES {
+            failures.push((endpoint, EndpointFailure::OverCap));
             continue;
         }
         let Ok(record) = IpnsRecord::unmarshal(&bytes) else {
+            failures.push((endpoint, EndpointFailure::Malformed));
             continue;
         };
         let Ok(verified) = record.verify(name) else {
+            failures.push((endpoint, EndpointFailure::Unverified));
             continue;
         };
         if best
@@ -175,10 +249,17 @@ pub async fn fanout_get_classified<T: RecordTransport>(
             best = Some((verified, bytes));
         }
     }
-    match best {
-        Some((verified, bytes)) => FanoutRecord::Found(verified, bytes),
-        None if asked > 0 && vacant == asked => FanoutRecord::Absent,
-        None => FanoutRecord::Unavailable,
+    if let Some((verified, bytes)) = best {
+        return FanoutRecord::Found(verified, bytes);
+    }
+    let vacant_by_rule = match rule {
+        VacancyRule::Unanimous => failures.is_empty(),
+        VacancyRule::FirstRun => true,
+    };
+    if vacant > 0 && vacant_by_rule {
+        FanoutRecord::Absent
+    } else {
+        FanoutRecord::Unavailable(EndpointFailures(failures))
     }
 }
 
@@ -253,8 +334,12 @@ mod tests {
         };
 
         assert!(matches!(
-            block_on(fanout_get_classified(&transport, &name)),
-            FanoutRecord::Unavailable
+            block_on(fanout_get_classified(
+                &transport,
+                &name,
+                VacancyRule::Unanimous
+            )),
+            FanoutRecord::Unavailable(_)
         ));
     }
 
@@ -266,7 +351,7 @@ mod tests {
 
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name)),
+                block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
                 FanoutRecord::Absent
             ),
             "every endpoint answers 'no record', so the name is absent"
@@ -277,8 +362,8 @@ mod tests {
         }
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name)),
-                FanoutRecord::Unavailable
+                block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
+                FanoutRecord::Unavailable(_)
             ),
             "no endpoint answered at all, so nothing is known about the name"
         );
@@ -295,17 +380,116 @@ mod tests {
         store.fail_endpoint(&eps[1]);
 
         assert!(matches!(
-            block_on(fanout_get_classified(&store, &name)),
-            FanoutRecord::Unavailable
+            block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
+            FanoutRecord::Unavailable(_)
         ));
 
         store.heal_endpoint(&eps[1]);
         assert!(
             matches!(
-                block_on(fanout_get_classified(&store, &name)),
+                block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous)),
                 FanoutRecord::Absent
             ),
             "unanimity is what makes an absence an answer"
         );
+    }
+
+    /// ADR 0022 D2: at a name the registry confirmed unregistered, one vacant
+    /// answer beside failures is an absence, and failures alone still are not.
+    #[test]
+    fn first_run_reads_one_vacant_answer_beside_a_failure_as_absent() {
+        let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([5u8; 32]).verifying_key());
+        let eps = vec![EndpointId::new("front"), EndpointId::new("public")];
+        let store = InMemoryRecordStore::new(eps.clone());
+        store.fail_endpoint(&eps[1]);
+
+        assert!(matches!(
+            block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun)),
+            FanoutRecord::Absent
+        ));
+
+        store.fail_endpoint(&eps[0]);
+        assert!(
+            matches!(
+                block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun)),
+                FanoutRecord::Unavailable(_)
+            ),
+            "with no vacant answer there is nothing to read as an absence"
+        );
+    }
+
+    /// ADR 0022 D3: the first-run rule changes only the vacancy verdict. A
+    /// record still has to verify at the name, and one that does is `Found`.
+    #[test]
+    fn first_run_still_verifies_every_record_it_is_served() {
+        let signer = Ed25519Signer::from_seed([5u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let eps = vec![
+            EndpointId::new("front"),
+            EndpointId::new("public"),
+            EndpointId::new("down"),
+        ];
+        let store = InMemoryRecordStore::new(eps.clone());
+        store.fail_endpoint(&eps[2]);
+        let forged = IpnsRecord::create_v2(
+            &Ed25519Signer::from_seed([6u8; 32]),
+            b"forged",
+            9,
+            1,
+            "2099-01-01T00:00:00Z",
+        )
+        .marshal();
+        store.seed_record(&eps[1], name.as_str(), forged);
+
+        assert!(
+            matches!(
+                block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun)),
+                FanoutRecord::Absent
+            ),
+            "a record that does not verify at the name is a failure, never a find"
+        );
+
+        let genuine =
+            IpnsRecord::create_v2(&signer, b"genuine", 1, 1, "2099-01-01T00:00:00Z").marshal();
+        store.seed_record(&eps[0], name.as_str(), genuine);
+        let FanoutRecord::Found(verified, _) =
+            block_on(fanout_get_classified(&store, &name, VacancyRule::FirstRun))
+        else {
+            panic!("a record that verifies at the name is found under either rule");
+        };
+        assert_eq!(verified.value, b"genuine");
+    }
+
+    #[test]
+    fn an_unavailable_read_names_every_failed_endpoint_and_its_class() {
+        let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([5u8; 32]).verifying_key());
+        let eps = vec![EndpointId::new("front"), EndpointId::new("public")];
+        let store = InMemoryRecordStore::new(eps.clone());
+        store.fail_endpoint(&eps[0]);
+        store.seed_record(&eps[1], name.as_str(), b"not a record".to_vec());
+
+        let FanoutRecord::Unavailable(failures) =
+            block_on(fanout_get_classified(&store, &name, VacancyRule::Unanimous))
+        else {
+            panic!("no endpoint answered usefully");
+        };
+        assert_eq!(failures.to_string(), "front transport; public malformed");
+    }
+
+    #[test]
+    fn a_vacancy_rule_is_first_run_only_at_the_confirmed_name() {
+        let confirmed =
+            IpnsName::from_public_key(&Ed25519Signer::from_seed([1u8; 32]).verifying_key());
+        let other = IpnsName::from_public_key(&Ed25519Signer::from_seed([2u8; 32]).verifying_key());
+
+        assert_eq!(
+            VacancyRule::at(Some(&confirmed), &confirmed),
+            VacancyRule::FirstRun
+        );
+        assert_eq!(
+            VacancyRule::at(Some(&confirmed), &other),
+            VacancyRule::Unanimous
+        );
+        assert_eq!(VacancyRule::at(None, &confirmed), VacancyRule::Unanimous);
     }
 }

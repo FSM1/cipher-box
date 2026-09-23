@@ -9,7 +9,7 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
 
-use super::fanout::{FanoutRecord, fanout_get_classified};
+use super::fanout::{FanoutRecord, VacancyRule, fanout_get_classified};
 use super::rotation::{PointerPipeline, publish_pointer_over};
 use crate::api::ApiClient;
 use crate::entropy::Entropy;
@@ -83,11 +83,13 @@ where
         &self,
         root_name: &[u8],
     ) -> Result<StandingVouch, RotationPublishError> {
-        let standing = match fanout_get_classified(self.transport, &self.name()).await {
-            FanoutRecord::Found(record, _) => record,
-            FanoutRecord::Absent => return Err(RotationPublishError::Rejected),
-            FanoutRecord::Unavailable => return Err(RotationPublishError::NotPublished),
-        };
+        let standing =
+            match fanout_get_classified(self.transport, &self.name(), VacancyRule::Unanimous).await
+            {
+                FanoutRecord::Found(record, _) => record,
+                FanoutRecord::Absent => return Err(RotationPublishError::Rejected),
+                FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
+            };
         let vouched = open_repoint(
             self.pointer_read_key.as_bytes(),
             self.payload_version,

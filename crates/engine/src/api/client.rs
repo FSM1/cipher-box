@@ -408,6 +408,22 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         .await
     }
 
+    /// Whether this account's registry holds `ipns_name`: 204 is `true`, 404 is
+    /// `false`, and every other answer is an error.
+    pub async fn name_registered(&self, ipns_name: &str) -> Result<bool, ApiError> {
+        let response = self
+            .request_authed(HttpMethod::Get, &format!("/registry/names/{ipns_name}"))
+            .await?;
+        match response.status {
+            204 => Ok(true),
+            404 => Ok(false),
+            status if is_success(status) => Err(ApiError::Decode(format!(
+                "a name registration query answered {status}"
+            ))),
+            _ => Err(error_from_response(&response)),
+        }
+    }
+
     async fn retire_entries(&self, entries: &[RetireEntry]) -> Result<RetireResult, ApiError> {
         let response = self
             .json_authed(HttpMethod::Post, "/registry/retire", entries)
@@ -1562,6 +1578,40 @@ mod tests {
         assert_eq!(body[0]["ipnsName"], "k51abc");
         assert_eq!(body[0]["headCid"], "bafyhead");
         assert_eq!(body[0]["contentCids"], json!(["bafyc1", "bafyc2"]));
+    }
+
+    #[test]
+    fn name_registered_reads_204_as_held_404_as_not_and_the_rest_as_errors() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let empty = |status| HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        http.enqueue_response(empty(204));
+        http.enqueue_response(empty(404));
+        http.enqueue_response(empty(200));
+        http.enqueue_response(empty(429));
+
+        assert_eq!(block_on(client.name_registered("k51abc")), Ok(true));
+        let request = http.requests().pop().unwrap();
+        assert_eq!(request.method, HttpMethod::Get);
+        assert_eq!(request.url, "http://api.test/registry/names/k51abc");
+        assert!(has_bearer(&request));
+
+        assert_eq!(block_on(client.name_registered("k51abc")), Ok(false));
+        assert!(
+            matches!(
+                block_on(client.name_registered("k51abc")),
+                Err(ApiError::Decode(_))
+            ),
+            "a 2xx other than 204 is not the registry's answer"
+        );
+        assert!(matches!(
+            block_on(client.name_registered("k51abc")),
+            Err(ApiError::Status { status: 429, .. })
+        ));
     }
 
     #[test]

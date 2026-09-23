@@ -79,7 +79,7 @@ use crate::grants::{
     ScopeRootPromoter, UNATTESTED_IDENTITY_PK, enforce_committed_ledger, mint_grant_row,
     recipient_self_location, row_is_owner_attested, self_locate_signed,
 };
-use crate::net::fanout::{FanoutRecord, fanout_get_classified, fanout_get_verify};
+use crate::net::fanout::{FanoutRecord, VacancyRule, fanout_get_classified, fanout_get_verify};
 use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::eager_set::bind_child_labels;
@@ -1021,8 +1021,8 @@ where
         // as a vacant one and switch the rollback bar off, which is the whole
         // authority a device holding no floor for this scope has
         // ([`FanoutRecord`]).
-        match fanout_get_classified(self.transport, &name).await {
-            FanoutRecord::Unavailable => return Err(RotationPublishError::NotPublished),
+        match fanout_get_classified(self.transport, &name, VacancyRule::Unanimous).await {
+            FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
             FanoutRecord::Found(standing, _) => {
                 // A standing block this build cannot open is a bar it cannot
                 // read, not a bar it may skip.
@@ -1110,11 +1110,12 @@ where
     // A bar of zero on silence is no bar at all: the publish would beat nothing
     // and overwrite the record it could not read, so an unreadable plane ends
     // the publish instead ([`FanoutRecord`]).
-    let observed = match fanout_get_classified(pipeline.transport, name).await {
-        FanoutRecord::Found(record, _) => record.sequence,
-        FanoutRecord::Absent => 0,
-        FanoutRecord::Unavailable => return Err(PointerPublishFailure::NotLanded),
-    };
+    let observed =
+        match fanout_get_classified(pipeline.transport, name, VacancyRule::Unanimous).await {
+            FanoutRecord::Found(record, _) => record.sequence,
+            FanoutRecord::Absent => 0,
+            FanoutRecord::Unavailable(_) => return Err(PointerPublishFailure::NotLanded),
+        };
     publish_pointer_over(pipeline, name, signer, block, observed).await
 }
 
@@ -4739,7 +4740,7 @@ where
             // for a wave already in flight and orphans every name the first one
             // registered.
             Ok(PointerRecord::Absent) => return Ok(RecoveredWave::nothing()),
-            Ok(PointerRecord::Unavailable) | Err(_) => return Err(ResolveFailure::Unavailable),
+            Ok(PointerRecord::Unavailable(_)) | Err(_) => return Err(ResolveFailure::Unavailable),
         };
         let pointer_read_key = self.scope_keys.pointer_read_key(&self.scope_id);
         let repoint = open_repoint(

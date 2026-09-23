@@ -24,6 +24,7 @@ use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::gate::floor;
+use crate::net::EndpointFailures;
 use crate::seams::{FloorStore, SeamError, SeamResult};
 
 /// A safety bound on the vault-pointer index walk. The chain length is
@@ -66,8 +67,8 @@ pub enum PointerError {
     /// A host durable-store / transport seam failure.
     Seam(SeamError),
     /// A pointer name no endpoint could answer for. Availability, never the
-    /// verdict that the chain ends here.
-    Unavailable,
+    /// verdict that the chain ends here. Carries every endpoint that failed.
+    Unavailable(EndpointFailures),
     /// The highest vault-pointer index this device has adopted no longer
     /// resolves, so the walk reached nothing it may adopt. Every index below it
     /// is abandoned by construction, and a floor never descends, so there is no
@@ -90,8 +91,8 @@ pub enum PointerRecord {
     /// The name carries no record: a gap in the vault-pointer chain, or a scope
     /// that was never re-pointed.
     Absent,
-    /// The name could not be read. Never a chain gap.
-    Unavailable,
+    /// The name could not be read, and which endpoints failed. Never a chain gap.
+    Unavailable(EndpointFailures),
 }
 
 /// Fetches the sealed re-point block published at a pointer name. Abstracts the
@@ -176,7 +177,9 @@ pub async fn resolve_vault_pointer<P: PointerFetch, F: FloorStore>(
     while index < MAX_VAULT_POINTER_PROBE {
         let name = vault_pointer_name(login_secret, index);
         match fetch.fetch(&name).await.map_err(PointerError::Seam)? {
-            PointerRecord::Unavailable => return Err(PointerError::Unavailable),
+            PointerRecord::Unavailable(failures) => {
+                return Err(PointerError::Unavailable(failures));
+            }
             // A gap: the chain ends here; the highest adopted below is the answer.
             PointerRecord::Absent => break,
             PointerRecord::Found(block) => match open_repoint(
@@ -334,7 +337,7 @@ mod tests {
         async fn fetch(&self, name: &IpnsName) -> SeamResult<PointerRecord> {
             self.asked.lock().unwrap().insert(name.as_str().to_owned());
             if self.unreadable.lock().unwrap().contains(name.as_str()) {
-                return Ok(PointerRecord::Unavailable);
+                return Ok(PointerRecord::Unavailable(EndpointFailures::default()));
             }
             Ok(match self.blocks.lock().unwrap().get(name.as_str()) {
                 Some(block) => PointerRecord::Found(block.clone()),
@@ -470,7 +473,7 @@ mod tests {
             1,
         ))
         .expect_err("an unreadable index refuses");
-        assert_eq!(err, PointerError::Unavailable);
+        assert!(matches!(err, PointerError::Unavailable(_)));
     }
 
     /// The durable half of the same defence, for the withholding a unanimous

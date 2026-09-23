@@ -100,7 +100,7 @@ mod tests {
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     use super::*;
-    use crate::net::fanout::{FanoutRecord, fanout_get_classified};
+    use crate::net::fanout::{FanoutRecord, VacancyRule, fanout_get_classified};
     use crate::seams::{SeamError, SeamResult};
     use crate::testkit::block_on;
 
@@ -198,7 +198,11 @@ mod tests {
     fn the_pseudonym_reaches_the_accelerator_and_no_public_endpoint() {
         let transport = armed(RefusesTheGatedLeg::new(Some(ACCELERATOR)));
 
-        block_on(fanout_get_classified(&transport, &name()));
+        block_on(fanout_get_classified(
+            &transport,
+            &name(),
+            VacancyRule::Unanimous,
+        ));
 
         assert_eq!(
             transport.inner.shown_to(ACCELERATOR).as_deref(),
@@ -245,7 +249,11 @@ mod tests {
         bearer.set("token with\na newline");
         let transport = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer);
 
-        block_on(fanout_get_classified(&transport, &name()));
+        block_on(fanout_get_classified(
+            &transport,
+            &name(),
+            VacancyRule::Unanimous,
+        ));
 
         assert_eq!(transport.inner.asked(ACCELERATOR), 1);
         assert_eq!(transport.inner.shown_to(ACCELERATOR), None);
@@ -260,11 +268,19 @@ mod tests {
         let transport = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer.clone());
 
         bearer.clear();
-        block_on(fanout_get_classified(&transport, &name()));
+        block_on(fanout_get_classified(
+            &transport,
+            &name(),
+            VacancyRule::Unanimous,
+        ));
         assert_eq!(transport.inner.shown_to(ACCELERATOR), None);
 
         bearer.set(PSEUDONYM);
-        block_on(fanout_get_classified(&transport, &name()));
+        block_on(fanout_get_classified(
+            &transport,
+            &name(),
+            VacancyRule::Unanimous,
+        ));
         assert_eq!(
             transport.inner.shown_to(ACCELERATOR).as_deref(),
             Some(PSEUDONYM),
@@ -274,7 +290,11 @@ mod tests {
         bearer.seal();
         bearer.set(PSEUDONYM);
         let sealed = armed_with(RefusesTheGatedLeg::new(Some(ACCELERATOR)), bearer);
-        block_on(fanout_get_classified(&sealed, &name()));
+        block_on(fanout_get_classified(
+            &sealed,
+            &name(),
+            VacancyRule::Unanimous,
+        ));
         assert_eq!(sealed.inner.shown_to(ACCELERATOR), None);
     }
 
@@ -282,7 +302,11 @@ mod tests {
     fn no_endpoint_is_armed_when_the_host_configured_no_accelerator() {
         let transport = armed(RefusesTheGatedLeg::new(None));
 
-        block_on(fanout_get_classified(&transport, &name()));
+        block_on(fanout_get_classified(
+            &transport,
+            &name(),
+            VacancyRule::Unanimous,
+        ));
 
         assert_eq!(transport.inner.shown_to(ACCELERATOR), None);
         assert_eq!(transport.inner.shown_to(PUBLIC), None);
@@ -295,8 +319,12 @@ mod tests {
         let transport = armed(RefusesTheGatedLeg::new(Some(ACCELERATOR)));
 
         assert!(matches!(
-            block_on(fanout_get_classified(&transport, &name())),
-            FanoutRecord::Unavailable
+            block_on(fanout_get_classified(
+                &transport,
+                &name(),
+                VacancyRule::Unanimous
+            )),
+            FanoutRecord::Unavailable(_)
         ));
     }
 }

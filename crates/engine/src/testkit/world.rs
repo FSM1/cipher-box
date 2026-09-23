@@ -6,8 +6,8 @@ use cipherbox_core::kdf;
 use crate::seams::{EndpointId, OwnerScopedFloorStore, QueueGenerationStore, SeamSet, SeamTypes};
 use crate::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailbox, InMemoryMailboxHub,
-    InMemoryReceivedShareStore, InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore,
-    ScriptedHttp, VirtualScheduler,
+    InMemoryNameRegistry, InMemoryReceivedShareStore, InMemoryRecordStore, InMemorySnapshotCache,
+    InMemoryStagingStore, ScriptedHttp, VirtualScheduler,
 };
 
 /// The [`SeamTypes`] family binding every fake — the test kit's host.
@@ -56,13 +56,19 @@ impl FakeWorld {
     /// device's mailbox inbox.
     pub fn device(&self, recipient_public_key: &[u8]) -> FakeDevice {
         let mailbox = self.mailbox_hub.mailbox_for(recipient_public_key);
+        let name_registry = InMemoryNameRegistry::default();
+        let mailbox_route = mailbox.http_route();
+        let registry = name_registry.clone();
         FakeDevice {
             floor_store: InMemoryFloorStore::default(),
             staging_store: QueueGenerationStore::new(InMemoryStagingStore::default()),
             snapshot_cache: InMemorySnapshotCache::default(),
             credential_store: InMemoryCredentialStore::default(),
-            http: ScriptedHttp::with_route(mailbox.http_route()),
+            http: ScriptedHttp::with_route(move |request| {
+                registry.serve(request).or_else(|| mailbox_route(request))
+            }),
             mailbox,
+            name_registry,
             received_share_store: InMemoryReceivedShareStore::default(),
             scheduler: self.scheduler.clone(),
             record_store: self.record_store.clone(),
@@ -96,6 +102,9 @@ pub struct FakeDevice {
     pub http: ScriptedHttp,
     /// This device's inbox on the shared hub.
     pub mailbox: InMemoryMailbox,
+    /// What the API answers this device's registration queries with. The
+    /// device's scripted HTTP serves it the way it serves [`Self::mailbox`].
+    pub name_registry: InMemoryNameRegistry,
     /// Device-local durable received-shares bookmark (the grants accept flow's
     /// [`ReceivedShareStore`](crate::grants::ReceivedShareStore)).
     pub received_share_store: InMemoryReceivedShareStore,
