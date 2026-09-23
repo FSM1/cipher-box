@@ -9196,7 +9196,50 @@ where {
             .record(&fragment.owner_contact_code)
             .await
             .map(|_| ())
-            .map_err(EngineError::from_contact_store)
+            .map_err(EngineError::from_contact_store)?;
+
+        // PROTOTYPE: read at once from the link's own grant blob.
+        let name =
+            scope_name(&fragment.scope_root_name).map_err(|_| EngineError::MalformedInput {
+                check: "malformed-invite-fragment",
+            })?;
+        let (_, record_bytes) = crate::net::fanout_get_verify(&self.record_transport, &name)
+            .await
+            .ok_or_else(|| EngineError::Seam {
+                message: "link scope root did not resolve".to_owned(),
+            })?;
+        let candidate = crate::net::assemble_candidate(
+            &self.gateway,
+            &self.seams.http,
+            &name,
+            &record_bytes,
+            None,
+        )
+        .await
+        .map_err(|_| EngineError::Seam {
+            message: "link scope root did not assemble".to_owned(),
+        })?;
+        let store = self.received_share_store(session);
+        let mut received = store.load().await.map_err(|e| EngineError::Seam {
+            message: e.to_string(),
+        })?;
+        crate::grants::link_read::accept_link_share(
+            &self.seams.floor_store,
+            &store,
+            &owner,
+            &invitee,
+            session.contact_label_seed(),
+            &fragment.scope_root_name,
+            &candidate,
+            &published_grant_blobs(&candidate.grant_section),
+            &self.snapshot.borrow().root.0,
+            &mut received,
+        )
+        .await
+        .map_err(|e| EngineError::TrustViolation {
+            message: e.to_string(),
+        })?;
+        Ok(())
     }
 
     /// Convert the invite claims this session's inbox holds for the link minted

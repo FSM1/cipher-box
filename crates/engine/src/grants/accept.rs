@@ -199,6 +199,9 @@ impl fmt::Debug for ReceivedShare {
 #[derive(Default)]
 pub struct ReceivedSharesList {
     entries: Vec<ReceivedShare>,
+    /// PROTOTYPE: the invite secret of a share held through a read link, until
+    /// a personal blob replaces it.
+    links: std::collections::BTreeMap<BookmarkKey, SecretBytes>,
 }
 
 impl ReceivedSharesList {
@@ -215,6 +218,22 @@ impl ReceivedSharesList {
     /// The bookmark under `key`, if one is held.
     pub fn find(&self, key: &BookmarkKey) -> Option<&ReceivedShare> {
         self.position(key).map(|i| &self.entries[i])
+    }
+
+    /// PROTOTYPE: the invite secret a link-held share reads with.
+    pub fn link_secret(&self, key: &BookmarkKey) -> Option<&SecretBytes> {
+        self.links.get(key)
+    }
+
+    /// PROTOTYPE: hold `key` through a read link.
+    pub(crate) fn set_link(&mut self, key: BookmarkKey, secret: SecretBytes) {
+        self.links.insert(key, secret);
+    }
+
+    /// PROTOTYPE: forget the link keys once a personal blob answers. `true`
+    /// when a secret was dropped.
+    pub(crate) fn drop_link(&mut self, key: &BookmarkKey) -> bool {
+        self.links.remove(key).is_some()
     }
 
     /// Reconcile a freshly-verified share into the self-healing bookmark: append
@@ -402,6 +421,9 @@ pub(crate) fn encode_stored_list(
         .map(|share| {
             let mut m = Map::new();
             m.insert("displayName", Value::Text(share.display_name.clone()));
+            if let Some(secret) = shares.links.get(&share.key()) {
+                m.insert("linkSecret", Value::Bytes(secret.as_bytes().to_vec()));
+            }
             m.insert(
                 "permission",
                 Value::Text(share.permission.as_wire().to_string()),
@@ -454,12 +476,14 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
     let raw = req(map, "shares")?.as_array()?;
     within("shares", raw.len(), MAX_RECEIVED_SHARES)?;
     let mut entries: Vec<ReceivedShare> = Vec::with_capacity(raw.len());
+    let mut links = std::collections::BTreeMap::new();
     for item in raw {
         let share = item.as_map()?;
         reject_unknown(
             share,
             &[
                 "displayName",
+                "linkSecret",
                 "permission",
                 "pointerReadKey",
                 "scopeId",
@@ -494,9 +518,12 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
         if entries.iter().any(|e| e.key() == key) {
             return Err(ReceivedSharesCodecError::DuplicateScope);
         }
+        if let Some(secret) = share.get("linkSecret") {
+            links.insert(key, SecretBytes::new(fixed::<32>(secret, "linkSecret")?));
+        }
         entries.push(decoded);
     }
-    Ok(ReceivedSharesList { entries })
+    Ok(ReceivedSharesList { entries, links })
 }
 
 /// Why encoding or decoding a stored received-shares body failed.
@@ -991,10 +1018,12 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         pointer_read_key: SecretBytes::new(*grant.pointer_read_key()),
     });
     let newly_added = matches!(reconciled, Reconciled::Added);
+    // PROTOTYPE: a personal blob opened, so the link keys go.
+    let dropped_link = received.drop_link(&bookmark_key);
 
     // Persist durably BEFORE the floor advance and the ack; a failure rolls the
     // in-memory bookmark back and returns un-acked, so the item redelivers.
-    if reconciled.is_durable_change() {
+    if reconciled.is_durable_change() || dropped_link {
         if let Err(e) = store.persist(received).await {
             received.revert(&bookmark_key, reconciled);
             return Err(AcceptError::Persist(e));

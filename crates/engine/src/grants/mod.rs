@@ -21,6 +21,7 @@ pub mod invite;
 pub mod invite_mint;
 pub mod invite_store;
 pub mod ledger;
+pub mod link_read;
 pub mod owner_entry;
 pub mod received_share_store;
 pub(crate) mod received_status;
