@@ -79,9 +79,7 @@ export function InviteLinkPanel({
     case 'mintable':
       return (
         <div className="dialog-content">
-          <p className="sharing-note" data-testid="share-no-local-link">
-            {'// no link on this browser - claims convert on the browser that made the link'}
-          </p>
+          <NoLocalLink />
           <label className="dialog-label" htmlFor="share-link-lifetime">
             link expires
           </label>
@@ -112,11 +110,26 @@ export function InviteLinkPanel({
 
     case 'refused':
       return (
-        <p className="sharing-note" data-testid="share-no-mint" data-check={state.check}>
-          {`// ${refusalLabel(state.check)}`}
-        </p>
+        <div className="dialog-content">
+          <p className="sharing-note" data-testid="share-no-mint" data-check={state.check}>
+            {`// ${refusalLabel(state.check)}`}
+          </p>
+          <NoLocalLink />
+        </div>
       );
   }
+}
+
+/**
+ * The link records are local to the browser that minted the link, so a scope
+ * another browser shared reads here as one with no live link.
+ */
+function NoLocalLink() {
+  return (
+    <p className="sharing-note" data-testid="share-no-local-link">
+      {'// no link on this browser - claims convert on the browser that made the link'}
+    </p>
+  );
 }
 
 /** Offers the prune the engine's spent count says there is something to drop. */

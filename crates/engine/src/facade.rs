@@ -9287,7 +9287,6 @@ where {
         // only in the delivery pass, one item at a time.
         let mut spent = records.claims.clone();
         let mut deliveries: Vec<Delivery> = Vec::new();
-        let mut acked: Vec<String> = Vec::new();
         for item in &items {
             let converted = convert_invite_claim(
                 &authority,
@@ -9321,11 +9320,8 @@ where {
                     | InviteError::UnusableClaimantKey
                     | InviteError::GrantWasCut,
                 ) => {
-                    match api.ack(&item.item_id).await {
-                        Ok(()) => acked.push(item.item_id.clone()),
-                        Err(e) => {
-                            failure.get_or_insert(EngineError::from_seam(e));
-                        }
+                    if let Err(e) = self.ack_claim(api.as_ref(), &item.item_id).await {
+                        failure.get_or_insert(EngineError::from_seam(e));
                     }
                     continue;
                 }
@@ -9470,14 +9466,10 @@ where {
                 }
             }
 
-            match api.ack(&delivery.item_id).await {
-                Ok(()) => acked.push(delivery.item_id),
-                Err(e) => {
-                    failure.get_or_insert(EngineError::from_seam(e));
-                }
+            if let Err(e) = self.ack_claim(api.as_ref(), &delivery.item_id).await {
+                failure.get_or_insert(EngineError::from_seam(e));
             }
         }
-        self.retire_pending_claims(&acked);
         match failure {
             Some(e) => Err(e),
             None => Ok(()),
@@ -9572,17 +9564,20 @@ where {
         counts
     }
 
-    /// Drop the claims a conversion acked from the count, so a host re-read
-    /// after the command does not wait a tick to see them go.
-    fn retire_pending_claims(&self, acked: &[String]) {
-        let mut claims = self.pending_invite_claims.borrow_mut();
-        let before = claims.len();
-        for item_id in acked {
-            claims.remove(item_id);
-        }
-        if claims.len() != before {
+    /// Ack one claim item and drop it from the count at once, so a host re-read
+    /// after the command does not wait a tick to see it go, whatever the rest
+    /// of the pass does.
+    async fn ack_claim<M: Mailbox + ?Sized>(&self, mailbox: &M, item_id: &str) -> SeamResult<()> {
+        mailbox.ack(item_id).await?;
+        let retired = self
+            .pending_invite_claims
+            .borrow_mut()
+            .remove(item_id)
+            .is_some();
+        if retired {
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         }
+        Ok(())
     }
 
     /// The provider config this session holds, which is the one its placement

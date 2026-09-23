@@ -5057,6 +5057,50 @@ fn a_conversion_pass_that_cannot_publish_acks_no_claim() {
     }
 }
 
+/// A terminal claim is acked before the publish, so a publish that fails does
+/// not bring it back: the count drops it at the ack, and keeps only the claim
+/// the failed pass left on the inbox.
+#[test]
+fn a_claim_acked_before_a_failed_publish_leaves_the_count() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    fx.post_claims(&fragment, 1);
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    // The owner's own code: a conversion refuses it for good and acks it.
+    let terminal = InviteClaim {
+        claim_id: [0x44; CLAIM_ID_LEN],
+        scope_root_name: opened.scope_root_name.clone(),
+        contact_code: contact_code(&SECRET),
+    };
+    fx.post_claim(&owner, &invitee, 9, &terminal, "terminal");
+    let waiting = |fx: &GrantScenario| {
+        block_on(fx.engine.snapshot(ROOT))
+            .expect("the root lists")
+            .children
+            .into_iter()
+            .find(|child| child.id == fx.folder)
+            .expect("the shared folder is listed")
+            .pending_invite_claims
+    };
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(waiting(&fx), 2);
+
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the publish fails");
+    fx.world.record_store.heal_put_for(name.as_str());
+
+    assert_eq!(
+        inbox(&fx.owner_device).len(),
+        1,
+        "only the terminal claim was acked"
+    );
+    assert_eq!(waiting(&fx), 1, "and the count dropped it at the ack");
+}
+
 /// Ack-after-durable per item, after the one publish: a spent-record write that
 /// fails leaves its claim un-acked, so the next press converts it again. That
 /// re-conversion changes a set the record plane already carries, so it

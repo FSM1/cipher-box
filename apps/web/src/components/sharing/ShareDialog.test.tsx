@@ -530,6 +530,15 @@ describe('a link the engine already holds', () => {
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
   });
 
+  it('tells a browser another one shared from where claims convert', async () => {
+    // Another browser's mint made this folder a scope root, so the mint is
+    // refused here and this browser holds no record of the link.
+    await share(sharingEngine({}, held([], [], { standing: 'alreadyAScope' })));
+
+    expect(screen.getByTestId('share-no-mint')).toBeTruthy();
+    expect(screen.getByTestId('share-no-local-link')).toBeTruthy();
+  });
+
   it('ends the link on a revoke and leaves the grants it converted standing', async () => {
     const engine = await share(
       sharingEngine(
