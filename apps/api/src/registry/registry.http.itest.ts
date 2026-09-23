@@ -502,7 +502,6 @@ describe('registry HTTP surface (real Postgres)', () => {
         .get('/registry/names/k51burst')
         .set('Authorization', `Bearer ${other.token}`)
         .expect(404);
-      await register(acct.token, 'k51afterburst');
     });
   });
 

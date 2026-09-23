@@ -8,6 +8,7 @@ import {
   MaxLength,
   ValidateIf,
 } from 'class-validator';
+import { IPNS_NAME_RE } from '../../common/patterns';
 
 /**
  * A CID or an IPNS name: url-safe base32/base36/base58 token. Kept
@@ -28,8 +29,7 @@ export class RegisterEntryDto {
     example: 'k51qzi5uqu5dkuzo866rgfkt5nuqo53l6l3l6zk3l6zk3l6zk3l6zk3l6zk3',
   })
   @IsString()
-  @MaxLength(128)
-  @Matches(CID_OR_NAME, { message: 'ipnsName must be a bare CID/name token' })
+  @Matches(IPNS_NAME_RE, { message: 'ipnsName must be a bare CID/name token' })
   ipnsName!: string;
 
   @ApiProperty({
@@ -80,8 +80,7 @@ export class RetireEntryDto {
   // Omitted, never null: an account-wide retire leaves the field out.
   @ValidateIf((entry: RetireEntryDto) => entry.ipnsName !== undefined)
   @IsString()
-  @MaxLength(128)
-  @Matches(CID_OR_NAME, { message: 'ipnsName must be a bare CID/name token' })
+  @Matches(IPNS_NAME_RE, { message: 'ipnsName must be a bare CID/name token' })
   ipnsName?: string;
 
   @ApiProperty({

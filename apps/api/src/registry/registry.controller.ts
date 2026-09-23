@@ -23,7 +23,6 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { IPNS_NAME_RE } from '../common/patterns';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import {
   MAX_BATCH,
@@ -115,7 +114,7 @@ export class RegistryController {
   @Throttle(THROTTLE_SURFACES.registryLookup)
   @ApiOperation({
     summary:
-      'Answer whether the caller account holds a registration for ipnsName; another account row never counts',
+      'Answer whether the caller account holds a registration for ipnsName; a malformed name answers 404',
   })
   @ApiParam({ name: 'ipnsName', description: 'The IPNS name (libp2p-key CID)' })
   @ApiNoContentResponse({ description: 'The caller account holds a registration for this name' })
@@ -129,10 +128,7 @@ export class RegistryController {
     @Param('ipnsName') ipnsName: string,
     @Req() request: AuthenticatedRequest
   ): Promise<void> {
-    if (
-      !IPNS_NAME_RE.test(ipnsName) ||
-      !(await this.registryService.holdsName(request.user.userId, ipnsName))
-    ) {
+    if (!(await this.registryService.holdsName(request.user.userId, ipnsName))) {
       throw new NotFoundException('No registration for this name');
     }
   }

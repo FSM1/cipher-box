@@ -43,10 +43,6 @@ class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
     return this.rows.filter((row) => inMatch(row as Record<string, unknown>, where));
   }
 
-  async existsBy(where: Record<string, unknown>): Promise<boolean> {
-    return this.rows.some((row) => inMatch(row as Record<string, unknown>, where));
-  }
-
   override async delete(criteria: Record<string, unknown>): Promise<{ affected: number }> {
     const before = this.rows.length;
     this.rows = this.rows.filter((row) => !inMatch(row as Record<string, unknown>, criteria));
@@ -158,11 +154,12 @@ interface SumQueryBuilder {
  */
 function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
   const byEntity = new Map(repos);
+  const getRepository = (entity: unknown) => byEntity.get(entity);
   return {
-    getRepository: (entity: unknown) => byEntity.get(entity),
+    getRepository,
     transaction: (runInTransaction: (manager: unknown) => unknown) =>
       runInTransaction({
-        getRepository: (entity: unknown) => byEntity.get(entity),
+        getRepository,
         query: async () => [],
       }),
     createQueryRunner: () => ({
@@ -504,12 +501,22 @@ describe('RegistryService', () => {
       expect(await service.holdsName(acct, 'k51never')).toBe(false);
     });
 
-    it('answers false for a name only another account registered', async () => {
+    it('answers false for a name only another account registered, true for that account', async () => {
       const owner = await account();
       const caller = await account();
       await service.register(owner, [{ ipnsName: 'k51foreign', contentCids: [] }]);
       expect(await service.holdsName(caller, 'k51foreign')).toBe(false);
       expect(await service.holdsName(owner, 'k51foreign')).toBe(true);
+    });
+
+    it('answers false for a malformed name without a query', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51shape', contentCids: [] }]);
+      names.existsBy = () => {
+        throw new Error('a malformed name reached the query');
+      };
+      expect(await service.holdsName(acct, 'k51\u0000shape')).toBe(false);
+      expect(await service.holdsName(acct, 'k'.repeat(129))).toBe(false);
     });
 
     it('answers false once the caller retires the name', async () => {

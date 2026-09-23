@@ -851,7 +851,7 @@
             "bearer": []
           }
         ],
-        "summary": "Answer whether the caller account holds a registration for ipnsName; another account row never counts",
+        "summary": "Answer whether the caller account holds a registration for ipnsName; a malformed name answers 404",
         "tags": [
           "Registry"
         ]
