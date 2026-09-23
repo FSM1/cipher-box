@@ -925,6 +925,7 @@ mod tests {
                     expires_at: Some(UnixMillis(u64::MAX)),
                     expired: true,
                     spent: 3,
+                    pending_claims: 2,
                 }),
             ),
             "state",
@@ -942,6 +943,7 @@ mod tests {
         assert_eq!(field(&links, "live"), JsValue::from_bool(true));
         assert_eq!(field(&links, "expired"), JsValue::from_bool(true));
         assert_eq!(field(&links, "spent"), JsValue::from_f64(3.0));
+        assert_eq!(field(&links, "pendingClaims"), JsValue::from_f64(2.0));
         let expires_at = field(&links, "expiresAt");
         assert_eq!(expires_at.js_typeof(), JsValue::from_str("bigint"));
         assert_eq!(

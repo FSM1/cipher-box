@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import type { ReceivedShareDescriptor, ReceivedShareResolution } from '@cipherbox/client';
@@ -182,5 +182,115 @@ describe('the shared route', () => {
     });
 
     expect(standings()).toEqual([{ resolution: 'revocation-signal', tone: 'warning' }]);
+  });
+
+  it('lists a share the sync tick accepted without a press', async () => {
+    let received: ReceivedShareDescriptor[] = [];
+    const engine = await renderShared(() => Promise.resolve(received));
+    expect(screen.getByTestId('shared-empty')).toBeTruthy();
+
+    received = [share(1, 'granted', 'photos')];
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'photos',
+    ]);
+  });
+
+  it('reads once more after a burst of updates, not once per update', async () => {
+    const reads: Array<(shares: ReceivedShareDescriptor[]) => void> = [];
+    const engine = await renderShared(
+      () => new Promise<ReceivedShareDescriptor[]>((resolve) => reads.push(resolve))
+    );
+    await act(async () => {
+      reads[0]?.([]);
+    });
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+      engine.emit({ kind: 'snapshotUpdated' });
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    expect(reads).toHaveLength(2);
+
+    await act(async () => {
+      reads[1]?.([]);
+    });
+    expect(reads).toHaveLength(3);
+    await act(async () => {
+      reads[2]?.([share(1, 'granted', 'photos')]);
+    });
+    expect(reads).toHaveLength(3);
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'photos',
+    ]);
+  });
+
+  it('reads once more when an update lands during a read', async () => {
+    const reads: Array<(shares: ReceivedShareDescriptor[]) => void> = [];
+    const engine = await renderShared(
+      () => new Promise<ReceivedShareDescriptor[]>((resolve) => reads.push(resolve))
+    );
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    expect(reads).toHaveLength(1);
+
+    await act(async () => {
+      reads[0]?.([]);
+    });
+    expect(reads).toHaveLength(2);
+    await act(async () => {
+      reads[1]?.([share(1, 'granted', 'newest')]);
+    });
+
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'newest',
+    ]);
+  });
+
+  it('does not leave an older refusal over the list a later read returned', async () => {
+    const reads: Array<{
+      resolve: (shares: ReceivedShareDescriptor[]) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const engine = await renderShared(
+      () =>
+        new Promise<ReceivedShareDescriptor[]>((resolve, reject) => reads.push({ resolve, reject }))
+    );
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+
+    await act(async () => {
+      reads[0]?.reject(new Error('the accepted list did not open'));
+    });
+    await act(async () => {
+      reads[1]?.resolve([share(1, 'granted', 'photos')]);
+    });
+
+    expect(screen.queryByTestId('shared-error')).toBeNull();
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'photos',
+    ]);
+  });
+
+  it('starts no read after the page is gone', async () => {
+    const reads: Array<(shares: ReceivedShareDescriptor[]) => void> = [];
+    const engine = await renderShared(
+      () => new Promise<ReceivedShareDescriptor[]>((resolve) => reads.push(resolve))
+    );
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+
+    cleanup();
+    await act(async () => {
+      reads[0]?.([]);
+    });
+
+    expect(reads).toHaveLength(1);
   });
 });

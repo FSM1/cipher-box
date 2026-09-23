@@ -113,7 +113,7 @@ describe('EngineProvider', () => {
         grants: [],
         grantRefusal: null,
         inviteLinkRefusal: null,
-        inviteLinks: { live: false, expired: false, expiresAt: null, spent: 0 },
+        inviteLinks: { live: false, expired: false, expiresAt: null, spent: 0, pendingClaims: 0 },
       },
     });
 

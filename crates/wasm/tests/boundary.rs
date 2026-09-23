@@ -324,6 +324,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 dead_letter: false,
                 content_version: Some(2),
                 content_cid: Some(vec![0xC1, 0xD0]),
+                pending_invite_claims: 0,
             },
             facade::SnapshotChild {
                 id: facade::NodeId([4u8; 16]),
@@ -335,6 +336,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 dead_letter: true,
                 content_version: None,
                 content_cid: None,
+                pending_invite_claims: 2,
             },
         ],
         ancestors: vec![facade::Breadcrumb {
@@ -510,6 +512,11 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         "an unprojected version count must cross as undefined"
     );
     assert_eq!(get(&folder_child, "deadLetter"), JsValue::TRUE);
+    assert_eq!(get(&file, "pendingInviteClaims").as_f64(), Some(0.0));
+    assert_eq!(
+        get(&folder_child, "pendingInviteClaims").as_f64(),
+        Some(2.0)
+    );
 
     let ancestors = get(&view, "ancestors").unchecked_into::<Array>();
     assert_eq!(ancestors.length(), 1);

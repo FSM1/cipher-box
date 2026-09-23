@@ -26,6 +26,7 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   expired: false,
   expiresAt: null,
   spent: 0,
+  pendingClaims: 0,
 };
 
 function grantsFor(scopeKey: string): readonly GrantRow[] | null {
@@ -292,7 +293,7 @@ describe('invite link commands', () => {
   });
 
   it('drops the spent records the engine pruned', async () => {
-    const engine = sharingEngine({}, { live: false, expired: false, expiresAt: null, spent: 2 });
+    const engine = sharingEngine({}, { ...NO_LINKS, spent: 2 });
     const { result } = mount(engine.client);
 
     await expect(result.current.pruneInviteLinks()).resolves.toBe(true);

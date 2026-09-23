@@ -6,6 +6,7 @@ import {
   type LinkLifetime,
 } from '../../sharing/inviteLink';
 import { refusalLabel } from '../../sharing/shareRefusals';
+import { plural } from '../../vault/selection';
 import type { ScopeSharing } from '../../stores/sharing.store';
 
 interface InviteLinkPanelProps {
@@ -41,12 +42,18 @@ export function InviteLinkPanel({
         </p>
       );
 
-    case 'live':
+    case 'live': {
+      const pending = plural(state.links.pendingClaims, 'claim');
       return (
         <div className="dialog-content" data-testid="share-live-link">
           <p className="sharing-note" data-testid="share-live-link-expiry">
             {`// a link stands here — ${expiryLabel(state.links)}`}
           </p>
+          {pending !== null && (
+            <p className="sharing-note" data-testid="share-pending-claims">
+              {`// ${pending} to convert`}
+            </p>
+          )}
           <button
             type="button"
             className="dialog-button"
@@ -67,10 +74,12 @@ export function InviteLinkPanel({
           </button>
         </div>
       );
+    }
 
     case 'mintable':
       return (
         <div className="dialog-content">
+          <NoLocalLink />
           <label className="dialog-label" htmlFor="share-link-lifetime">
             link expires
           </label>
@@ -101,11 +110,26 @@ export function InviteLinkPanel({
 
     case 'refused':
       return (
-        <p className="sharing-note" data-testid="share-no-mint" data-check={state.check}>
-          {`// ${refusalLabel(state.check)}`}
-        </p>
+        <div className="dialog-content">
+          <p className="sharing-note" data-testid="share-no-mint" data-check={state.check}>
+            {`// ${refusalLabel(state.check)}`}
+          </p>
+          <NoLocalLink />
+        </div>
       );
   }
+}
+
+/**
+ * The link records are local to the browser that minted the link, so a scope
+ * another browser shared reads here as one with no live link.
+ */
+function NoLocalLink() {
+  return (
+    <p className="sharing-note" data-testid="share-no-local-link">
+      {'// no link on this browser - claims convert on the browser that made the link'}
+    </p>
+  );
 }
 
 /** Offers the prune the engine's spent count says there is something to drop. */

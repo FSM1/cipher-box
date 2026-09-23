@@ -221,4 +221,32 @@ describe('the vault browser', () => {
     await waitFor(() => expect(screen.queryByTestId('file-browser-notice')).toBeNull());
     expect(screen.getAllByTestId('file-list-item')).toHaveLength(2);
   });
+
+  it('marks a row whose invite claims wait, until the engine counts none', async () => {
+    const engine = fakeEngine();
+    draw(engine.client);
+    const waiting = (claims: number) => {
+      const listed = view(ROOT_ID, 'fresh', 2);
+      listed.children[0] = { ...listed.children[0], kind: 'folder', pendingInviteClaims: claims };
+      return listed;
+    };
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[0].resolve(waiting(2));
+    });
+    const badge = await screen.findByTestId('file-list-item-claims');
+    expect(badge.textContent).toBe('[2 claims]');
+    expect(screen.getAllByTestId('file-list-item-claims')).toHaveLength(1);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+    await act(async () => {
+      engine.pulls[1].resolve(waiting(0));
+    });
+    await waitFor(() => expect(screen.queryByTestId('file-list-item-claims')).toBeNull());
+  });
 });

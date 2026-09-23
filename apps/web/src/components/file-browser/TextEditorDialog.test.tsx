@@ -24,6 +24,7 @@ function row(overrides: Partial<ListingRow> = {}): ListingRow {
     modified: '14 Nov 2023',
     pending: 'none',
     deadLetter: false,
+    pendingInviteClaims: 0,
     ...overrides,
   };
 }

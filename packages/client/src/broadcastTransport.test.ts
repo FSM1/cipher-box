@@ -623,6 +623,7 @@ describe('broadcast transport ↔ leader relay', () => {
           deadLetter: false,
           contentVersion: 9_007_199_254_740_993n,
           contentCid: new Uint8Array([0xc1, 0xd0]),
+          pendingInviteClaims: 2,
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],

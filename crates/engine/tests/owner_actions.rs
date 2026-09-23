@@ -4156,6 +4156,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
             expires_at: Some(deadline),
             expired: false,
             spent: 0,
+            pending_claims: 0,
         })
     );
 
@@ -4210,6 +4211,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
             expires_at: Some(deadline),
             expired: false,
             spent: 0,
+            pending_claims: 0,
         })
     );
 
@@ -4226,6 +4228,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
             expires_at: Some(deadline),
             expired: true,
             spent: 0,
+            pending_claims: 0,
         })
     );
 }
@@ -4254,6 +4257,7 @@ fn the_sharing_read_counts_the_records_a_prune_would_drop() {
             expires_at: None,
             expired: false,
             spent: 1,
+            pending_claims: 0,
         })
     );
 
@@ -4684,6 +4688,44 @@ fn a_claim_from_the_fragment_alone_becomes_a_personal_grant_on_the_scope() {
     );
 }
 
+/// A claim waits for the owner's press, so the owner must see it without the
+/// share dialog open: the tick's mailbox pull counts it on the folder's row and
+/// in the link standing, and the conversion that acks it clears both.
+#[test]
+fn a_waiting_claim_shows_on_the_folder_row_until_the_owner_converts_it() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    fx.post_claims(&fragment, 2);
+    let waiting = |fx: &GrantScenario| {
+        let row = block_on(fx.engine.snapshot(ROOT))
+            .expect("the root lists")
+            .children
+            .into_iter()
+            .find(|child| child.id == fx.folder)
+            .expect("the shared folder is listed")
+            .pending_invite_claims;
+        let links = block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .state
+            .and_then(|state| state.invite_links)
+            .expect("the link standing reads")
+            .pending_claims;
+        (row, links)
+    };
+    assert_eq!(waiting(&fx), (0, 0), "nothing counts before a pass polls");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(waiting(&fx), (2, 2));
+    assert_eq!(inbox(&fx.owner_device).len(), 2, "counting acks nothing");
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        waiting(&fx),
+        (0, 0),
+        "the conversion clears what it acked without waiting a pass"
+    );
+}
+
 /// The write link end to end. Its scope's cut moves the root the fragment and
 /// the recorded tag both bind, so the fragment seals at the moved name and the
 /// record is located by the tag the moved set carries.
@@ -5013,6 +5055,50 @@ fn a_conversion_pass_that_cannot_publish_acks_no_claim() {
             "the next press converts every claim the failed one left"
         );
     }
+}
+
+/// A terminal claim is acked before the publish, so a publish that fails does
+/// not bring it back: the count drops it at the ack, and keeps only the claim
+/// the failed pass left on the inbox.
+#[test]
+fn a_claim_acked_before_a_failed_publish_leaves_the_count() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    fx.post_claims(&fragment, 1);
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    // The owner's own code: a conversion refuses it for good and acks it.
+    let terminal = InviteClaim {
+        claim_id: [0x44; CLAIM_ID_LEN],
+        scope_root_name: opened.scope_root_name.clone(),
+        contact_code: contact_code(&SECRET),
+    };
+    fx.post_claim(&owner, &invitee, 9, &terminal, "terminal");
+    let waiting = |fx: &GrantScenario| {
+        block_on(fx.engine.snapshot(ROOT))
+            .expect("the root lists")
+            .children
+            .into_iter()
+            .find(|child| child.id == fx.folder)
+            .expect("the shared folder is listed")
+            .pending_invite_claims
+    };
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(waiting(&fx), 2);
+
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the publish fails");
+    fx.world.record_store.heal_put_for(name.as_str());
+
+    assert_eq!(
+        inbox(&fx.owner_device).len(),
+        1,
+        "only the terminal claim was acked"
+    );
+    assert_eq!(waiting(&fx), 1, "and the count dropped it at the ack");
 }
 
 /// Ack-after-durable per item, after the one publish: a spent-record write that

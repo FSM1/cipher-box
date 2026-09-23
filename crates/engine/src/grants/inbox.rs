@@ -19,10 +19,15 @@
 //! - **No sender holds the pass.** Each sender may spend at most
 //!   [`MAX_ACCEPTS_PER_SENDER`] of the pass's slots, so one contact's
 //!   never-retired pointers cannot starve every other contact's share.
+//!
+//! The same poll also counts the invite claims the owner's own recorded links
+//! would take. Only a conversion acks a claim, so the count is a read, not a
+//! retirement.
 
 use core::cell::RefCell;
 use std::collections::BTreeMap;
 
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -30,15 +35,17 @@ use futures_channel::mpsc;
 
 use crate::content::Gateway;
 use crate::entropy::Entropy;
-use crate::facade::{Event, emit_trust_violation, published_grant_blobs};
+use crate::facade::{Event, NodeId, emit_trust_violation, published_grant_blobs};
 use crate::mailbox::{VerifiedMailboxItem, poll_verified};
 use crate::net::rotation::scope_name;
 use crate::net::{assemble_candidate, fanout_get_verify};
-use crate::seams::{FloorStore, Http, Mailbox, RecordTransport, StagingStore};
+use crate::seams::{FloorStore, Http, Mailbox, RecordTransport, StagingStore, UnixMillis};
 
 use super::accept::{AcceptError, ReceivedShareStore, SharePointer, accept_share};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
+use super::invite::{InviteClaim, pending_claim_scope};
+use super::invite_store::{InviteStore, StagingInviteStore};
 use super::received_share_store::StagingReceivedShareStore;
 
 /// How many pointers one pass accepts. Each costs a fan-out GET, a head fetch
@@ -50,6 +57,10 @@ const MAX_ACCEPTS_PER_PASS: usize = 8;
 /// persist acks an item, so a sender whose pointers no pass can retire would
 /// otherwise hold every slot for good.
 const MAX_ACCEPTS_PER_SENDER: usize = 2;
+
+/// The invite claims an owner's inbox holds that a link this device recorded
+/// would take, keyed by the mailbox item that carries each.
+pub(crate) type PendingInviteClaims = BTreeMap<String, NodeId>;
 
 /// The seams one mailbox pull reads, plus this device's own encryption subkey —
 /// the seal's recipient half and the self-locating tag's other half. Borrowed:
@@ -77,24 +88,91 @@ pub(crate) struct ShareInbox<'a, M, T, H, F> {
 
 impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T, H, F> {
     /// Accept every share pointer on the inbox that a contact this vault
-    /// imported sent. The render tree moves on the received-share leg that
+    /// imported sent, and count the invite claims that wait for the owner to
+    /// convert them. The render tree moves on the received-share leg that
     /// follows, so this emits no repaint of its own.
     ///
     /// `v` is the envelope version the pointer was sealed under; a payload from
-    /// any other does not open and never reaches this arm.
+    /// any other does not open and never reaches this arm. `scope_root_name`
+    /// answers a scope root's current name. `None` where the inbox or the
+    /// owner's link records did not answer, so the caller keeps the count it
+    /// holds.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn pull<St, E>(
         &self,
         staging: &St,
         entropy: &RefCell<E>,
         v: u64,
+        now: UnixMillis,
+        scope_root_name: &dyn Fn(&[u8; 16]) -> Option<IpnsName>,
+        events: &mpsc::UnboundedSender<Event>,
+    ) -> Option<PendingInviteClaims>
+    where
+        St: StagingStore,
+        E: Entropy,
+    {
+        let items = poll_verified(self.mailbox, self.enc_secret, v).await.ok()?;
+        self.accept_pointers(&items, staging, entropy, events).await;
+        self.pending_claims(&items, staging, entropy, now, scope_root_name)
+            .await
+    }
+
+    /// The claims on `items` that one of this device's recorded links would
+    /// take.
+    async fn pending_claims<St, E>(
+        &self,
+        items: &[VerifiedMailboxItem],
+        staging: &St,
+        entropy: &RefCell<E>,
+        now: UnixMillis,
+        scope_root_name: &dyn Fn(&[u8; 16]) -> Option<IpnsName>,
+    ) -> Option<PendingInviteClaims>
+    where
+        St: StagingStore,
+        E: Entropy,
+    {
+        // Decoded ahead of the seal-open the records cost: most passes carry no
+        // claim.
+        let claims: Vec<(&VerifiedMailboxItem, InviteClaim)> = items
+            .iter()
+            .filter_map(|item| Some((item, InviteClaim::decode(&item.payload).ok()?)))
+            .collect();
+        if claims.is_empty() {
+            return Some(PendingInviteClaims::new());
+        }
+        let records = StagingInviteStore::new(staging, self.enc_secret, entropy)
+            .load()
+            .await
+            .ok()?;
+        Some(
+            claims
+                .iter()
+                .filter_map(|(item, claim)| {
+                    let sender = item.sender_identity.to_sec1();
+                    let scope = pending_claim_scope(
+                        &records.links,
+                        &records.claims,
+                        scope_root_name,
+                        &sender,
+                        claim,
+                        now,
+                    )?;
+                    Some((item.item_id.clone(), NodeId(scope)))
+                })
+                .collect(),
+        )
+    }
+
+    async fn accept_pointers<St, E>(
+        &self,
+        items: &[VerifiedMailboxItem],
+        staging: &St,
+        entropy: &RefCell<E>,
         events: &mpsc::UnboundedSender<Event>,
     ) where
         St: StagingStore,
         E: Entropy,
     {
-        let Ok(items) = poll_verified(self.mailbox, self.enc_secret, v).await else {
-            return;
-        };
         // Decoded once, ahead of both durable loads, which cost a seal-open
         // each: an inbox carrying nothing for this arm spends neither.
         let decoded: Vec<(&VerifiedMailboxItem, SharePointer)> = items
@@ -229,10 +307,14 @@ mod tests {
         SeededEntropy, block_on, owner_root_fixture, owner_root_pseudonym,
     };
 
+    use super::super::invite::{CLAIM_ID_LEN, ConvertedClaimRecord, RecordedInvite};
+    use super::super::invite_store::InviteRecords;
     use super::super::ledger::mint_grant_row;
 
     /// The envelope version the fixture authors and the pointer seals under.
     const V: u64 = 1;
+    /// The instant every pass runs at.
+    const NOW: UnixMillis = UnixMillis(1_000);
     const SCOPE: [u8; 16] = [0x5c; 16];
     /// This vault's own root scope — the anchor no received share may name.
     const VAULT_ROOT_SCOPE: [u8; 16] = [0u8; 16];
@@ -296,6 +378,17 @@ mod tests {
             owner_write_blob_epoch: None,
             write_history_link: Vec::new(),
         })
+    }
+
+    /// The owner's record of a link at [`SCOPE`] whose claims `link` signs.
+    fn link_record(link: &EcdsaSigner, expires_at: Option<UnixMillis>) -> RecordedInvite {
+        RecordedInvite {
+            scope_id: SCOPE,
+            tag: [0x63; 32],
+            ephemeral_identity_pk: link.verifying_key().to_sec1(),
+            ephemeral_enc_pk: X25519Secret::from_scalar([0x62; 32]).public().to_bytes(),
+            expires_at,
+        }
     }
 
     /// The recipient's whole world: the record plane serving the sharer's scope
@@ -414,8 +507,13 @@ mod tests {
                     body: self.fixture.head_block.clone(),
                 });
             }
+            self.pass().0
+        }
+
+        /// One pull pass: the events it emitted and the claims it counted.
+        fn pass(&self) -> (Vec<Event>, Option<PendingInviteClaims>) {
             let (sender, mut events) = mpsc::unbounded();
-            block_on(
+            let claims = block_on(
                 ShareInbox {
                     mailbox: &self.mailbox,
                     transport: &self.records,
@@ -426,14 +524,21 @@ mod tests {
                     contact_label_seed: &kdf::contact_label_seed(&[0x4c; 32]),
                     vault_root_scope: self.vault_root_scope,
                 }
-                .pull(&self.staging, &self.entropy, V, &sender),
+                .pull(
+                    &self.staging,
+                    &self.entropy,
+                    V,
+                    NOW,
+                    &|_| Some(scope_root_name()),
+                    &sender,
+                ),
             );
             drop(sender);
             let mut drained = Vec::new();
             while let Ok(event) = events.try_recv() {
                 drained.push(event);
             }
-            drained
+            (drained, claims)
         }
 
         /// The scope roots this vault has durably bookmarked.
@@ -452,6 +557,41 @@ mod tests {
                 .iter()
                 .map(|share| share.permission)
                 .collect()
+        }
+
+        /// Record an invite link at [`SCOPE`] whose claims `link` signs, as a
+        /// mint on this device leaves it.
+        fn record_link(&self, link: &EcdsaSigner, expires_at: Option<UnixMillis>) {
+            self.record(InviteRecords {
+                links: vec![link_record(link, expires_at)],
+                claims: Vec::new(),
+            });
+        }
+
+        fn record(&self, records: InviteRecords) {
+            block_on(
+                StagingInviteStore::new(&self.staging, &my_enc(), &self.entropy).persist(&records),
+            )
+            .expect("the records persist");
+        }
+
+        /// Post a claim with `claim_id`, signed by `link`.
+        fn claim(&self, link: &EcdsaSigner, claim_id: [u8; CLAIM_ID_LEN], idempotency_key: &str) {
+            let claim = InviteClaim {
+                claim_id,
+                scope_root_name: scope_root_name().as_str().as_bytes().to_vec(),
+                contact_code: ContactCode::create(&stranger(), stranger_enc().public()).encode(),
+            };
+            self.post(link, &claim.encode(), idempotency_key);
+        }
+
+        /// The claims one pass counts, per scope.
+        fn pending(&self) -> Option<BTreeMap<NodeId, usize>> {
+            let mut counts = BTreeMap::new();
+            for scope in self.pass().1?.values() {
+                *counts.entry(*scope).or_default() += 1;
+            }
+            Some(counts)
         }
 
         fn inbox_len(&self) -> usize {
@@ -652,6 +792,75 @@ mod tests {
 
         assert!(accuses(&events), "the replay is a trust verdict");
         assert_eq!(fx.inbox_len(), 1, "and the item is never acked");
+    }
+
+    /// A link holder's claim sits on the owner's inbox until a conversion. The
+    /// pass counts it at the scope its recorded link names, and leaves it there.
+    #[test]
+    fn a_claim_on_a_recorded_link_counts_at_its_scope_and_stays_on_the_inbox() {
+        let fx = Inbox::new();
+        let link = stranger();
+        fx.record_link(&link, None);
+        fx.claim(&link, [0x71; CLAIM_ID_LEN], "claim-1");
+        fx.claim(&link, [0x72; CLAIM_ID_LEN], "claim-2");
+
+        assert_eq!(fx.pending(), Some(BTreeMap::from([(NodeId(SCOPE), 2)])));
+        assert_eq!(fx.inbox_len(), 2, "counting acks nothing");
+    }
+
+    /// The count is the claims a conversion would still take on this device's
+    /// own records: a claim no recorded link signed, a link past its deadline,
+    /// a claim already converted, and the zero id all stay out of it.
+    #[test]
+    fn a_claim_no_recorded_link_would_take_is_not_counted() {
+        let fx = Inbox::new();
+        let link = stranger();
+        fx.record(InviteRecords {
+            links: vec![link_record(&link, None)],
+            claims: vec![ConvertedClaimRecord {
+                claim_id: [0x71; CLAIM_ID_LEN],
+                link_tag: [0x63; 32],
+                tag: [0x64; 32],
+            }],
+        });
+        fx.claim(&link, [0x71; CLAIM_ID_LEN], "converted");
+        fx.claim(&link, [0u8; CLAIM_ID_LEN], "zero-id");
+        fx.claim(&sharer(), [0x73; CLAIM_ID_LEN], "unrecorded-link");
+        fx.post(&link, b"not a claim", "other-arm");
+
+        assert_eq!(fx.pending(), Some(BTreeMap::new()));
+
+        fx.record_link(&link, Some(NOW));
+        fx.claim(&link, [0x74; CLAIM_ID_LEN], "expired");
+        assert_eq!(
+            fx.pending(),
+            Some(BTreeMap::new()),
+            "a link at its deadline takes no claim"
+        );
+    }
+
+    /// A fragment holder signs with the link's key but authors the claim's
+    /// scope root name. A conversion refuses a name that is not the scope
+    /// root's current one, so the count refuses it too, and one link holder
+    /// cannot raise the count with claims that never convert.
+    #[test]
+    fn a_claim_naming_another_scope_root_is_not_counted() {
+        let fx = Inbox::new();
+        let link = stranger();
+        fx.record_link(&link, None);
+        let claim = InviteClaim {
+            claim_id: [0x75; CLAIM_ID_LEN],
+            scope_root_name: b"k51-another-scope-root".to_vec(),
+            contact_code: ContactCode::create(&stranger(), stranger_enc().public()).encode(),
+        };
+        fx.post(&link, &claim.encode(), "other-scope-root");
+
+        assert_eq!(fx.pending(), Some(BTreeMap::new()));
+        assert_eq!(
+            fx.inbox_len(),
+            1,
+            "and the claim stays for the conversion to judge"
+        );
     }
 
     fn accuses(events: &[Event]) -> bool {

@@ -7,9 +7,9 @@
 # a pass on a required context.
 name: CI
 
-# No base-branch filter: a stacked pull request targets a feature branch.
 on:
   pull_request:
+    branches: [main]
 
 permissions: {}
 
