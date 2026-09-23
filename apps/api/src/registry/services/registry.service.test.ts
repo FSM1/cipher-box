@@ -154,10 +154,12 @@ interface SumQueryBuilder {
  */
 function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
   const byEntity = new Map(repos);
+  const getRepository = (entity: unknown) => byEntity.get(entity);
   return {
+    getRepository,
     transaction: (runInTransaction: (manager: unknown) => unknown) =>
       runInTransaction({
-        getRepository: (entity: unknown) => byEntity.get(entity),
+        getRepository,
         query: async () => [],
       }),
     createQueryRunner: () => ({
@@ -483,6 +485,45 @@ describe('RegistryService', () => {
 
       expect(result).toEqual({ retired: 1, unpinned: 0 });
       expect(pins.rows.filter((r) => r.cid === 'bafyUnpinNoop')).toHaveLength(0);
+    });
+  });
+
+  describe('holdsName — the caller inventory only', () => {
+    it('answers true for a name the caller registered', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51held', contentCids: [] }]);
+      expect(await service.holdsName(acct, 'k51held')).toBe(true);
+    });
+
+    it('answers false for a name the caller never registered', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51other', contentCids: [] }]);
+      expect(await service.holdsName(acct, 'k51never')).toBe(false);
+    });
+
+    it('answers false for a name only another account registered, true for that account', async () => {
+      const owner = await account();
+      const caller = await account();
+      await service.register(owner, [{ ipnsName: 'k51foreign', contentCids: [] }]);
+      expect(await service.holdsName(caller, 'k51foreign')).toBe(false);
+      expect(await service.holdsName(owner, 'k51foreign')).toBe(true);
+    });
+
+    it('answers false for a malformed name without a query', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51shape', contentCids: [] }]);
+      names.existsBy = () => {
+        throw new Error('a malformed name reached the query');
+      };
+      expect(await service.holdsName(acct, 'k51\u0000shape')).toBe(false);
+      expect(await service.holdsName(acct, 'k'.repeat(129))).toBe(false);
+    });
+
+    it('answers false once the caller retires the name', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51gone', contentCids: [] }]);
+      await service.retire(acct, [{ targets: ['k51gone'] }]);
+      expect(await service.holdsName(acct, 'k51gone')).toBe(false);
     });
   });
 

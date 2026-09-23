@@ -65,6 +65,11 @@ export const THROTTLE_SURFACES = {
    * request count, not item count, and sits well above the sync cadence.
    */
   registry: { default: { limit: 120, ttl: 60_000 } },
+  /**
+   * Per-name registration query: per account. A first-run cold start asks it
+   * once per sign-in (ADR 0022), so the cap sits far above any honest cadence.
+   */
+  registryLookup: { default: { limit: 120, ttl: 60_000 } },
   /** Account quota/BYO: per account; quota is polled on the statfs path. */
   account: { default: { limit: 120, ttl: 60_000 } },
   /**

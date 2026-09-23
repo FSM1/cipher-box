@@ -71,6 +71,10 @@ export class FakeRepository<T extends { id: string }> {
     ).length;
   }
 
+  async existsBy(where: Where): Promise<boolean> {
+    return this.rows.some((row) => matches(row as Record<string, unknown>, where));
+  }
+
   async save(partial: Partial<T>): Promise<T> {
     if (partial.id) {
       const existing = this.rows.find((row) => row.id === partial.id);

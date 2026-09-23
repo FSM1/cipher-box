@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
+import { IPNS_NAME_RE } from '../../common/patterns';
 import {
   advisoryLockKey,
   boundedAcquire,
@@ -365,6 +366,18 @@ export class RegistryService {
     }
 
     return { retired, unpinned };
+  }
+
+  /**
+   * Whether the caller's own inventory holds `ipnsName` (ADR 0022 D1). A
+   * malformed name is absent without a query: it can key no row, and a NUL
+   * byte would fault the parameter bind.
+   */
+  async holdsName(accountId: string, ipnsName: string): Promise<boolean> {
+    if (!IPNS_NAME_RE.test(ipnsName)) {
+      return false;
+    }
+    return this.dataSource.getRepository(NameInventory).existsBy({ accountId, ipnsName });
   }
 
   /**

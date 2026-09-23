@@ -22,3 +22,6 @@ export const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
  */
 export const CANONICAL_BASE64_RE =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/;
+
+/** A bare IPNS name token, bounded to the `ipns_name` column width. */
+export const IPNS_NAME_RE = /^[A-Za-z0-9]{1,128}$/;

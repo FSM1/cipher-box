@@ -9,12 +9,11 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { IPNS_NAME_RE } from '../common/patterns';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import { RecordCacheService } from './services/record-cache.service';
 
 const IPNS_RECORD_MEDIA_TYPE = 'application/vnd.ipfs.ipns-record';
-/** A bare CID/name token; matches the registry's zero-knowledge name shape. */
-const IPNS_NAME = /^[A-Za-z0-9]{1,128}$/;
 
 /**
  * The recovery endpoint (blueprint/api.md, Republisher module and recovery):
@@ -49,9 +48,7 @@ export class RecoveryController {
   @ApiResponse({ status: 404, description: 'No cached record for this name' })
   @ApiResponse({ status: 429, description: 'Recovery rate limit exceeded' })
   async fetch(@Param('ipnsName') ipnsName: string): Promise<StreamableFile> {
-    // A malformed name can never key a server-minted row; treat it as absent so
-    // the `varchar`-typed lookup never faults and the endpoint reveals nothing.
-    if (!IPNS_NAME.test(ipnsName)) {
+    if (!IPNS_NAME_RE.test(ipnsName)) {
       throw new NotFoundException('No cached record for this name');
     }
     const record = await this.cache.fetch(ipnsName);

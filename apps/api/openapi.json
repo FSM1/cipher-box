@@ -818,6 +818,49 @@
         ]
       }
     },
+    "/registry/names/{ipnsName}": {
+      "get": {
+        "operationId": "RegistryController_holdsName",
+        "parameters": [
+          {
+            "name": "ipnsName",
+            "required": true,
+            "in": "path",
+            "description": "The IPNS name (libp2p-key CID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NameRegistrationResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Registry lookup rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Answer whether the caller account holds a registration for ipnsName",
+        "tags": [
+          "Registry"
+        ]
+      }
+    },
     "/account/quota": {
       "get": {
         "operationId": "AccountController_quota",
@@ -2104,6 +2147,18 @@
         "required": [
           "retired",
           "unpinned"
+        ]
+      },
+      "NameRegistrationResponseDto": {
+        "type": "object",
+        "properties": {
+          "registered": {
+            "type": "boolean",
+            "description": "Whether the caller account holds a registration for the name. Another account row, and a malformed name, answer false."
+          }
+        },
+        "required": [
+          "registered"
         ]
       },
       "QuotaResponseDto": {
