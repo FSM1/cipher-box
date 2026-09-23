@@ -123,6 +123,15 @@ export class RetireResponseDto {
   unpinned!: number;
 }
 
+/** A JSON boolean, so a build without the route can never read as "not registered". */
+export class NameRegistrationResponseDto {
+  @ApiProperty({
+    description:
+      'Whether the caller account holds a registration for the name. Another account row, and a malformed name, answer false.',
+  })
+  registered!: boolean;
+}
+
 export class QuotaResponseDto {
   @ApiProperty({
     description:

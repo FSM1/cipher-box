@@ -1,20 +1,10 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  Post,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
   ApiExtraModels,
-  ApiNoContentResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -26,6 +16,7 @@ import { AuthenticatedRequest, JwtAuthGuard } from '../auth/guards/jwt-auth.guar
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import {
   MAX_BATCH,
+  NameRegistrationResponseDto,
   RegisterEntryDto,
   RegisterResponseDto,
   RetireEntryDto,
@@ -110,26 +101,18 @@ export class RegistryController {
   }
 
   @Get('names/:ipnsName')
-  @HttpCode(204)
   @Throttle(THROTTLE_SURFACES.registryLookup)
   @ApiOperation({
-    summary:
-      'Answer whether the caller account holds a registration for ipnsName; a malformed name answers 404',
+    summary: 'Answer whether the caller account holds a registration for ipnsName',
   })
   @ApiParam({ name: 'ipnsName', description: 'The IPNS name (libp2p-key CID)' })
-  @ApiNoContentResponse({ description: 'The caller account holds a registration for this name' })
+  @ApiOkResponse({ type: NameRegistrationResponseDto })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
-  @ApiResponse({
-    status: 404,
-    description: 'The caller account holds no registration for this name',
-  })
   @ApiResponse({ status: 429, description: 'Registry lookup rate limit exceeded' })
   async holdsName(
     @Param('ipnsName') ipnsName: string,
     @Req() request: AuthenticatedRequest
-  ): Promise<void> {
-    if (!(await this.registryService.holdsName(request.user.userId, ipnsName))) {
-      throw new NotFoundException('No registration for this name');
-    }
+  ): Promise<NameRegistrationResponseDto> {
+    return { registered: await this.registryService.holdsName(request.user.userId, ipnsName) };
   }
 }

@@ -441,47 +441,44 @@ describe('registry HTTP surface (real Postgres)', () => {
         .expect(201);
     }
 
-    it('answers 204 with an empty body for a name the caller registered', async () => {
+    /** The raw response text, so every "false" answer is compared byte for byte. */
+    async function ask(token: string, path: string): Promise<string> {
+      const res = await request(http())
+        .get(`/registry/names/${path}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(res.headers['content-type']).toContain('application/json');
+      return res.text;
+    }
+
+    const REGISTERED = JSON.stringify({ registered: true });
+    const NOT_REGISTERED = JSON.stringify({ registered: false });
+
+    it('answers registered true for a name the caller registered', async () => {
       const acct = await account();
       await register(acct.token, 'k51heldname');
-      const res = await request(http())
-        .get('/registry/names/k51heldname')
-        .set('Authorization', `Bearer ${acct.token}`)
-        .expect(204);
-      expect(res.text).toBe('');
+      expect(await ask(acct.token, 'k51heldname')).toBe(REGISTERED);
     });
 
-    it('answers 404 for a name the caller never registered', async () => {
+    it('answers registered false for a name the caller never registered', async () => {
       const acct = await account();
       await register(acct.token, 'k51someothername');
-      await request(http())
-        .get('/registry/names/k51nevername')
-        .set('Authorization', `Bearer ${acct.token}`)
-        .expect(404);
+      expect(await ask(acct.token, 'k51nevername')).toBe(NOT_REGISTERED);
     });
 
-    it('answers 404 for a name only another account registered', async () => {
+    it('answers registered false for a name only another account registered', async () => {
       const owner = await account();
       const caller = await account();
       await register(owner.token, 'k51foreignname');
-      await request(http())
-        .get('/registry/names/k51foreignname')
-        .set('Authorization', `Bearer ${caller.token}`)
-        .expect(404);
+      expect(await ask(caller.token, 'k51foreignname')).toBe(NOT_REGISTERED);
     });
 
-    it('answers 404 for a malformed name before any database lookup', async () => {
+    it('answers registered false for a malformed name before any database lookup', async () => {
       const acct = await account();
       // Postgres refuses a NUL byte in a text parameter, so this name 500s if
       // it ever reaches the query.
-      await request(http())
-        .get('/registry/names/k51%00bad')
-        .set('Authorization', `Bearer ${acct.token}`)
-        .expect(404);
-      await request(http())
-        .get(`/registry/names/${'k'.repeat(129)}`)
-        .set('Authorization', `Bearer ${acct.token}`)
-        .expect(404);
+      expect(await ask(acct.token, 'k51%00bad')).toBe(NOT_REGISTERED);
+      expect(await ask(acct.token, 'k'.repeat(129))).toBe(NOT_REGISTERED);
     });
 
     it('rate-limits the query on its own surface, per account (real 429s)', async () => {
@@ -489,19 +486,13 @@ describe('registry HTTP surface (real Postgres)', () => {
       const other = await account();
       const limit = THROTTLE_SURFACES.registryLookup.default.limit;
       for (let i = 0; i < limit; i += 1) {
-        await request(http())
-          .get('/registry/names/k51burst')
-          .set('Authorization', `Bearer ${acct.token}`)
-          .expect(404);
+        await ask(acct.token, 'k51burst');
       }
       await request(http())
         .get('/registry/names/k51burst')
         .set('Authorization', `Bearer ${acct.token}`)
         .expect(429);
-      await request(http())
-        .get('/registry/names/k51burst')
-        .set('Authorization', `Bearer ${other.token}`)
-        .expect(404);
+      expect(await ask(other.token, 'k51burst')).toBe(NOT_REGISTERED);
     });
   });
 
