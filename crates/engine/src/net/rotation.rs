@@ -1022,7 +1022,7 @@ where
         // authority a device holding no floor for this scope has
         // ([`FanoutRecord`]).
         match fanout_get_classified(self.transport, &name).await {
-            FanoutRecord::Unavailable => return Err(RotationPublishError::NotPublished),
+            FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
             FanoutRecord::Found(standing, _) => {
                 // A standing block this build cannot open is a bar it cannot
                 // read, not a bar it may skip.
@@ -1113,7 +1113,7 @@ where
     let observed = match fanout_get_classified(pipeline.transport, name).await {
         FanoutRecord::Found(record, _) => record.sequence,
         FanoutRecord::Absent => 0,
-        FanoutRecord::Unavailable => return Err(PointerPublishFailure::NotLanded),
+        FanoutRecord::Unavailable(_) => return Err(PointerPublishFailure::NotLanded),
     };
     publish_pointer_over(pipeline, name, signer, block, observed).await
 }
@@ -4739,7 +4739,7 @@ where
             // for a wave already in flight and orphans every name the first one
             // registered.
             Ok(PointerRecord::Absent) => return Ok(RecoveredWave::nothing()),
-            Ok(PointerRecord::Unavailable) | Err(_) => return Err(ResolveFailure::Unavailable),
+            Ok(PointerRecord::Unavailable(_)) | Err(_) => return Err(ResolveFailure::Unavailable),
         };
         let pointer_read_key = self.scope_keys.pointer_read_key(&self.scope_id);
         let repoint = open_repoint(

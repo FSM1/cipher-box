@@ -86,7 +86,7 @@ where
         let standing = match fanout_get_classified(self.transport, &self.name()).await {
             FanoutRecord::Found(record, _) => record,
             FanoutRecord::Absent => return Err(RotationPublishError::Rejected),
-            FanoutRecord::Unavailable => return Err(RotationPublishError::NotPublished),
+            FanoutRecord::Unavailable(_) => return Err(RotationPublishError::NotPublished),
         };
         let vouched = open_repoint(
             self.pointer_read_key.as_bytes(),

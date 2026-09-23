@@ -265,6 +265,22 @@ name → envelope grant blob → seeds → render. Residual, honestly scoped
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
 
+**The first-run rule** (ADR 0022). The vault-pointer walk reads a name as
+absent only when every routing endpoint answered and every answer was "no
+record". A fresh account has no record at any endpoint, so one failed endpoint
+refuses its sign-up. Before the walk at index 0 — on a device that holds no
+vault-pointer index floor — the cold start asks the registry whether this
+account holds a registration for the index-0 pointer name. When the answer is
+`200 {"registered": false}`, the walk and the mint's vacancy probe read that
+one name under the first-run rule: a fan-out with at least one "no record"
+answer and every other endpoint failed is absent. Every endpoint failed stays
+unavailable, and a record at the name still passes the verify and the adoption
+gate. Every other outcome keeps unanimity, a 404 too, so a missing route never
+reads as "not registered". Register-first places the registry row before any
+record reaches the transport, so "not registered" means this account never
+published a pointer there. The answer permits availability only: it never adopts a record
+or selects a root, and it is not stored.
+
 ## Vault settings load
 
 The vault settings record (`CONTEXT.md`) resolves at cold start, ahead of any
@@ -945,7 +961,10 @@ prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
   extra resolve on cold start and per tick (FSM1/cipher-box-next#39 D5). The
   first-run mint writes it, and every later write rotation of the anchor scope
   re-points it at the index that session adopted — so the plane the cold start
-  reads first names the root the scope currently sits at.
+  reads first names the root the scope currently sits at. A first-run walk,
+  which the registry has confirmed holds no registration for the pointer name,
+  reads a fan-out with a failed endpoint and one vacant answer as absent (ADR
+  0022).
 - **The write-epoch clock belongs to the scope pointer alone.** The two planes
   flip in sequence and not atomically, so a rotation that stops between them
   leaves the vault pointer one epoch behind. That lag is honest state, and

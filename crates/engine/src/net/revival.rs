@@ -106,7 +106,7 @@ where
     let basis = match fanout_get_classified(transport, request.name).await {
         FanoutRecord::Found(observed, _) if observed.sequence >= recovered.sequence => observed,
         FanoutRecord::Found(..) | FanoutRecord::Absent => recovered,
-        FanoutRecord::Unavailable => return Err(ReviveError::Uncorroborated),
+        FanoutRecord::Unavailable(_) => return Err(ReviveError::Uncorroborated),
     };
 
     // A basis below the durable floor is a rolled-back source (the floor law).

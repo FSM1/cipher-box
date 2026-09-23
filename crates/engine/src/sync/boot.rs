@@ -192,9 +192,9 @@ where
         // Availability, not trust: an unreadable pointer plane must reach the
         // host as a retry, or the boot that could not read one turns into an
         // accusation. The walk refuses either way.
-        PointerError::Unavailable => {
-            ColdStartError::Seam(SeamError::new("the vault-pointer plane could not be read"))
-        }
+        PointerError::Unavailable(failures) => ColdStartError::Seam(SeamError::new(format!(
+            "the vault-pointer plane could not be read: {failures}"
+        ))),
         PointerError::Seam(seam) => ColdStartError::Seam(seam),
         trust => ColdStartError::VaultPointer(trust),
     })?;

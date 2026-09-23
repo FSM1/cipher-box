@@ -49,6 +49,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::entropy::{Entropy, EntropyError, fresh_nonce};
 use crate::gate::floor::{self, ColdSeedError, FloorRegression};
+use crate::net::EndpointFailures;
 use crate::net::author::{
     AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section,
 };
@@ -76,17 +77,20 @@ pub const GENESIS_EPOCH: u64 = 1;
 pub const GENESIS_VAULT_POINTER_INDEX: u64 = 0;
 
 /// Why a first-run mint was refused before it began.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultPointerProbe {
     /// A record already exists at the vault-pointer name, so this account has
     /// published before. Minting would put a second genesis vault at the one
     /// name that names the first, and the first carries the only copy of a
     /// write scope seed nobody can re-derive.
     AlreadyPublished,
-    /// Some authority that must answer did not — any endpoint that failed, or an
-    /// API that would not say. Never evidence that an account is new: one silent
-    /// endpoint is exactly how a partial outage impersonates a vacant name.
+    /// The API would not say. Never evidence that an account is new.
     Indeterminate,
+    /// The endpoint set did not meet the read's vacancy rule
+    /// ([`VacancyRule`](crate::net::VacancyRule)). Never evidence that an
+    /// account is new: one silent endpoint is exactly how a partial outage
+    /// impersonates a vacant name.
+    Unreadable(EndpointFailures),
 }
 
 impl core::fmt::Display for VaultPointerProbe {
@@ -97,6 +101,9 @@ impl core::fmt::Display for VaultPointerProbe {
             }
             Self::Indeterminate => {
                 f.write_str("no authority could say whether the vault-pointer name is vacant")
+            }
+            Self::Unreadable(failures) => {
+                write!(f, "the vault-pointer name could not be read: {failures}")
             }
         }
     }
@@ -147,7 +154,8 @@ pub trait VaultProvisionPublisher {
     /// tolerates a per-endpoint failure as staleness (`net/fanout.rs`), so the
     /// mint asks positively here instead — and **unanimously**: every authority
     /// must answer, and none may hold a record. One tolerated silence is one
-    /// partial outage away from overwriting a live account's only vault.
+    /// partial outage away from overwriting a live account's only vault. The
+    /// one exception is a name the registry confirmed unregistered (ADR 0022).
     async fn require_vacant_vault_pointer(&self, name: &IpnsName) -> Result<(), VaultPointerProbe>;
 
     /// Upload the head block, then register-first CAS-publish the genesis root
@@ -321,7 +329,7 @@ impl ProvisionError {
     /// retryable stall, and a stall is never reported as a refusal.
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::NotAFirstRun(probe) => *probe == VaultPointerProbe::Indeterminate,
+            Self::NotAFirstRun(probe) => *probe != VaultPointerProbe::AlreadyPublished,
             Self::Entropy(_) | Self::Seam(_) | Self::PointerUnresolved => true,
             // A seam that could not supply a nonce or an HPKE ephemeral is the
             // same stall whether it fails at this module's own draw or inside
@@ -793,7 +801,7 @@ mod tests {
             &self,
             _name: &IpnsName,
         ) -> Result<(), VaultPointerProbe> {
-            self.probe.map_or(Ok(()), Err)
+            self.probe.clone().map_or(Ok(()), Err)
         }
 
         async fn publish_root_record(

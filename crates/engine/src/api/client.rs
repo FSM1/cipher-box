@@ -12,6 +12,7 @@ use core::cell::RefCell;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use cipherbox_core::content::{CONTENT_CID_CODEC, decode_content_cid_str};
+use cipherbox_core::ipns::IpnsName;
 use futures_channel::oneshot;
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -406,6 +407,28 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             targets: targets.to_vec(),
         }])
         .await
+    }
+
+    /// Only a 200 boolean answers: a missing route must not read as not
+    /// registered.
+    pub async fn name_registered(&self, ipns_name: &IpnsName) -> Result<bool, ApiError> {
+        #[derive(serde::Deserialize)]
+        struct Body {
+            registered: bool,
+        }
+        let response = self
+            .request_authed(
+                HttpMethod::Get,
+                &format!("/registry/names/{}", ipns_name.as_str()),
+            )
+            .await?;
+        match response.status {
+            200 => decode::<Body>(&response).map(|body| body.registered),
+            status if is_success(status) => Err(ApiError::Decode(format!(
+                "a name registration query answered {status}"
+            ))),
+            _ => Err(error_from_response(&response)),
+        }
     }
 
     async fn retire_entries(&self, entries: &[RetireEntry]) -> Result<RetireResult, ApiError> {
@@ -1562,6 +1585,50 @@ mod tests {
         assert_eq!(body[0]["ipnsName"], "k51abc");
         assert_eq!(body[0]["headCid"], "bafyhead");
         assert_eq!(body[0]["contentCids"], json!(["bafyc1", "bafyc2"]));
+    }
+
+    #[test]
+    fn name_registered_reads_only_a_200_boolean_and_errs_on_everything_else() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let name = IpnsName::from_public_key(
+            &cipherbox_core::suite::ed25519::Ed25519Signer::from_seed([1u8; 32]).verifying_key(),
+        );
+        http.enqueue_response(json_response(200, json!({ "registered": true })));
+        http.enqueue_response(json_response(200, json!({ "registered": false })));
+
+        assert_eq!(block_on(client.name_registered(&name)), Ok(true));
+        let request = http.requests().pop().unwrap();
+        assert_eq!(request.method, HttpMethod::Get);
+        assert_eq!(
+            request.url,
+            format!("http://api.test/registry/names/{}", name.as_str())
+        );
+        assert!(has_bearer(&request));
+        assert_eq!(block_on(client.name_registered(&name)), Ok(false));
+
+        let raw = |status, body: &[u8]| HttpResponse {
+            status,
+            headers: Vec::new(),
+            body: body.to_vec(),
+        };
+        for (reply, case) in [
+            (raw(404, b""), "a 404 is a missing route, never an answer"),
+            (
+                raw(204, b""),
+                "a 2xx other than 200 is not the registry's answer",
+            ),
+            (raw(200, b"{}"), "a 200 without the field"),
+            (
+                raw(200, br#"{"registered":"false"}"#),
+                "a field that is not a boolean",
+            ),
+            (raw(200, b"not json"), "a malformed body"),
+            (raw(429, b""), "a throttled query"),
+        ] {
+            http.enqueue_response(reply);
+            assert!(block_on(client.name_registered(&name)).is_err(), "{case}");
+        }
     }
 
     #[test]

@@ -296,7 +296,7 @@ mod tests {
 
         assert!(matches!(
             block_on(fanout_get_classified(&transport, &name())),
-            FanoutRecord::Unavailable
+            FanoutRecord::Unavailable(_)
         ));
     }
 }

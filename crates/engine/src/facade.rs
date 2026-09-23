@@ -137,7 +137,7 @@ use crate::sync::drain::{
 use crate::sync::model::{NodeMeta, RenderedChild, Snapshot, collation_key, rendered_children};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::pointer::PointerFetch;
+use crate::sync::pointer::{PointerFetch, vault_pointer_name};
 use crate::sync::project::{UnlinkedChild, map_kind, merge_root, project_child_version};
 use crate::sync::provision::{
     GENESIS_EPOCH, GENESIS_VAULT_POINTER_INDEX, ProvisionError, ProvisionOutcome, ProvisionPlan,
@@ -5397,14 +5397,19 @@ impl<T: SeamTypes> Engine<T> {
         // degrades to the anchored root with no error.
         let root = self.snapshot.borrow().root;
         let root_scope_id = root.0;
-        let mut outcome = self.cold_start_or_clear(root).await?;
+        let first_run_name = self.first_run_pointer_name(&api, root_scope_id).await;
+        let first_run_name = first_run_name.as_ref();
+        let mut outcome = self.cold_start_or_clear(root, first_run_name).await?;
         // An empty chain is an account that has never published: mint its genesis
         // vault before anything reads one (`sync/provision.rs`). Register-first
         // has no offline form, so the harness's no-API mode skips provisioning
         // for the same reason it skips login ([`ApiBaseUrl::offline`]).
         let provisioned =
             if outcome.vault_pointer.is_none() && self.api_base_url.configured().is_some() {
-                match self.provision_first_run_vault(&api, root_scope_id).await {
+                match self
+                    .provision_first_run_vault(&api, root_scope_id, first_run_name)
+                    .await
+                {
                     Ok(ProvisionOutcome::Minted(vault)) => Some(*vault),
                     // The account already holds a vault — another device
                     // published it, before this pass or during it. Its root is
@@ -5414,7 +5419,7 @@ impl<T: SeamTypes> Engine<T> {
                     // stays retryable rather than going dark and silent.
                     Ok(ProvisionOutcome::MovedOn)
                     | Err(ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished)) => {
-                        outcome = self.cold_start_or_clear(root).await?;
+                        outcome = self.cold_start_or_clear(root, None).await?;
                         if outcome.vault_pointer.is_none() {
                             let _ = self.events.unbounded_send(Event::VaultUnprovisioned {
                                 retryable: true,
@@ -6009,8 +6014,12 @@ impl<T: SeamTypes> Engine<T> {
     /// Run [`cold_start_data_path`](Self::cold_start_data_path) over the live
     /// record plane, clearing the session fail-closed on a trust violation
     /// ([`Self::clear_failed_start`]) so no key material stays resident.
-    async fn cold_start_or_clear(&mut self, root: NodeId) -> Result<ColdStartOutcome, EngineError> {
-        match self.run_cold_start(root).await {
+    async fn cold_start_or_clear(
+        &mut self,
+        root: NodeId,
+        first_run_name: Option<&IpnsName>,
+    ) -> Result<ColdStartOutcome, EngineError> {
+        match self.run_cold_start(root, first_run_name).await {
             Ok(outcome) => Ok(outcome),
             Err(err) => {
                 self.clear_failed_start();
@@ -6021,10 +6030,15 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Run [`cold_start_data_path`](Self::cold_start_data_path) over the live
     /// record plane, off the session `start` has already derived.
-    async fn run_cold_start(&self, root: NodeId) -> Result<ColdStartOutcome, ColdStartError> {
+    async fn run_cold_start(
+        &self,
+        root: NodeId,
+        first_run_name: Option<&IpnsName>,
+    ) -> Result<ColdStartOutcome, ColdStartError> {
         let session = self.session.as_ref().ok_or(ColdStartError::NotStarted)?;
         let owner_identity = session.owner_identity();
-        let pointer_fetch = RecordPointerFetch::new(&self.record_transport);
+        let pointer_fetch =
+            RecordPointerFetch::new(&self.record_transport).first_run_at(first_run_name);
         let adopter = self.root_adopter(session, &owner_identity, root.0);
         self.cold_start_data_path(
             &pointer_fetch,
@@ -6057,6 +6071,24 @@ impl<T: SeamTypes> Engine<T> {
         )
     }
 
+    /// The registry speaks for the genesis name only
+    /// ([`VacancyRule`](crate::net::VacancyRule)).
+    async fn first_run_pointer_name(
+        &self,
+        api: &ApiClient<T::Http, T::CredentialStore>,
+        root_scope_id: [u8; 16],
+    ) -> Option<IpnsName> {
+        self.api_base_url.configured()?;
+        let session = self.session.as_ref()?;
+        // A device with an index floor resumes the walk there, never at index 0.
+        let floor = floor::vault_pointer_index_floor(&self.seams.floor_store, &root_scope_id).await;
+        if !matches!(floor, Ok(None)) {
+            return None;
+        }
+        let name = vault_pointer_name(session.login_secret(), GENESIS_VAULT_POINTER_INDEX);
+        matches!(api.name_registered(&name).await, Ok(false)).then_some(name)
+    }
+
     /// Fail-closed symmetry with the login path: clear the derived session and
     /// the placement decision beside it, so the engine reports unstarted. The
     /// access token login already stored outlives the dropped client in the
@@ -6086,6 +6118,7 @@ impl<T: SeamTypes> Engine<T> {
         &self,
         api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
         root_scope_id: [u8; 16],
+        first_run_name: Option<&IpnsName>,
     ) -> Result<ProvisionOutcome, ProvisionError>
 where {
         let session = self.session.as_ref().expect("session set by start");
@@ -6097,6 +6130,7 @@ where {
             floors: &self.seams.floor_store,
             scheduler: &self.seams.scheduler,
             profile: &self.profile,
+            first_run_name,
         };
         provision_vault(
             &self.entropy,
@@ -9609,7 +9643,11 @@ where {
     async fn provision_in_session(&self) -> Result<(), EngineError> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?.clone();
         let root = self.snapshot.borrow().root;
-        match self.provision_first_run_vault(&api, root.0).await {
+        let first_run_name = self.first_run_pointer_name(&api, root.0).await;
+        match self
+            .provision_first_run_vault(&api, root.0, first_run_name.as_ref())
+            .await
+        {
             Ok(ProvisionOutcome::Minted(vault)) => {
                 self.install_mint(*vault);
                 self.publish_genesis_bin_index(&api).await;
@@ -9622,7 +9660,7 @@ where {
             Ok(ProvisionOutcome::MovedOn)
             | Err(ProvisionError::NotAFirstRun(VaultPointerProbe::AlreadyPublished)) => {
                 let outcome = self
-                    .run_cold_start(root)
+                    .run_cold_start(root, None)
                     .await
                     .map_err(EngineError::from_cold_start)?;
                 if !self.install_cold_start(outcome, root.0) {
@@ -13724,6 +13762,143 @@ mod tests {
             engine.is_provisioned(),
             "the session never went permanently dark"
         );
+    }
+
+    /// The registry's answer for a name this account never registered.
+    const UNREGISTERED: (u16, &str) = (200, r#"{"registered":false}"#);
+
+    /// A fresh device on a configured API, logged in, with `failed` routing
+    /// endpoints down and the registry answering `(status, body)` for every name.
+    fn first_run_engine(
+        registry: (u16, &str),
+        failed: &[&str],
+    ) -> (Engine<FakeSeamTypes>, EventStream, FakeDevice) {
+        let (engine, events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": LOGIN_CHALLENGE_FIXTURE, "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            new_user_login_response("jwt-1", &"a".repeat(64), "gw-a"),
+        ));
+        device
+            .name_registry
+            .reply(registry.0, registry.1.as_bytes().to_vec());
+        for endpoint in failed {
+            device
+                .record_store
+                .fail_endpoint(&EndpointId::new(*endpoint));
+        }
+        (engine, events, device)
+    }
+
+    fn registered_any_name(device: &FakeDevice) -> bool {
+        device
+            .http
+            .requests()
+            .iter()
+            .any(|request| request.url.ends_with("/registry/register"))
+    }
+
+    /// ADR 0022 Gate 1: the registry confirms the pointer name was never
+    /// registered, so one vacant answer beside a failed public endpoint is a
+    /// vacant name, and the first run mints.
+    #[test]
+    fn a_first_run_mints_when_one_endpoint_is_vacant_and_the_other_failed() {
+        let (mut engine, _events, device) =
+            first_run_engine(UNREGISTERED, &["fake:public-routing"]);
+        serve_provisioning(&device);
+
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("the first run starts");
+
+        assert!(engine.is_provisioned(), "the first run minted its vault");
+        let pointer = vault_pointer_name(&[7u8; 32], GENESIS_VAULT_POINTER_INDEX);
+        assert_eq!(
+            device.name_registry.queries(),
+            vec![pointer.as_str().to_owned()],
+            "the engine asks about its own genesis pointer name, once"
+        );
+    }
+
+    /// ADR 0022 Gate 2 and D4: with no vacant answer at all the first-run rule
+    /// has nothing to read, so the start fails with the retryable seam error,
+    /// naming every endpoint that failed.
+    #[test]
+    fn a_first_run_with_every_endpoint_failed_is_the_seam_error() {
+        let (mut engine, _events, device) =
+            first_run_engine(UNREGISTERED, &["fake:someguy", "fake:public-routing"]);
+        serve_provisioning(&device);
+
+        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+
+        assert_eq!(
+            refused,
+            Err(EngineError::Seam {
+                message: "the vault-pointer plane could not be read: \
+                          fake:someguy transport; fake:public-routing transport"
+                    .to_owned()
+            })
+        );
+        assert!(!registered_any_name(&device), "no mint ran");
+    }
+
+    /// ADR 0022 Gates 3 and 4: a registered name, or any registry outcome other
+    /// than `200 {"registered": false}` — a 404 from a missing route too — keeps
+    /// unanimity. One failed endpoint is then the
+    /// retryable seam error, and no mint runs.
+    #[test]
+    fn a_registered_name_or_a_silent_registry_keeps_unanimity() {
+        for registry in [
+            (200, r#"{"registered":true}"#),
+            (404, ""),
+            (503, ""),
+            (429, ""),
+            (200, "{}"),
+        ] {
+            let (mut engine, _events, device) =
+                first_run_engine(registry, &["fake:public-routing"]);
+            serve_provisioning(&device);
+
+            let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+
+            assert_eq!(
+                refused,
+                Err(EngineError::Seam {
+                    message: "the vault-pointer plane could not be read: \
+                              fake:public-routing transport"
+                        .to_owned()
+                }),
+                "registry answered {registry:?}"
+            );
+            assert!(
+                !registered_any_name(&device),
+                "registry answered {registry:?}"
+            );
+        }
+    }
+
+    /// The registry is asked only before a walk at index 0: a device that holds
+    /// an index floor resumes there, and the query is never sent.
+    #[test]
+    fn a_device_that_walked_the_chain_before_does_not_ask_the_registry() {
+        let (mut engine, _events, device) =
+            first_run_engine(UNREGISTERED, &["fake:public-routing"]);
+        block_on(floor::advance_vault_pointer_index(
+            &device.floors(&[7u8; 32]),
+            &[0u8; 16],
+            0,
+        ))
+        .expect("the floor store accepts the mark");
+
+        let refused = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+
+        assert!(
+            matches!(refused, Err(EngineError::Seam { .. })),
+            "{refused:?}"
+        );
+        assert!(device.name_registry.queries().is_empty());
     }
 
     #[test]

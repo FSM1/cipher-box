@@ -316,7 +316,7 @@ pub enum WritePublishError {
 fn pointer_error_class(error: &PointerError) -> &'static str {
     match error {
         PointerError::NotOwnerSession => "capability",
-        PointerError::Entropy(_) | PointerError::Seam(_) | PointerError::Unavailable => {
+        PointerError::Entropy(_) | PointerError::Seam(_) | PointerError::Unavailable(_) => {
             "availability"
         }
         PointerError::Open(error) => error.class(),
