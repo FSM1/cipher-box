@@ -926,6 +926,31 @@ pub fn convert_invite_claim(
     })
 }
 
+/// The scope of the one link in `links` that `item` claims, where
+/// [`convert_invite_claim`] would not refuse it on the owner's local records
+/// alone. The record-plane checks run only at conversion, so a claim this counts
+/// can still be refused there.
+pub fn pending_claim_scope(
+    links: &[RecordedInvite],
+    converted: &[ConvertedClaimRecord],
+    item: &VerifiedMailboxItem,
+    now: UnixMillis,
+) -> Option<[u8; 16]> {
+    let claim = InviteClaim::decode(&item.payload).ok()?;
+    if claim.claim_id == [0u8; CLAIM_ID_LEN]
+        || converted.iter().any(|c| c.claim_id == claim.claim_id)
+    {
+        return None;
+    }
+    let sender = item.sender_identity.to_sec1();
+    let mut matches = links.iter().filter(|l| l.ephemeral_identity_pk == sender);
+    let link = matches.next()?;
+    if matches.next().is_some() || link.expires_at.is_some_and(|deadline| now.0 >= deadline.0) {
+        return None;
+    }
+    Some(link.scope_id)
+}
+
 /// The tag `link`'s own key material derives at `scope_root_name`, from the
 /// owner's half of the pairwise ECDH.
 ///

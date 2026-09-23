@@ -24,6 +24,7 @@ const ROW: ListingRow = {
   modified: '14 Nov 2023',
   pending: 'none',
   deadLetter: false,
+  pendingInviteClaims: 0,
 };
 
 function storageWith(binRetentionDays: number): VaultStorageDescriptor {

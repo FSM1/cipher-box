@@ -8,6 +8,7 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   expired: false,
   expiresAt: null,
   spent: 0,
+  pendingClaims: 0,
 };
 
 const scope = (

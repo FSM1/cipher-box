@@ -90,6 +90,7 @@ export interface WasmSnapshotChild {
   readonly deadLetter: boolean;
   readonly contentVersion?: bigint;
   readonly contentCid?: Uint8Array;
+  readonly pendingInviteClaims: number;
 }
 
 /** wasm-bindgen `DeadLetter` — one retained dead-lettered op and its reason. */
@@ -154,6 +155,7 @@ export interface WasmSharingInviteLinks {
   readonly expired: boolean;
   readonly expiresAt?: bigint;
   readonly spent: number;
+  readonly pendingClaims: number;
 }
 
 /** wasm-bindgen `ScopeSharing` — what one scope's own record says. */

@@ -54,7 +54,7 @@ pub use invite::{
     ConvertedClaimRecord, EphemeralInvitee, InviteClaim, InviteError, InviteFragment,
     MAX_INVITE_FRAGMENT_BYTES, MintedInvite, OwnerAuthority, RecordedInvite, ScopeLinks,
     convert_invite_claim, locate_invite_link, mint_invite_grant, partition_scope_links,
-    post_invite_claim,
+    pending_claim_scope, post_invite_claim,
 };
 pub use invite_mint::{
     InviteMintError, InviteMintPlan, MintedInviteLink, PendingInviteLink, mint_invite_link,

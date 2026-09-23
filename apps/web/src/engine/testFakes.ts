@@ -34,6 +34,7 @@ export function view(
       mtime: null,
       pending: 'none',
       deadLetter: false,
+      pendingInviteClaims: 0,
       contentVersion: null,
       contentCid: null,
     })),

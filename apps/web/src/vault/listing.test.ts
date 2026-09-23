@@ -11,6 +11,7 @@ function child(overrides: Partial<SnapshotChildDescriptor> = {}): SnapshotChildD
     mtime: null,
     pending: 'none',
     deadLetter: false,
+    pendingInviteClaims: 0,
     contentVersion: null,
     contentCid: null,
     ...overrides,

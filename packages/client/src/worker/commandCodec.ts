@@ -629,6 +629,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       deadLetter: child.deadLetter,
       contentVersion: child.contentVersion ?? null,
       contentCid: child.contentCid ?? null,
+      pendingInviteClaims: child.pendingInviteClaims,
     })),
     ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
     deadLetters: view.deadLetters.map((dead) => ({
@@ -931,6 +932,7 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
                     expired: links.expired,
                     expiresAt: links.expiresAt ?? null,
                     spent: links.spent,
+                    pendingClaims: links.pendingClaims,
                   },
           },
   };

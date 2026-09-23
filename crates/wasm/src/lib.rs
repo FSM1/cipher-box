@@ -729,6 +729,13 @@ impl SnapshotChild {
     pub fn content_cid(&self) -> Option<Vec<u8>> {
         self.inner.content_cid.clone()
     }
+
+    /// Invite claims that wait for a conversion at this scope root, as this
+    /// device's link records count them.
+    #[wasm_bindgen(getter, js_name = pendingInviteClaims)]
+    pub fn pending_invite_claims(&self) -> u32 {
+        self.inner.pending_invite_claims
+    }
 }
 
 impl SnapshotChild {
@@ -1061,6 +1068,12 @@ impl SharingInviteLinks {
     #[wasm_bindgen(getter)]
     pub fn spent(&self) -> u32 {
         self.inner.spent
+    }
+
+    /// Invite claims that wait for a conversion at this scope.
+    #[wasm_bindgen(getter, js_name = pendingClaims)]
+    pub fn pending_claims(&self) -> u32 {
+        self.inner.pending_claims
     }
 }
 
@@ -2617,6 +2630,7 @@ mod tests {
                     dead_letter: false,
                     content_version: Some(2),
                     content_cid: Some(vec![0xC1, 0xD0]),
+                    pending_invite_claims: 0,
                 },
                 facade::SnapshotChild {
                     id: facade::NodeId([4u8; 16]),
@@ -2628,6 +2642,7 @@ mod tests {
                     dead_letter: true,
                     content_version: None,
                     content_cid: None,
+                    pending_invite_claims: 2,
                 },
             ],
             ancestors: vec![facade::Breadcrumb {
@@ -2694,6 +2709,8 @@ mod tests {
         assert!(children[1].size().is_none());
         assert!(children[1].mtime().is_none());
         assert!(children[1].dead_letter());
+        assert_eq!(children[0].pending_invite_claims(), 0);
+        assert_eq!(children[1].pending_invite_claims(), 2);
 
         let ancestors = view.ancestors();
         assert_eq!(ancestors.len(), 1);

@@ -41,6 +41,7 @@ function file(id: Uint8Array, name: string, overrides: Partial<Child> = {}): Chi
     mtime: 1_700_000_000_000n,
     pending: 'none',
     deadLetter: false,
+    pendingInviteClaims: 0,
     contentVersion: 1n,
     contentCid: null,
     ...overrides,

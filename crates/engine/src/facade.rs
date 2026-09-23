@@ -62,7 +62,7 @@ use crate::grants::grafted::{
     GraftedSharers, evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace,
     floor_view, is_own_scope,
 };
-use crate::grants::inbox::ShareInbox;
+use crate::grants::inbox::{PendingInviteClaims, ShareInbox};
 use crate::grants::received_status::{
     ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
 };
@@ -364,6 +364,10 @@ pub struct SnapshotChild {
     /// The head version's content root CID, `None` until projected — what a
     /// caller hands back on [`WriteTarget::Version::expected_version`].
     pub content_cid: Option<Vec<u8>>,
+    /// Invite claims on this owner's inbox that wait for
+    /// [`Command::ConvertInviteClaims`] at this scope root. Zero on a device
+    /// that holds no record of the link they claim.
+    pub pending_invite_claims: u32,
 }
 
 /// The refusal a version command earns when the file's history does not name
@@ -408,6 +412,7 @@ impl fmt::Debug for SnapshotChild {
             .field("dead_letter", &self.dead_letter)
             .field("content_version", &self.content_version)
             .field("content_cid", &self.content_cid)
+            .field("pending_invite_claims", &self.pending_invite_claims)
             .finish()
     }
 }
@@ -537,6 +542,8 @@ pub struct SharingInviteLinks {
     /// This owner's records at the scope that its commitment no longer carries —
     /// what [`Command::PruneInviteLinks`] drops.
     pub spent: u32,
+    /// See [`SnapshotChild::pending_invite_claims`].
+    pub pending_claims: u32,
 }
 
 /// What one scope's own record says about sharing, when this read reached it.
@@ -5084,6 +5091,9 @@ pub struct Engine<T: SeamTypes> {
     /// record deliberately keeps none of it
     /// ([`RecordedInvite`](crate::grants::RecordedInvite)).
     pending_invite_links: Rc<RefCell<BTreeMap<NodeId, Rc<PendingInviteLink>>>>,
+    /// The invite claims the tick's last mailbox pull counted. In-memory: the
+    /// inbox is the authority, and the next pass re-counts it.
+    pending_invite_claims: Rc<RefCell<PendingInviteClaims>>,
     /// The folder the FUSE-op TTL check last fired a hint for, and when. One
     /// slot: the check only ever asks about the folder in view, and a hint is
     /// not the refresh stamp a completed pass earns
@@ -5266,6 +5276,7 @@ impl<T: SeamTypes> Engine<T> {
                 grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
                 minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 pending_invite_links: Rc::new(RefCell::new(BTreeMap::new())),
+                pending_invite_claims: Rc::new(RefCell::new(PendingInviteClaims::new())),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
@@ -5714,6 +5725,9 @@ impl<T: SeamTypes> Engine<T> {
         // session.
         if let Ok(mut links) = self.pending_invite_links.try_borrow_mut() {
             links.clear();
+        }
+        if let Ok(mut claims) = self.pending_invite_claims.try_borrow_mut() {
+            claims.clear();
         }
     }
 
@@ -6551,6 +6565,7 @@ where {
         let grafted_claims = self.grafted_claims.clone();
         let consult_keys = self.sweep_keys.clone();
         let minted_roots = self.minted_scope_roots.clone();
+        let pending_invite_claims = self.pending_invite_claims.clone();
         let pending_scope_exits = self.pending_scope_exits.clone();
         let sweep_tasks = self.sweep_tasks.clone();
         let queue_scan = self.queue_scan.clone();
@@ -7317,7 +7332,7 @@ where {
                     //
                     // The mailbox pull leads it, so a share this pass accepts is
                     // classified by the refresh below rather than a pass later.
-                    ShareInbox {
+                    let claims = ShareInbox {
                         mailbox: api.as_ref(),
                         transport: &transport,
                         gateway: &gateway,
@@ -7327,8 +7342,14 @@ where {
                         contact_label_seed: &contact_label_seed,
                         vault_root_scope: root_id,
                     }
-                    .pull(&staging, &entropy, ENVELOPE_V, &events)
+                    .pull(&staging, &entropy, ENVELOPE_V, now, &events)
                     .await;
+                    if let Some(claims) = claims
+                        && *pending_invite_claims.borrow() != claims
+                    {
+                        *pending_invite_claims.borrow_mut() = claims;
+                        let _ = events.unbounded_send(Event::SnapshotUpdated);
+                    }
                     ReceivedShareStatus {
                         transport: &transport,
                         gateway: &gateway,
@@ -9257,6 +9278,7 @@ where {
         // only in the delivery pass, one item at a time.
         let mut spent = records.claims.clone();
         let mut deliveries: Vec<Delivery> = Vec::new();
+        let mut acked: Vec<String> = Vec::new();
         for item in &items {
             let converted = convert_invite_claim(
                 &authority,
@@ -9290,8 +9312,11 @@ where {
                     | InviteError::UnusableClaimantKey
                     | InviteError::GrantWasCut,
                 ) => {
-                    if let Err(e) = api.ack(&item.item_id).await {
-                        failure.get_or_insert(EngineError::from_seam(e));
+                    match api.ack(&item.item_id).await {
+                        Ok(()) => acked.push(item.item_id.clone()),
+                        Err(e) => {
+                            failure.get_or_insert(EngineError::from_seam(e));
+                        }
                     }
                     continue;
                 }
@@ -9436,10 +9461,14 @@ where {
                 }
             }
 
-            if let Err(e) = api.ack(&delivery.item_id).await {
-                failure.get_or_insert(EngineError::from_seam(e));
+            match api.ack(&delivery.item_id).await {
+                Ok(()) => acked.push(delivery.item_id),
+                Err(e) => {
+                    failure.get_or_insert(EngineError::from_seam(e));
+                }
             }
         }
+        self.retire_pending_claims(&acked);
         match failure {
             Some(e) => Err(e),
             None => Ok(()),
@@ -9522,6 +9551,30 @@ where {
             session.enc_subkey(),
             &self.entropy,
         )
+    }
+
+    /// How many counted invite claims wait at the scope root `node`.
+    fn pending_claims_at(&self, node: NodeId) -> u32 {
+        let count = self
+            .pending_invite_claims
+            .borrow()
+            .values()
+            .filter(|scope| **scope == node)
+            .count();
+        u32::try_from(count).unwrap_or(u32::MAX)
+    }
+
+    /// Drop the claims a conversion acked from the count, so a host re-read
+    /// after the command does not wait a tick to see them go.
+    fn retire_pending_claims(&self, acked: &[String]) {
+        let mut claims = self.pending_invite_claims.borrow_mut();
+        let before = claims.len();
+        for item_id in acked {
+            claims.remove(item_id);
+        }
+        if claims.len() != before {
+            let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        }
     }
 
     /// The provider config this session holds, which is the one its placement
@@ -10433,6 +10486,7 @@ where {
                 dead_letter: dead_nodes.contains(&child.meta.id),
                 content_version: child.meta.content_version,
                 content_cid: child.meta.head_content_cid.clone(),
+                pending_invite_claims: self.pending_claims_at(child.meta.id),
             })
             .collect();
         let ancestors = rendered
@@ -10817,6 +10871,7 @@ where {
                 .and_then(|link| link.record.expires_at)
                 .is_some_and(|deadline| now.0 >= deadline.0),
             spent: u32::try_from(split.spent.len()).unwrap_or(u32::MAX),
+            pending_claims: self.pending_claims_at(scope_root),
         });
 
         let projected = project_grant_ledger(
@@ -12900,6 +12955,7 @@ mod tests {
                 dead_letter: false,
                 content_version: None,
                 content_cid: None,
+                pending_invite_claims: 0,
             }],
             ancestors: vec![Breadcrumb {
                 id: NodeId([4; 16]),

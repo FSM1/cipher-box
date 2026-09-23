@@ -172,6 +172,11 @@ export interface SnapshotChildDescriptor {
   contentVersion: bigint | null;
   /** The head version's content root CID; `null` until projected. */
   contentCid: Uint8Array | null;
+  /**
+   * Invite claims that wait for `convertInviteClaims` at this scope root. Zero
+   * on a device that holds no record of the link they claim.
+   */
+  pendingInviteClaims: number;
 }
 
 /**
@@ -240,6 +245,8 @@ export interface SharingInviteLinksDescriptor {
   expiresAt: bigint | null;
   /** The owner's records here that the scope's commitment no longer carries — what a prune drops. */
   spent: number;
+  /** Invite claims that wait for `convertInviteClaims` here, as this device's link records count them. */
+  pendingClaims: number;
 }
 
 /** What one scope's own record says, as data (mirrors `ScopeSharing`). */

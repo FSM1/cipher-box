@@ -4156,6 +4156,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
             expires_at: Some(deadline),
             expired: false,
             spent: 0,
+            pending_claims: 0,
         })
     );
 
@@ -4210,6 +4211,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
             expires_at: Some(deadline),
             expired: false,
             spent: 0,
+            pending_claims: 0,
         })
     );
 
@@ -4226,6 +4228,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
             expires_at: Some(deadline),
             expired: true,
             spent: 0,
+            pending_claims: 0,
         })
     );
 }
@@ -4254,6 +4257,7 @@ fn the_sharing_read_counts_the_records_a_prune_would_drop() {
             expires_at: None,
             expired: false,
             spent: 1,
+            pending_claims: 0,
         })
     );
 
@@ -4681,6 +4685,44 @@ fn a_claim_from_the_fragment_alone_becomes_a_personal_grant_on_the_scope() {
         inbox(&fx.recipient_device).len(),
         1,
         "and the claimant is told which scope root to resolve"
+    );
+}
+
+/// A claim waits for the owner's press, so the owner must see it without the
+/// share dialog open: the tick's mailbox pull counts it on the folder's row and
+/// in the link standing, and the conversion that acks it clears both.
+#[test]
+fn a_waiting_claim_shows_on_the_folder_row_until_the_owner_converts_it() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    fx.post_claims(&fragment, 2);
+    let waiting = |fx: &GrantScenario| {
+        let row = block_on(fx.engine.snapshot(ROOT))
+            .expect("the root lists")
+            .children
+            .into_iter()
+            .find(|child| child.id == fx.folder)
+            .expect("the shared folder is listed")
+            .pending_invite_claims;
+        let links = block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .state
+            .and_then(|state| state.invite_links)
+            .expect("the link standing reads")
+            .pending_claims;
+        (row, links)
+    };
+    assert_eq!(waiting(&fx), (0, 0), "nothing counts before a pass polls");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(waiting(&fx), (2, 2));
+    assert_eq!(inbox(&fx.owner_device).len(), 2, "counting acks nothing");
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        waiting(&fx),
+        (0, 0),
+        "the conversion clears what it acked without waiting a pass"
     );
 }
 

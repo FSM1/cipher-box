@@ -18,6 +18,7 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   expired: false,
   expiresAt: null,
   spent: 0,
+  pendingClaims: 0,
 };
 
 function identity(seed: number): Uint8Array {
@@ -169,6 +170,7 @@ describe('invite links', () => {
     expired: false,
     expiresAt: 1_700_000_000_000n,
     spent: 2,
+    pendingClaims: 0,
   };
   const linked = () =>
     view(DOCS, [1], [[1, 'read']], {

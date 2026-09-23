@@ -30,6 +30,7 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   expired: false,
   expiresAt: null,
   spent: 0,
+  pendingClaims: 0,
 };
 
 const folder: ListingRow = {
@@ -46,6 +47,7 @@ const folder: ListingRow = {
   modified: '-',
   pending: 'none',
   deadLetter: false,
+  pendingInviteClaims: 0,
 };
 
 function identity(seed: number): Uint8Array {
@@ -174,7 +176,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
     ),
     pruneInviteLinks: vi.fn(() =>
       answer('pruneInviteLinks', { kind: 'done' as const }).then((outcome) => {
-        state.links = { ...(state.links ?? NO_LINKS), spent: 0 };
+        state.links = { ...(state.links ?? NO_LINKS), spent: 0, pendingClaims: 0 };
         return outcome;
       })
     ),
@@ -489,6 +491,14 @@ describe('the invite link', () => {
 
     expect(screen.getByLabelText('close').hasAttribute('disabled')).toBe(true);
   });
+
+  it('tells a browser that holds no link where claims convert', async () => {
+    await share();
+
+    expect(screen.getByTestId('share-no-local-link').textContent).toBe(
+      '// no link on this browser - claims convert on the browser that made the link'
+    );
+  });
 });
 
 describe('a link the engine already holds', () => {
@@ -546,9 +556,33 @@ describe('a link the engine already holds', () => {
     expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
   });
 
+  it('counts the claims that wait beside the convert control', async () => {
+    await share(
+      sharingEngine(
+        {},
+        held([], [], { links: { ...live, pendingClaims: 2 }, standing: 'alreadyAScope' })
+      )
+    );
+
+    expect(screen.getByTestId('share-pending-claims').textContent).toBe(
+      '// 2 claims wait for conversion'
+    );
+    expect(screen.getByTestId('share-convert-claims')).toBeTruthy();
+    expect(screen.queryByTestId('share-no-local-link')).toBeNull();
+  });
+
+  it('says nothing waits where the engine counts no claim', async () => {
+    await share(sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' })));
+
+    expect(screen.queryByTestId('share-pending-claims')).toBeNull();
+  });
+
   it('offers to forget the records a cut left behind, and stops once pruned', async () => {
     const engine = await share(
-      sharingEngine({}, held([], [], { links: { ...live, spent: 2 }, standing: 'alreadyAScope' }))
+      sharingEngine(
+        {},
+        held([], [], { links: { ...live, spent: 2, pendingClaims: 0 }, standing: 'alreadyAScope' })
+      )
     );
 
     expect(screen.getByTestId('share-prune-links').textContent).toContain('2 spent link records');

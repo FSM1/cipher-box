@@ -1150,6 +1150,7 @@ describe('readSnapshot', () => {
           mtime: 1_700_000_000_000n,
           pending: 2,
           deadLetter: false,
+          pendingInviteClaims: 0,
           contentVersion: 2n,
           contentCid: new Uint8Array([0xc1, 0xd0]),
         },
@@ -1159,6 +1160,7 @@ describe('readSnapshot', () => {
           kind: 1,
           pending: 0,
           deadLetter: true,
+          pendingInviteClaims: 3,
         },
         {
           id: new Uint8Array(16).fill(5),
@@ -1166,6 +1168,7 @@ describe('readSnapshot', () => {
           kind: 0,
           pending: 1,
           deadLetter: false,
+          pendingInviteClaims: 0,
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
@@ -1198,6 +1201,7 @@ describe('readSnapshot', () => {
           mtime: 1_700_000_000_000n,
           pending: 'content',
           deadLetter: false,
+          pendingInviteClaims: 0,
           contentVersion: 2n,
           contentCid: new Uint8Array([0xc1, 0xd0]),
         },
@@ -1209,6 +1213,7 @@ describe('readSnapshot', () => {
           mtime: null,
           pending: 'none',
           deadLetter: true,
+          pendingInviteClaims: 3,
           contentVersion: null,
           contentCid: null,
         },
@@ -1220,6 +1225,7 @@ describe('readSnapshot', () => {
           mtime: null,
           pending: 'metadata',
           deadLetter: false,
+          pendingInviteClaims: 0,
           contentVersion: null,
           contentCid: null,
         },
@@ -1335,6 +1341,7 @@ describe('readSnapshot', () => {
             kind: 42,
             pending: 0,
             deadLetter: false,
+            pendingInviteClaims: 0,
           },
         ],
       })
@@ -1349,6 +1356,7 @@ describe('readSnapshot', () => {
             kind: 0,
             pending: 42,
             deadLetter: false,
+            pendingInviteClaims: 0,
           },
         ],
       })
@@ -1357,7 +1365,13 @@ describe('readSnapshot', () => {
 });
 
 describe('readSharing', () => {
-  const links = { live: true, expired: false, expiresAt: 1_700_000_000_000n, spent: 2 };
+  const links = {
+    live: true,
+    expired: false,
+    expiresAt: 1_700_000_000_000n,
+    spent: 2,
+    pendingClaims: 1,
+  };
   const view = {
     scope: new Uint8Array(16).fill(3),
     contacts: [{ identityPublicKey: new Uint8Array([1]) }],

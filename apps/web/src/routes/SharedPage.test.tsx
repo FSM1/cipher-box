@@ -183,4 +183,41 @@ describe('the shared route', () => {
 
     expect(standings()).toEqual([{ resolution: 'revocation-signal', tone: 'warning' }]);
   });
+
+  it('lists a share the sync tick accepted without a press', async () => {
+    let received: ReceivedShareDescriptor[] = [];
+    const engine = await renderShared(() => Promise.resolve(received));
+    expect(screen.getByTestId('shared-empty')).toBeTruthy();
+
+    received = [share(1, 'granted', 'photos')];
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'photos',
+    ]);
+  });
+
+  it('keeps the newest list when an older read lands after it', async () => {
+    const reads: Array<(shares: ReceivedShareDescriptor[]) => void> = [];
+    const engine = await renderShared(
+      () => new Promise<ReceivedShareDescriptor[]>((resolve) => reads.push(resolve))
+    );
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+    });
+
+    await act(async () => {
+      reads[1]?.([share(1, 'granted', 'newest')]);
+    });
+    await act(async () => {
+      reads[0]?.([]);
+    });
+
+    expect(reads).toHaveLength(2);
+    expect(screen.getAllByTestId('shared-name').map((node) => node.textContent)).toEqual([
+      'newest',
+    ]);
+  });
 });

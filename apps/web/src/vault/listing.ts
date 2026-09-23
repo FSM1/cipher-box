@@ -46,6 +46,8 @@ export interface ListingRow {
   modified: string;
   pending: PendingClass;
   deadLetter: boolean;
+  /** Invite claims that wait for the owner to convert them at this folder. */
+  pendingInviteClaims: number;
 }
 
 /**
@@ -72,6 +74,7 @@ function toRow(child: SnapshotChildDescriptor): ListingRow {
     modified: projectedDate(child.mtime),
     pending: child.pending,
     deadLetter: child.deadLetter,
+    pendingInviteClaims: child.pendingInviteClaims,
   };
 }
 

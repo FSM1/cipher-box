@@ -47,6 +47,11 @@ export function InviteLinkPanel({
           <p className="sharing-note" data-testid="share-live-link-expiry">
             {`// a link stands here — ${expiryLabel(state.links)}`}
           </p>
+          {state.links.pendingClaims > 0 && (
+            <p className="sharing-note" data-testid="share-pending-claims">
+              {`// ${waitingClaims(state.links.pendingClaims)} for conversion`}
+            </p>
+          )}
           <button
             type="button"
             className="dialog-button"
@@ -71,6 +76,9 @@ export function InviteLinkPanel({
     case 'mintable':
       return (
         <div className="dialog-content">
+          <p className="sharing-note" data-testid="share-no-local-link">
+            {'// no link on this browser - claims convert on the browser that made the link'}
+          </p>
           <label className="dialog-label" htmlFor="share-link-lifetime">
             link expires
           </label>
@@ -106,6 +114,10 @@ export function InviteLinkPanel({
         </p>
       );
   }
+}
+
+function waitingClaims(count: number): string {
+  return count === 1 ? '1 claim waits' : `${count} claims wait`;
 }
 
 /** Offers the prune the engine's spent count says there is something to drop. */
