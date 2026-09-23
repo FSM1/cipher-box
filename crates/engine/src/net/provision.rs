@@ -483,6 +483,23 @@ mod tests {
         );
     }
 
+    /// The recovery cache still refuses a first-run mint: the first-run rule
+    /// widens only what the record plane may call vacant.
+    #[test]
+    fn a_first_run_probe_still_refuses_on_a_cached_record() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        device
+            .record_store
+            .fail_endpoint(&EndpointId::new("fake:public-routing"));
+        recovery_reply(&device, 200);
+
+        assert_eq!(
+            first_run_probe(&device),
+            Err(VaultPointerProbe::AlreadyPublished)
+        );
+    }
+
     /// A healthy endpoint set with the record still on one of them refuses
     /// outright — the refusing side needs no unanimity, one sighting is decisive.
     #[test]

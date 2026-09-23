@@ -6088,7 +6088,7 @@ impl<T: SeamTypes> Engine<T> {
             return None;
         }
         let name = vault_pointer_name(session.login_secret(), GENESIS_VAULT_POINTER_INDEX);
-        matches!(api.name_registered(name.as_str()).await, Ok(false)).then_some(name)
+        matches!(api.name_registered(&name).await, Ok(false)).then_some(name)
     }
 
     /// Fail-closed symmetry with the login path: clear the derived session and
