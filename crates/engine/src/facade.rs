@@ -6071,10 +6071,8 @@ impl<T: SeamTypes> Engine<T> {
         )
     }
 
-    /// The genesis vault-pointer name, when this device has never walked the
-    /// chain and the registry answers that it is not registered: the one name
-    /// read under [`VacancyRule::FirstRun`](crate::net::VacancyRule). `None` on
-    /// every other answer, on any failure, and with no API configured.
+    /// The registry speaks for the genesis name only
+    /// ([`VacancyRule`](crate::net::VacancyRule)).
     async fn first_run_pointer_name(
         &self,
         api: &ApiClient<T::Http, T::CredentialStore>,

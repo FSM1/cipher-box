@@ -23,8 +23,7 @@ use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 /// transport bytes.
 pub struct RecordPointerFetch<'a, T> {
     transport: &'a T,
-    /// The one name read under [`VacancyRule::FirstRun`]; every other name is
-    /// read under unanimity.
+    /// See [`VacancyRule::at`].
     first_run_name: Option<&'a IpnsName>,
 }
 
@@ -37,7 +36,7 @@ impl<'a, T> RecordPointerFetch<'a, T> {
         }
     }
 
-    /// Read `name` under [`VacancyRule::FirstRun`].
+    /// The name the registry confirmed unregistered ([`VacancyRule`]).
     #[must_use]
     pub fn first_run_at(mut self, name: Option<&'a IpnsName>) -> Self {
         self.first_run_name = name;

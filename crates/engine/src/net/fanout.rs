@@ -85,11 +85,10 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
     Fanout { acked, not_acked }
 }
 
-/// Why one endpoint's answer to a fan-out GET counted for nothing. A class
-/// only: the diagnostics that carry it hold no record bytes.
+/// A class, never bytes: the diagnostics that carry it must hold no record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointFailure {
-    /// The transport returned an error: unreachable, refused, non-2xx, or late.
+    /// Unreachable, refused, non-2xx, or late.
     Transport,
     /// The endpoint served more than [`MAX_RECORD_BYTES`].
     OverCap,
@@ -141,8 +140,7 @@ pub enum VacancyRule {
 }
 
 impl VacancyRule {
-    /// [`FirstRun`](Self::FirstRun) at the one name the registry confirmed
-    /// unregistered, [`Unanimous`](Self::Unanimous) at every other name.
+    /// The registry's answer covers `first_run_name` and no other name.
     pub fn at(first_run_name: Option<&IpnsName>, name: &IpnsName) -> Self {
         if first_run_name == Some(name) {
             Self::FirstRun
@@ -210,8 +208,8 @@ pub async fn fanout_get_classified<T: RecordTransport>(
     fanout_get_under(transport, name, VacancyRule::Unanimous).await
 }
 
-/// [`fanout_get_classified`] under `rule`, which decides only between `Absent`
-/// and `Unavailable`: a `Found` is the same verified record under either rule.
+/// [`fanout_get_classified`] under `rule`, which never touches a `Found`
+/// (ADR 0022 D3).
 pub async fn fanout_get_under<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,

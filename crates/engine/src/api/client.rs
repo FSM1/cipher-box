@@ -409,9 +409,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         .await
     }
 
-    /// Whether this account's registry holds `ipns_name`: only a 200 carrying a
-    /// boolean `registered` answers, and every other outcome is an error, so a
-    /// missing route must not read as not registered.
+    /// Only a 200 boolean answers: a missing route must not read as not
+    /// registered.
     pub async fn name_registered(&self, ipns_name: &IpnsName) -> Result<bool, ApiError> {
         #[derive(serde::Deserialize)]
         struct Body {

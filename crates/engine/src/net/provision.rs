@@ -35,7 +35,7 @@ pub struct VaultProvisionNet<'a, T, H: Http, C: CredentialStore, F, Sch, Ad> {
     pub scheduler: &'a Sch,
     /// The publish pipeline's timing policy.
     pub profile: &'a SyncTimingProfile,
-    /// The one name the vacancy probe reads under [`VacancyRule::FirstRun`].
+    /// The name the registry confirmed unregistered ([`VacancyRule`]).
     pub first_run_name: Option<&'a IpnsName>,
 }
 
@@ -108,10 +108,8 @@ where
             Err(ApiError::Status { status: 404, .. }) => {}
             Err(_) => return Err(VaultPointerProbe::Indeterminate),
         }
-        // Then the record plane, by the vacancy rule this name is read under.
-        // Only bytes that verify at the name prove a publication: unverifiable
-        // bytes refuse as availability, so one hostile endpoint cannot forge a
-        // permanent verdict.
+        // Unverifiable bytes refuse as availability, so one hostile endpoint
+        // cannot forge a permanent verdict.
         let rule = VacancyRule::at(self.first_run_name, name);
         match fanout_get_under(self.transport, name, rule).await {
             FanoutRecord::Found(..) => Err(VaultPointerProbe::AlreadyPublished),
