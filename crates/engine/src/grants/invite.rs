@@ -793,12 +793,8 @@ pub fn convert_invite_claim(
     owner.authorise(scope)?;
     let claim = InviteClaim::decode(&item.payload).map_err(InviteError::MalformedClaim)?;
     let name = scope.commitment.ipns_name.as_slice();
-    if claim.scope_root_name != name {
-        return Err(InviteError::ScopeMismatch);
-    }
-
     let sender = item.sender_identity.to_sec1();
-    let link = recorded_claim_link(links, converted, scope.scope_id, &sender, &claim, now)?;
+    let link = recorded_claim_link(links, converted, scope.scope_id, name, &sender, &claim, now)?;
     // The tag the set carries for this link, which a write wave re-mints at the
     // name it moves the scope root to.
     let link_tag =
@@ -906,8 +902,8 @@ pub fn convert_invite_claim(
 }
 
 /// The one link the owner recorded at `scope_id` that `sender` signs claims
-/// for, where the owner's own records do not already refuse `claim` — the
-/// local half of [`convert_invite_claim`].
+/// for, where neither the scope root's current name nor the owner's own
+/// records refuse `claim` — the local half of [`convert_invite_claim`].
 ///
 /// The seal's inner sender signature is already verified; binding it to a link
 /// the owner recorded **at this scope** is what makes it a claim rather than a
@@ -918,10 +914,14 @@ fn recorded_claim_link<'l>(
     links: &'l [RecordedInvite],
     converted: &[ConvertedClaimRecord],
     scope_id: &[u8; 16],
+    scope_root_name: &[u8],
     sender: &[u8; IDENTITY_PUBLIC_LEN],
     claim: &InviteClaim,
     now: UnixMillis,
 ) -> Result<&'l RecordedInvite, InviteError> {
+    if claim.scope_root_name != scope_root_name {
+        return Err(InviteError::ScopeMismatch);
+    }
     let mut matches = links
         .iter()
         .filter(|l| l.scope_id == *scope_id && l.ephemeral_identity_pk == *sender);
@@ -943,11 +943,13 @@ fn recorded_claim_link<'l>(
 }
 
 /// The scope of the link `claim` names from `sender`, where the owner's local
-/// records would not refuse its conversion. The record-plane checks run only at
-/// conversion, so a claim this counts can still be refused there.
+/// records would not refuse its conversion. `scope_root_name` answers a scope
+/// root's current name, as this device last adopted it. The record-plane checks
+/// run only at conversion, so a claim this counts can still be refused there.
 pub fn pending_claim_scope(
     links: &[RecordedInvite],
     converted: &[ConvertedClaimRecord],
+    scope_root_name: &dyn Fn(&[u8; 16]) -> Option<IpnsName>,
     sender: &[u8; IDENTITY_PUBLIC_LEN],
     claim: &InviteClaim,
     now: UnixMillis,
@@ -956,9 +958,18 @@ pub fn pending_claim_scope(
         .iter()
         .find(|link| link.ephemeral_identity_pk == *sender)?
         .scope_id;
-    recorded_claim_link(links, converted, &scope_id, sender, claim, now)
-        .ok()
-        .map(|link| link.scope_id)
+    let name = scope_root_name(&scope_id)?;
+    recorded_claim_link(
+        links,
+        converted,
+        &scope_id,
+        name.as_str().as_bytes(),
+        sender,
+        claim,
+        now,
+    )
+    .ok()
+    .map(|link| link.scope_id)
 }
 
 /// The tag `link`'s own key material derives at `scope_root_name`, from the

@@ -7342,7 +7342,16 @@ where {
                         contact_label_seed: &contact_label_seed,
                         vault_root_scope: root_id,
                     }
-                    .pull(&staging, &entropy, ENVELOPE_V, now, &events)
+                    .pull(
+                        &staging,
+                        &entropy,
+                        ENVELOPE_V,
+                        now,
+                        &|scope_id| {
+                            scope_root_record_name(&base.borrow(), Some(&root_name), scope_id)
+                        },
+                        &events,
+                    )
                     .await;
                     if let Some(claims) = claims
                         && *pending_invite_claims.borrow() != claims

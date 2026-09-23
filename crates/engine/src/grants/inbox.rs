@@ -27,6 +27,7 @@
 use core::cell::RefCell;
 use std::collections::BTreeMap;
 
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -92,15 +93,18 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
     /// follows, so this emits no repaint of its own.
     ///
     /// `v` is the envelope version the pointer was sealed under; a payload from
-    /// any other does not open and never reaches this arm. `None` where the
-    /// inbox or the owner's link records did not answer, so the caller keeps
-    /// the count it holds.
+    /// any other does not open and never reaches this arm. `scope_root_name`
+    /// answers a scope root's current name. `None` where the inbox or the
+    /// owner's link records did not answer, so the caller keeps the count it
+    /// holds.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn pull<St, E>(
         &self,
         staging: &St,
         entropy: &RefCell<E>,
         v: u64,
         now: UnixMillis,
+        scope_root_name: &dyn Fn(&[u8; 16]) -> Option<IpnsName>,
         events: &mpsc::UnboundedSender<Event>,
     ) -> Option<PendingInviteClaims>
     where
@@ -109,7 +113,8 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
     {
         let items = poll_verified(self.mailbox, self.enc_secret, v).await.ok()?;
         self.accept_pointers(&items, staging, entropy, events).await;
-        self.pending_claims(&items, staging, entropy, now).await
+        self.pending_claims(&items, staging, entropy, now, scope_root_name)
+            .await
     }
 
     /// The claims on `items` that one of this device's recorded links would
@@ -120,6 +125,7 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
         staging: &St,
         entropy: &RefCell<E>,
         now: UnixMillis,
+        scope_root_name: &dyn Fn(&[u8; 16]) -> Option<IpnsName>,
     ) -> Option<PendingInviteClaims>
     where
         St: StagingStore,
@@ -143,8 +149,14 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
                 .iter()
                 .filter_map(|(item, claim)| {
                     let sender = item.sender_identity.to_sec1();
-                    let scope =
-                        pending_claim_scope(&records.links, &records.claims, &sender, claim, now)?;
+                    let scope = pending_claim_scope(
+                        &records.links,
+                        &records.claims,
+                        scope_root_name,
+                        &sender,
+                        claim,
+                        now,
+                    )?;
                     Some((item.item_id.clone(), NodeId(scope)))
                 })
                 .collect(),
@@ -512,7 +524,14 @@ mod tests {
                     contact_label_seed: &kdf::contact_label_seed(&[0x4c; 32]),
                     vault_root_scope: self.vault_root_scope,
                 }
-                .pull(&self.staging, &self.entropy, V, NOW, &sender),
+                .pull(
+                    &self.staging,
+                    &self.entropy,
+                    V,
+                    NOW,
+                    &|_| Some(scope_root_name()),
+                    &sender,
+                ),
             );
             drop(sender);
             let mut drained = Vec::new();
@@ -817,6 +836,30 @@ mod tests {
             fx.pending(),
             Some(BTreeMap::new()),
             "a link at its deadline takes no claim"
+        );
+    }
+
+    /// A fragment holder signs with the link's key but authors the claim's
+    /// scope root name. A conversion refuses a name that is not the scope
+    /// root's current one, so the count refuses it too, and one link holder
+    /// cannot raise the count with claims that never convert.
+    #[test]
+    fn a_claim_naming_another_scope_root_is_not_counted() {
+        let fx = Inbox::new();
+        let link = stranger();
+        fx.record_link(&link, None);
+        let claim = InviteClaim {
+            claim_id: [0x75; CLAIM_ID_LEN],
+            scope_root_name: b"k51-another-scope-root".to_vec(),
+            contact_code: ContactCode::create(&stranger(), stranger_enc().public()).encode(),
+        };
+        fx.post(&link, &claim.encode(), "other-scope-root");
+
+        assert_eq!(fx.pending(), Some(BTreeMap::new()));
+        assert_eq!(
+            fx.inbox_len(),
+            1,
+            "and the claim stays for the conversion to judge"
         );
     }
 
