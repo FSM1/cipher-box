@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.5.0](https://github.com/FSM1/cipher-box/compare/v2.4.1...v2.5.0) (2026-09-23)
+
+
+### Features
+
+* **api:** answer whether the caller account holds a name registration ([#1938](https://github.com/FSM1/cipher-box/issues/1938)) ([d4f2bca](https://github.com/FSM1/cipher-box/commit/d4f2bca8155c033f56112d9e00ab674c945b01b4))
+* **engine:** let a first-run cold start tolerate a failed public routing endpoint ([#1939](https://github.com/FSM1/cipher-box/issues/1939)) ([d30509e](https://github.com/FSM1/cipher-box/commit/d30509e48a2febc365d5ae663ee5d953e570069d))
+* **web:** show the owner the invite claims that wait for conversion ([#1940](https://github.com/FSM1/cipher-box/issues/1940)) ([cb7f85f](https://github.com/FSM1/cipher-box/commit/cb7f85f8d94f089d207c8c409bf90e0c877a3df4))
+
 ## [2.4.1](https://github.com/FSM1/cipher-box/compare/v2.4.0...v2.4.1) (2026-09-20)
 
 
