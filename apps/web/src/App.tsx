@@ -4,6 +4,7 @@ import { SessionEndWatcher } from './auth/SessionEndWatcher';
 import { BinPage } from './routes/BinPage';
 import { FilesPage } from './routes/FilesPage';
 import { InvitePage } from './routes/InvitePage';
+import { InvitePrototypeGate } from './routes/prototype/InvitePrototypePage';
 import { LoginPage } from './routes/LoginPage';
 import { SettingsPage } from './routes/SettingsPage';
 import { SharedPage } from './routes/SharedPage';
@@ -48,7 +49,14 @@ export function App() {
           }
         />
         {/* No `RequireAuth`: a redirect would drop the fragment the link is. */}
-        <Route path={INVITE_ROUTE} element={<InvitePage />} />
+        <Route
+          path={INVITE_ROUTE}
+          element={
+            <InvitePrototypeGate>
+              <InvitePage />
+            </InvitePrototypeGate>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>

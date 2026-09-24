@@ -1,0 +1,375 @@
+/* PROTOTYPE — throwaway. Styles for the invite-flow prototype only. */
+
+.proto-inv-page {
+  justify-content: flex-start;
+  padding-top: 48px;
+  padding-bottom: 96px;
+}
+
+.proto-inv-panel {
+  width: 100%;
+  max-width: 520px;
+}
+
+.proto-inv-card,
+.proto-inv-steps,
+.proto-inv-wide {
+  align-items: stretch;
+  text-align: left;
+}
+
+.proto-inv-card h1,
+.proto-inv-card .tagline,
+.proto-inv-steps h1,
+.proto-inv-steps .tagline,
+.proto-inv-wide h1,
+.proto-inv-wide .tagline {
+  text-align: center;
+}
+
+.proto-inv-wide {
+  max-width: 980px;
+}
+
+.proto-inv-stub-note {
+  margin-top: var(--spacing-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-dim);
+}
+
+.proto-inv-dim {
+  color: var(--color-text-secondary);
+}
+
+.proto-inv-warn {
+  color: var(--color-warning);
+}
+
+.proto-inv-small {
+  font-size: var(--font-size-sm);
+}
+
+.proto-inv-xsmall {
+  font-size: var(--font-size-xs);
+}
+
+.proto-inv-self-end {
+  align-self: flex-end;
+}
+
+.proto-inv-row {
+  display: flex;
+  gap: var(--spacing-xs);
+  justify-content: flex-end;
+}
+
+/* ---- header: folder name, from owner, permission ---- */
+
+.proto-inv-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.proto-inv-folder-name {
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.proto-inv-header--lg .proto-inv-folder-name {
+  font-size: 18px;
+}
+
+.proto-inv-header--sm .proto-inv-folder-name {
+  font-size: var(--font-size-md);
+}
+
+.proto-inv-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  align-items: center;
+  font-size: var(--font-size-sm);
+}
+
+.proto-inv-badge {
+  padding: 0 6px;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: var(--border-thickness) solid var(--color-green-primary);
+}
+
+.proto-inv-badge--write {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+/* ---- listing ---- */
+
+.proto-inv-plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.proto-inv-plain li {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: var(--spacing-xs);
+  padding: 6px var(--spacing-xs);
+  font-size: var(--font-size-sm);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.proto-inv-plain li:last-child {
+  border-bottom: none;
+}
+
+.proto-inv-kind {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.proto-inv-plain-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+
+.proto-inv-browser .file-list-header,
+.proto-inv-browser .file-list-item {
+  grid-template-columns: 1fr 90px 110px;
+  grid-template-areas: 'name size date';
+}
+
+.proto-inv-browser .file-list-item {
+  cursor: default;
+}
+
+/* ---- name field ---- */
+
+.proto-inv-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+
+/* ---- A: stacked card ---- */
+
+.proto-inv-card {
+  gap: var(--spacing-sm);
+}
+
+.proto-inv-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.proto-inv-join {
+  gap: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: var(--border-thickness) solid var(--color-border-dim);
+}
+
+/* ---- B: two panes ---- */
+
+.proto-inv-panes {
+  display: flex;
+  gap: var(--spacing-lg);
+  align-items: flex-start;
+}
+
+.proto-inv-pane-left {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  min-width: 0;
+}
+
+.proto-inv-pane-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.proto-inv-tag {
+  padding: 0 6px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  border: var(--border-thickness) dashed var(--color-green-dim);
+}
+
+.proto-inv-pane-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  width: 280px;
+  padding: var(--spacing-md);
+  border: var(--border-thickness) solid var(--color-green-primary);
+}
+
+/* ---- C: steps ---- */
+
+.proto-inv-steps {
+  gap: var(--spacing-sm);
+}
+
+.proto-inv-stepper {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proto-inv-step {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.proto-inv-step--on {
+  color: var(--color-text-primary);
+  border-color: var(--color-green-primary);
+}
+
+.proto-inv-step-n {
+  display: inline-grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--color-black);
+  background: var(--color-text-secondary);
+  border-radius: 999px;
+}
+
+.proto-inv-step--on .proto-inv-step-n,
+.proto-inv-step--done .proto-inv-step-n {
+  background: var(--color-green-primary);
+}
+
+.proto-inv-step-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proto-inv-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.proto-inv-summary {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+/* ---- joined: the shared folder ---- */
+
+.proto-inv-folder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  width: 100%;
+  max-width: 900px;
+  text-align: left;
+}
+
+/* ---- switcher: deliberately NOT the app's look ---- */
+
+.proto-inv-switcher {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  z-index: 2000;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  color: #111;
+  background: #fde047;
+  border-radius: 999px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 50%);
+  transform: translateX(-50%);
+}
+
+.proto-inv-switcher button {
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+  color: #111;
+  cursor: pointer;
+  background: #fff;
+  border: none;
+  border-radius: 999px;
+}
+
+.proto-inv-switcher-label {
+  min-width: 130px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ---- state panel: also off-brand, so it reads as a harness ---- */
+
+.proto-inv-state {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 720px;
+  margin-top: var(--spacing-lg);
+  padding: 8px;
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+  text-align: left;
+  color: #ddd;
+  background: #1c1c28;
+  border: 1px dashed #fde047;
+}
+
+.proto-inv-state summary {
+  color: #fde047;
+  cursor: pointer;
+}
+
+.proto-inv-state-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.proto-inv-state-row button {
+  padding: 2px 6px;
+  font-size: 11px;
+  color: #111;
+  cursor: pointer;
+  background: #e5e7eb;
+  border: none;
+  border-radius: 3px;
+}
+
+.proto-inv-state-dump {
+  margin-top: 6px;
+  font-size: 10px;
+  white-space: pre-wrap;
+  color: #a5f3fc;
+}
