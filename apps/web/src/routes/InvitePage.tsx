@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { LoginError } from '@cipherbox/auth-ui';
 import { useAuth } from '../auth/useAuth';
+import { SignInPanel } from '../components/auth/SignInPanel';
 import { useEngineAccount } from '../engine/useEngineSession';
 import { useCommandRunner } from '../hooks/useCommandRunner';
 
@@ -35,9 +36,13 @@ export function InvitePage() {
   // not absent.
   const [carriesLink] = useState(() => window.location.hash.length > 1);
 
+  // Latched, so a sign-in in flight keeps the panel, and the progress it holds.
+  const [decided, setDecided] = useState(false);
+  if (isSignedOut && !decided) setDecided(true);
+
   const state: ClaimState =
     progress ??
-    (account !== null ? (carriesLink ? 'ready' : 'noLink') : isSignedOut ? 'waiting' : 'checking');
+    (account !== null ? (carriesLink ? 'ready' : 'noLink') : decided ? 'waiting' : 'checking');
 
   const claim = () => {
     if (progress !== null) return;
@@ -61,37 +66,20 @@ export function InvitePage() {
       <div className="login-panel" data-testid="invite-claim" data-state={state}>
         <h1>CipherBox</h1>
         <p className="tagline">invite link</p>
-        <p className="login-description" data-testid="invite-status">
+        <p className="login-description" data-testid="invite-status" role="status">
           {MESSAGES[state]}
         </p>
         {state === 'refused' && <LoginError message={error} />}
-        {state === 'waiting' && (
-          <>
-            {/* A new tab, because this one holds the link: navigating away from
-                the address drops the capability with it. */}
-            <a className="terminal-btn" href="/" target="_blank" rel="noopener noreferrer">
-              sign in
-            </a>
-            {/* A session belongs to the tab that started it
-                (`EngineClient.signedInAccount`), and this one restores its own
-                once, at load — so a sign-in elsewhere reaches it by reloading,
-                which the address bar carries the link across. */}
-            <button
-              type="button"
-              className="terminal-btn"
-              onClick={() => window.location.reload()}
-              data-testid="invite-recheck"
-            >
-              reload after signing in
-            </button>
-          </>
-        )}
+        {/* In place: a navigation away would drop the link with the address. */}
+        {state === 'waiting' && <SignInPanel />}
         {state === 'ready' && (
           <>
             <p className="login-description" data-testid="invite-account">
               claiming as {account}
             </p>
+            {/* A sign-in here unmounts the focused control; the claim is next. */}
             <button
+              autoFocus={decided}
               type="button"
               className="terminal-btn terminal-btn--filled"
               onClick={claim}
@@ -118,7 +106,7 @@ export function InvitePage() {
  */
 const MESSAGES: Record<ClaimState, string> = {
   checking: 'checking whether this browser is signed in...',
-  waiting: 'sign in to claim this invite — the link keeps until you do.',
+  waiting: 'sign in here to claim this invite.',
   ready: 'this link shares a folder with you.',
   noLink: 'this address carries no invite link.',
   claiming: 'claiming...',

@@ -1,11 +1,12 @@
 import { StrictMode, type ReactNode } from 'react';
 import { EngineRequestError } from '@cipherbox/client';
 import type { EngineClient } from '@cipherbox/client';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { BrowserRouter, useLocation } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebCoreKitSession } from '../auth/coreKit';
-import { authWrapper, fakeCoreKitSession } from '../test/authFakes';
+import { authStore } from '../stores/auth.store';
+import { FAKE_PHRASE, fakeCoreKitSession, pageWrapper, signInByEmail } from '../test/authFakes';
 import { InvitePage } from './InvitePage';
 
 /** Stands in for the engine's opaque capability; the page reads none of it. */
@@ -16,7 +17,11 @@ const FRAGMENT = 'a-link-fragment';
  * moment the claim is dispatched — the ordering the capability's exposure
  * window depends on — and react-router's own location readable after it.
  */
-function claimEngine(refusal: Error | null = null, signedIn = true) {
+function claimEngine(
+  refusal: Error | null = null,
+  signedIn = true,
+  started: Promise<void> = Promise.resolve()
+) {
   const addressAtDispatch: string[] = [];
   let routerHash = '';
   const listeners = new Set<() => void>();
@@ -37,10 +42,10 @@ function claimEngine(refusal: Error | null = null, signedIn = true) {
       setFocus: () => Promise.resolve(),
       // The hand-off a restored Core Kit session owes the engine; it is what
       // gives this tab an account to claim with.
-      start(_secret: ArrayBuffer, accountId: string) {
+      async start(_secret: ArrayBuffer, accountId: string) {
+        await started;
         account = accountId;
         for (const listener of [...listeners]) listener();
-        return Promise.resolve();
       },
       claimInviteLink,
     },
@@ -65,7 +70,7 @@ async function openAt(
   session: WebCoreKitSession = fakeCoreKitSession().session
 ) {
   window.history.replaceState(null, '', `/invite${hash}`);
-  const Providers = authWrapper(engine.client, session);
+  const Providers = pageWrapper(engine.client, session);
   const wrapper = ({ children }: { children: ReactNode }) => (
     <StrictMode>
       <Providers>
@@ -89,6 +94,7 @@ async function claim() {
   });
 }
 
+beforeEach(() => authStore.signedOut());
 afterEach(() => window.history.replaceState(null, '', '/'));
 
 describe('the invite claim route', () => {
@@ -144,17 +150,79 @@ describe('the invite claim route', () => {
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('refused');
   });
 
-  it('leaves the link in the address bar until there is a session to claim with', async () => {
+  it('offers the sign-in methods in place, and leaves the link in the address bar', async () => {
     const { claimInviteLink } = await openAt(`#${FRAGMENT}`, claimEngine(null, false));
 
     expect(claimInviteLink).not.toHaveBeenCalled();
     expect(window.location.hash).toBe(`#${FRAGMENT}`);
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('waiting');
-    // A new tab, so signing in does not navigate this one off the capability.
-    expect(screen.getByRole('link', { name: 'sign in' }).getAttribute('target')).toBe('_blank');
-    // A session is the tab's own, so the sign-in that happens in that new tab
-    // reaches this one only across a load.
-    expect(screen.getByTestId('invite-recheck')).toBeTruthy();
+    expect(screen.getByTestId('sign-in-methods')).toBeTruthy();
+    expect(screen.queryByTestId('invite-claim-confirm')).toBeNull();
+  });
+
+  it('turns a sign-in on this page into a claim offer, with the link still in place', async () => {
+    const engine = await openAt(`#${FRAGMENT}`, claimEngine(null, false));
+
+    await signInByEmail();
+
+    await waitFor(() => expect(screen.getByTestId('invite-claim').dataset.state).toBe('ready'));
+    expect(window.location.pathname).toBe('/invite');
+    expect(window.location.hash).toBe(`#${FRAGMENT}`);
+    expect(screen.getByTestId('invite-account').textContent).toContain('acct01');
+    // The sign-in is not the gesture: the link waits for its own.
+    expect(engine.claimInviteLink).not.toHaveBeenCalled();
+
+    await claim();
+
+    expect(engine.claimInviteLink.mock.calls).toEqual([[FRAGMENT]]);
+    expect(screen.getByTestId('invite-claim').dataset.state).toBe('claimed');
+  });
+
+  it('moves focus to the claim control once a sign-in on this page lands', async () => {
+    await openAt(`#${FRAGMENT}`, claimEngine(null, false));
+
+    await signInByEmail();
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('invite-claim-confirm'))
+    );
+  });
+
+  it('keeps the sign-in panel through a sign-in still in flight', async () => {
+    // Core Kit holds the login while the engine has yet to start: the tab is
+    // neither signed in nor signed out, and the panel must not unmount.
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => (release = resolve));
+    await openAt(`#${FRAGMENT}`, claimEngine(null, false, started));
+
+    await signInByEmail();
+
+    expect(screen.getByTestId('invite-claim').dataset.state).toBe('waiting');
+    expect(screen.getByTestId('sign-in-methods')).toBeTruthy();
+
+    await act(async () => release());
+    await waitFor(() => expect(screen.getByTestId('invite-claim').dataset.state).toBe('ready'));
+  });
+
+  it('finishes a login held at the factor policy on this page too', async () => {
+    const engine = claimEngine(null, false);
+    const { session } = fakeCoreKitSession({ needsRecovery: true });
+    await openAt(`#${FRAGMENT}`, engine, session);
+
+    await signInByEmail();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recovery-choose-phrase'));
+    });
+    fireEvent.change(screen.getByTestId('recovery-phrase-input'), {
+      target: { value: FAKE_PHRASE },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('recovery-submit'));
+    });
+
+    await waitFor(() => expect(screen.getByTestId('invite-claim').dataset.state).toBe('ready'));
+    expect(window.location.hash).toBe(`#${FRAGMENT}`);
+    expect(engine.claimInviteLink).not.toHaveBeenCalled();
   });
 
   it('hands the engine a restored session, so an open link needs no second sign-in', async () => {

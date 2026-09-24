@@ -21,8 +21,9 @@ export class InvitePage {
     return this.page.getByTestId('invite-claim-confirm');
   }
 
-  get recheck(): Locator {
-    return this.page.getByTestId('invite-recheck');
+  /** The login methods the route renders in place while it waits for a session. */
+  get signIn(): Locator {
+    return this.page.getByTestId('sign-in-methods');
   }
 
   /**

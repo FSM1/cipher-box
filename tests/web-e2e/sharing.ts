@@ -48,7 +48,7 @@ export async function claimHere(page: Page, link: URL, how: ClaimSignIn): Promis
 
   await invite.open(link);
   await invite.expectState('waiting');
-  await expect(invite.recheck).toBeVisible();
+  await expect(invite.signIn).toBeVisible();
   await expect(invite.confirm).toHaveCount(0);
 
   await vault.ready();
