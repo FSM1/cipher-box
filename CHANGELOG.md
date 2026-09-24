@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/FSM1/cipher-box/compare/v2.5.0...v2.6.0) (2026-09-24)
+
+
+### Features
+
+* **web:** sign in on the invite page and claim without a reload ([#1944](https://github.com/FSM1/cipher-box/issues/1944)) ([41a425e](https://github.com/FSM1/cipher-box/commit/41a425edda28743026bbc5ba32afd57a4f3dcae9))
+
 ## [2.5.0](https://github.com/FSM1/cipher-box/compare/v2.4.1...v2.5.0) (2026-09-23)
 
 
