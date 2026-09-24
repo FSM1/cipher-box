@@ -4,7 +4,7 @@
  * account a spec mints is removed when the spec ends.
  */
 
-import { test as base, expect, type Browser, type Page } from '@playwright/test';
+import { test as base, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import type { Hex } from 'viem';
 import { FilesPage } from '../page-objects/files.page';
 import { LoginPage } from '../page-objects/login.page';
@@ -122,20 +122,29 @@ function report(
 const SIGN_IN_ATTEMPTS = 3;
 
 /**
- * Signs in through the shipped wallet method and waits for the vault browser.
- * Returns the milliseconds the successful attempt took, which is what the
- * timing profile records.
- *
- * The auth network refuses a login under its own load, which the front door
- * draws as a banner and not as a navigation, so a refused attempt is retried.
+ * Signs in at the front door and waits for the vault browser. Returns the
+ * milliseconds the successful attempt took, which is what the timing profile
+ * records.
  */
 export async function signIn(page: Page): Promise<number> {
+  await page.goto('/');
+  return signInWithWallet(page, new FilesPage(page).browser);
+}
+
+/**
+ * Signs in through the shipped wallet method on the page already open, and
+ * waits for `signedIn`. Returns the milliseconds the successful attempt took.
+ *
+ * The auth network refuses a login under its own load, which the panel draws as
+ * a banner and not as a navigation, so a refused attempt reloads the same
+ * address, fragment included, and is retried.
+ */
+export async function signInWithWallet(page: Page, signedIn: Locator): Promise<number> {
   const login = new LoginPage(page);
-  const files = new FilesPage(page);
   let refusal = '';
 
   for (let attempt = 0; attempt < SIGN_IN_ATTEMPTS; attempt += 1) {
-    await page.goto('/');
+    if (attempt > 0) await page.reload();
     await expect(login.walletButton).toBeEnabled({ timeout: 60_000 });
 
     const started = Date.now();
@@ -144,11 +153,8 @@ export async function signIn(page: Page): Promise<number> {
       .getByRole('button', { name: `Connect with ${TEST_WALLET_NAME}`, exact: true })
       .click();
 
-    const refused = await login.refusal(180_000);
-    if (refused === null) {
-      await expect(files.browser).toBeVisible({ timeout: 120_000 });
-      return Date.now() - started;
-    }
+    const refused = await login.refusal(signedIn, 300_000);
+    if (refused === null) return Date.now() - started;
     refusal = refused;
   }
 

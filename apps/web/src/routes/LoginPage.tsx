@@ -7,7 +7,7 @@ import { useEngineAccount } from '../engine/useEngineSession';
 /** The vault's front door. */
 export function LoginPage() {
   const isAuthenticated = useEngineAccount() !== null;
-  if (isAuthenticated) return <Navigate to="/files" />;
+  if (isAuthenticated) return <Navigate to="/files" replace />;
 
   return (
     <>

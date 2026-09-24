@@ -17,7 +17,11 @@ const FRAGMENT = 'a-link-fragment';
  * moment the claim is dispatched — the ordering the capability's exposure
  * window depends on — and react-router's own location readable after it.
  */
-function claimEngine(refusal: Error | null = null, signedIn = true) {
+function claimEngine(
+  refusal: Error | null = null,
+  signedIn = true,
+  started: Promise<void> = Promise.resolve()
+) {
   const addressAtDispatch: string[] = [];
   let routerHash = '';
   const listeners = new Set<() => void>();
@@ -38,10 +42,10 @@ function claimEngine(refusal: Error | null = null, signedIn = true) {
       setFocus: () => Promise.resolve(),
       // The hand-off a restored Core Kit session owes the engine; it is what
       // gives this tab an account to claim with.
-      start(_secret: ArrayBuffer, accountId: string) {
+      async start(_secret: ArrayBuffer, accountId: string) {
+        await started;
         account = accountId;
         for (const listener of [...listeners]) listener();
-        return Promise.resolve();
       },
       claimInviteLink,
     },
@@ -172,6 +176,32 @@ describe('the invite claim route', () => {
 
     expect(engine.claimInviteLink.mock.calls).toEqual([[FRAGMENT]]);
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('claimed');
+  });
+
+  it('moves focus to the claim control once a sign-in on this page lands', async () => {
+    await openAt(`#${FRAGMENT}`, claimEngine(null, false));
+
+    await signInByEmail();
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId('invite-claim-confirm'))
+    );
+  });
+
+  it('keeps the sign-in panel through a sign-in still in flight', async () => {
+    // Core Kit holds the login while the engine has yet to start: the tab is
+    // neither signed in nor signed out, and the panel must not unmount.
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => (release = resolve));
+    await openAt(`#${FRAGMENT}`, claimEngine(null, false, started));
+
+    await signInByEmail();
+
+    expect(screen.getByTestId('invite-claim').dataset.state).toBe('waiting');
+    expect(screen.getByTestId('sign-in-methods')).toBeTruthy();
+
+    await act(async () => release());
+    await waitFor(() => expect(screen.getByTestId('invite-claim').dataset.state).toBe('ready'));
   });
 
   it('finishes a login held at the factor policy on this page too', async () => {

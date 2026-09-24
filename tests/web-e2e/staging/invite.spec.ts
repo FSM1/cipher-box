@@ -8,7 +8,7 @@ import { FilesPage } from '../page-objects/files.page';
 import { InvitePage } from '../page-objects/invite.page';
 import { SharePage } from '../page-objects/share.page';
 import { SharedPage } from '../page-objects/shared.page';
-import { expect, published, signIn, test } from './fixtures';
+import { expect, published, signIn, signInWithWallet, test } from './fixtures';
 
 // The claim has to cross a second identity's sync pass against the real record
 // plane, which outlasts the suite's own per-test budget on a 2-vCPU box.
@@ -32,12 +32,15 @@ test('a minted link is claimed by a second identity and converted to a grant', a
   const link = await share.mintLink('30 days');
   await share.close();
 
+  // The claimant opens the link signed out and signs in on the claim route
+  // itself, so the fragment has to outlive the sign-in.
   const { page: claimant } = await secondContext();
-  await signIn(claimant);
-
   const invite = new InvitePage(claimant);
   await invite.open(link);
-  await invite.expectState('ready', 180_000);
+  await invite.expectState('waiting', 180_000);
+  await signInWithWallet(claimant, invite.confirm);
+  await invite.expectState('ready');
+  expect(new URL(claimant.url()).hash).not.toBe('');
   await expect(invite.account).not.toBeEmpty();
   await invite.claim();
   await invite.expectState('claimed', 180_000);

@@ -66,7 +66,7 @@ export function InvitePage() {
       <div className="login-panel" data-testid="invite-claim" data-state={state}>
         <h1>CipherBox</h1>
         <p className="tagline">invite link</p>
-        <p className="login-description" data-testid="invite-status">
+        <p className="login-description" data-testid="invite-status" role="status">
           {MESSAGES[state]}
         </p>
         {state === 'refused' && <LoginError message={error} />}
@@ -77,7 +77,9 @@ export function InvitePage() {
             <p className="login-description" data-testid="invite-account">
               claiming as {account}
             </p>
+            {/* A sign-in here unmounts the focused control; the claim is next. */}
             <button
+              autoFocus={decided}
               type="button"
               className="terminal-btn terminal-btn--filled"
               onClick={claim}

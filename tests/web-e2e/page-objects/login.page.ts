@@ -22,15 +22,15 @@ export class LoginPage {
   }
 
   /**
-   * Waits until the tab either reaches the vault or draws a refusal. Answers
-   * with the refusal text, or `null` once the vault won.
+   * Waits until the tab either shows `signedIn` or draws a refusal. Answers
+   * with the refusal text, or `null` once the sign-in won.
    */
-  async refusal(timeout: number): Promise<string | null> {
+  async refusal(signedIn: Locator, timeout: number): Promise<string | null> {
     let refused: string | null = null;
     await expect
       .poll(
         async () => {
-          if (new URL(this.page.url()).pathname.startsWith('/files')) return true;
+          if (await signedIn.isVisible()) return true;
           const banner = this.error.first();
           if ((await banner.count()) === 0) return false;
           refused = (await banner.innerText()).trim();
