@@ -1,6 +1,6 @@
 /**
- * PROTOTYPE — throwaway. Three variants of the share dialog under the
- * link-first model, switchable via `?variant=A|B|C` on the files route.
+ * PROTOTYPE — throwaway. Four variants of the share dialog under the
+ * link-first model, switchable via `?variant=A|B|C|D` on the files route.
  * Fed by an in-memory stub; it calls no engine and no facade.
  */
 import { useState } from 'react';
@@ -10,6 +10,7 @@ import { useSharePrototypeStore, type ProtoAction } from './SharePrototypeStore'
 import { SharePrototypeVariantA } from './SharePrototypeVariantA';
 import { SharePrototypeVariantB } from './SharePrototypeVariantB';
 import { SharePrototypeVariantC } from './SharePrototypeVariantC';
+import { SharePrototypeVariantD } from './SharePrototypeVariantD';
 import type { ProtoVariant } from './SharePrototypeVariant';
 import './SharePrototype.css';
 
@@ -30,12 +31,12 @@ export function SharePrototypeDialog({
     if (action.type === 'preset') setGeneration((value) => value + 1);
   };
 
-  const Variant =
-    variant === 'A'
-      ? SharePrototypeVariantA
-      : variant === 'B'
-        ? SharePrototypeVariantB
-        : SharePrototypeVariantC;
+  const Variant = {
+    A: SharePrototypeVariantA,
+    B: SharePrototypeVariantB,
+    C: SharePrototypeVariantC,
+    D: SharePrototypeVariantD,
+  }[variant];
 
   return (
     <Modal onClose={onClose} title={`share ${folderName}`} className="modal-backdrop--proto">

@@ -1,4 +1,4 @@
-/** PROTOTYPE — throwaway. Small pieces the three variants place differently. */
+/** PROTOTYPE — throwaway. Small pieces the variants place differently. */
 import { useState, type ReactNode } from 'react';
 import {
   PROTO_LIFETIMES,

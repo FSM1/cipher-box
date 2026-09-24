@@ -5,6 +5,7 @@ export const PROTO_VARIANTS = [
   { key: 'A', name: 'link first' },
   { key: 'B', name: 'people first' },
   { key: 'C', name: 'steps' },
+  { key: 'D', name: 'people table + inline link' },
 ] as const;
 
 export type ProtoVariant = (typeof PROTO_VARIANTS)[number]['key'];
