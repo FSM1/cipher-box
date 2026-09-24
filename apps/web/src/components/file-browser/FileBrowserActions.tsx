@@ -10,6 +10,9 @@ import { useContextMenu } from '../../hooks/useContextMenu';
 import { useFileDownload, type SaveRequest } from '../../hooks/useFileDownload';
 import { useVaultActions, type BatchOutcome } from '../../hooks/useVaultActions';
 import { ShareDialog } from '../sharing/ShareDialog';
+import { SharePrototypeDialog } from '../sharing/prototype/SharePrototypeDialog';
+import { SharePrototypeSwitcher } from '../sharing/prototype/SharePrototypeSwitcher';
+import { useSharePrototypeVariant } from '../sharing/prototype/SharePrototypeVariant';
 import type { ListingRow } from '../../vault/listing';
 import { previewKind } from '../../vault/previewKind';
 import { useSelection } from '../../vault/selection';
@@ -70,6 +73,7 @@ export function FileBrowserActions({
   onNavigateUp,
 }: FileBrowserActionsProps) {
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const prototypeVariant = useSharePrototypeVariant();
   const [downloading, setDownloading] = useState(false);
   const menu = useContextMenu();
   const actions = useVaultActions();
@@ -266,7 +270,17 @@ export function FileBrowserActions({
           onConfirm={() => closeOnBatch(actions.remove(dialog.rows.map((row) => row.id)))}
         />
       )}
-      {dialog?.kind === 'share' && <ShareDialog row={dialog.row} onClose={close} />}
+      {dialog?.kind === 'share' &&
+        (prototypeVariant === null ? (
+          <ShareDialog row={dialog.row} onClose={close} />
+        ) : (
+          <SharePrototypeDialog
+            folderName={dialog.row.name}
+            variant={prototypeVariant}
+            onClose={close}
+          />
+        ))}
+      {prototypeVariant !== null && <SharePrototypeSwitcher current={prototypeVariant} />}
       {dialog?.kind === 'details' && (
         <DetailsDialog
           row={dialog.row}

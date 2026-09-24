@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { RequireAuth } from './auth/RequireAuth';
 import { SessionEndWatcher } from './auth/SessionEndWatcher';
+import { SharePrototypePage } from './components/sharing/prototype/SharePrototypePage';
 import { BinPage } from './routes/BinPage';
 import { FilesPage } from './routes/FilesPage';
 import { InvitePage } from './routes/InvitePage';
@@ -49,6 +50,9 @@ export function App() {
         />
         {/* No `RequireAuth`: a redirect would drop the fragment the link is. */}
         <Route path={INVITE_ROUTE} element={<InvitePage />} />
+        {!import.meta.env.PROD && (
+          <Route path="/prototype/share-dialog" element={<SharePrototypePage />} />
+        )}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
