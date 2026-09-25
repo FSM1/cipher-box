@@ -267,19 +267,21 @@ notifications). Nothing on it is load-bearing for safety: root migration has
 the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in metadata.
 
 - **Post**: any authenticated account → recipient identity pubkey; body is the
-  HPKE-sealed blob (≤ ~8 KB), sender supplies an idempotency key. Posts to
-  unknown recipient pubkeys are rejected — an accepted, rate-limited,
-  exact-pubkey existence oracle.
+  HPKE-sealed blob (≤ ~8 KB), sender supplies an idempotency key. A post that
+  reuses a key returns the live item; after the ack, the same key creates a
+  new item
+  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  D5, D6). Posts to unknown recipient pubkeys are rejected — an accepted,
+  rate-limited, exact-pubkey existence oracle.
 - **Poll**: recipient-authenticated; returns `{id, receivedAt, blob}` — no
   sender metadata in the clear (the sealed payload is owner-signed inside).
   Clients poll on the sync design's 30 s cadence; no push in v2.0 (push-ready
   seam per FSM1/cipher-box-next#33).
-- **Ack**: delete by id. The answer says whether this call removed the item,
-  and the owner engine converts a claim only on "removed"
-  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
-  D5). Retention: until acked, bounded — per-recipient
-  pending cap (reject-new when full) and a 90-day unacked TTL aligned with
-  record EOLs. Rate limits per sender account and per recipient mailbox.
+- **Ack**: delete by id. The answer says whether this call removed the item, and
+  the owner engine converts a claim only on "removed" (ADR 0023 D5). Retention:
+  until acked, bounded — per-recipient pending cap (reject-new when full) and a
+  90-day unacked TTL aligned with record EOLs. Rate limits per sender account
+  and per recipient mailbox.
 - **Accepted exposure**: transient `{sender, recipient, timestamp}` edges;
   never a durable graph, never key material.
 

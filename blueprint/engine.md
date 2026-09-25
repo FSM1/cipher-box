@@ -923,8 +923,8 @@ The **expired-link sweep**
 D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
 `directChildScopeIndex` from the vault root, with one resolve and one unseal per
 scope root, and cuts every link entry whose `deadline` is not later than the
-injected `now`. It first converts the pending claims, and it never cuts a link
-that has a pending conversion op entry. The sweep depends on the two-device
+injected `now`. It first converts the pending claims, and it keeps the
+pending-op rule of "Invites" (ADR 0023 D4). The sweep depends on the two-device
 publish fix — re-resolve, then sign above the highest sequence seen — which is
 not landed; without it two owner devices that cut one link in one window publish
 two records at one sequence.
@@ -1030,7 +1030,9 @@ the republish it already does.
   grants coexist and a folder holds any number of live links, each with its
   own permission and lifetime. A direct grant to an existing grantee is a
   permission change when the permission differs, and nothing otherwise
-  ("already has access"). `grant-target-already-names-a-scope` and
+  ("already has access"). A write grant on a folder that is not a write
+  scope yet runs the write-scope cut first (ADR 0025 D6).
+  `grant-target-already-names-a-scope` and
   `invite-target-already-names-a-scope` retire for the append; D7 lists the
   refusals that stay.
 - **Accept flow**: mailbox pointer (sender-signature verified inside the seal,
@@ -1051,7 +1053,8 @@ the republish it already does.
   passes its binding verify → the engine resolves the scope pointer the
   fragment names, opens the re-point object under the fragment's
   `pointerReadKey`, verifies its owner-identity signature against that code,
-  and verifies the record at `currentRootName` at that name → the record is
+  and verifies the record at `currentRootName` at that name, with the
+  old-name tombstone and the mailbox mirror as accelerators only → the record is
   not this vault's own root scope → a blob sits at the link tag, derived
   again at each `currentRootName` → the owner-signed commitment names that tag
   with kind `link` and a `deadline` later than the injected `now`, and the
@@ -1072,8 +1075,10 @@ the republish it already does.
   to hosts. Read revoke = the immediate-cut trigger above; the promise is
   "they keep what they saw; they lose everything new, now." Write
   revoke/downgrade = write rotation; old names are hijackable by the revokee
-  and therefore dead to survivors — tombstones advisory only. Under the
-  link-first model (ADR 0025):
+  and therefore dead to survivors — tombstones advisory only. Every
+  write-grantee revoke, downgrade and D1 checkbox on a write grantee runs a
+  name wave, so cheap, routinely-runnable write rotation stays a hard
+  requirement (ADR 0025 D6). Under the link-first model (ADR 0025):
   - **Revoke link** cuts the link row, and every holder of that link loses
     access at once. A grantee who came through the link keeps access unless
     the owner ticks the confirmation's one checkbox, "also remove the N people
@@ -1119,26 +1124,31 @@ the republish it already does.
     and stops at the deadline.
   - **Conversion** (ADR 0023 D3, D4, D9): any owner device converts on every
     tick, with one root publish per folder per tick, and when the owner opens
-    the share dialog of a folder. It converts a claim only when the claim
-    opens and its sender signature verifies; the claim's scope pointer names
-    a scope this owner holds, matched by the re-point object's `scopeId`, and
-    the record at `currentRootName` passes the adoption gate; the sender is
-    the owner-attested `recipientIdentityPk` of a ledger row whose commitment
-    entry has kind `link`; that entry's deadline is later than the injected
-    `now`, checked once at the ack and stored in the op entry; the claimant
-    contact code passes its binding verify; and the live rows that carry this
-    link's via-link reference are below its admission cap. A row for the
-    claimant identity already in the scope makes conversion a no-op, so
-    conversion never changes an existing row (ADR 0026 consequence 5).
-    Otherwise the device appends a personal row at the conversion permission,
-    with the via-link reference, the claimant's name as the grantee name
-    under the flag `claimant`, and the write material for a write link; it
-    re-signs the commitment, publishes the root, and posts the share pointer.
-    The pending conversion is a durable op record under ADR 0020, and a failed
-    one retries whole on later ticks. The converting device shows one
-    transient `X joined <folder>` notice; the people list updates from the
-    record on every owner device (D7). A revoked person may join again through
-    another live link, as a fresh admission (D8).
+    the share dialog of a folder. It converts a claim only when the claim opens
+    and its sender signature verifies; the claim's scope pointer names a scope
+    this owner holds, matched by the re-point object's `scopeId`, and the record
+    at `currentRootName` passes the adoption gate; the sender is the
+    owner-attested `recipientIdentityPk` of a ledger row whose commitment entry
+    has kind `link`; that entry's deadline is later than the injected `now`,
+    checked once at the ack and stored in the op entry; the claimant contact
+    code passes its binding verify; and the live rows that carry this link's
+    via-link reference are below its admission cap. A row for the claimant
+    identity already in the scope makes conversion a no-op, so conversion never
+    changes an existing row (ADR 0026 consequence 5). Otherwise the device
+    appends a personal row at the conversion permission, with the via-link
+    reference, the claimant's name as the grantee name under the flag
+    `claimant`, and, for a write link, the write material, after a write-scope
+    cut when the folder is not a write scope yet (ADR 0024 D4); it re-signs the
+    commitment, publishes the root, and posts the share pointer. A write wave
+    re-maps each via-link reference (core.md "Write-body"). The pending
+    conversion is a durable op record under ADR 0020, and a failed one retries
+    whole on later ticks. The engine never cuts a link while an op entry for
+    that link is pending (ADR 0023 D4). A conversion refused at the 1024-row cap
+    dead-letters without blocking the queue, and the people list shows the
+    refusal (ADR 0026 E1). The converting device shows one transient
+    `X joined <folder>` notice; the people list updates from the record on
+    every owner device (D7). A revoked person may join again through another
+    live link, as a fresh admission (D8).
   - **Grantee names** (ADR 0027 D3): the owner can overwrite any grantee
     name; the edit re-signs the row with the flag `owner` and publishes the
     root. The name syncs with the record, and the same person in two folders
@@ -1152,8 +1162,10 @@ the republish it already does.
     navigates away. It returns the owner and folder names from a verified
     fragment signature, the link's conversion permission, and a one-level
     listing of the direct children's names and kinds from one read of the
-    scope root, with no sizes or counts. It reports an expired link, a
-    revoked link, and a link this account already joined.
+    scope root, with no sizes or counts and no browse into a subfolder. A
+    link with a bad name signature shows no names, and the link still works
+    (ADR 0027 D5). It reports an expired link, a revoked link, and a link
+    this account already joined.
 - **Files are first-class grant targets** (FSM1/cipher-box-next#25 D5): envelope blobs +
   write-body ledger like any node; ancestor rotations re-seal
   independently-shared descendants' grants as part of republishing them.
@@ -1185,10 +1197,22 @@ the republish it already does.
 
 ### Sharing residuals
 
-Accepted by ADRs 0023 to 0027:
+Accepted by ADRs 0023 to 0028:
 
 - A link holder, or anyone with the URL, unmasks every committed recipient key
-  through the fragment's `pointerReadKey` (ADR 0024 E4).
+  (`CONTEXT.md` "Grant ledger", ADR 0024 E4).
+- One key per link: the owner cannot cut one unconverted holder alone, and a
+  leak of one holder's bookmark leaks the link (ADR 0024 E3).
+- A person revoke ends the link for every holder not yet converted, so the
+  owner must issue a group link again (ADR 0025 E7).
+- A write revoke moves the scope root, and every live link on the scope
+  survives only through the scope pointer path (ADR 0025 E6).
+- An API that answers "removed" to two owner devices makes both mint the same
+  row; no extra grant results (ADR 0023 E1).
+- The API can replay an acked claim through a live link and re-admit a person
+  who could rejoin through it anyway (ADR 0023 E2).
+- More than 1000 pending claimants fill the owner's mailbox pending cap and
+  block other mail until the owner converts (ADR 0023 E6).
 - A public observer sees which commitment entries are links and when each
   expires, and each deadline causes a rotation (ADR 0023 consequence 3,
   ADR 0025 E8).
@@ -1418,15 +1442,16 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
 
 ## Facade
 
-The engine exposes one async command-and-event surface, designed to be
-wrapped, not extended: commands (the intent ops, grant/rotation/share actions,
-the invite preview of ADR 0028 D2, auth, manual refresh) and an event stream out (snapshot updates, staleness
-transitions, withheld-update escalations, dead-letters, attributable abuse
-events). Desktop calls it directly in the Tauri process; web wraps it via
-`crates/wasm` bindings inside a dedicated worker, with the RPC facade and tab
-leadership owned by `packages/client` (FSM1/cipher-box-next#28 D3/D4). The engine's contract is
-only this: one live instance is the single writer, and every trust decision
-already happened below the facade — hosts render, they never decide.
+The engine exposes one async command-and-event surface, designed to be wrapped,
+not extended: commands (the intent ops, grant/rotation/share actions, the invite
+preview of ADR 0028 D2, auth, manual refresh) and an event stream out (snapshot
+updates, staleness transitions, withheld-update escalations, dead-letters,
+attributable abuse events). Desktop calls it directly in the Tauri process; web
+wraps it via `crates/wasm` bindings inside a dedicated worker, with the RPC
+facade and tab leadership owned by `packages/client` (FSM1/cipher-box-next#28
+D3/D4). The engine's contract is only this: one live instance is the single
+writer, and every trust decision already happened below the facade — hosts
+render, they never decide.
 
 ## Open edges
 

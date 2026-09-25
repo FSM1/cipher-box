@@ -194,7 +194,9 @@ all living in `packages/client` and running inside the engine worker realm:
   share list in the snapshot, revocation states from the engine's
   revocation-signal/unresolvable/epoch-lag classification and its three
   removed-side messages (engine.md "Grants and ledger"). Every grantee
-  fingerprint comes from the engine; the UI hashes no key.
+  fingerprint comes from the engine; the UI hashes no key. The UI renders the
+  engine's flag that a write link makes each URL holder a writer after
+  conversion, with no owner step (ADR 0023 D9, E3).
 
 ## Login and identity
 
@@ -277,28 +279,30 @@ all living in `packages/client` and running inside the engine worker realm:
 | `/settings`       | Auth methods, MFA enrollment and recovery phrase (Core Kit UX), authorized devices and approval (ADR 0009), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export                         |
 | `/invite#…`       | Invite page — sign-in, then the preview, then "join" as its own press; fragment secret handed to the facade unread                                                                                          |
 
-- **Invite page** (ADR 0028 D1, D4–D6): sign-in comes first and never spends
-  a link. The preview then runs with no press and shows one card:
+- **Invite page** (ADR 0028 D1, D4–D6): sign-in comes first and never spends a
+  link. The preview then runs with no press and shows one card:
   `<owner name> shared <folder> with you` when the fragment's name signature
-  verifies, the permission badge, the one-level listing of names and kinds,
-  and a grantee-name field that starts at the sign-in display name, never the
-  email ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
-  D1). "Join" posts the claim, starts the link read and opens the shared
-  folder. An expired or revoked link shows its state; a link this account
-  already joined shows "open folder" and no "join". A write-link preview says
-  "can edit" before the holder can write.
+  verifies (a link with a bad name signature shows no names, and the link still
+  works; ADR 0027 D5), the permission badge, the one-level listing of names and
+  kinds, and a grantee-name field that starts at the sign-in display name, or
+  empty when the sign-in supplies none, never the email
+  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  D1). "Join" posts the claim, starts the link read and opens the shared folder.
+  An expired or revoked link shows its state; a link this account already joined
+  shows "open folder" and no "join". A write-link preview says "can edit" before
+  the holder can write.
 - **Share dialog**
   ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
   D7, [ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
   D1, D5–D7, [ADR 0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)
   D2–D4): a people table with each grantee name, editable, the fingerprint on
   hover, and a "can" control with view and edit; an inline "create link" row
-  that sets permission, deadline and admission cap, and shows the new link
-  once; one chip per live link, with no permission control; and the
-  contact-code path collapsed under "advanced". Opening the dialog runs
-  conversion, and the device that converts shows one transient
-  `X joined <folder>` notice. A revoke confirms inline
-  with the fingerprint, and names the link and the other people who keep
+  that sets permission, deadline and admission cap, with a small default cap
+  that the build chooses (ADR 0023 D9), and shows the new link once; one chip
+  per live link, with no permission control; and the contact-code path collapsed
+  under "advanced". Opening the dialog runs conversion, and the device that
+  converts shows one transient `X joined <folder>` notice. A revoke confirms
+  inline with the fingerprint, and names the link and the other people who keep
   access; a link revoke carries the checkbox "also remove the N people who
   joined through this link". A grant to an existing grantee with the same
   permission says "already has access".

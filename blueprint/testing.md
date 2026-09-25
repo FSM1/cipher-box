@@ -217,8 +217,8 @@ is not the contract gate.
   two instances of one host) on a single vault, exercising share
   grant/accept, an invite-link join converted by an owner device other than
   the one that minted the link, the revocation immediate cut, write rotation
-  with surviving grantees, offline/reconnect convergence, and leader failover mid-flow
-  (web-client.md). Runnable at all only because of the DX hook below.
+  with surviving grantees, offline/reconnect convergence, and leader failover
+  mid-flow (web-client.md). Runnable at all only because of the DX hook below.
 
 ## CI gates
 

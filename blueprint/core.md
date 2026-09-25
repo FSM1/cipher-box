@@ -241,7 +241,9 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
 tag}` and each optional field only when it is present, so a row minted
   before those fields keeps its bytes and its signature, and a removed field
   still fails the verify. A row carries no deadline. The codec refuses a
-  malformed grantee name on decode and, release-active, on encode
+  malformed grantee name on decode and, release-active, on encode. A write
+  wave re-mints every row at a new tag and re-maps each via-link reference in
+  the same pass
   ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
   D2 and consequence 1, ADR 0027 D3). The
   child-scope index enumerates directly-descendant scope roots for the F-4
@@ -303,12 +305,12 @@ tag}` and each optional field only when it is present, so a row minted
   grant-set commitment (ECDSA over det-CBOR `{cutEpoch, ipnsName,
 ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`,
   where each entry may also carry the optional `kind`, `deadline`, conversion
-  permission and admission cap). An absent `kind` means `personal`; the other
-  three belong to a `link` entry only, and the codec refuses a `deadline` on a
-  `personal` entry on decode and, release-active, on encode. A `link` entry
-  commits `permission` = `read` whatever its conversion permission, because
-  every re-sealer selects blob material by the committed permission (ADR 0023
-  D2, D9;
+  permission and admission cap). An absent `kind` means `personal`; the
+  `deadline`, the cap and the conversion permission are link fields. The codec
+  refuses a `deadline` on a `personal` entry and a `link` entry whose
+  `permission` is not `read`, on decode and, release-active, on encode: every
+  re-sealer selects blob material by the committed permission (ADR 0023 D2,
+  D9;
   [ADR 0024](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
   D4). The section also carries the owner blob, the optional
   owner-write-blob (below), ascent link (public half plaintext,
@@ -423,12 +425,14 @@ writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   verify functions.
 - **Invite fragment and claim**: the invite-link fragment is det-CBOR inside a
   2048-byte bound, carrying the invite secret, the owner contact code, the
-  scope pointer name, the scope's `pointerReadKey`, and the owner's
-  identity signature over `{scopePointerName, ownerName, folderName}`. The
-  claim payload carries `{claimId, scopePointerName, contactCode}` and the
-  claimant's suggested grantee name, bounded like a share display name (ADR
-  0023 D2, ADR 0027 D1, D5). New KAT vectors pin both; the vectors that predate
-  them stay valid.
+  scope pointer name, the scope's `pointerReadKey`, `ownerName`, `folderName`,
+  and the owner's identity signature over `{scopePointerName, ownerName,
+folderName}`. The claim payload carries `{claimId, scopePointerName,
+contactCode}` and the claimant's suggested grantee name, bounded like a share
+  display name (ADR 0023 D2, ADR 0027 D1, D5). New KAT vectors pin the
+  fragment, the claim, and the new commitment-entry and ledger-row fields;
+  the vectors that predate them stay valid (ADR 0023 consequence 1, ADR 0027
+  consequence 1).
 
 ### Structure-tag registry
 
@@ -502,27 +506,27 @@ open path would refuse is a version whose key is gone.
 
 The `owner-local` structure carries **every durable store the owner alone
 authors and reads** — received shares, the contact book, and the engine's
-per-owner staging bookkeeping (the retire ledger and the doomed-name journal)
-— under one format rather than one module per store
-(FSM1/cipher-box-next ADR 0006). It seals HPKE **auth mode** to the owner's own
-enc subkey over the same three-key clear header as the settings record (`v`,
-`enc`, `ciphertext`), with the owner tag bound into the AAD and never
-serialized. What is new is the **store kind**: a frozen registry of
-`(name, discriminator)` pairs — `received-shares` (`0x01`), `contact-book`
-(`0x02`), `retire-ledger` (`0x04`), `doomed-journal` (`0x05`) — whose
-discriminator rides the AAD and whose name completes the HPKE `info` string
-`cipherbox/v2/owner-local/<name>`. Kind `0x03`, the retired `invite-records`
-store, stays reserved for ever (ADR 0023 D2, consequence 2). The kind is a
-key-schedule input and **never a wire field**, so a blob offered as the wrong
-store is refused by the AEAD rather than by a comparison: a decryption failure,
-not a parse failure. The KAT set is `owner_local_accept` (an empty body, plus one populated body per kind,
-each reproducing its exact bytes from a fixed enc + ephemeral, then opening) and
+per-owner staging bookkeeping (the retire ledger and the doomed-name journal) —
+under one format rather than one module per store (FSM1/cipher-box-next ADR
+0006). It seals HPKE **auth mode** to the owner's own enc subkey over the same
+three-key clear header as the settings record (`v`, `enc`, `ciphertext`), with
+the owner tag bound into the AAD and never serialized. What is new is the
+**store kind**: a frozen registry of `(name, discriminator)` pairs —
+`received-shares` (`0x01`), `contact-book` (`0x02`), `retire-ledger` (`0x04`),
+`doomed-journal` (`0x05`) — whose discriminator rides the AAD and whose name
+completes the HPKE `info` string `cipherbox/v2/owner-local/<name>`. Kind `0x03`,
+the retired `invite-records` store, stays reserved for ever (ADR 0023 D2,
+consequence 2). The kind is a key-schedule input and **never a wire field**, so
+a blob offered as the wrong store is refused by the AEAD rather than by a
+comparison: a decryption failure, not a parse failure. The KAT set is
+`owner_local_accept` (an empty body, plus one populated body per kind, each
+reproducing its exact bytes from a fixed enc + ephemeral, then opening) and
 `owner_local_reject` (the settings record's reject family — tampered ciphertext,
 a foreign recipient, a cross-family transplant, a short and a low-order `enc`, a
 missing `enc` and a missing `ciphertext`, a forward `v`, an unknown clear-header
 field, and a base-mode forgery — plus a **cross-kind negative for every ordered
-pair of kinds**, which is what proves the discriminator earns the separation that
-distinct per-store `info` strings used to give for free).
+pair of kinds**, which is what proves the discriminator earns the separation
+that distinct per-store `info` strings used to give for free).
 
 ### Bin index
 
