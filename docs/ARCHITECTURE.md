@@ -330,7 +330,7 @@ FUSE architecture details.
 ## Sharing Model
 
 Sharing is grants-in-metadata: a grant blob in the shared folder's own record carries the
-scope seed, sealed to the recipient, under an owner-signed grant-set commitment. The server
+scope seed, sealed to the recipient, whose tag an owner-signed grant-set commitment names. The server
 holds no grant and no key. The invite link is the primary sharing path: it is bearer and
 multi-claim, a link holder reads at once, and any owner device converts a claim into a
 personal grant with no approve step. See [SHARING.md](SHARING.md).

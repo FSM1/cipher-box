@@ -1,11 +1,8 @@
 //! A fresh grant mint: the owner-side grant on a folder that is not a scope
-//! root yet (blueprint/engine.md "Grants and ledger: Grant creation",
-//! ADR 0026). A grant on a scope root that stands appends a row instead
-//! ([`super::append`]).
+//! root yet. blueprint/engine.md "Grants and ledger: Grant creation" gives the
+//! mint sequence (ADR 0026). A grant on a scope root that stands appends a row
+//! instead ([`super::append`]).
 //!
-//! The mint converges the subtree, mints the grantee scope at read epoch 1,
-//! publishes grantee-first, re-seals the granted folder's interior into that
-//! scope, re-keys the reparented descendants, and updates the parent index.
 //! A subtree that cannot be proven epoch-converged is refused **fail-closed**,
 //! so a new grantee never regresses through an ancestor scope's history
 //! (`CONTEXT.md` "Epoch-converged"). An invite link mint on such a folder runs
@@ -15,7 +12,7 @@
 //! ([`rotate_scope_write`](crate::rotation::rotate_scope_write)), which the
 //! caller runs over the minted root. [`post_share_pointer`] is split out of
 //! [`create_grant`] so the caller posts the pointer after that wave: a pointer
-//! to the root the wave moves off names a name the grantee's seed does not
+//! to the root the wave moves off carries a name the grantee's seed does not
 //! derive.
 //!
 //! Entropy is the injected [`Entropy`] seam. Every seam this composes over has

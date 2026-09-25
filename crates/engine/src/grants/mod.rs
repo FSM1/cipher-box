@@ -9,9 +9,9 @@
 //!
 //! - [`create`] mints a fresh grantee scope; [`append`] adds a row, changes a
 //!   permission or renames a grantee at a scope root that stands (ADR 0026).
-//! - [`invite`] and [`invite_mint`] mint a link entry; the link-held read runs
-//!   through it until the owner converts the claim; [`conversion`] holds the
-//!   acked claims the conversion pass converts (ADR 0023, ADR 0024).
+//! - [`invite`] and [`invite_mint`] mint a link entry; `link_read` reads
+//!   through the link entry until the owner converts the claim; [`conversion`]
+//!   holds the acked claims the conversion pass converts (ADR 0023, ADR 0024).
 //! - [`cut_set`] names the rows one revoke removes (ADR 0025 D4);
 //!   [`revocation`] classifies what a reader finds.
 

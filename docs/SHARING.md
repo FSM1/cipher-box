@@ -19,13 +19,13 @@ This document cites a decision as "ADR 0023 D3" (decision) or "ADR 0023 E2" (res
 
 ## Where the grant lives
 
-A grant lives in the published record of the shared folder, not on the server. Sharing a folder makes it a scope root. The scope root carries:
+A grant lives in the published record of the shared folder, not on the server. When the owner shares a folder, the folder becomes a scope root. The scope root carries:
 
 - one grant blob per recipient, keyed by a blinded tag;
 - the grant ledger, sealed in the write-body;
 - the owner-signed grant-set commitment.
 
-Each commitment entry has a kind: `personal` or `link`. A link entry also carries the owner-signed deadline, the conversion permission and the admission cap (ADR 0023 D2, D9, ADR 0024 D4). Each ledger row carries an owner signature over its keys and tag, plus the via-link reference, the grantee name and the name source flag when they are present (ADR 0027 D3).
+Each commitment entry has a kind: `personal` or `link`. A link entry also carries the owner-signed deadline, the conversion permission and the admission cap (ADR 0023 D2, D9, ADR 0024 D4). Each ledger row carries an owner signature over its keys and tag. The signature also covers the via-link reference, the grantee name and the name source flag when they are present (ADR 0027 D3).
 
 The API holds no grant and no key. It carries the mailbox only: share pointers, claims, and nothing that safety depends on. Every owner act reads the record. The owner's contact book is no trust input for conversion or revoke (ADR 0025 D3).
 
@@ -46,7 +46,7 @@ A direct grant to an identity that already holds a row is a permission change wh
 `Command::CreateInviteLink { node, permission, expires_at, owner_name }` mints a link.
 
 - The link is a grant blob wrapped to an ephemeral identity that derives from one random invite secret. Its ledger row has the shape of a personal row.
-- The link entry and its row are committed at `read`, whatever `permission` is. `permission` is the conversion permission. So a write link runs no write-scope cut and no name wave at mint, and its blob holds no write seed (ADR 0024 D4).
+- The engine commits the link entry and its row at `read`, whatever `permission` is. `permission` is the conversion permission. So a write link runs no write-scope cut and no name wave at mint, and its blob holds no write seed (ADR 0024 D4).
 - Every link has a deadline. With no `expires_at`, the deadline is `DEFAULT_LINK_LIFETIME` (7 days) from the injected `now`.
 - The mint sets the admission cap to `DEFAULT_ADMISSION_CAP` (25).
 - No owner device stores the invite secret or a record of the link. The link lives in the owner-signed record alone. The fragment shows only once, at the mint (ADR 0023 D2).
@@ -54,14 +54,14 @@ A direct grant to an identity that already holds a row is a permission change wh
 
 ### The fragment
 
-The URL fragment is the whole bearer capability. It is one det-CBOR blob with a 2048-byte bound (`MAX_INVITE_FRAGMENT_BYTES`). It carries:
+The URL fragment is the whole bearer capability. It is base64url text over one det-CBOR blob, and the blob bytes have a 2048-byte bound (`MAX_INVITE_FRAGMENT_BYTES`). The blob carries:
 
 - the invite secret;
 - the owner contact code;
 - the scope id, the scope pointer name and the scope's stable `pointerReadKey`;
 - the owner name and the folder name, under an owner identity signature over `{scopePointerName, ownerName, folderName}` (ADR 0027 D5).
 
-A host moves the fragment between a URL and a command, and never parses it. A bad names signature gives no names, and the link still works. The fragment carries no MAC, so its other fields fail closed on their own: a changed pointer name or read key opens no re-point object under the owner code.
+A host moves the fragment between a URL and a command, and never parses it. A bad names signature gives no names, and the link still works. The fragment carries no MAC, and its other fields fail closed on their own: a changed pointer name or read key opens no re-point object under the owner code.
 
 Anyone who holds the URL can unmask every committed recipient key with `pointerReadKey` (ADR 0024 E4).
 
@@ -71,7 +71,7 @@ Anyone who holds the URL can unmask every committed recipient key with `pointerR
 
 - It runs the checks of the join up to the open, and opens the scope root once through the link's grant blob under the adoption gate.
 - It checks against the floors the session already holds, and raises none. It posts no claim, persists nothing and deposits no seed.
-- It returns the names (only when the names signature verifies), the conversion permission, the state (`live`, `expired`, `revoked` or `unresolvable`), whether this account already joined, and the names and kinds of the direct children of the scope root. It returns no sizes, no counts and no deeper level.
+- It returns the names, only when the names signature verifies. It also returns the conversion permission, the state (`live`, `expired`, `revoked` or `unresolvable`) and whether this account already joined. It returns the names and kinds of the direct children of the scope root, and no sizes, no counts and no deeper level.
 - A refused re-point object, or a scope root that the gate refuses, is a trust violation.
 
 ### Join and the link-held read
@@ -80,8 +80,8 @@ Anyone who holds the URL can unmask every committed recipient key with `pointerR
 
 1. The fragment decodes inside its bound.
 2. The owner contact code passes its binding verify.
-3. The engine resolves the scope pointer, opens the re-point object under `pointerReadKey`, and verifies its owner-identity signature against the fragment's owner code. The record at `currentRootName` must verify at that name.
-4. The record is not this vault's own root scope.
+3. The fragment's scope id is not this vault's own root scope (`invite-names-the-own-vault-root`).
+4. The engine resolves the scope pointer, opens the re-point object under `pointerReadKey`, and verifies its owner-identity signature against the fragment's owner code. The record at `currentRootName` must verify at that name.
 5. A blob sits at the link tag, which the holder derives again at each `currentRootName`.
 6. The owner-signed commitment names that tag as a link entry, with a deadline later than `now`. The holder reads at `read`.
 7. The blob opens under the ephemeral subkey.
@@ -112,7 +112,7 @@ Any owner device runs the conversion pass on every tick, over every folder. `Com
 
 For a claim item, the engine acks first and converts only when the ack answers that this call removed the item (ADR 0023 D5). The `Mailbox` seam `ack` returns `true` only then. So two owner devices never both convert one claim on an honest ack.
 
-The acked claim is held in the conversion record: a sealed owner-local record (`PendingConversions`, kind `0x07`). The engine writes each claim in the `acking` state before the delete runs, and writes it again as pending after the delete removed it. An entry is `acking`, pending, pointer-due or refused. A conversion that fails on availability stays pending, and a later pass runs it again, checks included (ADR 0023 D6). A record that does not open is set aside, the record starts empty, and the engine emits `Event::ConversionRecordUnreadable`; the claimant re-post recovers the claims.
+The engine holds the acked claim in the conversion record: a sealed owner-local record (`PendingConversions`, kind `0x07`). The engine writes each claim in the `acking` state before the delete runs, and writes it again as pending after the delete removed it. An entry is `acking`, pending, pointer-due or refused. A conversion that fails on availability stays pending, and a later pass runs it again, checks included (ADR 0023 D6). When the record does not open, the engine sets it aside, starts an empty record and emits `Event::ConversionRecordUnreadable`. The claimant re-post recovers the claims.
 
 ### The checks
 
@@ -133,9 +133,9 @@ The pass appends a personal row at the conversion permission, with the via-link 
 
 A write claim that passes every check, on a folder that is not a write scope yet, runs one write-scope cut first (ADR 0024 D4). The tick holds the same cut authority as the command.
 
-The converting device records the claimant in its contact book and emits `Event::GranteeJoined { scope_root, name, fingerprint }`, a transient notice (ADR 0023 D7). The other owner devices see the new row in the record.
+The device that converts records the claimant in its contact book and emits `Event::GranteeJoined { scope_root, name, fingerprint }`, a transient notice (ADR 0023 D7). The other owner devices see the new row in the record.
 
-### Refusals and the per-link contact share
+### Refusals
 
 These refusals keep the entry as refused. The sharing read counts them per link (`refusedClaims`), and they never block the pending entries:
 
@@ -143,10 +143,10 @@ These refusals keep the entry as refused. The sharing read counts them per link 
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `link-admission-cap-reached`  | The link reached its admission cap. A revoke frees a slot.                                                    |
 | `grant-set-full`              | The scope root holds 1024 rows (ADR 0026 E1).                                                                 |
-| `contact-book-full`           | The contact book cannot record the claimant: the link's share, the contact's scope bound or the book is full. |
+| `contact-book-full`           | The contact book cannot record the claimant: the link's bound, the contact's scope bound or the book is full. |
 | `claim-recipient-key-changed` | A known identity claims under another encryption subkey. The owner revokes and grants again.                  |
 
-The per-link contact share bounds the claimants one link can record in the owner's contact book (`MAX_LINK_CONTACTS`, 128). One leaked link therefore takes only its own share, and it does not deny other links or a hand import. A fresh copy of a refused claim is pending again. `Command::DismissRefusedClaims { node }` clears the refused entries, and the cut of a link retires the claims it refused. The record keeps at most 64 refused entries, and `Event::RefusedClaimDropped` reports the oldest one when it goes.
+One link can record at most `MAX_LINK_CONTACTS` (128) claimants in the owner's contact book, and the sharing read sets `contactBudgetFull` on a link at that bound. One leaked link therefore fills only its own part of the book, and it does not deny other links or a hand import. A fresh copy of a refused claim is pending again. `Command::DismissRefusedClaims { node }` clears the refused entries, and the cut of a link retires the claims it refused. The record keeps at most 64 refused entries, and `Event::RefusedClaimDropped` reports the oldest one when it goes.
 
 ### Two owner devices
 
@@ -174,7 +174,7 @@ Every co-writer of the folder reads the grantee names, because the ledger is in 
 - A downgrade is a write revoke: a write rotation renames the subtree, and the grantee keeps a read row at the new name.
 - The engine refuses a link row, the owner, a stranger, a row that is not owner-attested, and a grantee that holds more than one attested row.
 
-A link's permission is fixed at creation. To change it, the owner revokes the link and mints a new one (ADR 0025 D7).
+The mint fixes the permission of a link. To change it, the owner revokes the link and mints a new one (ADR 0025 D7).
 
 ## Revocation
 
@@ -186,9 +186,9 @@ Every row one revoke removes leaves in one cut set, with one cut-epoch step, one
 
 ### Revoke a person
 
-`Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). A row whose writer broke the owner signature is found through the committed `recipientEncPk` of the one contact on this device that holds that key.
+`Command::Revoke { node, recipient_identity_public_key }` finds the grantee on the owner-attested ledger rows, so any owner device revokes, including one that never saw the person (ADR 0025 D3). A writer can break the owner signature of a row. The engine then finds that row through the committed `recipientEncPk` of the one contact on this device that holds that key.
 
-The cut also takes each committed link that the via-link reference of an attested row names (ADR 0024 D3). When a link admitted the grantee, the engine first converts the claims waiting at the folder. It then refuses with `link-has-a-pending-conversion` while a conversion through an admitting link is pending, and with `mailbox-unavailable` when it cannot poll the inbox. The revoke of a direct grantee does not wait for a conversion.
+The cut also takes each committed link that the via-link reference of an attested row names (ADR 0024 D3). The engine runs a conversion pass first. When a link admitted the grantee, a failed pass refuses the revoke, with `mailbox-unavailable` when the engine cannot poll the inbox. A pending conversion through a link that admitted the grantee refuses it with `link-has-a-pending-conversion`. The revoke of a direct grantee does not wait for a conversion.
 
 ### Revoke a link
 
@@ -208,7 +208,7 @@ When another owner device commits the recipient again, an owner-signed commitmen
 
 The owner tick runs the sweep on `SyncTimingProfile::link_sweep_cadence` (600 s in production), after the conversion pass and under the same lock (ADR 0025 D2).
 
-- It walks `directChildScopeIndex` from the vault root, with one resolve and one unseal per scope root. A scope root counts as visited only after the gate passes it.
+- It walks the direct-child-scope index from the vault root, with one resolve and one unseal per scope root. A scope root counts as visited only after the gate passes it.
 - It cuts every link entry whose deadline the injected `now` has reached, less every link with a pending conversion entry.
 - Each folder takes one cut for all its expired links. The engine resolves the scope root again right before it signs, so a link that another owner device already cut costs nothing.
 - One sweep lands at most eight cuts, deepest first. A failed cut does not count. When the sweep stops at the cap, the next tick sweeps again.
@@ -235,7 +235,7 @@ The received-share refresh reports one class per bookmark (ADR 0025 D5):
 | `preview_invite_link`    | link holder | ADR 0028        |
 | `ClaimInviteLink`        | link holder | ADR 0023, 0024  |
 | `ConvertInviteClaims`    | owner       | ADR 0023 D4     |
-| `DismissRefusedClaims`   | owner       | ADR 0023 D9     |
+| `DismissRefusedClaims`   | owner       | build detail    |
 | `ImportContact`, `Grant` | owner       | ADR 0026, 0027  |
 | `ChangePermission`       | owner       | ADR 0025 D6     |
 | `RenameGrantee`          | owner       | ADR 0027 D3     |
@@ -244,10 +244,10 @@ The received-share refresh reports one class per bookmark (ADR 0025 D5):
 
 ## Known windows
 
-These gaps are in the code on `main`. Each one is a single sentence.
+These gaps are in the code on `main`.
 
-- The web host does not show the link-first share dialog yet: it shows one live link and a control that runs a conversion pass at once, and it has no people-list names, rename, permission control, `remove_grantees` checkbox, joined notice or refused count.
-- The web invite page runs no preview, and it sends an empty claimant name and an empty owner name.
+- The web host does not show the link-first share dialog yet. It shows one live link and a control that runs a conversion pass at once, and it mints every link with an empty owner name. It has a downgrade-only control and no upgrade, and it has no people-list names, rename, `remove_grantees` checkbox, joined notice or refused count.
+- The web invite page runs no preview, and it sends an empty claimant name.
 - The owner cannot set the admission cap yet, so every link carries the default of 25.
 - Only a command pass (`ConvertInviteClaims` or `RevokeInviteLink`) repairs a parent index that a failed re-point left stale, because the tick converts only at scope roots its own walk proved.
 - A downgrade over a stalled write scope runs two name waves: the owed wave, then the cut.
@@ -257,4 +257,4 @@ These gaps are in the code on `main`. Each one is a single sentence.
 
 ## Accepted residuals
 
-The residuals of ADRs 0023 to 0028 are listed once, in [`blueprint/engine.md`](../blueprint/engine.md) "Sharing residuals".
+[`blueprint/engine.md`](../blueprint/engine.md) "Sharing residuals" lists the residuals of ADRs 0023 to 0028 once.
