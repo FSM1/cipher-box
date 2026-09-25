@@ -182,15 +182,6 @@ describe('mailbox HTTP surface (real Postgres)', () => {
       expect((await ack(recipient.token, 'not-a-uuid')).body).toEqual({ removed: false });
     });
 
-    it('answers removed: true to exactly one of concurrent DELETEs of one id', async () => {
-      const sender = await account();
-      const recipient = await account();
-      const id = await postOne(sender, recipient, 'race');
-
-      const answers = await Promise.all(Array.from({ length: 6 }, () => ack(recipient.token, id)));
-      expect(answers.filter((res) => res.body.removed === true)).toHaveLength(1);
-    });
-
     it('returns the live item to a reused key, and a new item after the ack', async () => {
       const sender = await account();
       const recipient = await account();

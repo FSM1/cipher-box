@@ -13,7 +13,8 @@ import { MailboxMessage } from '../entities/mailbox-message.entity';
 import { MailboxService } from './mailbox.service';
 
 /**
- * The pending-cap serialization guard proven against a REAL Postgres.
+ * The pending-cap serialization guard, and the exclusive ack answer, proven
+ * against a REAL Postgres.
  *
  * The fix wraps purge → count → cap-check → insert in one transaction under a
  * per-recipient `pg_advisory_xact_lock`. Advisory locks and the count→insert
@@ -127,6 +128,23 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
     const finalCount = await repo.count({ where: { recipientPublicKey: recipient } });
     expect(finalCount).toBe(CAP);
     expect(finalCount).toBeLessThanOrEqual(CAP);
+  });
+
+  it('answers removed: true to exactly one of N concurrent acks of one id', async () => {
+    const RACERS = 8;
+    const { service, recipient, sender } = buildService(10);
+    const { id } = await service.post(sender, {
+      recipientPublicKey: recipient,
+      blob: base64Blob(64),
+      idempotencyKey: 'ack-race',
+    });
+
+    const answers = await Promise.all(
+      Array.from({ length: RACERS }, () => service.ack(recipient, id))
+    );
+
+    expect(answers.filter((answer) => answer.removed)).toHaveLength(1);
+    expect(await repo.count({ where: { recipientPublicKey: recipient } })).toBe(0);
   });
 
   it('under full saturation, exactly CAP of CAP+extra concurrent posts commit; the surplus 409', async () => {
