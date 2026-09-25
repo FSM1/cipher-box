@@ -27,7 +27,7 @@ use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher,
 
 use super::create::{
     CreateGrantError, GrantSubtree, GrantedReadScope, GranteeScopePlan, OwnerGrantKeys,
-    ParentScopePlan, converge_grant_subtree, mint_grantee_scope,
+    ParentScopePlan, converge_grant_subtree, promote_grantee_scope, resume_grantee_scope,
 };
 use super::invite::{EphemeralInvitee, InviteError, InviteFragment, LinkTerms, mint_invite_grant};
 
@@ -97,7 +97,12 @@ impl std::error::Error for InviteMintError {}
 /// the subtree, and mint and publish the fresh scope its link entry is the
 /// whole committed set of.
 ///
-/// The minted scope's read material rides alongside, for the owner's own reads.
+/// The fragment is the only copy of the invite secret, so once the scope root
+/// that commits the link has landed the fragment is returned whatever the
+/// handover after it does. The handover's result rides alongside: the minted
+/// scope's read material, or the post-publish failure. A later mint over the
+/// same folder finishes that handover against the promoted root and refuses a
+/// second link.
 ///
 /// Owner-only by construction, exactly as [`create_grant`](super::create_grant)
 /// is: the scope this publishes is signed under the owner's writer pseudonym and
@@ -108,7 +113,7 @@ pub async fn mint_invite_link<E, N, V>(
     voucher: &V,
     owner: &OwnerGrantKeys<'_>,
     plan: &InviteMintPlan<'_>,
-) -> Result<(MintedInviteLink, GrantedReadScope), InviteMintError>
+) -> Result<(MintedInviteLink, Result<GrantedReadScope, CreateGrantError>), InviteMintError>
 where
     E: Entropy,
     N: MintNet,
@@ -145,18 +150,32 @@ where
     let subtree = converge_grant_subtree(net, net, plan.grantee, plan.parent)
         .await
         .map_err(InviteMintError::Create)?;
-    // An invitee is drawn fresh per call, so its row can never be the one a
-    // promoted root committed.
-    let GrantSubtree::Converged(converged) = subtree else {
-        return Err(InviteMintError::Create(
-            CreateGrantError::ResumeNotThisGrant,
-        ));
+    let converged = match subtree {
+        GrantSubtree::Converged(converged) => converged,
+        // The link a stalled mint committed is still the one its fragment
+        // holder reads, so the handover finishes and no second link mints.
+        GrantSubtree::Promoted(promoted) => {
+            let Some(link) = promoted.sole_link_entry() else {
+                return Err(InviteMintError::Create(
+                    CreateGrantError::ResumeNotThisGrant,
+                ));
+            };
+            resume_grantee_scope(entropy, net, promoted, &link, owner)
+                .await
+                .map_err(InviteMintError::Create)?;
+            return Err(InviteMintError::Create(
+                CreateGrantError::TargetAlreadyNamesAScope,
+            ));
+        }
     };
-    let outcome = mint_grantee_scope(entropy, net, voucher, converged, &row, owner)
+    let handover = promote_grantee_scope(entropy, net, voucher, converged, &row, owner)
         .await
         .map_err(InviteMintError::Create)?;
 
-    Ok((MintedInviteLink { fragment }, outcome.read_scope))
+    Ok((
+        MintedInviteLink { fragment },
+        handover.map(|outcome| outcome.read_scope),
+    ))
 }
 
 #[cfg(test)]
@@ -255,6 +274,8 @@ mod tests {
     struct FakeNet {
         published: Rc<RefCell<Vec<ResealedScopeRoot>>>,
         refuse_publish: bool,
+        /// Refuse every publish once this many have landed.
+        publishes_before_refusal: Option<usize>,
         /// One interior node inside the invited folder, when a test wants the
         /// mint to own a subtree rather than a bare folder.
         interior: Option<[u8; 16]>,
@@ -270,6 +291,7 @@ mod tests {
             Self {
                 published: Rc::new(RefCell::new(Vec::new())),
                 refuse_publish: false,
+                publishes_before_refusal: None,
                 interior: None,
                 resealed: Rc::new(RefCell::new(Vec::new())),
                 promotion_stands: false,
@@ -455,7 +477,11 @@ mod tests {
             &self,
             record: &ResealedScopeRoot,
         ) -> Result<(), RotationPublishError> {
-            if self.refuse_publish {
+            if self.refuse_publish
+                || self
+                    .publishes_before_refusal
+                    .is_some_and(|landed| self.published.borrow().len() >= landed)
+            {
                 return Err(RotationPublishError::NotPublished);
             }
             self.published.borrow_mut().push(record.clone());
@@ -517,11 +543,25 @@ mod tests {
             self.mint_named(terms, "Photos")
         }
 
+        /// A mint whose handover landed whole.
         fn mint_named(
             &self,
             terms: LinkTerms,
             folder_name: &str,
         ) -> Result<MintedInviteLink, InviteMintError> {
+            self.mint_with_handover(terms, folder_name)
+                .map(|(minted, handover)| {
+                    handover.expect("the handover lands");
+                    minted
+                })
+        }
+
+        fn mint_with_handover(
+            &self,
+            terms: LinkTerms,
+            folder_name: &str,
+        ) -> Result<(MintedInviteLink, Result<GrantedReadScope, CreateGrantError>), InviteMintError>
+        {
             let owner_enc_pub = self.enc.public();
             let grantee = GranteeScopePlan {
                 v: V,
@@ -577,7 +617,6 @@ mod tests {
                     folder_name,
                 },
             ))
-            .map(|(minted, _)| minted)
         }
 
         /// The invite scope root the mint published.
@@ -760,8 +799,8 @@ mod tests {
         assert!(matches!(refused, InviteMintError::Create(_)));
     }
 
-    /// An invitee is drawn fresh per call, so a link's row can never be the one
-    /// a promoted root already committed.
+    /// A folder a link already promoted takes no second link. The mint
+    /// finishes the promoted root's handover and refuses.
     #[test]
     fn a_link_over_an_already_promoted_folder_is_refused() {
         let mut f = Fixture::new();
@@ -774,7 +813,59 @@ mod tests {
 
         assert!(matches!(
             refused,
-            InviteMintError::Create(CreateGrantError::ResumeNotThisGrant)
+            InviteMintError::Create(CreateGrantError::TargetAlreadyNamesAScope)
         ));
+        let links = f
+            .net
+            .published
+            .borrow()
+            .iter()
+            .filter(|r| r.scope_id == FOLDER)
+            .flat_map(|r| r.section.commitment.entries.clone())
+            .map(|entry| entry.tag)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(links.len(), 1, "no second link is committed");
+    }
+
+    /// The fragment is the only copy of the invite secret, so a handover that
+    /// fails after the scope root landed still returns it, and the link it
+    /// names is the one committed. A later mint finishes the handover.
+    #[test]
+    fn a_parent_publish_failure_after_the_root_still_returns_the_fragment() {
+        let mut f = Fixture::new();
+        f.net.publishes_before_refusal = Some(1);
+
+        let (link, handover) = f
+            .mint_with_handover(read_link(), "Photos")
+            .expect("the root that commits the link landed");
+
+        assert!(matches!(handover, Err(CreateGrantError::ParentPublish(_))));
+        let fragment = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
+        let invitee =
+            EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes()).expect("valid secret");
+        let tag = recipient_blinded_tag(invitee.enc_secret(), &f.enc.public(), &folder_name())
+            .expect("contributory");
+        let scope_root = f.scope_root();
+        assert!(
+            self_locate_signed(&scope_root.section.grant_blobs, &tag).is_some(),
+            "the holder self-locates its blob at the committed root"
+        );
+
+        f.net.publishes_before_refusal = None;
+        f.net.promotion_stands = true;
+        assert!(matches!(
+            f.mint(read_link()),
+            Err(InviteMintError::Create(
+                CreateGrantError::TargetAlreadyNamesAScope
+            ))
+        ));
+        assert!(
+            f.net
+                .published
+                .borrow()
+                .iter()
+                .any(|r| r.scope_id == PARENT_SCOPE),
+            "the retry publishes the parent the first mint owed"
+        );
     }
 }

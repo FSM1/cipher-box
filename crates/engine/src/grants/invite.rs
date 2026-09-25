@@ -161,8 +161,9 @@ impl InviteError {
     ];
 
     /// The class label used in reject vectors. An invite refuses on the owner's
-    /// authority over the set, on a bound the recipient's own decoder enforces,
-    /// or on the deadline the link entry carries.
+    /// authority over the set or on a bound the recipient's own decoder
+    /// enforces. A deadline the owner signed and that has passed is no trust
+    /// verdict: the link is valid and no longer takes claims.
     pub fn class(&self) -> &'static str {
         match self {
             Self::InvalidSecret
@@ -171,7 +172,6 @@ impl InviteError {
             | Self::ScopeUnbound
             | Self::NotOwner
             | Self::LinkNotCommitted
-            | Self::LinkExpired
             | Self::ClaimantIsTheEphemeralHalf
             | Self::ClaimantIsTheOwner
             | Self::UnusableClaimantKey
@@ -180,6 +180,7 @@ impl InviteError {
             Self::InvalidExpiry => CodecError::from(Malformed::InvalidDeadline).class(),
             Self::MalformedClaim(error) | Self::ClaimantContact(error) => error.class(),
             Self::MalformedFragment => "malformed",
+            Self::LinkExpired => "unsupported",
             Self::FragmentTooLarge | Self::NameTooLong | Self::GrantSetFull => "over-cap",
             Self::Authority(violation) => violation.class(),
         }
@@ -715,8 +716,8 @@ pub struct CommittedLink {
     pub ephemeral_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     /// The ephemeral encryption subkey the link's blob is sealed to.
     pub ephemeral_enc_pk: [u8; SECRET_LEN],
-    /// The owner-signed deadline, or `None` for a link with none.
-    pub deadline: Option<UnixMillis>,
+    /// The owner-signed deadline. Core refuses a link entry without one.
+    pub deadline: UnixMillis,
     /// The permission conversion grants a claimant.
     pub conversion_permission: Permission,
 }
@@ -724,7 +725,7 @@ pub struct CommittedLink {
 impl CommittedLink {
     /// Whether `now` has reached the deadline.
     pub fn is_expired(&self, now: UnixMillis) -> bool {
-        now.reached(self.deadline)
+        now.reached(Some(self.deadline))
     }
 }
 
@@ -748,11 +749,12 @@ pub fn committed_links(
         .filter(|entry| entry.kind == GrantSetEntryKind::Link)
         .filter_map(|entry| {
             let row = scope.ledger.iter().find(|row| row.tag == entry.tag)?;
+            let deadline = UnixMillis(entry.deadline?.get());
             row_is_owner_attested(&owner_identity, row, name).then(|| CommittedLink {
                 tag: entry.tag,
                 ephemeral_identity_pk: row.recipient_identity_pk,
                 ephemeral_enc_pk: row.recipient_enc_pk,
-                deadline: entry.deadline.map(|deadline| UnixMillis(deadline.get())),
+                deadline,
                 conversion_permission: entry.conversion_permission.unwrap_or(Permission::Read),
             })
         })

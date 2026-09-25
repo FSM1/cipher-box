@@ -5122,7 +5122,7 @@ fn a_join_past_the_link_deadline_is_refused_and_posts_nothing() {
 
     assert_eq!(
         join_link(&mut holder, &mut holder_tasks, link.fragment),
-        Err(EngineError::MalformedInput {
+        Err(EngineError::UnsupportedTarget {
             check: "link-expired"
         }),
     );
@@ -5209,6 +5209,46 @@ fn a_join_whose_names_do_not_verify_bookmarks_no_name() {
     let shares = block_on(holder.received_shares()).expect("the list reads");
     assert_eq!(shares[0].display_name, "");
     assert!(shares[0].via_link);
+}
+
+/// The fragment is the only copy of the invite secret. A parent publish that
+/// fails after the scope root landed still hands it over, the holder joins
+/// through it, and a later mint of the folder finishes the handover.
+#[test]
+fn a_mint_whose_parent_publish_fails_still_hands_over_a_working_link() {
+    let mut fx = GrantScenario::new();
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    let fragment = fx.mint_link();
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
+
+    assert_eq!(
+        fx.try_mint_link_at(Permission::Read),
+        Err(EngineError::UnsupportedTarget {
+            check: "invite-target-already-names-a-scope"
+        }),
+        "the folder holds its link, and takes no second one"
+    );
+    assert!(
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .state
+            .expect("the finished handover indexes the scope")
+            .invite_links
+            .live,
+        "the sharing read reports the one live link"
+    );
 }
 
 /// A fragment is bearer key material a host hands over unread, so anything that

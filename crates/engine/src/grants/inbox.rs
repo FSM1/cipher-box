@@ -41,7 +41,9 @@ use crate::net::rotation::scope_name;
 use crate::net::{assemble_candidate, fanout_get_verify};
 use crate::seams::{FloorStore, Http, Mailbox, RecordTransport, StagingStore};
 
-use super::accept::{AcceptError, ReceivedShareStore, SharePointer, accept_share};
+use super::accept::{
+    AcceptError, ReceivedShareStore, ReceivedSharesLock, SharePointer, accept_share,
+};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::invite::InviteClaim;
@@ -83,6 +85,8 @@ pub(crate) struct ShareInbox<'a, M, T, H, F> {
     /// This session's own root scope, which no received share may name
     /// ([`AcceptError::OwnVaultScope`]).
     pub vault_root_scope: [u8; 16],
+    /// Held from the list load through the last accept's persist.
+    pub list_lock: &'a ReceivedSharesLock,
 }
 
 /// The claims on `items` that name one of this owner's scope pointers. The
@@ -184,6 +188,7 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
             return;
         }
 
+        let _list_guard = self.list_lock.lock().await;
         let store = StagingReceivedShareStore::new(staging, self.enc_secret, entropy);
         let Ok(mut received) = store.load().await else {
             return;
@@ -485,6 +490,7 @@ mod tests {
                     enc_secret: &my_enc(),
                     contact_label_seed: &kdf::contact_label_seed(&[0x4c; 32]),
                     vault_root_scope: self.vault_root_scope,
+                    list_lock: &ReceivedSharesLock::new(()),
                 }
                 .pull(
                     &self.staging,

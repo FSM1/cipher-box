@@ -47,7 +47,7 @@
   {
     "name": "claim-on-a-link-past-its-deadline",
     "check": "link-expired",
-    "class": "trust"
+    "class": "unsupported"
   },
   {
     "name": "claimant-contact-code-that-fails-its-binding-verify",

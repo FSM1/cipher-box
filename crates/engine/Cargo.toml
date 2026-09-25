@@ -20,6 +20,7 @@ caseless.workspace = true
 cipherbox-core.workspace = true
 futures-channel.workspace = true
 futures-core.workspace = true
+futures-util.workspace = true
 # The tree's one production `Entropy` impl lives here, in `entropy::OsEntropy`;
 # every host uses it rather than repeating the per-target wiring.
 getrandom.workspace = true

@@ -34,28 +34,30 @@ export function expiryAt(lifetime: LinkLifetime, now: number): bigint {
  * passed is the engine's verdict, read against its own clock — this only draws
  * it.
  */
-export function expiryLabel(links: SharingInviteLinksDescriptor): string {
-  if (links.expired) return 'expired';
-  if (links.expiresAt === null) return 'never expires';
-  return links.expiresAt > MAX_DATE_MILLIS
+export function expiryLabel(expired: boolean, expiresAt: bigint): string {
+  if (expired) return 'expired';
+  return expiresAt > MAX_DATE_MILLIS
     ? 'expires beyond any date'
-    : `expires ${formatDate(Number(links.expiresAt))}`;
+    : `expires ${formatDate(Number(expiresAt))}`;
 }
 
 /** Which of the owner's three link situations a scope is in. */
 export type InviteLinkState =
-  | { kind: 'live'; links: SharingInviteLinksDescriptor }
+  | { kind: 'live'; links: SharingInviteLinksDescriptor; expiresAt: bigint }
   | { kind: 'mintable' }
   | { kind: 'refused'; check: string };
 
 /**
  * A scope the engine reached carries a live link, takes a mint, or takes
  * neither. `refused` carries the engine's own check name, because which ground
- * refuses is the engine's to say.
+ * refuses is the engine's to say. The engine reports every live link with its
+ * owner-signed deadline.
  */
 export function inviteLinkState(scope: ScopeSharing): InviteLinkState {
   const links = scope.inviteLinks;
-  if (links.live) return { kind: 'live', links };
+  if (links.live && links.expiresAt !== null) {
+    return { kind: 'live', links, expiresAt: links.expiresAt };
+  }
   const refusal = scope.inviteLinkRefusal;
   return refusal === null ? { kind: 'mintable' } : { kind: 'refused', check: refusal };
 }

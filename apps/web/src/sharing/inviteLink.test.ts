@@ -35,29 +35,22 @@ describe('the deadline a mint sends', () => {
 describe('the deadline label', () => {
   it('takes the engine verdict rather than re-deciding it against a browser clock', () => {
     // A deadline far in the future, which a clock comparison would draw as live.
-    const links = { ...NO_LINKS, live: true, expired: true, expiresAt: 4_000_000_000_000n };
-
-    expect(expiryLabel(links)).toBe('expired');
-  });
-
-  it('names a link that never expires rather than showing a date', () => {
-    expect(expiryLabel({ ...NO_LINKS, live: true })).toBe('never expires');
+    expect(expiryLabel(true, 4_000_000_000_000n)).toBe('expired');
   });
 
   it('refuses a deadline no date can hold rather than rendering an invalid one', () => {
-    const beyond = { ...NO_LINKS, live: true, expiresAt: 2n ** 63n };
-
-    expect(expiryLabel(beyond)).toBe('expires beyond any date');
+    expect(expiryLabel(false, 2n ** 63n)).toBe('expires beyond any date');
   });
 });
 
 describe('which link situation a scope is in', () => {
   it('reports the link a scope carries over any mint verdict', () => {
-    const links = { ...NO_LINKS, live: true };
+    const links = { ...NO_LINKS, live: true, expiresAt: 1_000n };
 
     expect(inviteLinkState(scope(links, 'invite-target-already-names-a-scope'))).toEqual({
       kind: 'live',
       links,
+      expiresAt: 1_000n,
     });
   });
 

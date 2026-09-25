@@ -37,8 +37,8 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission,
-    PreservedFields, ReadBody, SignedSealed, sign_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, GrantSetEntryKind,
+    Permission, PreservedFields, ReadBody, SignedSealed, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
@@ -776,7 +776,7 @@ where
             mint_grantee_scope(entropy, net, voucher, converged, &row, owner).await
         }
         GrantSubtree::Promoted(promoted) => {
-            resume_grantee_scope(entropy, net, promoted, &row, owner).await
+            resume_grantee_scope(entropy, net, promoted, &row.commitment_entry, owner).await
         }
     }
 }
@@ -887,6 +887,17 @@ pub struct PromotedSubtree<'a> {
     /// Boxed: it carries a whole published section, and the converged arm is
     /// the common one.
     promoted: Box<PromotedScopeRoot>,
+}
+
+impl PromotedSubtree<'_> {
+    /// The link entry the promoted root commits as its whole set, which is
+    /// what an invite mint publishes.
+    pub(crate) fn sole_link_entry(&self) -> Option<GrantSetEntry> {
+        match &self.promoted.record.section.commitment.entries[..] {
+            [entry] if entry.kind == GrantSetEntryKind::Link => Some(entry.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// Prove the granted folder's subtree epoch-converged inside the scope it still
@@ -1030,6 +1041,25 @@ where
     N: MintNet,
     V: ScopePointerVoucher,
 {
+    promote_grantee_scope(entropy, net, voucher, converged, row, owner).await?
+}
+
+/// [`mint_grantee_scope`] with its two sides apart. The outer `Err` is
+/// fail-closed: no grantee root is on the network. The inner result is the
+/// handover that runs once that root has landed.
+pub(crate) async fn promote_grantee_scope<E, N, V>(
+    entropy: &mut E,
+    net: &N,
+    voucher: &V,
+    converged: ConvergedSubtree<'_>,
+    row: &GrantRow,
+    owner: &OwnerGrantKeys<'_>,
+) -> Result<Result<CreateGrantOutcome, CreateGrantError>, CreateGrantError>
+where
+    E: Entropy,
+    N: MintNet,
+    V: ScopePointerVoucher,
+{
     let ConvergedSubtree {
         grantee,
         parent,
@@ -1140,7 +1170,7 @@ where
         .await
         .map_err(CreateGrantError::Publish)?;
 
-    hand_over_granted_folder(
+    Ok(hand_over_granted_folder(
         entropy,
         net,
         grantee,
@@ -1159,7 +1189,7 @@ where
         },
         row.tag,
     )
-    .await
+    .await)
 }
 
 /// Finish the interior move a stalled attempt over the granted folder still
@@ -1170,13 +1200,14 @@ where
 /// vouched for: a second mint over the same folder would draw a second override
 /// seed and strand every node the first attempt already moved.
 ///
-/// The published root must be the one `row`'s own plan minted. Both halves of
-/// that proof are release-active, ahead of everything the shared tail publishes.
+/// The published root must be the one `entry`'s own plan minted. Both halves
+/// of that proof are release-active, ahead of everything the shared tail
+/// publishes.
 pub async fn resume_grantee_scope<E, N>(
     entropy: &mut E,
     net: &N,
     subtree: PromotedSubtree<'_>,
-    row: &GrantRow,
+    entry: &GrantSetEntry,
     owner: &OwnerGrantKeys<'_>,
 ) -> Result<CreateGrantOutcome, CreateGrantError>
 where
@@ -1205,7 +1236,7 @@ where
         .commitment
         .entries
         .iter()
-        .any(|entry| committed_as(entry, &row.commitment_entry));
+        .any(|published| committed_as(published, entry));
     let planned_index = canonicalize(grantee.subtree_child_index);
     if !commits_row || canonicalize(&promoted.boundaries) != planned_index {
         return Err(CreateGrantError::ResumeNotThisGrant);
@@ -1232,7 +1263,7 @@ where
                 admits: InteriorAdmission::Unmeasured,
             },
         },
-        row.tag,
+        entry.tag,
     )
     .await
 }

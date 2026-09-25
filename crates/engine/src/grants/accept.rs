@@ -136,6 +136,10 @@ impl SharePointer {
 /// Every per-share map and every durable per-share key uses this pair.
 pub type BookmarkKey = ([u8; IDENTITY_PUBLIC_LEN], [u8; 16]);
 
+/// Held by every writer of the received-shares list from its load to its
+/// persist, so no writer persists over another's change.
+pub(crate) type ReceivedSharesLock = futures_util::lock::Mutex<()>;
+
 /// One received share in the recipient's own vault: the discovery fields plus
 /// the persisted `pointerReadKey` (secret). Redacted `Debug`.
 #[derive(Clone)]

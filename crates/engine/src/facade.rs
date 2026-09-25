@@ -57,6 +57,7 @@ use crate::deadlines::DeadlinePolicy;
 use crate::devices::{self, ApprovalDecision, MalformedDeviceField, PendingApprovalView};
 use crate::entropy::{Entropy, SharedEntropy, fresh_bytes, fresh_ephemeral, fresh_seed};
 use crate::gate::{GateError, floor, record_cut_epoch_floor};
+use crate::grants::accept::ReceivedSharesLock;
 use crate::grants::grafted::{
     BookmarkedPermissions, BookmarkedScopeRoots, ClaimRecord, FloorNamespace, GraftedPlane,
     GraftedSharers, evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace,
@@ -533,8 +534,8 @@ pub struct SharingInviteLinks {
     /// link [`Command::RevokeInviteLink`] cuts and
     /// [`Command::ConvertInviteClaims`] converts against.
     pub live: bool,
-    /// The live link's owner-signed deadline in Unix millis, or `None` where it
-    /// does not expire or where there is no live link.
+    /// The live link's owner-signed deadline in Unix millis, or `None` where
+    /// no link is live.
     pub expires_at: Option<UnixMillis>,
     /// The deadline has passed, read against the engine's clock rather than a
     /// host's.
@@ -1877,6 +1878,7 @@ impl EngineError {
                     message: e.to_string(),
                 }
             }
+            e @ InviteError::LinkExpired => EngineError::UnsupportedTarget { check: e.check() },
             e => EngineError::MalformedInput { check: e.check() },
         }
     }
@@ -5031,6 +5033,9 @@ pub struct Engine<T: SeamTypes> {
     /// scope. In-memory: a verdict is what a live resolve found, so a restart
     /// re-earns it rather than rendering one nothing observed this session.
     received_verdicts: Rc<RefCell<ReceivedVerdicts>>,
+    /// Held across every load, change and persist of the received-shares list,
+    /// so the join, the accept and the refresh never overwrite each other.
+    received_shares_lock: Rc<ReceivedSharesLock>,
     /// Rebuilt by the received-share pass, like
     /// [`received_verdicts`](Self::received_verdicts).
     grafted_sharers: Rc<RefCell<GraftedSharers>>,
@@ -5231,6 +5236,7 @@ impl<T: SeamTypes> Engine<T> {
                 focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 pointer_consulted: Rc::new(RefCell::new(BTreeMap::new())),
                 received_verdicts: Rc::new(RefCell::new(ReceivedVerdicts::new())),
+                received_shares_lock: Rc::new(ReceivedSharesLock::new(())),
                 grafted_sharers: Rc::new(RefCell::new(GraftedSharers::new())),
                 bookmarked_scope_roots: Rc::new(RefCell::new(BookmarkedScopeRoots::new())),
                 bookmarked_permissions: Rc::new(RefCell::new(BookmarkedPermissions::new())),
@@ -6514,6 +6520,7 @@ where {
         let focus_refreshed = self.focus_refreshed.clone();
         let pointer_consulted = self.pointer_consulted.clone();
         let received_verdicts = self.received_verdicts.clone();
+        let received_shares_lock = self.received_shares_lock.clone();
         let grafted_sharers = self.grafted_sharers.clone();
         let bookmarked_scope_roots = self.bookmarked_scope_roots.clone();
         let bookmarked_permissions = self.bookmarked_permissions.clone();
@@ -7297,6 +7304,7 @@ where {
                         enc_secret: &enc_subkey,
                         contact_label_seed: &contact_label_seed,
                         vault_root_scope: root_id,
+                        list_lock: &received_shares_lock,
                     }
                     .pull(
                         &staging,
@@ -7326,6 +7334,7 @@ where {
                         floors: &floors,
                         enc_secret: &enc_subkey,
                         contact_label_seed: &contact_label_seed,
+                        list_lock: &received_shares_lock,
                         mode,
                     }
                     .refresh(
@@ -8624,7 +8633,7 @@ where {
                 expires_at,
                 owner_name,
             } => {
-                let (minted, read_scope) = mint_invite_link(
+                let (minted, handover) = mint_invite_link(
                     &mut SharedEntropy(&self.entropy),
                     &net,
                     &voucher,
@@ -8652,6 +8661,12 @@ where {
                     InviteMintError::Create(create) => EngineError::from_share_mint(create, checks),
                     other => EngineError::from_invite_mint(other),
                 })?;
+                // The root that commits the link has landed, so its fragment goes
+                // back even when the handover stalled. A later mint of this
+                // folder finishes that handover.
+                let Ok(read_scope) = handover else {
+                    return Ok(CommandOutcome::InviteLinkMinted(minted));
+                };
                 granted_read_scope = Some(read_scope);
                 PendingShare::Fragment(minted)
             }
@@ -9106,6 +9121,7 @@ where {
             .await
             .map_err(EngineError::from_contact_store)?;
 
+        let list_guard = self.received_shares_lock.lock().await;
         let store = self.received_share_store(session);
         let mut received = store
             .load()
@@ -9128,6 +9144,7 @@ where {
                 .await
                 .map_err(EngineError::from_received_share_store)?;
         }
+        drop(list_guard);
         // The bookmark is durable, so the read waits for no pass.
         let _ = self.file_forced_pass();
         Ok(())
@@ -10550,8 +10567,9 @@ where {
     /// resolve of that scope root, so a revocation or a downgrade the owner
     /// published is *discovered* here rather than delivered.
     ///
-    /// The label is the one the graft renders under ([`grafted_root_name`]), so
-    /// this row and the folder it opens name the same thing.
+    /// The label is the one the graft renders under ([`grafted_root_name`]). A
+    /// link-held share with no verified name is the one exception: its row
+    /// carries an empty label, which the host labels itself.
     pub async fn received_shares(&self) -> Result<Vec<ReceivedShareRow>, EngineError> {
         self.live_session()?;
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
@@ -10754,7 +10772,7 @@ where {
         let now = self.seams.scheduler.now();
         let invite_links = SharingInviteLinks {
             live: live.is_some(),
-            expires_at: live.and_then(|link| link.deadline),
+            expires_at: live.map(|link| link.deadline),
             expired: live.is_some_and(|link| link.is_expired(now)),
             pending_claims: self
                 .pending_claim_counts()

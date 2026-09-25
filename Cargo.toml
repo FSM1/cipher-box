@@ -45,6 +45,7 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 futures-channel = "0.3"
 getrandom = "0.3"
 futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The engine's strict comparator normalizes to NFC before folding case

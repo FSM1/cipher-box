@@ -40,7 +40,7 @@ export function InviteLinkPanel({
       return (
         <div className="dialog-content" data-testid="share-live-link">
           <p className="sharing-note" data-testid="share-live-link-expiry">
-            {`// a link stands here — ${expiryLabel(state.links)}`}
+            {`// a link stands here — ${expiryLabel(state.links.expired, state.expiresAt)}`}
           </p>
           {pending !== null && (
             <p className="sharing-note" data-testid="share-pending-claims">

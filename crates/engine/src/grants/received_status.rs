@@ -48,7 +48,7 @@ use crate::sync::render::BaseSnapshot;
 use crate::sync::tick::{ResolveMode, on_access_refresh_due};
 
 use super::accept::ReceivedShareStore;
-use super::accept::{BookmarkKey, LinkHold, ReceivedShare, ReceivedSharesList};
+use super::accept::{BookmarkKey, LinkHold, ReceivedShare, ReceivedSharesList, ReceivedSharesLock};
 use super::contact::Contact;
 use super::contact_store::{ContactStore, StagingContactStore};
 use super::grafted::{
@@ -375,6 +375,8 @@ pub(crate) struct ReceivedShareStatus<'a, T, H, F> {
     /// This account's contact-label seed — what a share's sharer is labelled
     /// under before it keys that scope's durable epoch floor.
     pub contact_label_seed: &'a SecretBytes,
+    /// Held across the tail's load, change and persist of the list.
+    pub list_lock: &'a ReceivedSharesLock,
     /// How this pass paces its re-resolves
     /// ([`refresh`](ReceivedShareStatus::refresh)).
     pub mode: ResolveMode,
@@ -393,7 +395,8 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     ///
     /// Both legs are capped at [`MAX_RESOLVES_PER_PASS`]: a pass over a full
     /// bookmark list would not finish inside its own tick, and the legs after it
-    /// would never run. A verdict not re-reached this pass is carried forward.
+    /// would never run. A verdict not re-reached this pass is carried forward,
+    /// and the least recently refreshed bookmarks go first.
     ///
     /// Rebuilt each pass, so a share the list no longer holds leaves no verdict
     /// behind. A store failure leaves the last pass's verdicts standing rather
@@ -444,13 +447,20 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     .get(key)
                     .is_none_or(|held| on_access_refresh_due(now, held.at, profile))
         };
-        // One budget, spent in list order: a held bookmark spends one resolve on
+        // One budget, spent least recently refreshed first, so capped passes
+        // reach every bookmark in turn. A held bookmark spends one resolve on
         // its scope pointer and one on its scope root.
-        let mut budget = MAX_RESOLVES_PER_PASS;
-        let scheduled: BTreeSet<BookmarkKey> = received
+        let mut due_keys: Vec<(Option<UnixMillis>, BookmarkKey)> = received
             .iter()
             .map(ReceivedShare::key)
             .filter(due)
+            .map(|key| (verdicts.borrow().get(&key).map(|held| held.at), key))
+            .collect();
+        due_keys.sort_by_key(|(at, _)| *at);
+        let mut budget = MAX_RESOLVES_PER_PASS;
+        let scheduled: BTreeSet<BookmarkKey> = due_keys
+            .into_iter()
+            .map(|(_, key)| key)
             .map_while(|key| {
                 let cost = 1 + usize::from(received.link_hold(&key).is_some());
                 budget = budget.checked_sub(cost)?;
@@ -645,13 +655,14 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         // the changes land by key on the list as stored now. Best effort: a
         // failed persist leaves the stored list one pass behind, and the next
         // pass reaches the same changes from the record.
-        if !hold_changes.is_empty()
-            && let Ok(mut stored) = store.load().await
-        {
-            for change in hold_changes {
-                change.apply(&mut stored);
+        if !hold_changes.is_empty() {
+            let _list_guard = self.list_lock.lock().await;
+            if let Ok(mut stored) = store.load().await {
+                for change in hold_changes {
+                    change.apply(&mut stored);
+                }
+                let _ = store.persist(&stored).await;
             }
-            let _ = store.persist(&stored).await;
         }
     }
 
@@ -779,7 +790,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         };
         let sharer_enc = contact.enc_subkey();
         let link = match hold {
-            Some(hold) if !committed_blob_at(&candidate, share, self.enc_secret, &sharer_enc) => {
+            Some(hold) if !personal_blob_opens(&candidate, share, self.enc_secret, &sharer_enc) => {
                 // A stored secret that is no scalar reads nothing.
                 match EphemeralInvitee::from_secret(hold.invite_secret.as_bytes()) {
                     Ok(invitee) => Some(invitee),
@@ -1056,19 +1067,35 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 }
 
 /// Whether the owner-signed commitment names the tag `enc_secret` derives and
-/// the record carries a blob there. Not a trust verdict: [`facts_from`] still
-/// runs the whole of stage 2 on the path this picks.
-fn committed_blob_at(
+/// the blob there opens under it. A link holder reads its personal tag only
+/// then, so a blob it cannot open leaves the link as its way in. Not a trust
+/// verdict: [`facts_from`] still runs the whole of stage 2 on the path this
+/// picks.
+fn personal_blob_opens(
     candidate: &Candidate,
     share: &ReceivedShare,
     enc_secret: &X25519Secret,
     sharer_enc_pub: &X25519Public,
 ) -> bool {
     let section = &candidate.grant_section;
-    recipient_blinded_tag(enc_secret, sharer_enc_pub, &share.scope_root_name).is_some_and(|tag| {
-        section.commitment.entries.iter().any(|e| e.tag == tag)
-            && self_locate_signed(&section.grant_blobs, &tag).is_some()
-    })
+    let Some(tag) = recipient_blinded_tag(enc_secret, sharer_enc_pub, &share.scope_root_name)
+    else {
+        return false;
+    };
+    if !section.commitment.entries.iter().any(|e| e.tag == tag) {
+        return false;
+    }
+    let Some(blob) = self_locate_signed(&section.grant_blobs, &tag) else {
+        return false;
+    };
+    let aad = AadContext {
+        v: candidate.envelope.v,
+        id: candidate.envelope.id,
+        scope: candidate.envelope.scope,
+        epoch: candidate.envelope.epoch,
+        struct_tag: STRUCT_TAG_GRANT_BLOB,
+    };
+    open_grant_blob(enc_secret, &blob.enc, &aad, &blob.ciphertext).is_ok()
 }
 
 /// What a resolved scope root supports, as a pure function of the record and the
@@ -1137,6 +1164,8 @@ mod tests {
     use cipherbox_core::suite::secret::SecretBytes;
 
     use core::cell::Cell;
+    use core::pin::pin;
+    use core::task::{Context, Waker};
     use std::sync::{Arc, Mutex};
 
     use crate::content::GatewaySource;
@@ -1487,6 +1516,7 @@ mod tests {
                     floors,
                     enc_secret: &my_enc(),
                     contact_label_seed: &label_seed(),
+                    list_lock: &ReceivedSharesLock::new(()),
                     mode: ResolveMode::CacheFirst,
                 }
                 .classified(
@@ -2046,6 +2076,7 @@ mod tests {
         granted: Permission,
         /// Whether the last pass attributed abuse to the sharer.
         reported: Cell<bool>,
+        list_lock: ReceivedSharesLock,
     }
 
     impl RenderedScope {
@@ -2087,6 +2118,7 @@ mod tests {
                 verdicts: RefCell::new(ReceivedVerdicts::new()),
                 granted: permission,
                 reported: Cell::new(false),
+                list_lock: ReceivedSharesLock::new(()),
             };
             block_on(
                 StagingContactStore::new(&fx.staging, &my_enc(), &fx.entropy)
@@ -2228,13 +2260,33 @@ mod tests {
             at_millis: u64,
             mode: ResolveMode,
         ) -> ResolutionClass {
+            let (events, mut rx) = mpsc::unbounded();
+            block_on(self.refresh_over(transport, &events, at_millis, mode));
+            drop(events);
+            self.reported.set(
+                core::iter::from_fn(|| rx.try_recv().ok())
+                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
+            );
+            self.verdicts
+                .borrow()
+                .get(&(sharer_signer().verifying_key().to_sec1(), SCOPE))
+                .map_or(ResolutionClass::Unresolvable, |verdict| verdict.class)
+        }
+
+        /// The pass itself, with the head block its resolve fetches served.
+        fn refresh_over<'s, T: RecordTransport>(
+            &'s self,
+            transport: &'s T,
+            events: &'s mpsc::UnboundedSender<Event>,
+            at_millis: u64,
+            mode: ResolveMode,
+        ) -> impl Future<Output = ()> + 's {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
                 body: self.fixture.head_block.clone(),
             });
-            let (events, mut rx) = mpsc::unbounded();
-            block_on(
+            async move {
                 ReceivedShareStatus {
                     transport,
                     gateway: &self.gateway,
@@ -2242,6 +2294,7 @@ mod tests {
                     floors: &self.floors,
                     enc_secret: &my_enc(),
                     contact_label_seed: &label_seed(),
+                    list_lock: &self.list_lock,
                     mode,
                 }
                 .refresh(
@@ -2258,21 +2311,13 @@ mod tests {
                         scope_roots: &self.scope_roots,
                         permissions: &self.permissions,
                         claims: &self.claims,
-                        events: &events,
+                        events,
                     },
                     UnixMillis(at_millis),
                     &SyncTimingProfile::CI,
-                ),
-            );
-            drop(events);
-            self.reported.set(
-                core::iter::from_fn(|| rx.try_recv().ok())
-                    .any(|event| matches!(event, Event::AttributableAbuse { .. })),
-            );
-            self.verdicts
-                .borrow()
-                .get(&(sharer_signer().verifying_key().to_sec1(), SCOPE))
-                .map_or(ResolutionClass::Unresolvable, |verdict| verdict.class)
+                )
+                .await;
+            }
         }
 
         /// The names the render tree lists under the shared scope root.
@@ -3064,6 +3109,7 @@ mod tests {
                     floors: &self.floors,
                     enc_secret: &my_enc(),
                     contact_label_seed: &label_seed(),
+                    list_lock: &ReceivedSharesLock::new(()),
                     mode: ResolveMode::CacheFirst,
                 }
                 .refresh(
@@ -3866,8 +3912,8 @@ mod tests {
             );
         }
 
-        /// A committed personal blob drops the link keys only once it opens: a
-        /// blob this device cannot open leaves the link as its only way in.
+        /// A committed personal blob this device cannot open leaves the link
+        /// as its way in, on every pass, and the link keys stay.
         #[test]
         fn a_personal_blob_that_will_not_open_keeps_the_link_keys() {
             let mut fx = RenderedScope::new(Vec::new());
@@ -3877,11 +3923,18 @@ mod tests {
             unopenable.ledger_entry.recipient_enc_pk = someone_else().to_bytes();
             serve_root(&mut fx, vec![link_row(LATER), unopenable], 0, 1);
 
-            assert_ne!(fx.forced_pass(0), ResolutionClass::Granted);
-            assert!(
-                stored(&fx).1.is_some(),
-                "the link keys stay until a personal blob opens"
-            );
+            for at in [0, 1_000] {
+                assert_eq!(
+                    fx.forced_pass(at),
+                    ResolutionClass::Granted,
+                    "the share reads through the link"
+                );
+                assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+                assert!(
+                    stored(&fx).1.is_some(),
+                    "the link keys stay until a personal blob opens"
+                );
+            }
         }
 
         /// A transport that runs `during` once, at the first GET of a pass.
@@ -4010,6 +4063,89 @@ mod tests {
             fx.records.heal_get_for(pointer_name().as_str());
             assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
             assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+        }
+
+        /// Capped passes reach every held bookmark in turn: the one a full
+        /// pass left out goes first in the next.
+        #[test]
+        fn a_capped_pass_reaches_the_held_bookmark_the_last_one_left_out() {
+            let fx = RenderedScope::new(Vec::new());
+            let scopes: Vec<[u8; 16]> = (0..=MAX_RESOLVES_PER_PASS / 2)
+                .map(|i| {
+                    let mut scope = [0x60; 16];
+                    scope[15] = u8::try_from(i).expect("a small list");
+                    scope
+                })
+                .collect();
+            let mut list = ReceivedSharesList::new();
+            for scope in &scopes {
+                let share = ReceivedShare {
+                    scope_root_name: derive_write_name(&[0x78; 32], scope)
+                        .as_str()
+                        .as_bytes()
+                        .to_vec(),
+                    scope_id: *scope,
+                    sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                    display_name: String::new(),
+                    permission: Permission::Read,
+                    pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                };
+                let key = share.key();
+                list.reconcile(share);
+                list.hold_link(
+                    key,
+                    LinkHold::new(
+                        SecretBytes::new(LINK_SECRET),
+                        scope_pointer_name(&POINTER_SEED, scope),
+                    ),
+                );
+            }
+            fx.persist(&list).expect("the joins persist");
+            let unread = || -> Vec<[u8; 16]> {
+                scopes
+                    .iter()
+                    .filter(|scope| {
+                        fx.records
+                            .get_count(scope_pointer_name(&POINTER_SEED, scope).as_str())
+                            == 0
+                    })
+                    .copied()
+                    .collect()
+            };
+
+            fx.forced_pass(0);
+            let [left_out] = unread()[..] else {
+                panic!("one full pass leaves exactly one held bookmark out");
+            };
+            fx.forced_pass(1_000);
+            assert!(
+                !unread().contains(&left_out),
+                "the next pass reads the bookmark the first one left out"
+            );
+        }
+
+        /// The pass's write-back of the list waits for a writer that holds it,
+        /// and lands once that writer lets go.
+        #[test]
+        fn the_refresh_write_back_waits_for_a_writer_holding_the_list() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            let writer = fx.list_lock.try_lock().expect("the list is free");
+            let (events, _rx) = mpsc::unbounded();
+            let mut pass = pin!(fx.refresh_over(&fx.records, &events, 0, ResolveMode::NoCache));
+            let mut cx = Context::from_waker(Waker::noop());
+
+            assert!(pass.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(
+                stored(&fx).0,
+                old_root_name().as_str().as_bytes(),
+                "the heal waits for the writer"
+            );
+            drop(writer);
+            block_on(pass);
+            assert_eq!(stored(&fx).0, scope_root_name().as_str().as_bytes());
         }
 
         /// A stored link secret that is no scalar reads nothing: the verdict is
