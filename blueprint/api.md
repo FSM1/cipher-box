@@ -262,7 +262,7 @@ Per the liveness design (FSM1/cipher-box-next#24), restated here as API surface:
 ## Mailbox
 
 Integrity-untrusted, swappable transport for one-shot sealed pointers
-(share pointers, write-rotation root re-points, invite claims, courtesy
+(share pointers, write-rotation root re-points, claims, courtesy
 notifications). Nothing on it is load-bearing for safety: root migration has
 the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in metadata.
 
@@ -274,7 +274,10 @@ the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in meta
   sender metadata in the clear (the sealed payload is owner-signed inside).
   Clients poll on the sync design's 30 s cadence; no push in v2.0 (push-ready
   seam per FSM1/cipher-box-next#33).
-- **Ack**: delete by id. Retention: until acked, bounded — per-recipient
+- **Ack**: delete by id. The answer says whether this call removed the item,
+  and the owner engine converts a claim only on "removed"
+  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  D5). Retention: until acked, bounded — per-recipient
   pending cap (reject-new when full) and a 90-day unacked TTL aligned with
   record EOLs. Rate limits per sender account and per recipient mailbox.
 - **Accepted exposure**: transient `{sender, recipient, timestamp}` edges;
@@ -288,12 +291,14 @@ directory component (FSM1/cipher-box-next#25) and resolves crypto-review finding
 - A **contact code** (QR / URL / pasted string) carries the self-authenticating
   bundle `{identityPk, encSubkey, bindingSig}` (~130 bytes). The engine verifies
   the binding signature against the carried identity key at import,
-  **fail-closed and mandatory**. Invite URLs carry the owner's bundle the same
-  way.
+  **fail-closed and mandatory**. It is the advanced sharing path; an invite
+  link's fragment carries the owner's contact code the same way (ADR 0023 D1,
+  D2).
 - Identity keys therefore only ever arrive out-of-band — there is no in-band
-  lookup for a directory substitution attack to poison. Optional
-  fingerprint-comparison UX remains available client-side for channel-MITM
-  paranoia, but no server component is involved.
+  lookup for a directory substitution attack to poison. Fingerprint comparison
+  uses the `crates/core` fingerprint function
+  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  D7), and no server component is involved.
 
 ## Account lifecycle
 
