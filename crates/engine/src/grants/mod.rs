@@ -1,14 +1,19 @@
-//! Grants — the ledger, commitment, contact import, share lists, and the accept
-//! flow (blueprint/engine.md "Grants and ledger", grants-in-metadata #25 D1).
+//! Grants: the ledger and commitment, contacts, share lists, invite links and
+//! their conversion, and revocation (blueprint/engine.md "Grants and ledger",
+//! #25 D1, ADRs 0023 to 0028; `docs/SHARING.md`).
 //!
-//! The engine layer that *composes* `crates/core`'s grant/contact/mailbox codecs
-//! and KDF edges into stateful behaviour — self-location, owner-only authority,
-//! contact import, the accept flow, revocation classification, and the owner seed
-//! cross-check. Read-grant *creation* ([`create`]) composes the sweep + re-seal +
-//! mailbox primitives into the owner-side mint; [`invite`] mints the ephemeral
-//! identity a bearer link's grant is wrapped to and converts its claims into
-//! personal grants. Write grants are not implemented here. Every trust decision
-//! is a composed core verdict or the adoption gate's; this layer holds no crypto.
+//! This layer composes `crates/core`'s grant, contact and mailbox codecs into
+//! stateful behaviour and holds no crypto of its own. Every trust decision is a
+//! core verdict or the adoption gate's, and every owner act reads the
+//! owner-signed record (ADR 0025 D3).
+//!
+//! - [`create`] mints a fresh grantee scope; [`append`] adds a row, changes a
+//!   permission or renames a grantee at a scope root that stands (ADR 0026).
+//! - [`invite`] and [`invite_mint`] mint a link entry; the link-held read runs
+//!   through it until the owner converts the claim; [`conversion`] holds the
+//!   acked claims the conversion pass converts (ADR 0023, ADR 0024).
+//! - [`cut_set`] names the rows one revoke removes (ADR 0025 D4);
+//!   [`revocation`] classifies what a reader finds.
 
 pub mod accept;
 pub mod append;

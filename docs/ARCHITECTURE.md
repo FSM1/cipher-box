@@ -281,7 +281,6 @@ via TypeORM repositories. Redis (BullMQ) backs the republish and migration job q
 | `tee`             | TEE key state, TEE worker HTTP proxy, key rotation                       |
 | `republish`       | BullMQ-backed 6-hour IPNS republish scheduler                            |
 | `device-approval` | Cross-device new-device approval flow (IPNS-based registry)              |
-| `shares`          | Share creation, invite links, share key distribution                     |
 | `migration`       | BullMQ-backed CID migration between pinning providers                    |
 | `health`          | Health check endpoint                                                    |
 | `metrics`         | Prometheus metrics registry (`prom-client`) and HTTP metrics interceptor |
@@ -330,17 +329,11 @@ FUSE architecture details.
 
 ## Sharing Model
 
-File and folder sharing is client-side key distribution. The owner wraps the target
-`folderKey` (or `fileKey`) with the recipient's `publicKey` using ECIES and stores the
-result as a `ShareKey` in the `shares` table. The recipient fetches the `ShareKey`, unwraps
-it with their own `privateKey`, and then has direct access to the shared content.
-
-The server stores only the ECIES-wrapped `ShareKey` ciphertext — it cannot access the
-plaintext key. Invite links are one-time tokens that deliver the wrapped key to a recipient
-who registers their `publicKey`.
-
-Share key types (`file`, `folder`, `file-ipns`, `folder-ipns`) control whether the
-recipient can read only or also write (subfolder IPNS key required for write).
+Sharing is grants-in-metadata: a grant blob in the shared folder's own record carries the
+scope seed, sealed to the recipient, under an owner-signed grant-set commitment. The server
+holds no grant and no key. The invite link is the primary sharing path: it is bearer and
+multi-claim, a link holder reads at once, and any owner device converts a claim into a
+personal grant with no approve step. See [SHARING.md](SHARING.md).
 
 ## BYO-IPFS Pinning
 
@@ -373,9 +366,6 @@ for migration discipline rules.
 | `tee_key_state`           | Singleton row: current and previous TEE key epochs + grace period                  |
 | `tee_key_rotation_log`    | Audit log of epoch rotations                                                       |
 | `device_approvals`        | Cross-device approval requests                                                     |
-| `shares`                  | Share records: sharer, recipient, target IPNS name                                 |
-| `share_keys`              | ECIES-wrapped key material per share entry                                         |
-| `share_invites`           | One-time invite tokens for share delivery                                          |
 | `pin_migrations`          | BullMQ-backed CID migration job state                                              |
 
 ## Further Reading
