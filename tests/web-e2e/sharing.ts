@@ -37,10 +37,10 @@ export interface ClaimSignIn {
 }
 
 /**
- * Spends `link` in `page`.
+ * Spends `link` in `page`: sign-in, the preview, then the join.
  *
- * The claim route must survive a tab that holds no session: the fragment is the
- * capability, so it has to outlive the sign-in.
+ * The invite route must survive a tab that holds no session: the fragment is
+ * the capability, so it has to outlive the sign-in.
  */
 export async function claimHere(page: Page, link: URL, how: ClaimSignIn): Promise<void> {
   const invite = new InvitePage(page);
@@ -49,16 +49,16 @@ export async function claimHere(page: Page, link: URL, how: ClaimSignIn): Promis
   await invite.open(link);
   await invite.expectState('waiting');
   await expect(invite.signIn).toBeVisible();
-  await expect(invite.confirm).toHaveCount(0);
+  await expect(invite.joinButton).toHaveCount(0);
 
   await vault.ready();
   await how.start();
 
-  await invite.expectState('ready');
+  await invite.expectState('joinable');
   await expect(invite.account).toContainText(how.account);
-  await invite.claim();
-  await invite.expectState('claimed');
-  // The claim takes the capability out of the address, so a reload cannot spend
+  await invite.join();
+  await invite.expectFolderOpened();
+  // The join takes the capability out of the address, so a reload cannot spend
   // it a second time.
   expect(new URL(page.url()).hash).toBe('');
 }

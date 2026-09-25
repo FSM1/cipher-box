@@ -3,7 +3,7 @@ import { RequireAuth } from './auth/RequireAuth';
 import { SessionEndWatcher } from './auth/SessionEndWatcher';
 import { BinPage } from './routes/BinPage';
 import { FilesPage } from './routes/FilesPage';
-import { InvitePage } from './routes/InvitePage';
+import { InvitePage } from './routes/invite/InvitePage';
 import { LoginPage } from './routes/LoginPage';
 import { SettingsPage } from './routes/SettingsPage';
 import { SharedPage } from './routes/SharedPage';
