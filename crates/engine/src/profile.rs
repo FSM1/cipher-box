@@ -77,6 +77,12 @@ pub struct SyncTimingProfile {
     ///
     /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
     pub settings_recheck_interval: Duration,
+    /// How often an owner session runs the expired-link sweep (ADR 0025 D2).
+    /// Coarser than [`poll_cadence`]: each pass costs one resolve and one
+    /// unseal per scope root, and a link deadline is measured in days.
+    ///
+    /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
+    pub link_sweep_cadence: Duration,
 }
 
 impl SyncTimingProfile {
@@ -103,6 +109,7 @@ impl SyncTimingProfile {
         preserved_dead_letter_ttl: Duration::from_secs(30 * 24 * 60 * 60),
         settings_load_budget: Duration::from_secs(10),
         settings_recheck_interval: Duration::from_secs(300),
+        link_sweep_cadence: Duration::from_secs(600),
     };
 
     /// CI policy: record TTL 1–5 s (small but nonzero) and compressed
@@ -119,6 +126,7 @@ impl SyncTimingProfile {
         preserved_dead_letter_ttl: Duration::from_secs(60),
         settings_load_budget: Duration::from_secs(1),
         settings_recheck_interval: Duration::from_secs(2),
+        link_sweep_cadence: Duration::from_secs(3),
     };
 }
 
@@ -165,6 +173,16 @@ mod tests {
             assert!(
                 profile.sweep_cadence > profile.poll_cadence,
                 "background hygiene must not contend with interactive polling"
+            );
+        }
+    }
+
+    #[test]
+    fn the_link_sweep_runs_slower_than_the_tick() {
+        for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
+            assert!(
+                profile.link_sweep_cadence > profile.poll_cadence,
+                "the expired-link sweep is slower than the tick (ADR 0025 D2)"
             );
         }
     }

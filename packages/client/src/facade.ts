@@ -426,11 +426,21 @@ export class EngineFacade {
 
   /**
    * Revokes the link `linkTag` names at `node` (its `SharingInviteLinkDescriptor.tag`):
-   * future claims end, converted grants stand. With no tag it cuts the scope's
-   * only link, which the engine refuses where the scope carries more.
+   * every link holder loses access at once. With no tag it cuts the scope's only
+   * link, which the engine refuses where the scope carries more. The people who
+   * joined through the link keep access unless `removeGrantees` is set.
    */
-  revokeInviteLink(node: Uint8Array, linkTag?: Uint8Array): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'revokeInviteLink', node, linkTag: linkTag ?? null });
+  revokeInviteLink(
+    node: Uint8Array,
+    linkTag?: Uint8Array,
+    removeGrantees = false
+  ): Promise<CommandOutcomeDescriptor> {
+    return this.command({
+      kind: 'revokeInviteLink',
+      node,
+      linkTag: linkTag ?? null,
+      removeGrantees,
+    });
   }
 
   /**

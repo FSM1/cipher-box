@@ -400,7 +400,11 @@ export interface EngineWasm {
       expiresAt: bigint | undefined,
       ownerName: string
     ): WasmCommand;
-    revokeInviteLink(node: WasmNodeId, linkTag: Uint8Array | undefined): WasmCommand;
+    revokeInviteLink(
+      node: WasmNodeId,
+      linkTag: Uint8Array | undefined,
+      removeGrantees: boolean
+    ): WasmCommand;
     claimInviteLink(fragment: string, name: string): WasmCommand;
     convertInviteClaims(node: WasmNodeId): WasmCommand;
     dismissRefusedClaims(node: WasmNodeId): WasmCommand;

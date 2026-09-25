@@ -62,6 +62,8 @@ pub struct InMemoryRecordStore {
     /// Whether every GET parks for ever
     /// ([`stall_gets`](InMemoryRecordStore::stall_gets)).
     stalling_gets: Arc<AtomicBool>,
+    /// ([`stall_gets_for_after`](InMemoryRecordStore::stall_gets_for_after)).
+    stalling_keys: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl InMemoryRecordStore {
@@ -88,6 +90,7 @@ impl InMemoryRecordStore {
             deferred: Arc::new(Mutex::new(HashMap::new())),
             dropping_puts: Arc::new(AtomicBool::new(false)),
             stalling_gets: Arc::new(AtomicBool::new(false)),
+            stalling_keys: Arc::default(),
         }
     }
 
@@ -280,6 +283,15 @@ impl InMemoryRecordStore {
         self.dropping_puts.store(true, Ordering::SeqCst);
     }
 
+    /// Park every GET under `routing_key` for ever once `budget` more of them
+    /// have answered, so a test can hold one caller mid-read.
+    pub fn stall_gets_for_after(&self, routing_key: &str, budget: usize) {
+        self.stalling_keys
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned(), budget);
+    }
+
     /// Park every GET for ever — the shape of a name no source answers for.
     /// The future stays `Pending`, so a deterministic executor parks on it
     /// rather than spinning.
@@ -314,7 +326,19 @@ impl RecordTransport for InMemoryRecordStore {
             .expect("lock")
             .entry(routing_key.to_owned())
             .or_default() += 1;
-        if self.stalling_gets.load(Ordering::SeqCst) {
+        let stalled = self
+            .stalling_keys
+            .lock()
+            .expect("lock")
+            .get_mut(routing_key)
+            .is_some_and(|budget| match budget.checked_sub(1) {
+                Some(left) => {
+                    *budget = left;
+                    false
+                }
+                None => true,
+            });
+        if stalled || self.stalling_gets.load(Ordering::SeqCst) {
             return core::future::poll_fn(|_| core::task::Poll::Pending).await;
         }
         if self.get_failing(endpoint) {

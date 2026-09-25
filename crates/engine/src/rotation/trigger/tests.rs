@@ -899,3 +899,56 @@ fn the_cut_check_surface_matches_the_variants_in_order() {
         WriteRotateError::NotOwner.check(),
     );
 }
+
+/// ADR 0025 D4: every row one revoke removes leaves in one cut set, with one
+/// cut-epoch step and one re-sign.
+#[test]
+fn one_revoke_cuts_every_named_row_in_one_step() {
+    let fx = Fixture::new();
+    let cut = revoke_grants(&fx.plan(), &BTreeSet::from([read_tag(), link_tag()]))
+        .expect("the cut lands");
+
+    assert_eq!(
+        cut.commitment
+            .entries
+            .iter()
+            .map(|e| e.tag)
+            .collect::<Vec<_>>(),
+        vec![write_tag()]
+    );
+    assert_eq!(cut.grant_ledger.len(), 1);
+    assert_eq!(cut.commitment.cut_epoch, fx.commitment.cut_epoch + 1);
+    assert_eq!(cut.revoked_recipients.len(), 2);
+    assert!(cut.planes().read() && !cut.planes().write());
+    fx.verify(&cut);
+}
+
+/// A write row in the cut set ends only with the name wave, so the write plane
+/// joins the read plane.
+#[test]
+fn a_cut_set_holding_a_write_row_rotates_both_planes() {
+    let fx = Fixture::new();
+    let cut = revoke_grants(&fx.plan(), &BTreeSet::from([link_tag(), write_tag()]))
+        .expect("the cut lands");
+    assert!(cut.planes().read() && cut.planes().write());
+}
+
+#[test]
+fn a_cut_set_naming_an_uncommitted_tag_or_nothing_is_refused() {
+    let fx = Fixture::new();
+    assert_eq!(
+        revoke_grants(&fx.plan(), &BTreeSet::from([read_tag(), [0xee; 32]])),
+        Err(RevokeError::NotGranted)
+    );
+    assert_eq!(
+        revoke_grants(&fx.plan(), &BTreeSet::new()),
+        Err(RevokeError::NotGranted)
+    );
+    assert_eq!(
+        revoke_grants(
+            &fx.plan_signed_by(&stranger()),
+            &BTreeSet::from([read_tag()])
+        ),
+        Err(RevokeError::UnauthorizedSigner)
+    );
+}

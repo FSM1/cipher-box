@@ -16,11 +16,12 @@ use crate::grants::conversion::{
 use crate::grants::create::MINT_EPOCH;
 use crate::grants::inbox::OwnedClaim;
 use crate::grants::{
-    AckedClaim, ClaimDisposition, GrantRecipient, fingerprint_identity_key, link_of_sender,
-    post_share_pointer_at,
+    AckedClaim, ClaimDisposition, CommittedLink, GrantRecipient, fingerprint_identity_key,
+    link_of_sender, post_share_pointer_at,
 };
 use crate::net::rotation::OwnerScopeKeys;
 use crate::rotation::cut_for_write_scope;
+use crate::sync::BookkeepingSeal;
 
 /// The refusal a record change answers while a conversion pass runs.
 pub(super) const CONVERSION_RUNNING: &str = "a-conversion-pass-is-running";
@@ -185,6 +186,10 @@ pub(super) struct ConversionPass<'a, T, H: Http, C: CredentialStore, F, Sch, S, 
 }
 
 /// Holds [`ConversionPass::running`] and clears it however the holder ends.
+///
+/// A cut of a link holds it too: the cut removes the link row a conversion
+/// reads, so the cut and the pass exclude each other, and a link with a
+/// pending conversion entry is never cut (ADR 0023 D4).
 pub(super) struct Running<'a>(&'a Cell<bool>);
 
 impl<'a> Running<'a> {
@@ -197,6 +202,50 @@ impl<'a> Running<'a> {
 impl Drop for Running<'_> {
     fn drop(&mut self) {
         self.0.set(false);
+    }
+}
+
+/// The conversion record, read under [`Running`] for a cut of a link.
+/// [`ConversionPass::settle`] writes back the entries it retired.
+pub(super) struct HeldRecord<'a> {
+    _running: Running<'a>,
+    record: ConversionRecord,
+    retired: bool,
+}
+
+impl HeldRecord<'_> {
+    /// The ephemeral identities that send a pending conversion entry.
+    pub(super) fn pending_links(&self) -> Vec<[u8; IDENTITY_PUBLIC_LEN]> {
+        self.record.pending().map(|claim| claim.sender).collect()
+    }
+
+    fn retire(&mut self, retired: impl Fn(&AckedClaim) -> bool) {
+        if self.record.retire_refused(retired) > 0 {
+            self.retired = true;
+        }
+    }
+
+    /// Retire the refused entries the links in `cut` sent, once their cut
+    /// landed.
+    pub(super) fn retire_cut(&mut self, cut: &[[u8; IDENTITY_PUBLIC_LEN]]) {
+        self.retire(|claim| cut.contains(&claim.sender));
+    }
+
+    /// Retire the refused entries at the scope root `node` that no link in
+    /// `links`, the set it commits now, sent. This catches the entries of a
+    /// landed cut whose own retire did not persist.
+    pub(super) fn retire_uncommitted(
+        &mut self,
+        node: NodeId,
+        links: &[CommittedLink],
+        pointers: &PointerIndex,
+    ) {
+        self.retire(|claim| {
+            claimed_pointer(claim).is_some_and(|pointer| placed(pointers, &pointer) == Some(node))
+                && !links
+                    .iter()
+                    .any(|link| link.ephemeral_identity_pk == claim.sender)
+        });
     }
 }
 
@@ -229,7 +278,7 @@ where
         BookkeepingSeal::new(self.enc_secret, self.entropy)
     }
 
-    fn keys(&self) -> OwnerRotationKeys<'_> {
+    pub(super) fn keys(&self) -> OwnerRotationKeys<'_> {
         OwnerRotationKeys {
             enc_secret: self.enc_secret,
             identity: self.owner_identity,
@@ -237,7 +286,7 @@ where
         }
     }
 
-    fn net(
+    pub(super) fn net(
         &self,
         target: &OwnerScope,
         pointer_consult: PointerConsultArm,
@@ -273,6 +322,84 @@ where
         persist_conversions(self.staging, self.seal(), self.enc_secret, record)
             .await
             .map_err(EngineError::from_seam)
+    }
+
+    /// Hold the pass off and read the record, for a cut of a link. `None`
+    /// while a pass or another cut holds it.
+    pub(super) async fn hold_record(&self) -> Result<Option<HeldRecord<'_>>, EngineError> {
+        let Some(running) = Running::take(self.running) else {
+            return Ok(None);
+        };
+        Ok(Some(HeldRecord {
+            record: self.load().await?,
+            _running: running,
+            retired: false,
+        }))
+    }
+
+    /// Write back the entries `held` retired, and release [`Running`].
+    pub(super) async fn settle(
+        &self,
+        held: HeldRecord<'_>,
+        pointers: &PointerIndex,
+    ) -> Result<(), EngineError> {
+        if held.retired {
+            self.persist(&held.record).await?;
+            self.show_counts(&held.record, pointers);
+        }
+        Ok(())
+    }
+
+    /// Drive `cut` at `node` through the planes it demands, then raise this
+    /// device's cut-epoch floor: the gate raises it from any adopted record,
+    /// and without this raise the owner accepts the pre-cut root a surviving
+    /// write grantee republishes until its next resolve here.
+    ///
+    /// `vault_pointer_signer` re-points the vault pointer when a write wave
+    /// moves the vault root.
+    pub(super) async fn rotate_cut(
+        &self,
+        node: NodeId,
+        target: &OwnerScope,
+        scope_root_name: &IpnsName,
+        cut: &RevokedCommittedSet,
+        vault_pointer_signer: Option<&Ed25519Signer>,
+    ) -> Result<CutRotationReport, EngineError> {
+        let sweep = self.cut.sweep;
+        let rotator = OwnerCutNet {
+            transport: self.transport,
+            api: self.api,
+            gateway: self.gateway,
+            http: self.http,
+            floors: self.floors,
+            snapshot_cache: self.snapshot_cache,
+            events: self.events,
+            scheduler: self.scheduler,
+            profile: self.profile,
+            entropy: self.entropy,
+            keys: self.keys(),
+            owner_signer: self.identity,
+            owner_pointer_seed: self.cut.owner_pointer_seed,
+            vault_pointer_signer,
+            held: self.cut.held,
+            payload_version: POINTER_PAYLOAD_VERSION,
+            scope_root_name,
+            scope_id: target.scope.scope_id,
+            parent_node_seed: target.parent_node_seed.as_deref(),
+            session_root_scope_id: self.cut.vault_root.0,
+            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
+        };
+        let report = rotate_on_cut(&rotator, node, cut)
+            .await
+            .map_err(EngineError::from_rotation)?;
+        record_cut_epoch_floor(
+            self.floors,
+            &target.scope.scope_id,
+            cut.commitment.cut_epoch,
+        )
+        .await
+        .map_err(EngineError::from_seam)?;
+        Ok(report)
     }
 
     /// Show the counts `record` holds, and repaint when they moved.
@@ -557,10 +684,20 @@ where
             };
             // The converting device records the claimant, so it can cut the
             // grant it mints (ADR 0023 D8).
-            match contacts
-                .record_from_link(&claimant_code, &link_tag, &target.scope.scope_id)
-                .await
-            {
+            let scope_id = &target.scope.scope_id;
+            let recorded = match outcome {
+                ClaimOutcome::Granted => {
+                    contacts
+                        .record_from_link(&claimant_code, &link_tag, scope_id)
+                        .await
+                }
+                ClaimOutcome::Unchanged => {
+                    contacts
+                        .record_unchanged_from_link(&claimant_code, &link_tag, scope_id)
+                        .await
+                }
+            };
+            match recorded {
                 Ok(_) => {}
                 Err(
                     ContactStoreError::Full
@@ -573,6 +710,10 @@ where
                         }
                         ClaimOutcome::Unchanged => Verdict::Settled,
                     });
+                    continue;
+                }
+                Err(ContactStoreError::RecipientKeyChanged) => {
+                    verdicts[at] = Some(Verdict::Refused(ConversionRefusal::RecipientKeyChanged));
                     continue;
                 }
                 Err(e) => {
@@ -684,41 +825,10 @@ where
             pointer_read_key: &current.pointer_read_key,
         })
         .map_err(EngineError::from_revoke)?;
-        let sweep = self.cut.sweep;
-        let rotator = OwnerCutNet {
-            transport: self.transport,
-            api: self.api,
-            gateway: self.gateway,
-            http: self.http,
-            floors: self.floors,
-            snapshot_cache: self.snapshot_cache,
-            events: self.events,
-            scheduler: self.scheduler,
-            profile: self.profile,
-            entropy: self.entropy,
-            keys: self.keys(),
-            owner_signer: self.identity,
-            owner_pointer_seed: self.cut.owner_pointer_seed,
-            // The vault root takes no link, so no conversion cuts it.
-            vault_pointer_signer: None,
-            held: self.cut.held,
-            payload_version: POINTER_PAYLOAD_VERSION,
-            scope_root_name: &scope_root_name,
-            scope_id: target.scope.scope_id,
-            parent_node_seed: target.parent_node_seed.as_deref(),
-            session_root_scope_id: self.cut.vault_root.0,
-            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
-        };
-        let report = rotate_on_cut(&rotator, node, &cut)
-            .await
-            .map_err(EngineError::from_rotation)?;
-        record_cut_epoch_floor(
-            self.floors,
-            &target.scope.scope_id,
-            cut.commitment.cut_epoch,
-        )
-        .await
-        .map_err(EngineError::from_seam)?;
+        // The vault root takes no link, so no conversion cuts it.
+        let report = self
+            .rotate_cut(node, target, &scope_root_name, &cut, None)
+            .await?;
         let write = report.write.ok_or_else(|| EngineError::Seam {
             message: "the write-scope cut ran no write wave".to_owned(),
         })?;
@@ -988,5 +1098,26 @@ impl ConversionSites for TickSites<'_> {
 
     async fn folder_name(&self, node: NodeId) -> Result<String, EngineError> {
         share_display_name(&self.boundaries.base.borrow(), node)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cut and a pass exclude each other, and the flag frees when the
+    /// holder ends.
+    #[test]
+    fn one_holder_at_a_time_and_the_flag_frees_on_drop() {
+        let running = Cell::new(false);
+        let held = Running::take(&running).expect("the flag is free");
+        assert!(Running::take(&running).is_none(), "a second holder waits");
+        assert!(
+            running.get(),
+            "and the refusal leaves the first holder's flag"
+        );
+        drop(held);
+        assert!(!running.get());
+        assert!(Running::take(&running).is_some());
     }
 }

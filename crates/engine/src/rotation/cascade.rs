@@ -420,6 +420,8 @@ impl CascadeError {
 const REVOKED_MARKER_SUFFIX: &[u8] = b"/revoked";
 const REVOKED_ENTRY_SUFFIX: &[u8] = b"/revoked/";
 const GRANTED_ENTRY_SUFFIX: &[u8] = b"/granted/";
+const CUT_EPOCH_ENTRY_SUFFIX: &[u8] = b"/revoked-at-cut/";
+const CLEARED_ENTRY_SUFFIX: &[u8] = b"/cleared/";
 
 /// The key that carries **whether** this engine ever recorded a cut at
 /// `scope_id`. Read first, so the common scope pays one floor read rather than
@@ -441,6 +443,18 @@ fn revocation_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Ve
 /// path raises this, and a replay raises nothing.
 fn grant_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8> {
     [scope_id.as_slice(), GRANTED_ENTRY_SUFFIX, recipient].concat()
+}
+
+/// The key that carries the cut epoch of the set this engine's newest cut of
+/// `recipient` at `scope_id` signed.
+fn revocation_cut_epoch_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8> {
+    [scope_id.as_slice(), CUT_EPOCH_ENTRY_SUFFIX, recipient].concat()
+}
+
+/// The key that carries the read epoch up to which an owner-signed re-commit
+/// of `recipient` at `scope_id` cleared this engine's cut (ADR 0025 D3).
+fn cleared_floor_key(scope_id: &[u8; 16], recipient: &[u8; SECRET_LEN]) -> Vec<u8> {
+    [scope_id.as_slice(), CLEARED_ENTRY_SUFFIX, recipient].concat()
 }
 
 /// Record one owner grant of `recipient` at `scope_id`, at the read epoch the
@@ -495,6 +509,12 @@ pub(crate) async fn record_grant_floor<F: FloorStore>(
 /// same recipient at the same scope ([`record_grant_floor`]), so an owner who
 /// grants again after a cut is served rather than silently withheld for ever.
 ///
+/// The grant floor is this device's own. Another owner device that commits
+/// the recipient again leaves only the record, so an owner-signed set that
+/// commits the recipient at a cut epoch not below the one this device's cut
+/// signed clears the cut here, durably (ADR 0025 D3). A pre-cut set carries a
+/// lower cut epoch and clears nothing.
+///
 /// The marker read comes first so a scope the owner never cut pays no per-entry
 /// floor read at all.
 async fn effective_revoked_recipients<F: FloorStore>(
@@ -526,9 +546,22 @@ async fn effective_revoked_recipients<F: FloorStore>(
         let granted = floors
             .epoch_floor(&grant_floor_key(scope_id, &recipient))
             .await?;
-        if granted.is_none_or(|granted| cut > granted) {
-            revoked.insert(recipient);
+        let cleared = floors
+            .epoch_floor(&cleared_floor_key(scope_id, &recipient))
+            .await?;
+        if granted.max(cleared).is_some_and(|served| cut <= served) {
+            continue;
         }
+        let cut_at = floors
+            .epoch_floor(&revocation_cut_epoch_key(scope_id, &recipient))
+            .await?;
+        if cut_at.is_some_and(|cut_at| committed.commitment.cut_epoch >= cut_at) {
+            floors
+                .raise_epoch_floor(&cleared_floor_key(scope_id, &recipient), cut)
+                .await?;
+            continue;
+        }
+        revoked.insert(recipient);
     }
     Ok(revoked.into_iter().collect())
 }
@@ -560,6 +593,31 @@ async fn record_revocation_floor<F: FloorStore>(
             read_epoch,
         )])
         .collect();
+    floors.commit_floors(&raises).await
+}
+
+/// Record the cut epoch of the set that removes `cut_recipients`, the bar a
+/// later re-commit must reach to clear the cut
+/// ([`effective_revoked_recipients`]).
+///
+/// Raised only **after** the publish lands. A cut that never landed leaves this
+/// device at the previous cut epoch, and its next cut signs the same epoch
+/// again, which would clear a cut that no record carries.
+async fn record_cut_epochs<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    cut_recipients: &[[u8; SECRET_LEN]],
+    cut_epoch: u64,
+) -> Result<(), SeamError> {
+    let raises: Vec<FloorRaise> = cut_recipients
+        .iter()
+        .map(|recipient| {
+            FloorRaise::epoch(revocation_cut_epoch_key(scope_id, recipient), cut_epoch)
+        })
+        .collect();
+    if raises.is_empty() {
+        return Ok(());
+    }
     floors.commit_floors(&raises).await
 }
 
@@ -703,6 +761,14 @@ where
         .raise_epoch_floor(&scope_id, new_read_epoch)
         .await
         .map_err(|error| CascadeError::Floor { scope_id, error })?;
+    record_cut_epochs(
+        floors,
+        &scope_id,
+        plan.committed.revoked_recipients,
+        plan.committed.commitment.cut_epoch,
+    )
+    .await
+    .map_err(|error| CascadeError::RevocationFloor { scope_id, error })?;
 
     Ok((
         RekeyedScope {

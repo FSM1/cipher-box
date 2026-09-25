@@ -87,6 +87,7 @@ fn wired_owner_commands() -> Vec<(Command, EngineError)> {
             Command::RevokeInviteLink {
                 node,
                 link_tag: None,
+                remove_grantees: false,
             },
             EngineError::UnsupportedTarget {
                 check: "revoke-link-target-is-not-a-scope-root",

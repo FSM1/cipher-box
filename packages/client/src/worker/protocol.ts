@@ -616,7 +616,12 @@ export type CommandDescriptor =
       ownerName: string;
     }
   /** A `null` tag cuts the scope's only link; the engine refuses it where the scope carries more. */
-  | { kind: 'revokeInviteLink'; node: Uint8Array; linkTag: Uint8Array | null }
+  | {
+      kind: 'revokeInviteLink';
+      node: Uint8Array;
+      linkTag: Uint8Array | null;
+      removeGrantees: boolean;
+    }
   /**
    * The fragment is the whole bearer capability, opaque above the engine: it
    * crosses verbatim, is never parsed, and never reaches a log or any durable
