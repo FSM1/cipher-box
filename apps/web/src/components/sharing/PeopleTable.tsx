@@ -1,8 +1,10 @@
 import { Fragment, useState } from 'react';
-import type { Permission } from '@cipherbox/client';
+import { toHex } from '@cipherbox/client';
+import type { Permission, SharingInviteLinkDescriptor } from '@cipherbox/client';
 import type { SharingActions } from '../../hooks/useSharingActions';
-import { accessLabel } from '../../sharing/inviteLink';
-import type { GrantRow } from '../../stores/sharing.store';
+import { accessLabel, linkLabel } from '../../sharing/inviteLink';
+import type { GrantRow, ScopeSharing } from '../../stores/sharing.store';
+import { plural } from '../../vault/selection';
 import { Confirm } from './Confirm';
 
 /** Who a row names: the name on it, else its fingerprint. */
@@ -10,9 +12,20 @@ export function granteeLabel(grant: GrantRow): string {
   return grant.name?.name ?? grant.fingerprint ?? 'an unnamed person';
 }
 
+/**
+ * The owner and each grantee, then the live links: a link holder reads the
+ * folder before a conversion lists them as a grantee (ADR 0024).
+ */
+export function peopleCount(scope: ScopeSharing): string {
+  const live = plural(scope.inviteLinks.filter((link) => !link.expired).length, 'live link');
+  const people = String(scope.grants.length + 1);
+  return live === null ? people : `${people} · ${live}`;
+}
+
 interface PeopleTableProps {
   /** `null` where no read reached the scope root. */
   grants: readonly GrantRow[] | null;
+  links: readonly SharingInviteLinkDescriptor[];
   actions: SharingActions;
   busy: boolean;
 }
@@ -22,7 +35,7 @@ interface PeopleTableProps {
  * its name and its permission in place and revokes behind a confirmation that
  * shows the fingerprint, since the name is only a label (ADR 0027 D7).
  */
-export function PeopleTable({ grants, actions, busy }: PeopleTableProps) {
+export function PeopleTable({ grants, links, actions, busy }: PeopleTableProps) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
 
@@ -148,12 +161,31 @@ export function PeopleTable({ grants, actions, busy }: PeopleTableProps) {
         {grants.length === 0 && (
           <tr>
             <td colSpan={4} className="sharing-people-empty" data-testid="share-no-grants">
-              {'// only you have access — create a link below to invite someone'}
+              <NoGrantees links={links} />
             </td>
           </tr>
         )}
       </tbody>
     </table>
+  );
+}
+
+function NoGrantees({ links }: { links: readonly SharingInviteLinkDescriptor[] }) {
+  const live = links.filter((link) => !link.expired);
+  if (live.length === 0) {
+    return <>{'// only you have access — create a link below to invite someone'}</>;
+  }
+  return (
+    <>
+      {'// no one has joined yet — whoever holds a live link can already open this folder'}
+      {live
+        .filter((link) => link.pendingClaims > 0)
+        .map((link) => (
+          <div key={toHex(link.tag)} data-testid="share-link-waiting">
+            {`// ${plural(link.pendingClaims, 'claim')} waiting on the ${linkLabel(link)}`}
+          </div>
+        ))}
+    </>
   );
 }
 

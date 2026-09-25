@@ -53,8 +53,12 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
   const factory = useRef(createClient);
 
   // `facade.logout` closes the client for good, so the tab needs a new one
-  // before it can log in again.
-  const rebuild = useCallback(() => setGeneration((current) => current + 1), []);
+  // before it can log in again. The owner name goes with the sign-out, not with
+  // an unmount, so a reload in this tab keeps it.
+  const rebuild = useCallback(() => {
+    forgetOwnerName();
+    setGeneration((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     const secrets = new LoginSecretSource();
@@ -70,7 +74,6 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
       secrets.use(null);
       // Session-scoped UI state naming this identity's peers goes with it.
       sharingStore.clear();
-      forgetOwnerName();
       snapshots.dispose();
       media
         ?.dispose()

@@ -190,6 +190,8 @@ export function LinkSection({ scope, actions, busy, fresh, onMinted }: LinkSecti
 
       {chosen !== null && (
         <RevokeLinkPrompt
+          // A fresh prompt per link: a choice made for one link never rides into another.
+          key={tagKey(chosen)}
           link={chosen}
           scope={scope}
           actions={actions}
@@ -278,9 +280,11 @@ function RevokeLinkPrompt({
   const people = joined.length === 1 ? '1 person' : `${joined.length} people`;
 
   const revoke = () =>
-    void actions.revokeInviteLink(link.tag, { removeGrantees }).then((revoked) => {
-      if (revoked) onDone();
-    });
+    void actions
+      .revokeInviteLink(link.tag, { removeGrantees: removeGrantees && joined.length > 0 })
+      .then((revoked) => {
+        if (revoked) onDone();
+      });
 
   return (
     <Confirm

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 
 interface ConfirmProps {
   title: string;
@@ -22,10 +22,21 @@ export function Confirm({
   onConfirm,
   testId,
 }: ConfirmProps) {
+  const id = useId();
   return (
-    <div className="sharing-confirm" role="alertdialog" data-testid={`${testId}-prompt`}>
-      <p className="sharing-confirm-title">{title}</p>
-      {children}
+    <div
+      className="sharing-confirm"
+      role="alertdialog"
+      aria-labelledby={`${id}-title`}
+      aria-describedby={`${id}-notes`}
+      data-testid={`${testId}-prompt`}
+    >
+      <p className="sharing-confirm-title" id={`${id}-title`}>
+        {title}
+      </p>
+      <div className="sharing-confirm-notes" id={`${id}-notes`}>
+        {children}
+      </div>
       <div className="dialog-actions">
         <button
           type="button"

@@ -13,7 +13,7 @@ import type { ListingRow } from '../../vault/listing';
 import { Modal } from '../ui/Modal';
 import { ContactImportForm } from './ContactImportForm';
 import { LinkSection } from './LinkSection';
-import { PeopleTable } from './PeopleTable';
+import { PeopleTable, peopleCount } from './PeopleTable';
 
 interface ShareDialogProps {
   /** The scope root being shared. */
@@ -78,12 +78,15 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
         />
       ) : (
         <div className="dialog-content sharing-dialog" data-testid="share-dialog">
-          <p className="dialog-label">
-            {scope === null
-              ? 'people with access'
-              : `people with access · ${scope.grants.length + 1}`}
+          <p className="dialog-label" data-testid="share-people-count">
+            {scope === null ? 'people with access' : `people with access · ${peopleCount(scope)}`}
           </p>
-          <PeopleTable grants={scope?.grants ?? null} actions={actions} busy={busy} />
+          <PeopleTable
+            grants={scope?.grants ?? null}
+            links={scope?.inviteLinks ?? []}
+            actions={actions}
+            busy={busy}
+          />
           {actions.joined !== null && (
             <p className="sharing-note" role="status" data-testid="share-joined">
               {`// ${actions.joined} joined through a link`}

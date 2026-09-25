@@ -304,6 +304,26 @@ describe('the people table', () => {
     expect(screen.queryByTestId('share-grant-row')).toBeNull();
   });
 
+  it('counts the live links and says their holders can open the folder before any join', async () => {
+    const live = { ...inviteLink(0x7a, 4_000_000_000_000n), pendingClaims: 2 };
+    const expired = { ...inviteLink(0x7b, 1n), expired: true, pendingClaims: 4 };
+    const running = new EngineRequestError('seam error: a-conversion-pass-is-running', 'seam');
+    await share(
+      sharingEngine({ convertInviteClaims: running }, held([], [], { links: [live, expired] }))
+    );
+
+    expect(screen.getByTestId('share-people-count').textContent).toBe(
+      'people with access · 1 · 1 live link'
+    );
+    expect(screen.getByTestId('share-no-grants').textContent).toContain(
+      'whoever holds a live link can already open this folder'
+    );
+    const waiting = screen.getAllByTestId('share-link-waiting');
+    expect(waiting.map((line) => line.textContent)).toEqual([
+      expect.stringMatching(/^\/\/ 2 claims waiting on the view link, expires/),
+    ]);
+  });
+
   it('does not draw a scope the engine could not reach as one shared with nobody', async () => {
     await share(sharingEngine({}, held([1], null)));
 
@@ -352,6 +372,18 @@ describe('the people table', () => {
     expect(engine.facade.revoke).toHaveBeenCalledWith(DOCS, identity(1));
     expect(screen.queryByTestId('share-grant-row')).toBeNull();
     expect(screen.queryByTestId('share-revoke-prompt')).toBeNull();
+  });
+
+  it('names the confirmation by its title and describes it by its notes', async () => {
+    await share(sharingEngine({}, held([1], [{ seed: 1, permission: 'read' }])));
+
+    await click('share-revoke');
+
+    const prompt = screen.getByRole('alertdialog', {
+      name: `remove ${fingerprint(1)}?`,
+      description: new RegExp(`fingerprint ${fingerprint(1)}`),
+    });
+    expect(prompt).toBe(screen.getByTestId('share-revoke-prompt'));
   });
 
   it('keeps the grant when the owner steps back from the confirmation', async () => {
@@ -801,6 +833,23 @@ describe('the links a scope carries', () => {
 
     await click(remove);
     expect(keepers.textContent).toContain('these lose access');
+  });
+
+  it('drops the remove choice when the owner turns to a link no one joined through', async () => {
+    const other = inviteLink(0x7b, 4_000_000_000_000n);
+    const rows: HeldGrant[] = [{ seed: 2, permission: 'read', viaLink: 0x7a }];
+    const engine = await share(sharingEngine({}, held([], rows, { links: [LIVE, other] })));
+
+    await click(screen.getAllByTestId('share-revoke-link')[0]);
+    await click('share-link-remove-grantees');
+    await click(screen.getAllByTestId('share-revoke-link')[1]);
+    expect(screen.queryByTestId('share-link-remove-grantees')).toBeNull();
+
+    await click('share-link-revoke-confirm');
+
+    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, other.tag);
+    expect(screen.queryByTestId('dialog-error')).toBeNull();
+    expect(screen.getAllByTestId('share-link-chip')).toHaveLength(1);
   });
 
   it('refuses a revoke that also removes the people who joined, and keeps the link', async () => {
