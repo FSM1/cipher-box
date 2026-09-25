@@ -39,13 +39,14 @@
     },
     "invite": {
       "file": "vectors/invite_reject.json",
-      "count": 14,
+      "count": 16,
       "checks": [
         "invalid-invite-secret",
         "malformed-claim",
         "malformed-invite-fragment",
         "invite-fragment-too-large",
         "invite-name-too-long",
+        "invalid-claim-name",
         "claim-scope-mismatch",
         "commitment-names-another-scope-root",
         "not-owner",
@@ -54,6 +55,7 @@
         "claimant-contact-invalid",
         "claimant-is-the-ephemeral-half",
         "claimant-is-the-owner",
+        "link-admission-cap-reached",
         "duplicate-tag"
       ]
     },

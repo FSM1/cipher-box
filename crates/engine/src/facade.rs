@@ -15,11 +15,20 @@
 //! and every successful stage emits [`Event::SnapshotUpdated`]. A [`Command`]
 //! variant with no arm of its own returns [`EngineError::Unimplemented`].
 
+mod claim_conversion;
+
 use core::cell::{Cell, RefCell};
 use core::fmt;
 use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+
+use crate::grants::conversion::{load_conversions, persist_conversions};
+use crate::sync::BookkeepingSeal;
+use claim_conversion::{
+    CONVERSION_RUNNING, ClaimCounts, ConversionPass, CutAuthority, EngineSites, PassOutcome,
+    PointerIndex, Running, TickSites, claimed_pointer, placed, scope_pointer_index,
+};
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
 use cipherbox_core::content::{CONTENT_CID_LEN, encode_content_cid_str};
@@ -31,7 +40,9 @@ use cipherbox_core::seal::{
     GranteeName, MAX_READ_SEALED_BYTES, NameSource, Permission as CommittedPermission, ReadBody,
     Version, open_content_key, seal_content_key, sign_grant_set,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier, IDENTITY_PUBLIC_LEN};
+use cipherbox_core::suite::ecdsa::{
+    EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN,
+};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -64,24 +75,24 @@ use crate::grants::grafted::{
     GraftedSharers, evict_grafted_read_seeds, evict_grafted_write_seeds, floor_namespace,
     floor_view, is_own_scope,
 };
-use crate::grants::inbox::{PendingInviteClaims, ShareInbox};
+use crate::grants::inbox::{OwnedClaim, ShareInbox, owned_claims};
 use crate::grants::link_read::{
     JoinRead, JoinSeams, LinkReadRefusal, PreviewRead, join_read, pending_link_bookmark,
-    preview_read,
+    preview_read, repost_held_claims,
 };
 use crate::grants::received_status::{
     ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
 };
 use crate::grants::{
-    ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
-    CreateGrantError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee,
-    GrantRecipient, GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError,
-    InviteMintPlan, LinkHold, LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
-    ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
-    ReceivedShareStoreError, ResolutionClass, SharePointer, StagingContactStore,
+    CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError,
+    ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
+    EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim, InviteClaim, InviteError,
+    InviteFragment, InviteMintError, InviteMintPlan, LinkHold, LinkTerms, MintedInviteLink,
+    OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShare,
+    ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, StagingContactStore,
     StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_links, convert_invite_claim,
     create_grant, enforce_committed_ledger, import_contact, insert_child, link_budget_full,
-    locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer,
+    link_of_sender, locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer,
     recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
 };
 use crate::grants::{
@@ -89,16 +100,14 @@ use crate::grants::{
     append_row, held_row, mint_grant_row, mint_invite_row, name_row, post_share_pointer_at,
     rename_grantee, seal_fragment, set_permission,
 };
-use crate::mailbox::{poll_verified, post_sealed};
+use crate::mailbox::poll_verified;
 use crate::name::{NameError, is_emittable, validate_name};
 use crate::net::author::ENVELOPE_V;
 use crate::net::cut::OwnerCutNet;
 use crate::net::record_publish::RecordPublishError;
 use crate::net::retire::{OrphanHeads, ReclaimStall, retire};
 use crate::net::rotation::scope_name;
-use crate::net::rotation::{
-    GatedRoots, MovedScopeSeed, OwnerPointerRead, RotationAncestry, SweptScopeState,
-};
+use crate::net::rotation::{GatedRoots, MovedScopeSeed, RotationAncestry, SweptScopeState};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, DescendantScopeRoot, EolRenewResult, FolderRefresh,
     FolderRefreshReport, GraftedLeg, HeldKey, HeldMaterial, HeldRecord, HeldRecords,
@@ -377,9 +386,8 @@ pub struct SnapshotChild {
     /// The head version's content root CID, `None` until projected — what a
     /// caller hands back on [`WriteTarget::Version::expected_version`].
     pub content_cid: Option<Vec<u8>>,
-    /// Invite claims on this owner's inbox that wait for
-    /// [`Command::ConvertInviteClaims`] at this scope root, counted by the
-    /// scope pointer each claim names.
+    /// Invite claims this owner device acked at this scope root and has not
+    /// converted yet (ADR 0023 D5).
     pub pending_invite_claims: u32,
 }
 
@@ -576,6 +584,9 @@ pub struct SharingInviteLink {
     /// ([`MAX_LINK_CONTACTS`](crate::grants::MAX_LINK_CONTACTS)), so a claim
     /// on it cannot convert until the owner revokes it.
     pub contact_budget_full: bool,
+    /// Claims this owner device refused at a cap here: the link's admission
+    /// cap or the grant-set ceiling (ADR 0023 D9, ADR 0026 E1).
+    pub refused_claims: u32,
 }
 
 /// What one scope's own record says about sharing, when this read reached it.
@@ -765,6 +776,50 @@ type LinkSeams<'a, T> = JoinSeams<
     <T as SeamTypes>::Http,
     SharerScopedFloorStore<'a, OwnerScopedFloorStore<<T as SeamTypes>::FloorStore>>,
 >;
+
+/// Re-seal the set `current` carries at its current read epoch, which a set
+/// edit cuts no key of, and publish it at `target`. `commitment_sig` is the
+/// owner's signature over `current.commitment`.
+async fn publish_edited_set(
+    net: &impl ScopeRootPublisher,
+    entropy: &RefCell<Box<dyn Entropy>>,
+    owner_enc_secret: &X25519Secret,
+    target: &OwnerScope,
+    current: &CascadeTarget,
+    commitment_sig: &EcdsaSignature,
+) -> Result<(), EngineError> {
+    let section = reseal_at_current_epoch(
+        &mut SharedEntropy(entropy),
+        current,
+        &ResealSite {
+            scope_id: target.scope.scope_id,
+            ipns_name: &target.scope.ipns_name,
+            owner_enc_secret,
+            ascent: target
+                .parent_node_seed
+                .as_deref()
+                .map(AscentAuthority::ParentSeed),
+            owes_ascent_link: current.carried_ascent_link,
+        },
+        &CommittedSet {
+            commitment: &current.commitment,
+            commitment_sig: &commitment_sig.to_compact(),
+            grant_ledger: &current.grant_ledger,
+            direct_child_scope_index: &current.direct_child_scope_index,
+            revoked_recipients: &[],
+        },
+    )
+    .map_err(|e| EngineError::from_rotate(RotateError::Reseal(e)))?;
+    net.publish_scope_root(&ResealedScopeRoot {
+        scope_id: target.scope.scope_id,
+        ipns_name: target.scope.ipns_name.clone(),
+        read_epoch: current.current_read_epoch,
+        write_epoch: current.write_epoch,
+        section,
+    })
+    .await
+    .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
+}
 
 fn link_read_refused(refusal: LinkReadRefusal) -> EngineError {
     match refusal {
@@ -1384,13 +1439,26 @@ pub enum Command {
         link_tag: Option<Vec<u8>>,
     },
     /// Claim an invite link from the fragment its URL carries ([`InviteFragment`]).
+    /// A second claim of a link this device already holds, or of a folder it
+    /// already reads as a grantee, posts nothing and changes nothing.
     ClaimInviteLink {
         /// The link's URL fragment, verbatim.
         fragment: Zeroizing<String>,
+        /// The grantee name the claimant suggests (ADR 0027 D1): the sign-in
+        /// display name, or empty, and never the email. The host supplies it.
+        name: String,
     },
-    /// Convert the invite claims waiting on this owner's inbox for the link
-    /// minted at `node` (owner-only).
+    /// Convert the invite claims waiting for the folder at `node` now, as the
+    /// tick does on every pass (owner-only). A host issues it when the share
+    /// dialog opens (ADR 0023 D4).
     ConvertInviteClaims {
+        /// The node the link was minted at.
+        node: NodeId,
+    },
+    /// Drop the claims refused at a cap for the folder at `node` from this
+    /// device's conversion record (owner-only). A claimant that still wants in
+    /// posts its claim again.
+    DismissRefusedClaims {
         /// The node the link was minted at.
         node: NodeId,
     },
@@ -1497,6 +1565,7 @@ impl Command {
             Command::RevokeInviteLink { .. } => "revokeInviteLink",
             Command::ClaimInviteLink { .. } => "claimInviteLink",
             Command::ConvertInviteClaims { .. } => "convertInviteClaims",
+            Command::DismissRefusedClaims { .. } => "dismissRefusedClaims",
             Command::RotateNow { .. } => "rotateNow",
             Command::SaveVaultSettings { .. } => "saveVaultSettings",
             Command::SiweLink { .. } => "siweLink",
@@ -1625,6 +1694,13 @@ pub enum Event {
     /// pre-fill and no authority: names the owner gave are still on the rows,
     /// and only the offer of a name for a new folder is lost.
     GranteeNamesCleared,
+    /// This device's conversion record did not open. It is set aside under a
+    /// key of its own and the record starts empty; each claimant posts its
+    /// claim again, which is the recovery (ADR 0023 D5).
+    ConversionRecordUnreadable,
+    /// The conversion record held its bound of refused claims, so the oldest
+    /// refusal went. That claimant posts its claim again to be read again.
+    RefusedClaimDropped,
     /// Attributable abuse: a fail-closed adoption-gate rejection, or an
     /// owner-blob / ascent-link / unseal cross-check disagreement (#39 D6) —
     /// never a silent failure.
@@ -1669,6 +1745,19 @@ pub enum Event {
         /// Key-material-free classification of what stopped the rotation.
         detail: String,
     },
+    /// A claim this device converted added a grantee to a folder (ADR 0023
+    /// D7). Transient: only the converting device sees it, and every owner
+    /// device reads the grantee off the record.
+    GranteeJoined {
+        /// The folder's scope root.
+        scope_root: NodeId,
+        /// The grantee name the claimant suggested, or empty. The claimant
+        /// chose it, so a host shows it as a suggestion next to the
+        /// fingerprint, never as an identity.
+        name: String,
+        /// The claimant's identity-key fingerprint.
+        fingerprint: String,
+    },
     /// Progress of a content-plane transfer for one node: the driving op (if
     /// any), the phase reached, how far the transfer has got, and the failure
     /// classification on a failed phase.
@@ -1707,6 +1796,8 @@ impl fmt::Debug for Event {
                 .finish(),
             Self::ParkedWritesUnreadable => f.write_str("ParkedWritesUnreadable"),
             Self::GranteeNamesCleared => f.write_str("GranteeNamesCleared"),
+            Self::ConversionRecordUnreadable => f.write_str("ConversionRecordUnreadable"),
+            Self::RefusedClaimDropped => f.write_str("RefusedClaimDropped"),
             Self::VaultSettingsChanged => f.write_str("VaultSettingsChanged"),
             Self::AttributableAbuse { description } => f
                 .debug_struct("AttributableAbuse")
@@ -1729,6 +1820,16 @@ impl fmt::Debug for Event {
                 .debug_struct("ScopeExitCutOwed")
                 .field("scope_root", scope_root)
                 .field("detail", detail)
+                .finish(),
+            Self::GranteeJoined {
+                scope_root,
+                name,
+                fingerprint,
+            } => f
+                .debug_struct("GranteeJoined")
+                .field("scope_root", scope_root)
+                .field("name", &RedactedText::of(name))
+                .field("fingerprint", &RedactedText::of(fingerprint))
                 .finish(),
             Self::OpProgress {
                 op_id,
@@ -3547,6 +3648,12 @@ fn parsed_commitment_sig(compact: &[u8; 64]) -> Result<EcdsaSignature, EngineErr
     })
 }
 
+/// Why a link revoke waits: a conversion through the link is still pending.
+const LINK_CONVERSION_PENDING: &str = "link-has-a-pending-conversion";
+
+/// The refusal of a link revoke whose inbox poll failed.
+const MAILBOX_UNAVAILABLE: &str = "mailbox-unavailable";
+
 /// This session's authority over a scope's grant set — the pair every link
 /// path acts under ([`OwnerAuthority`]).
 fn owner_authority(session: &SessionIdentity) -> OwnerAuthority<'_> {
@@ -4543,6 +4650,72 @@ fn held_vault_root_scope(
     ))
 }
 
+/// `parent`'s record re-sealed at its current epoch with its index entry for
+/// `node` naming `moved`. A metadata-only re-seal, so it cuts no plane.
+fn reseal_with_moved_child(
+    entropy: &RefCell<Box<dyn Entropy>>,
+    owner_enc_secret: &X25519Secret,
+    parent: &OwnerScope,
+    current: &CascadeTarget,
+    node: NodeId,
+    moved: &IpnsName,
+) -> Result<ResealedScopeRoot, EngineError> {
+    let scope = &parent.scope;
+    let index = insert_child(
+        &current.direct_child_scope_index,
+        ChildScopeRef::new(node.0, moved.as_str().as_bytes().to_vec()),
+    );
+    let section = reseal_scope_root(
+        &mut SharedEntropy(entropy),
+        &ScopeRootIdentity {
+            v: current.v,
+            scope_id: scope.scope_id,
+            ipns_name: &scope.ipns_name,
+            owner_enc_pub: &current.owner_enc_pub,
+            owner_enc_secret: Some(owner_enc_secret),
+            ascent: parent
+                .parent_node_seed
+                .as_deref()
+                .map(AscentAuthority::ParentSeed),
+            owes_ascent_link: current.carried_ascent_link,
+            pseudonym_signer: &current.pseudonym_signer,
+        },
+        &ResealSeeds {
+            override_seed: &current.override_seed,
+            read_epoch: current.current_read_epoch,
+            prev: None,
+            write_scope_seed: &current.write_scope_seed,
+            write_epoch: current.write_epoch,
+            write_history: WriteHistory::Carried(&current.write_history_link),
+            pointer_read_key: &current.pointer_read_key,
+        },
+        &CommittedSet {
+            commitment: &current.commitment,
+            commitment_sig: &current.commitment_sig,
+            grant_ledger: &current.grant_ledger,
+            direct_child_scope_index: &index,
+            revoked_recipients: &[],
+        },
+        &current.carried_history_links,
+    )
+    .map_err(|e| EngineError::from_rotate(RotateError::Reseal(e)))?;
+    Ok(ResealedScopeRoot {
+        scope_id: scope.scope_id,
+        ipns_name: scope.ipns_name.clone(),
+        read_epoch: current.current_read_epoch,
+        write_epoch: current.write_epoch,
+        section,
+    })
+}
+
+/// The owner material a command's conversion pass holds for its duration.
+struct PassKeys<'a> {
+    owner_identity: EcdsaVerifier,
+    scope_keys: OwnerSessionKeys<'a>,
+    pointer_seed: SecretBytes,
+    sweep: SweepTaskFactory,
+}
+
 /// [`held_vault_root_scope`]'s refusal name.
 const HELD_SEED_NOT_AT_CURRENT_ROOT: &str = "held-write-seed-does-not-name-the-current-root";
 
@@ -5277,6 +5450,9 @@ pub struct Engine<T: SeamTypes> {
     /// walk that proves its whole boundary set lifts it; an availability
     /// failure neither raises nor lifts it.
     boundary_walk_rejected: Rc<Cell<bool>>,
+    /// Whether the last boundary walk proved every scope root it named. Until
+    /// one has, a scope root can be missing from the known set.
+    scope_roots_walked: Rc<Cell<bool>>,
     /// The read epoch the same walk proved each of them at, which no seed cache
     /// carries ([`crate::rotation::scope_material`]). Replaced per walk, unlike
     /// the set above.
@@ -5340,9 +5516,10 @@ pub struct Engine<T: SeamTypes> {
     /// the only writer; read by
     /// [`relocation_scope_roots`](Self::relocation_scope_roots).
     minted_scope_roots: Rc<RefCell<BTreeSet<NodeId>>>,
-    /// The invite claims the tick's last mailbox pull counted. In-memory: the
-    /// inbox is the authority, and the next pass re-counts it.
-    pending_invite_claims: Rc<RefCell<PendingInviteClaims>>,
+    /// The conversion entries the last conversion pass counted.
+    pending_invite_claims: Rc<RefCell<ClaimCounts>>,
+    /// Set while a conversion pass runs ([`ConversionPass::running`]).
+    conversion_running: Rc<Cell<bool>>,
     /// The folder the FUSE-op TTL check last fired a hint for, and when. One
     /// slot: the check only ever asks about the folder in view, and a hint is
     /// not the refresh stamp a completed pass earns
@@ -5407,6 +5584,11 @@ pub struct Engine<T: SeamTypes> {
     /// recheck on the same terms as [`tick_bin_keys`](Self::tick_bin_keys). The
     /// recheck enrols what it resolved, and the renewal re-signs with this.
     tick_settings_signer: Rc<RefCell<Option<Rc<Ed25519Signer>>>>,
+    /// The owner identity signer, shared with the tick's conversion pass on
+    /// the same terms as [`tick_settings_signer`](Self::tick_settings_signer):
+    /// a conversion on the tick re-signs the commitment, each minted row and
+    /// each share pointer (ADR 0023 D4).
+    tick_owner_signer: Rc<RefCell<Option<Rc<EcdsaSigner>>>>,
     /// The received-share leg's: the contact-label seed that leg's
     /// sharer-scoped floor reads are keyed under
     /// ([`ContactLabel`](crate::seams::ContactLabel)). Same cell discipline as
@@ -5511,6 +5693,7 @@ impl<T: SeamTypes> Engine<T> {
                 descendant_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 unproved_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 boundary_walk_rejected: Rc::new(Cell::new(false)),
+                scope_roots_walked: Rc::new(Cell::new(false)),
                 walked_read_epochs: Rc::new(RefCell::new(WalkedReadEpochs::new())),
                 current_root_name: Rc::new(RefCell::new(None)),
                 vault_pointer_index: Cell::new(None),
@@ -5525,7 +5708,8 @@ impl<T: SeamTypes> Engine<T> {
                 grafted_write_roots: Rc::new(RefCell::new(BTreeSet::new())),
                 grafted_claims: Rc::new(RefCell::new(ClaimRecord::default())),
                 minted_scope_roots: Rc::new(RefCell::new(BTreeSet::new())),
-                pending_invite_claims: Rc::new(RefCell::new(PendingInviteClaims::new())),
+                pending_invite_claims: Rc::new(RefCell::new(ClaimCounts::default())),
+                conversion_running: Rc::new(Cell::new(false)),
                 focus_hinted: Cell::new(None),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: Rc::new(RefCell::new(QueueScanMemo::default())),
@@ -5541,6 +5725,7 @@ impl<T: SeamTypes> Engine<T> {
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
                 tick_bin_keys: Rc::new(RefCell::new(None)),
                 tick_settings_signer: Rc::new(RefCell::new(None)),
+                tick_owner_signer: Rc::new(RefCell::new(None)),
                 tick_contact_label_seed: Rc::new(RefCell::new(None)),
                 tick_loop_spawner: RefCell::new(None),
                 sweep_tasks: Rc::new(RefCell::new(None)),
@@ -5904,6 +6089,9 @@ impl<T: SeamTypes> Engine<T> {
         if let Ok(mut signer) = self.tick_settings_signer.try_borrow_mut() {
             *signer = None;
         }
+        if let Ok(mut signer) = self.tick_owner_signer.try_borrow_mut() {
+            *signer = None;
+        }
         if let Ok(mut seed) = self.tick_contact_label_seed.try_borrow_mut() {
             *seed = None;
         }
@@ -5940,6 +6128,7 @@ impl<T: SeamTypes> Engine<T> {
             roots.clear();
         }
         self.boundary_walk_rejected.set(false);
+        self.scope_roots_walked.set(false);
         if let Ok(mut epochs) = self.walked_read_epochs.try_borrow_mut() {
             epochs.clear();
         }
@@ -5971,7 +6160,7 @@ impl<T: SeamTypes> Engine<T> {
             roots.clear();
         }
         if let Ok(mut claims) = self.pending_invite_claims.try_borrow_mut() {
-            claims.clear();
+            *claims = ClaimCounts::default();
         }
     }
 
@@ -6796,6 +6985,7 @@ where {
         let descendant_roots = self.descendant_scope_roots.clone();
         let unproved_roots = self.unproved_scope_roots.clone();
         let boundary_walk_rejected = self.boundary_walk_rejected.clone();
+        let scope_roots_walked = self.scope_roots_walked.clone();
         let walked_read_epochs = self.walked_read_epochs.clone();
         let current_root_name = self.current_root_name.clone();
         let focus = self.focus.clone();
@@ -6811,6 +7001,8 @@ where {
         let consult_keys = self.sweep_keys.clone();
         let minted_roots = self.minted_scope_roots.clone();
         let pending_invite_claims = self.pending_invite_claims.clone();
+        let tick_owner_signer = self.tick_owner_signer.clone();
+        let conversion_running = self.conversion_running.clone();
         let pending_scope_exits = self.pending_scope_exits.clone();
         let sweep_tasks = self.sweep_tasks.clone();
         let queue_scan = self.queue_scan.clone();
@@ -7095,6 +7287,8 @@ where {
                             );
                             descendants = walked.proved;
                         }
+                        scope_roots_walked
+                            .set(failure.is_none() && unproved_roots.borrow().is_empty());
                         // The boundary set a rejection leaves is incomplete, and
                         // what is missing from it reads as its parent's scope,
                         // so the session refuses to classify a move at all until
@@ -7577,6 +7771,14 @@ where {
                     //
                     // The mailbox pull leads it, so a share this pass accepts is
                     // classified by the refresh below rather than a pass later.
+                    let owner_keys = consult_keys.borrow().clone();
+                    let pointers = match (&boundaries, &owner_keys) {
+                        (Some(boundaries), Some(keys)) => scope_pointer_index(
+                            &keys.scope_keys,
+                            boundaries.scope_roots.iter().copied(),
+                        ),
+                        _ => PointerIndex::new(),
+                    };
                     let claims = ShareInbox {
                         mailbox: api.as_ref(),
                         transport: &transport,
@@ -7592,23 +7794,83 @@ where {
                         &staging,
                         &entropy,
                         ENVELOPE_V,
-                        &|pointer| {
-                            let keys = consult_keys.borrow().clone()?;
-                            descendant_roots
-                                .borrow()
-                                .iter()
-                                .find(|scope| keys.scope_keys.pointer_name(&scope.0) == *pointer)
-                                .copied()
-                        },
+                        &|pointer| placed(&pointers, pointer),
                         &events,
                     )
                     .await;
-                    if let Some(claims) = claims
-                        && *pending_invite_claims.borrow() != claims
-                    {
-                        *pending_invite_claims.borrow_mut() = claims;
-                        let _ = events.unbounded_send(Event::SnapshotUpdated);
+                    // Any owner device converts on every pass (ADR 0023 D4), at
+                    // the boundaries this pass's own walk proved. A failed poll
+                    // still converts the claims already acked.
+                    let owner_signer = tick_owner_signer.borrow().clone();
+                    let sweep = sweep_tasks.borrow().clone();
+                    let vault_root_name = current_root_name.borrow().clone();
+                    if let (
+                        Some(boundaries),
+                        Some(signer),
+                        Some(keys),
+                        Some(sweep),
+                        Some(root_name),
+                    ) = (
+                        boundaries.as_ref(),
+                        owner_signer,
+                        owner_keys,
+                        sweep,
+                        vault_root_name,
+                    ) {
+                        let converted = ConversionPass {
+                            transport: &transport,
+                            api: api.as_ref(),
+                            gateway: &gateway,
+                            http: &http,
+                            floors: &floors,
+                            snapshot_cache: &snapshot_cache,
+                            events: &events,
+                            scheduler: &scheduler,
+                            profile: &profile,
+                            entropy: &entropy,
+                            staging: &staging,
+                            identity: &signer,
+                            enc_secret: &enc_subkey,
+                            owner_identity: &owner_identity,
+                            scope_keys: &keys.scope_keys,
+                            cut: CutAuthority {
+                                owner_pointer_seed: keys.scope_keys.pointer_seed(),
+                                held: &held,
+                                sweep: &sweep,
+                                vault_root: NodeId(root_id),
+                            },
+                            scope_roots_walked: &scope_roots_walked,
+                            counts: &pending_invite_claims,
+                            running: &conversion_running,
+                        }
+                        .run(
+                            &TickSites {
+                                boundaries,
+                                root_name: &root_name,
+                                walked: scope_roots_walked.get(),
+                            },
+                            &pointers,
+                            claims.unwrap_or_default(),
+                            None,
+                        )
+                        .await
+                        .into_result();
+                        if let Err(EngineError::TrustViolation { message }) = converted {
+                            let _ = events.unbounded_send(Event::AttributableAbuse {
+                                description: message,
+                            });
+                        }
                     }
+                    repost_held_claims(
+                        api.as_ref(),
+                        &staging,
+                        &entropy,
+                        &enc_subkey,
+                        &received_shares_lock,
+                        ENVELOPE_V,
+                        scheduler.now(),
+                    )
+                    .await;
                     ReceivedShareStatus {
                         transport: &transport,
                         gateway: &gateway,
@@ -7681,10 +7943,11 @@ where {
             return;
         };
         // Least privilege, drawn no earlier than the loop that reads it: the
-        // pass needs the enc subkey, the bin index's own two edges, and the
-        // (public) owner verifier, never the login secret or the pointer seeds
-        // beside them.
+        // pass needs the enc subkey, the bin index's own two edges, the owner
+        // identity signer its conversions sign with, and the (public) owner
+        // verifier, never the login secret or the pointer seeds beside them.
         *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
+        *self.tick_owner_signer.borrow_mut() = Some(Rc::new(session.identity().clone()));
         *self.tick_bin_keys.borrow_mut() =
             Some(Rc::new(BinIndexKeys::derive(session.login_secret())));
         *self.tick_settings_signer.borrow_mut() =
@@ -7951,12 +8214,16 @@ where {
                 .revoke_invite_link(node, link_tag.as_deref())
                 .await
                 .map(|()| CommandOutcome::Done),
-            Command::ClaimInviteLink { fragment } => self
-                .claim_invite_link(&fragment)
+            Command::ClaimInviteLink { fragment, name } => self
+                .claim_invite_link(&fragment, name)
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::ConvertInviteClaims { node } => self
                 .convert_invite_claims(node)
+                .await
+                .map(|()| CommandOutcome::Done),
+            Command::DismissRefusedClaims { node } => self
+                .dismiss_refused_claims(node)
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::Grant {
@@ -9086,54 +9353,17 @@ where {
         let (parent_scope, current, net) = self
             .enclosing_scope(node, api, owner_keys(), PointerConsultArm::Permitted)
             .await?;
-        let parent = &parent_scope.scope;
-        let index = insert_child(
-            &current.direct_child_scope_index,
-            ChildScopeRef::new(node.0, moved.as_str().as_bytes().to_vec()),
-        );
-        let section = reseal_scope_root(
-            &mut SharedEntropy(&self.entropy),
-            &ScopeRootIdentity {
-                v: current.v,
-                scope_id: parent.scope_id,
-                ipns_name: &parent.ipns_name,
-                owner_enc_pub: &current.owner_enc_pub,
-                owner_enc_secret: Some(session.enc_subkey()),
-                ascent: parent_scope
-                    .parent_node_seed
-                    .as_deref()
-                    .map(AscentAuthority::ParentSeed),
-                owes_ascent_link: current.carried_ascent_link,
-                pseudonym_signer: &current.pseudonym_signer,
-            },
-            &ResealSeeds {
-                override_seed: &current.override_seed,
-                read_epoch: current.current_read_epoch,
-                prev: None,
-                write_scope_seed: &current.write_scope_seed,
-                write_epoch: current.write_epoch,
-                write_history: WriteHistory::Carried(&current.write_history_link),
-                pointer_read_key: &current.pointer_read_key,
-            },
-            &CommittedSet {
-                commitment: &current.commitment,
-                commitment_sig: &current.commitment_sig,
-                grant_ledger: &current.grant_ledger,
-                direct_child_scope_index: &index,
-                revoked_recipients: &[],
-            },
-            &current.carried_history_links,
-        )
-        .map_err(|e| EngineError::from_rotate(RotateError::Reseal(e)))?;
-        net.publish_scope_root(&ResealedScopeRoot {
-            scope_id: parent.scope_id,
-            ipns_name: parent.ipns_name.clone(),
-            read_epoch: current.current_read_epoch,
-            write_epoch: current.write_epoch,
-            section,
-        })
-        .await
-        .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
+        let resealed = reseal_with_moved_child(
+            &self.entropy,
+            session.enc_subkey(),
+            &parent_scope,
+            &current,
+            node,
+            moved,
+        )?;
+        net.publish_scope_root(&resealed)
+            .await
+            .map_err(|e| EngineError::from_rotate(RotateError::Publish(e)))
     }
 
     /// Append a share of `node` to the scope root `target` it already names
@@ -9576,69 +9806,15 @@ where {
         current.commitment = edited.commitment;
         current.grant_ledger = edited.ledger;
         current.commitment_sig = edited.commitment_sig.to_compact();
-        self.publish_converted_set(
-            session,
+        publish_edited_set(
             &gated.net,
+            &self.entropy,
+            session.enc_subkey(),
             &gated.target,
             current,
             &edited.commitment_sig,
         )
         .await
-    }
-
-    /// A link's owner-signed deadline: the one the command gives, or
-    /// [`DEFAULT_LINK_LIFETIME`] from now.
-    fn link_deadline(&self, expires_at: Option<UnixMillis>) -> UnixMillis {
-        expires_at.unwrap_or_else(|| {
-            self.seams
-                .scheduler
-                .now()
-                .saturating_add(DEFAULT_LINK_LIFETIME)
-        })
-    }
-
-    /// This session's grantee name cache over the staging store.
-    fn name_cache<'a>(
-        &'a self,
-        session: &'a SessionIdentity,
-    ) -> StagingGranteeNameCache<'a, QueueGenerationStore<T::StagingStore>, Box<dyn Entropy>> {
-        StagingGranteeNameCache::new(
-            &self.seams.staging_store,
-            session.enc_subkey(),
-            &self.entropy,
-        )
-    }
-
-    /// Revoke the invite link `link_tag` names at `node`, or its only link:
-    /// cut its row from the owner-signed committed set and drive the cut
-    /// through the planes it demands. The link is read off the record, so any
-    /// owner device can revoke it.
-    async fn revoke_invite_link(
-        &self,
-        node: NodeId,
-        link_tag: Option<&[u8]>,
-    ) -> Result<(), EngineError> {
-        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let link_tag = link_tag
-            .map(<[u8; 32]>::try_from)
-            .transpose()
-            .map_err(|_| EngineError::from_invite(InviteError::LinkNotCommitted))?;
-        // Owner-only: the tag cut is a link entry on a set this session's own
-        // identity signed; the command's tag only picks among them.
-        self.cut_and_rotate(
-            node,
-            "revoke-link-target-is-not-a-scope-root",
-            UnindexedScope::Derive,
-            async |target: &OwnerScope, current: &CascadeTarget| {
-                let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
-                let scope = bound_scope(target, current, &commitment_sig)?;
-                locate_invite_link(&owner_authority(session), &scope, link_tag.as_ref())
-                    .map(|link| link.tag)
-                    .map_err(EngineError::from_invite)
-            },
-        )
-        .await
-        .map(|_| ())
     }
 
     /// Decode an invite fragment into the pending bookmark and the seams the
@@ -9689,6 +9865,154 @@ where {
         })
     }
 
+    /// A link's owner-signed deadline: the one the command gives, or
+    /// [`DEFAULT_LINK_LIFETIME`] from now.
+    fn link_deadline(&self, expires_at: Option<UnixMillis>) -> UnixMillis {
+        expires_at.unwrap_or_else(|| {
+            self.seams
+                .scheduler
+                .now()
+                .saturating_add(DEFAULT_LINK_LIFETIME)
+        })
+    }
+
+    /// This session's grantee name cache over the staging store.
+    fn name_cache<'a>(
+        &'a self,
+        session: &'a SessionIdentity,
+    ) -> StagingGranteeNameCache<'a, QueueGenerationStore<T::StagingStore>, Box<dyn Entropy>> {
+        StagingGranteeNameCache::new(
+            &self.seams.staging_store,
+            session.enc_subkey(),
+            &self.entropy,
+        )
+    }
+
+    /// Revoke the invite link `link_tag` names at `node`, or its only link:
+    /// cut its row from the owner-signed committed set and drive the cut
+    /// through the planes it demands. The link is read off the record, so any
+    /// owner device can revoke it.
+    ///
+    /// The claims waiting in the inbox for the link convert first, and a link
+    /// with a conversion still pending is not cut: the cut removes the link
+    /// row that conversion reads (ADR 0023 D4). Any intake failure refuses the
+    /// revoke, because a claim it left on the inbox could never convert after
+    /// the cut. A conversion failure leaves its entry pending, which the cut
+    /// refuses; a share pointer still due does not read the link, so it does
+    /// not hold the cut. The cut retires the claims the link refused. No pass
+    /// runs while the revoke holds the record.
+    async fn revoke_invite_link(
+        &self,
+        node: NodeId,
+        link_tag: Option<&[u8]>,
+    ) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let link_tag = link_tag
+            .map(<[u8; 32]>::try_from)
+            .transpose()
+            .map_err(|_| EngineError::from_invite(InviteError::LinkNotCommitted))?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        if self.conversion_running.get() {
+            return Err(EngineError::Seam {
+                message: CONVERSION_RUNNING.to_owned(),
+            });
+        }
+        // A write conversion in the pass below moves the root, and each tag
+        // with it; the link's ephemeral identity stays.
+        let pinned = self.link_identity(session, node, link_tag.as_ref()).await?;
+        let items = self
+            .poll_owned_claims(session, api)
+            .await
+            .map_err(|_| EngineError::Seam {
+                message: MAILBOX_UNAVAILABLE.to_owned(),
+            })?;
+        let pass = self.run_conversion(session, api, items, node).await;
+        pass.intake?;
+        if let Err(EngineError::TrustViolation { message }) = pass.conversion {
+            let _ = self.events.unbounded_send(Event::AttributableAbuse {
+                description: message,
+            });
+        }
+        // A running pass may hold acked claims this read cannot see.
+        let Some(_running) = Running::take(&self.conversion_running) else {
+            return Err(EngineError::Seam {
+                message: CONVERSION_RUNNING.to_owned(),
+            });
+        };
+        let seal = || BookkeepingSeal::new(session.enc_subkey(), &*self.entropy);
+        let mut record = load_conversions(
+            &self.seams.staging_store,
+            seal(),
+            session.enc_subkey(),
+            &self.events,
+        )
+        .await
+        .map_err(EngineError::from_seam)?;
+        let pending: Vec<[u8; IDENTITY_PUBLIC_LEN]> =
+            record.pending().map(|claim| claim.sender).collect();
+        let revoked = Cell::new(None);
+        // Owner-only: the tag cut is a link entry on a set this session's own
+        // identity signed; the command's tag only picks among them.
+        self.cut_and_rotate(
+            node,
+            "revoke-link-target-is-not-a-scope-root",
+            UnindexedScope::Derive,
+            async |target: &OwnerScope, current: &CascadeTarget| {
+                let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
+                let scope = bound_scope(target, current, &commitment_sig)?;
+                let links = committed_links(&owner_authority(session), &scope)
+                    .map_err(EngineError::from_invite)?;
+                let link = link_of_sender(&links, &pinned).map_err(EngineError::from_invite)?;
+                if pending.contains(&link.ephemeral_identity_pk) {
+                    return Err(EngineError::Seam {
+                        message: LINK_CONVERSION_PENDING.to_owned(),
+                    });
+                }
+                revoked.set(Some(link.ephemeral_identity_pk));
+                Ok(link.tag)
+            },
+        )
+        .await?;
+        if let Some(link) = revoked.get()
+            && record.retire_refused(|claim| claim.sender == link) > 0
+        {
+            persist_conversions(
+                &self.seams.staging_store,
+                seal(),
+                session.enc_subkey(),
+                &record,
+            )
+            .await
+            .map_err(EngineError::from_seam)?;
+            let keys = self.pass_keys(session)?;
+            self.conversion_pass(session, api, &keys)
+                .show_counts(&record, &self.scope_pointer_index(session));
+        }
+        Ok(())
+    }
+
+    /// The ephemeral identity of the link `tag` names at `node`, or of its only
+    /// link.
+    async fn link_identity(
+        &self,
+        session: &SessionIdentity,
+        node: NodeId,
+        tag: Option<&[u8; 32]>,
+    ) -> Result<[u8; IDENTITY_PUBLIC_LEN], EngineError> {
+        let check = "revoke-link-target-is-not-a-scope-root";
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let keys = OwnerActionKeys::new(session);
+        let target = self
+            .owner_scope(node, api, keys.rotation(), check, UnindexedScope::Derive)
+            .await?;
+        let gated = self.resolve_owned_scope(&keys, target, check).await?;
+        let commitment_sig = parsed_commitment_sig(&gated.current.commitment_sig)?;
+        let scope = bound_scope(&gated.target, &gated.current, &commitment_sig)?;
+        locate_invite_link(&owner_authority(session), &scope, tag)
+            .map(|link| link.ephemeral_identity_pk)
+            .map_err(EngineError::from_invite)
+    }
+
     /// Claim an invite link from the fragment its URL carries: read the link
     /// through the scope pointer, post a sealed claim to the owner the fragment
     /// names, record that owner as a contact, and bookmark the folder with the
@@ -9698,13 +10022,15 @@ where {
     /// The engine does the parsing so the host never has to ([`InviteFragment`]).
     ///
     /// A read that does not answer never fails the claim: the command files a
-    /// pass, and the tick reads the folder through the link.
+    /// pass, and the tick reads the folder through the link. The bookmark
+    /// holds the claim and its idempotency key, and the tick posts it again
+    /// until a personal blob lands (ADR 0023 D6).
     ///
     /// Residual: nothing anchors the fragment's owner code (ADR 0024 E2), so it
     /// names whoever minted the *link*. Recording that bundle is what anchors
     /// the read and the grant this claim produces, so it waits on a post the
     /// transport accepted.
-    async fn claim_invite_link(&self, fragment: &str) -> Result<(), EngineError> {
+    async fn claim_invite_link(&self, fragment: &str, name: String) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let LinkOpening {
@@ -9712,7 +10038,7 @@ where {
             invitee,
             owner,
             mut share,
-            hold,
+            mut hold,
             seams,
             ..
         } = self.open_link_fragment(fragment)?;
@@ -9742,18 +10068,39 @@ where {
             Err(refusal) => return Err(link_read_refused(refusal)),
         }
 
+        // Held to the persist below, so no other list writer lands between
+        // the claimed check and the hold this call writes.
+        let list_guard = self.received_shares_lock.lock().await;
+        let store = self.received_share_store(session);
+        let mut received = store
+            .load()
+            .await
+            .map_err(EngineError::from_received_share_store)?;
+        let key = share.key();
+        let bookmarked = received.find(&key).is_some();
+        // A personal bookmark already reads the folder, and a hold that
+        // already posted a claim through this link posts it again on the tick.
+        let personal = bookmarked && received.link_hold(&key).is_none();
+        let claimed = received
+            .link_hold(&key)
+            .is_some_and(|held| held.claim.is_some() && held.invite_secret == hold.invite_secret);
+        if personal || claimed {
+            return Ok(());
+        }
+
         let mut entropy = SharedEntropy(&self.entropy);
         let claim = InviteClaim::mint(
             &mut entropy,
             fragment.scope_pointer_name.clone(),
             session.contact_code(),
+            name,
         )
         .map_err(EngineError::from_invite)?;
         let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
         // Fresh random and unlabelled: the API keeps only sha256(senderPublicKey
         // : idempotencyKey) but sees the key itself, so a derivable one hands
         // back the sender edge and a named one hands back the message class.
-        let idempotency: [u8; 16] = fresh_bytes(&mut entropy, "claim idempotency key")
+        let idempotency: [u8; CLAIM_KEY_LEN] = fresh_bytes(&mut entropy, "claim idempotency key")
             .map_err(EngineError::from_entropy)?;
         post_invite_claim(
             api.as_ref(),
@@ -9761,7 +10108,7 @@ where {
             &invitee,
             &ephemeral,
             ENVELOPE_V,
-            &claim,
+            &claim.encode().map_err(EngineError::from_invite)?,
             &hex_lower(&idempotency),
         )
         .await
@@ -9772,343 +10119,156 @@ where {
             .await
             .map_err(EngineError::from_contact_store)?;
 
-        let list_guard = self.received_shares_lock.lock().await;
-        let store = self.received_share_store(session);
-        let mut received = store
-            .load()
+        if !bookmarked {
+            received.reconcile(share);
+        }
+        if let Some(previous) = received.link_hold(&key)
+            && previous.invite_secret == hold.invite_secret
+        {
+            hold.deadline = previous.deadline;
+        }
+        hold.claim = Some(HeldClaim::first_post(
+            claim,
+            idempotency,
+            self.seams.scheduler.now(),
+        ));
+        received.hold_link(key, hold);
+        store
+            .persist(&received)
             .await
             .map_err(EngineError::from_received_share_store)?;
-        let key = share.key();
-        let bookmarked = received.find(&key).is_some();
-        let held = received.link_hold(&key);
-        // A personal bookmark already reads the folder, and a second join of
-        // one link keeps the hold and the deadline it verified.
-        let unchanged = (bookmarked && held.is_none())
-            || held.is_some_and(|held| held.invite_secret == hold.invite_secret);
-        if !unchanged {
-            if !bookmarked {
-                received.reconcile(share);
-            }
-            received.hold_link(key, hold);
-            store
-                .persist(&received)
-                .await
-                .map_err(EngineError::from_received_share_store)?;
-        }
         drop(list_guard);
         // The bookmark is durable, so the read waits for no pass.
         let _ = self.file_forced_pass();
         Ok(())
     }
 
-    /// Convert the invite claims this session's inbox holds for the link at
-    /// `node`.
-    ///
-    /// Owner-only twice over: conversion authorises against the owner's own
-    /// signature over the set it is changing, and the link it converts against
-    /// is the owner-attested link row on that set (ADR 0023 D3).
-    ///
-    /// Two passes over the inbox. The first converts every item against the set
-    /// the pass is accumulating in memory and publishes that set **once**; the
-    /// second posts each claimant their pointer and acks. Nothing is acked
-    /// until the one publish landed and that item's own pointer is posted, so a
-    /// failure anywhere leaves its claim un-acked and re-convertible on the
-    /// next press. A seam failure on one item does not block the rest — the
-    /// pass moves on and reports the first failure at the end. The publish is
-    /// deliberately outside [`Self::bounded_rotation`]: a lost race is
-    /// re-driven by the next pass against a re-resolved set, never retried
-    /// against a stale one.
+    /// Convert the claims waiting for the folder at `node`: poll the inbox,
+    /// ack the claims that name it, and run the conversion pass there
+    /// ([`ConversionPass`]).
     async fn convert_invite_claims(&self, node: NodeId) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        // Ahead of the render and both resolves, so the steady state — an inbox
-        // with nothing on it — spends neither.
+        let items = self.poll_owned_claims(session, api).await?;
+        self.run_conversion(session, api, items, node)
+            .await
+            .into_result()
+    }
+
+    /// The inbox items that claim a scope root this session holds.
+    async fn poll_owned_claims(
+        &self,
+        session: &SessionIdentity,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+    ) -> Result<Vec<OwnedClaim>, EngineError> {
         let items = poll_verified(api.as_ref(), session.enc_subkey(), ENVELOPE_V)
             .await
             .map_err(EngineError::from_seam)?;
-        if items.is_empty() {
-            return Ok(());
-        }
-        let rendered = self.render().await?;
-        let display_name = share_display_name(&rendered, node)?;
-
-        let owner_identity = session.owner_identity();
-        let scope_keys = OwnerSessionKeys::new(session);
-        let owner_keys = || OwnerRotationKeys {
-            enc_secret: session.enc_subkey(),
-            identity: &owner_identity,
-            scope_keys: &scope_keys,
-        };
-        let check = "convert-target-is-not-a-scope-root";
-        let target = self
-            .owner_scope(node, api, owner_keys(), check, UnindexedScope::Derive)
-            .await?;
-        let net = self.owner_rotation_net(
-            api,
-            owner_keys(),
-            target.ancestry(),
-            PointerConsultArm::Refused,
-        );
-        let mut current = net
-            .resolve_anchored(&target.scope)
-            .await
-            .map_err(|e| target.resolve_error(check, e))?;
-        let mut commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
-
-        let authority = owner_authority(session);
-        // Both are verdicts on the record this pass resolved rather than on any
-        // one item, so they fail the pass closed instead of reading as every
-        // item merely skipped (AGENTS.md rule 6).
-        let links = committed_links(
-            &authority,
-            &bound_scope(&target, &current, &commitment_sig)?,
-        )
-        .map_err(EngineError::from_invite)?;
-        enforce_committed_ledger(&current.commitment, &current.grant_ledger)
-            .map_err(|v| EngineError::from_invite(InviteError::Authority(v)))?;
-        if links.is_empty() {
-            return Ok(());
-        }
-        let scope_pointer_name = session.scope_pointer_name(&target.scope.scope_id);
-
-        /// One converted claim, held from the conversion pass to the delivery
-        /// pass. The set publishes once for the whole pass, so a delivery reads
-        /// nothing off the record its own item converted against.
-        struct Delivery {
-            claimant: Contact,
-            permission: CommittedPermission,
-            outcome: ClaimOutcome,
-            item_id: String,
-        }
-
-        let mut failure: Option<EngineError> = None;
-        let mut deliveries: Vec<Delivery> = Vec::new();
-        for item in &items {
-            let converted = convert_invite_claim(
-                &authority,
-                &bound_scope(&target, &current, &commitment_sig)?,
-                &scope_pointer_name,
-                &current.pointer_read_key,
-                item,
-                self.seams.scheduler.now(),
-            );
-            let ConvertedClaim {
-                row,
-                commitment,
-                ledger,
-                claimant,
-                link_tag,
-                claimant_code,
-                outcome,
-            } = match converted {
-                Ok(converted) => converted,
-                // A claim that can never become convertible. Acking ends its
-                // life rather than holding an inbox slot to its TTL.
-                Err(
-                    InviteError::ClaimantIsTheEphemeralHalf
-                    | InviteError::ClaimantIsTheOwner
-                    | InviteError::ClaimantContact(_)
-                    | InviteError::UnusableClaimantKey
-                    | InviteError::LinkExpired,
-                ) => {
-                    if let Err(e) = self.ack_claim(api.as_ref(), &item.item_id).await {
-                        failure.get_or_insert(EngineError::from_seam(e));
-                    }
-                    continue;
-                }
-                // Another consumer's item, another scope's claim, or a link
-                // this set does not carry now.
-                Err(
-                    InviteError::MalformedClaim(_)
-                    | InviteError::ScopeMismatch
-                    | InviteError::LinkNotCommitted,
-                ) => continue,
-                // A full set refuses this item alone: a claimant the set
-                // already holds still converts, and this one can after a
-                // revoke frees a row.
-                Err(e @ InviteError::GrantSetFull) => {
-                    failure.get_or_insert(EngineError::from_invite(e));
-                    continue;
-                }
-                // A verdict on the set this item proposed. The pass stops
-                // converting but still publishes what it converted, which is
-                // the last set this owner signed: to discard it would strand
-                // those claimants on every later press, where this item refuses
-                // again.
-                Err(e) => {
-                    failure.get_or_insert(EngineError::from_invite(e));
-                    break;
-                }
-            };
-
-            // Ahead of the publish: `revoke`/`downgrade` resolve their recipient
-            // in the contact book alone, so a grant this owner cannot later cut
-            // must never reach the record plane. A book with no room refuses the
-            // conversion and the item stays un-acked. The write is charged to
-            // the link that drove it, so bearer traffic cannot crowd out the
-            // contacts the owner imported by hand.
-            if let Err(e) = self
-                .contact_store(session)
-                .record_from_link(&claimant_code, &link_tag, &target.scope.scope_id)
-                .await
-            {
-                failure.get_or_insert(EngineError::from_contact_store(e));
-                continue;
-            }
-
-            if outcome == ClaimOutcome::Granted {
-                // The next item converts against what this one changed, and
-                // `convert_invite_claim` authorises against the signature over
-                // the set it is handed — so the accumulating set is re-signed
-                // per item and published once, at the end of the pass.
-                commitment_sig = sign_grant_set(session.identity(), &commitment).map_err(|_| {
-                    EngineError::MalformedInput {
-                        check: "converted-commitment-unsignable",
-                    }
-                })?;
-                current.commitment_sig = commitment_sig.to_compact();
-                current.commitment = commitment;
-                current.grant_ledger = ledger;
-            }
-            deliveries.push(Delivery {
-                claimant,
-                permission: row.commitment_entry.permission,
-                outcome,
-                item_id: item.item_id.clone(),
-            });
-        }
-
-        let changed = deliveries
-            .iter()
-            .any(|delivery| delivery.outcome == ClaimOutcome::Granted);
-        if changed
-            && let Err(e) = self
-                .publish_converted_set(session, &net, &target, &current, &commitment_sig)
-                .await
-        {
-            // Nothing this pass converted reached the record plane, so no claim
-            // is acked.
-            return Err(failure.unwrap_or(e));
-        }
-
-        for delivery in deliveries {
-            // The owner's own grant decision, and the only evidence of one this
-            // pass holds: the conversion **minted** this row, and the set
-            // carrying it landed. `Unchanged` turns on a row the resolved
-            // record already carried, which a committed write grantee authors,
-            // so it may not lift a cut (`rotation::record_grant_floor`).
-            if delivery.outcome == ClaimOutcome::Granted {
-                if let Err(e) = record_grant_floor(
-                    &self.seams.floor_store,
-                    &target.scope.scope_id,
-                    &delivery.claimant.enc_subkey(),
-                    current.current_read_epoch,
-                )
-                .await
-                {
-                    failure.get_or_insert(EngineError::from_seam(e));
-                    continue;
-                }
-            }
-
-            // Ahead of the ack: a post that fails leaves the claim un-acked, so
-            // the next pass re-runs it rather than acking a claimant who was
-            // never told where to look.
-            let mut entropy = SharedEntropy(&self.entropy);
-            let ephemeral = fresh_ephemeral(&mut entropy).map_err(EngineError::from_entropy)?;
-            let idempotency: [u8; 16] = fresh_bytes(&mut entropy, "claim grant idempotency key")
-                .map_err(EngineError::from_entropy)?;
-            let pointer = match SharePointer::bounded(
-                current.commitment.ipns_name.clone(),
-                owner_identity.to_sec1(),
-                display_name.clone(),
-                delivery.permission,
-            ) {
-                Ok(pointer) => pointer,
-                Err(_) => {
-                    failure.get_or_insert(EngineError::MalformedInput {
-                        check: "grant-display-name-too-long",
-                    });
-                    continue;
-                }
-            };
-            if let Err(e) = post_sealed(
-                api.as_ref(),
-                &delivery.claimant.enc_subkey(),
-                &delivery.claimant.identity_pk(),
-                &ephemeral,
-                ENVELOPE_V,
-                session.identity(),
-                &pointer.encode(),
-                &hex_lower(&idempotency),
-            )
-            .await
-            {
-                failure.get_or_insert(EngineError::from_seam(e));
-                continue;
-            }
-
-            if let Err(e) = self.ack_claim(api.as_ref(), &delivery.item_id).await {
-                failure.get_or_insert(EngineError::from_seam(e));
-            }
-        }
-        match failure {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        let pointers = self.scope_pointer_index(session);
+        Ok(owned_claims(items, &|pointer| placed(&pointers, pointer)))
     }
 
-    /// Publish the set a whole conversion pass produced at the scope root it
-    /// belongs to: re-seal at the current read epoch — a claim cuts no key — and
-    /// publish. `commitment_sig` is the owner's
-    /// signature over `current.commitment`, which the pass already made to
-    /// authorise each conversion against the set the one before it left.
-    async fn publish_converted_set(
+    /// Run the conversion pass for the folder at `node` over `items`.
+    async fn run_conversion(
         &self,
         session: &SessionIdentity,
-        net: &OwnerNet<'_, T>,
-        target: &OwnerScope,
-        current: &CascadeTarget,
-        commitment_sig: &EcdsaSignature,
-    ) -> Result<(), EngineError> {
-        let section = reseal_at_current_epoch(
-            &mut SharedEntropy(&self.entropy),
-            current,
-            &ResealSite {
-                scope_id: target.scope.scope_id,
-                ipns_name: &target.scope.ipns_name,
-                owner_enc_secret: session.enc_subkey(),
-                ascent: target
-                    .parent_node_seed
-                    .as_deref()
-                    .map(AscentAuthority::ParentSeed),
-                owes_ascent_link: current.carried_ascent_link,
-            },
-            &CommittedSet {
-                commitment: &current.commitment,
-                commitment_sig: &commitment_sig.to_compact(),
-                grant_ledger: &current.grant_ledger,
-                direct_child_scope_index: &current.direct_child_scope_index,
-                revoked_recipients: &[],
-            },
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        items: Vec<OwnedClaim>,
+        node: NodeId,
+    ) -> PassOutcome {
+        let sites = EngineSites {
+            engine: self,
+            session,
+            api,
+        };
+        let keys = match self.pass_keys(session) {
+            Ok(keys) => keys,
+            Err(e) => return PassOutcome::unheld(e),
+        };
+        self.conversion_pass(session, api, &keys)
+            .run(
+                &sites,
+                &self.scope_pointer_index(session),
+                items,
+                Some(node),
+            )
+            .await
+    }
+
+    /// Drop the claims refused at `node` from this device's conversion record.
+    async fn dismiss_refused_claims(&self, node: NodeId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let pointer = session.scope_pointer_name(&node.0);
+        let keys = self.pass_keys(session)?;
+        self.conversion_pass(session, api, &keys)
+            .retire_refused(&self.scope_pointer_index(session), |claim| {
+                claimed_pointer(claim).as_ref() == Some(&pointer)
+            })
+            .await
+    }
+
+    /// Every scope root this session knows, under its scope pointer name.
+    fn scope_pointer_index(&self, session: &SessionIdentity) -> PointerIndex {
+        scope_pointer_index(
+            &OwnerSessionKeys::new(session),
+            own_descendant_scopes(&self.descendant_scope_roots, &self.minted_scope_roots),
         )
-        .map_err(|e| EngineError::MalformedInput { check: e.check() })?;
-        net.publish_scope_root(&ResealedScopeRoot {
-            scope_id: target.scope.scope_id,
-            ipns_name: target.scope.ipns_name.clone(),
-            read_epoch: current.current_read_epoch,
-            write_epoch: current.write_epoch,
-            section,
+    }
+
+    /// The owner material a conversion pass holds for its duration.
+    fn pass_keys<'a>(&self, session: &'a SessionIdentity) -> Result<PassKeys<'a>, EngineError> {
+        Ok(PassKeys {
+            owner_identity: session.owner_identity(),
+            scope_keys: OwnerSessionKeys::new(session),
+            pointer_seed: session.owner_pointer_seed(),
+            sweep: self.sweep_factory()?,
         })
-        .await
-        .map_err(|e| {
-            let message = e.to_string();
-            match e.is_retryable() {
-                true => EngineError::Seam { message },
-                false => EngineError::TrustViolation { message },
-            }
-        })?;
-        Ok(())
+    }
+
+    /// The conversion pass over this session's seams.
+    #[allow(clippy::type_complexity)]
+    fn conversion_pass<'a>(
+        &'a self,
+        session: &'a SessionIdentity,
+        api: &'a Rc<ApiClient<T::Http, T::CredentialStore>>,
+        keys: &'a PassKeys<'a>,
+    ) -> ConversionPass<
+        'a,
+        RecordAccelerator<T::RecordTransport>,
+        T::Http,
+        T::CredentialStore,
+        OwnerScopedFloorStore<T::FloorStore>,
+        T::Scheduler,
+        T::SnapshotCache,
+        QueueGenerationStore<T::StagingStore>,
+    > {
+        ConversionPass {
+            transport: &self.record_transport,
+            api: api.as_ref(),
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            snapshot_cache: &self.seams.snapshot_cache,
+            events: &self.events,
+            scheduler: &self.seams.scheduler,
+            profile: &self.profile,
+            entropy: &self.entropy,
+            staging: &self.seams.staging_store,
+            identity: session.identity(),
+            enc_secret: session.enc_subkey(),
+            owner_identity: &keys.owner_identity,
+            scope_keys: &keys.scope_keys,
+            cut: CutAuthority {
+                owner_pointer_seed: keys.pointer_seed.as_bytes(),
+                held: &self.held_records,
+                sweep: &keys.sweep,
+                vault_root: self.snapshot.borrow().root,
+            },
+            scope_roots_walked: &self.scope_roots_walked,
+            counts: &self.pending_invite_claims,
+            running: &self.conversion_running,
+        }
     }
 
     /// This session's durable received-share bookmarks.
@@ -10122,43 +10282,6 @@ where {
             session.enc_subkey(),
             &self.entropy,
         )
-    }
-
-    /// How many counted invite claims wait at each scope root.
-    fn pending_claim_counts(&self) -> BTreeMap<NodeId, u32> {
-        let mut counts: BTreeMap<NodeId, u32> = BTreeMap::new();
-        for claim in self.pending_invite_claims.borrow().values() {
-            let count = counts.entry(claim.scope).or_default();
-            *count = count.saturating_add(1);
-        }
-        counts
-    }
-
-    /// How many counted invite claims at `scope_root` the link whose ephemeral
-    /// identity is `sender` signed.
-    fn pending_link_claims(&self, scope_root: NodeId, sender: &[u8; IDENTITY_PUBLIC_LEN]) -> u32 {
-        let claims = self.pending_invite_claims.borrow();
-        let count = claims
-            .values()
-            .filter(|claim| claim.scope == scope_root && claim.sender == *sender)
-            .count();
-        u32::try_from(count).unwrap_or(u32::MAX)
-    }
-
-    /// Ack one claim item and drop it from the count at once, so a host re-read
-    /// after the command does not wait a tick to see it go, whatever the rest
-    /// of the pass does.
-    async fn ack_claim<M: Mailbox + ?Sized>(&self, mailbox: &M, item_id: &str) -> SeamResult<()> {
-        mailbox.ack(item_id).await?;
-        let retired = self
-            .pending_invite_claims
-            .borrow_mut()
-            .remove(item_id)
-            .is_some();
-        if retired {
-            let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-        }
-        Ok(())
     }
 
     /// The provider config this session holds, which is the one its placement
@@ -11058,7 +11181,7 @@ where {
         }
         let dead = self.dead_letters.borrow();
         let dead_nodes: BTreeSet<NodeId> = dead.values().filter_map(|(node, _)| *node).collect();
-        let claims = self.pending_claim_counts();
+        let claims = self.pending_invite_claims.borrow().clone();
         let children = rendered_children(&rendered, folder)
             .iter()
             .map(|child| SnapshotChild {
@@ -11071,7 +11194,7 @@ where {
                 dead_letter: dead_nodes.contains(&child.meta.id),
                 content_version: child.meta.content_version,
                 content_cid: child.meta.head_content_cid.clone(),
-                pending_invite_claims: claims.get(&child.meta.id).copied().unwrap_or(0),
+                pending_invite_claims: claims.pending(child.meta.id),
             })
             .collect();
         let ancestors = rendered
@@ -11514,6 +11637,7 @@ where {
         // than as a scope with no links.
         let links = committed_links(&owner_authority(session), &scope).ok()?;
         let now = self.seams.scheduler.now();
+        let counts = self.pending_invite_claims.borrow();
         let invite_links = links
             .iter()
             .map(|link| SharingInviteLink {
@@ -11522,10 +11646,12 @@ where {
                 expires_at: link.deadline,
                 expired: link.is_expired(now),
                 admission_cap: link.admission_cap,
-                pending_claims: self.pending_link_claims(scope_root, &link.ephemeral_identity_pk),
+                pending_claims: counts.link_pending(scope_root, &link.ephemeral_identity_pk),
                 contact_budget_full: link_budget_full(sources, &link.tag),
+                refused_claims: counts.link_refused(scope_root, &link.ephemeral_identity_pk),
             })
             .collect();
+        drop(counts);
 
         let projected = project_grant_ledger(
             &GrantLabels {
@@ -18053,6 +18179,7 @@ mod tests {
 
     mod capstone {
         use super::*;
+        use crate::grants::SharePointer;
 
         use core::task::{Context, Poll, Waker};
 
@@ -21083,6 +21210,35 @@ mod tests {
         assert_eq!(body["signature"], device_signature());
         assert_eq!(body["identityToken"], "identity-token");
         assert_eq!(body["label"], "Laptop");
+    }
+
+    /// A conversion and a link revoke that start while another pass holds the
+    /// record answer the same retryable refusal, never `Done`.
+    #[test]
+    fn a_running_pass_refuses_a_conversion_and_a_link_revoke() {
+        let (mut engine, device) = engine_for_account("account-7");
+        let root = engine.snapshot.borrow().root;
+        let running = engine.conversion_running.clone();
+        let _held = claim_conversion::Running::take(&running).expect("no pass runs yet");
+        for command in [
+            Command::ConvertInviteClaims { node: root },
+            Command::RevokeInviteLink {
+                node: root,
+                link_tag: None,
+            },
+        ] {
+            let name = command.name();
+            device
+                .http
+                .enqueue_response(json_response(200, json!({ "messages": [] })));
+            assert_eq!(
+                block_on(engine.command(command)),
+                Err(EngineError::Seam {
+                    message: CONVERSION_RUNNING.to_owned()
+                }),
+                "{name}"
+            );
+        }
     }
 
     #[test]

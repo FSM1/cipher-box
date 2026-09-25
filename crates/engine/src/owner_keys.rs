@@ -66,6 +66,11 @@ impl OwnerSeedKeys {
             pointer_seed: session.owner_pointer_seed(),
         }
     }
+
+    /// The owner pointer seed, for a write-scope cut the tick drives.
+    pub(crate) fn pointer_seed(&self) -> &[u8; SECRET_LEN] {
+        self.pointer_seed.as_bytes()
+    }
 }
 
 impl OwnerScopeKeys for OwnerSeedKeys {

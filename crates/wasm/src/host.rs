@@ -947,6 +947,7 @@ mod tests {
                     admission_cap: 5,
                     pending_claims: 2,
                     contact_budget_full: true,
+                    refused_claims: 1,
                 }],
             ),
             "state",
@@ -966,6 +967,7 @@ mod tests {
         assert_eq!(field(&link, "expired"), JsValue::from_bool(true));
         assert_eq!(field(&link, "pendingClaims"), JsValue::from_f64(2.0));
         assert_eq!(field(&link, "contactBudgetFull"), JsValue::from_bool(true));
+        assert_eq!(field(&link, "refusedClaims"), JsValue::from_f64(1.0));
         assert_eq!(
             field(&link, "tag")
                 .unchecked_into::<js_sys::Uint8Array>()

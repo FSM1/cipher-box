@@ -1127,6 +1127,13 @@ impl SharingInviteLink {
     pub fn contact_budget_full(&self) -> bool {
         self.inner.contact_budget_full
     }
+
+    /// Invite claims this link refused at a cap: its admission cap or the
+    /// grant set was full.
+    #[wasm_bindgen(getter, js_name = refusedClaims)]
+    pub fn refused_claims(&self) -> u32 {
+        self.inner.refused_claims
+    }
 }
 
 impl SharingInviteLink {
@@ -2140,10 +2147,12 @@ impl Command {
     }
 
     /// Claim an invite link from the fragment its URL carries, verbatim.
+    /// `name` is the name the claimant gives the owner; empty sends none.
     #[wasm_bindgen(js_name = claimInviteLink)]
-    pub fn claim_invite_link(fragment: String) -> Command {
+    pub fn claim_invite_link(fragment: String, name: String) -> Command {
         Self::wrap(facade::Command::ClaimInviteLink {
             fragment: Zeroizing::new(fragment),
+            name,
         })
     }
 
@@ -2152,6 +2161,15 @@ impl Command {
     #[wasm_bindgen(js_name = convertInviteClaims)]
     pub fn convert_invite_claims(node: &NodeId) -> Command {
         Self::wrap(facade::Command::ConvertInviteClaims {
+            node: node.facade(),
+        })
+    }
+
+    /// Drop the claims refused at a cap for the link minted at a node from
+    /// this device's conversion record (owner-only).
+    #[wasm_bindgen(js_name = dismissRefusedClaims)]
+    pub fn dismiss_refused_claims(node: &NodeId) -> Command {
+        Self::wrap(facade::Command::DismissRefusedClaims {
             node: node.facade(),
         })
     }
@@ -2282,12 +2300,15 @@ impl Event {
             facade::Event::DeadLetter { .. } => "deadLetter",
             facade::Event::ParkedWritesUnreadable => "parkedWritesUnreadable",
             facade::Event::GranteeNamesCleared => "granteeNamesCleared",
+            facade::Event::ConversionRecordUnreadable => "conversionRecordUnreadable",
+            facade::Event::RefusedClaimDropped => "refusedClaimDropped",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
             facade::Event::VaultUnprovisioned { .. } => "vaultUnprovisioned",
             facade::Event::VaultSettingsChanged => "vaultSettingsChanged",
             facade::Event::ScopeExitCutOwed { .. } => "scopeExitCutOwed",
             facade::Event::OpProgress { .. } => "opProgress",
+            facade::Event::GranteeJoined { .. } => "granteeJoined",
         }
         .to_string()
     }
@@ -2412,11 +2433,33 @@ impl Event {
     }
 
     /// `scopeExitCutOwed`: the 16 raw bytes of the scope root that still owes
-    /// the cut; otherwise `undefined`.
+    /// the cut. `granteeJoined`: the scope root the grantee joined. Otherwise
+    /// `undefined`.
     #[wasm_bindgen(getter, js_name = scopeRoot)]
     pub fn scope_root(&self) -> Option<Vec<u8>> {
         match self.inner {
-            facade::Event::ScopeExitCutOwed { scope_root, .. } => Some(scope_root.0.to_vec()),
+            facade::Event::ScopeExitCutOwed { scope_root, .. }
+            | facade::Event::GranteeJoined { scope_root, .. } => Some(scope_root.0.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// `granteeJoined`: the name the claimant suggested, or empty; otherwise
+    /// `undefined`. Show it as a suggestion next to the fingerprint.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> Option<String> {
+        match &self.inner {
+            facade::Event::GranteeJoined { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// `granteeJoined`: the claimant's identity-key fingerprint; otherwise
+    /// `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn fingerprint(&self) -> Option<String> {
+        match &self.inner {
+            facade::Event::GranteeJoined { fingerprint, .. } => Some(fingerprint.clone()),
             _ => None,
         }
     }

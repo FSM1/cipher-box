@@ -437,21 +437,28 @@ export class EngineFacade {
    * Claims a link from its URL fragment — `location.hash.slice(1)`, verbatim.
    * The fragment is the whole bearer capability, so clear it from the address
    * bar (`history.replaceState`) before awaiting this: a hash survives in
-   * session-restore state and in the back/forward entry.
+   * session-restore state and in the back/forward entry. `name` is the name
+   * the owner sees for the claimant: the sign-in display name, else empty,
+   * never the email.
    */
-  claimInviteLink(fragment: string): Promise<CommandOutcomeDescriptor> {
+  claimInviteLink(fragment: string, name: string): Promise<CommandOutcomeDescriptor> {
     // Refused here rather than sent: past this call the fragment is cloned into
     // the worker's realm — and, behind a follower, the leader tab's — before
     // anything measures it (AGENTS.md 8).
     if (fragment.length > MAX_FRAGMENT_CHARS) {
       return Promise.reject(new Error('that is not an invite link'));
     }
-    return this.command({ kind: 'claimInviteLink', fragment });
+    return this.command({ kind: 'claimInviteLink', fragment, name });
   }
 
   /** Converts the claims waiting on the link minted at `node` into grants. */
   convertInviteClaims(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'convertInviteClaims', node });
+  }
+
+  /** Drops the claims the link minted at `node` refused at a cap. */
+  dismissRefusedClaims(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
+    return this.command({ kind: 'dismissRefusedClaims', node });
   }
 
   rotateNow(node: Uint8Array): Promise<CommandOutcomeDescriptor> {

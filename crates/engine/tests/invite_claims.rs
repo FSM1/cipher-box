@@ -19,8 +19,8 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::grants::{
-    CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, EphemeralInvitee, InviteClaim,
-    InviteError, LinkTerms, OwnerAuthority, convert_invite_claim, import_contact,
+    AckedClaim, CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, EphemeralInvitee,
+    InviteClaim, InviteError, LinkTerms, OwnerAuthority, convert_invite_claim, import_contact,
     mint_invite_grant, post_invite_claim,
 };
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified};
@@ -170,7 +170,10 @@ fn a_link_holder_claims_over_the_mailbox_and_the_owner_converts_it() {
             claim_id: [0x01; CLAIM_ID_LEN],
             scope_pointer_name: pointer_name(),
             contact_code: ContactCode::create(&claimant_identity, claimant_enc.public()).encode(),
-        },
+            name: String::new(),
+        }
+        .encode()
+        .expect("the claim encodes"),
         "claim-1",
     ))
     .expect("posts");
@@ -189,8 +192,7 @@ fn a_link_holder_claims_over_the_mailbox_and_the_owner_converts_it() {
         &l.scope(),
         &pointer_name(),
         &POINTER_READ_KEY,
-        &items[0],
-        UnixMillis(0),
+        &acked(&items[0], UnixMillis(0)),
     )
     .expect("converts");
 
@@ -225,7 +227,10 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
             claim_id: [0x01; CLAIM_ID_LEN],
             scope_pointer_name: pointer_name(),
             contact_code: ContactCode::create(&claimant_identity, claimant_enc.public()).encode(),
-        },
+            name: String::new(),
+        }
+        .encode()
+        .expect("the claim encodes"),
         "forged-1",
     ))
     .expect("posts");
@@ -242,8 +247,7 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
             &l.scope(),
             &pointer_name(),
             &POINTER_READ_KEY,
-            &items[0],
-            UnixMillis(0),
+            &acked(&items[0], UnixMillis(0)),
         )
         .unwrap_err()
         .check(),
@@ -266,6 +270,7 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
         &mut SeededEntropy::new(4),
         pointer_name(),
         contact_code.clone(),
+        String::new(),
     )
     .expect("mints")
     .claim_id;
@@ -280,7 +285,10 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
             claim_id,
             scope_pointer_name: pointer_name(),
             contact_code: contact_code.clone(),
-        },
+            name: String::new(),
+        }
+        .encode()
+        .expect("the claim encodes"),
         "claim-1",
     ))
     .expect("posts");
@@ -331,7 +339,10 @@ fn delivered_claim(
             claim_id,
             scope_pointer_name: scope_pointer,
             contact_code: ContactCode::create(&claimant_identity, claimant_enc.public()).encode(),
-        },
+            name: String::new(),
+        }
+        .encode()
+        .expect("the claim encodes"),
         "claim-1",
     ))
     .expect("posts");
@@ -342,10 +353,19 @@ fn delivered_claim(
         .expect("the claim was delivered")
 }
 
+/// `item` as the owner holds it once its ack removed it at `acked_at`.
+fn acked(item: &VerifiedMailboxItem, acked_at: UnixMillis) -> AckedClaim {
+    AckedClaim {
+        sender: item.sender_identity.to_sec1(),
+        payload: item.payload.clone(),
+        acked_at,
+    }
+}
+
 fn convert(
     scope: &CommittedScope<'_>,
     item: &VerifiedMailboxItem,
-    now: UnixMillis,
+    acked_at: UnixMillis,
 ) -> Result<ConvertedClaim, InviteError> {
     let keys = Owner::new();
     convert_invite_claim(
@@ -353,8 +373,7 @@ fn convert(
         scope,
         &pointer_name(),
         &POINTER_READ_KEY,
-        item,
-        now,
+        &acked(item, acked_at),
     )
 }
 
@@ -387,10 +406,10 @@ fn a_claim_from_a_committed_grantee_changes_nothing() {
     }
 }
 
-/// A write link converts at read, because a write grant needs a write cut that
-/// conversion does not run.
+/// A write link converts at its conversion permission (ADR 0024 D4). The
+/// write-scope cut before it is the caller's.
 #[test]
-fn a_write_link_converts_to_a_read_grant() {
+fn a_write_link_converts_to_a_write_grant() {
     let l = link(Permission::Write);
     let converted = convert(
         &l.scope(),
@@ -399,10 +418,10 @@ fn a_write_link_converts_to_a_read_grant() {
     )
     .expect("converts");
     assert_eq!(converted.outcome, ClaimOutcome::Granted);
-    assert_eq!(converted.row.ledger_entry.permission, Permission::Read);
+    assert_eq!(converted.row.ledger_entry.permission, Permission::Write);
 }
 
-/// ADR 0023 D3: the deadline must be later than now.
+/// ADR 0023 D3: the deadline must be later than the ack.
 #[test]
 fn a_claim_at_the_link_deadline_is_refused() {
     let l = link(Permission::Read);

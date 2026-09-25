@@ -58,20 +58,27 @@ where
     assert!(payloads.contains(&b"sealed-1".as_slice()));
     assert!(payloads.contains(&b"sealed-2".as_slice()));
 
-    // Ack deletes exactly the acked item; acking is idempotent.
+    // Ack deletes exactly the acked item, and only the call that removed it
+    // answers `true`.
     let first_id = items
         .iter()
         .find(|i| i.sealed_payload == b"sealed-1")
         .expect("item present")
         .item_id
         .clone();
-    mailbox.ack(&first_id).await.unwrap();
-    mailbox.ack(&first_id).await.unwrap();
+    assert!(
+        mailbox.ack(&first_id).await.unwrap(),
+        "the first ack removes"
+    );
+    assert!(
+        !mailbox.ack(&first_id).await.unwrap(),
+        "a second ack removes nothing"
+    );
     let remaining = mailbox.poll().await.unwrap();
     assert_eq!(remaining.len(), 1, "ack must delete exactly one item");
     assert_eq!(remaining[0].sealed_payload, b"sealed-2");
 
-    mailbox.ack(&remaining[0].item_id).await.unwrap();
+    assert!(mailbox.ack(&remaining[0].item_id).await.unwrap());
     assert!(
         mailbox.poll().await.unwrap().is_empty(),
         "an acked inbox must poll empty"

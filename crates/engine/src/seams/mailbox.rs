@@ -76,10 +76,13 @@ pub trait Mailbox {
     /// All items currently pending in the caller's own inbox.
     async fn poll(&self) -> SeamResult<Vec<MailboxItem>>;
 
-    /// Acknowledges (deletes) one item. Idempotent: acking an already-acked
-    /// or unknown item succeeds.
+    /// Acknowledges (deletes) one item, and answers whether this call removed
+    /// it. Acking an already-acked, unknown or foreign item succeeds and
+    /// answers `false`.
     ///
-    /// The engine acks only after the pointed-at fact is durably recorded
-    /// (blueprint/engine.md "Mailbox logic").
-    async fn ack(&self, item_id: &str) -> SeamResult<()>;
+    /// A share pointer is acked after the pointed-at fact is durably recorded;
+    /// a claim is acked first and converted only on `true`, so two owner
+    /// devices never both convert on an honest ack (ADR 0023 E1;
+    /// blueprint/engine.md "Mailbox logic").
+    async fn ack(&self, item_id: &str) -> SeamResult<bool>;
 }

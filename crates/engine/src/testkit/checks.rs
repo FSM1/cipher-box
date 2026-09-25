@@ -40,12 +40,12 @@ use crate::grants::contact::import_contact;
 use crate::grants::ledger::enforce_committed_ledger;
 use crate::grants::owner_entry::{AbuseEvent, OwnerEntry, cross_check};
 use crate::grants::{
-    AuthorityViolation, CLAIM_ID_LEN, CommittedScope, CreateGrantError, EphemeralInvitee,
-    GrantRecipient, GrantRow, GranteeScopePlan, InviteClaim, InviteError, InviteFragment,
-    LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority, OwnerGrantKeys,
-    convert_invite_claim, mint_invite_grant, post_share_pointer,
+    AckedClaim, AuthorityViolation, CLAIM_ID_LEN, CommittedScope, CreateGrantError,
+    EphemeralInvitee, GrantRecipient, GrantRow, GranteeScopePlan, InviteClaim, InviteError,
+    InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority,
+    OwnerGrantKeys, convert_invite_claim, mint_invite_grant, post_share_pointer,
 };
-use crate::mailbox::VerifiedMailboxItem;
+
 use crate::name::MAX_NODE_NAME_BYTES;
 use crate::net::author::{
     AuthorError, EnvelopeAuthoring, author_child_envelope, author_scope_root_envelope,
@@ -442,6 +442,11 @@ struct InviteFixture {
 
 impl InviteFixture {
     fn new() -> Self {
+        Self::capped(5)
+    }
+
+    /// A link that admits `admission_cap` people.
+    fn capped(admission_cap: u64) -> Self {
         let identity = EcdsaSigner::from_scalar(&[0x33; 32]).expect("a valid owner scalar");
         let enc = X25519Secret::from_scalar([0x11; 32]);
         let pseudonym = Ed25519Signer::from_seed([0x22; 32]);
@@ -460,7 +465,7 @@ impl InviteFixture {
             &LinkTerms {
                 deadline: INVITE_DEADLINE,
                 conversion_permission: Permission::Read,
-                admission_cap: 5,
+                admission_cap,
             },
         )
         .expect("the owner mints its own link");
@@ -513,21 +518,23 @@ fn owner_signed_set(
     (commitment, sig, ledger)
 }
 
-/// A claim as the mailbox hands it over: sender-authenticated already.
+/// A claim as the owner acked it: sender-authenticated already.
 fn claim_item(
     sender: &EcdsaSigner,
     contact_code: Vec<u8>,
     scope_pointer_name: IpnsName,
-) -> VerifiedMailboxItem {
-    VerifiedMailboxItem {
-        item_id: "claim-1".to_owned(),
-        sender_identity: sender.verifying_key(),
+) -> AckedClaim {
+    AckedClaim {
+        sender: sender.verifying_key().to_sec1(),
         payload: InviteClaim {
             claim_id: [0x99; CLAIM_ID_LEN],
             scope_pointer_name,
             contact_code,
+            name: String::new(),
         }
-        .encode(),
+        .encode()
+        .expect("an honest claim encodes"),
+        acked_at: UnixMillis(0),
     }
 }
 
@@ -630,7 +637,7 @@ fn invite_family() -> RejectFamily {
     let claimant = contact_code(&claimant_identity, &claimant_enc);
 
     // One honest conversion, varied one input at a time.
-    let convert = |name: &'static str, scope: &CommittedScope<'_>, item: &VerifiedMailboxItem| {
+    let convert = |name: &'static str, scope: &CommittedScope<'_>, item: &AckedClaim| {
         refusal!(
             name,
             convert_invite_claim(
@@ -639,7 +646,6 @@ fn invite_family() -> RejectFamily {
                 &invite_pointer_name(),
                 &POINTER_READ_KEY,
                 item,
-                UnixMillis(0),
             )
             .err()
             .unwrap_or_else(|| panic!("{name}: the conversion must fail closed")),
@@ -670,6 +676,17 @@ fn invite_family() -> RejectFamily {
                 .expect_err("a name past its bound is refused at encode"),
         ),
         refusal!(
+            "claim-name-no-ledger-row-can-carry",
+            InviteClaim {
+                claim_id: [0x99; CLAIM_ID_LEN],
+                scope_pointer_name: invite_pointer_name(),
+                contact_code: claimant.clone(),
+                name: "a\nb".to_owned(),
+            }
+            .encode()
+            .expect_err("a name with a control character is refused at encode"),
+        ),
+        refusal!(
             "gated-reference-to-a-scope-the-set-does-not-name",
             CommittedScope::bind(
                 &ChildScopeRef::new(INVITE_SCOPE, b"k51qzi5uqu5delsewhere".to_vec()),
@@ -695,7 +712,6 @@ fn invite_family() -> RejectFamily {
             &invite_pointer_name(),
             &POINTER_READ_KEY,
             &honest_item,
-            UnixMillis(0),
         )
         .expect_err("only the owner converts a claim"),
     ));
@@ -703,10 +719,9 @@ fn invite_family() -> RejectFamily {
     vectors.push(convert(
         "claim-payload-that-did-not-decode",
         &fx.committed(),
-        &VerifiedMailboxItem {
-            item_id: "claim-1".to_owned(),
-            sender_identity: link_signer.verifying_key(),
+        &AckedClaim {
             payload: b"not det-cbor".to_vec(),
+            ..honest_item.clone()
         },
     ));
     vectors.push(convert(
@@ -731,10 +746,24 @@ fn invite_family() -> RejectFamily {
             &fx.committed(),
             &invite_pointer_name(),
             &POINTER_READ_KEY,
-            &honest_item,
-            INVITE_DEADLINE,
+            &AckedClaim {
+                acked_at: INVITE_DEADLINE,
+                ..honest_item.clone()
+            },
         )
         .expect_err("a link past its deadline admits nobody"),
+    ));
+    let full = InviteFixture::capped(0);
+    vectors.push(refusal!(
+        "claim-on-a-link-at-its-admission-cap",
+        convert_invite_claim(
+            &full.authority(),
+            &full.committed(),
+            &invite_pointer_name(),
+            &POINTER_READ_KEY,
+            &honest_item,
+        )
+        .expect_err("a link at its cap admits nobody"),
     ));
 
     let mut torn = claimant.clone();
@@ -907,8 +936,8 @@ impl Mailbox for RefusingMailbox {
         Ok(Vec::new())
     }
 
-    async fn ack(&self, _item_id: &str) -> SeamResult<()> {
-        Ok(())
+    async fn ack(&self, _item_id: &str) -> SeamResult<bool> {
+        Ok(false)
     }
 }
 

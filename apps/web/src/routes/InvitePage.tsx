@@ -56,7 +56,8 @@ export function InvitePage() {
     // `EngineFacade.claimInviteLink`.
     navigate(`${window.location.pathname}${window.location.search}`, { replace: true });
     setProgress('claiming');
-    void run('claimInviteLink', (facade) => facade.claimInviteLink(fragment)).then((accepted) =>
+    // The web session holds no display name, so the claim carries none.
+    void run('claimInviteLink', (facade) => facade.claimInviteLink(fragment, '')).then((accepted) =>
       setProgress(accepted ? 'claimed' : 'refused')
     );
   };

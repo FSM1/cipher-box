@@ -20,6 +20,11 @@
     "class": "over-cap"
   },
   {
+    "name": "claim-name-no-ledger-row-can-carry",
+    "check": "invalid-claim-name",
+    "class": "malformed"
+  },
+  {
     "name": "gated-reference-to-a-scope-the-set-does-not-name",
     "check": "commitment-names-another-scope-root",
     "class": "trust"
@@ -48,6 +53,11 @@
     "name": "claim-on-a-link-past-its-deadline",
     "check": "link-expired",
     "class": "unsupported"
+  },
+  {
+    "name": "claim-on-a-link-at-its-admission-cap",
+    "check": "link-admission-cap-reached",
+    "class": "over-cap"
   },
   {
     "name": "claimant-contact-code-that-fails-its-binding-verify",

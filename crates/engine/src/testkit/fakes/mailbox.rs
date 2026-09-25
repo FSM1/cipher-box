@@ -9,7 +9,7 @@
 //! engine presents a bearer on every mailbox call is asserted where the token
 //! lives (`api/client.rs`) and against the live API (the contract suite).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
@@ -35,6 +35,10 @@ struct HubInner {
     /// `(recipient, idempotency key)` → the id the first post assigned, so a
     /// replay answers with the original id the way the API does.
     seen_idempotency_keys: HashMap<(String, String), String>,
+    /// Every post in arrival order, replays included: `(recipient, key)`.
+    posts: Vec<(String, String)>,
+    /// Addresses the API holds no account for: a post to one is refused.
+    unknown: HashSet<String>,
 }
 
 /// The shared mailbox "server": routes posts between recipients so N
@@ -51,16 +55,56 @@ impl InMemoryMailboxHub {
             hub: self.clone(),
             address: hex_lower(recipient_public_key),
             ack_failing: Arc::new(Mutex::new(false)),
+            poll_failing: Arc::new(Mutex::new(false)),
+            stale_poll: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Route one sealed payload and answer the id the recipient will ack by.
-    /// A replay of a `(recipient, idempotency key)` pair answers the original.
-    fn post_item(&self, address: &str, sealed_payload: &[u8], key: &str) -> String {
+    /// The idempotency key of every post to `recipient_public_key`, in arrival
+    /// order, replays included.
+    pub fn posted_keys(&self, recipient_public_key: &[u8]) -> Vec<String> {
+        let address = hex_lower(recipient_public_key);
+        self.inner
+            .lock()
+            .expect("lock")
+            .posts
+            .iter()
+            .filter(|(to, _)| *to == address)
+            .map(|(_, key)| key.clone())
+            .collect()
+    }
+
+    /// Make the API hold no account at `recipient_public_key`: every post to
+    /// it is refused as the API refuses an unknown recipient.
+    pub fn forget_recipient(&self, recipient_public_key: &[u8]) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .unknown
+            .insert(hex_lower(recipient_public_key));
+    }
+
+    /// Undo [`Self::forget_recipient`]: the API holds the account again.
+    pub fn remember_recipient(&self, recipient_public_key: &[u8]) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .unknown
+            .remove(&hex_lower(recipient_public_key));
+    }
+
+    /// Route one sealed payload and answer the id the recipient will ack by,
+    /// or `None` for an unknown recipient. A replay of a `(recipient,
+    /// idempotency key)` pair answers the original.
+    fn post_item(&self, address: &str, sealed_payload: &[u8], key: &str) -> Option<String> {
         let mut inner = self.inner.lock().expect("lock");
+        if inner.unknown.contains(address) {
+            return None;
+        }
+        inner.posts.push((address.to_owned(), key.to_owned()));
         let dedupe_key = (address.to_owned(), key.to_owned());
         if let Some(id) = inner.seen_idempotency_keys.get(&dedupe_key) {
-            return id.clone();
+            return Some(id.clone());
         }
         inner.next_id += 1;
         let item_id = format!("item-{}", inner.next_id);
@@ -75,7 +119,7 @@ impl InMemoryMailboxHub {
                 item_id: item_id.clone(),
                 sealed_payload: sealed_payload.to_vec(),
             });
-        item_id
+        Some(item_id)
     }
 }
 
@@ -89,6 +133,11 @@ pub struct InMemoryMailbox {
     /// prove a redelivered accept takes the idempotent ack-only path. Shared
     /// across clones so a toggle on one handle affects the borrowed handle.
     ack_failing: Arc<Mutex<bool>>,
+    /// When set, every HTTP poll fails: an inbox outage.
+    poll_failing: Arc<Mutex<bool>>,
+    /// What the next HTTP poll answers in place of the queue: a poll the API
+    /// served before another device's delete landed.
+    stale_poll: Arc<Mutex<Option<Vec<MailboxItem>>>>,
 }
 
 impl InMemoryMailbox {
@@ -105,6 +154,17 @@ impl InMemoryMailbox {
     /// Make every `ack` fail, or clear the failure.
     pub fn set_ack_failing(&self, failing: bool) {
         *self.ack_failing.lock().expect("lock") = failing;
+    }
+
+    /// Make every HTTP poll fail, or clear the failure.
+    pub fn set_poll_failing(&self, failing: bool) {
+        *self.poll_failing.lock().expect("lock") = failing;
+    }
+
+    /// Make the next HTTP poll answer the items queued now, whatever another
+    /// device acks before it runs.
+    pub fn answer_next_poll_as_of_now(&self) {
+        *self.stale_poll.lock().expect("lock") = Some(self.items());
     }
 
     /// This inbox as a standing [`ScriptedHttp`](super::ScriptedHttp) route.
@@ -128,6 +188,9 @@ impl InMemoryMailbox {
             .trim_start_matches('/');
         Some(match (request.method, tail) {
             (HttpMethod::Post, "") => Ok(self.serve_post(request.body.as_deref())),
+            (HttpMethod::Get, "") if *self.poll_failing.lock().expect("lock") => {
+                Err(SeamError::new("mailbox poll outage"))
+            }
             (HttpMethod::Get, "") => Ok(self.serve_poll()),
             (HttpMethod::Delete, id) if !id.is_empty() => self.serve_ack(id),
             _ => Ok(json(
@@ -150,14 +213,16 @@ impl InMemoryMailbox {
                 Some(self.hub.post_item(address, &blob, &key))
             });
         match posted {
-            Some(id) => json(201, format!(r#"{{"id":"{id}"}}"#).into_bytes()),
+            Some(Some(id)) => json(201, format!(r#"{{"id":"{id}"}}"#).into_bytes()),
+            Some(None) => json(404, br#"{"message":"Unknown recipient"}"#.to_vec()),
             None => json(400, br#"{"message":"malformed post body"}"#.to_vec()),
         }
     }
 
     fn serve_poll(&self) -> HttpResponse {
-        let messages: Vec<Value> = self
-            .items()
+        let stale = self.stale_poll.lock().expect("lock").take();
+        let messages: Vec<Value> = stale
+            .unwrap_or_else(|| self.items())
             .into_iter()
             .map(|item| {
                 json!({
@@ -220,20 +285,22 @@ impl Mailbox for InMemoryMailbox {
         sealed_payload: &[u8],
         idempotency_key: &str,
     ) -> SeamResult<()> {
-        self.hub.post_item(
-            &hex_lower(recipient_public_key),
-            sealed_payload,
-            idempotency_key,
-        );
-        Ok(())
+        self.hub
+            .post_item(
+                &hex_lower(recipient_public_key),
+                sealed_payload,
+                idempotency_key,
+            )
+            .map(drop)
+            .ok_or_else(|| SeamError::new("unknown recipient"))
     }
 
     async fn poll(&self) -> SeamResult<Vec<MailboxItem>> {
         Ok(self.items())
     }
 
-    async fn ack(&self, item_id: &str) -> SeamResult<()> {
-        self.remove(item_id).map(drop)
+    async fn ack(&self, item_id: &str) -> SeamResult<bool> {
+        self.remove(item_id)
     }
 }
 
@@ -278,18 +345,22 @@ mod tests {
         let bob = hub.mailbox_for(b"bob-pk");
         let address = hex_lower(b"bob-pk");
 
-        let first = hub.post_item(&address, b"claim", "k1");
-        assert_eq!(hub.post_item(&address, b"claim", "k1"), first);
+        let first = hub
+            .post_item(&address, b"claim", "k1")
+            .expect("a known recipient");
+        assert_eq!(hub.post_item(&address, b"claim", "k1"), Some(first.clone()));
         assert!(!bob.remove("item-unknown").unwrap());
         assert_eq!(
             hub.post_item(&address, b"claim", "k1"),
-            first,
+            Some(first.clone()),
             "an ack that removed nothing keeps the key"
         );
 
         assert!(bob.remove(&first).unwrap());
         assert!(!bob.remove(&first).unwrap(), "a second ack removes nothing");
-        let second = hub.post_item(&address, b"claim", "k1");
+        let second = hub
+            .post_item(&address, b"claim", "k1")
+            .expect("a known recipient");
         assert_ne!(second, first, "the key of an acked item posts a new item");
         let pending: Vec<_> = block_on(bob.poll())
             .unwrap()
@@ -297,5 +368,8 @@ mod tests {
             .map(|item| item.item_id)
             .collect();
         assert_eq!(pending, [second]);
+
+        hub.forget_recipient(b"bob-pk");
+        assert_eq!(hub.post_item(&address, b"claim", "k2"), None);
     }
 }

@@ -230,8 +230,8 @@ mod tests {
                     sealed_payload: self.1.clone(),
                 }])
             }
-            async fn ack(&self, _: &str) -> SeamResult<()> {
-                Ok(())
+            async fn ack(&self, _: &str) -> SeamResult<bool> {
+                Ok(false)
             }
         }
 

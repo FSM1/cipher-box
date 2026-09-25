@@ -20,13 +20,13 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as FRAGMENT_B64;
-use cipherbox_core::codec::RedactedBytes;
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
+use cipherbox_core::codec::{RedactedBytes, RedactedText};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::payload::{InviteNames, sign_invite_names, verify_invite_names};
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntryKind, MAX_GRANT_BLOBS,
-    Permission, verify_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntryKind, GranteeName,
+    MAX_GRANT_BLOBS, NameSource, Permission, sign_recipient_binding, verify_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
@@ -42,11 +42,12 @@ use zeroize::Zeroizing;
 use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_seed};
 use crate::grants::accept::{fixed, req};
 use crate::grants::contact::import_contact;
+use crate::grants::conversion::ConversionRefusal;
 use crate::grants::{
     AuthorityViolation, Contact, GrantRow, enforce_committed_ledger, mint_grant_row,
     row_is_owner_attested,
 };
-use crate::mailbox::{VerifiedMailboxItem, post_sealed};
+use crate::mailbox::post_sealed;
 use crate::name::MAX_NODE_NAME_BYTES;
 use crate::rotation::derive_write_name;
 use crate::seams::{Mailbox, SeamResult, UnixMillis};
@@ -98,6 +99,9 @@ pub enum InviteError {
     /// A fragment name is past [`MAX_INVITE_NAME_BYTES`], on encode and on
     /// decode alike.
     NameTooLong,
+    /// A claim's suggested name is not empty and is not a name a ledger row
+    /// can carry ([`GranteeName::new`]), on encode and on decode alike.
+    InvalidClaimName,
     /// The claim names a scope pointer other than the one of the scope it is
     /// converted against.
     ScopeMismatch,
@@ -124,6 +128,9 @@ pub enum InviteError {
     /// The claim handed back the owner's own contact bundle, which the invite URL
     /// carries. The owner is not a grantee of its own scope.
     ClaimantIsTheOwner,
+    /// The live rows this link admitted have reached its owner-signed
+    /// admission cap (ADR 0023 D9).
+    AdmissionCapReached,
     /// The set is at the grant-set ceiling
     /// ([`MAX_GRANT_BLOBS`](cipherbox_core::seal::MAX_GRANT_BLOBS)); one more row
     /// could only ever mint a record its own decoder refuses.
@@ -150,6 +157,7 @@ impl InviteError {
         "malformed-invite-fragment",
         "invite-fragment-too-large",
         "invite-name-too-long",
+        "invalid-claim-name",
         "claim-scope-mismatch",
         "commitment-names-another-scope-root",
         "not-owner",
@@ -159,6 +167,7 @@ impl InviteError {
         "claimant-contact-invalid",
         "claimant-is-the-ephemeral-half",
         "claimant-is-the-owner",
+        "link-admission-cap-reached",
         "grant-set-full",
         "unusable-claimant-key",
         "duplicate-tag",
@@ -186,8 +195,46 @@ impl InviteError {
             Self::MalformedFragment => "malformed",
             Self::LinkAmbiguous => "capability",
             Self::LinkExpired => "unsupported",
-            Self::FragmentTooLarge | Self::NameTooLong | Self::GrantSetFull => "over-cap",
+            Self::InvalidClaimName => CodecError::from(Malformed::InvalidGranteeName).class(),
+            Self::FragmentTooLarge
+            | Self::NameTooLong
+            | Self::AdmissionCapReached
+            | Self::GrantSetFull => "over-cap",
             Self::Authority(violation) => violation.class(),
+        }
+    }
+
+    /// What a conversion does with the claim this error refused. Exhaustive,
+    /// so a new variant is a decision and never a drop by default.
+    pub fn disposition(&self) -> ClaimDisposition {
+        match self {
+            Self::GrantSetFull => ClaimDisposition::Refused(ConversionRefusal::GrantSetFull),
+            Self::AdmissionCapReached => {
+                ClaimDisposition::Refused(ConversionRefusal::AdmissionCapReached)
+            }
+            Self::MalformedClaim(_)
+            | Self::InvalidClaimName
+            | Self::ScopeMismatch
+            | Self::LinkNotCommitted
+            | Self::LinkExpired
+            | Self::ClaimantContact(_)
+            | Self::ClaimantIsTheEphemeralHalf
+            | Self::ClaimantIsTheOwner
+            | Self::UnusableClaimantKey => ClaimDisposition::Settle,
+            // A verdict on the set the pass resolved, a failed seam, or a
+            // check conversion never runs: every entry waits.
+            Self::Entropy(_)
+            | Self::ScopeUnbound
+            | Self::NotOwner
+            | Self::DuplicateTag
+            | Self::LinkAmbiguous
+            | Self::Authority(_)
+            | Self::InvalidSecret
+            | Self::UnusableInviteeKey
+            | Self::InvalidExpiry
+            | Self::MalformedFragment
+            | Self::FragmentTooLarge
+            | Self::NameTooLong => ClaimDisposition::Retry,
         }
     }
 
@@ -202,6 +249,7 @@ impl InviteError {
             Self::MalformedFragment => "malformed-invite-fragment",
             Self::FragmentTooLarge => "invite-fragment-too-large",
             Self::NameTooLong => "invite-name-too-long",
+            Self::InvalidClaimName => "invalid-claim-name",
             Self::ScopeMismatch => "claim-scope-mismatch",
             Self::ScopeUnbound => "commitment-names-another-scope-root",
             Self::NotOwner => "not-owner",
@@ -211,6 +259,7 @@ impl InviteError {
             Self::ClaimantContact(_) => "claimant-contact-invalid",
             Self::ClaimantIsTheEphemeralHalf => "claimant-is-the-ephemeral-half",
             Self::ClaimantIsTheOwner => "claimant-is-the-owner",
+            Self::AdmissionCapReached => "link-admission-cap-reached",
             Self::GrantSetFull => "grant-set-full",
             Self::UnusableClaimantKey => "unusable-claimant-key",
             Self::DuplicateTag => "duplicate-tag",
@@ -560,8 +609,8 @@ impl InviteFragment {
 pub const CLAIM_ID_LEN: usize = 16;
 
 /// The claim a link holder posts to the owner's mailbox: the scope pointer the
-/// link names, the claimant's own contact code to be anchored to, and the
-/// claim's own id.
+/// link names, the claimant's own contact code to be anchored to, the name the
+/// claimant suggests (ADR 0027 D1), and the claim's own id.
 ///
 /// Opaque application bytes inside the HPKE seal — app framing, not crypto. Its
 /// authentication is the seal's inner sender signature, which the claimant makes
@@ -576,6 +625,9 @@ pub struct InviteClaim {
     pub scope_pointer_name: IpnsName,
     /// The claimant's contact code — `{identityPk, encSubkey, bindingSig}`.
     pub contact_code: Vec<u8>,
+    /// The grantee name the claimant suggests, or empty for none. Conversion
+    /// copies it into the row under the flag `claimant`.
+    pub name: String,
 }
 
 impl fmt::Debug for InviteClaim {
@@ -584,8 +636,20 @@ impl fmt::Debug for InviteClaim {
             .field("claim_id", &RedactedBytes::of(&self.claim_id))
             .field("scope_pointer_name", &self.scope_pointer_name)
             .field("contact_code", &RedactedBytes::of(&self.contact_code))
+            .field("name", &RedactedText::of(&self.name))
             .finish()
     }
+}
+
+/// The grantee name a claim's suggestion becomes, or `None` for no
+/// suggestion. Refuses a name no ledger row can carry.
+fn claimant_name(name: &str) -> Result<Option<GranteeName>, InviteError> {
+    if name.is_empty() {
+        return Ok(None);
+    }
+    GranteeName::new(name.to_owned(), NameSource::Claimant)
+        .map(Some)
+        .map_err(|_| InviteError::InvalidClaimName)
 }
 
 impl InviteClaim {
@@ -594,36 +658,49 @@ impl InviteClaim {
         entropy: &mut E,
         scope_pointer_name: IpnsName,
         contact_code: Vec<u8>,
+        name: String,
     ) -> Result<Self, InviteError> {
+        claimant_name(&name)?;
         Ok(Self {
             claim_id: fresh_bytes(entropy, "claim id").map_err(InviteError::Entropy)?,
             scope_pointer_name,
             contact_code,
+            name,
         })
     }
 
-    /// Encode to det-CBOR (canonical key order).
-    pub fn encode(&self) -> Vec<u8> {
+    /// Encode to det-CBOR (canonical key order). Refuses the name
+    /// [`decode`](Self::decode) refuses (AGENTS.md rule 8).
+    pub fn encode(&self) -> Result<Vec<u8>, InviteError> {
+        claimant_name(&self.name)?;
         let mut m = Map::new();
         m.insert("claimId", Value::Bytes(self.claim_id.to_vec()));
         m.insert("contactCode", Value::Bytes(self.contact_code.clone()));
+        m.insert("name", Value::Text(self.name.clone()));
         m.insert(
             "scopePointerName",
             Value::Text(self.scope_pointer_name.as_str().to_owned()),
         );
-        encode_fixed_depth(&Value::Map(m))
+        Ok(encode_fixed_depth(&Value::Map(m)))
     }
 
-    /// Decode a claim (strict det-CBOR). A missing or mistyped field is
-    /// [`Malformed`]. Unknown fields are dropped rather than preserved: this is a
-    /// consume-once engine payload, not a re-sealed shared structure.
+    /// Decode a claim (strict det-CBOR). A missing or mistyped field, or a name
+    /// no ledger row can carry, is [`Malformed`]; an absent name is none.
+    /// Unknown fields are dropped rather than preserved: this is a consume-once
+    /// engine payload, not a re-sealed shared structure.
     pub fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let value = decode(bytes)?;
         let map = value.as_map()?;
+        let name = match map.get("name") {
+            Some(name) => name.as_text()?.to_owned(),
+            None => String::new(),
+        };
+        claimant_name(&name).map_err(|_| Malformed::InvalidGranteeName)?;
         Ok(Self {
             claim_id: fixed::<CLAIM_ID_LEN>(req(map, "claimId")?, "claimId")?,
             scope_pointer_name: IpnsName::parse(req(map, "scopePointerName")?.as_text()?)?,
             contact_code: req(map, "contactCode")?.as_bytes()?.to_vec(),
+            name,
         })
     }
 }
@@ -639,6 +716,8 @@ impl InviteClaim {
 /// Residual: the post is an authenticated API call addressed to the owner's
 /// identity key, so the transport learns claimant→owner even for claims the owner
 /// never converts. Inherent to the mailbox; the payload itself stays sealed.
+///
+/// `claim` is an encoded [`InviteClaim`] ([`InviteClaim::encode`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn post_invite_claim<M: Mailbox>(
     mailbox: &M,
@@ -646,7 +725,7 @@ pub async fn post_invite_claim<M: Mailbox>(
     invitee: &EphemeralInvitee,
     ephemeral_scalar: &[u8; 32],
     v: u64,
-    claim: &InviteClaim,
+    claim: &[u8],
     idempotency_key: &str,
 ) -> SeamResult<()> {
     post_sealed(
@@ -656,10 +735,23 @@ pub async fn post_invite_claim<M: Mailbox>(
         ephemeral_scalar,
         v,
         &invitee.identity,
-        &claim.encode(),
+        claim,
         idempotency_key,
     )
     .await
+}
+
+/// What a conversion does with a claim it refused
+/// ([`InviteError::disposition`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimDisposition {
+    /// The claim can never convert: its entry settles.
+    Settle,
+    /// A cap refused it: its entry is kept as refused.
+    Refused(ConversionRefusal),
+    /// No verdict on this claim: every entry at the folder waits for a later
+    /// pass.
+    Retry,
 }
 
 /// The owner's authority over a scope's grant set: the identity key that signs
@@ -748,7 +840,8 @@ pub struct CommittedLink {
     pub deadline: UnixMillis,
     /// The permission conversion grants a claimant.
     pub conversion_permission: Permission,
-    /// The owner-signed admission cap. Core refuses a link entry without one.
+    /// The owner-signed admission cap: how many live rows this link may admit
+    /// (ADR 0023 D9). Core refuses a link entry without one.
     pub admission_cap: u64,
 }
 
@@ -814,6 +907,47 @@ pub fn locate_invite_link(
     }
 }
 
+/// A claim an owner device acked, as its conversion entry holds it
+/// (ADR 0023 D5).
+#[derive(Clone, PartialEq, Eq)]
+pub struct AckedClaim {
+    /// The mailbox sender: the link's ephemeral identity, whose signature the
+    /// poll verified inside the seal.
+    pub sender: [u8; IDENTITY_PUBLIC_LEN],
+    /// The claim payload as it opened.
+    pub payload: Vec<u8>,
+    /// The instant of the ack that removed the item. The deadline verdict
+    /// compares the owner-signed deadline to this instant on every run, so a
+    /// retry never re-judges it against a later `now` (ADR 0023 D3 item 4).
+    pub acked_at: UnixMillis,
+}
+
+impl fmt::Debug for AckedClaim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AckedClaim")
+            .field("sender", &RedactedBytes::of(&self.sender))
+            .field("payload", &RedactedBytes::of(&self.payload))
+            .field("acked_at", &self.acked_at)
+            .finish()
+    }
+}
+
+/// The one committed link whose ephemeral identity is `sender`. Two links
+/// under one identity have no defined conversion, so they answer none.
+pub fn link_of_sender(
+    links: &[CommittedLink],
+    sender: &[u8; IDENTITY_PUBLIC_LEN],
+) -> Result<CommittedLink, InviteError> {
+    let mut matches = links
+        .iter()
+        .filter(|link| link.ephemeral_identity_pk == *sender);
+    let link = *matches.next().ok_or(InviteError::LinkNotCommitted)?;
+    if matches.next().is_some() {
+        return Err(InviteError::LinkNotCommitted);
+    }
+    Ok(link)
+}
+
 /// What converting a claim did to the owner-signed set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaimOutcome {
@@ -850,41 +984,34 @@ pub struct ConvertedClaim {
     pub outcome: ClaimOutcome,
 }
 
-/// Convert a sender-verified invite claim into a personal grant for the
-/// claimant's contact-anchored identity (ADR 0023 D3).
+/// Convert an acked invite claim into a personal grant for the claimant's
+/// contact-anchored identity (ADR 0023 D3).
 ///
 /// The link is the owner-attested ledger row whose `recipientIdentityPk` is the
-/// item's sender and whose commitment entry is a link entry; the owner device
+/// claim's sender and whose commitment entry is a link entry; the owner device
 /// holds no other record of it. `scope_pointer_name` is the pointer of the
-/// scope `scope` binds, which the claim must name. `now` is the injected
-/// [`Scheduler::now`](crate::seams::Scheduler::now) instant.
+/// scope `scope` binds, which the claim must name.
 ///
-/// The grant is minted at `read`.
+/// The row is minted at the link's conversion permission, with the via-link
+/// reference and the claimant's name. A `write` row carries the scope's write
+/// seed at the next re-seal, so the caller runs the write-scope cut first when
+/// the scope has no write scope of its own (ADR 0024 D4).
 ///
-/// The caller signs and publishes the returned set, and acks the mailbox item
-/// only once that is durable.
+/// The caller signs and publishes the returned set.
 pub fn convert_invite_claim(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
     scope_pointer_name: &IpnsName,
     pointer_read_key: &[u8; SECRET_LEN],
-    item: &VerifiedMailboxItem,
-    now: UnixMillis,
+    acked: &AckedClaim,
 ) -> Result<ConvertedClaim, InviteError> {
     let links = committed_links(owner, scope)?;
-    let claim = InviteClaim::decode(&item.payload).map_err(InviteError::MalformedClaim)?;
+    let claim = InviteClaim::decode(&acked.payload).map_err(InviteError::MalformedClaim)?;
     if claim.scope_pointer_name != *scope_pointer_name {
         return Err(InviteError::ScopeMismatch);
     }
-    let sender = item.sender_identity.to_sec1();
-    let mut matches = links
-        .iter()
-        .filter(|link| link.ephemeral_identity_pk == sender);
-    let link = *matches.next().ok_or(InviteError::LinkNotCommitted)?;
-    if matches.next().is_some() {
-        return Err(InviteError::LinkNotCommitted);
-    }
-    if link.is_expired(now) {
+    let link = link_of_sender(&links, &acked.sender)?;
+    if link.is_expired(acked.acked_at) {
         return Err(InviteError::LinkExpired);
     }
     let contact = import_contact(&claim.contact_code).map_err(InviteError::ClaimantContact)?;
@@ -908,9 +1035,13 @@ pub fn convert_invite_claim(
         &contact.enc_subkey(),
         scope.scope_id,
         name,
-        Permission::Read,
+        link.conversion_permission,
     )
     .ok_or(InviteError::UnusableClaimantKey)?;
+    row.ledger_entry.via_link = Some(link.tag);
+    row.ledger_entry.grantee_name = claimant_name(&claim.name)?;
+    row.ledger_entry.owner_sig =
+        sign_recipient_binding(owner.identity_signer, name, &row.ledger_entry).to_compact();
 
     let owner_identity = owner.identity_signer.verifying_key();
     let held = scope
@@ -933,6 +1064,17 @@ pub fn convert_invite_claim(
     let mut ledger = scope.ledger.to_vec();
     let outcome = match held {
         None => {
+            let admitted = scope
+                .ledger
+                .iter()
+                .filter(|entry| {
+                    entry.via_link == Some(link.tag)
+                        && row_is_owner_attested(&owner_identity, entry, name)
+                })
+                .count();
+            if u64::try_from(admitted).map_or(true, |admitted| admitted >= link.admission_cap) {
+                return Err(InviteError::AdmissionCapReached);
+            }
             commitment.entries.push(row.commitment_entry.clone());
             ledger.push(row.ledger_entry.clone());
             ClaimOutcome::Granted
@@ -1184,16 +1326,19 @@ mod tests {
         sender: &EcdsaSigner,
         contact: Vec<u8>,
         pointer: IpnsName,
-    ) -> VerifiedMailboxItem {
-        VerifiedMailboxItem {
-            item_id: "claim".to_owned(),
-            sender_identity: sender.verifying_key(),
+        acked_at: UnixMillis,
+    ) -> AckedClaim {
+        AckedClaim {
+            sender: sender.verifying_key().to_sec1(),
             payload: InviteClaim {
                 claim_id: [0x71; CLAIM_ID_LEN],
                 scope_pointer_name: pointer,
                 contact_code: contact,
+                name: "Grace".to_owned(),
             }
-            .encode(),
+            .encode()
+            .expect("encodes"),
+            acked_at,
         }
     }
 
@@ -1201,7 +1346,7 @@ mod tests {
         scope: &Scope,
         sender: &EcdsaSigner,
         contact: Vec<u8>,
-        now: UnixMillis,
+        acked_at: UnixMillis,
     ) -> Result<ConvertedClaim, InviteError> {
         let (identity, enc) = (owner_identity(), owner_enc());
         convert_invite_claim(
@@ -1209,9 +1354,26 @@ mod tests {
             &scope.bound(),
             &pointer_name(),
             &POINTER_READ_KEY,
-            &claim_item(sender, contact, pointer_name()),
-            now,
+            &claim_item(sender, contact, pointer_name(), acked_at),
         )
+    }
+
+    /// A link row at `permission` that admits `cap` people.
+    fn capped_link_row(invitee: &EphemeralInvitee, permission: Permission, cap: u64) -> GrantRow {
+        mint_invite_grant(
+            &owner_identity(),
+            &owner_enc(),
+            &POINTER_READ_KEY,
+            invitee,
+            &SCOPE,
+            &WRITE_SCOPE_SEED,
+            &LinkTerms {
+                deadline: DEADLINE,
+                conversion_permission: permission,
+                admission_cap: cap,
+            },
+        )
+        .expect("mints")
     }
 
     #[test]
@@ -1435,13 +1597,170 @@ mod tests {
             claim_id: [0x71; CLAIM_ID_LEN],
             scope_pointer_name: pointer_name(),
             contact_code: vec![1, 2, 3],
+            name: "Grace".to_owned(),
         };
-        assert!(InviteClaim::decode(&claim.encode()).expect("decodes") == claim);
+        assert!(InviteClaim::decode(&claim.encode().expect("encodes")).expect("decodes") == claim);
         let mut m = Map::new();
         m.insert("claimId", Value::Bytes(vec![0x71; CLAIM_ID_LEN]));
         m.insert("contactCode", Value::Bytes(vec![1]));
         m.insert("scopeRootName", Value::Bytes(scope_name()));
         assert!(InviteClaim::decode(&encode(&Value::Map(m)).expect("encodes")).is_err());
+    }
+
+    /// ADR 0027 D1: a claim without a name carries none, and a name no ledger
+    /// row can carry is refused at both ends (AGENTS.md rule 8).
+    #[test]
+    fn a_claim_name_no_row_can_carry_is_refused_at_both_ends() {
+        let unnamed = InviteClaim {
+            claim_id: [0x71; CLAIM_ID_LEN],
+            scope_pointer_name: pointer_name(),
+            contact_code: vec![1, 2, 3],
+            name: String::new(),
+        };
+        let bytes = unnamed.encode().expect("an empty name encodes");
+        assert!(InviteClaim::decode(&bytes).expect("decodes") == unnamed);
+
+        let mut m = Map::new();
+        m.insert("claimId", Value::Bytes(vec![0x71; CLAIM_ID_LEN]));
+        m.insert("contactCode", Value::Bytes(vec![1]));
+        m.insert(
+            "scopePointerName",
+            Value::Text(pointer_name().as_str().to_owned()),
+        );
+        let nameless = encode(&Value::Map(m.clone())).expect("encodes");
+        assert_eq!(
+            InviteClaim::decode(&nameless)
+                .expect("an absent name is none")
+                .name,
+            ""
+        );
+
+        for bad in ["a\u{7}b".to_owned(), "n".repeat(256)] {
+            let mut named = unnamed.clone();
+            named.name = bad.clone();
+            assert_eq!(named.encode().unwrap_err(), InviteError::InvalidClaimName);
+            assert_eq!(
+                InviteClaim::mint(
+                    &mut SeededEntropy::new(1),
+                    pointer_name(),
+                    vec![1],
+                    bad.clone()
+                )
+                .unwrap_err(),
+                InviteError::InvalidClaimName
+            );
+            m.insert("name", Value::Text(bad));
+            assert!(
+                InviteClaim::decode(&encode(&Value::Map(m.clone())).expect("encodes")).is_err()
+            );
+        }
+    }
+
+    /// ADR 0023 D2, ADR 0027 D3: the personal row carries the via-link
+    /// reference and the claimant's name under the flag `claimant`, both under
+    /// the owner's row signature, at the link's conversion permission.
+    #[test]
+    fn a_converted_row_names_its_link_and_the_claimants_name() {
+        let link = invitee();
+        let link_row = capped_link_row(&link, Permission::Write, 3);
+        let scope = Scope::of(&[&link_row]);
+        let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
+        let (identity, enc) = claimant(0x40);
+
+        let converted = convert(
+            &scope,
+            &sender,
+            ContactCode::create(&identity, enc.public()).encode(),
+            UnixMillis(0),
+        )
+        .expect("converts");
+
+        let row = &converted.row.ledger_entry;
+        assert_eq!(row.via_link, Some(link_row.tag));
+        let name = row.grantee_name.as_ref().expect("a name");
+        assert_eq!(name.name(), "Grace");
+        assert_eq!(name.source(), NameSource::Claimant);
+        assert_eq!(row.permission, Permission::Write);
+        assert_eq!(converted.row.commitment_entry.permission, Permission::Write);
+        assert!(row_is_owner_attested(
+            &owner_identity().verifying_key(),
+            row,
+            &scope.name
+        ));
+    }
+
+    /// ADR 0023 D9: the live rows that name the link count against its cap,
+    /// and the owner and other rows do not.
+    #[test]
+    fn a_link_at_its_admission_cap_refuses_the_next_claimant() {
+        let link = invitee();
+        let link_row = capped_link_row(&link, Permission::Read, 1);
+        let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
+        let (other, other_enc) = claimant(0x50);
+        let scope = Scope::of(&[&link_row, &personal_row(&other, &other_enc)]);
+        let (first, first_enc) = claimant(0x40);
+        let admitted = convert(
+            &scope,
+            &sender,
+            ContactCode::create(&first, first_enc.public()).encode(),
+            UnixMillis(0),
+        )
+        .expect("a direct grant takes no slot");
+
+        let signed = sign_grant_set(&owner_identity(), &admitted.commitment).expect("signs");
+        let full = Scope {
+            reference: scope.reference.clone(),
+            name: scope.name.clone(),
+            commitment: admitted.commitment.clone(),
+            sig: signed,
+            ledger: admitted.ledger.clone(),
+        };
+        let (second, second_enc) = claimant(0x60);
+        assert_eq!(
+            convert(
+                &full,
+                &sender,
+                ContactCode::create(&second, second_enc.public()).encode(),
+                UnixMillis(0),
+            )
+            .unwrap_err(),
+            InviteError::AdmissionCapReached
+        );
+        assert_eq!(
+            convert(
+                &full,
+                &sender,
+                ContactCode::create(&first, first_enc.public()).encode(),
+                UnixMillis(0),
+            )
+            .expect("a known identity is a no-op")
+            .outcome,
+            ClaimOutcome::Unchanged,
+            "the cap never refuses a known identity"
+        );
+    }
+
+    /// ADR 0023 D9: a row that names the link without the owner's signature
+    /// over that name takes no slot.
+    #[test]
+    fn a_row_the_owner_did_not_sign_takes_no_slot_of_the_cap() {
+        let link = invitee();
+        let link_row = capped_link_row(&link, Permission::Read, 1);
+        let (other, other_enc) = claimant(0x50);
+        let mut forged = personal_row(&other, &other_enc);
+        forged.ledger_entry.via_link = Some(link_row.tag);
+        let scope = Scope::of(&[&link_row, &forged]);
+        let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
+        let (next, next_enc) = claimant(0x60);
+
+        let converted = convert(
+            &scope,
+            &sender,
+            ContactCode::create(&next, next_enc.public()).encode(),
+            UnixMillis(0),
+        )
+        .expect("the forged row takes no slot");
+        assert_eq!(converted.outcome, ClaimOutcome::Granted);
     }
 
     /// ADR 0023 D3: the link is the owner-attested row the sender signs for,
@@ -1469,7 +1788,11 @@ mod tests {
             converted.row.commitment_entry.kind,
             GrantSetEntryKind::Personal
         );
-        assert_eq!(converted.row.commitment_entry.permission, Permission::Read);
+        assert_eq!(
+            converted.row.commitment_entry.permission,
+            Permission::Write,
+            "the link converts at its conversion permission"
+        );
         assert_eq!(
             converted.row.ledger_entry.recipient_identity_pk,
             identity.verifying_key().to_sec1()
@@ -1570,8 +1893,8 @@ mod tests {
                     &sender,
                     ContactCode::create(&identity, enc.public()).encode(),
                     elsewhere,
+                    UnixMillis(0),
                 ),
-                UnixMillis(0),
             )
             .unwrap_err(),
             InviteError::ScopeMismatch

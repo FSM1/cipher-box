@@ -36,6 +36,7 @@ use crate::seams::{
 };
 
 use super::contact::Contact;
+use super::invite::{InviteClaim, MAX_INVITE_FRAGMENT_BYTES};
 use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
 
 /// The mailbox-delivered share pointer: which scope root to resolve and the
@@ -211,6 +212,78 @@ pub struct LinkHold {
     /// The deadline of the link entry the holder last verified, or `None`
     /// before any verified read or for a link with none.
     pub deadline: Option<UnixMillis>,
+    /// The claim this device posted through the link, which it posts again
+    /// until a personal blob lands (ADR 0023 D6). `None` on a hold the
+    /// previous release wrote.
+    pub claim: Option<HeldClaim>,
+}
+
+/// A posted claim and its re-post schedule.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HeldClaim {
+    /// The claim as first posted. Every re-post sends it again.
+    pub claim: InviteClaim,
+    /// The idempotency key of the first post. Every re-post reuses it, so the
+    /// mailbox keeps one live item for the claim.
+    pub idempotency_key: [u8; CLAIM_KEY_LEN],
+    /// How many posts ran.
+    pub posts: u64,
+    /// When the next re-post falls due.
+    pub next_post: UnixMillis,
+}
+
+/// The byte length of a claim's idempotency key.
+pub const CLAIM_KEY_LEN: usize = 16;
+
+/// The wait before the first re-post of a claim. Each later wait doubles.
+pub const CLAIM_REPOST_FIRST_WAIT: u64 = 10 * 60 * 1000;
+
+/// The longest wait between two posts of one claim.
+pub const CLAIM_REPOST_MAX_WAIT: u64 = 24 * 60 * 60 * 1000;
+
+/// The most posts of one claim: about 33 days of the schedule above. A claim
+/// the owner never converts stops there, and a link with no deadline does not
+/// post for ever.
+pub const CLAIM_MAX_POSTS: u64 = 40;
+
+impl HeldClaim {
+    /// A claim whose first post runs at `now`.
+    pub(crate) fn first_post(
+        claim: InviteClaim,
+        idempotency_key: [u8; CLAIM_KEY_LEN],
+        now: UnixMillis,
+    ) -> Self {
+        let mut held = Self {
+            claim,
+            idempotency_key,
+            posts: 0,
+            next_post: now,
+        };
+        held.posted(now);
+        held
+    }
+
+    /// Count one post at `now` and schedule the next one, with exponential
+    /// backoff.
+    pub(crate) fn posted(&mut self, now: UnixMillis) {
+        self.posts = self.posts.saturating_add(1);
+        let doublings = self.posts.saturating_sub(1).min(16);
+        let wait = CLAIM_REPOST_FIRST_WAIT
+            .saturating_mul(1u64 << doublings)
+            .min(CLAIM_REPOST_MAX_WAIT);
+        self.next_post = UnixMillis(now.0.saturating_add(wait));
+    }
+}
+
+impl fmt::Debug for HeldClaim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HeldClaim")
+            .field("claim", &self.claim)
+            .field("idempotency_key", &RedactedBytes::of(&self.idempotency_key))
+            .field("posts", &self.posts)
+            .field("next_post", &self.next_post)
+            .finish()
+    }
 }
 
 impl LinkHold {
@@ -221,7 +294,18 @@ impl LinkHold {
             invite_secret,
             scope_pointer_name,
             deadline: None,
+            claim: None,
         }
+    }
+
+    /// Whether a re-post of the held claim falls due at `now`: a claim is
+    /// held, its wait is over, and the link's last verified deadline is not
+    /// past.
+    pub fn repost_due(&self, now: UnixMillis) -> bool {
+        self.claim
+            .as_ref()
+            .is_some_and(|claim| claim.posts < CLAIM_MAX_POSTS && now.0 >= claim.next_post.0)
+            && !self.is_expired(now)
     }
 
     /// Whether `now` has reached the last verified deadline (ADR 0025 D5).
@@ -264,6 +348,11 @@ impl ReceivedSharesList {
     /// Read the bookmark under `key` through `hold`, replacing any hold it had.
     pub(crate) fn hold_link(&mut self, key: BookmarkKey, hold: LinkHold) {
         self.links.insert(key, hold);
+    }
+
+    /// Every held link, with the bookmark key it reads for.
+    pub(crate) fn link_holds_mut(&mut self) -> impl Iterator<Item = (&BookmarkKey, &mut LinkHold)> {
+        self.links.iter_mut()
     }
 
     /// Drop the link keys of the bookmark under `key`, returning them.
@@ -470,10 +559,21 @@ pub(crate) fn encode_stored_list(
     }
     let encoded_shares = sorted
         .into_iter()
-        .map(|share| {
+        .map(|share| -> Result<Value, ReceivedSharesCodecError> {
             let mut m = Map::new();
             m.insert("displayName", Value::Text(share.display_name.clone()));
             if let Some(hold) = shares.links.get(&share.key()) {
+                if let Some(held) = &hold.claim {
+                    let claim = held
+                        .claim
+                        .encode()
+                        .map_err(|_| Malformed::InvalidGranteeName)?;
+                    within("claim", claim.len(), MAX_INVITE_FRAGMENT_BYTES)?;
+                    m.insert("claim", Value::Bytes(claim));
+                    m.insert("claimKey", Value::Bytes(held.idempotency_key.to_vec()));
+                    m.insert("claimNextPost", Value::Unsigned(held.next_post.0));
+                    m.insert("claimPosts", Value::Unsigned(held.posts));
+                }
                 if let Some(deadline) = hold.deadline {
                     m.insert("linkDeadline", Value::Unsigned(deadline.0));
                 }
@@ -500,9 +600,9 @@ pub(crate) fn encode_stored_list(
                 "sharerIdentityPk",
                 Value::Bytes(share.sharer_identity_pk.to_vec()),
             );
-            Value::Map(m)
+            Ok(Value::Map(m))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     let mut body = Map::new();
     body.insert("shares", Value::Array(encoded_shares));
     body.insert("v", Value::Unsigned(STORED_LIST_V));
@@ -544,6 +644,10 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
         reject_unknown(
             share,
             &[
+                "claim",
+                "claimKey",
+                "claimNextPost",
+                "claimPosts",
                 "displayName",
                 "linkDeadline",
                 "linkSecret",
@@ -590,29 +694,53 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
     Ok(ReceivedSharesList { entries, links })
 }
 
+/// The claim keys of one stored bookmark: all four or none.
+const CLAIM_FIELDS: [&str; 4] = ["claim", "claimKey", "claimNextPost", "claimPosts"];
+
 /// The optional link keys of one stored bookmark. `linkSecret` and
-/// `scopePointerName` come as a pair, and `linkDeadline` only with them; a
-/// bookmark without `linkSecret` is a personal one.
-fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, CodecError> {
+/// `scopePointerName` come as a pair, and `linkDeadline` and the claim keys
+/// only with them; a bookmark without `linkSecret` is a personal one.
+fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, ReceivedSharesCodecError> {
     let Some(secret) = share.get("linkSecret") else {
-        if share.get("scopePointerName").is_some() || share.get("linkDeadline").is_some() {
-            return Err(Malformed::MissingField {
+        let stray = ["scopePointerName", "linkDeadline"]
+            .into_iter()
+            .chain(CLAIM_FIELDS)
+            .any(|field| share.get(field).is_some());
+        return if stray {
+            Err(Malformed::MissingField {
                 field: "linkSecret",
             }
-            .into());
-        }
-        return Ok(None);
+            .into())
+        } else {
+            Ok(None)
+        };
     };
     let scope_pointer_name = IpnsName::parse(req(share, "scopePointerName")?.as_text()?)?;
     let deadline = share
         .get("linkDeadline")
         .map(|value| value.as_unsigned().map(UnixMillis))
         .transpose()?;
+    let claim = read_held_claim(share)?;
     let bytes = Zeroizing::new(fixed::<32>(secret, "linkSecret")?);
     Ok(Some(LinkHold {
         invite_secret: SecretBytes::new(*bytes),
         scope_pointer_name,
         deadline,
+        claim,
+    }))
+}
+
+fn read_held_claim(share: &Map) -> Result<Option<HeldClaim>, ReceivedSharesCodecError> {
+    if CLAIM_FIELDS.iter().all(|field| share.get(field).is_none()) {
+        return Ok(None);
+    }
+    let bytes = req(share, "claim")?.as_bytes()?;
+    within("claim", bytes.len(), MAX_INVITE_FRAGMENT_BYTES)?;
+    Ok(Some(HeldClaim {
+        claim: InviteClaim::decode(bytes)?,
+        idempotency_key: fixed::<CLAIM_KEY_LEN>(req(share, "claimKey")?, "claimKey")?,
+        posts: req(share, "claimPosts")?.as_unsigned()?,
+        next_post: UnixMillis(req(share, "claimNextPost")?.as_unsigned()?),
     }))
 }
 
@@ -1588,7 +1716,123 @@ mod tests {
                 &Ed25519Signer::from_seed([0x5d; 32]).verifying_key(),
             ),
             deadline: Some(UnixMillis(1_700_000_000_000)),
+            claim: Some(HeldClaim::first_post(
+                InviteClaim {
+                    claim_id: [0x71; 16],
+                    scope_pointer_name: IpnsName::from_public_key(
+                        &Ed25519Signer::from_seed([0x5d; 32]).verifying_key(),
+                    ),
+                    contact_code: vec![0x02; 40],
+                    name: "Grace".to_owned(),
+                },
+                [0x6b; CLAIM_KEY_LEN],
+                UnixMillis(1_600_000_000_000),
+            )),
         }
+    }
+
+    /// A hold the previous release wrote carries no claim keys, and loads.
+    #[test]
+    fn a_hold_without_claim_keys_loads_with_no_claim() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"k51scoperoot", 0x8A));
+        let key = list.iter().next().expect("one bookmark").key();
+        let mut previous = link_hold();
+        previous.claim = None;
+        list.hold_link(key, previous.clone());
+        let decoded =
+            decode_stored_list(&encode_stored_list(&list).expect("encodes")).expect("loads");
+        assert!(decoded.link_hold(&key) == Some(&previous));
+    }
+
+    /// The four claim keys come as a set.
+    #[test]
+    fn a_hold_missing_one_claim_key_is_refused() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"k51scoperoot", 0x8A));
+        let key = list.iter().next().expect("one bookmark").key();
+        list.hold_link(key, link_hold());
+        let tree = decode(&encode_stored_list(&list).unwrap()).unwrap();
+        for dropped in CLAIM_FIELDS {
+            let mut map = tree.as_map().unwrap().clone();
+            let shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
+            let mut entry = Map::new();
+            for (field, value) in shares[0].as_map().unwrap().entries() {
+                if field != dropped {
+                    entry.insert(field, value.clone());
+                }
+            }
+            map.insert("shares", Value::Array(vec![Value::Map(entry)]));
+            assert!(
+                decode_stored_list(&encode(&Value::Map(map)).unwrap()).is_err(),
+                "a hold without {dropped} is refused"
+            );
+        }
+    }
+
+    /// Encode and decode refuse a held claim past its bound alike (AGENTS.md
+    /// rule 8).
+    #[test]
+    fn a_held_claim_past_its_bound_is_refused_at_both_ends() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"k51scoperoot", 0x8A));
+        let key = list.iter().next().expect("one bookmark").key();
+        let mut long = link_hold();
+        if let Some(held) = long.claim.as_mut() {
+            held.claim.contact_code = vec![0x02; MAX_INVITE_FRAGMENT_BYTES];
+        }
+        list.hold_link(key, long);
+        assert!(matches!(
+            encode_stored_list(&list),
+            Err(ReceivedSharesCodecError::TooLong(TooLong {
+                field: "claim",
+                ..
+            }))
+        ));
+
+        list.hold_link(key, link_hold());
+        let mut tree = decode(&encode_stored_list(&list).expect("encodes")).expect("det-CBOR");
+        let Value::Map(body) = &mut tree else {
+            panic!("a map");
+        };
+        let shares = body
+            .get("shares")
+            .expect("shares")
+            .as_array()
+            .expect("an array");
+        let mut entry = shares[0].as_map().expect("an entry").clone();
+        entry.insert(
+            "claim",
+            Value::Bytes(vec![0; MAX_INVITE_FRAGMENT_BYTES + 1]),
+        );
+        body.insert("shares", Value::Array(vec![Value::Map(entry)]));
+        assert!(matches!(
+            decode_stored_list(&encode(&tree).expect("encodes")),
+            Err(ReceivedSharesCodecError::TooLong(TooLong {
+                field: "claim",
+                ..
+            }))
+        ));
+    }
+
+    /// Each post doubles the wait before the next, up to the bound.
+    #[test]
+    fn a_held_claim_backs_off_exponentially_to_its_bound() {
+        let start = UnixMillis(1_000);
+        let mut held = link_hold().claim.expect("a claim");
+        held.posts = 0;
+        let mut waits = Vec::new();
+        let mut now = start;
+        for _ in 0..12 {
+            held.posted(now);
+            waits.push(held.next_post.0 - now.0);
+            now = held.next_post;
+        }
+        assert_eq!(waits[0], CLAIM_REPOST_FIRST_WAIT);
+        assert_eq!(waits[1], CLAIM_REPOST_FIRST_WAIT * 2);
+        assert_eq!(waits[2], CLAIM_REPOST_FIRST_WAIT * 4);
+        assert_eq!(*waits.last().unwrap(), CLAIM_REPOST_MAX_WAIT);
+        assert!(waits.windows(2).all(|pair| pair[0] <= pair[1]));
     }
 
     /// ADR 0024 C1: the link keys are optional keys of a version 2 bookmark.
