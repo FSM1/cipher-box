@@ -11,6 +11,7 @@ import type { EngineClient, MediaService } from '@cipherbox/client';
 import { createMediaService } from '../engine/createMediaService';
 import { LoginSecretSource } from '../engine/loginHandoff';
 import { errorMessage } from '../lib/errorMessage';
+import { forgetOwnerName } from '../sharing/ownerName';
 import { sharingStore } from '../stores/sharing.store';
 import {
   createSnapshotStore,
@@ -69,6 +70,7 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
       secrets.use(null);
       // Session-scoped UI state naming this identity's peers goes with it.
       sharingStore.clear();
+      forgetOwnerName();
       snapshots.dispose();
       media
         ?.dispose()

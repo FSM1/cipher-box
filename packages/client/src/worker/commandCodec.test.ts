@@ -1576,6 +1576,7 @@ describe('readSharing', () => {
           recipientIdentityPublicKey: new Uint8Array([2]),
           permission: fakeWasmEnums.Permission.Read,
           granteeName: { name: 'Ada', source: 'claimant' },
+          viaLink: new Uint8Array(32).fill(0x7a),
         },
       ],
       grantRefusal: 'grant-parent-envelope-version-unsupported',
@@ -1595,6 +1596,7 @@ describe('readSharing', () => {
             recipientIdentityPublicKey: new Uint8Array([2]),
             permission: 'read',
             granteeName: { name: 'Ada', source: 'claimant' },
+            viaLink: new Uint8Array(32).fill(0x7a),
           },
         ],
         grantRefusal: 'grant-parent-envelope-version-unsupported',
@@ -1615,19 +1617,20 @@ describe('readSharing', () => {
     });
   });
 
-  it('reads an unnamed row and an uncached contact as null', () => {
+  it('reads an unnamed direct row and an uncached contact as null', () => {
     const unnamed = {
       ...view,
       contacts: [{ identityPublicKey: new Uint8Array([1]), cachedName: undefined }],
       state: {
         ...view.state,
-        grants: [{ ...view.state.grants[0], granteeName: undefined }],
+        grants: [{ ...view.state.grants[0], granteeName: undefined, viaLink: undefined }],
       },
     };
 
     const read = readSharing(fakeWasm, unnamed);
     expect(read.contacts[0].cachedName).toBeNull();
     expect(read.state?.grants[0].granteeName).toBeNull();
+    expect(read.state?.grants[0].viaLink).toBeNull();
   });
 
   it('refuses a grantee name whose source this build does not know', () => {

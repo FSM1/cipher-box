@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { refusalLabel } from './shareRefusals';
+import { refusalLabel, refusalText } from './shareRefusals';
 
 describe('how a share refusal reads to the member', () => {
   it('says a grant refusal in words, not as the engine’s check name', () => {
@@ -32,5 +32,24 @@ describe('how a share refusal reads to the member', () => {
   it('reads a name that collides with a prototype key as itself', () => {
     expect(refusalLabel('constructor')).toBe('constructor');
     expect(refusalLabel('__proto__')).toBe('__proto__');
+  });
+});
+
+describe('how a refused sharing command reads to the member', () => {
+  it('says a check the dialog can hit in words', () => {
+    expect(refusalText('unsupported target: grant-row-is-a-link')).toContain('mint a new one');
+    expect(refusalText('malformed input: invalid-grantee-name')).toContain(
+      'at least one character'
+    );
+    expect(refusalText('malformed input: invite-name-too-long')).toContain('too long');
+    expect(refusalText('capability: link-ambiguous')).toContain('more than one link');
+  });
+
+  it('passes any other refusal through verbatim', () => {
+    expect(refusalText('seam error: the mailbox did not answer')).toBe(
+      'seam error: the mailbox did not answer'
+    );
+    expect(refusalText('the publish was refused')).toBe('the publish was refused');
+    expect(refusalText('malformed input: constructor')).toBe('malformed input: constructor');
   });
 });

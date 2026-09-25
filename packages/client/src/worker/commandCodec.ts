@@ -1044,6 +1044,7 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
               recipientIdentityPublicKey: grant.recipientIdentityPublicKey,
               permission: permissionFrom(wasm, grant.permission),
               granteeName: granteeName(grant),
+              viaLink: grant.viaLink ?? null,
             })),
             grantRefusal: state.grantRefusal ?? null,
             inviteLinkRefusal: state.inviteLinkRefusal ?? null,

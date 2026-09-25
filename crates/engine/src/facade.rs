@@ -539,6 +539,10 @@ pub struct SharingGrant {
     /// The grantee name on the owner-attested row, and who chose it
     /// (ADR 0027 D3). `None` for a row with no name or no owner attestation.
     pub grantee_name: Option<(String, NameSource)>,
+    /// The tag of the link that admitted this grantee, as
+    /// [`SharingInviteLink::tag`] names it (ADR 0023 D2). `None` for a direct
+    /// grant or a row with no owner attestation.
+    pub via_link: Option<Vec<u8>>,
 }
 
 impl fmt::Debug for SharingGrant {
@@ -556,6 +560,7 @@ impl fmt::Debug for SharingGrant {
                     .as_ref()
                     .map(|(name, source)| (RedactedText::of(name), source)),
             )
+            .field("via_link", &self.via_link.as_deref().map(RedactedBytes::of))
             .finish()
     }
 }
@@ -4642,6 +4647,7 @@ fn project_grant_ledger<'a>(
                 .as_ref()
                 .filter(|_| attested)
                 .map(|name| (name.name().to_owned(), name.source())),
+            via_link: entry.via_link.filter(|_| attested).map(|tag| tag.to_vec()),
         });
     }
     projected
@@ -13135,6 +13141,63 @@ mod tests {
         let _held = roots.borrow();
 
         clear_proved_scope_roots(&roots);
+    }
+
+    /// A via-link tag reaches the host only on a row the owner signed: any
+    /// committed writer authors the ledger, so an unsigned tag could credit a
+    /// grantee to a link that never admitted it.
+    #[test]
+    fn a_via_link_tag_reaches_the_host_only_on_an_owner_attested_row() {
+        use cipherbox_core::seal::{PreservedFields, sign_recipient_binding};
+        use cipherbox_core::suite::ecdsa::EcdsaSigner;
+        use cipherbox_core::suite::x25519::X25519Secret;
+
+        const NAME: &[u8] = b"scope-root-name";
+        const POINTER_READ_KEY: [u8; 32] = [0x55; 32];
+        const LINK_TAG: [u8; 32] = [0x44; 32];
+        let owner = EcdsaSigner::from_scalar(&[0x21; 32]).expect("valid scalar");
+        let grantee = EcdsaSigner::from_scalar(&[0x23; 32]).expect("valid scalar");
+        let mut joined = mint_grant_row(
+            &owner,
+            &X25519Secret::from_scalar([0x22; 32]),
+            &POINTER_READ_KEY,
+            grantee.verifying_key().to_sec1(),
+            &X25519Secret::from_scalar([0x24; 32]).public(),
+            &[0x6a; 16],
+            NAME,
+            CommittedPermission::Read,
+        )
+        .expect("a contributory recipient key")
+        .ledger_entry;
+        joined.via_link = Some(LINK_TAG);
+        joined.owner_sig = sign_recipient_binding(&owner, NAME, &joined).to_compact();
+        let mut forged = joined.clone();
+        forged.owner_sig[0] ^= 0xff;
+        let commitment = GrantSetCommitment {
+            ipns_name: NAME.to_vec(),
+            owner_pseudonym_pk: [0x33; 32],
+            cut_epoch: 0,
+            entries: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+
+        let projected = project_grant_ledger(
+            &GrantLabels {
+                owner_identity: &owner.verifying_key(),
+                scope_root_ipns_name: NAME,
+                commitment: &commitment,
+                pointer_read_key: &POINTER_READ_KEY,
+                contacts: &[],
+            },
+            [&joined, &forged],
+        );
+
+        let via_links: Vec<Option<Vec<u8>>> = projected
+            .grants
+            .into_iter()
+            .map(|grant| grant.via_link)
+            .collect();
+        assert_eq!(via_links, vec![Some(LINK_TAG.to_vec()), None]);
     }
 
     mod grafted_passes {

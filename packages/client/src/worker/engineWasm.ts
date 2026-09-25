@@ -158,6 +158,7 @@ export interface WasmSharingGrant {
   readonly recipientIdentityPublicKey: Uint8Array;
   readonly permission: number;
   readonly granteeName: WasmGranteeName | undefined;
+  readonly viaLink: Uint8Array | undefined;
 }
 
 /** wasm-bindgen `SharingInviteLink` — one link a scope's commitment carries. */

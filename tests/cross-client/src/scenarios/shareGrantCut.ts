@@ -25,7 +25,7 @@ export const shareGrantCut: Scenario = {
     // The cut: the owner revokes the one grant, and the grantee discovers it on
     // its next pass rather than being told.
     await owner.share.open(FOLDER);
-    await owner.share.revoke.click();
+    await owner.share.revokeGrantee();
     await expect(owner.share.noGrants).toBeVisible();
     await expect(owner.share.error).toHaveCount(0);
     await owner.share.close();

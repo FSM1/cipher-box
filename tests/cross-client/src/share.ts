@@ -46,8 +46,10 @@ export async function grantOneFolder(context: ScenarioContext): Promise<Granted>
   const grantee = await context.claimant('grantee-web', context.secret(), link);
   context.log('the grantee spent the link');
 
-  await owner.share.openUntilGranted(FOLDER, 1, 180_000);
-  await expect(owner.share.permission).toHaveText('read');
+  // A claim asks for access and carries none: opening the owner's share
+  // dialog converts it into the grant.
+  await owner.share.openUntilGranted(FOLDER, 1);
+  await expect(owner.share.permission).toHaveValue('read');
   await owner.share.close();
 
   await owner.vault.settled();

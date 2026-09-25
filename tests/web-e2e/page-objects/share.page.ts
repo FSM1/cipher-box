@@ -1,8 +1,8 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
- * The share dialog a folder row raises: the grant list, the contact import
- * step, and the invite-link panel.
+ * The share dialog a folder row raises: the people table, the link row and
+ * its chips, and the contact-code path under "advanced".
  *
  * Every surface here is the engine's own read — the dialog re-reads after each
  * command rather than mirroring what it sent — so a wait on a row or a panel is
@@ -57,17 +57,18 @@ export class SharePage {
     return this.page.getByTestId('share-no-mint');
   }
 
-  /** The panel a scope that already carries a link shows in the mint's place. */
-  get liveLink(): Locator {
-    return this.page.getByTestId('share-live-link');
+  /** One chip per link the scope carries, this session's mint or not. */
+  get linkChips(): Locator {
+    return this.page.getByTestId('share-link-chip');
   }
 
-  get liveLinkExpiry(): Locator {
-    return this.page.getByTestId('share-live-link-expiry');
-  }
-
-  get revokeLinkButton(): Locator {
-    return this.page.getByTestId('share-revoke-link');
+  /** Cuts the first link, through the confirmation its chip raises. */
+  async revokeFirstLink(): Promise<void> {
+    await this.page.getByTestId('share-revoke-link').first().click();
+    await this.page.getByTestId('share-link-revoke-confirm').click();
+    await expect(this.page.getByTestId('share-link-revoke-prompt')).toHaveCount(0, {
+      timeout: 180_000,
+    });
   }
 
   /** The just-minted link, shown once and only to the tab that minted it. */
@@ -104,46 +105,56 @@ export class SharePage {
   }
 
   /**
-   * Reopens the dialog until `count` grant rows show: the owner's tick converts
-   * a claim in the background, and the dialog reads the grants only when it opens.
+   * Opens the dialog until `count` grant rows show. Opening converts the claims
+   * that wait on the folder's links, and a claim can land after one opening.
    */
-  async openUntilGranted(folder: string, count: number, timeout = 90_000): Promise<void> {
+  async openUntilGranted(folder: string, count: number, timeout = 180_000): Promise<void> {
     await expect(async () => {
       if ((await this.dialog.count()) > 0) await this.close();
       await this.open(folder);
-      await expect(this.grantRows).toHaveCount(count);
+      await expect(this.grantRows).toHaveCount(count, { timeout: 30_000 });
     }).toPass({ timeout });
   }
 
-  /** The permission badge one grant row carries. */
+  /** The access control one grant row carries; its value is `read` or `write`. */
   get permission(): Locator {
     return this.page.getByTestId('share-grant-permission');
   }
 
-  /** Cuts one recipient's grant. */
-  get revoke(): Locator {
-    return this.page.getByTestId('share-revoke');
+  /** Cuts the one recipient's grant, through the confirmation the row raises. */
+  async revokeGrantee(): Promise<void> {
+    await this.page.getByTestId('share-revoke').click();
+    await this.page.getByTestId('share-revoke-confirm').click();
   }
 
-  /** Takes a write grant back down to read. There is no way back up. */
-  get downgrade(): Locator {
-    return this.page.getByTestId('share-downgrade');
-  }
-
-  /** Clicks the downgrade and waits for the engine's re-read to report `read`. */
+  /** Takes a write grant down to read and waits for the engine's re-read to report it. */
   async downgradeToRead(timeout = 60_000): Promise<void> {
-    await this.downgrade.click();
-    await expect(this.permission).toHaveText('read', { timeout });
+    await this.permission.selectOption('read');
+    await expect(this.permission).toHaveValue('read', { timeout });
+    await expect(this.permission).toBeEnabled({ timeout });
   }
 
-  /** What a grant or a mint would carry: `read` or `write`. */
+  /** What a minted link would carry: `read` or `write`. */
   get permissionChoice(): Locator {
-    return this.page.getByLabel('permission');
+    return this.page.getByLabel('link permission');
+  }
+
+  /** What a contact grant would carry: `read` or `write`. */
+  get grantPermissionChoice(): Locator {
+    return this.page.getByLabel('contact permission');
   }
 
   /** The imported contacts this member can grant to. */
   get recipientChoice(): Locator {
-    return this.page.getByLabel('contact');
+    return this.page.getByLabel('contact', { exact: true });
+  }
+
+  /** Unfolds the contact-code path, which the dialog keeps collapsed. */
+  async expandAdvanced(): Promise<void> {
+    const advanced = this.page.getByTestId('share-advanced');
+    if ((await advanced.getAttribute('open')) === null) {
+      await advanced.locator('summary').click();
+    }
   }
 
   /**
@@ -154,13 +165,14 @@ export class SharePage {
   async grantTo(code: string, permission: 'read' | 'write'): Promise<void> {
     await this.importContact(code);
 
+    await this.expandAdvanced();
     await this.recipientChoice.selectOption({ index: 1 });
-    await this.permissionChoice.selectOption(permission);
+    await this.grantPermissionChoice.selectOption(permission);
     await this.grantButton.click();
     // A grant re-wraps the scope key and publishes it, so against a real record
     // plane the row lands well after the click.
     await expect(this.grantRows).toHaveCount(1, { timeout: 180_000 });
-    await expect(this.permission).toHaveText(permission);
+    await expect(this.permission).toHaveValue(permission);
   }
 
   /**
@@ -203,6 +215,7 @@ export class SharePage {
 
   /** Steps into the contact import, which replaces the dialog's body. */
   async openImport(): Promise<void> {
+    await this.expandAdvanced();
     await this.page.getByTestId('share-import-contact').click();
     await expect(this.importForm).toBeVisible();
   }

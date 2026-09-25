@@ -1,6 +1,7 @@
 /**
  * The invite link across two accounts: one vault mints, another previews and
- * joins it, and the minter's tick converts that claim into a read grant.
+ * joins it, and the minter's share dialog converts that claim into a read grant
+ * when it opens.
  */
 
 import { expect, test } from '../fixtures';
@@ -34,9 +35,11 @@ test('@full a link minted by one vault is claimed by another and converts to a g
 
   const claimant = await claim(browser, link);
 
+  // A claim reaches the minter's inbox and asks for a grant; opening the share
+  // dialog converts it with no owner step.
   await share.openUntilGranted(FOLDER, 1);
 
-  await expect(share.permission).toHaveText('read');
+  await expect(share.permission).toHaveValue('read');
   await expect(share.error).toHaveCount(0);
   await claimant.context().close();
 });

@@ -52,12 +52,24 @@ function view(
               recipientIdentityPublicKey: identity(seed),
               permission,
               granteeName: null,
+              viaLink: null,
             })),
             grantRefusal: null,
             inviteLinkRefusal: null,
             inviteLinks: NO_LINKS,
             ...scopeState,
           },
+  };
+}
+
+/** The row a direct, unnamed grant reads as, with no fingerprint formed. */
+function row(seed: number, permission: Permission): GrantRow {
+  return {
+    contact: { key: key(seed), identityPublicKey: identity(seed) },
+    permission,
+    name: null,
+    viaLink: null,
+    fingerprint: null,
   };
 }
 
@@ -87,10 +99,29 @@ describe('grants', () => {
   it('lists the rows the engine reported under the scope it read', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'write']]));
 
-    expect(grantsFor(DOCS_KEY)).toEqual([
-      { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'write' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row(1, 'write')]);
     expect(grantsFor(PHOTOS_KEY)).toBeNull();
+  });
+
+  it('carries the name, the admitting link and the fingerprint of a row', () => {
+    const joined = view(DOCS, [], [[1, 'read']]);
+    const tag = new Uint8Array(32).fill(0x44);
+    joined.state!.grants[0] = {
+      ...joined.state!.grants[0],
+      granteeName: { name: 'Ada', source: 'claimant' },
+      viaLink: tag,
+    };
+
+    sharingStore.reported(joined, new Map([[key(1), 'fp-ada']]));
+
+    expect(grantsFor(DOCS_KEY)).toEqual([
+      {
+        ...row(1, 'read'),
+        name: { name: 'Ada', source: 'claimant' },
+        viaLink: toHex(tag),
+        fingerprint: 'fp-ada',
+      },
+    ]);
   });
 
   it('holds no row a later read of the same scope stopped reporting', () => {
@@ -106,18 +137,14 @@ describe('grants', () => {
     );
     sharingStore.reported(view(DOCS, [1, 2], [[2, 'read']]));
 
-    expect(grantsFor(DOCS_KEY)).toEqual([
-      { contact: { key: key(2), identityPublicKey: identity(2) }, permission: 'read' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row(2, 'read')]);
   });
 
   it('takes the permission the engine reported, not the one it last held', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'write']]));
     sharingStore.reported(view(DOCS, [1], [[1, 'read']]));
 
-    expect(grantsFor(DOCS_KEY)).toEqual([
-      { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'read' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row(1, 'read')]);
   });
 
   it('answers with no ledger at all for a scope no read has covered', () => {
@@ -138,9 +165,7 @@ describe('grants', () => {
     sharingStore.reported(view(DOCS, [1], [[1, 'write']]));
     sharingStore.reported(view(DOCS, [1], null));
 
-    expect(grantsFor(DOCS_KEY)).toEqual([
-      { contact: { key: key(1), identityPublicKey: identity(1) }, permission: 'write' },
-    ]);
+    expect(grantsFor(DOCS_KEY)).toEqual([row(1, 'write')]);
   });
 
   it('reports the emptiness of a scope that commits no grant', () => {

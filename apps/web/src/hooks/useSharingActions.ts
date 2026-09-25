@@ -8,7 +8,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { toHex } from '@cipherbox/client';
-import type { EngineFacade, Permission } from '@cipherbox/client';
+import type { EngineFacade, Permission, SharingDescriptor } from '@cipherbox/client';
 import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
@@ -18,38 +18,66 @@ export type SharingCommand =
   | 'importContact'
   | 'grant'
   | 'revoke'
-  | 'downgrade'
+  | 'changePermission'
+  | 'renameGrantee'
   | 'createInviteLink'
   | 'revokeInviteLink'
   | 'convertInviteClaims';
+
+export interface RevokeLinkOptions {
+  /** Also cut the people who joined through the link (ADR 0025 D1). */
+  removeGrantees: boolean;
+}
 
 export interface SharingActions {
   busy: SharingCommand | null;
   /** The last refusal, in the engine's own words; cleared by the next dispatch. */
   error: string | null;
   clearError(): void;
-  /** Re-reads this scope's contacts and grants into the store. */
-  reload(): Promise<boolean>;
+  /**
+   * Reads this scope into the store and, where it carries a link, converts the
+   * claims that wait on it (ADR 0023 D4).
+   */
+  open(): Promise<boolean>;
   /** Resolves `true` once the engine verified the code and re-read the book. */
   importContact(contactCode: Uint8Array): Promise<boolean>;
   grant(contact: VerifiedContact, permission: Permission): Promise<boolean>;
   revoke(contact: VerifiedContact): Promise<boolean>;
-  downgrade(contact: VerifiedContact): Promise<boolean>;
+  changePermission(contact: VerifiedContact, permission: Permission): Promise<boolean>;
+  renameGrantee(contact: VerifiedContact, name: string): Promise<boolean>;
   /**
    * Mints a link over this scope, resolving with the engine's fragment
-   * (`MintedInviteLink`) or `null` where the engine refused. An omitted
-   * `expiresAt` takes the engine's default lifetime. The fragment is the link's whole
-   * capability and the engine hands it over once, so a caller that drops it
-   * cannot ask for it again.
+   * (`MintedInviteLink`) or `null` where the engine refused. The fragment is
+   * the link's whole capability and the engine hands it over once, so a caller
+   * that drops it cannot ask for it again.
    */
-  createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
-  /**
-   * Cuts the link `linkTag` names at this scope, or its only link: its future
-   * claims end, converted grants stand.
-   */
-  revokeInviteLink(linkTag?: Uint8Array): Promise<boolean>;
-  /** Converts the claims waiting on this scope's link into grants. */
-  convertInviteClaims(): Promise<boolean>;
+  createInviteLink(
+    permission: Permission,
+    expiresAt: bigint,
+    ownerName: string
+  ): Promise<string | null>;
+  /** Cuts the link `linkTag` names at this scope: its future claims end. */
+  revokeInviteLink(linkTag: Uint8Array, options: RevokeLinkOptions): Promise<boolean>;
+}
+
+/**
+ * The engine's fingerprint of each grantee key, by hex key. A row whose key is
+ * not a curve point (an unattested row) has none, and neither does one whose
+ * read failed: the row still renders, only without it.
+ */
+async function fingerprintsOf(
+  facade: EngineFacade,
+  view: SharingDescriptor
+): Promise<Map<string, string>> {
+  const entries = await Promise.all(
+    (view.state?.grants ?? []).map((grant) =>
+      facade.identityFingerprint(grant.recipientIdentityPublicKey).then(
+        (fingerprint): [string, string] => [toHex(grant.recipientIdentityPublicKey), fingerprint],
+        () => null
+      )
+    )
+  );
+  return new Map(entries.filter((entry) => entry !== null));
 }
 
 export function useSharingActions(scope: Uint8Array): SharingActions {
@@ -61,7 +89,11 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
   const target = useMemo(() => scope, [scopeKey]);
 
   const read = useCallback(
-    async (facade: EngineFacade) => sharingStore.reported(await facade.sharing(target)),
+    async (facade: EngineFacade) => {
+      const view = await facade.sharing(target);
+      sharingStore.reported(view, await fingerprintsOf(facade, view));
+      return view;
+    },
     [target]
   );
 
@@ -69,7 +101,17 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
     busy,
     error,
     clearError,
-    reload: useCallback(() => run('read', read), [run, read]),
+    open: useCallback(async () => {
+      let linked = false;
+      const reached = await run('read', async (facade) => {
+        linked = ((await read(facade)).state?.inviteLinks.length ?? 0) > 0;
+      });
+      if (!reached || !linked) return reached;
+      return run('convertInviteClaims', async (facade) => {
+        await facade.convertInviteClaims(target);
+        await read(facade);
+      });
+    }, [run, read, target]),
     importContact: useCallback(
       (contactCode) =>
         run('importContact', async (facade) => {
@@ -94,19 +136,28 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
         }),
       [run, read, target]
     ),
-    downgrade: useCallback(
-      (contact) =>
-        run('downgrade', async (facade) => {
-          await facade.changePermission(target, contact.identityPublicKey, 'read');
+    changePermission: useCallback(
+      (contact, permission) =>
+        run('changePermission', async (facade) => {
+          await facade.changePermission(target, contact.identityPublicKey, permission);
+          await read(facade);
+        }),
+      [run, read, target]
+    ),
+    renameGrantee: useCallback(
+      (contact, name) =>
+        run('renameGrantee', async (facade) => {
+          await facade.renameGrantee(target, contact.identityPublicKey, name);
           await read(facade);
         }),
       [run, read, target]
     ),
     createInviteLink: useCallback(
-      async (permission, expiresAt) => {
+      async (permission, expiresAt, ownerName) => {
         let fragment: string | null = null;
         await run('createInviteLink', async (facade) => {
-          fragment = (await facade.createInviteLink(target, permission, expiresAt)).fragment;
+          fragment = (await facade.createInviteLink(target, permission, expiresAt, ownerName))
+            .fragment;
           await read(facade);
         });
         return fragment;
@@ -114,17 +165,10 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       [run, read, target]
     ),
     revokeInviteLink: useCallback(
-      (linkTag) =>
+      (linkTag, _options) =>
         run('revokeInviteLink', async (facade) => {
+          // The client takes no `removeGrantees` yet, so the options stop here.
           await facade.revokeInviteLink(target, linkTag);
-          await read(facade);
-        }),
-      [run, read, target]
-    ),
-    convertInviteClaims: useCallback(
-      () =>
-        run('convertInviteClaims', async (facade) => {
-          await facade.convertInviteClaims(target);
           await read(facade);
         }),
       [run, read, target]

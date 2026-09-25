@@ -1,5 +1,6 @@
-import type { SharingInviteLinkDescriptor } from '@cipherbox/client';
-import type { ScopeSharing } from '../stores/sharing.store';
+import { toHex } from '@cipherbox/client';
+import type { Permission, SharingInviteLinkDescriptor } from '@cipherbox/client';
+import type { GrantRow } from '../stores/sharing.store';
 import { formatDate, MAX_DATE_MILLIS } from '../utils/format';
 
 /** The claim route, so the mint and the router name one destination. */
@@ -41,21 +42,21 @@ export function expiryLabel(expired: boolean, expiresAt: bigint): string {
     : `expires ${formatDate(Number(expiresAt))}`;
 }
 
-/** Which of the owner's three link situations a scope is in. */
-export type InviteLinkState =
-  | { kind: 'live'; link: SharingInviteLinkDescriptor }
-  | { kind: 'mintable' }
-  | { kind: 'refused'; check: string };
+/** How a permission reads on the share dialog. */
+export function accessLabel(permission: Permission): string {
+  return permission === 'write' ? 'edit' : 'view';
+}
 
-/**
- * A scope the engine reached carries a live link, takes a mint, or takes
- * neither. `live` draws the first link the commitment carries that has not
- * expired on the engine's clock. `refused` carries the engine's own check name,
- * because which ground refuses is the engine's to say.
- */
-export function inviteLinkState(scope: ScopeSharing): InviteLinkState {
-  const link = scope.inviteLinks.find((each) => !each.expired);
-  if (link !== undefined) return { kind: 'live', link };
-  const refusal = scope.inviteLinkRefusal;
-  return refusal === null ? { kind: 'mintable' } : { kind: 'refused', check: refusal };
+/** A link names itself by what it grants and when it ends, since it carries no name. */
+export function linkLabel(link: SharingInviteLinkDescriptor): string {
+  return `${accessLabel(link.permission)} link, ${expiryLabel(link.expired, link.expiresAt)}`;
+}
+
+/** The grants a link admitted, by the via-link tag each row carries. */
+export function joinedThrough(
+  grants: readonly GrantRow[],
+  link: SharingInviteLinkDescriptor
+): GrantRow[] {
+  const tag = toHex(link.tag);
+  return grants.filter((grant) => grant.viaLink === tag);
 }

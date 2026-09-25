@@ -1043,6 +1043,13 @@ impl SharingGrant {
                 source: source.as_wire(),
             })
     }
+
+    /// The tag of the link that admitted this grantee, which matches a
+    /// [`SharingInviteLink`]'s `tag`.
+    #[wasm_bindgen(getter, js_name = viaLink)]
+    pub fn via_link(&self) -> Option<Vec<u8>> {
+        self.inner.via_link.clone()
+    }
 }
 
 /// A grantee name and who chose it, which cross as one value so neither
@@ -2761,17 +2768,21 @@ mod tests {
             recipient_identity_public_key: vec![2; 33],
             permission: facade::Permission::Write,
             grantee_name: Some(("Ada".into(), cipherbox_core::seal::NameSource::Claimant)),
+            via_link: Some(vec![0x44; 32]),
         });
         let name = named.grantee_name().expect("a named row");
         assert_eq!(name.name(), "Ada");
         assert_eq!(name.source(), "claimant");
+        assert_eq!(named.via_link(), Some(vec![0x44; 32]));
 
         let unnamed = SharingGrant::from_facade(facade::SharingGrant {
             recipient_identity_public_key: vec![2; 33],
             permission: facade::Permission::Read,
             grantee_name: None,
+            via_link: None,
         });
         assert!(unnamed.grantee_name().is_none());
+        assert!(unnamed.via_link().is_none());
 
         let contact = SharingContact::from_facade(facade::SharingContact {
             identity_public_key: vec![2; 33],

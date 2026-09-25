@@ -1,14 +1,19 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { Permission } from '@cipherbox/client';
-import { useSharingActions } from '../../hooks/useSharingActions';
-import { expiryAt, inviteUrl, type LinkLifetime } from '../../sharing/inviteLink';
-import { refusalLabel } from '../../sharing/shareRefusals';
-import { sharingFor, sharingStore } from '../../stores/sharing.store';
+import { useSharingActions, type SharingActions } from '../../hooks/useSharingActions';
+import { accessLabel } from '../../sharing/inviteLink';
+import { refusalLabel, refusalText } from '../../sharing/shareRefusals';
+import {
+  sharingFor,
+  sharingStore,
+  type ScopeSharing,
+  type VerifiedContact,
+} from '../../stores/sharing.store';
 import type { ListingRow } from '../../vault/listing';
-import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
 import { Modal } from '../ui/Modal';
 import { ContactImportForm } from './ContactImportForm';
-import { InviteLinkPanel } from './InviteLinkPanel';
+import { LinkSection } from './LinkSection';
+import { PeopleTable } from './PeopleTable';
 
 interface ShareDialogProps {
   /** The scope root being shared. */
@@ -20,70 +25,33 @@ interface ShareDialogProps {
 type Step = 'grants' | 'import';
 
 /**
- * Who a folder is shared with, and the owner-only changes to that set: grant,
- * revoke, and the write→read downgrade. The dialog issues one facade command
- * per action and renders the engine's own sharing read — it verifies nothing
- * and remembers nothing of its own.
+ * Who a folder is shared with, and the owner's changes to that set. The link
+ * is the main path; the contact-code grant sits under "advanced" (ADR 0023
+ * D7). The dialog issues one facade command per action and renders the
+ * engine's own sharing read — it verifies nothing and remembers nothing of its
+ * own.
  */
 export function ShareDialog({ row, onClose }: ShareDialogProps) {
   const state = useSyncExternalStore(sharingStore.subscribe, sharingStore.getState);
   const actions = useSharingActions(row.id);
   const [step, setStep] = useState<Step>('grants');
-  const [recipient, setRecipient] = useState('');
-  const [permission, setPermission] = useState<Permission>('read');
-  const [lifetime, setLifetime] = useState<LinkLifetime>('7 days');
   // Held until the dialog closes and no longer: unmounting is what forgets it.
   const [link, setLink] = useState<string | null>(null);
-  // Closed before the dispatch rather than by a render: two activations in one
-  // frame would mint two links and strand the first, a live capability nothing
-  // can name again — and `busy` is itself the render-late value that misses it.
-  const minting = useRef(false);
 
-  // `null` is "no read reached this scope yet", which the list must not draw as
-  // "granted to nobody" — the two differ to an owner deciding whether to grant
-  // again.
+  // `null` is "no read reached this scope yet", which the table must not draw
+  // as "shared with nobody".
   const scope = sharingFor(state, row.key);
-  const rows = scope?.grants ?? null;
-  const granted = new Set((rows ?? []).map((entry) => entry.contact.key));
-  const grantable = state.contacts.filter((contact) => !granted.has(contact.key));
-  const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
   const busy = actions.busy !== null;
-  // The engine's verdict on this target's standing, not a rule re-derived here.
-  const grantRefusal = scope?.grantRefusal ?? null;
-  // A read that never landed carries no verdict either way, and the engine
-  // answers none rather than let a host offer what it would refuse
-  // (`crates/engine/src/facade.rs`, `scope_sharing`).
-  const standingUnknown = scope === null;
 
-  const { reload } = actions;
+  const { open } = actions;
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    void open();
+  }, [open]);
 
   // A refusal belongs to the step that drew it; leaving the step retires it.
   const goTo = (next: Step) => {
     actions.clearError();
     setStep(next);
-  };
-
-  const grant = () => {
-    if (chosen === null) return;
-    void actions.grant(chosen, permission).then((accepted) => {
-      if (accepted) setRecipient('');
-    });
-  };
-
-  const mintLink = () => {
-    if (busy || minting.current) return;
-    minting.current = true;
-    void actions
-      .createInviteLink(permission, expiryAt(lifetime, Date.now()))
-      .then((fragment) => {
-        if (fragment !== null) setLink(inviteUrl(fragment));
-      })
-      .finally(() => {
-        minting.current = false;
-      });
   };
 
   const importContact = (code: Uint8Array) => {
@@ -96,7 +64,7 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
     <Modal
       onClose={onClose}
       title={step === 'import' ? 'import contact' : `share ${row.name}`}
-      error={actions.error}
+      error={actions.error === null ? null : refusalText(actions.error)}
       busy={busy}
       // A minted link is shown once, so only the deliberate exit discards it.
       dismissible={link === null}
@@ -109,130 +77,32 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
           onConfirm={importContact}
         />
       ) : (
-        <div className="dialog-content" data-testid="share-dialog">
-          <p className="dialog-label">shared with</p>
-          {rows === null ? (
-            <p className="sharing-note" data-testid="share-grants-unavailable">
-              {'// grants unavailable'}
-            </p>
-          ) : rows.length === 0 ? (
-            <p className="sharing-note" data-testid="share-no-grants">
-              {'// nothing granted here'}
-            </p>
-          ) : (
-            <ul className="sharing-list" data-testid="share-grant-list">
-              {rows.map((entry) => (
-                <li key={entry.contact.key} className="sharing-row" data-testid="share-grant-row">
-                  <span className="sharing-key">{entry.contact.key}</span>
-                  <span className="details-badge" data-testid="share-grant-permission">
-                    {entry.permission}
-                  </span>
-                  {entry.permission === 'write' && (
-                    <button
-                      type="button"
-                      className="dialog-button"
-                      onClick={() => void actions.downgrade(entry.contact)}
-                      disabled={busy}
-                      data-testid="share-downgrade"
-                    >
-                      make read-only
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="dialog-button dialog-button--danger"
-                    onClick={() => void actions.revoke(entry.contact)}
-                    disabled={busy}
-                    data-testid="share-revoke"
-                  >
-                    revoke
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <p className="dialog-label">grant access</p>
-          {standingUnknown ? (
-            <p className="sharing-note" data-testid="share-standing-unknown">
-              {'// no read reached this folder — nothing can be granted until one does'}
-            </p>
-          ) : grantRefusal !== null ? (
-            <p className="sharing-note" data-testid="share-no-grant" data-check={grantRefusal}>
-              {`// ${refusalLabel(grantRefusal)}`}
-            </p>
-          ) : grantable.length === 0 ? (
-            <p className="sharing-note" data-testid="share-no-contacts">
-              {'// no contact left to grant here — import one'}
-            </p>
-          ) : (
-            <div className="dialog-content">
-              <label className="dialog-label" htmlFor="share-recipient">
-                contact
-              </label>
-              <select
-                id="share-recipient"
-                className="dialog-input"
-                value={recipient}
-                onChange={(event) => setRecipient(event.target.value)}
-                disabled={busy}
-              >
-                <option value="">select a contact</option>
-                {grantable.map((contact) => (
-                  <option key={contact.key} value={contact.key}>
-                    {contact.key}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* One choice for both actions below: a grant and a minted link. */}
-          <label className="dialog-label" htmlFor="share-permission">
-            permission
-          </label>
-          <select
-            id="share-permission"
-            className="dialog-input"
-            value={permission}
-            onChange={(event) => setPermission(event.target.value as Permission)}
-            disabled={busy}
-          >
-            <option value="read">read</option>
-            <option value="write">write</option>
-          </select>
-
-          <p className="dialog-label">invite link</p>
-          {link !== null && (
-            <div className="dialog-content" data-testid="invite-link">
-              <CopyableValue value={link} label="invite link" />
-              <p className="sharing-note" data-testid="invite-link-bearer">
-                {'// whoever holds this link claims it — hand it over like a key'}
-              </p>
-            </div>
-          )}
+        <div className="dialog-content sharing-dialog" data-testid="share-dialog">
+          <p className="dialog-label">{`people with access · ${(scope?.grants.length ?? 0) + 1}`}</p>
+          <PeopleTable grants={scope?.grants ?? null} actions={actions} busy={busy} />
 
           {scope !== null && (
-            <InviteLinkPanel
+            <LinkSection
               scope={scope}
               actions={actions}
               busy={busy}
-              lifetime={lifetime}
-              onLifetime={setLifetime}
-              onMint={mintLink}
+              fresh={link}
+              onMinted={setLink}
             />
           )}
 
+          <details className="sharing-advanced" data-testid="share-advanced">
+            <summary className="dialog-label">advanced: share by contact code</summary>
+            <ContactGrant
+              scope={scope}
+              contacts={state.contacts}
+              actions={actions}
+              busy={busy}
+              onImport={() => goTo('import')}
+            />
+          </details>
+
           <div className="dialog-actions">
-            <button
-              type="button"
-              className="dialog-button"
-              onClick={() => goTo('import')}
-              disabled={busy}
-              data-testid="share-import-contact"
-            >
-              import contact...
-            </button>
             <button
               type="button"
               className="dialog-button"
@@ -242,18 +112,104 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
             >
               {link === null ? 'done' : 'done — link saved'}
             </button>
-            <button
-              type="button"
-              className="dialog-button dialog-button--primary"
-              onClick={grant}
-              disabled={busy || chosen === null || grantRefusal !== null || standingUnknown}
-              data-testid="share-grant"
-            >
-              {actions.busy === 'grant' ? 'granting...' : 'grant'}
-            </button>
           </div>
         </div>
       )}
     </Modal>
+  );
+}
+
+/** The contact-code grant: pick an imported contact and a permission. */
+function ContactGrant({
+  scope,
+  contacts,
+  actions,
+  busy,
+  onImport,
+}: {
+  scope: ScopeSharing | null;
+  contacts: readonly VerifiedContact[];
+  actions: SharingActions;
+  busy: boolean;
+  onImport: () => void;
+}) {
+  const [recipient, setRecipient] = useState('');
+  const [permission, setPermission] = useState<Permission>('read');
+  const granted = new Set((scope?.grants ?? []).map((entry) => entry.contact.key));
+  const grantable = contacts.filter((contact) => !granted.has(contact.key));
+  const chosen = grantable.find((contact) => contact.key === recipient) ?? null;
+  // The engine's verdict on this target's standing, not a rule re-derived here.
+  const grantRefusal = scope?.grantRefusal ?? null;
+
+  const grant = () => {
+    if (chosen === null) return;
+    void actions.grant(chosen, permission).then((accepted) => {
+      if (accepted) setRecipient('');
+    });
+  };
+
+  return (
+    <div className="dialog-content">
+      {scope === null ? (
+        <p className="sharing-note" data-testid="share-standing-unknown">
+          {'// no read reached this folder — nothing can be granted until one does'}
+        </p>
+      ) : grantRefusal !== null ? (
+        <p className="sharing-note" data-testid="share-no-grant" data-check={grantRefusal}>
+          {`// ${refusalLabel(grantRefusal)}`}
+        </p>
+      ) : grantable.length === 0 ? (
+        <p className="sharing-note" data-testid="share-no-contacts">
+          {'// no contact left to grant here — import one'}
+        </p>
+      ) : (
+        <div className="sharing-inline">
+          <select
+            className="dialog-input"
+            aria-label="contact"
+            value={recipient}
+            onChange={(event) => setRecipient(event.target.value)}
+            disabled={busy}
+          >
+            <option value="">select a contact</option>
+            {grantable.map((contact) => (
+              <option key={contact.key} value={contact.key}>
+                {contact.key}
+              </option>
+            ))}
+          </select>
+          <select
+            className="dialog-input"
+            aria-label="contact permission"
+            value={permission}
+            onChange={(event) => setPermission(event.target.value as Permission)}
+            disabled={busy}
+          >
+            <option value="read">{`can ${accessLabel('read')}`}</option>
+            <option value="write">{`can ${accessLabel('write')}`}</option>
+          </select>
+        </div>
+      )}
+      <div className="dialog-actions">
+        <button
+          type="button"
+          className="dialog-button"
+          onClick={onImport}
+          disabled={busy}
+          data-testid="share-import-contact"
+        >
+          import contact...
+        </button>
+        <button
+          type="button"
+          className="dialog-button dialog-button--primary"
+          onClick={grant}
+          disabled={busy || chosen === null || grantRefusal !== null || scope === null}
+          data-testid="share-grant"
+        >
+          {actions.busy === 'grant' ? 'granting...' : 'grant'}
+        </button>
+      </div>
+    </div>
   );
 }

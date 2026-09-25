@@ -43,7 +43,7 @@ test('a grant reaches a second identity, and a revoke cuts it', async ({
 
   await ownerFiles.openFromSidebar();
   await owner.open(OWNER_FOLDER);
-  await owner.revoke.click();
+  await owner.revokeGrantee();
   await expect(owner.noGrants).toBeVisible({ timeout: 60_000 });
   await owner.close();
 

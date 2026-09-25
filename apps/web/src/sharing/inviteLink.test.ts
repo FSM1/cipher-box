@@ -1,9 +1,16 @@
+import { toHex } from '@cipherbox/client';
 import type { SharingInviteLinkDescriptor } from '@cipherbox/client';
 import { describe, expect, it } from 'vitest';
-import type { ScopeSharing } from '../stores/sharing.store';
-import { expiryAt, expiryLabel, inviteLinkState, inviteUrl } from './inviteLink';
+import type { GrantRow } from '../stores/sharing.store';
+import {
+  accessLabel,
+  expiryAt,
+  expiryLabel,
+  inviteUrl,
+  joinedThrough,
+  linkLabel,
+} from './inviteLink';
 
-const NO_LINKS: SharingInviteLinkDescriptor[] = [];
 const LINK: SharingInviteLinkDescriptor = {
   tag: new Uint8Array(32).fill(1),
   permission: 'read',
@@ -14,11 +21,6 @@ const LINK: SharingInviteLinkDescriptor = {
   contactBudgetFull: false,
   refusedClaims: 0,
 };
-
-const scope = (
-  inviteLinks: SharingInviteLinkDescriptor[],
-  inviteLinkRefusal: string | null = null
-): ScopeSharing => ({ grants: [], grantRefusal: null, inviteLinkRefusal, inviteLinks });
 
 describe('the link URL', () => {
   it('carries the capability in the fragment, which reaches no server', () => {
@@ -48,35 +50,27 @@ describe('the deadline label', () => {
   });
 });
 
-describe('which link situation a scope is in', () => {
-  it('reports the link a scope carries over any mint verdict', () => {
-    expect(inviteLinkState(scope([LINK], 'invite-parent-envelope-version-unsupported'))).toEqual({
-      kind: 'live',
-      link: LINK,
-    });
+describe('how a link names itself', () => {
+  it('says what it grants and when it ends', () => {
+    expect(linkLabel({ ...LINK, permission: 'write', expired: true })).toBe('edit link, expired');
+    expect(accessLabel('read')).toBe('view');
+  });
+});
+
+describe('who joined through a link', () => {
+  const row = (seed: number, viaLink: Uint8Array | null): GrantRow => ({
+    contact: { key: toHex(new Uint8Array(33).fill(seed)), identityPublicKey: new Uint8Array(33) },
+    permission: 'read',
+    name: null,
+    viaLink: viaLink === null ? null : toHex(viaLink),
+    fingerprint: null,
   });
 
-  it('draws the first link still claimable, past one that expired', () => {
-    const expired = { ...LINK, tag: new Uint8Array(32).fill(2), expired: true };
-    const fresh = { ...LINK, tag: new Uint8Array(32).fill(3) };
+  it('takes the rows whose via-link tag is that link, and no direct grant', () => {
+    const joined = row(1, LINK.tag);
+    const other = row(2, new Uint8Array(32).fill(9));
+    const direct = row(3, null);
 
-    expect(inviteLinkState(scope([expired, fresh]))).toEqual({ kind: 'live', link: fresh });
-  });
-
-  it('offers a mint where every link the scope carries has expired', () => {
-    expect(inviteLinkState(scope([{ ...LINK, expired: true }]))).toEqual({ kind: 'mintable' });
-  });
-
-  it('offers a mint only where the engine would take one', () => {
-    expect(inviteLinkState(scope(NO_LINKS))).toEqual({ kind: 'mintable' });
-  });
-
-  it('carries the engine’s own ground for a refusal, whichever rule it was', () => {
-    for (const check of [
-      'invite-target-is-the-vault-root',
-      'invite-parent-envelope-version-unsupported',
-    ]) {
-      expect(inviteLinkState(scope(NO_LINKS, check))).toEqual({ kind: 'refused', check });
-    }
+    expect(joinedThrough([joined, other, direct], LINK)).toEqual([joined]);
   });
 });
