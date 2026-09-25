@@ -925,9 +925,10 @@ D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
 scope root, and cuts every link entry whose `deadline` is not later than the
 injected `now`. It first converts the pending claims, and it keeps the
 pending-op rule of "Invites" (ADR 0023 D4). The sweep depends on the two-device
-publish fix — re-resolve, then sign above the highest sequence seen — which is
-not landed; without it two owner devices that cut one link in one window publish
-two records at one sequence.
+publish fix: the drain re-resolves the root through the gate just before it
+signs and signs above the highest sequence it observed, and a confirm that reads
+a sibling's record at its own sequence is a lost race the next pass rebases and
+signs above.
 
 ### Residuals (as amended by FSM1/cipher-box-next#38)
 

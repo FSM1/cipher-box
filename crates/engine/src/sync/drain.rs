@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
 };
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     BinEntry, BinIndex, ChildRef, Envelope, NodeKind, PreservedFields, ReadBody, SignedSealed,
@@ -388,14 +388,19 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
-    /// The op's record reached the record plane and did not confirm, or the
-    /// scope root moved above the base this pass built on before it signed (a
-    /// lost CAS race). Charged against the attempt budget, because a retry
-    /// re-signs at the same sequence and a jammed name would otherwise retry
-    /// forever. A record of this op may be resolvable, so a spent budget hands
-    /// nothing back — cutting a name a live record carries would leave a
+    /// The op's record reached the record plane and did not confirm. Charged
+    /// against the attempt budget, because a retry re-signs at the same
+    /// sequence and a jammed name would otherwise retry forever. The PUT was
+    /// acked, so a record may be resolvable at the name and a spent budget
+    /// hands nothing back — cutting a name a live record carries would leave a
     /// reference outliving its referent.
     Attempt,
+    /// A folder moved above the base this pass built on before the pass signed
+    /// over it: a lost CAS race. Nothing was PUT and the adopt raised the floor,
+    /// so the retry rebases and signs higher. Charged like
+    /// [`Halt::Unclassified`] and never against the attempt budget, which a
+    /// busy sibling device would otherwise spend on a valid op.
+    LostRace,
     /// A refusal this pass cannot attribute, raised before the record it was
     /// authoring reached the transport: an upload, a registration, or a
     /// produce-side trust refusal. Charged like [`Halt::Attempt`], and a spent
@@ -1887,7 +1892,7 @@ where
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
-            Halt::Unclassified => {
+            Halt::Unclassified | Halt::LostRace => {
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
                     return;
                 }
@@ -2277,18 +2282,30 @@ where
         scope: &DrainScope<'_>,
         end: &ScopeEnd<'_>,
     ) -> Result<Vec<u8>, Halt> {
+        let resolved = self
+            .gated_scope_root(scope, end, ResolveMode::CacheFirst)
+            .await?;
+        resolved_bytes(resolved, end.root_name, self.events)
+    }
+
+    /// One end's scope root through its own gate, under `mode`.
+    async fn gated_scope_root(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        mode: ResolveMode,
+    ) -> Result<GatedResolve, Halt> {
         let floors = end.floors(self.floors);
         let adopter = self.root_adopter(scope, &floors, end);
-        let resolved = resolve_gated(
+        resolve_gated(
             self.transport,
             self.snapshot_cache,
             &adopter,
             end.root_name,
-            ResolveMode::CacheFirst,
+            mode,
         )
         .await
-        .map_err(seam)?;
-        resolved_bytes(resolved, end.root_name, self.events)
+        .map_err(seam)
     }
 
     /// Resolve one non-root node's own record through the child pipeline and
@@ -5750,11 +5767,9 @@ where
         let plane = scope
             .folder_plane(pass, folder)
             .map_err(PublishHalt::before_the_put)?;
-        if is_scope_root {
-            self.reresolve_scope_root(scope, &plane.end, &name, built_on)
-                .await
-                .map_err(PublishHalt::before_the_put)?;
-        }
+        self.reresolve_before_signing(scope, &plane, folder, &name, is_scope_root, built_on)
+            .await
+            .map_err(PublishHalt::before_the_put)?;
         let published = self
             .publish_node(
                 scope,
@@ -5779,25 +5794,56 @@ where
         Ok(published.sequence)
     }
 
-    /// Re-resolve a scope root just before this pass signs over it, so the
-    /// record it signs sits strictly above every sequence the endpoints serve.
-    /// Two devices of one owner derive one name key, and the CAS law holds only
-    /// if each signs above what the network holds rather than above its own
-    /// cache (blueprint/engine.md "Publish").
-    ///
-    /// The freshest record passes the gate first, and the gate raises the
-    /// durable floor the signature is minted above. A record above `built_on`
-    /// is a sibling's: its adopt re-bases the next pass, and this attempt halts
-    /// as a lost race.
-    async fn reresolve_scope_root(
+    /// Re-resolve a folder just before signing over it, so the signature is
+    /// minted above what the endpoints serve and not above this device's cache
+    /// (blueprint/engine.md "Publish"): the adopt raises the durable floor the
+    /// publish mints above, and a record above `built_on` halts this attempt so
+    /// the next pass rebases onto it.
+    async fn reresolve_before_signing(
         &self,
         scope: &DrainScope<'_>,
-        end: &ScopeEnd<'_>,
+        plane: &SealPlane<'_>,
+        folder: NodeId,
         name: &IpnsName,
+        is_scope_root: bool,
         built_on: u64,
     ) -> Result<(), Halt> {
-        let floors = end.floors(self.floors);
-        let adopter = self.root_adopter(scope, &floors, end);
+        let observed = if is_scope_root {
+            let resolved = self
+                .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
+                .await?;
+            if let ResolveOutcome::TrustViolation(rejection) = &resolved.resolved.outcome {
+                return Err(refuse_record(self.events, name, rejection));
+            }
+            resolved.held_record.map(|(record, _)| record.sequence)
+        } else {
+            self.observed_child_sequence(plane, folder, name).await?
+        };
+        match observed {
+            Some(sequence) if sequence > built_on => Err(Halt::LostRace),
+            _ => Ok(()),
+        }
+    }
+
+    /// The sequence an interior folder's name now serves, through the child
+    /// gate. A record the epoch floor refuses is the lazy wave's to re-seal, as
+    /// in [`Self::load_child_node`], so it counts; every other refusal is a
+    /// trust violation.
+    async fn observed_child_sequence(
+        &self,
+        plane: &SealPlane<'_>,
+        folder: NodeId,
+        name: &IpnsName,
+    ) -> Result<Option<u64>, Halt> {
+        let floors = plane.end.floors(self.floors);
+        let adopter = ChildAdopter::new(
+            self.gateway,
+            self.http,
+            &floors,
+            plane.end.root.0,
+            plane.end.read_scope_seed.clone(),
+            folder.0,
+        );
         let resolved = resolve_gated(
             self.transport,
             self.snapshot_cache,
@@ -5807,12 +5853,20 @@ where
         )
         .await
         .map_err(seam)?;
-        if let ResolveOutcome::TrustViolation(rejection) = &resolved.resolved.outcome {
-            return Err(refuse_record(self.events, name, rejection));
-        }
-        match resolved.held_record {
-            Some((observed, _)) if observed.sequence > built_on => Err(Halt::Attempt),
-            _ => Ok(()),
+        match &resolved.resolved.outcome {
+            ResolveOutcome::TrustViolation(rejection) => match rejection.reason {
+                RejectionReason::EpochBelowFloor { .. } => {
+                    let bytes = adopter
+                        .assembled_record_bytes(name)
+                        .ok_or(Halt::EpochLagged)?;
+                    let lagging = IpnsRecord::unmarshal(&bytes)
+                        .and_then(|record| record.verify(name))
+                        .map_err(|_| Halt::Unclassified)?;
+                    Ok(Some(lagging.sequence))
+                }
+                _ => Err(refuse_record(self.events, name, rejection)),
+            },
+            _ => Ok(resolved.held_record.map(|(record, _)| record.sequence)),
         }
     }
 
@@ -6629,7 +6683,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
-        Halt::Attempt | Halt::UploadAttempt => {
+        Halt::Attempt | Halt::UploadAttempt | Halt::LostRace => {
             Some("the network refused it without a classification")
         }
         Halt::RecordRefused => Some("a record this change builds on failed verification"),

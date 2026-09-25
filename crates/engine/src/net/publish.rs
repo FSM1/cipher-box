@@ -17,7 +17,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol;
-use super::fanout::{MAX_RECORD_BYTES, fanout_get_verify, fanout_put};
+use super::fanout::{MAX_RECORD_BYTES, fanout_get_confirm, fanout_put};
 use super::register::register;
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::gate::floor;
@@ -183,6 +183,8 @@ pub enum PublishError {
         /// The read epoch the record binds.
         epoch: u64,
     },
+    /// The durable floor sits at `u64::MAX`, so no sequence above it exists.
+    SequenceExhausted,
 }
 
 /// One record the pipeline is about to sign: the name it publishes under, its
@@ -330,7 +332,10 @@ where
         .await
         .map_err(PublishError::FloorRead)?
         .unwrap_or(0);
-    let sequence = durable.max(request.min_current_sequence.unwrap_or(0)) + 1;
+    let sequence = durable
+        .max(request.min_current_sequence.unwrap_or(0))
+        .checked_add(1)
+        .ok_or(PublishError::SequenceExhausted)?;
 
     // The read-epoch bar ([`EpochBar`]), read last so no await separates it from
     // the signature below.
@@ -377,13 +382,11 @@ where
         );
     }
 
-    // Confirm by re-resolve over the freshest record across the endpoint set.
-    // Only our own bytes prove an endpoint holds *our* record; observing nothing
-    // at all confirms nothing, so it must not report success.
-    let observed = fanout_get_verify(transport, request.name).await;
+    // Only our own bytes, uncontested at their sequence, confirm the publish.
+    let observed = fanout_get_confirm(transport, request.name).await;
     let outcome = match observed {
-        Some((_, bytes)) if bytes == record_bytes => PublishOutcome::Published { sequence },
-        Some((observed, _)) if observed.sequence >= sequence => PublishOutcome::LostRace {
+        Some((_, bytes, false)) if bytes == record_bytes => PublishOutcome::Published { sequence },
+        Some((observed, _, _)) if observed.sequence >= sequence => PublishOutcome::LostRace {
             published_sequence: sequence,
             observed_sequence: observed.sequence,
         },

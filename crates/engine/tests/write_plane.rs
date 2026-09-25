@@ -3717,8 +3717,8 @@ fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
 }
 
 // ---------------------------------------------------------------------------
-// Two devices of one owner publishing one scope root. Both derive its name key,
-// so the CAS law holds only if each signs above what the plane serves.
+// Two devices of one owner publishing one folder (blueprint/engine.md
+// "Publish").
 // ---------------------------------------------------------------------------
 
 /// Two devices of one account, booted on one scope root. The first has landed
@@ -3977,6 +3977,164 @@ fn a_root_the_gate_refuses_at_the_pre_signature_re_resolve_is_a_trust_violation(
         "the refusal is reported"
     );
     assert_eq!(queued(&second), 1, "the create stays queued");
+}
+
+/// A lost race before the signature put nothing on the plane and the retry
+/// signs higher, so it never spends the attempt budget: six losses in a row
+/// leave the op queued, not dead-lettered, and the next pass lands it.
+#[test]
+fn a_run_of_lost_races_before_the_signature_never_dead_letters_the_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, ROOT);
+    let base_record = root_record(&world, 0);
+
+    let names: Vec<String> = (1..=6).map(|index| format!("a{index}")).collect();
+    let mut siblings = Vec::new();
+    for name in &names {
+        block_on(engine_a.command(Command::Create {
+            parent: ROOT,
+            name: name.clone(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+        tick(&world, &engine_a, &mut tasks_a);
+        siblings.push(root_record(&world, 0));
+    }
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    let notes = child_id(&engine, ROOT, "notes");
+    for sibling in siblings {
+        world.record_store.seed_record_after_put(
+            write_name(notes).as_str(),
+            write_name(ROOT).as_str(),
+            sibling,
+        );
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(queued(&second), 1, "the create stays queued");
+    }
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "no lost race spent the attempt budget"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(published(&world.record_store, ROOT).0, base + 7);
+    let mut expected = names;
+    expected.push("notes".to_owned());
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        expected
+    );
+    assert_eq!(queued(&second), 0);
+}
+
+/// An interior folder shares the scope root's name derivation and the same
+/// window between the pass's load and its signature. A sibling's record that
+/// lands in that window is never signed over at its own sequence.
+#[test]
+fn a_sibling_interior_folder_that_lands_mid_pass_is_rebased_on_and_signed_above() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    let second = world.device(b"alice-second-device");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, photos);
+    let base_record = world
+        .record_store
+        .record_at(
+            &world.record_store.endpoints()[0],
+            write_name(photos).as_str(),
+        )
+        .expect("photos has a record");
+
+    block_on(engine_a.command(Command::Create {
+        parent: photos,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    assert_eq!(published(&world.record_store, photos).0, base + 1);
+    let sibling = world
+        .record_store
+        .record_at(
+            &world.record_store.endpoints()[0],
+            write_name(photos).as_str(),
+        )
+        .expect("photos has a record");
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(photos).as_str(), base_record.clone());
+    }
+
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "2027".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    let created = child_id(&engine, photos, "2027");
+    world.record_store.seed_record_after_put(
+        write_name(created).as_str(),
+        write_name(photos).as_str(),
+        sibling.clone(),
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in world.record_store.endpoints() {
+        assert_eq!(
+            world
+                .record_store
+                .record_at(&endpoint, write_name(photos).as_str()),
+            Some(sibling.clone()),
+            "nothing is signed over the sibling's folder at its sequence"
+        );
+    }
+    assert_eq!(queued(&second), 1, "the create stays queued");
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published(&world.record_store, photos).0,
+        base + 2,
+        "the rebased folder signs above the sibling's"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["2026", "2027"],
+        "both devices' creates survive"
+    );
+    assert_eq!(queued(&second), 0);
 }
 
 /// Seed a zero bin retention, so this session's deletes take the hard path —
