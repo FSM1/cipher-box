@@ -50,6 +50,8 @@ describe('how a refused sharing command reads to the member', () => {
       'seam error: the mailbox did not answer'
     );
     expect(refusalText('the publish was refused')).toBe('the publish was refused');
+    // A bare check name is no rendered refusal, so it is not read as one.
+    expect(refusalText('xlink-ambiguous')).toBe('xlink-ambiguous');
     expect(refusalText('malformed input: constructor')).toBe('malformed input: constructor');
   });
 });

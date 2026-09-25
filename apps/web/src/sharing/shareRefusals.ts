@@ -11,7 +11,9 @@ export function refusalLabel(check: string): string {
  * a listed check reads in words and anything else reaches them verbatim.
  */
 export function refusalText(message: string): string {
-  const check = message.slice(message.lastIndexOf(': ') + 2);
+  const at = message.lastIndexOf(': ');
+  if (at < 0) return message;
+  const check = message.slice(at + 2);
   return Object.hasOwn(SHARE_REFUSALS, check) ? SHARE_REFUSALS[check] : message;
 }
 
