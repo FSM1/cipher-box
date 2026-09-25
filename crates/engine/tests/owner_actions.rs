@@ -21,6 +21,10 @@ use cipherbox_core::seal::{
     STRUCT_TAG_WRITE_BODY, WriteBody, decode_envelope, decode_grant_section, decode_write_body,
     grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body, unseal,
 };
+use cipherbox_core::seal::{
+    ChildScopeRef, SignedSealed, StructureSigInput, encode_envelope, encode_grant_section,
+    encode_write_body, seal, set_grant_section, sign_structure,
+};
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::ct_eq;
@@ -30,7 +34,7 @@ use zeroize::Zeroizing;
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
 use cipherbox_engine::grants::conversion::{
     CONVERSION_RECORD_PREFIX, ConversionRecord, MAX_CONVERSION_ENTRIES, POINTER_RETRY_WINDOW,
-    load_conversions, persist_conversions,
+    conversions_key, load_conversions, persist_conversions,
 };
 use cipherbox_engine::grants::{
     AckedClaim, CLAIM_ID_LEN, CLAIM_REPOST_FIRST_WAIT, Contact, ContactStore,
@@ -3923,6 +3927,292 @@ fn the_sharing_read_names_a_rewritten_row_from_the_owners_own_commitment() {
     );
 }
 
+/// The labels the sharing read gives each committed row at `node`.
+fn sharing_labels(engine: &Engine<FakeSeamTypes>, node: NodeId) -> Vec<Vec<u8>> {
+    block_on(engine.sharing(node))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved")
+        .grants
+        .into_iter()
+        .map(|grant| grant.recipient_identity_public_key)
+        .collect()
+}
+
+/// A write grantee's row with the label it rewrote, over the recipient the
+/// owner granted.
+fn relabelled_write_row() -> GrantRow {
+    let mut row = recipient_row_at_root(CorePermission::Write);
+    row.ledger_entry.recipient_identity_pk = [0x11; IDENTITY_PUBLIC_LEN];
+    row
+}
+
+/// ADR 0025 D3: a write grantee authors the ledger, so it can rewrite the
+/// label of its own row. The revoke reaches the row through the owner's own
+/// commitment, as the sharing read names it, and cuts no row it does not name.
+#[test]
+fn a_revoke_reaches_a_row_its_writer_relabelled() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(
+        &world,
+        &blocks,
+        vec![relabelled_write_row(), bystander_row_with_corrupt_sig()],
+    );
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    let honest = recipient_identity().verifying_key().to_sec1().to_vec();
+    assert!(sharing_labels(&engine, ROOT).contains(&honest));
+
+    assert_eq!(
+        block_on(engine.command(Command::Revoke {
+            node: ROOT,
+            recipient_identity_public_key: honest,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        sharing_labels(&engine, ROOT),
+        vec![vec![0u8; IDENTITY_PUBLIC_LEN]],
+        "the relabelled row is cut, and the bystander row no contact names stays"
+    );
+}
+
+/// ADR 0025 D1: `remove_grantees` takes a row that names the link even when
+/// its writer broke the owner's signature over it.
+#[test]
+fn a_link_revoke_with_remove_grantees_takes_a_row_its_writer_relabelled() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let link = invite_link_at_root(0x4e);
+    let mut joined = relabelled_write_row();
+    joined.ledger_entry.via_link = Some(link.tag);
+    seed_vault(
+        &world,
+        &blocks,
+        vec![link, joined, bystander_row_with_corrupt_sig()],
+    );
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink {
+            node: ROOT,
+            link_tag: None,
+            remove_grantees: true,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&world, &engine, &mut tasks);
+
+    let state = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved");
+    assert!(state.invite_links.is_empty(), "the link is cut");
+    assert_eq!(
+        state
+            .grants
+            .into_iter()
+            .map(|grant| grant.recipient_identity_public_key)
+            .collect::<Vec<_>>(),
+        vec![vec![0u8; IDENTITY_PUBLIC_LEN]],
+        "with the row that joined through it, and not the bystander row"
+    );
+}
+
+/// ADR 0025 D1: a write grantee that joined through a link and then stripped
+/// the via-link reference from its own row breaks the owner's signature over
+/// it. The owner's contact book still names the link that sourced the
+/// grantee, so `remove_grantees` still takes the row. A direct grantee stays.
+#[test]
+fn a_link_revoke_with_remove_grantees_takes_a_row_whose_via_link_its_writer_stripped() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let link = invite_link_at_root(0x4e);
+    let link_tag = link.tag;
+    let mut stripped = recipient_row_at_root(CorePermission::Write);
+    stripped.ledger_entry.via_link = Some(link_tag);
+    stripped.ledger_entry.owner_sig = cipherbox_core::seal::sign_recipient_binding(
+        &owner_identity(),
+        write_name(ROOT).as_str().as_bytes(),
+        &stripped.ledger_entry,
+    )
+    .to_compact();
+    stripped.ledger_entry.via_link = None;
+    let bystander = EcdsaSigner::from_scalar(&BYSTANDER_SECRET).expect("valid identity scalar");
+    let direct = mint_grant_row(
+        &owner_identity(),
+        &kdf::enc_subkey(&SECRET),
+        &owner_pointer_read_key(),
+        bystander.verifying_key().to_sec1(),
+        &kdf::enc_subkey(&BYSTANDER_SECRET).public(),
+        &SCOPE,
+        write_name(ROOT).as_str().as_bytes(),
+        CorePermission::Read,
+    )
+    .expect("a contributory recipient key");
+    seed_vault(&world, &blocks, vec![link, stripped, direct]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let book = StagingContactStore::new(&alice.staging_store, &enc_subkey, &entropy);
+    block_on(book.record_from_link(&contact_code(&RECIPIENT_SECRET), &link_tag, &SCOPE))
+        .expect("the conversion records the grantee under the link");
+
+    assert_eq!(
+        block_on(engine.command(Command::RevokeInviteLink {
+            node: ROOT,
+            link_tag: None,
+            remove_grantees: true,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&world, &engine, &mut tasks);
+
+    let state = block_on(engine.sharing(ROOT))
+        .expect("a sharing read")
+        .state
+        .expect("the vault root resolved");
+    assert!(state.invite_links.is_empty(), "the link is cut");
+    assert_eq!(
+        state
+            .grants
+            .into_iter()
+            .map(|grant| grant.recipient_identity_public_key)
+            .collect::<Vec<_>>(),
+        vec![bystander.verifying_key().to_sec1().to_vec()],
+        "the stripped row leaves with the link, and the direct grantee stays"
+    );
+}
+
+/// A claim through a second link that grants nothing admits no one, so the
+/// contact keeps the link that admitted it. A revoke of the second link with
+/// `remove_grantees` keeps the person, and a revoke of the first link cuts
+/// the person.
+#[test]
+fn a_claim_that_grants_nothing_leaves_the_person_with_the_link_that_admitted_it() {
+    let mut fx = GrantScenario::new();
+    let first = fx.mint_link();
+    let [first_link] = <[SharingInviteLink; 1]>::try_from(folder_links(&fx)).expect("one link");
+    let person = fx.post_claimant(&first, 0, 0);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let second = fx.mint_link();
+    let second_link = folder_links(&fx)
+        .into_iter()
+        .find(|link| link.tag != first_link.tag)
+        .expect("the second link");
+    assert_eq!(fx.post_claimant(&second, 0, 1), person);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the second claim converted"
+    );
+
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let book = StagingContactStore::new(&fx.owner_device.staging_store, &enc_subkey, &entropy);
+    let source = block_on(book.contacts_with_sources())
+        .expect("the book opens")
+        .into_iter()
+        .find(|(contact, _)| contact.identity_pk().to_sec1().to_vec() == person)
+        .and_then(|(_, source)| source);
+    assert_eq!(
+        source.map(|tag| tag.to_vec()),
+        Some(first_link.tag.clone()),
+        "the contact stays with the link that admitted it"
+    );
+
+    let revoke = |fx: &mut GrantScenario, tag: &[u8]| {
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: Some(tag.to_vec()),
+            remove_grantees: true,
+        }))
+    };
+    assert_eq!(revoke(&mut fx, &second_link.tag), Ok(CommandOutcome::Done));
+    assert!(
+        fx.granted_to().contains(&person),
+        "the person keeps access past the second link's revoke"
+    );
+    assert_eq!(revoke(&mut fx, &first_link.tag), Ok(CommandOutcome::Done));
+    assert!(
+        !fx.granted_to().contains(&person),
+        "the first link's revoke cuts the person"
+    );
+}
+
+/// A key change is a revoke and a re-grant by the owner. A claim from a known
+/// identity under another encryption subkey is refused with
+/// `claim-recipient-key-changed` on the link it came through, and the book
+/// keeps the subkey the revoke fallback reaches the old rows by.
+#[test]
+fn a_claim_under_a_rotated_key_is_refused_and_the_book_keeps_the_old_key() {
+    let mut fx = GrantScenario::new();
+    let first = fx.mint_link();
+    let [first_link] = <[SharingInviteLink; 1]>::try_from(folder_links(&fx)).expect("one link");
+    let person = fx.post_claimant(&first, 0, 0);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let second = fx.mint_link();
+    let second_refused = |fx: &GrantScenario| {
+        folder_links(fx)
+            .into_iter()
+            .find(|link| link.tag != first_link.tag)
+            .expect("the second link")
+            .refused_claims
+    };
+    assert_eq!(second_refused(&fx), 0);
+
+    let opened = InviteFragment::decode(&second).expect("the mint's own fragment");
+    let scalar = [CLAIMANT_SCALAR_BASE; 32];
+    let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+    let rotated = kdf::enc_subkey(&[0x3d; 32]).public();
+    fx.post_claim(
+        &import_contact(&opened.owner_contact_code).expect("the owner bundle verifies"),
+        &EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret"),
+        1,
+        &InviteClaim {
+            claim_id: [0x2c; CLAIM_ID_LEN],
+            scope_pointer_name: opened.scope_pointer_name.clone(),
+            contact_code: ContactCode::create(&identity, rotated).encode(),
+            name: String::new(),
+        },
+        "claim-rotated",
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        second_refused(&fx),
+        1,
+        "the claim shows as refused on its link"
+    );
+
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let book = StagingContactStore::new(&fx.owner_device.staging_store, &enc_subkey, &entropy);
+    let held = block_on(book.contacts_with_sources())
+        .expect("the book opens")
+        .into_iter()
+        .find(|(contact, _)| contact.identity_pk().to_sec1().to_vec() == person)
+        .expect("the book holds the person");
+    assert_eq!(
+        held.0.enc_subkey().to_bytes(),
+        kdf::enc_subkey(&scalar).public().to_bytes(),
+        "the book keeps the old subkey"
+    );
+    assert_eq!(held.1.map(|tag| tag.to_vec()), Some(first_link.tag.clone()));
+
+    assert_eq!(fx.revoke_person(&person), Ok(CommandOutcome::Done));
+    assert!(
+        !fx.granted_to().contains(&person),
+        "the revoke reaches the old row"
+    );
+}
+
 /// The name wave re-mints every committed row, and files the all-zero
 /// placeholder for one whose recipient binding the owner never signed. Doing
 /// that silently would leave the owner a live grant they can neither name nor
@@ -4189,6 +4479,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
         block_on(engine.command(Command::RevokeInviteLink {
             node: ROOT,
             link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done)
     );
@@ -4458,6 +4749,7 @@ fn revoking_an_invite_link_cuts_its_row_and_rotates_the_read_plane() {
         block_on(engine.command(Command::RevokeInviteLink {
             node: ROOT,
             link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done)
     );
@@ -4502,6 +4794,7 @@ fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violati
         block_on(engine.command(Command::RevokeInviteLink {
             node: folder,
             link_tag: None,
+            remove_grantees: false,
         })),
         Err(EngineError::UnsupportedTarget {
             check: "revoke-link-target-is-not-a-scope-root"
@@ -4553,6 +4846,7 @@ fn revoking_a_link_on_a_scope_with_no_link_entry_publishes_nothing() {
         block_on(engine.command(Command::RevokeInviteLink {
             node: ROOT,
             link_tag: None,
+            remove_grantees: false,
         })),
         Err(EngineError::MalformedInput {
             check: "link-not-committed"
@@ -4620,6 +4914,7 @@ fn two_links_are_both_listed_and_a_revoke_by_tag_cuts_only_that_one() {
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
             link_tag: Some(read.tag.clone()),
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done)
     );
@@ -4661,6 +4956,7 @@ fn a_revoke_with_no_tag_over_two_links_is_refused_and_publishes_nothing() {
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
             link_tag: None,
+            remove_grantees: false,
         })),
         Err(EngineError::MalformedInput {
             check: "link-ambiguous"
@@ -4673,6 +4969,7 @@ fn a_revoke_with_no_tag_over_two_links_is_refused_and_publishes_nothing() {
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
             link_tag: Some(vec![0x11; 32]),
+            remove_grantees: false,
         })),
         Err(EngineError::MalformedInput {
             check: "link-not-committed"
@@ -5185,30 +5482,18 @@ fn a_link_past_its_cap(fx: &mut GrantScenario) -> (Zeroizing<String>, Vec<Vec<u8
     (fragment, claimants, u8::try_from(cap).expect("a small cap"))
 }
 
-/// ADR 0023 D9: a revoke frees a slot, so the refused claimant's re-post is
-/// acked, held as pending again, and converts.
+/// ADR 0024 D3, ADR 0025 E7: a grantee revoke also cuts the link that
+/// admitted the grantee, so the claims that link refused retire with it.
 #[test]
-fn a_refused_claim_converts_once_a_revoke_frees_its_slot() {
+fn a_grantee_revoke_retires_the_claims_its_admitting_link_refused() {
     let mut fx = GrantScenario::new();
-    let (fragment, claimants, refused) = a_link_past_its_cap(&mut fx);
-    assert_eq!(
-        block_on(fx.engine.command(Command::Revoke {
-            node: fx.folder,
-            recipient_identity_public_key: claimants[0].clone(),
-        })),
-        Ok(CommandOutcome::Done),
-    );
+    let (_, claimants, _) = a_link_past_its_cap(&mut fx);
+    assert_eq!(recorded_refusals(&fx), 1);
 
-    fx.post_claimant(&fragment, refused, 0x60);
-    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.revoke_person(&claimants[0]), Ok(CommandOutcome::Done));
 
-    assert!(fx.granted_to().contains(&claimants[usize::from(refused)]));
-    assert_eq!(
-        refused_claims(&fx),
-        0,
-        "the fresh copy replaced the refusal"
-    );
-    assert_eq!(waiting_claims(&fx), (0, 0));
+    assert_eq!(fx.link_entries(), 0, "the admitting link is cut");
+    assert_eq!(recorded_refusals(&fx), 0, "and its refusals are retired");
 }
 
 /// The owner can dismiss a refusal, and the count leaves the link.
@@ -5238,7 +5523,8 @@ fn the_cut_of_a_link_retires_the_claims_it_refused() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done),
     );
@@ -5395,6 +5681,7 @@ fn a_revoke_with_no_tag_over_two_links_leaves_a_waiting_claim_on_the_inbox() {
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
             link_tag: None,
+            remove_grantees: false,
         })),
         Err(EngineError::MalformedInput {
             check: "link-ambiguous"
@@ -5425,7 +5712,8 @@ fn a_link_with_a_pending_conversion_refuses_the_revoke() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Err(EngineError::Seam {
             message: "link-has-a-pending-conversion".to_owned()
@@ -5436,7 +5724,8 @@ fn a_link_with_a_pending_conversion_refuses_the_revoke() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done),
         "the revoke converts the pending claim first, then cuts"
@@ -5463,9 +5752,713 @@ fn a_claimant_the_api_does_not_know_does_not_block_the_revoke() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Link-first revocation and the expired-link sweep (ADR 0025)
+// ---------------------------------------------------------------------------
+
+impl GrantScenario {
+    /// The folder's grant section at the root its scope pointer names now.
+    fn folder_section(&self) -> GrantSection {
+        published_grant_section_at(
+            &self.world,
+            &self.blocks,
+            &self.granted_scope_repoint().current_root,
+        )
+        .expect("the folder's scope root answers")
+    }
+
+    /// How many link entries the folder's owner-signed set commits.
+    fn link_entries(&self) -> usize {
+        self.folder_section()
+            .commitment
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == GrantSetEntryKind::Link)
+            .count()
+    }
+
+    fn cut_epoch(&self) -> u64 {
+        self.folder_section().commitment.cut_epoch
+    }
+
+    fn revoke_link(&mut self, remove_grantees: bool) -> Result<CommandOutcome, EngineError> {
+        block_on(self.engine.command(Command::RevokeInviteLink {
+            node: self.folder,
+            link_tag: None,
+            remove_grantees,
+        }))
+    }
+
+    fn revoke_person(&mut self, identity_pk: &[u8]) -> Result<CommandOutcome, EngineError> {
+        block_on(self.engine.command(Command::Revoke {
+            node: self.folder,
+            recipient_identity_public_key: identity_pk.to_vec(),
+        }))
+    }
+
+    /// Mint a link at the folder that expires at `deadline`.
+    fn mint_link_until(
+        &mut self,
+        permission: Permission,
+        deadline: UnixMillis,
+    ) -> Zeroizing<String> {
+        let outcome = block_on(self.engine.command(Command::CreateInviteLink {
+            node: self.folder,
+            permission,
+            expires_at: Some(deadline),
+            owner_name: "owner".to_owned(),
+        }))
+        .expect("the link mints");
+        let CommandOutcome::InviteLinkMinted(link) = outcome else {
+            panic!("minting a link answers with the link");
+        };
+        link.fragment
+    }
+
+    /// A second session of the owner on its own device, which never minted
+    /// anything.
+    fn owner_phone(&self) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+        let phone = self
+            .world
+            .device(&owner_identity().verifying_key().to_sec1());
+        boot_owner(&self.world, &self.blocks, &phone)
+    }
+
+    fn an_hour_from_now(&self) -> UnixMillis {
+        UnixMillis(self.world.scheduler.now().0 + 3_600_000)
+    }
+}
+
+/// ADR 0025 D1: a link revoke ends every link holder at once, and the
+/// grantees who joined through the link keep access. A read cut runs no name
+/// wave.
+#[test]
+fn a_link_revoke_without_remove_grantees_keeps_the_grantees_who_joined_through_it() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 2);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let cut_epoch = fx.cut_epoch();
+    let read_epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+    let write_epoch = fx.granted_scope_repoint().write_epoch;
+
+    assert_eq!(fx.revoke_link(false), Ok(CommandOutcome::Done));
+
+    assert_eq!(fx.link_entries(), 0, "the link row is cut");
+    let granted = fx.granted_to();
+    for claimant in &claimants {
+        assert!(granted.contains(claimant), "a grantee keeps access");
+    }
+    assert_eq!(fx.cut_epoch(), cut_epoch + 1);
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        read_epoch + 1
+    );
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        write_epoch,
+        "no name wave ran"
+    );
+}
+
+/// ADR 0025 D1, D4: with `remove_grantees`, the link and every grantee who
+/// joined through it leave in one cut.
+#[test]
+fn a_link_revoke_with_remove_grantees_removes_them_in_one_cut() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    fx.post_claims(&fragment, 2);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let cut_epoch = fx.cut_epoch();
+    let read_epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    assert_eq!(fx.revoke_link(true), Ok(CommandOutcome::Done));
+
+    assert_eq!(fx.link_entries(), 0);
+    assert!(fx.granted_to().is_empty(), "both people are removed");
+    assert_eq!(fx.cut_epoch(), cut_epoch + 1, "one cut-epoch step");
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        read_epoch + 1,
+        "one rotation"
+    );
+}
+
+/// ADR 0024 D3, ADR 0025 D4: a person revoke also cuts the link that admitted
+/// the person, in the same rotation. Another person who joined through it
+/// keeps access.
+#[test]
+fn a_person_revoke_cuts_the_admitting_link_in_the_same_rotation() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 2);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let cut_epoch = fx.cut_epoch();
+    let read_epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    assert_eq!(fx.revoke_person(&claimants[0]), Ok(CommandOutcome::Done));
+
+    assert_eq!(fx.link_entries(), 0, "the admitting link is cut");
+    let granted = fx.granted_to();
+    assert!(!granted.contains(&claimants[0]));
+    assert!(granted.contains(&claimants[1]));
+    assert_eq!(fx.cut_epoch(), cut_epoch + 1);
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        read_epoch + 1
+    );
+}
+
+/// A claim left on an inbox that does not answer could never convert after
+/// the cut of the link that admitted the person, so that person's revoke is
+/// refused as the link revoke is.
+#[test]
+fn a_mailbox_outage_refuses_the_revoke_of_a_link_admitted_grantee() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    fx.owner_device.mailbox.set_poll_failing(true);
+
+    assert_eq!(
+        fx.revoke_person(&claimants[0]),
+        Err(EngineError::Seam {
+            message: "mailbox-unavailable".to_owned()
+        }),
+    );
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert_eq!(fx.link_entries(), 1, "the link stays committed");
+
+    fx.owner_device.mailbox.set_poll_failing(false);
+    assert_eq!(fx.revoke_person(&claimants[0]), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().is_empty());
+}
+
+/// A failed ack stops the intake, so a claim behind it stays on the inbox. The
+/// person revoke that cuts the link the claim came through is refused as the
+/// link revoke is. A direct grantee's revoke cuts no link, so it still runs.
+#[test]
+fn a_failed_ack_refuses_the_revoke_of_a_link_admitted_grantee_whose_claim_it_left_on_the_inbox() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let admitted = fx.post_claimant(&fragment, 0, 0);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let behind = fx.post_claimant(&fragment, 1, 1);
+    fx.owner_device.mailbox.set_ack_failing(true);
+
+    assert!(
+        matches!(
+            fx.revoke_person(&admitted),
+            Err(EngineError::Seam { message }) if message.starts_with("mailbox ack")
+        ),
+        "the failed ack refuses the revoke"
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 1, "the claim waits");
+    assert_eq!(fx.link_entries(), 1, "the link stays committed");
+    assert!(fx.granted_to().contains(&admitted));
+
+    let direct = recipient_identity().verifying_key().to_sec1().to_vec();
+    assert_eq!(fx.revoke_person(&direct), Ok(CommandOutcome::Done));
+    assert!(!fx.granted_to().contains(&direct));
+
+    fx.owner_device.mailbox.set_ack_failing(false);
+    assert_eq!(fx.revoke_person(&admitted), Ok(CommandOutcome::Done));
+    let granted = fx.granted_to();
+    assert!(!granted.contains(&admitted));
+    assert!(
+        granted.contains(&behind),
+        "the waiting claim converts first"
+    );
+    assert_eq!(fx.link_entries(), 0, "the admitting link is cut");
+}
+
+/// No link admitted a direct grantee, so an inbox that does not answer holds
+/// no claim the revoke could strand.
+#[test]
+fn a_mailbox_outage_leaves_the_revoke_of_a_direct_grantee() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    fx.owner_device.mailbox.set_poll_failing(true);
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(fx.granted_to().is_empty());
+}
+
+/// A retire whose write fails behind a landed cut refuses nothing: the
+/// revoke still drops the contact the conversion recorded, and the next hold
+/// of the conversion record retires the entries the cut link refused.
+#[test]
+fn a_retire_that_does_not_persist_is_finished_by_the_next_hold() {
+    let mut fx = GrantScenario::new();
+    let (_, claimants, _) = a_link_past_its_cap(&mut fx);
+    let contacts = |fx: &GrantScenario| -> Vec<Vec<u8>> {
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .contacts
+            .into_iter()
+            .map(|contact| contact.identity_public_key)
+            .collect()
+    };
+    assert!(contacts(&fx).contains(&claimants[0]));
+    // The retire empties the record, so its write is the removal.
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_removal_after(&conversions_key(&kdf::enc_subkey(&SECRET)), 0);
+
+    assert_eq!(fx.revoke_person(&claimants[0]), Ok(CommandOutcome::Done));
+    assert_eq!(fx.link_entries(), 0, "the admitting link is cut");
+    assert!(
+        !contacts(&fx).contains(&claimants[0]),
+        "the contact the conversion recorded is dropped"
+    );
+    assert_eq!(recorded_refusals(&fx), 1, "the retire did not persist");
+
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().link_sweep_cadence);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(recorded_refusals(&fx), 0, "the sweep's hold retires it");
+}
+
+/// One sweep cuts the expired links of at most eight scope roots, and the
+/// next tick continues with no cadence to wait out.
+#[test]
+fn a_sweep_past_its_cut_cap_continues_on_the_next_tick() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx.an_hour_from_now();
+    let folders: Vec<NodeId> = (0..9)
+        .map(|i| {
+            let folder = create_published_folder(
+                &fx.world,
+                &mut fx.engine,
+                &mut fx._tasks,
+                ROOT,
+                &format!("linked-{i}"),
+            );
+            assert!(matches!(
+                block_on(fx.engine.command(Command::CreateInviteLink {
+                    node: folder,
+                    permission: Permission::Read,
+                    expires_at: Some(deadline),
+                    owner_name: "owner".to_owned(),
+                })),
+                Ok(CommandOutcome::InviteLinkMinted(_))
+            ));
+            folder
+        })
+        .collect();
+    let live = |fx: &GrantScenario| {
+        folders
+            .iter()
+            .filter(|folder| {
+                !block_on(fx.engine.sharing(**folder))
+                    .expect("a sharing read")
+                    .state
+                    .expect("the folder resolves")
+                    .invite_links
+                    .is_empty()
+            })
+            .count()
+    };
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    fx.world.scheduler.advance_to(deadline);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(live(&fx), 1, "one sweep cuts eight scope roots");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(live(&fx), 0, "and the next tick cuts the rest");
+}
+
+/// ADR 0025 D3: the revoke reads the person's key off the owner-attested row,
+/// so an owner device whose contact book never held the person revokes.
+#[test]
+fn a_person_revoke_runs_on_an_owner_device_that_never_saw_the_person() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let (mut phone, _phone_events, mut phone_tasks) = fx.owner_phone();
+    tick(&fx.world, &phone, &mut phone_tasks);
+
+    assert_eq!(
+        block_on(phone.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimants[0].clone(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+
+    assert!(fx.granted_to().is_empty());
+    assert_eq!(fx.link_entries(), 0);
+}
+
+/// ADR 0023 D2: a write wave re-mints every row at a new tag and re-maps each
+/// via-link reference, so `remove_grantees` still finds the grantees the link
+/// admitted after the scope root moved.
+#[test]
+fn after_a_write_wave_the_via_link_references_name_the_moved_link() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let claimants = fx.post_claims(&fragment, 1);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let converted_at = fx.granted_scope_repoint().current_root;
+    assert_eq!(
+        block_on(fx.engine.command(Command::ChangePermission {
+            node: fx.folder,
+            recipient_identity_public_key: claimants[0].clone(),
+            permission: Permission::Read,
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        converted_at,
+        "the downgrade's name wave moved the scope root"
+    );
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the downgrade keeps the grantee"
+    );
+
+    assert_eq!(fx.revoke_link(true), Ok(CommandOutcome::Done));
+
+    assert!(
+        fx.granted_to().is_empty(),
+        "the re-mapped reference still names the link"
+    );
+    assert_eq!(fx.link_entries(), 0);
+}
+
+/// ADR 0025 D2: the sweep runs on any owner device, so a link expires on a
+/// device that never minted it.
+#[test]
+fn the_sweep_cuts_an_expired_link_on_a_device_that_never_minted_it() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx.an_hour_from_now();
+    fx.mint_link_until(Permission::Read, deadline);
+    let (phone, _phone_events, mut phone_tasks) = fx.owner_phone();
+    let read_epoch = published_read_epoch(&fx.world, &fx.blocks, fx.folder);
+
+    fx.world.scheduler.advance(Duration::from_secs(60));
+    tick(&fx.world, &phone, &mut phone_tasks);
+    assert_eq!(fx.link_entries(), 1, "a live link is not cut");
+
+    fx.world.scheduler.advance_to(deadline);
+    tick(&fx.world, &phone, &mut phone_tasks);
+
+    assert_eq!(fx.link_entries(), 0, "the expired link is cut");
+    assert_eq!(
+        published_read_epoch(&fx.world, &fx.blocks, fx.folder),
+        read_epoch + 1
+    );
+}
+
+/// ADR 0023 D4: a claim acked before the deadline converts before the sweep
+/// cuts its link, so the claimant keeps the grant.
+#[test]
+fn a_pending_claim_on_an_expired_link_converts_before_the_cut() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx.an_hour_from_now();
+    let fragment = fx.mint_link_until(Permission::Read, deadline);
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the conversion cannot publish");
+    fx.world.record_store.heal_put_for(name.as_str());
+    assert_eq!(waiting_claims(&fx), (1, 1));
+
+    fx.world.scheduler.advance_to(deadline);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the claim converted"
+    );
+    assert_eq!(fx.link_entries(), 0, "and then the link was cut");
+}
+
+/// ADR 0023 D4, ADR 0024 D4: a write claim acked before the deadline at a
+/// folder with no write scope of its own stays pending while the folder does
+/// not resolve. The next tick converts it through the write-scope cut, and the
+/// sweep then cuts the expired link, on the owner device that never minted it.
+#[test]
+fn an_expired_write_link_with_a_pending_write_claim_converts_then_the_sweep_cuts_it() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx.an_hour_from_now();
+    let (mut phone, _phone_events, mut phone_tasks) = fx.owner_phone();
+    tick(&fx.world, &phone, &mut phone_tasks);
+    let outcome = block_on(phone.command(Command::CreateInviteLink {
+        node: fx.folder,
+        permission: Permission::Write,
+        expires_at: Some(deadline),
+        owner_name: "owner".to_owned(),
+    }));
+    let Ok(CommandOutcome::InviteLinkMinted(link)) = outcome else {
+        panic!("the phone mints the link: {outcome:?}");
+    };
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    let claimants = fx.post_claims(&link.fragment, 1);
+    let inherited_root = fx.granted_scope_repoint().current_root;
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_get_for(name.as_str());
+    assert!(fx.convert().is_err(), "the folder does not resolve");
+    fx.world.record_store.heal_get_for(name.as_str());
+    assert_eq!(waiting_claims(&fx), (1, 1), "the write claim is pending");
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        inherited_root,
+        "and the folder still has no write scope of its own"
+    );
+
+    fx.world.scheduler.advance_to(deadline);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the write claim converted"
+    );
+    assert_ne!(
+        fx.granted_scope_repoint().current_root,
+        inherited_root,
+        "through a write-scope cut"
+    );
+    assert_eq!(fx.link_entries(), 0, "and then the link was cut");
+}
+
+/// A grantee revoke takes the conversion lock only for a grantee a link
+/// admitted, so the sweep holding it blocks no revoke of a direct grantee.
+#[test]
+fn a_direct_grantee_revoke_runs_while_the_sweep_holds_the_lock() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    assert!(matches!(
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: other,
+            permission: Permission::Read,
+            expires_at: None,
+            owner_name: "owner".to_owned(),
+        })),
+        Ok(CommandOutcome::InviteLinkMinted(_))
+    ));
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    // The tick reads `other` once on each endpoint before the sweep does.
+    fx.world
+        .record_store
+        .stall_gets_for_after(write_name(other).as_str(), 2);
+    fx.world
+        .scheduler
+        .advance(fx.engine.profile().link_sweep_cadence);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: other,
+            remove_grantees: false,
+            link_tag: None,
+        })),
+        Err(EngineError::Seam {
+            message: "a-conversion-pass-is-running".to_owned()
+        }),
+        "the sweep holds the lock"
+    );
+
+    assert_eq!(
+        fx.revoke_person(&recipient_identity().verifying_key().to_sec1()),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(fx.granted_to().is_empty());
+}
+
+/// Republish the vault root with `extra` added to its direct-child-scope
+/// index, signed as any committed writer can sign it.
+fn index_under_the_vault_root(fx: &GrantScenario, extra: ChildScopeRef) {
+    let name = write_name(ROOT);
+    let head = published_head(&fx.world, &fx.blocks, &name).expect("the vault root is published");
+    let mut envelope = decode_envelope(&head).expect("the head decodes");
+    let mut section = decode_grant_section(grant_section_bytes(&envelope).expect("a scope root"))
+        .expect("the section decodes");
+    let mut body = published_write_body(&fx.world, &fx.blocks, ROOT, envelope.epoch);
+    body.direct_child_scope_index.push(extra);
+    let sealed = seal(
+        kdf::write_key(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes()).as_bytes(),
+        &[0x5e; 24],
+        &AadContext {
+            v: ENVELOPE_V,
+            id: ROOT.0,
+            scope: ROOT.0,
+            epoch: envelope.epoch,
+            struct_tag: STRUCT_TAG_WRITE_BODY,
+        },
+        &encode_write_body(&body).expect("the body encodes"),
+    );
+    section.write_body = SignedSealed {
+        signature: sign_structure(
+            &owner_pseudonym(),
+            &StructureSigInput::over_ciphertext(
+                ROOT.0,
+                envelope.epoch,
+                STRUCT_TAG_WRITE_BODY,
+                None,
+                &sealed,
+            ),
+        )
+        .to_bytes(),
+        sealed,
+        unknown: PreservedFields::new(),
+    };
+    set_grant_section(
+        &mut envelope,
+        encode_grant_section(&section).expect("the section encodes"),
+    );
+    let cid = fx
+        .blocks
+        .put(encode_envelope(&envelope).expect("the envelope encodes"));
+    let record = IpnsRecord::create_v2(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes()),
+        format!("/ipfs/{cid}").as_bytes(),
+        sequence_at(&fx.world, &name) + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in fx.world.record_store.endpoints() {
+        fx.world
+            .record_store
+            .seed_record(&endpoint, name.as_str(), record.clone());
+    }
+}
+
+/// ADR 0025 E3: an index entry that names a scope root under the wrong
+/// parent fails the gate there, and the parent that holds it still reaches it,
+/// so the sweep still cuts its expired link.
+#[test]
+fn the_sweep_cuts_a_link_under_its_real_parent_when_another_index_names_it() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+    let deadline = fx.an_hour_from_now();
+    assert!(matches!(
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: inner,
+            permission: Permission::Read,
+            expires_at: Some(deadline),
+            owner_name: "owner".to_owned(),
+        })),
+        Ok(CommandOutcome::InviteLinkMinted(_))
+    ));
+    index_under_the_vault_root(
+        &fx,
+        ChildScopeRef::new(inner.0, write_name(inner).as_str().as_bytes().to_vec()),
+    );
+    let links_at_inner = |fx: &GrantScenario| {
+        published_grant_section(&fx.world, &fx.blocks, inner)
+            .expect("the inner scope root answers")
+            .commitment
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == GrantSetEntryKind::Link)
+            .count()
+    };
+    assert_eq!(links_at_inner(&fx), 1);
+
+    fx.world.scheduler.advance_to(deadline);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert_eq!(
+        links_at_inner(&fx),
+        0,
+        "the link is cut under its real parent"
+    );
+}
+
+/// ADR 0025 D2: the sweep batches the expired links of one scope root into one
+/// cut, so two cost one rotation. A personal grant there stands.
+#[test]
+fn two_expired_links_in_one_folder_cost_one_rotation() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let deadline = UnixMillis(world.scheduler.now().0 + 60_000);
+    let grantee = recipient_row_at_root(CorePermission::Read);
+    seed_vault(
+        &world,
+        &blocks,
+        vec![
+            expiring_invite_link_at_root(0x4e, deadline),
+            expiring_invite_link_at_root(0x4f, deadline),
+            grantee.clone(),
+        ],
+    );
+    let alice = world.device(b"alice");
+    let (engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+
+    world.scheduler.advance_to(deadline);
+    tick(&world, &engine, &mut tasks);
+
+    let section = published_grant_section(&world, &blocks, ROOT).expect("the root republished");
+    assert_eq!(
+        section
+            .commitment
+            .entries
+            .iter()
+            .map(|entry| entry.tag)
+            .collect::<Vec<_>>(),
+        vec![grantee.tag],
+        "both links are cut and the grant stands"
+    );
+    assert_eq!(section.commitment.cut_epoch, 1, "one cut-epoch step");
+    assert_eq!(
+        published_read_epoch(&world, &blocks, ROOT),
+        EPOCH + 1,
+        "one rotation"
+    );
+}
+
+/// ADR 0025 D2: two owner devices sweep one expired link in one window. Each
+/// cut resolves the scope root again before it signs, so the second device
+/// finds the link cut and publishes nothing: one record per sequence on every
+/// endpoint.
+#[test]
+fn two_owner_devices_sweeping_one_window_publish_one_cut() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx.an_hour_from_now();
+    fx.mint_link_until(Permission::Read, deadline);
+    let (phone, _phone_events, mut phone_tasks) = fx.owner_phone();
+    let name = write_name(fx.folder);
+    let sequence = sequence_at(&fx.world, &name);
+
+    fx.world.scheduler.advance_to(deadline);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    tick(&fx.world, &phone, &mut phone_tasks);
+
+    assert_eq!(fx.link_entries(), 0);
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        sequence + 1,
+        "one cut landed"
+    );
+    let served: Vec<_> = fx
+        .world
+        .record_store
+        .endpoints()
+        .iter()
+        .map(|endpoint| fx.world.record_store.record_at(endpoint, name.as_str()))
+        .collect();
+    assert!(
+        served.windows(2).all(|pair| pair[0] == pair[1]),
+        "every endpoint serves the one record"
     );
 }
 
@@ -5579,6 +6572,7 @@ fn a_record_write_that_fails_at_intake_refuses_the_link_revoke() {
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
             link_tag: None,
+            remove_grantees: false,
         }))
     };
 
@@ -5631,7 +6625,8 @@ fn a_full_conversion_record_refuses_the_link_revoke() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Err(EngineError::Seam {
             message: "the-conversion-record-is-full".to_owned()
@@ -5642,7 +6637,8 @@ fn a_full_conversion_record_refuses_the_link_revoke() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done),
     );
@@ -5668,6 +6664,7 @@ fn an_ack_that_fails_refuses_the_revoke_of_a_link_whose_claim_it_left_on_the_inb
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
             link_tag: Some(revoked.tag.clone()),
+            remove_grantees: false,
         }))
     };
 
@@ -5772,7 +6769,8 @@ fn a_mailbox_outage_refuses_the_link_revoke() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Err(EngineError::Seam {
             message: "mailbox-unavailable".to_owned()
@@ -5793,7 +6791,8 @@ fn a_mailbox_outage_refuses_the_link_revoke() {
     assert_eq!(
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
-            link_tag: None
+            link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done),
     );
@@ -6537,6 +7536,7 @@ fn a_preview_of_a_revoked_link_is_revoked() {
         block_on(fx.engine.command(Command::RevokeInviteLink {
             node: fx.folder,
             link_tag: None,
+            remove_grantees: false,
         })),
         Ok(CommandOutcome::Done)
     );
@@ -6917,6 +7917,61 @@ fn a_write_share_whose_cut_failed_is_finished_by_the_same_share() {
         delivered_share_pointer(&fx.recipient_device).scope_root_name,
         moved.as_str().as_bytes(),
         "and the pointer the share owed names the root the wave moved to"
+    );
+}
+
+/// ADR 0025 D3: the phone cut a grantee, and the owner committed the grantee
+/// again through a new link. The re-commit reaches the cut epoch of the
+/// phone's cut, so the phone's next re-key serves the grantee a blob.
+#[test]
+fn a_device_serves_a_grantee_again_once_another_device_commits_it_again() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    let (mut phone, _phone_events, mut phone_tasks) = fx.owner_phone();
+    tick(&fx.world, &phone, &mut phone_tasks);
+    assert_eq!(
+        block_on(phone.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimants[0].clone(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    let fragment = fx.mint_link();
+    fx.post_claimant(&fragment, 0, 0x40);
+    let other = fx.post_claimant(&fragment, 2, 0x42);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().contains(&claimants[0]), "committed again");
+
+    tick(&fx.world, &phone, &mut phone_tasks);
+    assert_eq!(
+        block_on(phone.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: other,
+        })),
+        Ok(CommandOutcome::Done),
+        "the phone re-keys the folder"
+    );
+
+    assert_eq!(fx.granted_to(), vec![claimants[0].clone()]);
+    let section = fx.folder_section();
+    let personal: Vec<[u8; 32]> = section
+        .commitment
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == GrantSetEntryKind::Personal)
+        .map(|entry| entry.tag)
+        .collect();
+    assert_eq!(personal.len(), 1);
+    assert!(
+        section
+            .grant_blobs
+            .iter()
+            .any(|blob| blob.tag == personal[0]),
+        "the phone serves the grantee a blob"
     );
 }
 
@@ -7801,6 +8856,48 @@ fn a_nested_root_upgrade_seals_its_own_write_scope_seed() {
     );
 }
 
+/// A grantee with two owner-attested rows names no single row, so a permission
+/// change refuses and publishes nothing.
+#[test]
+fn a_permission_change_refuses_a_grantee_that_holds_more_than_one_row() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let second = mint_grant_row(
+        &owner_identity(),
+        &kdf::enc_subkey(&SECRET),
+        &owner_pointer_read_key(),
+        recipient_identity().verifying_key().to_sec1(),
+        &kdf::enc_subkey(&BYSTANDER_SECRET).public(),
+        &SCOPE,
+        write_name(ROOT).as_str().as_bytes(),
+        CorePermission::Write,
+    )
+    .expect("a contributory recipient key");
+    seed_vault(
+        &world,
+        &blocks,
+        vec![recipient_row_at_root(CorePermission::Write), second],
+    );
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    let before = published_grant_section(&world, &blocks, ROOT).expect("the root answers");
+
+    assert_eq!(
+        block_on(engine.command(Command::ChangePermission {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
+        })),
+        Err(EngineError::UnsupportedTarget {
+            check: "grantee-holds-more-than-one-row"
+        }),
+    );
+    assert_eq!(
+        published_grant_section(&world, &blocks, ROOT).expect("the root answers"),
+        before,
+        "nothing is published"
+    );
+}
 // ---------------------------------------------------------------------------
 // A write grantee's delete, end to end
 // ---------------------------------------------------------------------------

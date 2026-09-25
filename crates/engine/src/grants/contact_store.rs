@@ -109,6 +109,11 @@ pub enum ContactStoreError {
     /// [`Encode`](Self::Encode), which says the whole book is unwritable: here
     /// the book is fine and one contact reached a frozen bound.
     LinkContactScopesFull,
+    /// A claim that granted nothing carries an encryption subkey other than the
+    /// one the book holds for that identity. A key change is a revoke and a
+    /// re-grant by the owner, never a silent book update: the revoke fallback
+    /// reaches the old rows by the held subkey.
+    RecipientKeyChanged,
     /// The book to store is not one this build may write: two codes for one
     /// identity, or a field past its bound. A write-path refusal, so never
     /// [`Unreadable`](Self::Unreadable) — nothing was read.
@@ -142,6 +147,9 @@ impl fmt::Display for ContactStoreError {
                 f,
                 "that contact already holds a granted scope on {MAX_LINK_CONTACT_SCOPES} scopes"
             ),
+            ContactStoreError::RecipientKeyChanged => {
+                f.write_str("the claim carries a key other than the one the book holds")
+            }
             ContactStoreError::Encode(e) => write!(f, "the contact book to store {e}"),
             ContactStoreError::Entropy(e) => write!(f, "contact book: {e}"),
             ContactStoreError::Seal(e) => write!(f, "contact book seal failed: {}", e.check()),
@@ -257,6 +265,20 @@ pub trait ContactStore {
     /// A contact the owner imported by hand keeps that standing and owes the
     /// link bound nothing.
     async fn record_from_link(
+        &self,
+        contact_code: &[u8],
+        link_tag: &[u8; 32],
+        scope_id: &[u8; 16],
+    ) -> Result<Contact, ContactStoreError>;
+
+    /// Record the claimant of a claim that converted to no new grant. The
+    /// claim admitted no one, so a contact the book already holds stays as it
+    /// is: its origin stays with the link that admitted it, and this link takes
+    /// no share. A claim under another encryption subkey is refused with
+    /// [`RecipientKeyChanged`](ContactStoreError::RecipientKeyChanged). One the
+    /// book does not hold records as [`record_from_link`](Self::record_from_link)
+    /// does.
+    async fn record_unchanged_from_link(
         &self,
         contact_code: &[u8],
         link_tag: &[u8; 32],
@@ -463,6 +485,28 @@ impl<St: StagingStore, E: Entropy> ContactStore for StagingContactStore<'_, St, 
         });
         self.put(&book).await?;
         Ok(contact)
+    }
+
+    async fn record_unchanged_from_link(
+        &self,
+        contact_code: &[u8],
+        link_tag: &[u8; 32],
+        scope_id: &[u8; 16],
+    ) -> Result<Contact, ContactStoreError> {
+        let (contact, _) = import_recorded(contact_code).map_err(ContactStoreError::Import)?;
+        let book = self.recorded().await?;
+        let Some(held) = book
+            .iter()
+            .find(|held| held.contact.identity_pk() == contact.identity_pk())
+        else {
+            return self
+                .record_from_link(contact_code, link_tag, scope_id)
+                .await;
+        };
+        if held.contact.enc_subkey().to_bytes() != contact.enc_subkey().to_bytes() {
+            return Err(ContactStoreError::RecipientKeyChanged);
+        }
+        Ok(held.contact)
     }
 
     async fn record_from_link(
@@ -1354,6 +1398,14 @@ mod tests {
         ContactCode::create(&identity, kdf::enc_subkey(&scalar).public()).encode()
     }
 
+    /// [`claimant_code`] with its encryption subkey rotated.
+    fn rotated_claimant_code(i: u16) -> Vec<u8> {
+        let mut scalar = [0x77; 32];
+        scalar[..2].copy_from_slice(&i.to_be_bytes());
+        let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+        ContactCode::create(&identity, X25519Secret::from_scalar([0x3d; 32]).public()).encode()
+    }
+
     fn claimant_identity(i: u16) -> [u8; IDENTITY_PUBLIC_LEN] {
         import_contact(&claimant_code(i))
             .expect("valid code")
@@ -1433,6 +1485,85 @@ mod tests {
             block_on(store.contacts()).expect("load").len(),
             MAX_LINK_CONTACTS + 1,
             "and every earlier claimant stays resolvable for a cut"
+        );
+    }
+
+    /// A claim through a second link that grants nothing admitted no one, so
+    /// the entry keeps the link that admitted it and the second link's share
+    /// does not change.
+    #[test]
+    fn a_claim_that_grants_nothing_leaves_the_origin_and_the_second_links_share() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x7A);
+        let entropy = seeded(123);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_A))
+            .expect("a claim on the first link converts");
+        for i in 1..MAX_LINK_CONTACTS {
+            block_on(store.record_from_link(
+                &claimant_code(u16::try_from(i).expect("in range")),
+                &OTHER_LINK,
+                &SCOPE_A,
+            ))
+            .expect("a claim under the second link's bound records");
+        }
+
+        block_on(store.record_unchanged_from_link(&claimant_code(0), &OTHER_LINK, &SCOPE_A))
+            .expect("a claim that grants nothing records nothing");
+        let sources = block_on(store.contacts_with_sources())
+            .expect("book")
+            .into_iter()
+            .map(|(_, source)| source)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sources.iter().filter(|s| **s == Some(LINK)).count(),
+            1,
+            "the entry stays with the link that admitted it"
+        );
+        assert_eq!(
+            sources.iter().filter(|s| **s == Some(OTHER_LINK)).count(),
+            MAX_LINK_CONTACTS - 1,
+            "and the second link took no share"
+        );
+        block_on(store.record_from_link(
+            &claimant_code(u16::try_from(MAX_LINK_CONTACTS).expect("in range")),
+            &OTHER_LINK,
+            &SCOPE_A,
+        ))
+        .expect("the second link still has room for a new contact");
+    }
+
+    /// A key change is a revoke and a re-grant by the owner, so a claim that
+    /// grants nothing under a rotated subkey is refused and the book keeps the
+    /// subkey it held.
+    #[test]
+    fn a_claim_that_grants_nothing_under_a_rotated_subkey_is_refused() {
+        let staging = InMemoryStagingStore::default();
+        let secret = enc(0x7A);
+        let entropy = seeded(124);
+        let store = StagingContactStore::new(&staging, &secret, &entropy);
+        let held = block_on(store.record_from_link(&claimant_code(0), &LINK, &SCOPE_A))
+            .expect("a claim on the first link converts");
+
+        assert!(matches!(
+            block_on(store.record_unchanged_from_link(
+                &rotated_claimant_code(0),
+                &OTHER_LINK,
+                &SCOPE_A
+            )),
+            Err(ContactStoreError::RecipientKeyChanged)
+        ));
+        let book = block_on(store.contacts_with_sources()).expect("book");
+        assert_eq!(book.len(), 1);
+        assert_eq!(
+            book[0].0.enc_subkey().to_bytes(),
+            held.enc_subkey().to_bytes(),
+            "the book keeps the subkey it held"
+        );
+        assert_eq!(
+            book[0].1,
+            Some(LINK),
+            "and the link that admitted the contact"
         );
     }
 

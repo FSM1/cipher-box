@@ -69,13 +69,17 @@ pub enum ConversionRefusal {
     /// The converting device's contact book cannot record the claimant, so
     /// this device could not cut the grant it minted.
     ContactBookFull,
+    /// A claim from a known identity carries another encryption subkey. The
+    /// owner revokes and grants again to move the grant to the new key.
+    RecipientKeyChanged,
 }
 
 impl ConversionRefusal {
-    const ALL: [Self; 3] = [
+    const ALL: [Self; 4] = [
         Self::GrantSetFull,
         Self::AdmissionCapReached,
         Self::ContactBookFull,
+        Self::RecipientKeyChanged,
     ];
 
     /// The stable wire and host-facing name.
@@ -84,6 +88,7 @@ impl ConversionRefusal {
             Self::GrantSetFull => "grant-set-full",
             Self::AdmissionCapReached => "link-admission-cap-reached",
             Self::ContactBookFull => "contact-book-full",
+            Self::RecipientKeyChanged => "claim-recipient-key-changed",
         }
     }
 

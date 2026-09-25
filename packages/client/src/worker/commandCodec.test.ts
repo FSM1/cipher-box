@@ -458,17 +458,17 @@ describe('buildCommand', () => {
       const { wasm, calls } = spyWasm();
       const linkTag = new Uint8Array(32).fill(0x7a);
 
-      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag });
+      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag, removeGrantees: false });
 
-      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, linkTag]]);
+      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, linkTag, false]]);
     });
 
     it('spells an absent link tag as undefined, never as null', () => {
       const { wasm, calls } = spyWasm();
 
-      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag: null });
+      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag: null, removeGrantees: false });
 
-      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, undefined]]);
+      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, undefined, false]]);
     });
 
     it('refuses a link tag that is not bytes before the node is minted', () => {
@@ -479,10 +479,28 @@ describe('buildCommand', () => {
           kind: 'revokeInviteLink',
           node,
           linkTag: 'tag' as unknown as Uint8Array,
+          removeGrantees: false,
         })
       ).toThrow('invalid request field linkTag: string');
       expect(calls.NodeId).toBeUndefined();
       expect(calls.revokeInviteLink).toBeUndefined();
+    });
+
+    it.each([false, true])('builds a revokeInviteLink with removeGrantees %s', (removeGrantees) => {
+      const { wasm, calls } = spyWasm();
+
+      buildCommand(wasm, { kind: 'revokeInviteLink', node, linkTag: null, removeGrantees });
+
+      expect(calls.revokeInviteLink).toEqual([[{ bytes: node }, undefined, removeGrantees]]);
+    });
+
+    it('rejects a link revoke whose removeGrantees is not a boolean', () => {
+      expect(
+        refuses({ kind: 'revokeInviteLink', node, linkTag: null, removeGrantees: 'yes' })
+      ).toThrow('invalid request field removeGrantees: string');
+      expect(refuses({ kind: 'revokeInviteLink', node, linkTag: null })).toThrow(
+        'invalid request field removeGrantees: undefined'
+      );
     });
 
     it('hands the claim its URL fragment verbatim, and the claimant name', () => {
@@ -554,9 +572,9 @@ describe('buildCommand', () => {
     it.each(['revokeInviteLink', 'convertInviteClaims', 'dismissRefusedClaims'] as const)(
       'rejects a %s whose node is not bytes',
       (kind) => {
-        expect(refuses({ kind, node: 'sixteen bytes!!!', linkTag: null })).toThrow(
-          'invalid request field node: string'
-        );
+        expect(
+          refuses({ kind, node: 'sixteen bytes!!!', linkTag: null, removeGrantees: false })
+        ).toThrow('invalid request field node: string');
       }
     );
   });

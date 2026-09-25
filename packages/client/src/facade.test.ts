@@ -508,7 +508,7 @@ describe('EngineFacade', () => {
     });
   });
 
-  it('names the link a revoke cuts, and sends null where the caller names none', async () => {
+  it('names the link a revoke cuts, sends null where the caller names none, and passes removeGrantees', async () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
     const node = new Uint8Array(16);
@@ -516,10 +516,12 @@ describe('EngineFacade', () => {
 
     await facade.revokeInviteLink(node, linkTag);
     await facade.revokeInviteLink(node);
+    await facade.revokeInviteLink(node, linkTag, true);
 
     expect(transport.commands).toEqual([
-      { kind: 'revokeInviteLink', node, linkTag },
-      { kind: 'revokeInviteLink', node, linkTag: null },
+      { kind: 'revokeInviteLink', node, linkTag, removeGrantees: false },
+      { kind: 'revokeInviteLink', node, linkTag: null, removeGrantees: false },
+      { kind: 'revokeInviteLink', node, linkTag, removeGrantees: true },
     ]);
   });
 

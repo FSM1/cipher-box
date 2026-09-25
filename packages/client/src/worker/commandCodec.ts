@@ -105,6 +105,12 @@ export function text(value: unknown, field: string): string {
   return value;
 }
 
+/** A boolean the bool ABI would otherwise coerce from any truthy value. */
+function flag(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw invalidField(field, value);
+  return value;
+}
+
 /**
  * A byte count or offset. The number ABI coerces rather than rejects — a string
  * or a `NaN` arrives as a valid-looking integer — so the range the engine can
@@ -382,7 +388,12 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
     }
     case 'revokeInviteLink': {
       const tag = descriptor.linkTag === null ? undefined : bytes(descriptor.linkTag, 'linkTag');
-      return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'), tag);
+      const removeGrantees = flag(descriptor.removeGrantees, 'removeGrantees');
+      return wasm.Command.revokeInviteLink(
+        nodeId(wasm, descriptor.node, 'node'),
+        tag,
+        removeGrantees
+      );
     }
     case 'claimInviteLink':
       return wasm.Command.claimInviteLink(

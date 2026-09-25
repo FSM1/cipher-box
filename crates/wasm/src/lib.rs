@@ -2137,12 +2137,18 @@ impl Command {
     }
 
     /// Revoke the invite link `link_tag` names at a node, or its only link
-    /// where no tag is given (owner-only).
+    /// where no tag is given (owner-only). With `remove_grantees`, the people
+    /// who joined through it go in the same cut.
     #[wasm_bindgen(js_name = revokeInviteLink)]
-    pub fn revoke_invite_link(node: &NodeId, link_tag: Option<Vec<u8>>) -> Command {
+    pub fn revoke_invite_link(
+        node: &NodeId,
+        link_tag: Option<Vec<u8>>,
+        remove_grantees: bool,
+    ) -> Command {
         Self::wrap(facade::Command::RevokeInviteLink {
             node: node.facade(),
             link_tag,
+            remove_grantees,
         })
     }
 

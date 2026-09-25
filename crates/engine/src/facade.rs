@@ -16,6 +16,7 @@
 //! variant with no arm of its own returns [`EngineError::Unimplemented`].
 
 mod claim_conversion;
+mod link_sweep;
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
@@ -23,11 +24,9 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::grants::conversion::{load_conversions, persist_conversions};
-use crate::sync::BookkeepingSeal;
 use claim_conversion::{
     CONVERSION_RUNNING, ClaimCounts, ConversionPass, CutAuthority, EngineSites, PassOutcome,
-    PointerIndex, Running, TickSites, claimed_pointer, placed, scope_pointer_index,
+    PointerIndex, TickSites, claimed_pointer, placed, scope_pointer_index,
 };
 
 use cipherbox_core::codec::{RedactedBytes, RedactedText};
@@ -87,13 +86,14 @@ use crate::grants::{
     CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError,
     ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
     EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim, InviteClaim, InviteError,
-    InviteFragment, InviteMintError, InviteMintPlan, LinkHold, LinkTerms, MintedInviteLink,
-    OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShare,
-    ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, StagingContactStore,
-    StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_links, convert_invite_claim,
-    create_grant, enforce_committed_ledger, import_contact, insert_child, link_budget_full,
-    link_of_sender, locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer,
-    recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    InviteFragment, InviteMintError, InviteMintPlan, LinkHold, LinkSources, LinkTerms,
+    MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob,
+    ReceivedShare, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, RevokedPerson,
+    StagingContactStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_grantee,
+    committed_links, convert_invite_claim, create_grant, enforce_committed_ledger, grantee_cut_set,
+    import_contact, insert_child, link_budget_full, link_cut_set, link_of_sender,
+    locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer, resolve_recipient,
+    row_is_owner_attested,
 };
 use crate::grants::{
     EditedSet, FragmentNames, GrantEditError, GranteeNameCache, HeldRow, StagingGranteeNameCache,
@@ -131,7 +131,7 @@ use crate::rotation::{
     RotationOutcome, RotationPublishError, ScopeRootIdentity, ScopeRootPublisher, SweepError,
     SweepOutcome, SweepResolveFailure, SweepRun, WalkedReadEpochs, WriteHistory, WriteRevokeKind,
     bounded, cut_for_write_scope, derive_write_name, install_walked_read_epochs,
-    record_grant_floor, reseal_at_current_epoch, reseal_scope_root, revoke_read_grant,
+    record_grant_floor, reseal_at_current_epoch, reseal_scope_root, revoke_grants,
     revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep, run_sweep_job,
 };
 use crate::seams::{
@@ -184,9 +184,8 @@ use crate::sync::staging::{
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{
     FocusFile, FocusQueueOrigin, FocusWindow, ResolveMode, TickControl, consult_scopes,
-    consult_scopes_due, elapsed_at_least, expire_focus_stamps, expire_touched_folders,
-    focus_by_scope, focus_files, focus_folders_due, on_access_refresh_due, resolve_mode,
-    run_tick_loop, scope_root_of,
+    consult_scopes_due, expire_focus_stamps, expire_touched_folders, focus_by_scope, focus_files,
+    focus_folders_due, on_access_refresh_due, pace_due, resolve_mode, run_tick_loop, scope_root_of,
 };
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -1427,16 +1426,19 @@ pub enum Command {
         /// signature (ADR 0027 D5). May be empty.
         owner_name: String,
     },
-    /// Revoke an invite link the owner minted at `node` (owner-only). The cut
-    /// rotates the read plane, and the grants claims already converted from the
-    /// link keep standing — ending a link ends future claims, not the personal
-    /// grants it produced.
+    /// Revoke an invite link the owner minted at `node` (owner-only). Every
+    /// link holder loses access at once. The grants that claims through the
+    /// link produced keep standing unless `remove_grantees` is set (ADR 0025
+    /// D1). Either way it is one cut and one rotation.
     RevokeInviteLink {
         /// The node the link was minted at.
         node: NodeId,
         /// The tag of the link to cut ([`SharingInviteLink::tag`]). `None` cuts
         /// the only link at `node`, and is refused where it carries more.
         link_tag: Option<Vec<u8>>,
+        /// Also remove every person who joined through the link, found by
+        /// the via-link reference of the owner-attested row.
+        remove_grantees: bool,
     },
     /// Claim an invite link from the fragment its URL carries ([`InviteFragment`]).
     /// A second claim of a link this device already holds, or of a folder it
@@ -3654,6 +3656,10 @@ const LINK_CONVERSION_PENDING: &str = "link-has-a-pending-conversion";
 /// The refusal of a link revoke whose inbox poll failed.
 const MAILBOX_UNAVAILABLE: &str = "mailbox-unavailable";
 
+/// Why a permission change refuses: the grantee holds more than one row, so
+/// no single row names the permission to change.
+const GRANTEE_HOLDS_MORE_THAN_ONE_ROW: &str = "grantee-holds-more-than-one-row";
+
 /// This session's authority over a scope's grant set — the pair every link
 /// path acts under ([`OwnerAuthority`]).
 fn owner_authority(session: &SessionIdentity) -> OwnerAuthority<'_> {
@@ -3715,6 +3721,8 @@ fn refuse_the_owner(
 }
 
 /// The row `current` commits at `target` for `identity_pk` ([`held_row`]).
+/// A grantee with more than one personal row names no single row, so it is
+/// refused.
 fn held_grantee(
     session: &SessionIdentity,
     target: &OwnerScope,
@@ -3722,11 +3730,18 @@ fn held_grantee(
     identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
 ) -> Result<Option<HeldRow>, EngineError> {
     let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
-    Ok(held_row(
-        &owner_authority(session),
-        &bound_scope(target, current, &commitment_sig)?,
-        identity_pk,
-    ))
+    let authority = owner_authority(session);
+    let scope = bound_scope(target, current, &commitment_sig)?;
+    if committed_grantee(&authority, &scope, identity_pk)
+        .map_err(EngineError::from_invite)?
+        .len()
+        > 1
+    {
+        return Err(EngineError::UnsupportedTarget {
+            check: GRANTEE_HOLDS_MORE_THAN_ONE_ROW,
+        });
+    }
+    Ok(held_row(&authority, &scope, identity_pk))
 }
 
 /// The owner keys one owner action's rotation nets run under, borrowed from
@@ -3803,14 +3818,14 @@ const LINK_CONTACT_BUDGET_FULL: &str = "invite-link-contact-budget-full";
 /// minted below, so the walk refuses instead.
 const ENCLOSING_INDEX_LOST_A_ROOT: &str = "enclosing-scope-index-lost-a-root";
 
-/// How far a committed-set cut goes at the tag it names.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum CutKind {
-    /// Remove the row: a read revoke, or a full write revoke.
-    Revoke,
-    /// Demote a write row to read, keeping the recipient committed
-    /// ([`WriteRevokeKind::DowngradeToRead`]).
-    Downgrade,
+/// The rows a committed-set cut acts on, and how far it goes.
+#[derive(Clone, Copy)]
+enum CutKind<'a> {
+    /// Remove the rows: a read revoke, or a full write revoke.
+    Revoke(&'a BTreeSet<[u8; 32]>),
+    /// Demote the write row under the tag to read, keeping the recipient
+    /// committed ([`WriteRevokeKind::DowngradeToRead`]).
+    Downgrade(&'a [u8; 32]),
 }
 
 /// The name a revoke reports for a target that names no scope root. One rule,
@@ -4486,6 +4501,45 @@ struct ContactKeys {
     enc_subkey: [u8; SECRET_LEN],
 }
 
+impl ContactKeys {
+    fn of(contact: &Contact) -> Self {
+        Self {
+            identity_pk: contact.identity_pk().to_sec1().to_vec(),
+            enc_subkey: contact.enc_subkey().to_bytes(),
+        }
+    }
+}
+
+/// The one contact in `contacts` that binds `enc_subkey`, or `None` when none
+/// or more than one does.
+///
+/// A contact code binds an encryption subkey under its own holder's
+/// signature, so a second holder may bind a subkey that is already another
+/// contact's. Naming either of two would put a party the owner never granted
+/// on the surface they revoke from, so an ambiguous match names nobody.
+fn sole_holder<'a>(
+    contacts: &'a [ContactKeys],
+    enc_subkey: &[u8; SECRET_LEN],
+) -> Option<&'a ContactKeys> {
+    let mut named = contacts
+        .iter()
+        .filter(|contact| contact.enc_subkey == *enc_subkey);
+    let contact = named.next()?;
+    named.next().is_none().then_some(contact)
+}
+
+/// The encryption subkey `contacts` binds to `identity_pk` and to no other
+/// contact: the key [`GrantLabels::committed_contact`] names that contact by.
+fn sole_enc_subkey(
+    contacts: &[ContactKeys],
+    identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
+) -> Option<[u8; SECRET_LEN]> {
+    let contact = contacts
+        .iter()
+        .find(|contact| contact.identity_pk == identity_pk)?;
+    sole_holder(contacts, &contact.enc_subkey).map(|contact| contact.enc_subkey)
+}
+
 /// The owner-held inputs a grant row's recipient label is resolved from.
 struct GrantLabels<'a> {
     /// The stage-2 anchor for each row's own binding signature.
@@ -4503,14 +4557,9 @@ struct GrantLabels<'a> {
 
 impl GrantLabels<'_> {
     /// The contact the owner's own commitment names under `tag`, or `None` when
-    /// no committed entry carries the tag and no contact holds that encryption
-    /// subkey. Both keys are public, so the comparison needs no constant time.
-    ///
-    /// One contact or none: a contact code binds an encryption subkey under its
-    /// own holder's signature, so a second holder may bind a subkey that is
-    /// already another contact's. Naming either of two would put a party the
-    /// owner never granted on the surface they revoke from, and the label is
-    /// what a host renders, so an ambiguous match reads as unattested.
+    /// no committed entry carries the tag or no sole contact holds that
+    /// encryption subkey ([`sole_holder`]). Both keys are public, so the
+    /// comparison needs no constant time.
     fn committed_contact(&self, tag: &[u8; 32]) -> Option<Vec<u8>> {
         let recipient_enc_pk = self
             .commitment
@@ -4518,12 +4567,7 @@ impl GrantLabels<'_> {
             .iter()
             .find(|entry| entry.tag == *tag)?
             .recipient_enc_pk(self.pointer_read_key);
-        let mut named = self
-            .contacts
-            .iter()
-            .filter(|contact| contact.enc_subkey == recipient_enc_pk);
-        let contact = named.next()?;
-        named.next().is_none().then(|| contact.identity_pk.clone())
+        sole_holder(self.contacts, &recipient_enc_pk).map(|contact| contact.identity_pk.clone())
     }
 }
 
@@ -6976,6 +7020,7 @@ where {
         let byo_reconciled = self.byo_reconciled.clone();
         // Start has just decided, so the first re-decide comes one interval on.
         let settings_rechecked = Cell::new(self.seams.scheduler.now());
+        let link_swept = Cell::new(self.seams.scheduler.now());
         let held = self.held_records.clone();
         let base = self.snapshot.clone();
         let events = self.events.clone();
@@ -7050,12 +7095,12 @@ where {
                     };
                     let now = scheduler.now();
                     // What this paces is a revocation window
-                    // ([`redecide_placement`]), so a backward clock step must
-                    // not park the next check on a future stamp.
-                    let last_checked = settings_rechecked.get();
-                    if now.0 < last_checked.0
-                        || elapsed_at_least(now, last_checked, profile.settings_recheck_interval)
-                    {
+                    // ([`redecide_placement`]).
+                    if pace_due(
+                        now,
+                        settings_rechecked.get(),
+                        profile.settings_recheck_interval,
+                    ) {
                         settings_rechecked.set(now);
                         let observed = observed_at(&held, HeldKey::VaultSettings);
                         let read = load_settings_at(
@@ -7817,7 +7862,7 @@ where {
                         sweep,
                         vault_root_name,
                     ) {
-                        let converted = ConversionPass {
+                        let pass = ConversionPass {
                             transport: &transport,
                             api: api.as_ref(),
                             gateway: &gateway,
@@ -7842,23 +7887,46 @@ where {
                             scope_roots_walked: &scope_roots_walked,
                             counts: &pending_invite_claims,
                             running: &conversion_running,
-                        }
-                        .run(
-                            &TickSites {
-                                boundaries,
-                                root_name: &root_name,
-                                walked: scope_roots_walked.get(),
-                            },
-                            &pointers,
-                            claims.unwrap_or_default(),
-                            None,
-                        )
-                        .await
-                        .into_result();
+                        };
+                        let converted = pass
+                            .run(
+                                &TickSites {
+                                    boundaries,
+                                    root_name: &root_name,
+                                    walked: scope_roots_walked.get(),
+                                },
+                                &pointers,
+                                claims.unwrap_or_default(),
+                                None,
+                            )
+                            .await
+                            .into_result();
                         if let Err(EngineError::TrustViolation { message }) = converted {
                             let _ = events.unbounded_send(Event::AttributableAbuse {
                                 description: message,
                             });
+                        }
+                        // After the conversion above, so a claim acked this
+                        // pass converts before its link can be cut.
+                        if pace_due(now, link_swept.get(), profile.link_sweep_cadence)
+                            && let Some(swept) = pass.sweep_links(&root_name, &pointers).await
+                        {
+                            // A capped sweep continues on the next tick.
+                            if !swept.more {
+                                link_swept.set(now);
+                            }
+                            // A cut supersedes the material this session
+                            // walked for every scope root it re-keyed.
+                            let mut walked = walked_read_epochs.borrow_mut();
+                            for node in &swept.rekeyed {
+                                walked.remove(node);
+                            }
+                            drop(walked);
+                            if let Some(EngineError::TrustViolation { message }) = swept.failure {
+                                let _ = events.unbounded_send(Event::AttributableAbuse {
+                                    description: message,
+                                });
+                            }
                         }
                     }
                     repost_held_claims(
@@ -8210,8 +8278,12 @@ where {
                 self.create_invite_link(node, permission, expires_at, &owner_name)
                     .await
             }
-            Command::RevokeInviteLink { node, link_tag } => self
-                .revoke_invite_link(node, link_tag.as_deref())
+            Command::RevokeInviteLink {
+                node,
+                link_tag,
+                remove_grantees,
+            } => self
+                .revoke_invite_link(node, link_tag.as_deref(), remove_grantees)
                 .await
                 .map(|()| CommandOutcome::Done),
             Command::ClaimInviteLink { fragment, name } => self
@@ -8709,34 +8781,90 @@ where {
 
     /// Revoke a recipient's grant at `node`'s scope root.
     ///
-    /// The owner's half of the same pairwise ECDH the recipient self-locates
-    /// under names the tag, so it is derived here and never taken from a caller.
+    /// The recipient is the one the owner-attested ledger rows name, so any
+    /// owner device revokes (ADR 0025 D3), or the one the sharing read names
+    /// a row by from this device's contact book. The revoke also cuts each
+    /// link that admitted the grantee, in the same cut (ADR 0024 D3), under
+    /// [`Running`](claim_conversion::Running), and refuses as the link revoke
+    /// does when the claims waiting for that link cannot convert first.
     async fn revoke_grant(
         &self,
         node: NodeId,
         recipient_identity_public_key: &[u8],
     ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
-        let contact = self
-            .recipient_contact(session, recipient_identity_public_key)
-            .await?;
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let identity_pk = recipient_identity(recipient_identity_public_key)?;
+        let contacts: Vec<ContactKeys> = self
+            .contact_store(session)
+            .contacts()
+            .await
+            .map_err(EngineError::from_contact_store)?
+            .iter()
+            .map(ContactKeys::of)
+            .collect();
+        let contact_enc_pk = sole_enc_subkey(&contacts, &identity_pk);
+        let converted = self.convert_before_link_cut(session, api, node).await;
+        let keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &keys);
+        let pointers = self.scope_pointer_index(session);
+        let held = RefCell::new(None);
+        let admitting = RefCell::new(Vec::new());
         let cut = self
             .cut_and_rotate(
                 node,
                 REVOKE_TARGET,
                 UnindexedScope::Refuse,
-                async |target: &OwnerScope, _current: &CascadeTarget| {
-                    recipient_blinded_tag(
-                        session.enc_subkey(),
-                        &contact.enc_subkey(),
-                        &target.scope.ipns_name,
-                    )
-                    .ok_or(EngineError::MalformedInput {
-                        check: "unusable-recipient-key",
-                    })
+                async |target: &OwnerScope, current: &CascadeTarget| {
+                    let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
+                    let scope = bound_scope(target, current, &commitment_sig)?;
+                    let authority = owner_authority(session);
+                    let person = RevokedPerson {
+                        identity_pk: &identity_pk,
+                        contact_enc_pk,
+                        pointer_read_key: &current.pointer_read_key,
+                    };
+                    let cut = grantee_cut_set(&authority, &scope, &person)
+                        .map_err(EngineError::from_invite)?
+                        .ok_or_else(|| EngineError::from_revoke(RevokeError::NotGranted))?;
+                    if !cut.admitting_links.is_empty() {
+                        converted.clone()?;
+                        let links: Vec<[u8; IDENTITY_PUBLIC_LEN]> = cut
+                            .admitting_links
+                            .iter()
+                            .map(|link| link.ephemeral_identity_pk)
+                            .collect();
+                        let mut record =
+                            pass.hold_record().await?.ok_or_else(|| EngineError::Seam {
+                                message: CONVERSION_RUNNING.to_owned(),
+                            })?;
+                        let pending = record.pending_links();
+                        if links.iter().any(|link| pending.contains(link)) {
+                            return Err(EngineError::Seam {
+                                message: LINK_CONVERSION_PENDING.to_owned(),
+                            });
+                        }
+                        let committed = committed_links(&authority, &scope)
+                            .map_err(EngineError::from_invite)?;
+                        record.retire_uncommitted(
+                            NodeId(target.scope.scope_id),
+                            &committed,
+                            &pointers,
+                        );
+                        *held.borrow_mut() = Some(record);
+                        *admitting.borrow_mut() = links;
+                    }
+                    Ok(cut.tags)
                 },
             )
             .await;
+        if let Some(mut record) = held.into_inner() {
+            if cut.is_ok() {
+                record.retire_cut(&admitting.into_inner());
+            }
+            // A failed write leaves the entries for the next hold to retire.
+            let _ = pass.settle(record, &pointers).await;
+        }
         // A claim conversion records its claimant only so a cut can resolve
         // them; the grant is gone, so the entry returns the room it took. The
         // book keeps a contact that still holds a converted grant elsewhere, and
@@ -8752,31 +8880,31 @@ where {
         };
         if cut_reached_the_set {
             self.contact_store(session)
-                .forget_link_grant(&contact.identity_pk().to_sec1(), &node.0)
+                .forget_link_grant(&identity_pk, &node.0)
                 .await
                 .map_err(EngineError::from_contact_store)?;
         }
         cut.map(|_| ())
     }
 
-    /// Cut the tag `select` names out of the owner-signed committed set at
-    /// `node`'s scope root, then drive the cut through the planes it demands
-    /// (blueprint/engine.md "Triggers"). Returns the tag it cut.
+    /// Cut the tags `select` names out of the owner-signed committed set at
+    /// `node`'s scope root in one cut, then drive the cut through the planes it
+    /// demands (blueprint/engine.md "Triggers"). Returns the tags it cut.
     ///
     /// The cut alone revokes nothing — only the fresh-seed cascade completes a
     /// read revoke, and only the name wave ends a write grant — so a failure to
     /// rotate is reported rather than swallowed. `select` runs over the resolved
-    /// set: what makes a revoke owner-only is where that tag comes from, and it
-    /// is never the command.
+    /// set: what makes a revoke owner-only is where those tags come from, and
+    /// it is never the command.
     async fn cut_and_rotate<S>(
         &self,
         node: NodeId,
         check: &'static str,
         unindexed: UnindexedScope,
         select: S,
-    ) -> Result<[u8; 32], EngineError>
+    ) -> Result<BTreeSet<[u8; 32]>, EngineError>
     where
-        S: AsyncFnOnce(&OwnerScope, &CascadeTarget) -> Result<[u8; 32], EngineError>,
+        S: AsyncFnOnce(&OwnerScope, &CascadeTarget) -> Result<BTreeSet<[u8; 32]>, EngineError>,
     {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
@@ -8800,21 +8928,21 @@ where {
             .resolve_anchored(&target.scope)
             .await
             .map_err(|e| target.resolve_error(check, e))?;
-        let tag = select(&target, &current).await?;
-        self.cut_at(node, &target, &current, &tag, CutKind::Revoke)
+        let tags = select(&target, &current).await?;
+        self.cut_at(node, &target, &current, CutKind::Revoke(&tags))
             .await?;
-        Ok(tag)
+        Ok(tags)
     }
 
-    /// Cut `tag` out of the owner-signed set `current` publishes at `target`,
-    /// and drive the cut through the planes it demands.
+    /// Cut the rows `kind` names out of the owner-signed set `current`
+    /// publishes at `target` in one cut, and drive the cut through the planes
+    /// it demands.
     async fn cut_at(
         &self,
         node: NodeId,
         target: &OwnerScope,
         current: &CascadeTarget,
-        tag: &[u8; 32],
-        kind: CutKind,
+        kind: CutKind<'_>,
     ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let scope_root_name = parsed_scope_name(&target.scope.ipns_name)?;
@@ -8827,16 +8955,10 @@ where {
             pointer_read_key: &current.pointer_read_key,
         };
         let cut = match kind {
-            // A write grant is cut by `revoke_write_grant`, never by a read
-            // revoke — the read cut refuses it by name, which is what selects
-            // the arm.
-            CutKind::Revoke => match revoke_read_grant(&plan, tag) {
-                Err(RevokeError::WriteGranted) => {
-                    revoke_write_grant(&plan, tag, WriteRevokeKind::Full)
-                }
-                read_cut => read_cut,
-            },
-            CutKind::Downgrade => revoke_write_grant(&plan, tag, WriteRevokeKind::DowngradeToRead),
+            CutKind::Revoke(tags) => revoke_grants(&plan, tags),
+            CutKind::Downgrade(tag) => {
+                revoke_write_grant(&plan, tag, WriteRevokeKind::DowngradeToRead)
+            }
         }
         .map_err(EngineError::from_revoke)?;
         self.drive_cut(node, target, &scope_root_name, &cut)
@@ -8855,55 +8977,21 @@ where {
     ) -> Result<CutRotationReport, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
-        let sweep = self.sweep_factory()?;
-        let owner_identity = session.owner_identity();
-        let scope_keys = OwnerSessionKeys::new(session);
-        let owner_pointer_seed = session.owner_pointer_seed();
+        let keys = self.pass_keys(session)?;
         let vault_pointer_signer = self
             .vault_pointer_index
             .get()
             .map(|index| session.vault_pointer_signer(index));
-        let rotator = OwnerCutNet {
-            transport: &self.record_transport,
-            api: api.as_ref(),
-            gateway: &self.gateway,
-            http: &self.seams.http,
-            floors: &self.seams.floor_store,
-            snapshot_cache: &self.seams.snapshot_cache,
-            events: &self.events,
-            scheduler: &self.seams.scheduler,
-            profile: &self.profile,
-            entropy: &self.entropy,
-            keys: OwnerRotationKeys {
-                enc_secret: session.enc_subkey(),
-                identity: &owner_identity,
-                scope_keys: &scope_keys,
-            },
-            owner_signer: session.identity(),
-            owner_pointer_seed: owner_pointer_seed.as_bytes(),
-            vault_pointer_signer: vault_pointer_signer.as_ref(),
-            held: &self.held_records,
-            payload_version: POINTER_PAYLOAD_VERSION,
-            scope_root_name,
-            scope_id: target.scope.scope_id,
-            parent_node_seed: target.parent_node_seed.as_deref(),
-            session_root_scope_id: self.snapshot.borrow().root.0,
-            sweep: &|| sweep(target.scope.clone(), target.parent_node_seed.clone()),
-        };
-        let report = rotate_on_cut(&rotator, node, cut)
-            .await
-            .map_err(EngineError::from_rotation)?;
-        // The planes have published the cut set, so this device now refuses the
-        // set it just cut. The gate raises the same floor from any adopted
-        // record; without this raise the owner keeps accepting the pre-cut root
-        // a surviving write grantee republishes, until its next resolve here.
-        record_cut_epoch_floor(
-            &self.seams.floor_store,
-            &target.scope.scope_id,
-            cut.commitment.cut_epoch,
-        )
-        .await
-        .map_err(EngineError::from_seam)?;
+        let report = self
+            .conversion_pass(session, api, &keys)
+            .rotate_cut(
+                node,
+                target,
+                scope_root_name,
+                cut,
+                vault_pointer_signer.as_ref(),
+            )
+            .await?;
         if let Some(write) = report.write.as_ref() {
             // First, and before anything fallible: the wave already published,
             // so every later step in this method can fail without leaving the
@@ -9620,8 +9708,7 @@ where {
                     node,
                     &gated.target,
                     &gated.current,
-                    &held.tag,
-                    CutKind::Downgrade,
+                    CutKind::Downgrade(&held.tag),
                 )
                 .await
             }
@@ -9899,12 +9986,14 @@ where {
     /// revoke, because a claim it left on the inbox could never convert after
     /// the cut. A conversion failure leaves its entry pending, which the cut
     /// refuses; a share pointer still due does not read the link, so it does
-    /// not hold the cut. The cut retires the claims the link refused. No pass
-    /// runs while the revoke holds the record.
+    /// not hold the cut. The cut retires the claims the link refused. With
+    /// `remove_grantees`, the people who joined through the link go in the
+    /// same cut (ADR 0025 D1). No pass runs while the revoke holds the record.
     async fn revoke_invite_link(
         &self,
         node: NodeId,
         link_tag: Option<&[u8]>,
+        remove_grantees: bool,
     ) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let link_tag = link_tag
@@ -9920,6 +10009,85 @@ where {
         // A write conversion in the pass below moves the root, and each tag
         // with it; the link's ephemeral identity stays.
         let pinned = self.link_identity(session, node, link_tag.as_ref()).await?;
+        self.convert_before_link_cut(session, api, node).await?;
+        let sources = if remove_grantees {
+            Some(
+                self.contact_store(session)
+                    .contacts_with_sources()
+                    .await
+                    .map_err(EngineError::from_contact_store)?
+                    .iter()
+                    .map(|(contact, source)| (contact.enc_subkey().to_bytes(), *source))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+        let keys = self.pass_keys(session)?;
+        let pass = self.conversion_pass(session, api, &keys);
+        let pointers = self.scope_pointer_index(session);
+        // A running pass may hold acked claims this read cannot see.
+        let held = RefCell::new(pass.hold_record().await?.ok_or_else(|| EngineError::Seam {
+            message: CONVERSION_RUNNING.to_owned(),
+        })?);
+        let pending = held.borrow().pending_links();
+        let revoked = Cell::new(None);
+        // Owner-only: the tags come from a link entry on a set this session's
+        // own identity signed, and from the rows it commits; the command's tag
+        // only picks among the links.
+        let cut = self
+            .cut_and_rotate(
+                node,
+                "revoke-link-target-is-not-a-scope-root",
+                UnindexedScope::Derive,
+                async |target: &OwnerScope, current: &CascadeTarget| {
+                    let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
+                    let scope = bound_scope(target, current, &commitment_sig)?;
+                    let authority = owner_authority(session);
+                    let links =
+                        committed_links(&authority, &scope).map_err(EngineError::from_invite)?;
+                    held.borrow_mut().retire_uncommitted(
+                        NodeId(target.scope.scope_id),
+                        &links,
+                        &pointers,
+                    );
+                    let link = link_of_sender(&links, &pinned).map_err(EngineError::from_invite)?;
+                    if pending.contains(&link.ephemeral_identity_pk) {
+                        return Err(EngineError::Seam {
+                            message: LINK_CONVERSION_PENDING.to_owned(),
+                        });
+                    }
+                    revoked.set(Some(link.ephemeral_identity_pk));
+                    let book = sources.as_deref().map(|contacts| LinkSources {
+                        contacts,
+                        pointer_read_key: &current.pointer_read_key,
+                    });
+                    link_cut_set(&authority, &scope, &link, book.as_ref())
+                        .map_err(EngineError::from_invite)
+                },
+            )
+            .await;
+        let mut held = held.into_inner();
+        if cut.is_ok()
+            && let Some(link) = revoked.get()
+        {
+            held.retire_cut(&[link]);
+        }
+        // A failed write leaves the entries for the next hold to retire.
+        let _ = pass.settle(held, &pointers).await;
+        cut.map(|_| ())
+    }
+
+    /// Convert the claims waiting at `node` ahead of a cut of a link there:
+    /// a claim left on the inbox could never convert after the cut. Refuses
+    /// when the inbox does not answer or on any intake failure, and reports a
+    /// trust violation as abuse.
+    async fn convert_before_link_cut(
+        &self,
+        session: &SessionIdentity,
+        api: &Rc<ApiClient<T::Http, T::CredentialStore>>,
+        node: NodeId,
+    ) -> Result<(), EngineError> {
         let items = self
             .poll_owned_claims(session, api)
             .await
@@ -9932,61 +10100,6 @@ where {
             let _ = self.events.unbounded_send(Event::AttributableAbuse {
                 description: message,
             });
-        }
-        // A running pass may hold acked claims this read cannot see.
-        let Some(_running) = Running::take(&self.conversion_running) else {
-            return Err(EngineError::Seam {
-                message: CONVERSION_RUNNING.to_owned(),
-            });
-        };
-        let seal = || BookkeepingSeal::new(session.enc_subkey(), &*self.entropy);
-        let mut record = load_conversions(
-            &self.seams.staging_store,
-            seal(),
-            session.enc_subkey(),
-            &self.events,
-        )
-        .await
-        .map_err(EngineError::from_seam)?;
-        let pending: Vec<[u8; IDENTITY_PUBLIC_LEN]> =
-            record.pending().map(|claim| claim.sender).collect();
-        let revoked = Cell::new(None);
-        // Owner-only: the tag cut is a link entry on a set this session's own
-        // identity signed; the command's tag only picks among them.
-        self.cut_and_rotate(
-            node,
-            "revoke-link-target-is-not-a-scope-root",
-            UnindexedScope::Derive,
-            async |target: &OwnerScope, current: &CascadeTarget| {
-                let commitment_sig = parsed_commitment_sig(&current.commitment_sig)?;
-                let scope = bound_scope(target, current, &commitment_sig)?;
-                let links = committed_links(&owner_authority(session), &scope)
-                    .map_err(EngineError::from_invite)?;
-                let link = link_of_sender(&links, &pinned).map_err(EngineError::from_invite)?;
-                if pending.contains(&link.ephemeral_identity_pk) {
-                    return Err(EngineError::Seam {
-                        message: LINK_CONVERSION_PENDING.to_owned(),
-                    });
-                }
-                revoked.set(Some(link.ephemeral_identity_pk));
-                Ok(link.tag)
-            },
-        )
-        .await?;
-        if let Some(link) = revoked.get()
-            && record.retire_refused(|claim| claim.sender == link) > 0
-        {
-            persist_conversions(
-                &self.seams.staging_store,
-                seal(),
-                session.enc_subkey(),
-                &record,
-            )
-            .await
-            .map_err(EngineError::from_seam)?;
-            let keys = self.pass_keys(session)?;
-            self.conversion_pass(session, api, &keys)
-                .show_counts(&record, &self.scope_pointer_index(session));
         }
         Ok(())
     }
@@ -11547,10 +11660,7 @@ where {
         let sources: Vec<Option<[u8; 32]>> = book.iter().map(|(_, source)| *source).collect();
         let keys: Vec<ContactKeys> = book
             .iter()
-            .map(|(contact, _)| ContactKeys {
-                identity_pk: contact.identity_pk().to_sec1().to_vec(),
-                enc_subkey: contact.enc_subkey().to_bytes(),
-            })
+            .map(|(contact, _)| ContactKeys::of(contact))
             .collect();
         let contacts = keys
             .iter()
@@ -16815,17 +16925,26 @@ mod tests {
         );
     }
 
-    /// A permission change reads its grantee off the owner-attested row, never
-    /// the contact book (ADR 0025 D3), so a recipient this device never
-    /// imported reaches the target check. Each command names that check.
+    /// A revoke, a permission change and a rename read the grantee off the
+    /// owner-attested row, never the contact book (ADR 0025 D3), so a
+    /// recipient this device never imported reaches the target check. Each
+    /// command names that check.
     #[test]
-    fn a_permission_change_needs_no_import_and_names_its_own_target_check() {
+    fn a_grantee_action_needs_no_import_and_names_its_own_target_check() {
         let (mut engine, _events) = started();
+        let node = NodeId([1; 16]);
         let recipient_identity_public_key = vec![2u8; 33];
         for (command, check) in [
             (
+                Command::Revoke {
+                    node,
+                    recipient_identity_public_key: recipient_identity_public_key.clone(),
+                },
+                "revoke-target-is-not-a-scope-root",
+            ),
+            (
                 Command::ChangePermission {
-                    node: NodeId([1; 16]),
+                    node,
                     recipient_identity_public_key: recipient_identity_public_key.clone(),
                     permission: Permission::Write,
                 },
@@ -16833,7 +16952,7 @@ mod tests {
             ),
             (
                 Command::RenameGrantee {
-                    node: NodeId([1; 16]),
+                    node,
                     recipient_identity_public_key,
                     name: "Alice".to_owned(),
                 },
@@ -16845,23 +16964,6 @@ mod tests {
                 Err(EngineError::UnsupportedTarget { check }),
             );
         }
-    }
-
-    /// A revoke names a recipient before it names a scope: the contact book is
-    /// local, so a recipient this vault never imported is refused without a
-    /// resolve — and without deriving a blinded tag against an unverified key.
-    #[test]
-    fn a_revoke_refuses_an_unimported_recipient_before_it_resolves_anything() {
-        let (mut engine, _events) = started();
-        assert_eq!(
-            block_on(engine.command(Command::Revoke {
-                node: NodeId([1; 16]),
-                recipient_identity_public_key: vec![2u8; 33],
-            })),
-            Err(EngineError::MalformedInput {
-                check: "recipient-not-imported"
-            }),
-        );
     }
 
     /// A write grant names its recipient before it mints anything, so an
@@ -21225,6 +21327,7 @@ mod tests {
             Command::RevokeInviteLink {
                 node: root,
                 link_tag: None,
+                remove_grantees: false,
             },
         ] {
             let name = command.name();

@@ -488,6 +488,34 @@ pub fn revoke_read_grant(
     )
 }
 
+/// Perform the committed-set cut of one owner revoke: remove every tag in
+/// `revoked_tags` from both halves of the set in `plan`, with one cut-epoch
+/// step and one re-sign (ADR 0025 D4).
+///
+/// The read plane always rotates. The write plane rotates too when any cut tag
+/// is committed with [`Permission::Write`], because only the name wave ends a
+/// write grant. Owner-only and scope-bound exactly as [`revoke_read_grant`]
+/// is. An empty set, or a tag the set does not commit, is
+/// [`RevokeError::NotGranted`].
+pub fn revoke_grants(
+    plan: &GrantCutPlan<'_>,
+    revoked_tags: &BTreeSet<[u8; 32]>,
+) -> Result<RevokedCommittedSet, RevokeError> {
+    authorize_cut(plan)?;
+    if revoked_tags.is_empty() {
+        return Err(RevokeError::NotGranted);
+    }
+    let mut write = false;
+    for tag in revoked_tags {
+        write |= committed_permission(plan, tag)? == Permission::Write;
+    }
+    resign(
+        drop_tags(plan, revoked_tags)?,
+        RotationPlanes { read: true, write },
+        plan.owner_signer,
+    )
+}
+
 /// How far a write revoke cuts.
 ///
 /// Either way the committed-set edit alone revokes nothing on the write plane:

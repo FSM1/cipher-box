@@ -709,6 +709,130 @@ fn the_cut_the_cascade_drives_is_durable_at_the_scope_it_cuts() {
 }
 
 #[test]
+fn the_cut_records_the_cut_epoch_of_the_set_that_removes_the_recipient() {
+    let net = FakeNet::new().scope(0x0a, 4, &[]);
+    let revokee = net.owner.grantee.public().to_bytes();
+    let mut fx = RootFx::new(net.clone()).revoking(revokee);
+    fx.commitment.cut_epoch = 6;
+    fx.commitment_sig = sign_grant_set(&net.owner.ecdsa, &fx.commitment)
+        .unwrap()
+        .to_compact();
+    let (outcome, _, floors, _) = run_fx(fx, net.clone(), vec![childref(0x0a)]);
+    outcome.expect("the cascade runs");
+    assert_eq!(
+        block_on(floors.epoch_floor(&revocation_cut_epoch_key(&sid(0x00), &revokee)))
+            .expect("floor read"),
+        Some(6),
+    );
+    assert_eq!(
+        block_on(floors.epoch_floor(&revocation_cut_epoch_key(&sid(0x0a), &revokee)))
+            .expect("floor read"),
+        None,
+        "a descendant the owner never cut records no cut epoch"
+    );
+}
+
+/// A cut whose publish did not land records its revocation floor but no cut
+/// epoch. The next cut from the same base signs that cut epoch again, and it
+/// must not clear a cut that no record carries.
+#[test]
+fn a_cut_that_did_not_land_is_not_cleared_by_the_next_cut_at_its_epoch() {
+    let net = FakeNet::new()
+        .scope(0x0a, 4, &[])
+        .publish_fault(0x00, RotationPublishError::NotPublished);
+    let revokee = net.owner.grantee.public().to_bytes();
+    let signed_at = |mut fx: RootFx| {
+        fx.commitment.cut_epoch = 6;
+        fx.commitment_sig = sign_grant_set(&fx.net.owner.ecdsa, &fx.commitment)
+            .unwrap()
+            .to_compact();
+        fx
+    };
+    let (outcome, net, floors, _) = run_fx(
+        signed_at(RootFx::new(net.clone()).revoking(revokee)),
+        net.clone(),
+        vec![],
+    );
+    assert!(outcome.is_err(), "the scripted publish fails");
+    assert_eq!(
+        block_on(floors.epoch_floor(&revocation_cut_epoch_key(&sid(0x00), &revokee)))
+            .expect("floor read"),
+        None,
+        "a cut that did not land records no cut epoch"
+    );
+
+    net.publish_faults.borrow_mut().clear();
+    let (outcome, after, ..) = run_over(
+        SeededEntropy::new(0xCA5CADE),
+        floors,
+        signed_at(RootFx::new(net.clone())),
+        net,
+        vec![],
+    );
+    outcome.expect("the cascade runs");
+    assert!(
+        after.blob_tags(0x00).is_empty(),
+        "the recipient stays withheld"
+    );
+}
+
+/// ADR 0025 D3: device B cut the recipient, and device A committed it again
+/// after that cut. A's set carries a cut epoch not below the one B's cut
+/// signed, so B's next re-key serves the recipient and clears its own cut.
+#[test]
+fn a_re_commit_at_the_recorded_cut_epoch_clears_this_devices_cut() {
+    let net = FakeNet::new().scope(0x0a, 4, &[]);
+    let recipient = net.owner.grantee.public().to_bytes();
+    let floors = InMemoryFloorStore::default();
+    cut_at(&floors, 0x0a, &recipient, 3);
+    block_on(floors.raise_epoch_floor(&revocation_cut_epoch_key(&sid(0x0a), &recipient), 0))
+        .expect("the cut epoch raises");
+
+    let (outcome, after, floors, _) = run_over(
+        SeededEntropy::new(0xCA5CADE),
+        floors,
+        RootFx::new(net.clone()),
+        net.clone(),
+        vec![childref(0x0a)],
+    );
+    outcome.expect("the cascade runs");
+    assert_eq!(after.blob_tags(0x0a).len(), 1, "the recipient is served");
+    assert_eq!(
+        block_on(floors.epoch_floor(&cleared_floor_key(&sid(0x0a), &recipient)))
+            .expect("floor read"),
+        Some(3),
+        "and the clear is durable"
+    );
+}
+
+/// A set below the recorded cut epoch is one the owner signed before the cut,
+/// such as a replay a write grantee republished. It clears nothing.
+#[test]
+fn a_set_below_the_recorded_cut_epoch_keeps_the_cut() {
+    let net = FakeNet::new().scope(0x0a, 4, &[]);
+    let recipient = net.owner.grantee.public().to_bytes();
+    let floors = InMemoryFloorStore::default();
+    cut_at(&floors, 0x0a, &recipient, 3);
+    block_on(floors.raise_epoch_floor(&revocation_cut_epoch_key(&sid(0x0a), &recipient), 1))
+        .expect("the cut epoch raises");
+
+    let (outcome, after, floors, _) = run_over(
+        SeededEntropy::new(0xCA5CADE),
+        floors,
+        RootFx::new(net.clone()),
+        net.clone(),
+        vec![childref(0x0a)],
+    );
+    outcome.expect("the cascade runs");
+    assert!(after.blob_tags(0x0a).is_empty(), "the cut still withholds");
+    assert_eq!(
+        block_on(floors.epoch_floor(&cleared_floor_key(&sid(0x0a), &recipient)))
+            .expect("floor read"),
+        None
+    );
+}
+
+#[test]
 fn no_two_epoch_namespace_key_shapes_collide() {
     // Five producers share the one epoch namespace: the read-epoch floor is
     // the bare scope id, `gate::floor` adds a `/write-epoch` and a
@@ -729,6 +853,10 @@ fn no_two_epoch_namespace_key_shapes_collide() {
         grant_floor_key(&scope, &[0x07; SECRET_LEN]),
         grant_floor_key(&scope, &[0x08; SECRET_LEN]),
         grant_floor_key(&other, &[0x07; SECRET_LEN]),
+        revocation_cut_epoch_key(&scope, &[0x07; SECRET_LEN]),
+        revocation_cut_epoch_key(&other, &[0x07; SECRET_LEN]),
+        cleared_floor_key(&scope, &[0x07; SECRET_LEN]),
+        cleared_floor_key(&other, &[0x07; SECRET_LEN]),
     ];
     for (i, a) in shapes.iter().enumerate() {
         for b in &shapes[i + 1..] {

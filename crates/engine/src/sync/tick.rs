@@ -338,6 +338,14 @@ pub(crate) fn elapsed_at_least(now: UnixMillis, since: UnixMillis, interval: Dur
     now.0.saturating_sub(since.0) >= crate::sync::duration_millis(interval)
 }
 
+/// Whether a step paced at `interval` and last run at `last` is due at `now`.
+/// A clock that stepped backwards makes it due: what these steps pace is a
+/// revocation window, so a backward step must not park the next run on a
+/// future stamp.
+pub(crate) fn pace_due(now: UnixMillis, last: UnixMillis, interval: Duration) -> bool {
+    now.0 < last.0 || elapsed_at_least(now, last, interval)
+}
+
 /// The focus window's folders due for an on-access refresh: those no pass has
 /// touched inside the staleness threshold ([`on_access_refresh_due`]). The poll
 /// leg refreshes the whole window regardless; this is the navigation leg's

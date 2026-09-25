@@ -17,6 +17,7 @@ pub mod contact;
 pub mod contact_store;
 pub mod conversion;
 pub mod create;
+pub mod cut_set;
 pub(crate) mod grafted;
 pub(crate) mod inbox;
 pub mod invite;
@@ -55,6 +56,10 @@ pub use create::{
     MovingChild, OwnerGrantKeys, ParentScopePlan, PromotedScopeRoot, PromotedSubtree,
     ScopePointerVoucher, ScopeRootPromoter, converge_grant_subtree, create_grant,
     mint_grantee_scope, post_share_pointer, post_share_pointer_at, resume_grantee_scope,
+};
+pub use cut_set::{
+    GranteeCut, LinkSources, RevokedPerson, committed_grantee, expired_links, grantee_cut_set,
+    link_cut_set,
 };
 pub use invite::{
     AckedClaim, CLAIM_ID_LEN, ClaimDisposition, ClaimOutcome, CommittedLink, CommittedScope,
