@@ -8,7 +8,7 @@ import { InvitePage } from '../page-objects/invite.page';
 import { SharePage } from '../page-objects/share.page';
 import { SharedPage } from '../page-objects/shared.page';
 import { VaultPage } from '../page-objects/vault.page';
-import { claim, mint } from '../sharing';
+import { claim, claimHere, mint } from '../sharing';
 
 const FOLDER = 'granted-folder';
 
@@ -46,16 +46,26 @@ test('@full a second visit to a joined link offers only "open folder"', async ({
   browser,
 }) => {
   const link = await mint(page, FOLDER);
-  const claimant = await claim(browser, link);
+  const context = await browser.newContext();
+  const first = await context.newPage();
+  const account = `claimant-${crypto.randomUUID()}`;
+  await claimHere(first, link, { account, start: () => new VaultPage(first).signInHere(account) });
 
-  const invite = new InvitePage(claimant);
+  // A document load ends this suite's in-memory session, so the second visit is
+  // a sibling tab that joins the first tab's session as a follower.
+  const second = await context.newPage();
+  const invite = new InvitePage(second);
+  const vault = new VaultPage(second);
   await invite.open(link);
+  await vault.ready();
+  await vault.signInHere(account);
+
   await invite.expectState('joined');
   await expect(invite.joinButton).toHaveCount(0);
   await invite.openFolderButton.click();
   await invite.expectFolderOpened();
-  expect(new URL(claimant.url()).hash).toBe('');
-  await claimant.context().close();
+  expect(new URL(second.url()).hash).toBe('');
+  await context.close();
 });
 
 test("@full a join lists the folder once in the claimant's shared list", async ({
