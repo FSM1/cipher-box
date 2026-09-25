@@ -1,6 +1,6 @@
 //! Shared content-plane size limits.
 
-use cipherbox_core::seal::MAX_READ_SEALED_BYTES;
+use cipherbox_core::seal::{MAX_GRANTEE_NAME_BYTES, MAX_READ_SEALED_BYTES};
 use cipherbox_core::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
 
 use super::chunk::SEALED_LEAF_OVERHEAD;
@@ -37,9 +37,12 @@ pub(crate) const MAX_RESOLVED_RECORD_BYTES: usize = cipherbox_core::seal::MAX_BL
 /// and the map framing around them.
 const GRANT_BLOB_WIRE_BYTES: usize = 384;
 
-/// One grant-ledger row: two public keys, a permission, a blinded tag, the
-/// owner's compact ECDSA signature, an optional deadline, and framing.
-const LEDGER_ROW_WIRE_BYTES: usize = 224;
+/// One grant-ledger row at its widest, rounded up to a 64-byte step: the base
+/// row (two public keys, a permission, a blinded tag, the owner's compact ECDSA
+/// signature, framing), a `viaLink` tag, a maximal `granteeName`, and a
+/// `nameSource`. Pinned against a measured row by a test below.
+const LEDGER_ROW_WIRE_BYTES: usize =
+    (235 + 42 + (14 + MAX_GRANTEE_NAME_BYTES) + 20).next_multiple_of(64);
 
 /// One `directChildScopeIndex` entry: a 16-byte scope id and an `ipnsName`.
 const CHILD_SCOPE_REF_WIRE_BYTES: usize = 128;
@@ -181,14 +184,14 @@ pub(crate) fn scope_root_rest_bytes(block_len: usize, section_len: usize) -> usi
     block_len.saturating_sub(section_len)
 }
 
-/// The reservation must leave the body the larger share even at the frozen grant
-/// ceiling, or a wire-cost edit has quietly turned a re-seal budget into a cap on
-/// ordinary folders. Compile-time, so it cannot reach a release build
-/// (AGENTS.md rule 8).
+/// The reservation must leave the body a third of the block even at the frozen
+/// grant ceiling, where every row may carry a maximal grantee name, or a
+/// wire-cost edit has quietly turned a re-seal budget into a cap on ordinary
+/// folders. Compile-time, so it cannot reach a release build (AGENTS.md rule 8).
 const _: () = assert!(
     resealable_root_rest_bytes(cipherbox_core::seal::MAX_GRANT_BLOBS)
-        > resealable_section_bytes(cipherbox_core::seal::MAX_GRANT_BLOBS),
-    "the re-seal reservation must not outweigh the body it reserves against"
+        >= MAX_RESOLVED_RECORD_BYTES / 3,
+    "the re-seal reservation must leave the body a third of the block"
 );
 
 /// The shipped framing's sealed leaf must fit the block ceiling, or every
@@ -205,7 +208,40 @@ const _: () = assert!(
 mod tests {
     use super::*;
     use cipherbox_core::content::seal_chunk;
+    use cipherbox_core::seal::{
+        GrantLedgerEntry, GranteeName, NameSource, Permission, PreservedFields, WriteBody,
+        encode_write_body,
+    };
     use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
+
+    #[test]
+    fn the_widest_ledger_row_fits_its_budget_within_one_step() {
+        let body_len = |grant_ledger| {
+            encode_write_body(&WriteBody {
+                grant_ledger,
+                write_history_link: Vec::new(),
+                direct_child_scope_index: Vec::new(),
+                unknown: PreservedFields::new(),
+            })
+            .expect("the body encodes")
+            .len()
+        };
+        let mut row = GrantLedgerEntry::new(
+            [0x02; 33],
+            [0x11; 32],
+            Permission::Write,
+            [0x21; 32],
+            [0x77; 64],
+        );
+        row.via_link = Some([0x31; 32]);
+        row.grantee_name = Some(
+            GranteeName::new("a".repeat(MAX_GRANTEE_NAME_BYTES), NameSource::Claimant)
+                .expect("a name at the bound"),
+        );
+        let width = body_len(vec![row]) - body_len(Vec::new());
+        assert!(width <= LEDGER_ROW_WIRE_BYTES, "a {width}-byte row");
+        assert!(LEDGER_ROW_WIRE_BYTES - width < 64, "a {width}-byte row");
+    }
 
     /// The const assertion above computes the leaf size from
     /// `SEALED_LEAF_OVERHEAD`; this measures a real sealed leaf, so a seal

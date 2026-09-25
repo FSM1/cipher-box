@@ -774,6 +774,7 @@ export type ReadDescriptor =
   | { kind: 'deviceRegistrationChallenge'; devicePublicKey: string }
   | { kind: 'pendingApprovals' }
   | { kind: 'deviceRendezvous'; step: DeviceRendezvousStep }
+  | { kind: 'identityFingerprint'; identityPublicKey: Uint8Array }
   | { kind: 'siweChallenge'; intent: SiweIntent }
   | { kind: 'download'; node: Uint8Array }
   | { kind: 'fileVersions'; node: Uint8Array }
@@ -791,6 +792,7 @@ export interface ReadResults {
   deviceRegistrationChallenge: Uint8Array;
   pendingApprovals: PendingApprovalDescriptor[];
   deviceRendezvous: DeviceRendezvousResult;
+  identityFingerprint: string;
   siweChallenge: string;
   download: ArrayBuffer;
   fileVersions: VersionEntryDescriptor[];
@@ -819,6 +821,7 @@ export const READ_KINDS: ReadonlySet<string> = new Set<ReadDescriptor['kind']>([
   'deviceRegistrationChallenge',
   'pendingApprovals',
   'deviceRendezvous',
+  'identityFingerprint',
   'siweChallenge',
   'download',
   'fileVersions',

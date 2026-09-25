@@ -14,6 +14,7 @@
 //! top. Everything the wider tier refuses stays listable and removable, or a
 //! name another client committed would be stranded in the vault forever.
 
+use cipherbox_core::name::is_deceptive;
 use zeroize::Zeroizing;
 
 /// The longest node name a command may carry, in bytes.
@@ -80,36 +81,13 @@ const RESERVED_CHARACTERS: &[char] = &['<', '>', ':', '"', '|', '?', '*'];
 /// Windows device names, reserved with or without an extension.
 const RESERVED_DEVICES: &[&str] = &["con", "prn", "aux", "nul"];
 
-/// Whether the character reorders, hides or breaks the rest of the name when a
-/// file manager draws it. `char::is_control` is category `Cc` only and misses
-/// all of these; the strict comparator folds case but not format characters, so
-/// nothing downstream catches them either.
-///
-/// U+200C and U+200D sit between the refused code points and are admitted:
-/// the non-joiner is mandatory orthography in Persian, Urdu and Kurdish, and
-/// the joiner builds Indic conjuncts and every multi-person emoji, so a
-/// refusal would deny whole scripts a name.
-fn is_deceptive(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}' // soft hyphen
-            | '\u{061C}' // arabic letter mark
-            | '\u{200B}' // zero-width space
-            | '\u{200E}' | '\u{200F}' // LRM/RLM
-            | '\u{2028}' | '\u{2029}' // line and paragraph separators
-            | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
-            | '\u{2060}' // word joiner
-            | '\u{2066}'..='\u{2069}' // bidi isolates
-            | '\u{FEFF}' // zero-width no-break space
-    )
-}
-
 /// The name with every character the law refuses as deceptive removed, or `None`
 /// when the name holds none.
 ///
 /// A read plane draws what it is given, thus one override in a peer's child
-/// name reorders every name drawn around it. The set has one home here, so what
-/// an author cannot write is what a listing cannot draw.
+/// name reorders every name drawn around it. The set has one home, core's
+/// [`is_deceptive`], so what an author cannot write is what a listing cannot
+/// draw.
 pub fn strip_deceptive(name: &str) -> Option<Zeroizing<String>> {
     name.chars().any(is_deceptive).then(|| {
         Zeroizing::new(

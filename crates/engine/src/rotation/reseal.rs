@@ -1052,7 +1052,8 @@ pub fn reseal_scope_root<E: Entropy>(
                     permission: entry.permission,
                     tag: entry.tag,
                     owner_sig: entry.owner_sig,
-                    expires_at: entry.expires_at,
+                    via_link: entry.via_link,
+                    grantee_name: entry.grantee_name.clone(),
                     unknown: PreservedFields::new(),
                 })
                 .collect(),

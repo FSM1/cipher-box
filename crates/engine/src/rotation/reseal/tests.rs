@@ -2,10 +2,10 @@ use super::*;
 use crate::grants::mint_grant_row;
 use crate::testkit::{SeededEntropy, padding};
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantSetEntry, MAX_DIRECT_CHILD_SCOPES, MAX_WRITE_BODY_BYTES,
-    encode_grant_section, open_ascent_link, open_grant_blob, open_history_link, open_owner_blob,
-    open_owner_history_link, open_owner_write_blob, sign_grant_set, sign_recipient_binding,
-    verify_structure,
+    ChildScopeRef, GrantSetEntry, GranteeName, MAX_DIRECT_CHILD_SCOPES, MAX_GRANTEE_NAME_BYTES,
+    MAX_WRITE_BODY_BYTES, NameSource, encode_grant_section, open_ascent_link, open_grant_blob,
+    open_history_link, open_owner_blob, open_owner_history_link, open_owner_write_blob,
+    sign_grant_set, sign_recipient_binding, verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -127,6 +127,25 @@ impl Fixture {
             [0u8; ECDSA_SIG_LEN],
         );
         row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, ipns_name, &row).to_compact();
+        row
+    }
+
+    /// A read row at its widest wire form, a via-link and a maximal grantee
+    /// name, attested at `b"n"`.
+    fn widest_row(&self, recipient_enc_pk: [u8; 32], tag: [u8; 32]) -> GrantLedgerEntry {
+        let mut row = GrantLedgerEntry::new(
+            [0x02; 33],
+            recipient_enc_pk,
+            Permission::Read,
+            tag,
+            [0u8; ECDSA_SIG_LEN],
+        );
+        row.via_link = Some([0x31; 32]);
+        row.grantee_name = Some(
+            GranteeName::new("a".repeat(MAX_GRANTEE_NAME_BYTES), NameSource::Claimant)
+                .expect("a name at the bound"),
+        );
+        row.owner_sig = sign_recipient_binding(&self.owner_ecdsa, b"n", &row).to_compact();
         row
     }
 
@@ -865,9 +884,10 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
     // real bytes at the frozen ceiling of committed rows, since the budget
     // is sized from per-row wire estimates.
     //
-    // Every row and every child ref carries a padded unknown map here. The
-    // counts are frozen and the per-item sizes are not, so the budget is a
-    // bound only because the re-seal drops the carry.
+    // Every row is full width, a via-link and a maximal grantee name, and
+    // every row and child ref carries a padded unknown map. The counts are
+    // frozen and the per-item sizes are not, so the budget is a bound only
+    // because it charges the widest row and the re-seal drops the carry.
     let fx = Fixture::new();
     let owner_pub = fx.owner_enc.public();
     let (mut commitment, _, _) = fx.committed(b"n");
@@ -884,7 +904,7 @@ fn a_full_committed_set_re_seals_inside_the_budget_the_author_reserved() {
                     Permission::Read,
                     [0x02; 32],
                 ),
-                fx.attested_row([0x02; 33], recipient, Permission::Read, tag, b"n"),
+                fx.widest_row(recipient, tag),
             )
         })
         .collect();
@@ -982,6 +1002,38 @@ fn a_re_seal_carries_no_preserved_field_a_write_grantee_authored() {
             "a re-sealed child scope ref carries a padded map"
         );
     }
+}
+
+#[test]
+fn a_re_seal_carries_a_row_signature_verbatim_so_an_unattested_name_stays_unattested() {
+    // The re-seal holds no owner identity and re-signs no row: a name a write
+    // grantee wrote into a row still fails the owner binding after the re-seal,
+    // and the owner's own named row still passes it.
+    let fx = Fixture::new();
+    let owner_pub = fx.owner_enc.public();
+    let (commitment, sig, mut ledger) = fx.committed(b"n");
+    ledger[0].grantee_name = Some(GranteeName::new("Alice".to_owned(), NameSource::Owner).unwrap());
+    ledger[0].owner_sig = sign_recipient_binding(&fx.owner_ecdsa, b"n", &ledger[0]).to_compact();
+    ledger[1].grantee_name = Some(GranteeName::new("Owner".to_owned(), NameSource::Owner).unwrap());
+    let id = identity(&fx, &owner_pub, b"n", None);
+    let seed = chain_seed(1);
+    let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
+    let cs = committed_set(&commitment, &sig, &ledger);
+
+    let section = reseal_scope_root(&mut SeededEntropy::new(11), &id, &s, &cs, &[])
+        .expect("the named set re-seals");
+    let body = opened_write_body(&section, &fx.write_scope_seed, 1);
+    let owner = fx.owner_ecdsa.verifying_key();
+    for (before, after) in ledger.iter().zip(&body.grant_ledger) {
+        assert_eq!(after.tag, before.tag);
+        assert_eq!(after.owner_sig, before.owner_sig);
+        assert_eq!(
+            verify_recipient_binding(&owner, b"n", after).is_ok(),
+            verify_recipient_binding(&owner, b"n", before).is_ok(),
+        );
+    }
+    assert!(verify_recipient_binding(&owner, b"n", &body.grant_ledger[0]).is_ok());
+    assert!(verify_recipient_binding(&owner, b"n", &body.grant_ledger[1]).is_err());
 }
 
 #[test]

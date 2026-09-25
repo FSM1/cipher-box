@@ -692,27 +692,6 @@ fn a_ledger_row_demoted_by_its_writer_still_rotates_the_write_plane() {
     );
 }
 
-/// A write-grantee authors `expiresAt`, so a prune driven off the published
-/// row would let one forge an early deadline on a peer and have the owner
-/// revoke a grantee it never chose to.
-#[test]
-fn a_deadline_forged_in_the_ledger_prunes_nothing() {
-    let fx = Fixture::new();
-    let mut forged = fx.ledger.clone();
-    forged[0].expires_at = core::num::NonZeroU64::new(1);
-    let plan = GrantCutPlan {
-        grant_ledger: &forged,
-        ..fx.plan()
-    };
-
-    assert!(
-        prune_expired_grants(&plan, &owner_deadlines(&[]), UnixMillis(u64::MAX))
-            .expect("owner prune")
-            .is_none(),
-        "only the owner's own record can expire a grant"
-    );
-}
-
 #[test]
 fn a_non_owner_session_cuts_nothing_on_a_discovered_expiry() {
     // A grantee can neither extend nor shrink the committed set, so its

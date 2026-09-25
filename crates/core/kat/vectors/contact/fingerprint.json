@@ -1,0 +1,12 @@
+[
+  {
+    "name": "primary",
+    "identityPk": "02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27",
+    "fingerprint": "e686 bdd6 b44e 05c4 4db0"
+  },
+  {
+    "name": "alt-keys",
+    "identityPk": "0284bf7562262bbd6940085748f3be6afa52ae317155181ece31b66351ccffa4b0",
+    "fingerprint": "6ab2 8771 7d02 bc0e e926"
+  }
+]

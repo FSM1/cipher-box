@@ -33,10 +33,10 @@ use cipherbox_core::payload::pointer::{
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, BIN_INDEX_RUNGS, BIN_INDEX_V, CONTENT_KEY_HPKE_INFO,
     CONTENT_KEY_V, CRITICAL_KEY_PREFIX, GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantLedgerEntry,
-    GrantSetCommitment, GrantSetEntry, MAX_BIN_INDEX_BODY_BYTES, MAX_BIN_INDEX_BYTES,
+    GrantSetCommitment, GrantSetEntry, GranteeName, MAX_BIN_INDEX_BODY_BYTES, MAX_BIN_INDEX_BYTES,
     MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES,
-    MAX_WRITE_BODY_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OWNER_LOCAL_HPKE_INFO_PREFIX,
-    OWNER_LOCAL_V, OwnerLocalKind, Permission, PreservedFields,
+    MAX_WRITE_BODY_BYTES, NameSource, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OwnerLocalKind, Permission, PreservedFields,
     READ_SEALED_ENVELOPE_HEADROOM_BYTES, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
     STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_BIN_INDEX, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
     STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_LOCAL,
@@ -56,7 +56,10 @@ use cipherbox_core::seal::{
     verify_grant_set, verify_recipient_binding, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
-use cipherbox_core::suite::contact::{import_contact_code, subkey_binding_preimage};
+use cipherbox_core::suite::contact::{
+    FINGERPRINT_BYTES, FINGERPRINT_DOMAIN, identity_fingerprint, import_contact_code,
+    subkey_binding_preimage,
+};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ecies::{
     ENC_LEN as ECIES_ENC_LEN, KEY_CONTEXT as ECIES_KEY_CONTEXT,
@@ -116,6 +119,10 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/contact/reject.json",
         include_str!("../kat/vectors/contact/reject.json"),
+    ),
+    (
+        "vectors/contact/fingerprint.json",
+        include_str!("../kat/vectors/contact/fingerprint.json"),
     ),
     (
         "vectors/seal/seal.json",
@@ -188,6 +195,10 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/grant/recipient_binding_accept.json",
         include_str!("../kat/vectors/grant/recipient_binding_accept.json"),
+    ),
+    (
+        "vectors/grant/recipient_binding_reject.json",
+        include_str!("../kat/vectors/grant/recipient_binding_reject.json"),
     ),
     (
         "vectors/grant/grant_blob_accept.json",
@@ -759,6 +770,7 @@ struct GrantManifest {
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     recipient_binding_accept: FileCount,
+    recipient_binding_reject: RejectSection,
     grant_blob_accept: FileCount,
     grant_blob_reject: RejectSection,
     owner_blob_accept: FileCount,
@@ -789,8 +801,9 @@ struct WriteBodyAcceptVector {
 }
 
 /// A recipient-binding accept vector: the frozen preimage the owner signs over
-/// one grant-ledger row and their signature over it. `permission` and
-/// `expiresAt` are absent because they are outside the preimage.
+/// one grant-ledger row and their signature over it. `permission` is absent
+/// because it is outside the preimage; each optional signed field is absent
+/// when the row carries none.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RecipientBindingAcceptVector {
@@ -800,8 +813,30 @@ struct RecipientBindingAcceptVector {
     recipient_identity_pk: String,
     recipient_enc_pk: String,
     tag: String,
+    via_link: Option<String>,
+    grantee_name: Option<String>,
+    name_source: Option<String>,
     preimage: String,
     signature: String,
+}
+
+/// A ledger row presented with a signed field removed or changed, and the owner
+/// signature over the row before the change.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecipientBindingRejectVector {
+    name: String,
+    owner_identity_pk: String,
+    ipns_name: String,
+    recipient_identity_pk: String,
+    recipient_enc_pk: String,
+    tag: String,
+    via_link: Option<String>,
+    grantee_name: Option<String>,
+    name_source: Option<String>,
+    signature: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -1074,6 +1109,24 @@ struct EciesContexts {
 struct ContactMeta {
     accept: FileCount,
     reject: RejectSection,
+    fingerprint: FingerprintMeta,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FingerprintMeta {
+    domain: String,
+    bytes: usize,
+    file: String,
+    count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FingerprintVector {
+    name: String,
+    identity_pk: String,
+    fingerprint: String,
 }
 
 #[derive(Deserialize)]
@@ -1426,6 +1479,15 @@ fn write_body_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
     serde_json::from_str(fixture(&m.grant.write_body_reject.file)).expect("write_body_reject shape")
 }
 
+fn recipient_binding_reject_vectors(m: &Manifest) -> Vec<RecipientBindingRejectVector> {
+    serde_json::from_str(fixture(&m.grant.recipient_binding_reject.file))
+        .expect("recipient_binding_reject shape")
+}
+
+fn fingerprint_vectors(m: &Manifest) -> Vec<FingerprintVector> {
+    serde_json::from_str(fixture(&m.suite.contact.fingerprint.file)).expect("fingerprint shape")
+}
+
 fn recipient_binding_accept_vectors(m: &Manifest) -> Vec<RecipientBindingAcceptVector> {
     serde_json::from_str(fixture(&m.grant.recipient_binding_accept.file))
         .expect("recipient_binding_accept shape")
@@ -1622,6 +1684,7 @@ fn fixture_table_matches_manifest_files() {
         m.suite.ecies.seal_reject_file.as_str(),
         m.suite.contact.accept.file.as_str(),
         m.suite.contact.reject.file.as_str(),
+        m.suite.contact.fingerprint.file.as_str(),
         m.seal.seal.file.as_str(),
         m.seal.open_reject.file.as_str(),
         m.seal.read_body_accept.file.as_str(),
@@ -1640,6 +1703,7 @@ fn fixture_table_matches_manifest_files() {
         m.grant.write_body_accept.file.as_str(),
         m.grant.write_body_reject.file.as_str(),
         m.grant.recipient_binding_accept.file.as_str(),
+        m.grant.recipient_binding_reject.file.as_str(),
         m.grant.grant_blob_accept.file.as_str(),
         m.grant.grant_blob_reject.file.as_str(),
         m.grant.owner_blob_accept.file.as_str(),
@@ -1966,6 +2030,11 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check),
     );
     covered.extend(grant_set_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(
+        recipient_binding_reject_vectors(&m)
+            .into_iter()
+            .map(|v| v.check),
+    );
     covered.extend(section_reject_vectors(&m).into_iter().map(|v| v.check));
     // Content plane: the content-open and content-CID reject families pin
     // `seal-open-failed`/`truncated` and `content-cid-mismatch`.
@@ -4305,13 +4374,7 @@ fn recipient_binding_accept_vectors_reencode_and_verify() {
             v.name
         );
         let ipns_name = unhex(&v.name, &v.ipns_name);
-        let entry = GrantLedgerEntry::new(
-            unhex_n::<33>(&v.name, &v.recipient_identity_pk),
-            unhex32(&v.name, &v.recipient_enc_pk),
-            Permission::Read,
-            unhex32(&v.name, &v.tag),
-            unhex_n::<64>(&v.name, &v.signature),
-        );
+        let entry = v.row();
         assert_eq!(
             hex::encode(encode_recipient_binding(&ipns_name, &entry)),
             v.preimage,
@@ -4345,6 +4408,108 @@ fn recipient_binding_accept_vectors_reencode_and_verify() {
                 .check(),
             "identity-signature-invalid",
             "recipient-binding accept {}: ipnsName must be bound",
+            v.name
+        );
+    }
+}
+
+/// Both recipient-binding vector shapes carry the same signed row fields.
+macro_rules! impl_binding_row {
+    ($($vector:ty),+) => {$(
+        impl $vector {
+            /// The ledger row rebuilt from the vector's fields, with the
+            /// optional signed fields set only where the vector carries them.
+            fn row(&self) -> GrantLedgerEntry {
+                let name = self.name.as_str();
+                let mut entry = GrantLedgerEntry::new(
+                    unhex_n::<33>(name, &self.recipient_identity_pk),
+                    unhex32(name, &self.recipient_enc_pk),
+                    Permission::Read,
+                    unhex32(name, &self.tag),
+                    unhex_n::<64>(name, &self.signature),
+                );
+                entry.via_link = self.via_link.as_ref().map(|t| unhex32(name, t));
+                entry.grantee_name = match (&self.grantee_name, &self.name_source) {
+                    (None, None) => None,
+                    (Some(text), Some(source)) => {
+                        let source = NameSource::from_wire(source)
+                            .unwrap_or_else(|| panic!("{name}: unknown name source {source}"));
+                        Some(GranteeName::new(text.clone(), source).expect("a valid grantee name"))
+                    }
+                    _ => panic!("{name}: a grantee name and its source travel together"),
+                };
+                entry
+            }
+        }
+    )+};
+}
+impl_binding_row!(RecipientBindingAcceptVector, RecipientBindingRejectVector);
+
+/// A signed field removed or changed detaches the owner signature: each
+/// optional field is in the preimage only when present, so a row without it
+/// is a different preimage.
+#[test]
+fn recipient_binding_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = recipient_binding_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.recipient_binding_reject.count,
+        "recipient-binding reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .grant
+        .recipient_binding_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs recipient_binding_reject.json"
+    );
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate recipient-binding reject {}",
+            v.name
+        );
+        let entry = v.row();
+        let verifier = EcdsaVerifier::from_sec1(&unhex(&v.name, &v.owner_identity_pk))
+            .expect("valid owner identity key");
+        let err = verify_recipient_binding(&verifier, &unhex(&v.name, &v.ipns_name), &entry)
+            .expect_err("a tampered row must fail closed");
+        assert_eq!(err.check(), v.check, "recipient-binding reject {}", v.name);
+        assert_eq!(
+            err.class(),
+            v.class,
+            "recipient-binding reject {}: class",
+            v.name
+        );
+    }
+}
+
+/// Both hosts show the string pinned here for the same key; the Client Browser
+/// Suite asserts the WASM export against the same vector.
+#[test]
+fn fingerprint_vectors_are_frozen() {
+    let m = manifest();
+    let meta = &m.suite.contact.fingerprint;
+    assert_eq!(meta.domain, FINGERPRINT_DOMAIN, "fingerprint domain drift");
+    assert_eq!(meta.bytes, FINGERPRINT_BYTES, "fingerprint width drift");
+    assert!(meta.bytes * 8 >= 80, "a fingerprint shows at least 80 bits");
+    let vectors = fingerprint_vectors(&m);
+    assert_eq!(vectors.len(), meta.count, "fingerprint count drift");
+    assert!(vectors.len() >= 2, "the family pins more than one key");
+    for v in &vectors {
+        let key =
+            EcdsaVerifier::from_sec1(&unhex(&v.name, &v.identity_pk)).expect("valid identity key");
+        assert_eq!(
+            identity_fingerprint(&key),
+            v.fingerprint,
+            "fingerprint {}",
             v.name
         );
     }

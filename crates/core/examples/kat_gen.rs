@@ -37,10 +37,10 @@ use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, BIN_INDEX_RUNGS, BIN_INDEX_V, BinEntry, BinIndex,
     CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, CRITICAL_KEY_PREFIX, ChildRef, ChildScopeRef,
     GRANT_SECTION_ENVELOPE_HEADROOM_BYTES, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment,
-    GrantSetEntry, HistoryLinkPayload, MAX_BIN_INDEX_BODY_BYTES, MAX_BIN_INDEX_BYTES,
-    MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_DIRECT_CHILD_SCOPES, MAX_GRANT_BLOBS,
-    MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES, MAX_WRITE_BODY_BYTES,
-    MAX_WRITE_HISTORY_LINK_BYTES, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    GrantSetEntry, GrantSetEntryKind, GranteeName, HistoryLinkPayload, MAX_BIN_INDEX_BODY_BYTES,
+    MAX_BIN_INDEX_BYTES, MAX_BLOCK_BYTES, MAX_CRITICAL_CARRIED_BYTES, MAX_DIRECT_CHILD_SCOPES,
+    MAX_GRANT_BLOBS, MAX_GRANT_SECTION_BYTES, MAX_READ_SEALED_BYTES, MAX_WRITE_BODY_BYTES,
+    MAX_WRITE_HISTORY_LINK_BYTES, NameSource, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
     OWNER_LOCAL_HPKE_INFO_PREFIX, OWNER_LOCAL_V, OpRecordHeader, OverrideSeedPayload,
     OwnerLocalHeader, OwnerLocalKind, OwnerWriteBlobPayload, Permission, PreservedFields,
     READ_SEALED_ENVELOPE_HEADROOM_BYTES, ReadBody, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
@@ -68,7 +68,9 @@ use cipherbox_core::seal::{
     verify_structure,
 };
 use cipherbox_core::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
-use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
+use cipherbox_core::suite::contact::{
+    ContactCode, FINGERPRINT_BYTES, FINGERPRINT_DOMAIN, identity_fingerprint, import_contact_code,
+};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ecies::{
     ENC_LEN as ECIES_ENC_LEN, KEY_CONTEXT as ECIES_KEY_CONTEXT,
@@ -628,6 +630,7 @@ struct GrantSection {
     write_body_accept: FileCount,
     write_body_reject: RejectSection,
     recipient_binding_accept: FileCount,
+    recipient_binding_reject: RejectSection,
     grant_blob_accept: FileCount,
     grant_blob_reject: RejectSection,
     owner_blob_accept: FileCount,
@@ -671,8 +674,54 @@ struct RecipientBindingAcceptVector {
     recipient_identity_pk: String,
     recipient_enc_pk: String,
     tag: String,
+    #[serde(flatten)]
+    optional: SignedRowFields,
     preimage: String,
     signature: String,
+}
+
+/// A ledger row's optional owner-signed fields, each omitted when absent so a
+/// vector for a row without them keeps its shape.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SignedRowFields {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via_link: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grantee_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name_source: Option<String>,
+}
+
+impl SignedRowFields {
+    fn of(entry: &GrantLedgerEntry) -> Self {
+        Self {
+            via_link: entry.via_link.map(|t| hexstr(&t)),
+            grantee_name: entry.grantee_name.as_ref().map(|n| n.name().to_string()),
+            name_source: entry
+                .grantee_name
+                .as_ref()
+                .map(|n| n.source().as_wire().to_string()),
+        }
+    }
+}
+
+/// A ledger row presented with a signed field removed or changed: the owner
+/// signature over the original row must not verify over it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecipientBindingRejectVector {
+    name: String,
+    owner_identity_pk: String,
+    ipns_name: String,
+    recipient_identity_pk: String,
+    recipient_enc_pk: String,
+    tag: String,
+    #[serde(flatten)]
+    optional: SignedRowFields,
+    signature: String,
+    check: String,
+    class: String,
 }
 
 /// A grant-section accept vector: the canonical bundle plus the counts the
@@ -1105,6 +1154,26 @@ struct EciesContexts {
 struct ContactMeta {
     accept: FileCount,
     reject: RejectSection,
+    fingerprint: FingerprintMeta,
+}
+
+/// The identity fingerprint of ADR 0027 D7: its hash domain, the digest bytes
+/// it shows, and the vectors that pin the rendered string.
+#[derive(Serialize)]
+struct FingerprintMeta {
+    domain: String,
+    bytes: usize,
+    file: String,
+    count: usize,
+}
+
+/// An identity key and the fingerprint string both hosts show for it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FingerprintVector {
+    name: String,
+    identity_pk: String,
+    fingerprint: String,
 }
 
 #[derive(Serialize)]
@@ -1211,6 +1280,8 @@ fn main() {
     write_pretty(&ecies_dir.join("seal_reject.json"), &ecies_seal_reject);
     write_pretty(&contact_dir.join("accept.json"), &contact_accept);
     write_pretty(&contact_dir.join("reject.json"), &contact_reject);
+    let fingerprint = build_fingerprint();
+    write_pretty(&contact_dir.join("fingerprint.json"), &fingerprint);
 
     let seal_vectors = build_seal_vectors();
     let seal_open_reject = build_seal_open_reject();
@@ -1261,6 +1332,10 @@ fn main() {
     write_pretty(
         &grant_dir.join("recipient_binding_accept.json"),
         &g.recipient_binding_accept,
+    );
+    write_pretty(
+        &grant_dir.join("recipient_binding_reject.json"),
+        &g.recipient_binding_reject,
     );
     write_pretty(
         &grant_dir.join("grant_blob_accept.json"),
@@ -1421,6 +1496,7 @@ fn main() {
         ecies_seal_reject: &ecies_seal_reject,
         contact_accept: &contact_accept,
         contact_reject: &contact_reject,
+        fingerprint: &fingerprint,
         seal: &seal_vectors,
         seal_open_reject: &seal_open_reject,
         read_body_accept: &read_body_accept,
@@ -1534,7 +1610,14 @@ fn nested_arrays(levels: usize) -> Value {
 }
 
 fn map_of(entries: Vec<(&str, Value)>) -> Value {
-    let mut m = Map::new();
+    with_fields(Value::Map(Map::new()), entries)
+}
+
+/// `map` with each pair inserted; a pair replaces a key the map already has.
+fn with_fields(map: Value, entries: Vec<(&str, Value)>) -> Value {
+    let Value::Map(mut m) = map else {
+        panic!("with_fields takes a map")
+    };
     for (k, v) in entries {
         m.insert(k, v);
     }
@@ -2251,6 +2334,7 @@ struct ManifestInputs<'a> {
     ecies_seal_reject: &'a [EciesSealRejectVector],
     contact_accept: &'a [ContactAcceptVector],
     contact_reject: &'a [RejectVector],
+    fingerprint: &'a [FingerprintVector],
     seal: &'a [SealVector],
     seal_open_reject: &'a [SealOpenRejectVector],
     read_body_accept: &'a [ReadBodyAcceptVector],
@@ -2297,6 +2381,7 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
     let ecies_seal_reject = m.ecies_seal_reject;
     let contact_accept = m.contact_accept;
     let contact_reject = m.contact_reject;
+    let fingerprint = m.fingerprint;
 
     // requiredKinds: distinct kinds in first-appearance order (deterministic).
     let mut required_kinds: Vec<String> = Vec::new();
@@ -2386,6 +2471,12 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                     file: "vectors/contact/reject.json".to_string(),
                     count: contact_reject.len(),
                     checks: checks_in_surface_order(contact_reject),
+                },
+                fingerprint: FingerprintMeta {
+                    domain: FINGERPRINT_DOMAIN.to_string(),
+                    bytes: FINGERPRINT_BYTES,
+                    file: "vectors/contact/fingerprint.json".to_string(),
+                    count: fingerprint.len(),
                 },
             },
         },
@@ -2685,6 +2776,16 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
             "recipient_binding_accept",
             g.recipient_binding_accept.len(),
         ),
+        recipient_binding_reject: RejectSection {
+            file: "vectors/grant/recipient_binding_reject.json".to_string(),
+            count: g.recipient_binding_reject.len(),
+            checks: checks_surface_ordered(
+                &g.recipient_binding_reject
+                    .iter()
+                    .map(|v| v.check.as_str())
+                    .collect(),
+            ),
+        },
         grant_blob_accept: file_count("grant_blob_accept", g.grant_blob_accept.len()),
         grant_blob_reject: blob_reject("grant_blob_reject", &g.grant_blob_reject),
         owner_blob_accept: file_count("owner_blob_accept", g.owner_blob_accept.len()),
@@ -4564,6 +4665,31 @@ fn build_contact_accept() -> Vec<ContactAcceptVector> {
     out
 }
 
+/// The fingerprint of each contact-accept identity, so a host that shows a
+/// contact code shows the value pinned here for the same key.
+fn build_fingerprint() -> Vec<FingerprintVector> {
+    let cases: Vec<(&str, [u8; 32])> = vec![
+        ("primary", [0x22; 32]),
+        ("alt-keys", std::array::from_fn(|i| (i + 1) as u8)),
+    ];
+    let mut seen = BTreeSet::new();
+    cases
+        .into_iter()
+        .map(|(name, scalar)| {
+            let identity = EcdsaSigner::from_scalar(&scalar)
+                .expect("valid identity scalar")
+                .verifying_key();
+            let fingerprint = identity_fingerprint(&identity);
+            assert!(seen.insert(fingerprint.clone()), "fingerprints must differ");
+            FingerprintVector {
+                name: name.to_string(),
+                identity_pk: hexstr(&identity.to_sec1()),
+                fingerprint,
+            }
+        })
+        .collect()
+}
+
 /// The 65-byte uncompressed SEC1 encoding of a compressed secp256k1 key: a
 /// byte-distinct re-encoding of the same point that the frozen 33-byte identity
 /// width must reject.
@@ -5499,6 +5625,7 @@ struct GrantVectors {
     write_body_accept: Vec<WriteBodyAcceptVector>,
     write_body_reject: Vec<RejectVector>,
     recipient_binding_accept: Vec<RecipientBindingAcceptVector>,
+    recipient_binding_reject: Vec<RecipientBindingRejectVector>,
     grant_blob_accept: Vec<HpkeStructureVector>,
     grant_blob_reject: Vec<BlobRejectVector>,
     owner_blob_accept: Vec<HpkeStructureVector>,
@@ -5526,6 +5653,7 @@ impl GrantVectors {
             + self.write_body_accept.len()
             + self.write_body_reject.len()
             + self.recipient_binding_accept.len()
+            + self.recipient_binding_reject.len()
             + self.grant_blob_accept.len()
             + self.grant_blob_reject.len()
             + self.owner_blob_accept.len()
@@ -5571,6 +5699,7 @@ fn build_grant_vectors() -> GrantVectors {
         write_body_accept: build_write_body_accept(),
         write_body_reject: build_write_body_reject(),
         recipient_binding_accept: build_recipient_binding_accept(),
+        recipient_binding_reject: build_recipient_binding_reject(),
         section_accept: build_grant_section_accept(),
         section_reject: build_grant_section_reject(),
         grant_blob_accept: build_grant_blob_accept(),
@@ -5611,20 +5740,46 @@ fn signed_ledger_row(
     permission: Permission,
     tag: [u8; 32],
 ) -> GrantLedgerEntry {
-    let owner = write_body_owner();
-    let mut entry = GrantLedgerEntry::new(
+    sign_ledger_row(GrantLedgerEntry::new(
         recipient_identity_pk,
         recipient_enc_pk,
         permission,
         tag,
         [0u8; ECDSA_SIG_LEN],
-    );
+    ))
+}
+
+/// `entry` stamped with the owner's signature over its current fields.
+fn sign_ledger_row(mut entry: GrantLedgerEntry) -> GrantLedgerEntry {
+    let owner = write_body_owner();
     entry.owner_sig = sign_recipient_binding(&owner, WRITE_BODY_IPNS_NAME, &entry).to_compact();
     assert!(
         verify_recipient_binding(&owner.verifying_key(), WRITE_BODY_IPNS_NAME, &entry).is_ok(),
         "ledger row binding must verify"
     );
     entry
+}
+
+/// A read row with the optional owner-signed fields set before it is signed.
+fn named_ledger_row(
+    recipient_identity_pk: [u8; 33],
+    recipient_enc_pk: [u8; 32],
+    tag: [u8; 32],
+    via_link: Option<[u8; 32]>,
+    name: Option<(&str, NameSource)>,
+) -> GrantLedgerEntry {
+    let mut entry = GrantLedgerEntry::new(
+        recipient_identity_pk,
+        recipient_enc_pk,
+        Permission::Read,
+        tag,
+        [0u8; ECDSA_SIG_LEN],
+    );
+    entry.via_link = via_link;
+    entry.grantee_name = name.map(|(text, source)| {
+        GranteeName::new(text.to_string(), source).expect("a valid grantee name")
+    });
+    sign_ledger_row(entry)
 }
 
 /// Write epoch 1: no prior write epoch, so no history link, and a scope root
@@ -5663,15 +5818,43 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         direct_child_scope_index: vec![ChildScopeRef::new([0x77; 16], b"one-child".to_vec())],
         unknown: PreservedFields::new(),
     };
-    // An invite link's ledger row: an expiry deadline beside a personal row that
-    // has none. Only the deadline distinguishes the two on the wire.
+    // A row minted while `expiresAt` was a typed row field. The key is retired
+    // (ADR 0023 D2) and now rides as a preserved unknown field, so the row keeps
+    // its bytes and its signature.
     let expiring = WriteBody {
         grant_ledger: vec![
             signed_ledger_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
             GrantLedgerEntry {
-                expires_at: NonZeroU64::new(1_700_000_000_000),
+                unknown: PreservedFields::from_iter([(
+                    "expiresAt".to_string(),
+                    Value::Unsigned(1_700_000_000_000),
+                )]),
                 ..signed_ledger_row([0x03; 33], [0x12; 32], Permission::Read, [0x22; 32])
             },
+        ],
+        write_history_link: b"h".to_vec(),
+        direct_child_scope_index: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    // A link row beside the rows it admitted: one named by its claimant, one
+    // renamed by the owner.
+    let linked = WriteBody {
+        grant_ledger: vec![
+            signed_ledger_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+            named_ledger_row(
+                [0x03; 33],
+                [0x12; 32],
+                [0x22; 32],
+                Some([0x21; 32]),
+                Some(("Alice", NameSource::Claimant)),
+            ),
+            named_ledger_row(
+                [0x04; 33],
+                [0x13; 32],
+                [0x23; 32],
+                Some([0x21; 32]),
+                Some(("Bob from work", NameSource::Owner)),
+            ),
         ],
         write_history_link: b"h".to_vec(),
         direct_child_scope_index: Vec::new(),
@@ -5682,6 +5865,7 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         ("write-epoch-1-empty", epoch_one),
         ("read-only-single-child", read_only),
         ("invite-expiring-entry", expiring),
+        ("linked-and-named-rows", linked),
     ];
 
     let mut names = BTreeSet::new();
@@ -5758,6 +5942,7 @@ fn build_write_body_reject() -> Vec<RejectVector> {
         ])
     };
     let good_entry = || ledger_entry_map(vec![0x02; 33], vec![0x11; 32], "read", vec![0x21; 32]);
+    let named_entry = |extra: Vec<(&str, Value)>| with_fields(good_entry(), extra);
     let child = |ipns_name: Vec<u8>| {
         map_of(vec![
             ("ipnsName", Value::Bytes(ipns_name)),
@@ -5812,22 +5997,99 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             "malformed",
         ),
         (
-            // Zero is the natural uninitialized value, and would be dead for
-            // every clock — the opposite of the absent field's "no deadline".
-            "ledger-zero-expiry",
+            "ledger-empty-grantee-name",
             body(
                 vec![],
-                vec![map_of(vec![
-                    ("expiresAt", Value::Unsigned(0)),
-                    ("ownerSig", Value::Bytes(vec![0x77; ECDSA_SIG_LEN])),
-                    ("permission", Value::Text("read".to_string())),
-                    ("recipientEncPk", Value::Bytes(vec![0x11; 32])),
-                    ("recipientIdentityPk", Value::Bytes(vec![0x02; 33])),
-                    ("tag", Value::Bytes(vec![0x21; 32])),
+                vec![named_entry(vec![
+                    ("granteeName", Value::Text(String::new())),
+                    ("nameSource", Value::Text("claimant".to_string())),
                 ])],
                 Value::Bytes(vec![]),
             ),
-            "invalid-expiry",
+            "invalid-grantee-name",
+            "malformed",
+        ),
+        (
+            // A line break lets a claimant fake a second line in a
+            // confirmation that shows the name.
+            "ledger-grantee-name-control-character",
+            body(
+                vec![],
+                vec![named_entry(vec![
+                    ("granteeName", Value::Text("Alice\nOwner".to_string())),
+                    ("nameSource", Value::Text("claimant".to_string())),
+                ])],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-grantee-name",
+            "malformed",
+        ),
+        (
+            // A bidi override reorders every name drawn after it.
+            "ledger-grantee-name-deceptive-character",
+            body(
+                vec![],
+                vec![named_entry(vec![
+                    ("granteeName", Value::Text("Alice\u{202E}renwO".to_string())),
+                    ("nameSource", Value::Text("claimant".to_string())),
+                ])],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-grantee-name",
+            "malformed",
+        ),
+        (
+            "ledger-grantee-name-over-bound",
+            body(
+                vec![],
+                vec![named_entry(vec![
+                    (
+                        "granteeName",
+                        Value::Text("n".repeat(seal::MAX_GRANTEE_NAME_BYTES + 1)),
+                    ),
+                    ("nameSource", Value::Text("owner".to_string())),
+                ])],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-grantee-name",
+            "malformed",
+        ),
+        (
+            "ledger-invalid-name-source",
+            body(
+                vec![],
+                vec![named_entry(vec![
+                    ("granteeName", Value::Text("Alice".to_string())),
+                    ("nameSource", Value::Text("server".to_string())),
+                ])],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-name-source",
+            "malformed",
+        ),
+        (
+            // The flag is what makes the signature attest who chose the name,
+            // so a name never rides without it.
+            "ledger-grantee-name-without-source",
+            body(
+                vec![],
+                vec![named_entry(vec![(
+                    "granteeName",
+                    Value::Text("Alice".to_string()),
+                )])],
+                Value::Bytes(vec![]),
+            ),
+            "missing-field",
+            "malformed",
+        ),
+        (
+            "ledger-via-link-wrong-length",
+            body(
+                vec![],
+                vec![named_entry(vec![("viaLink", Value::Bytes(vec![0x21; 31]))])],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-field-length",
             "malformed",
         ),
         (
@@ -5951,6 +6213,18 @@ fn build_recipient_binding_accept() -> Vec<RecipientBindingAcceptVector> {
             "write-grantee",
             signed_ledger_row([0x03; 33], [0x12; 32], Permission::Write, [0x22; 32]),
         ),
+        ("via-link", via_link_row()),
+        ("claimant-named", claimant_named_row()),
+        (
+            "owner-named-via-link",
+            named_ledger_row(
+                [0x04; 33],
+                [0x13; 32],
+                [0x23; 32],
+                Some([0x21; 32]),
+                Some(("Bob from work", NameSource::Owner)),
+            ),
+        ),
     ];
 
     let mut names = BTreeSet::new();
@@ -5979,11 +6253,84 @@ fn build_recipient_binding_accept() -> Vec<RecipientBindingAcceptVector> {
             recipient_identity_pk: hexstr(&entry.recipient_identity_pk),
             recipient_enc_pk: hexstr(&entry.recipient_enc_pk),
             tag: hexstr(&entry.tag),
+            optional: SignedRowFields::of(&entry),
             preimage: hexstr(&preimage),
             signature: hexstr(&entry.owner_sig),
         });
     }
     out
+}
+
+fn via_link_row() -> GrantLedgerEntry {
+    named_ledger_row([0x03; 33], [0x12; 32], [0x22; 32], Some([0x21; 32]), None)
+}
+
+fn claimant_named_row() -> GrantLedgerEntry {
+    named_ledger_row(
+        [0x03; 33],
+        [0x12; 32],
+        [0x22; 32],
+        None,
+        Some(("Alice", NameSource::Claimant)),
+    )
+}
+
+/// Each optional field enters the preimage only when present, so a row
+/// presented with a signed field removed or changed no longer verifies under
+/// the signature over the original row.
+fn build_recipient_binding_reject() -> Vec<RecipientBindingRejectVector> {
+    let owner = write_body_owner();
+    let removed_link = GrantLedgerEntry {
+        via_link: None,
+        ..via_link_row()
+    };
+    let removed_name = GrantLedgerEntry {
+        grantee_name: None,
+        ..claimant_named_row()
+    };
+    let flipped_source = GrantLedgerEntry {
+        grantee_name: Some(
+            GranteeName::new("Alice".to_string(), NameSource::Owner).expect("a valid name"),
+        ),
+        ..claimant_named_row()
+    };
+    let renamed = GrantLedgerEntry {
+        grantee_name: Some(
+            GranteeName::new("Mallory".to_string(), NameSource::Claimant).expect("a valid name"),
+        ),
+        ..claimant_named_row()
+    };
+    let cases: Vec<(&str, GrantLedgerEntry)> = vec![
+        ("via-link-removed", removed_link),
+        ("grantee-name-removed", removed_name),
+        ("name-source-changed", flipped_source),
+        ("grantee-name-changed", renamed),
+    ];
+    let mut names = BTreeSet::new();
+    cases
+        .into_iter()
+        .map(|(name, entry)| {
+            assert!(
+                names.insert(name),
+                "duplicate recipient-binding reject {name}"
+            );
+            let err =
+                verify_recipient_binding(&owner.verifying_key(), WRITE_BODY_IPNS_NAME, &entry)
+                    .expect_err("a tampered row must not verify");
+            RecipientBindingRejectVector {
+                name: name.to_string(),
+                owner_identity_pk: hexstr(&owner.verifying_key().to_sec1()),
+                ipns_name: hexstr(WRITE_BODY_IPNS_NAME),
+                recipient_identity_pk: hexstr(&entry.recipient_identity_pk),
+                recipient_enc_pk: hexstr(&entry.recipient_enc_pk),
+                tag: hexstr(&entry.tag),
+                optional: SignedRowFields::of(&entry),
+                signature: hexstr(&entry.owner_sig),
+                check: err.check().to_string(),
+                class: err.class().to_string(),
+            }
+        })
+        .collect()
 }
 
 // --- Grant section (the seed-bearing-structure bundle) ----------------------
@@ -7219,34 +7566,83 @@ fn grant_set_sample() -> GrantSetCommitment {
     }
 }
 
+/// A link entry committed at `read` with every link field set: the deadline,
+/// a `write` conversion permission and an admission cap.
+fn grant_set_link_entry() -> GrantSetEntry {
+    let mut entry = GrantSetEntry::new(
+        &GRANT_SET_POINTER_READ_KEY,
+        [0x05; 32],
+        [0x45; 32],
+        Permission::Read,
+        [0x06; 32],
+    );
+    entry.kind = GrantSetEntryKind::Link;
+    entry.deadline = NonZeroU64::new(1_800_000_000_000);
+    entry.conversion_permission = Some(Permission::Write);
+    entry.admission_cap = Some(5);
+    entry
+}
+
+/// A personal entry beside two link entries that differ in every link field:
+/// the second converts at `read` under a zero cap, which admits no claim.
+fn grant_set_link_sample() -> GrantSetCommitment {
+    let mut read_link = GrantSetEntry::new(
+        &GRANT_SET_POINTER_READ_KEY,
+        [0x07; 32],
+        [0x47; 32],
+        Permission::Read,
+        [0x08; 32],
+    );
+    read_link.kind = GrantSetEntryKind::Link;
+    read_link.deadline = NonZeroU64::new(1);
+    read_link.conversion_permission = Some(Permission::Read);
+    read_link.admission_cap = Some(0);
+    GrantSetCommitment {
+        entries: vec![
+            grant_set_sample().entries[0].clone(),
+            grant_set_link_entry(),
+            read_link,
+        ],
+        ..grant_set_sample()
+    }
+}
+
 fn build_grant_set_accept() -> Vec<GrantSetAcceptVector> {
     let owner = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar");
-    let c = grant_set_sample();
-    let bytes = encode_grant_set_commitment(&c).expect("commitment encodes");
-    let decoded = decode_grant_set_commitment(&bytes).expect("commitment decodes");
-    assert_eq!(decoded, c, "grant-set accept: decode != source");
-    assert_eq!(
-        encode_grant_set_commitment(&decoded).unwrap(),
-        bytes,
-        "grant-set accept: not byte-stable"
-    );
-    let sig = sign_grant_set(&owner, &c).expect("commitment signs");
-    assert!(
-        verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok(),
-        "grant-set accept: must verify"
-    );
-    vec![GrantSetAcceptVector {
-        name: "read-and-write".to_string(),
-        owner_identity_pk: hexstr(&owner.verifying_key().to_sec1()),
-        pointer_read_key: hexstr(&GRANT_SET_POINTER_READ_KEY),
-        recipients: c
-            .entries
-            .iter()
-            .map(|e| hexstr(&e.recipient_enc_pk(&GRANT_SET_POINTER_READ_KEY)))
-            .collect(),
-        commitment: hexstr(&bytes),
-        signature: hexstr(&sig.to_compact()),
-    }]
+    let cases = [
+        ("read-and-write", grant_set_sample()),
+        ("personal-and-link", grant_set_link_sample()),
+    ];
+    cases
+        .into_iter()
+        .map(|(name, c)| {
+            let bytes = encode_grant_set_commitment(&c).expect("commitment encodes");
+            let decoded = decode_grant_set_commitment(&bytes).expect("commitment decodes");
+            assert_eq!(decoded, c, "grant-set accept {name}: decode != source");
+            assert_eq!(
+                encode_grant_set_commitment(&decoded).unwrap(),
+                bytes,
+                "grant-set accept {name}: not byte-stable"
+            );
+            let sig = sign_grant_set(&owner, &c).expect("commitment signs");
+            assert!(
+                verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok(),
+                "grant-set accept {name}: must verify"
+            );
+            GrantSetAcceptVector {
+                name: name.to_string(),
+                owner_identity_pk: hexstr(&owner.verifying_key().to_sec1()),
+                pointer_read_key: hexstr(&GRANT_SET_POINTER_READ_KEY),
+                recipients: c
+                    .entries
+                    .iter()
+                    .map(|e| hexstr(&e.recipient_enc_pk(&GRANT_SET_POINTER_READ_KEY)))
+                    .collect(),
+                commitment: hexstr(&bytes),
+                signature: hexstr(&sig.to_compact()),
+            }
+        })
+        .collect()
 }
 
 /// A grant-set entry map value, for hand-crafting commitment reject vectors.
@@ -7279,6 +7675,24 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
             kv.push(("entries", Value::Array(entries)));
         }
         encode(&map_of(kv)).unwrap()
+    };
+    let entry_with = |extra: Vec<(&str, Value)>| {
+        with_fields(
+            grant_set_entry_map(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]),
+            extra,
+        )
+    };
+    let link = || ("kind", Value::Text("link".to_string()));
+    // A link entry with every link field except `field`.
+    let link_without = |field: &str| {
+        let mut extra = vec![
+            link(),
+            ("deadline", Value::Unsigned(1_800_000_000_000)),
+            ("conversionPermission", Value::Text("read".to_string())),
+            ("admissionCap", Value::Unsigned(5)),
+        ];
+        extra.retain(|(key, _)| *key != field);
+        entry_with(extra)
     };
     let codec_cases: Vec<(&str, Vec<u8>, &str)> = vec![
         (
@@ -7377,6 +7791,111 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
             ),
             "too-many-structures",
         ),
+        (
+            "deadline-on-personal-entry",
+            commitment_of(
+                vec![entry_with(vec![("deadline", Value::Unsigned(1))])],
+                false,
+            ),
+            "link-field-on-personal-entry",
+        ),
+        (
+            "admission-cap-on-personal-entry",
+            commitment_of(
+                vec![entry_with(vec![("admissionCap", Value::Unsigned(5))])],
+                false,
+            ),
+            "link-field-on-personal-entry",
+        ),
+        (
+            "conversion-permission-on-personal-entry",
+            commitment_of(
+                vec![entry_with(vec![(
+                    "conversionPermission",
+                    Value::Text("read".to_string()),
+                )])],
+                false,
+            ),
+            "link-field-on-personal-entry",
+        ),
+        (
+            "link-missing-deadline",
+            commitment_of(vec![link_without("deadline")], false),
+            "missing-field",
+        ),
+        (
+            "link-missing-conversion-permission",
+            commitment_of(vec![link_without("conversionPermission")], false),
+            "missing-field",
+        ),
+        (
+            "link-missing-admission-cap",
+            commitment_of(vec![link_without("admissionCap")], false),
+            "missing-field",
+        ),
+        (
+            "unknown-entry-kind",
+            commitment_of(
+                vec![entry_with(vec![("kind", Value::Text("group".to_string()))])],
+                false,
+            ),
+            "invalid-entry-kind",
+        ),
+        (
+            "entry-kind-not-text",
+            commitment_of(vec![entry_with(vec![("kind", Value::Unsigned(1))])], false),
+            "unexpected-type",
+        ),
+        (
+            "link-deadline-not-an-unsigned",
+            commitment_of(
+                vec![entry_with(vec![
+                    link(),
+                    ("deadline", Value::Text("soon".to_string())),
+                ])],
+                false,
+            ),
+            "unexpected-type",
+        ),
+        (
+            // Every re-sealer selects blob material by the committed
+            // permission, so this entry would hand the write seed to every
+            // link holder.
+            "link-committed-at-write",
+            commitment_of(
+                vec![entry_with(vec![
+                    ("kind", Value::Text("link".to_string())),
+                    ("permission", Value::Text("write".to_string())),
+                ])],
+                false,
+            ),
+            "link-permission-not-read",
+        ),
+        (
+            // A personal entry has one wire form: no `kind` key.
+            "explicit-personal-kind",
+            commitment_of(
+                vec![entry_with(vec![(
+                    "kind",
+                    Value::Text("personal".to_string()),
+                )])],
+                false,
+            ),
+            "invalid-entry-kind",
+        ),
+        (
+            // Zero is the natural uninitialized value, and would be dead for
+            // every clock — the opposite of the absent field's "no deadline".
+            "link-zero-deadline",
+            commitment_of(
+                vec![entry_with(vec![
+                    ("kind", Value::Text("link".to_string())),
+                    ("deadline", Value::Unsigned(0)),
+                ])],
+                false,
+            ),
+            "invalid-deadline",
+        ),
     ];
 
     let mut names = BTreeSet::new();
@@ -7441,12 +7960,48 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
     assert!(names.insert("signature-over-other-commitment"));
     out.push(GrantSetRejectVector {
         name: "signature-over-other-commitment".to_string(),
-        owner_identity_pk: owner_pk_hex,
+        owner_identity_pk: owner_pk_hex.clone(),
         commitment: hexstr(&this_bytes),
         signature: hexstr(&sig_over_other.to_compact()),
         check: "commitment-invalid".to_string(),
         class: "trust".to_string(),
     });
+
+    // The link fields are under the owner signature: the signed set presented
+    // with any one of them edited never verifies.
+    let signed = grant_set_link_sample();
+    let sig = sign_grant_set(&owner, &signed).expect("link commitment signs");
+    type Edit = fn(&mut GrantSetEntry);
+    let edits: [(&str, Edit); 4] = [
+        ("link-deadline-edited", |e| e.deadline = NonZeroU64::new(1)),
+        ("link-conversion-permission-edited", |e| {
+            e.conversion_permission = Some(Permission::Read)
+        }),
+        ("link-admission-cap-edited", |e| e.admission_cap = Some(50)),
+        ("link-kind-edited", |e| {
+            e.kind = GrantSetEntryKind::Personal;
+            e.deadline = None;
+            e.conversion_permission = None;
+            e.admission_cap = None;
+        }),
+    ];
+    for (name, edit) in edits {
+        let mut edited = signed.clone();
+        edit(&mut edited.entries[1]);
+        let edited_bytes = encode_grant_set_commitment(&edited).expect("edited set encodes");
+        let err = verify_grant_set(&owner.verifying_key(), &edited, &sig)
+            .expect_err("an edited link field must fail closed");
+        assert_eq!(err.check(), "commitment-invalid", "grant-set reject {name}");
+        assert!(names.insert(name), "duplicate grant-set reject {name}");
+        out.push(GrantSetRejectVector {
+            name: name.to_string(),
+            owner_identity_pk: owner_pk_hex.clone(),
+            commitment: hexstr(&edited_bytes),
+            signature: hexstr(&sig.to_compact()),
+            check: "commitment-invalid".to_string(),
+            class: "trust".to_string(),
+        });
+    }
     out
 }
 

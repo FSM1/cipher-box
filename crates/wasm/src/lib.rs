@@ -2279,6 +2279,15 @@ impl Event {
     }
 }
 
+/// The short fingerprint of a 33-byte compressed identity key, the value both
+/// hosts show beside a grantee name (ADR 0027 D7). Throws on bytes that are
+/// not an identity key.
+#[wasm_bindgen(js_name = identityFingerprint)]
+pub fn identity_fingerprint(identity_public_key: &[u8]) -> Result<String, JsError> {
+    cipherbox_engine::fingerprint_identity_key(identity_public_key)
+        .ok_or_else(|| JsError::new("invalid identity public key"))
+}
+
 // ---------------------------------------------------------------------------
 // The device-approval rendezvous (ADR 0009). Pure functions of the exchange
 // transcript, exported free rather than as engine commands: a device that asks

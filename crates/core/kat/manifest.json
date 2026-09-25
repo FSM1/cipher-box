@@ -234,6 +234,12 @@
           "invalid-enc-subkey",
           "invalid-binding-sig-encoding"
         ]
+      },
+      "fingerprint": {
+        "domain": "cipherbox/v2/identity-fingerprint",
+        "bytes": 10,
+        "file": "vectors/contact/fingerprint.json",
+        "count": 2
       }
     }
   },
@@ -363,24 +369,32 @@
     "grantSectionEnvelopeHeadroomBytes": 49152,
     "writeBodyAccept": {
       "file": "vectors/grant/write_body_accept.json",
-      "count": 4
+      "count": 5
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 12,
+      "count": 18,
       "checks": [
         "duplicate-grant-tag",
         "too-many-structures",
         "unexpected-type",
         "missing-field",
         "invalid-permission",
-        "invalid-expiry",
+        "invalid-grantee-name",
+        "invalid-name-source",
         "invalid-field-length"
       ]
     },
     "recipientBindingAccept": {
       "file": "vectors/grant/recipient_binding_accept.json",
-      "count": 2
+      "count": 5
+    },
+    "recipientBindingReject": {
+      "file": "vectors/grant/recipient_binding_reject.json",
+      "count": 4,
+      "checks": [
+        "identity-signature-invalid"
+      ]
     },
     "grantBlobAccept": {
       "file": "vectors/grant/grant_blob_accept.json",
@@ -470,11 +484,11 @@
     },
     "grantSetAccept": {
       "file": "vectors/grant/grant_set_accept.json",
-      "count": 1
+      "count": 2
     },
     "grantSetReject": {
       "file": "vectors/grant/grant_set_reject.json",
-      "count": 10,
+      "count": 26,
       "checks": [
         "duplicate-grant-tag",
         "commitment-invalid",
@@ -482,6 +496,10 @@
         "unexpected-type",
         "missing-field",
         "invalid-permission",
+        "invalid-deadline",
+        "invalid-entry-kind",
+        "link-field-on-personal-entry",
+        "link-permission-not-read",
         "invalid-field-length"
       ]
     },

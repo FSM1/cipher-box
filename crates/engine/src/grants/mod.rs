@@ -35,7 +35,7 @@ pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
     repair_observed, undo_dest_add_versioned,
 };
-pub use contact::{Contact, MAX_CONTACT_CODE_BYTES, import_contact};
+pub use contact::{Contact, MAX_CONTACT_CODE_BYTES, fingerprint_identity_key, import_contact};
 pub use contact_store::{
     BookCodecError, CONTACTS_PREFIX, ContactStore, ContactStoreError, MAX_CONTACTS,
     MAX_LINK_CONTACT_SCOPES, MAX_LINK_CONTACTS, StagingContactStore, link_budget_full,
@@ -65,8 +65,8 @@ pub use invite_store::{
 };
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, UNATTESTED_IDENTITY_PK,
-    enforce_committed_ledger, entry_is_live, mint_grant_row, recipient_blinded_tag,
-    recipient_self_location, row_is_owner_attested, self_locate, self_locate_signed,
+    enforce_committed_ledger, mint_grant_row, recipient_blinded_tag, recipient_self_location,
+    row_is_owner_attested, self_locate, self_locate_signed,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use received_share_store::{RECEIVED_SHARES_PREFIX, StagingReceivedShareStore};

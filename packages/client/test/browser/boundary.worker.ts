@@ -15,12 +15,17 @@
  *   await would read a detached view as '' and store the entry under the wrong
  *   name, so the read-back under the real key here would miss — the fix stores
  *   it correctly.
+ * - `identityFingerprint`: the wasm export answers the core KAT
+ *   (`crates/core/kat/vectors/contact/fingerprint.json`) and refuses a key that
+ *   is not 33 bytes.
  */
-import init, { deadLetterEvent } from './pkg/cipherbox_wasm.js';
+import init, { deadLetterEvent, identityFingerprint } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
+import fingerprintVectors from '../../../../crates/core/kat/vectors/contact/fingerprint.json?raw';
 
 import { IdbFloorStore, IdbSnapshotCache, OpfsStagingStore } from '../../src/seams/index.js';
 import { deleteDatabase } from '../../src/seams/idb.js';
+import { unhex } from './hexUtil.js';
 import type { HarnessWorkerScope } from './workerScope.js';
 
 interface Outcome {
@@ -47,6 +52,30 @@ async function runBigint(): Promise<void> {
   if (event.kind !== 'deadLetter') throw new Error(`kind ${event.kind}`);
   if (typeof event.opId !== 'bigint') throw new Error(`opId type ${typeof event.opId}`);
   if (event.opId !== huge) throw new Error(`opId ${event.opId} !== ${huge}`);
+}
+
+interface FingerprintVector {
+  name: string;
+  identityPk: string;
+  fingerprint: string;
+}
+
+const FINGERPRINT_KAT = JSON.parse(fingerprintVectors) as FingerprintVector[];
+
+async function runIdentityFingerprint(): Promise<void> {
+  await init({ module_or_path: wasmUrl });
+  if (FINGERPRINT_KAT.length === 0) throw new Error('no fingerprint vectors');
+  for (const { name, identityPk, fingerprint } of FINGERPRINT_KAT) {
+    const got = identityFingerprint(unhex(identityPk));
+    if (got !== fingerprint) throw new Error(`fingerprint ${name}: ${got} != ${fingerprint}`);
+  }
+  let refused = false;
+  try {
+    identityFingerprint(new Uint8Array(32).fill(2));
+  } catch {
+    refused = true;
+  }
+  if (!refused) throw new Error('a 32-byte identity key was fingerprinted');
 }
 
 async function runStagingDetachment(): Promise<void> {
@@ -189,6 +218,8 @@ async function run(name: string): Promise<void> {
       return runSnapshotKeyDetachment();
     case 'floorKeyDetachment':
       return runFloorKeyDetachment();
+    case 'identityFingerprint':
+      return runIdentityFingerprint();
     default:
       throw new Error(`unknown boundary check: ${name}`);
   }

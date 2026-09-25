@@ -638,6 +638,47 @@ describe('EngineHost device reads', () => {
   });
 });
 
+/** A wasm module whose fingerprint free function records the key it was handed. */
+function fingerprintWasm(): { wasm: EngineWasm; keys: Uint8Array[] } {
+  const keys: Uint8Array[] = [];
+  const wasm = {
+    ...fakeWasmEnums,
+    EngineHandle: class {
+      start(): Promise<void> {
+        return Promise.resolve();
+      }
+    },
+    identityFingerprint: (identityPublicKey: Uint8Array): string => {
+      keys.push(identityPublicKey);
+      return 'e686 bdd6 b44e 05c4 4db0';
+    },
+  } as unknown as EngineWasm;
+  return { wasm, keys };
+}
+
+describe('EngineHost identity fingerprint', () => {
+  it('hands the key bytes to the wasm export and answers with its string', async () => {
+    const { wasm, keys } = fingerprintWasm();
+    const host = await started(wasm);
+    const identityPublicKey = new Uint8Array(33).fill(2);
+
+    await expect(host.read({ kind: 'identityFingerprint', identityPublicKey })).resolves.toBe(
+      'e686 bdd6 b44e 05c4 4db0'
+    );
+    expect(keys).toEqual([identityPublicKey]);
+  });
+
+  it('refuses a key that is not bytes before the wasm export is reached', async () => {
+    const { wasm, keys } = fingerprintWasm();
+    const host = await started(wasm);
+
+    await expect(
+      host.read({ kind: 'identityFingerprint', identityPublicKey: '02ab' as unknown as Uint8Array })
+    ).rejects.toThrow('invalid request field identityPublicKey: string');
+    expect(keys).toEqual([]);
+  });
+});
+
 describe('EngineHost device rendezvous', () => {
   // Security rule 7: the realm that holds a copy erases it. The caller keeps
   // and erases its own, and a transferred buffer is already detached.

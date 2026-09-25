@@ -11,6 +11,7 @@ pub mod error;
 pub mod hex;
 pub mod ipns;
 pub mod kdf;
+pub mod name;
 pub mod payload;
 pub mod seal;
 pub mod suite;

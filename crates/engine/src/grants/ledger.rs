@@ -30,8 +30,6 @@ use cipherbox_core::suite::ecdsa::{
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::seams::UnixMillis;
-
 /// One grant blob as published in a scope root's envelope: its blinded `tag`
 /// (the lookup key) and the HPKE `enc`/`ciphertext` the recipient opens. The
 /// gate authenticates the blob's signature separately; this is only the
@@ -107,22 +105,6 @@ pub fn self_locate_signed<'a>(
     tag: &[u8; 32],
 ) -> Option<&'a SignedGrantBlob> {
     blobs.iter().find(|b| &b.tag == tag)
-}
-
-/// Whether a grant-ledger row is still live at `now` — the injected
-/// [`Scheduler::now`](crate::seams::Scheduler::now) instant, never a clock this
-/// layer reads. A row with no deadline never expires; one with a deadline dies
-/// **at** it, not a tick later.
-///
-/// The predicate every reader of a resolved ledger applies, and the input the
-/// discovered-expiry trigger prunes from. It decides nothing on its own — see
-/// [`GrantLedgerEntry::expires_at`] for why a deadline is not a capability
-/// boundary.
-pub fn entry_is_live(entry: &GrantLedgerEntry, now: UnixMillis) -> bool {
-    match entry.expires_at {
-        Some(expires_at) => now.0 < expires_at.get(),
-        None => true,
-    }
 }
 
 /// The rows one grantee contributes to a scope root: the blinded tag, the entry
@@ -258,8 +240,7 @@ fn committed_permissions(commitment: &GrantSetCommitment) -> BTreeMap<[u8; 32], 
 /// too, and every consumer reads those off the commitment rather than off a row,
 /// so a row that disagrees misdirects nothing and buys a committed writer no
 /// veto over the record. `recipientIdentityPk` is under the row's own owner
-/// signature ([`row_is_owner_attested`]); `expiresAt` is under none, and is not
-/// a capability boundary ([`GrantLedgerEntry::expires_at`]).
+/// signature ([`row_is_owner_attested`]).
 pub fn enforce_committed_ledger(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
@@ -288,7 +269,6 @@ pub fn enforce_committed_ledger(
 mod tests {
     use super::*;
     use cipherbox_core::seal::{GrantSetEntry, PreservedFields};
-    use core::num::NonZeroU64;
 
     /// The scope pointer read key every fixture masks its recipients under.
     const PRK: [u8; SECRET_LEN] = [0x66; SECRET_LEN];
@@ -440,25 +420,6 @@ mod tests {
         ];
         assert_eq!(self_locate(&blobs, &[0x02; 32]).unwrap().ciphertext, b"b");
         assert!(self_locate(&blobs, &[0x03; 32]).is_none());
-    }
-
-    #[test]
-    fn a_row_with_no_deadline_is_live_at_every_instant() {
-        let entry = ledger_entry([0x21; 32], Permission::Read);
-        assert!(entry_is_live(&entry, UnixMillis(0)));
-        assert!(entry_is_live(&entry, UnixMillis(u64::MAX)));
-    }
-
-    #[test]
-    fn a_deadline_row_dies_at_the_deadline_instant() {
-        let mut entry = ledger_entry([0x21; 32], Permission::Read);
-        entry.expires_at = NonZeroU64::new(1_000);
-        assert!(entry_is_live(&entry, UnixMillis(999)));
-        assert!(
-            !entry_is_live(&entry, UnixMillis(1_000)),
-            "dies at, not after"
-        );
-        assert!(!entry_is_live(&entry, UnixMillis(1_001)));
     }
 
     #[test]
