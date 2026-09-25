@@ -13,6 +13,7 @@ use cipherbox_core::seal::{GrantLedgerEntry, GrantSetEntry, GrantSetEntryKind};
 use cipherbox_core::suite::ecdsa::{EcdsaVerifier, IDENTITY_PUBLIC_LEN};
 use cipherbox_core::suite::secret::SECRET_LEN;
 
+use super::contact_store::LinkSource;
 use super::invite::{CommittedLink, CommittedScope, InviteError, OwnerAuthority, committed_links};
 use super::ledger::{UNATTESTED_IDENTITY_PK, row_is_owner_attested};
 use crate::seams::UnixMillis;
@@ -147,19 +148,19 @@ pub fn grantee_cut_set(
 pub struct LinkSources<'a> {
     /// Each contact's encryption subkey with the link that sourced it, `None`
     /// for one the owner imported or granted directly.
-    pub contacts: &'a [([u8; SECRET_LEN], Option<[u8; 32]>)],
+    pub contacts: &'a [([u8; SECRET_LEN], Option<LinkSource>)],
     /// Unmasks each committed entry's `recipientEncPk`.
     pub pointer_read_key: &'a [u8; SECRET_LEN],
 }
 
 impl LinkSources<'_> {
-    /// The encryption subkeys of the contacts `link_tag` sourced, each bound
-    /// to that contact only.
-    fn joined_through(&self, link_tag: &[u8; 32]) -> Vec<[u8; SECRET_LEN]> {
+    /// The encryption subkeys of the contacts `link` sourced, each bound to
+    /// that contact only.
+    fn joined_through(&self, link: &CommittedLink) -> Vec<[u8; SECRET_LEN]> {
         self.contacts
             .iter()
             .filter(|(enc, source)| {
-                source.as_ref() == Some(link_tag)
+                source.is_some_and(|source| source.names(link))
                     && self.contacts.iter().filter(|(held, _)| held == enc).count() == 1
             })
             .map(|(enc, _)| *enc)
@@ -173,10 +174,10 @@ impl LinkSources<'_> {
 ///
 /// A row whose via-link reference names the link counts even when its writer
 /// broke the owner's signature: a write grantee who breaks its own row must
-/// not keep a grant the owner removes. A row with no owner signature also
+/// not keep a grant the owner removes. A row with no attested label also
 /// counts when its committed `recipientEncPk` names a contact the link
 /// sourced, so a write grantee that strips its via-link reference is still
-/// found. The cut can only grow.
+/// found, before and after a wave re-mints the row. The cut can only grow.
 pub fn link_cut_set(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
@@ -190,15 +191,17 @@ pub fn link_cut_set(
     };
     let owner_identity = owner.identity_signer.verifying_key();
     let name = scope.commitment.ipns_name.as_slice();
-    let joined = book.joined_through(&link.tag);
+    let joined = book.joined_through(link);
     tags.extend(
         scope
             .ledger
             .iter()
             .filter(|row| {
                 personal_entry(scope, &row.tag).is_some_and(|entry| {
+                    let unlabelled = !row_is_owner_attested(&owner_identity, row, name)
+                        || row.recipient_identity_pk == UNATTESTED_IDENTITY_PK;
                     row.via_link == Some(link.tag)
-                        || (!row_is_owner_attested(&owner_identity, row, name)
+                        || (unlabelled
                             && joined.contains(&entry.recipient_enc_pk(book.pointer_read_key)))
                 })
             })
@@ -549,11 +552,8 @@ mod tests {
             BTreeSet::from([fx.link, fx.tag_of(0x12)]),
             "the stripped row names the link nowhere in the ledger"
         );
-        let contacts = [
-            (enc(0x11), Some(fx.link)),
-            (enc(0x12), Some(fx.link)),
-            (enc(0x13), None),
-        ];
+        let source = Some(LinkSource::Identity(link.ephemeral_identity_pk));
+        let contacts = [(enc(0x11), source), (enc(0x12), source), (enc(0x13), None)];
         let book = LinkSources {
             contacts: &contacts,
             pointer_read_key: &PRK,
@@ -563,7 +563,7 @@ mod tests {
             BTreeSet::from([fx.link, fx.tag_of(0x11), fx.tag_of(0x12)]),
             "the contact the link sourced names the row, and the direct grantee stays"
         );
-        let shared = [(enc(0x11), Some(fx.link)), (enc(0x11), None)];
+        let shared = [(enc(0x11), source), (enc(0x11), None)];
         let ambiguous = LinkSources {
             contacts: &shared,
             pointer_read_key: &PRK,

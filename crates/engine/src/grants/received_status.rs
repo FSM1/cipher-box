@@ -858,9 +858,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
 
     /// The record `share`'s scope root answers with now, and the durable bars
     /// every verdict on it is measured against. `None` is never a removal: it
-    /// is absence — an unparsable bookmark, an unresolvable name, an
-    /// unassemblable record, or a floor this pass could not read — or a replay
-    /// below the sequence floor, which is reported on `events` first.
+    /// is absence — an unparsable bookmark, an unresolvable name, a record whose
+    /// blocks a seam could not fetch, or a floor this pass could not read — or a
+    /// gate refusal (a replay below the sequence floor, a record the assembly
+    /// rejects), which is reported on `events` first.
     async fn resolved(
         &self,
         share: &ReceivedShare,
@@ -900,9 +901,15 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             }
             Err(GateError::Seam(_)) => return None,
         }
-        let candidate = assemble_candidate(self.gateway, self.http, &name, &record_bytes, None)
-            .await
-            .ok()?;
+        let candidate =
+            match assemble_candidate(self.gateway, self.http, &name, &record_bytes, None).await {
+                Ok(candidate) => candidate,
+                Err(GateError::Rejected(rejection)) => {
+                    report_refusal(events, share, &rejection);
+                    return None;
+                }
+                Err(GateError::Seam(_)) => return None,
+            };
         Some((candidate, SharedScopeFloors { epoch, cut_epoch }))
     }
 

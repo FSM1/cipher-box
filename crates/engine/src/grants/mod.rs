@@ -46,7 +46,7 @@ pub use child_index::{
 };
 pub use contact::{Contact, MAX_CONTACT_CODE_BYTES, fingerprint_identity_key, import_contact};
 pub use contact_store::{
-    BookCodecError, CONTACTS_PREFIX, ContactStore, ContactStoreError, MAX_CONTACTS,
+    BookCodecError, CONTACTS_PREFIX, ContactStore, ContactStoreError, LinkSource, MAX_CONTACTS,
     MAX_LINK_CONTACT_SCOPES, MAX_LINK_CONTACTS, StagingContactStore, link_budget_full,
     resolve_recipient,
 };

@@ -86,7 +86,7 @@ use crate::grants::{
     CLAIM_KEY_LEN, ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError,
     ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
     EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim, InviteClaim, InviteError,
-    InviteFragment, InviteMintError, InviteMintPlan, LinkHold, LinkSources, LinkTerms,
+    InviteFragment, InviteMintError, InviteMintPlan, LinkHold, LinkSource, LinkSources, LinkTerms,
     MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob,
     ReceivedShare, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, RevokedPerson,
     StagingContactStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_grantee,
@@ -11657,7 +11657,7 @@ where {
             }
             Err(e) => return Err(EngineError::from_contact_store(e)),
         };
-        let sources: Vec<Option<[u8; 32]>> = book.iter().map(|(_, source)| *source).collect();
+        let sources: Vec<Option<LinkSource>> = book.iter().map(|(_, source)| *source).collect();
         let keys: Vec<ContactKeys> = book
             .iter()
             .map(|(contact, _)| ContactKeys::of(contact))
@@ -11699,7 +11699,7 @@ where {
         &self,
         session: &SessionIdentity,
         scope_root: NodeId,
-        sources: &[Option<[u8; 32]>],
+        sources: &[Option<LinkSource>],
         contacts: &[ContactKeys],
     ) -> Option<ScopeSharing> {
         let api = self.api.as_ref()?;
@@ -11757,7 +11757,7 @@ where {
                 expired: link.is_expired(now),
                 admission_cap: link.admission_cap,
                 pending_claims: counts.link_pending(scope_root, &link.ephemeral_identity_pk),
-                contact_budget_full: link_budget_full(sources, &link.tag),
+                contact_budget_full: link_budget_full(sources, link),
                 refused_claims: counts.link_refused(scope_root, &link.ephemeral_identity_pk),
             })
             .collect();

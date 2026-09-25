@@ -662,7 +662,7 @@ where
                 commitment,
                 ledger,
                 claimant,
-                link_tag,
+                link,
                 claimant_code,
                 outcome,
             } = match converted {
@@ -688,12 +688,12 @@ where
             let recorded = match outcome {
                 ClaimOutcome::Granted => {
                     contacts
-                        .record_from_link(&claimant_code, &link_tag, scope_id)
+                        .record_from_link(&claimant_code, &link, scope_id)
                         .await
                 }
                 ClaimOutcome::Unchanged => {
                     contacts
-                        .record_unchanged_from_link(&claimant_code, &link_tag, scope_id)
+                        .record_unchanged_from_link(&claimant_code, &link, scope_id)
                         .await
                 }
             };
