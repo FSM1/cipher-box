@@ -49,7 +49,6 @@ test('a minted link is claimed by a second identity and converted to a grant', a
   expect(new URL(claimant.url()).hash).toBe('');
   await claimant.getByRole('link', { name: 'go to your files' }).click();
 
-  // A claim is a standing request; the owner's tick converts it to a grant.
   await share.openUntilGranted(FOLDER, 1, 360_000);
   await expect(share.permission).toHaveText('read');
   await share.close();
