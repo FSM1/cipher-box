@@ -84,7 +84,14 @@ function answerRead(read: ReadDescriptor): ReadResultValue {
     case 'download':
       return new Uint8Array([1, 2, 3]).buffer;
     case 'invitePreview':
-      return { names: null, permission: null, state: 'unresolvable', joined: false, listing: [] };
+      return {
+        scope: new Uint8Array(16),
+        names: null,
+        permission: null,
+        state: 'unresolvable',
+        joined: false,
+        listing: [],
+      };
   }
 }
 

@@ -993,6 +993,7 @@ export function readInvitePreview(
     throw new Error('WASM invite preview carries one name without the other');
   }
   return {
+    scope: preview.scope,
     names: ownerName === undefined || folderName === undefined ? null : { ownerName, folderName },
     permission: permission === undefined ? null : permissionFrom(wasm, permission),
     state: previewState(preview.state),

@@ -206,6 +206,7 @@ export interface WasmPreviewEntry {
 
 /** wasm-bindgen `InvitePreview` — what the invite page shows before the join. */
 export interface WasmInvitePreview {
+  readonly scope: Uint8Array;
   readonly ownerName?: string;
   readonly folderName?: string;
   readonly permission?: number;

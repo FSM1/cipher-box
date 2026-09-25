@@ -1714,6 +1714,7 @@ describe('readReceivedShare', () => {
 
 describe('readInvitePreview', () => {
   const preview = {
+    scope: new Uint8Array(16).fill(4),
     ownerName: 'Ada',
     folderName: 'trips',
     permission: fakeWasmEnums.Permission.Write,
@@ -1725,8 +1726,9 @@ describe('readInvitePreview', () => {
     ],
   };
 
-  it('carries the verified names, the permission, the state and the listing', () => {
+  it('carries the scope, the verified names, the permission, the state and the listing', () => {
     expect(readInvitePreview(fakeWasm, preview)).toEqual({
+      scope: new Uint8Array(16).fill(4),
       names: { ownerName: 'Ada', folderName: 'trips' },
       permission: 'write',
       state: 'live',

@@ -335,6 +335,8 @@ export interface InvitePreviewEntryDescriptor {
  * preview posts nothing and persists nothing.
  */
 export interface InvitePreviewDescriptor {
+  /** The folder the join bookmarks: what a host opens once the account joined. */
+  scope: Uint8Array;
   /** `null` when the owner signature over the names does not verify; the link still works. */
   names: { ownerName: string; folderName: string } | null;
   /** The permission conversion grants, or `null` when no link entry was read. */
