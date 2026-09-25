@@ -335,12 +335,11 @@ pub enum Malformed {
     /// class boundary [`Self::InvalidNodeKind`] draws for the kind discriminant.
     InvalidPermission,
     /// A grant-set commitment entry carried `deadline: 0`. Zero is the natural
-    /// uninitialized value, and its meaning — expired at the Unix epoch, so dead
-    /// for every clock — is the exact opposite of the "no deadline" an absent
-    /// field means. Accepting it would make an uninitialized deadline
+    /// uninitialized value, and a deadline at the Unix epoch is dead for every
+    /// clock, so accepting it would make an uninitialized deadline
     /// indistinguishable from a deliberately dead one. *Malformed*: foreign data
     /// in the deadline slot, not a tampered canonical form.
-    InvalidExpiry,
+    InvalidDeadline,
     /// A grant-set commitment entry's `kind` was not `"link"`. A personal entry
     /// has one wire form, the absent key, so an explicit `"personal"` is
     /// refused with every other string.
@@ -354,7 +353,8 @@ pub enum Malformed {
     /// every link holder (ADR 0024 D4).
     LinkPermissionNotRead,
     /// A grant-ledger row's `granteeName` was empty, longer than
-    /// [`crate::seal::MAX_GRANTEE_NAME_BYTES`], or carried a control character.
+    /// [`crate::seal::MAX_GRANTEE_NAME_BYTES`], or carried a control character or
+    /// a character [`crate::name::is_deceptive`] refuses.
     InvalidGranteeName,
     /// A grant-ledger row's `nameSource` was not `"claimant"` or `"owner"`.
     InvalidNameSource,
@@ -430,7 +430,7 @@ impl Malformed {
         "invalid-binding-sig-encoding",
         "invalid-node-kind",
         "invalid-permission",
-        "invalid-expiry",
+        "invalid-deadline",
         "invalid-entry-kind",
         "link-field-on-personal-entry",
         "link-permission-not-read",
@@ -468,7 +468,7 @@ impl Malformed {
             Self::InvalidBindingSigEncoding => "invalid-binding-sig-encoding",
             Self::InvalidNodeKind => "invalid-node-kind",
             Self::InvalidPermission => "invalid-permission",
-            Self::InvalidExpiry => "invalid-expiry",
+            Self::InvalidDeadline => "invalid-deadline",
             Self::InvalidEntryKind => "invalid-entry-kind",
             Self::LinkFieldOnPersonalEntry => "link-field-on-personal-entry",
             Self::LinkPermissionNotRead => "link-permission-not-read",
@@ -524,7 +524,7 @@ impl fmt::Display for Malformed {
             | Self::InvalidBindingSigEncoding
             | Self::InvalidNodeKind
             | Self::InvalidPermission
-            | Self::InvalidExpiry
+            | Self::InvalidDeadline
             | Self::InvalidEntryKind
             | Self::LinkFieldOnPersonalEntry
             | Self::LinkPermissionNotRead

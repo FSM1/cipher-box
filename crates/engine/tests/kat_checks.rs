@@ -376,7 +376,7 @@ fn the_invite_check_surface_matches_the_variants_in_order() {
         delegated,
         [
             EntropyError::CHECKS[0],
-            Malformed::InvalidExpiry.check(),
+            Malformed::InvalidDeadline.check(),
             violation.check(),
         ]
     );

@@ -81,15 +81,6 @@ pub fn fingerprint_identity_key(identity_public_key: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_fingerprint_needs_a_valid_identity_key() {
-        let key = identity().verifying_key();
-        assert_eq!(
-            fingerprint_identity_key(&key.to_sec1()),
-            Some(identity_fingerprint(&key))
-        );
-        assert_eq!(fingerprint_identity_key(&[0x02; 32]), None);
-    }
     use cipherbox_core::suite::contact::{ContactCode, sign_subkey_binding};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::x25519::X25519Secret;
@@ -100,6 +91,16 @@ mod tests {
 
     fn enc() -> X25519Public {
         X25519Secret::from_scalar([0x33; 32]).public()
+    }
+
+    #[test]
+    fn a_fingerprint_needs_a_valid_identity_key() {
+        let key = identity().verifying_key();
+        assert_eq!(
+            fingerprint_identity_key(&key.to_sec1()),
+            Some(identity_fingerprint(&key))
+        );
+        assert_eq!(fingerprint_identity_key(&[0x02; 32]), None);
     }
 
     #[test]

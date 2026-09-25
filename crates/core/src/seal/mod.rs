@@ -50,8 +50,8 @@ pub use envelope::{
     grant_section_bytes, has_grant_section, open_read_body, seal_read_body, set_grant_section,
 };
 pub use grant::{
-    AscentLink, EntryKind, GrantBlobPayload, GrantSetBindingError, GrantSetCommitment,
-    GrantSetEntry, HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
+    AscentLink, GrantBlobPayload, GrantSetBindingError, GrantSetCommitment, GrantSetEntry,
+    GrantSetEntryKind, HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
     decode_ascent_link, decode_grant_blob_payload, decode_grant_set_commitment,
     decode_history_link_payload, decode_override_seed_payload, decode_owner_write_blob_payload,
     encode_ascent_link, encode_grant_blob_payload, encode_grant_set_commitment,

@@ -373,7 +373,7 @@
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 17,
+      "count": 18,
       "checks": [
         "duplicate-grant-tag",
         "too-many-structures",
@@ -488,7 +488,7 @@
     },
     "grantSetReject": {
       "file": "vectors/grant/grant_set_reject.json",
-      "count": 16,
+      "count": 26,
       "checks": [
         "duplicate-grant-tag",
         "commitment-invalid",
@@ -496,7 +496,7 @@
         "unexpected-type",
         "missing-field",
         "invalid-permission",
-        "invalid-expiry",
+        "invalid-deadline",
         "invalid-entry-kind",
         "link-field-on-personal-entry",
         "link-permission-not-read",

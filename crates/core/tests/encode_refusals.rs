@@ -1,12 +1,8 @@
-//! Encode-side refusals of the link-first fields (AGENTS.md rule 8). CI also
-//! runs this file under `--release`, where `debug_assert!` is compiled out, so
-//! a refusal that leans on one fails there.
-
 use core::num::NonZeroU64;
 
 use cipherbox_core::codec::Value;
 use cipherbox_core::seal::{
-    EntryKind, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, GranteeName,
+    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, GrantSetEntryKind, GranteeName,
     MAX_GRANTEE_NAME_BYTES, NameSource, Permission, PreservedFields, WriteBody,
     encode_grant_set_commitment, encode_write_body, sign_grant_set,
 };
@@ -52,11 +48,35 @@ fn a_deadline_on_a_personal_entry_is_refused_at_encode_and_sign() {
 #[test]
 fn a_link_committed_at_write_is_refused_at_encode_and_sign() {
     let mut e = entry(Permission::Write);
-    e.kind = EntryKind::Link;
+    e.kind = GrantSetEntryKind::Link;
     assert_eq!(
         refused(&commitment(e)),
         ("link-permission-not-read", "link-permission-not-read")
     );
+}
+
+#[test]
+fn a_link_without_each_required_field_is_refused_at_encode_and_sign() {
+    let full = || {
+        let mut e = entry(Permission::Read);
+        e.kind = GrantSetEntryKind::Link;
+        e.deadline = NonZeroU64::new(1_800_000_000_000);
+        e.conversion_permission = Some(Permission::Read);
+        e.admission_cap = Some(0);
+        e
+    };
+    let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+    assert!(sign_grant_set(&owner, &commitment(full())).is_ok());
+    let strips: [fn(&mut GrantSetEntry); 3] = [
+        |e| e.deadline = None,
+        |e| e.conversion_permission = None,
+        |e| e.admission_cap = None,
+    ];
+    for strip in strips {
+        let mut e = full();
+        strip(&mut e);
+        assert_eq!(refused(&commitment(e)), ("missing-field", "missing-field"));
+    }
 }
 
 #[test]
@@ -75,6 +95,11 @@ fn a_malformed_grantee_name_cannot_be_built() {
         String::new(),
         "n".repeat(MAX_GRANTEE_NAME_BYTES + 1),
         "Alice\u{7}".to_owned(),
+        "Alice\u{202E}".to_owned(),
+        "Alice\u{2066}".to_owned(),
+        "Alice\u{200B}".to_owned(),
+        "Alice\u{FEFF}".to_owned(),
+        "Alice\u{2028}".to_owned(),
     ] {
         assert_eq!(
             GranteeName::new(name, NameSource::Owner)

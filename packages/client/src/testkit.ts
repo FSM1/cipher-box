@@ -529,7 +529,6 @@ export class FakeEngineTransport implements EngineTransport {
    * nothing.
    */
   readonly rendezvousSteps: DeviceRendezvousStep[] = [];
-  readonly fingerprintKeys: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
   readonly versionLists: Uint8Array[] = [];
   readonly versionDownloads: Array<{ node: Uint8Array; contentCid: Uint8Array }> = [];
@@ -664,7 +663,6 @@ export class FakeEngineTransport implements EngineTransport {
         this.rendezvousSteps.push(snapshotStep(read.step));
         return this.respondRendezvous(read.step);
       case 'identityFingerprint':
-        this.fingerprintKeys.push(read.identityPublicKey);
         return this.respondIdentityFingerprint(read.identityPublicKey);
       case 'siweChallenge':
         this.siweChallenges += 1;

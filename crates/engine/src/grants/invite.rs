@@ -48,6 +48,7 @@ use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use cipherbox_core::{ipns::IpnsName, kdf};
 use core::fmt;
+use core::num::NonZeroU64;
 use std::collections::BTreeSet;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -95,7 +96,7 @@ pub enum InviteError {
     UnusableInviteeKey,
     /// The deadline was `0`. Refused rather than mapped to "no deadline", which
     /// would silently mint a link that never expires
-    /// ([`Malformed::InvalidExpiry`](cipherbox_core::error::Malformed::InvalidExpiry)).
+    /// ([`Malformed::InvalidDeadline`](cipherbox_core::error::Malformed::InvalidDeadline)).
     InvalidExpiry,
     /// The claim payload did not decode.
     MalformedClaim(CodecError),
@@ -205,7 +206,7 @@ impl InviteError {
             | Self::UnusableClaimantKey
             | Self::DuplicateTag => "trust",
             Self::Entropy(error) => error.class(),
-            Self::InvalidExpiry => CodecError::from(Malformed::InvalidExpiry).class(),
+            Self::InvalidExpiry => CodecError::from(Malformed::InvalidDeadline).class(),
             Self::MalformedClaim(error) | Self::ClaimantContact(error) => error.class(),
             Self::FragmentTooLarge | Self::GrantSetFull => "over-cap",
             Self::Authority(violation) => violation.class(),
@@ -218,7 +219,7 @@ impl InviteError {
             Self::Entropy(error) => error.check(),
             Self::InvalidSecret => "invalid-invite-secret",
             Self::UnusableInviteeKey => "unusable-invitee-key",
-            Self::InvalidExpiry => Malformed::InvalidExpiry.check(),
+            Self::InvalidExpiry => Malformed::InvalidDeadline.check(),
             Self::MalformedClaim(_) => "malformed-claim",
             Self::MalformedFragment => "malformed-invite-fragment",
             Self::FragmentTooLarge => "invite-fragment-too-large",
@@ -304,9 +305,8 @@ impl EphemeralInvitee {
 /// One invite link as the owner recorded it at mint — **owner-local state, never
 /// network bytes**.
 ///
-/// A published ledger row is byte-shaped like a personal grantee's, so
-/// conversion decides *what may be claimed* from this record and never from
-/// the record it converts against.
+/// Conversion decides *what may be claimed* from this record alone, never from
+/// the resolved record it converts against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordedInvite {
     /// The scope the link was minted over. Written at mint so attributing a
@@ -353,9 +353,9 @@ pub fn mint_invite_grant(
     permission: Permission,
     expires_at: Option<UnixMillis>,
 ) -> Result<MintedInvite, InviteError> {
-    if expires_at.is_some_and(|deadline| deadline.0 == 0) {
-        return Err(InviteError::InvalidExpiry);
-    }
+    let deadline = expires_at
+        .map(|at| NonZeroU64::new(at.0).ok_or(InviteError::InvalidExpiry))
+        .transpose()?;
     let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
     let row = mint_grant_row(
         owner_identity_signer,
@@ -374,7 +374,7 @@ pub fn mint_invite_grant(
             tag: row.tag,
             ephemeral_identity_pk: invitee.identity_pk().to_sec1(),
             ephemeral_enc_pk: invitee.enc_public().to_bytes(),
-            expires_at,
+            expires_at: deadline.map(|at| UnixMillis(at.get())),
         },
         row,
     })
@@ -749,11 +749,9 @@ pub struct ConvertedClaim {
 /// claimant's contact-anchored identity.
 ///
 /// `links` is the owner's own record of the live links on this scope
-/// ([`RecordedInvite`]); a claim converts only against one of those. Nothing in a
-/// resolved record this build mints marks a row as an invite, so deciding
-/// claimability from the record would let any committed grantee — or any
-/// write-grantee re-authoring the ledger — drive the owner into signing a grant
-/// for an identity the owner never approved.
+/// ([`RecordedInvite`]); a claim converts only against one of those. The record
+/// is owner-local, so no committed grantee re-authoring the ledger can drive the
+/// owner into signing a grant for an identity the owner never approved.
 ///
 /// The ephemeral identity a link commits is structurally a login identity rather
 /// than a contact-anchored one; re-anchoring is the whole point of conversion, so
@@ -1409,23 +1407,10 @@ mod tests {
 
     #[test]
     fn the_minted_record_carries_the_deadline_the_caller_asked_for() {
-        let mint = |expires_at| {
-            mint_invite_grant(
-                &owner_identity(),
-                &owner_enc(),
-                &POINTER_READ_KEY,
-                &invitee(),
-                &SCOPE,
-                &WRITE_SCOPE_SEED,
-                Permission::Write,
-                expires_at,
-            )
-            .expect("mints")
-        };
-        let expiring = mint(Some(EXPIRES_AT));
+        let expiring = link(0x5a, Permission::Write, Some(EXPIRES_AT));
         assert_eq!(expiring.link.expires_at, Some(EXPIRES_AT));
         assert_eq!(expiring.row.ledger_entry.permission, Permission::Write);
-        assert_eq!(mint(None).link.expires_at, None);
+        assert_eq!(link(0x5a, Permission::Write, None).link.expires_at, None);
     }
 
     #[test]

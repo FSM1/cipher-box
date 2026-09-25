@@ -4374,12 +4374,7 @@ fn recipient_binding_accept_vectors_reencode_and_verify() {
             v.name
         );
         let ipns_name = unhex(&v.name, &v.ipns_name);
-        let entry = binding_row(
-            &v.name,
-            [&v.recipient_identity_pk, &v.recipient_enc_pk, &v.tag],
-            [&v.via_link, &v.grantee_name, &v.name_source],
-            &v.signature,
-        );
+        let entry = v.row();
         assert_eq!(
             hex::encode(encode_recipient_binding(&ipns_name, &entry)),
             v.preimage,
@@ -4418,36 +4413,37 @@ fn recipient_binding_accept_vectors_reencode_and_verify() {
     }
 }
 
-/// A ledger row rebuilt from a recipient-binding vector's fields, with the
-/// optional signed fields set only where the vector carries them.
-fn binding_row(
-    name: &str,
-    [identity, enc, tag]: [&String; 3],
-    [via_link, grantee_name, name_source]: [&Option<String>; 3],
-    signature: &str,
-) -> GrantLedgerEntry {
-    let mut entry = GrantLedgerEntry::new(
-        unhex_n::<33>(name, identity),
-        unhex32(name, enc),
-        Permission::Read,
-        unhex32(name, tag),
-        unhex_n::<64>(name, signature),
-    );
-    entry.via_link = via_link.as_ref().map(|t| unhex32(name, t));
-    entry.grantee_name = match (grantee_name, name_source) {
-        (None, None) => None,
-        (Some(text), Some(source)) => {
-            let source = match source.as_str() {
-                "claimant" => NameSource::Claimant,
-                "owner" => NameSource::Owner,
-                other => panic!("{name}: unknown name source {other}"),
-            };
-            Some(GranteeName::new(text.clone(), source).expect("a valid grantee name"))
+/// Both recipient-binding vector shapes carry the same signed row fields.
+macro_rules! impl_binding_row {
+    ($($vector:ty),+) => {$(
+        impl $vector {
+            /// The ledger row rebuilt from the vector's fields, with the
+            /// optional signed fields set only where the vector carries them.
+            fn row(&self) -> GrantLedgerEntry {
+                let name = self.name.as_str();
+                let mut entry = GrantLedgerEntry::new(
+                    unhex_n::<33>(name, &self.recipient_identity_pk),
+                    unhex32(name, &self.recipient_enc_pk),
+                    Permission::Read,
+                    unhex32(name, &self.tag),
+                    unhex_n::<64>(name, &self.signature),
+                );
+                entry.via_link = self.via_link.as_ref().map(|t| unhex32(name, t));
+                entry.grantee_name = match (&self.grantee_name, &self.name_source) {
+                    (None, None) => None,
+                    (Some(text), Some(source)) => {
+                        let source = NameSource::from_wire(source)
+                            .unwrap_or_else(|| panic!("{name}: unknown name source {source}"));
+                        Some(GranteeName::new(text.clone(), source).expect("a valid grantee name"))
+                    }
+                    _ => panic!("{name}: a grantee name and its source travel together"),
+                };
+                entry
+            }
         }
-        _ => panic!("{name}: a grantee name and its source travel together"),
-    };
-    entry
+    )+};
 }
+impl_binding_row!(RecipientBindingAcceptVector, RecipientBindingRejectVector);
 
 /// A signed field removed or changed detaches the owner signature: each
 /// optional field is in the preimage only when present, so a row without it
@@ -4480,12 +4476,7 @@ fn recipient_binding_reject_vectors_fail_closed() {
             "duplicate recipient-binding reject {}",
             v.name
         );
-        let entry = binding_row(
-            &v.name,
-            [&v.recipient_identity_pk, &v.recipient_enc_pk, &v.tag],
-            [&v.via_link, &v.grantee_name, &v.name_source],
-            &v.signature,
-        );
+        let entry = v.row();
         let verifier = EcdsaVerifier::from_sec1(&unhex(&v.name, &v.owner_identity_pk))
             .expect("valid owner identity key");
         let err = verify_recipient_binding(&verifier, &unhex(&v.name, &v.ipns_name), &entry)

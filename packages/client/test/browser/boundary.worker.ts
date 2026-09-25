@@ -21,6 +21,7 @@
  */
 import init, { deadLetterEvent, identityFingerprint } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
+import fingerprintVectors from '../../../../crates/core/kat/vectors/contact/fingerprint.json?raw';
 
 import { IdbFloorStore, IdbSnapshotCache, OpfsStagingStore } from '../../src/seams/index.js';
 import { deleteDatabase } from '../../src/seams/idb.js';
@@ -53,22 +54,20 @@ async function runBigint(): Promise<void> {
   if (event.opId !== huge) throw new Error(`opId ${event.opId} !== ${huge}`);
 }
 
-const FINGERPRINT_KAT: ReadonlyArray<readonly [string, string]> = [
-  [
-    '02466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27',
-    'e686 bdd6 b44e 05c4 4db0',
-  ],
-  [
-    '0284bf7562262bbd6940085748f3be6afa52ae317155181ece31b66351ccffa4b0',
-    '6ab2 8771 7d02 bc0e e926',
-  ],
-];
+interface FingerprintVector {
+  name: string;
+  identityPk: string;
+  fingerprint: string;
+}
+
+const FINGERPRINT_KAT = JSON.parse(fingerprintVectors) as FingerprintVector[];
 
 async function runIdentityFingerprint(): Promise<void> {
   await init({ module_or_path: wasmUrl });
-  for (const [identityPk, expected] of FINGERPRINT_KAT) {
+  if (FINGERPRINT_KAT.length === 0) throw new Error('no fingerprint vectors');
+  for (const { name, identityPk, fingerprint } of FINGERPRINT_KAT) {
     const got = identityFingerprint(unhex(identityPk));
-    if (got !== expected) throw new Error(`fingerprint of ${identityPk}: ${got} != ${expected}`);
+    if (got !== fingerprint) throw new Error(`fingerprint ${name}: ${got} != ${fingerprint}`);
   }
   let refused = false;
   try {

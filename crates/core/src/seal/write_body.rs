@@ -25,6 +25,7 @@ use crate::codec::{
 };
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::MAX_IPNS_NAME_BYTES;
+use crate::name::is_deceptive;
 use crate::suite::ecdsa::{
     EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
 };
@@ -98,12 +99,17 @@ impl NameSource {
         }
     }
 
-    fn from_value(v: &Value) -> Result<Self, CodecError> {
-        match v.as_text()? {
-            "claimant" => Ok(Self::Claimant),
-            "owner" => Ok(Self::Owner),
-            _ => Err(Malformed::InvalidNameSource.into()),
+    /// Parse the wire string; `None` for anything but `"claimant"`/`"owner"`.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "claimant" => Some(Self::Claimant),
+            "owner" => Some(Self::Owner),
+            _ => None,
         }
+    }
+
+    fn from_value(v: &Value) -> Result<Self, CodecError> {
+        Self::from_wire(v.as_text()?).ok_or_else(|| Malformed::InvalidNameSource.into())
     }
 }
 
@@ -132,11 +138,12 @@ impl fmt::Debug for GranteeName {
 
 impl GranteeName {
     /// Refuses with [`Malformed::InvalidGranteeName`] a name that is empty,
-    /// longer than [`MAX_GRANTEE_NAME_BYTES`], or carries a control character.
+    /// longer than [`MAX_GRANTEE_NAME_BYTES`], or carries a control character
+    /// or a character [`is_deceptive`] refuses.
     pub fn new(name: String, source: NameSource) -> Result<Self, CodecError> {
         if name.is_empty()
             || name.len() > MAX_GRANTEE_NAME_BYTES
-            || name.chars().any(char::is_control)
+            || name.chars().any(|c| c.is_control() || is_deceptive(c))
         {
             return Err(Malformed::InvalidGranteeName.into());
         }
@@ -596,9 +603,7 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 /// past [`MAX_DIRECT_CHILD_SCOPES`] entries or carrying an `ipnsName` past
 /// [`MAX_IPNS_NAME_BYTES`], or a plaintext past [`MAX_WRITE_BODY_BYTES`], fails
 /// here with the same verdict [`decode_write_body`] raises, so it never hands
-/// back bytes its own decoder rejects. The decoder's grantee-name rejects need
-/// no guard here: [`GranteeName::new`] refuses what the decoder refuses, so
-/// those bytes are unrepresentable. The optional keys are free, though, so each
+/// back bytes its own decoder rejects. The optional row keys are free, so each
 /// row's preserved fields must not smuggle one in. Every level's preserved list
 /// is held to the same rule, so the encoder never silently drops a caller's
 /// field where it errors on the equivalent one a level up.
@@ -681,7 +686,17 @@ mod tests {
         permission: Permission,
         tag: [u8; 32],
     ) -> GrantLedgerEntry {
-        let mut entry = GrantLedgerEntry::new(identity, enc, permission, tag, [0u8; ECDSA_SIG_LEN]);
+        signed(GrantLedgerEntry::new(
+            identity,
+            enc,
+            permission,
+            tag,
+            [0u8; ECDSA_SIG_LEN],
+        ))
+    }
+
+    /// `entry` stamped with the owner's signature over its current fields.
+    fn signed(mut entry: GrantLedgerEntry) -> GrantLedgerEntry {
         entry.owner_sig = sign_recipient_binding(&owner(), SCOPE_ROOT_IPNS, &entry).to_compact();
         entry
     }
@@ -1245,8 +1260,7 @@ mod tests {
         row.via_link = Some([0x31; 32]);
         row.grantee_name =
             Some(GranteeName::new("Alice".to_owned(), NameSource::Claimant).unwrap());
-        row.owner_sig = sign_recipient_binding(&owner(), SCOPE_ROOT_IPNS, &row).to_compact();
-        row
+        signed(row)
     }
 
     /// A row minted while `expiresAt` was a typed field keeps its bytes and its
@@ -1350,6 +1364,16 @@ mod tests {
                 "invalid-grantee-name",
             ),
             (
+                "a bidi override",
+                named(Value::Text("A\u{202E}B".into()), "owner"),
+                "invalid-grantee-name",
+            ),
+            (
+                "a two-byte character that crosses the bound",
+                named(Value::Text(format!("{}é", "a".repeat(254))), "owner"),
+                "invalid-grantee-name",
+            ),
+            (
                 "not text",
                 named(Value::Unsigned(1), "owner"),
                 "unexpected-type",
@@ -1381,22 +1405,28 @@ mod tests {
                 "{what}"
             );
         }
-        let at_bound = "a".repeat(MAX_GRANTEE_NAME_BYTES);
-        assert!(decode_write_body(&named(Value::Text(at_bound), "owner")).is_ok());
+        for at_bound in [
+            "a".repeat(MAX_GRANTEE_NAME_BYTES),
+            format!("{}é", "a".repeat(253)),
+        ] {
+            assert_eq!(at_bound.len(), MAX_GRANTEE_NAME_BYTES);
+            assert!(decode_write_body(&named(Value::Text(at_bound), "owner")).is_ok());
+        }
     }
 
+    /// The name and its source are separate keys in the preimage, so a row that
+    /// swaps their values signs different bytes.
     #[test]
-    fn encode_rejects_a_signed_field_smuggled_through_preserved_fields() {
-        for key in ["viaLink", "granteeName", "nameSource"] {
-            let mut body = sample();
-            body.grant_ledger[0].unknown =
-                PreservedFields::from_iter([(key.to_string(), Value::Text("x".into()))]);
-            assert_eq!(
-                encode_write_body(&body).unwrap_err().check(),
-                "unknown-field-collision",
-                "{key}"
-            );
-        }
+    fn swapped_name_and_source_values_sign_distinct_preimages() {
+        let named = |name: &str, source| {
+            let mut row = named_row();
+            row.grantee_name = Some(GranteeName::new(name.to_owned(), source).unwrap());
+            encode_recipient_binding(SCOPE_ROOT_IPNS, &row)
+        };
+        assert_ne!(
+            named("owner", NameSource::Claimant),
+            named("claimant", NameSource::Owner)
+        );
     }
 
     #[test]
