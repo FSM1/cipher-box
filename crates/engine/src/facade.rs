@@ -8633,7 +8633,7 @@ where {
                 expires_at,
                 owner_name,
             } => {
-                let (minted, handover) = mint_invite_link(
+                let minted = mint_invite_link(
                     &mut SharedEntropy(&self.entropy),
                     &net,
                     &voucher,
@@ -8661,14 +8661,19 @@ where {
                     InviteMintError::Create(create) => EngineError::from_share_mint(create, checks),
                     other => EngineError::from_invite_mint(other),
                 })?;
-                // The root that commits the link has landed, so its fragment goes
-                // back even when the handover stalled. A later mint of this
-                // folder finishes that handover.
-                let Ok(read_scope) = handover else {
-                    return Ok(CommandOutcome::InviteLinkMinted(minted));
-                };
-                granted_read_scope = Some(read_scope);
-                PendingShare::Fragment(minted)
+                // The root that commits the link has landed, so the session
+                // holds the scope and the host gets the fragment even when the
+                // handover stalled. The parent's sweep names the promoted root
+                // in its index (its self-heal), and a later mint of this folder
+                // finishes an interior move.
+                if minted.stalled.is_some() {
+                    let sweep = self.sweep_factory()?;
+                    self.seams
+                        .scheduler
+                        .spawn(sweep(parent.clone(), parent_scope.parent_node_seed.clone()));
+                }
+                granted_read_scope = Some(minted.read_scope);
+                PendingShare::Fragment(minted.link)
             }
         };
 
@@ -9257,7 +9262,8 @@ where {
                     InviteError::ClaimantIsTheEphemeralHalf
                     | InviteError::ClaimantIsTheOwner
                     | InviteError::ClaimantContact(_)
-                    | InviteError::UnusableClaimantKey,
+                    | InviteError::UnusableClaimantKey
+                    | InviteError::LinkExpired,
                 ) => {
                     if let Err(e) = self.ack_claim(api.as_ref(), &item.item_id).await {
                         failure.get_or_insert(EngineError::from_seam(e));
@@ -9269,9 +9275,15 @@ where {
                 Err(
                     InviteError::MalformedClaim(_)
                     | InviteError::ScopeMismatch
-                    | InviteError::LinkNotCommitted
-                    | InviteError::LinkExpired,
+                    | InviteError::LinkNotCommitted,
                 ) => continue,
+                // A full set refuses this item alone: a claimant the set
+                // already holds still converts, and this one can after a
+                // revoke frees a row.
+                Err(e @ InviteError::GrantSetFull) => {
+                    failure.get_or_insert(EngineError::from_invite(e));
+                    continue;
+                }
                 // A verdict on the set this item proposed. The pass stops
                 // converting but still publishes what it converted, which is
                 // the last set this owner signed: to discard it would strand

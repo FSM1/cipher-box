@@ -7,6 +7,7 @@
 //! inbox — what another device would see — never on a command's return alone.
 
 use core::cell::RefCell;
+use core::task::{Context, Waker};
 use core::time::Duration;
 
 use cipherbox_core::hex::lower as hex_lower;
@@ -28,9 +29,9 @@ use zeroize::Zeroizing;
 
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
-    CLAIM_ID_LEN, Contact, DEFAULT_ADMISSION_CAP, EphemeralInvitee, GrantRow, InviteClaim,
-    InviteFragment, LinkHold, LinkTerms, ReceivedShareStore, ResolutionClass,
-    StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
+    CLAIM_ID_LEN, Contact, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee,
+    GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms, ReceivedShareStore,
+    ResolutionClass, StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
     post_invite_claim, recipient_blinded_tag,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
@@ -4576,6 +4577,33 @@ fn a_waiting_claim_shows_on_the_folder_row_until_the_owner_converts_it() {
     );
 }
 
+/// A claim on a link past its owner-signed deadline can never convert, so the
+/// conversion acks it and it stops counting as waiting.
+#[test]
+fn a_claim_on_an_expired_link_is_acked_and_stops_counting() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    fx.post_claims(&fragment, 1);
+    let waiting = |fx: &GrantScenario| {
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .state
+            .expect("the link standing reads")
+            .invite_links
+            .pending_claims
+    };
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert_eq!(waiting(&fx), 1);
+
+    fx.world
+        .scheduler
+        .advance(DEFAULT_LINK_LIFETIME + Duration::from_secs(1));
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(inbox(&fx.owner_device).is_empty(), "the claim is acked");
+    assert_eq!(waiting(&fx), 0);
+    assert!(fx.granted_to().is_empty(), "and it granted nothing");
+}
+
 /// ADR 0024 D4: a write link mints a read link entry and runs no write cut, so
 /// the scope root stays where the mint published it. The fragment names the
 /// scope pointer, and the claim converts at read.
@@ -5211,6 +5239,20 @@ fn a_join_whose_names_do_not_verify_bookmarks_no_name() {
     assert!(shares[0].via_link);
 }
 
+/// Run the sweeps a stalled mint filed to completion. The mint files the
+/// parent's sweep, whose index self-heal names the promoted root.
+fn settle_filed_sweeps(fx: &GrantScenario) {
+    let mut cx = Context::from_waker(Waker::noop());
+    for mut sweep in fx.world.scheduler.take_spawned_tasks() {
+        let settled = (0..64).any(|_| {
+            let ready = sweep.as_mut().poll(&mut cx).is_ready();
+            fx.world.scheduler.advance(fx.engine.profile().poll_cadence);
+            ready
+        });
+        assert!(settled, "the parent sweep settles");
+    }
+}
+
 /// The fragment is the only copy of the invite secret. A parent publish that
 /// fails after the scope root landed still hands it over, the holder joins
 /// through it, and a later mint of the folder finishes the handover.
@@ -5224,6 +5266,7 @@ fn a_mint_whose_parent_publish_fails_still_hands_over_a_working_link() {
     fx.world
         .record_store
         .heal_put_for(write_name(ROOT).as_str());
+    settle_filed_sweeps(&fx);
 
     let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
     assert_eq!(
@@ -5248,6 +5291,45 @@ fn a_mint_whose_parent_publish_fails_still_hands_over_a_working_link() {
             .invite_links
             .live,
         "the sharing read reports the one live link"
+    );
+}
+
+/// A stalled handover leaves the owner's own session holding the minted scope:
+/// with no second mint, an owner write into the folder reaches the link holder.
+#[test]
+fn a_stalled_link_mint_leaves_the_owner_reading_the_folder() {
+    let mut fx = GrantScenario::new();
+    let inside = create_published_folder(
+        &fx.world,
+        &mut fx.engine,
+        &mut fx._tasks,
+        fx.folder,
+        "inside",
+    );
+    fx.world
+        .record_store
+        .fail_put_for(write_name(ROOT).as_str());
+    let fragment = fx.mint_link();
+    fx.world
+        .record_store
+        .heal_put_for(write_name(ROOT).as_str());
+    settle_filed_sweeps(&fx);
+    let later = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, inside, "later");
+
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    block_on(holder.command(Command::SetFocus { node: Some(inside) })).expect("the focus moves");
+    tick(&fx.world, &holder, &mut holder_tasks);
+    assert!(
+        block_on(holder.view())
+            .expect("a rendered view")
+            .children(inside)
+            .iter()
+            .any(|child| child.id == later),
+        "the owner's write after the stall lands under the scope the link reads"
     );
 }
 

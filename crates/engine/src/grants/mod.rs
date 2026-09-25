@@ -56,7 +56,9 @@ pub use invite::{
     committed_links, convert_invite_claim, locate_invite_link, mint_invite_grant,
     post_invite_claim, sole_link,
 };
-pub use invite_mint::{InviteMintError, InviteMintPlan, MintedInviteLink, mint_invite_link};
+pub use invite_mint::{
+    InviteMintError, InviteMintOutcome, InviteMintPlan, MintedInviteLink, mint_invite_link,
+};
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, UNATTESTED_IDENTITY_PK,
     enforce_committed_ledger, mint_grant_row, recipient_blinded_tag, recipient_self_location,

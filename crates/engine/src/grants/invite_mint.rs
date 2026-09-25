@@ -69,6 +69,17 @@ impl fmt::Debug for MintedInviteLink {
     }
 }
 
+/// A link whose committing scope root landed.
+#[derive(Debug)]
+pub struct InviteMintOutcome {
+    /// The link the host presents.
+    pub link: MintedInviteLink,
+    /// The minted scope's read material, for the owner's own reads.
+    pub read_scope: GrantedReadScope,
+    /// The handover after the root publish, where it stopped.
+    pub stalled: Option<CreateGrantError>,
+}
+
 /// A fail-closed mint failure. On every variant the host is handed no
 /// capability.
 #[derive(Debug)]
@@ -99,10 +110,8 @@ impl std::error::Error for InviteMintError {}
 ///
 /// The fragment is the only copy of the invite secret, so once the scope root
 /// that commits the link has landed the fragment is returned whatever the
-/// handover after it does. The handover's result rides alongside: the minted
-/// scope's read material, or the post-publish failure. A later mint over the
-/// same folder finishes that handover against the promoted root and refuses a
-/// second link.
+/// handover after it does. A later mint over the same folder finishes a
+/// stalled handover against the promoted root and refuses a second link.
 ///
 /// Owner-only by construction, exactly as [`create_grant`](super::create_grant)
 /// is: the scope this publishes is signed under the owner's writer pseudonym and
@@ -113,7 +122,7 @@ pub async fn mint_invite_link<E, N, V>(
     voucher: &V,
     owner: &OwnerGrantKeys<'_>,
     plan: &InviteMintPlan<'_>,
-) -> Result<(MintedInviteLink, Result<GrantedReadScope, CreateGrantError>), InviteMintError>
+) -> Result<InviteMintOutcome, InviteMintError>
 where
     E: Entropy,
     N: MintNet,
@@ -168,14 +177,15 @@ where
             ));
         }
     };
-    let handover = promote_grantee_scope(entropy, net, voucher, converged, &row, owner)
+    let promoted = promote_grantee_scope(entropy, net, voucher, converged, &row, owner)
         .await
         .map_err(InviteMintError::Create)?;
 
-    Ok((
-        MintedInviteLink { fragment },
-        handover.map(|outcome| outcome.read_scope),
-    ))
+    Ok(InviteMintOutcome {
+        link: MintedInviteLink { fragment },
+        read_scope: promoted.read_scope,
+        stalled: promoted.handover.err(),
+    })
 }
 
 #[cfg(test)]
@@ -549,19 +559,17 @@ mod tests {
             terms: LinkTerms,
             folder_name: &str,
         ) -> Result<MintedInviteLink, InviteMintError> {
-            self.mint_with_handover(terms, folder_name)
-                .map(|(minted, handover)| {
-                    handover.expect("the handover lands");
-                    minted
-                })
+            self.mint_with_handover(terms, folder_name).map(|outcome| {
+                assert!(outcome.stalled.is_none(), "the handover lands");
+                outcome.link
+            })
         }
 
         fn mint_with_handover(
             &self,
             terms: LinkTerms,
             folder_name: &str,
-        ) -> Result<(MintedInviteLink, Result<GrantedReadScope, CreateGrantError>), InviteMintError>
-        {
+        ) -> Result<InviteMintOutcome, InviteMintError> {
             let owner_enc_pub = self.enc.public();
             let grantee = GranteeScopePlan {
                 v: V,
@@ -835,12 +843,20 @@ mod tests {
         let mut f = Fixture::new();
         f.net.publishes_before_refusal = Some(1);
 
-        let (link, handover) = f
+        let outcome = f
             .mint_with_handover(read_link(), "Photos")
             .expect("the root that commits the link landed");
 
-        assert!(matches!(handover, Err(CreateGrantError::ParentPublish(_))));
-        let fragment = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
+        assert!(matches!(
+            outcome.stalled,
+            Some(CreateGrantError::ParentPublish(_))
+        ));
+        assert_eq!(
+            outcome.read_scope.epoch, 1,
+            "the owner holds the scope's read seed"
+        );
+        let fragment =
+            InviteFragment::decode(&outcome.link.fragment).expect("the mint's own fragment");
         let invitee =
             EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes()).expect("valid secret");
         let tag = recipient_blinded_tag(invitee.enc_secret(), &f.enc.public(), &folder_name())

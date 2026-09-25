@@ -1041,12 +1041,21 @@ where
     N: MintNet,
     V: ScopePointerVoucher,
 {
-    promote_grantee_scope(entropy, net, voucher, converged, row, owner).await?
+    promote_grantee_scope(entropy, net, voucher, converged, row, owner)
+        .await?
+        .handover
 }
 
-/// [`mint_grantee_scope`] with its two sides apart. The outer `Err` is
-/// fail-closed: no grantee root is on the network. The inner result is the
-/// handover that runs once that root has landed.
+/// A grantee scope whose root has landed, and the handover that ran after it.
+pub(crate) struct PromotedGrant {
+    /// The promoted scope's read material, known once its root landed.
+    pub read_scope: GrantedReadScope,
+    /// The interior, descendant and parent publishes after the root.
+    pub handover: Result<CreateGrantOutcome, CreateGrantError>,
+}
+
+/// [`mint_grantee_scope`] with its two sides apart. The `Err` is fail-closed:
+/// no grantee root is on the network.
 pub(crate) async fn promote_grantee_scope<E, N, V>(
     entropy: &mut E,
     net: &N,
@@ -1054,7 +1063,7 @@ pub(crate) async fn promote_grantee_scope<E, N, V>(
     converged: ConvergedSubtree<'_>,
     row: &GrantRow,
     owner: &OwnerGrantKeys<'_>,
-) -> Result<Result<CreateGrantOutcome, CreateGrantError>, CreateGrantError>
+) -> Result<PromotedGrant, CreateGrantError>
 where
     E: Entropy,
     N: MintNet,
@@ -1170,7 +1179,11 @@ where
         .await
         .map_err(CreateGrantError::Publish)?;
 
-    Ok(hand_over_granted_folder(
+    let read_scope = GrantedReadScope {
+        seed: override_seed.clone(),
+        epoch: grantee_record.read_epoch,
+    };
+    let handover = hand_over_granted_folder(
         entropy,
         net,
         grantee,
@@ -1189,7 +1202,11 @@ where
         },
         row.tag,
     )
-    .await)
+    .await;
+    Ok(PromotedGrant {
+        read_scope,
+        handover,
+    })
 }
 
 /// Finish the interior move a stalled attempt over the granted folder still
