@@ -944,6 +944,18 @@ impl GrantSetEntry {
         &self.masked_recipient_enc_pk
     }
 
+    /// This entry at the tag and the masked recipient key of `fresh`, a mint of
+    /// the same recipient at a new name. Every owner-signed field of `self`
+    /// stays, so a name wave keeps a link a link on its terms.
+    #[must_use]
+    pub fn rebound(&self, fresh: &Self) -> Self {
+        Self {
+            tag: fresh.tag,
+            masked_recipient_enc_pk: fresh.masked_recipient_enc_pk,
+            ..self.clone()
+        }
+    }
+
     /// Re-mask this entry over a different recipient, keeping every other field
     /// and the preserved unknowns.
     ///

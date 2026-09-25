@@ -44,8 +44,8 @@ export interface ScopeSharing {
   readonly grantRefusal: string | null;
   /** The refusal an invite-link mint here would report, or `null`. */
   readonly inviteLinkRefusal: string | null;
-  /** `null` where the engine reached the scope but not the owner's link records. */
-  readonly inviteLinks: SharingInviteLinksDescriptor | null;
+  /** This owner's invite links here, read off the scope's own record. */
+  readonly inviteLinks: SharingInviteLinksDescriptor;
 }
 
 export interface SharingState {
@@ -115,8 +115,7 @@ export const sharingStore = {
           ),
           grantRefusal: view.state.grantRefusal,
           inviteLinkRefusal: view.state.inviteLinkRefusal,
-          inviteLinks:
-            view.state.inviteLinks === null ? null : Object.freeze(view.state.inviteLinks),
+          inviteLinks: Object.freeze(view.state.inviteLinks),
         })
       );
     }

@@ -7,11 +7,16 @@
   {
     "name": "fragment-that-is-not-this-build-encoding",
     "check": "malformed-invite-fragment",
-    "class": "trust"
+    "class": "malformed"
   },
   {
     "name": "fragment-past-the-invite-link-bound",
     "check": "invite-fragment-too-large",
+    "class": "over-cap"
+  },
+  {
+    "name": "fragment-folder-name-past-its-bound",
+    "check": "invite-name-too-long",
     "class": "over-cap"
   },
   {
@@ -30,29 +35,19 @@
     "class": "malformed"
   },
   {
-    "name": "claim-naming-another-scope-root",
+    "name": "claim-naming-another-scope-pointer",
     "check": "claim-scope-mismatch",
     "class": "trust"
   },
   {
-    "name": "claim-on-a-link-the-owner-records-no-more",
+    "name": "claim-signed-by-no-link-on-the-set",
     "check": "link-not-committed",
     "class": "trust"
   },
   {
     "name": "claim-on-a-link-past-its-deadline",
     "check": "link-expired",
-    "class": "trust"
-  },
-  {
-    "name": "claim-id-already-in-the-spent-set",
-    "check": "claim-already-converted",
-    "class": "trust"
-  },
-  {
-    "name": "claim-carrying-the-id-a-broken-entropy-seam-emits",
-    "check": "claim-id-is-zero",
-    "class": "trust"
+    "class": "unsupported"
   },
   {
     "name": "claimant-contact-code-that-fails-its-binding-verify",

@@ -34,7 +34,7 @@ use cipherbox_engine::testkit::account::{
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, poll_tasks_until_parked,
+    SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, DeadLetterReason, Engine,
@@ -227,24 +227,6 @@ fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTas
     poll_tasks_until_parked(tasks);
 }
 
-/// Drive one command to completion with the spawned loops running beside it —
-/// what a manual refresh needs, since it parks on the pass the tick loop runs.
-fn command_while_ticking(
-    engine: &mut Engine<FakeSeamTypes>,
-    command: Command,
-    tasks: &mut [BoxedTask],
-) -> Result<CommandOutcome, EngineError> {
-    let mut pending = Box::pin(engine.command(command));
-    let mut cx = Context::from_waker(Waker::noop());
-    for _ in 0..64 {
-        if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
-            return outcome;
-        }
-        poll_tasks_until_parked(tasks);
-    }
-    panic!("the command never settled against the running loops");
-}
-
 /// Create `name` under `parent` and drive it to the record plane.
 fn create_published_folder(
     world: &FakeWorld,
@@ -278,7 +260,7 @@ fn mounted_reader(
     let (mut engine, events, mut tasks) = boot(world, blocks, device, 7);
     block_on(engine.command(Command::SetFocus { node: Some(scope) }))
         .expect("focus moves to the granted folder");
-    let refreshed = command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks);
+    let refreshed = block_on_while_ticking(engine.command(Command::ManualRefresh), &mut tasks);
     assert!(
         refreshed.is_ok(),
         "the focus refresh reads the granted folder's own record: {refreshed:?}"
@@ -1235,8 +1217,7 @@ fn the_owner_reads_a_file_inside_a_folder_it_granted() {
 /// A share hands its own device the minted scope's read seed, so a read needs
 /// no boundary walk to prove the scope first, and the passes that run while no
 /// walk can reach the network keep that seed. Both gestures that mint a scope:
-/// a contact grant, and an invite link on a write share, whose cut moves the
-/// scope's names but not its read plane.
+/// a contact grant, and an invite link.
 #[test]
 fn the_owner_reads_a_shared_folder_no_walk_has_proved() {
     for by_link in [false, true] {
@@ -1264,6 +1245,7 @@ fn the_owner_reads_a_shared_folder_no_walk_has_proved() {
                         node: shared,
                         permission: Permission::Write,
                         expires_at: None,
+                        owner_name: String::new(),
                     })),
                     Ok(CommandOutcome::InviteLinkMinted(_))
                 ),
@@ -1455,7 +1437,7 @@ fn the_focus_refresh_lists_a_lagging_folder_after_a_cut() {
         node: Some(reports),
     }))
     .expect("focus moves to the lagging folder");
-    let refreshed = command_while_ticking(&mut engine_m, Command::ManualRefresh, &mut tasks_m);
+    let refreshed = block_on_while_ticking(engine_m.command(Command::ManualRefresh), &mut tasks_m);
     assert!(
         refreshed.is_ok(),
         "the refresh reads the lagging folder: {refreshed:?}"
@@ -1771,20 +1753,13 @@ fn a_write_staged_across_a_cut_publishes_rather_than_dead_lettering() {
 // A write share, and the last-known-good the wave leaves behind
 // ---------------------------------------------------------------------------
 
-/// How the owner shares the folder with write permission.
-#[derive(Debug, Clone, Copy)]
-enum WriteShare {
-    Contact,
-    InviteLink,
-}
-
 /// A folder holding one file with `bodies` as its two versions, published and
-/// drained, then shared with write permission. Answers the folder and the file.
+/// drained, then granted to a contact with write permission. Answers the folder
+/// and the file.
 fn file_under_a_write_share(
     world: &FakeWorld,
     blocks: &Blocks,
     tab: &FakeDevice,
-    share: WriteShare,
     bodies: &[Vec<u8>; 2],
 ) -> (Engine<FakeSeamTypes>, NodeId, NodeId) {
     let (mut engine, _events, mut tasks) = boot(world, blocks, tab, 42);
@@ -1792,26 +1767,13 @@ fn file_under_a_write_share(
     let file = file_with_two_versions(world, &mut engine, &mut tasks, shared, "notes.bin", bodies);
     assert_eq!(queued(tab), 0, "both versions drain before the share");
 
-    let outcome = match share {
-        WriteShare::Contact => {
-            import_recipient(&mut engine);
-            block_on(engine.command(Command::Grant {
-                node: shared,
-                recipient_identity_public_key:
-                    recipient_identity().verifying_key().to_sec1().to_vec(),
-                permission: Permission::Write,
-            }))
-        }
-        WriteShare::InviteLink => block_on(engine.command(Command::CreateInviteLink {
-            node: shared,
-            permission: Permission::Write,
-            expires_at: None,
-        })),
-    };
-    assert!(
-        outcome.is_ok(),
-        "the {share:?} write share lands: {outcome:?}"
-    );
+    import_recipient(&mut engine);
+    let outcome = block_on(engine.command(Command::Grant {
+        node: shared,
+        recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        permission: Permission::Write,
+    }));
+    assert!(outcome.is_ok(), "the write share lands: {outcome:?}");
     (engine, shared, file)
 }
 
@@ -1829,29 +1791,26 @@ fn record_sequence(name: &IpnsName, bytes: &[u8]) -> u64 {
 /// at that floor.
 #[test]
 fn a_write_share_leaves_every_record_it_touches_cached_at_its_sequence_floor() {
-    for share in [WriteShare::Contact, WriteShare::InviteLink] {
-        let world = FakeWorld::new();
-        let blocks = Blocks::default();
-        seed_vault(&world, &blocks);
-        let tab = world.device(&owner_identity().verifying_key().to_sec1());
-        let (_engine, shared, file) =
-            file_under_a_write_share(&world, &blocks, &tab, share, &two_bodies(5));
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let (_engine, shared, file) = file_under_a_write_share(&world, &blocks, &tab, &two_bodies(5));
 
-        for node in [ROOT, shared, file] {
-            let name = write_name(node);
-            let floor = block_on(tab.floors(&SECRET).sequence_floor(name.as_str().as_bytes()))
-                .expect("the floor store answers")
-                .expect("every record the share touched holds a sequence floor");
-            let cached = tab
-                .snapshot_cache
-                .peek(name.as_str().as_bytes())
-                .expect("every record the share touched is cached");
-            assert_eq!(
-                record_sequence(&name, &cached),
-                floor,
-                "{share:?}: the cached record of {node:?} sits at the floor the share raised"
-            );
-        }
+    for node in [ROOT, shared, file] {
+        let name = write_name(node);
+        let floor = block_on(tab.floors(&SECRET).sequence_floor(name.as_str().as_bytes()))
+            .expect("the floor store answers")
+            .expect("every record the share touched holds a sequence floor");
+        let cached = tab
+            .snapshot_cache
+            .peek(name.as_str().as_bytes())
+            .expect("every record the share touched is cached");
+        assert_eq!(
+            record_sequence(&name, &cached),
+            floor,
+            "the cached record of {node:?} sits at the floor the share raised"
+        );
     }
 }
 
@@ -1860,17 +1819,14 @@ fn a_write_share_leaves_every_record_it_touches_cached_at_its_sequence_floor() {
 /// version.
 #[test]
 fn a_file_under_a_write_share_reads_with_every_record_endpoint_down() {
-    for share in [WriteShare::Contact, WriteShare::InviteLink] {
-        let world = FakeWorld::new();
-        let blocks = Blocks::default();
-        seed_vault(&world, &blocks);
-        let tab = world.device(&owner_identity().verifying_key().to_sec1());
-        let bodies = two_bodies(11);
-        let (engine, _shared, file) =
-            file_under_a_write_share(&world, &blocks, &tab, share, &bodies);
-        for endpoint in world.record_store.endpoints() {
-            world.record_store.fail_endpoint(&endpoint);
-        }
-        assert_reads_both_versions(&engine, file, &bodies, &format!("{share:?}, offline"));
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_vault(&world, &blocks);
+    let tab = world.device(&owner_identity().verifying_key().to_sec1());
+    let bodies = two_bodies(11);
+    let (engine, _shared, file) = file_under_a_write_share(&world, &blocks, &tab, &bodies);
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_endpoint(&endpoint);
     }
+    assert_reads_both_versions(&engine, file, &bodies, "offline");
 }

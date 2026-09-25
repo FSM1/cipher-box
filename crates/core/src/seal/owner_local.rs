@@ -52,9 +52,6 @@ pub enum OwnerLocalKind {
     ReceivedShares,
     /// The owner's imported contacts.
     ContactBook,
-    /// The invite records conversion reads a link's permission and deadline
-    /// from.
-    InviteRecords,
     /// The pinned bytes a published prune or delete still owes the registry.
     RetireLedger,
     /// What a delete still owes once its unlink is live: the detached subtree's
@@ -67,10 +64,9 @@ pub enum OwnerLocalKind {
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::ReceivedShares,
         Self::ContactBook,
-        Self::InviteRecords,
         Self::RetireLedger,
         Self::DoomedJournal,
         Self::ScopeExitDebt,
@@ -81,7 +77,6 @@ impl OwnerLocalKind {
         match self {
             Self::ReceivedShares => "received-shares",
             Self::ContactBook => "contact-book",
-            Self::InviteRecords => "invite-records",
             Self::RetireLedger => "retire-ledger",
             Self::DoomedJournal => "doomed-journal",
             Self::ScopeExitDebt => "scope-exit-debt",
@@ -93,12 +88,16 @@ impl OwnerLocalKind {
         match self {
             Self::ReceivedShares => 0x01,
             Self::ContactBook => 0x02,
-            Self::InviteRecords => 0x03,
             Self::RetireLedger => 0x04,
             Self::DoomedJournal => 0x05,
             Self::ScopeExitDebt => 0x06,
         }
     }
+
+    /// Every retired kind's discriminator and name. Each stays reserved for
+    /// ever, so no live kind reuses one (ADR 0023 consequence 2). Frozen in the
+    /// KAT manifest.
+    pub const RESERVED: &[(u8, &str)] = &[(0x03, "invite-records")];
 
     /// The kind's HPKE `info` string: its key-schedule domain separator. This is
     /// what makes a cross-kind open fail the AEAD instead of a comparison.
@@ -295,10 +294,9 @@ mod tests {
             let index = match kind {
                 OwnerLocalKind::ReceivedShares => 0,
                 OwnerLocalKind::ContactBook => 1,
-                OwnerLocalKind::InviteRecords => 2,
-                OwnerLocalKind::RetireLedger => 3,
-                OwnerLocalKind::DoomedJournal => 4,
-                OwnerLocalKind::ScopeExitDebt => 5,
+                OwnerLocalKind::RetireLedger => 2,
+                OwnerLocalKind::DoomedJournal => 3,
+                OwnerLocalKind::ScopeExitDebt => 4,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],
@@ -317,12 +315,21 @@ mod tests {
                 "duplicate info string for {}",
                 kind.name()
             );
-            assert_eq!(
-                kind.discriminator() as usize,
-                index + 1,
+            assert!(
+                index == 0 || OwnerLocalKind::ALL[index - 1].discriminator() < kind.discriminator(),
                 "{} out of discriminator order",
                 kind.name()
             );
+        }
+    }
+
+    #[test]
+    fn no_live_kind_reuses_a_reserved_discriminator_or_name() {
+        for (discriminator, name) in OwnerLocalKind::RESERVED {
+            for kind in OwnerLocalKind::ALL {
+                assert_ne!(kind.discriminator(), *discriminator, "{}", kind.name());
+                assert_ne!(kind.name(), *name);
+            }
         }
     }
 
@@ -369,7 +376,7 @@ mod tests {
     #[test]
     fn the_stored_blob_names_no_key_and_no_kind() {
         let owner = secret(20);
-        let kind = OwnerLocalKind::InviteRecords;
+        let kind = OwnerLocalKind::RetireLedger;
         let blob = seal_owner_local(&owner, kind, &[21; SECRET_LEN], b"invites").unwrap();
         let decoded = decode(&blob).unwrap();
         let mut keys: Vec<&str> = decoded

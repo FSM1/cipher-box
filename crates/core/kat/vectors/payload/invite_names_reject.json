@@ -1,0 +1,42 @@
+[
+  {
+    "name": "changed-owner-name",
+    "ownerScalar": "2727272727272727272727272727272727272727272727272727272727272727",
+    "scopePointerName": "k51qzi5uqu5dlztc50s0yahe3av6clr5wtqka25mv3rpnuim89x3l0dzmidm2z",
+    "ownerName": "Eve",
+    "folderName": "Photos",
+    "signature": "b88b10c413f844b0479e42141c7016b7c896c8894b58bf9f09d5c810b325b36627a2b21d4f7935aaad5f2e4f8f470cd954735c873fd8e2ce49db635691915862",
+    "check": "identity-signature-invalid",
+    "class": "trust"
+  },
+  {
+    "name": "changed-folder-name",
+    "ownerScalar": "2727272727272727272727272727272727272727272727272727272727272727",
+    "scopePointerName": "k51qzi5uqu5dlztc50s0yahe3av6clr5wtqka25mv3rpnuim89x3l0dzmidm2z",
+    "ownerName": "Ada",
+    "folderName": "Taxes",
+    "signature": "b88b10c413f844b0479e42141c7016b7c896c8894b58bf9f09d5c810b325b36627a2b21d4f7935aaad5f2e4f8f470cd954735c873fd8e2ce49db635691915862",
+    "check": "identity-signature-invalid",
+    "class": "trust"
+  },
+  {
+    "name": "changed-scope-pointer-name",
+    "ownerScalar": "2727272727272727272727272727272727272727272727272727272727272727",
+    "scopePointerName": "k51qzi5uqu5dmf5oe7f52psholkw640gi97lj1xeubob1h2wdu223y5jx01eud",
+    "ownerName": "Ada",
+    "folderName": "Photos",
+    "signature": "b88b10c413f844b0479e42141c7016b7c896c8894b58bf9f09d5c810b325b36627a2b21d4f7935aaad5f2e4f8f470cd954735c873fd8e2ce49db635691915862",
+    "check": "identity-signature-invalid",
+    "class": "trust"
+  },
+  {
+    "name": "stranger-key",
+    "ownerScalar": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "scopePointerName": "k51qzi5uqu5dlztc50s0yahe3av6clr5wtqka25mv3rpnuim89x3l0dzmidm2z",
+    "ownerName": "Ada",
+    "folderName": "Photos",
+    "signature": "b88b10c413f844b0479e42141c7016b7c896c8894b58bf9f09d5c810b325b36627a2b21d4f7935aaad5f2e4f8f470cd954735c873fd8e2ce49db635691915862",
+    "check": "identity-signature-invalid",
+    "class": "trust"
+  }
+]

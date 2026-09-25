@@ -295,6 +295,16 @@ fn main() {
         CHECKS_PROFILE,
         checks::reject_families(),
     );
+    // The fragment bytes an invite link carries, pinned beside the invite
+    // rejects (`tests/kat_checks.rs` decodes each one).
+    let fragments = checks::invite_fragment_accept();
+    write_pretty(
+        &kat_dir
+            .join("checks")
+            .join("vectors")
+            .join("invite_fragment_accept.json"),
+        &fragments,
+    );
 
     println!(
         "kat_gen: wrote {} accept, {} reject, 2 capacity vectors + manifest.json; \

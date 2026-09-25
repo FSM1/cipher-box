@@ -8,7 +8,7 @@ import type { ListingRow } from '../../vault/listing';
 import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
 import { Modal } from '../ui/Modal';
 import { ContactImportForm } from './ContactImportForm';
-import { InviteLinkPanel, SpentLinkRecords } from './InviteLinkPanel';
+import { InviteLinkPanel } from './InviteLinkPanel';
 
 interface ShareDialogProps {
   /** The scope root being shared. */
@@ -213,17 +213,14 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
           )}
 
           {scope !== null && (
-            <>
-              <InviteLinkPanel
-                scope={scope}
-                actions={actions}
-                busy={busy}
-                lifetime={lifetime}
-                onLifetime={setLifetime}
-                onMint={mintLink}
-              />
-              <SpentLinkRecords scope={scope} actions={actions} busy={busy} />
-            </>
+            <InviteLinkPanel
+              scope={scope}
+              actions={actions}
+              busy={busy}
+              lifetime={lifetime}
+              onLifetime={setLifetime}
+              onMint={mintLink}
+            />
           )}
 
           <div className="dialog-actions">

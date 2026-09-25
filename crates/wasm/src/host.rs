@@ -920,13 +920,12 @@ mod tests {
             &shared(
                 Some("grant-target-already-names-a-scope"),
                 Some("invite-target-already-names-a-scope"),
-                Some(facade::SharingInviteLinks {
+                facade::SharingInviteLinks {
                     live: true,
                     expires_at: Some(UnixMillis(u64::MAX)),
                     expired: true,
-                    spent: 3,
                     pending_claims: 2,
-                }),
+                },
             ),
             "state",
         );
@@ -942,7 +941,6 @@ mod tests {
         let links = field(&live, "inviteLinks");
         assert_eq!(field(&links, "live"), JsValue::from_bool(true));
         assert_eq!(field(&links, "expired"), JsValue::from_bool(true));
-        assert_eq!(field(&links, "spent"), JsValue::from_f64(3.0));
         assert_eq!(field(&links, "pendingClaims"), JsValue::from_f64(2.0));
         let expires_at = field(&links, "expiresAt");
         assert_eq!(expires_at.js_typeof(), JsValue::from_str("bigint"));
@@ -957,7 +955,7 @@ mod tests {
         );
 
         let mintable = field(
-            &shared(None, None, Some(facade::SharingInviteLinks::default())),
+            &shared(None, None, facade::SharingInviteLinks::default()),
             "state",
         );
         assert!(
@@ -975,17 +973,17 @@ mod tests {
         // A link the engine refuses on its own ground, at a scope a grant is
         // still accepted at: the two verdicts are read apart.
         let link_only = field(
-            &shared(None, Some("invite-target-is-the-vault-root"), None),
+            &shared(
+                None,
+                Some("invite-target-is-the-vault-root"),
+                facade::SharingInviteLinks::default(),
+            ),
             "state",
         );
         assert!(field(&link_only, "grantRefusal").is_undefined());
         assert_eq!(
             field(&link_only, "inviteLinkRefusal"),
             JsValue::from_str("invite-target-is-the-vault-root")
-        );
-        assert!(
-            field(&link_only, "inviteLinks").is_undefined(),
-            "a read that could not open the records withholds them"
         );
         assert!(
             field(&view(None), "state").is_undefined(),

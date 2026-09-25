@@ -30,6 +30,13 @@ impl UnixMillis {
         let millis = u64::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX);
         Self(self.0.saturating_add(millis))
     }
+
+    /// Whether this instant has reached `deadline`. A deadline must be later
+    /// than now to stand, so the instant itself counts as reached; `None` is
+    /// never reached.
+    pub fn reached(self, deadline: Option<Self>) -> bool {
+        deadline.is_some_and(|deadline| self >= deadline)
+    }
 }
 
 /// A boxed background task handed to [`Scheduler::spawn`].
@@ -63,6 +70,15 @@ pub trait Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deadline_is_reached_at_its_own_instant() {
+        let deadline = Some(UnixMillis(10));
+        assert!(!UnixMillis(9).reached(deadline));
+        assert!(UnixMillis(10).reached(deadline));
+        assert!(UnixMillis(11).reached(deadline));
+        assert!(!UnixMillis(u64::MAX).reached(None));
+    }
 
     #[test]
     fn saturating_add_rounds_sub_millisecond_durations_up() {

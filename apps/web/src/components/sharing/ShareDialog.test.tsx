@@ -29,7 +29,6 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   live: false,
   expired: false,
   expiresAt: null,
-  spent: 0,
   pendingClaims: 0,
 };
 
@@ -63,8 +62,7 @@ interface EngineState {
   contacts: number[];
   /** A scope mapped to `null` is one whose root the engine could not reach. */
   grants: Map<string, Array<[number, Permission]> | null>;
-  /** `null` for an owner whose link records the engine could not open. */
-  links: SharingInviteLinksDescriptor | null;
+  links: SharingInviteLinksDescriptor;
   /** The ground `share_scope` would refuse this target on, as the engine names it. */
   standing: ShareStanding;
 }
@@ -97,7 +95,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
   const state: EngineState = {
     contacts: held.contacts ?? [],
     grants: held.grants ?? new Map(),
-    links: held.links === undefined ? NO_LINKS : held.links,
+    links: held.links ?? NO_LINKS,
     standing: held.standing ?? 'accepted',
   };
   const answer = <T,>(name: string, value: T) =>
@@ -127,7 +125,7 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
                   })),
                   grantRefusal: SHARE_STANDINGS[state.standing].grant,
                   inviteLinkRefusal: SHARE_STANDINGS[state.standing].inviteLink,
-                  inviteLinks: state.links === null ? null : { ...state.links },
+                  inviteLinks: { ...state.links },
                 },
         })
     ),
@@ -171,12 +169,6 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           expired: false,
           expiresAt: null,
         };
-        return outcome;
-      })
-    ),
-    pruneInviteLinks: vi.fn(() =>
-      answer('pruneInviteLinks', { kind: 'done' as const }).then((outcome) => {
-        state.links = { ...(state.links ?? NO_LINKS), spent: 0 };
         return outcome;
       })
     ),
@@ -419,14 +411,17 @@ describe('the invite link', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('mints a link that expires, unless the owner asks for one that does not', async () => {
+  it('mints a link under the lifetime the owner picks', async () => {
     const engine = await share();
 
-    fireEvent.change(screen.getByLabelText('link expires'), { target: { value: 'never' } });
+    fireEvent.change(screen.getByLabelText('link expires'), { target: { value: '30 days' } });
     await click('share-mint-link');
 
-    // `undefined` is the engine's "no deadline"; the default above is not it.
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', undefined);
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(
+      DOCS,
+      'read',
+      BigInt(MINTED_AT + 30 * 86_400_000)
+    );
   });
 
   it('frames the engine fragment into the claim URL, in the URL fragment', async () => {
@@ -491,14 +486,6 @@ describe('the invite link', () => {
 
     expect(screen.getByLabelText('close').hasAttribute('disabled')).toBe(true);
   });
-
-  it('tells a browser that holds no link where claims convert', async () => {
-    await share();
-
-    expect(screen.getByTestId('share-no-local-link').textContent).toBe(
-      '// no link on this browser - claims convert on the browser that made the link'
-    );
-  });
 });
 
 describe('a link the engine already holds', () => {
@@ -528,15 +515,6 @@ describe('a link the engine already holds', () => {
 
     expect(screen.getByTestId('share-no-mint')).toBeTruthy();
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
-  });
-
-  it('tells a browser another one shared from where claims convert', async () => {
-    // Another browser's mint made this folder a scope root, so the mint is
-    // refused here and this browser holds no record of the link.
-    await share(sharingEngine({}, held([], [], { standing: 'alreadyAScope' })));
-
-    expect(screen.getByTestId('share-no-mint')).toBeTruthy();
-    expect(screen.getByTestId('share-no-local-link')).toBeTruthy();
   });
 
   it('ends the link on a revoke and leaves the grants it converted standing', async () => {
@@ -575,7 +553,6 @@ describe('a link the engine already holds', () => {
 
     expect(screen.getByTestId('share-pending-claims').textContent).toBe('// 2 claims to convert');
     expect(screen.getByTestId('share-convert-claims')).toBeTruthy();
-    expect(screen.queryByTestId('share-no-local-link')).toBeNull();
   });
 
   it('says nothing waits where the engine counts no claim', async () => {
@@ -584,30 +561,11 @@ describe('a link the engine already holds', () => {
     expect(screen.queryByTestId('share-pending-claims')).toBeNull();
   });
 
-  it('offers to forget the records a cut left behind, and stops once pruned', async () => {
-    const engine = await share(
-      sharingEngine({}, held([], [], { links: { ...live, spent: 2 }, standing: 'alreadyAScope' }))
-    );
-
-    expect(screen.getByTestId('share-prune-links').textContent).toContain('2 spent link records');
-    await click('share-prune-links');
-
-    expect(engine.facade.pruneInviteLinks).toHaveBeenCalledWith(DOCS);
-    expect(screen.queryByTestId('share-prune-links')).toBeNull();
-  });
-
-  it('says the standing is unknown when the owner’s link records would not open', async () => {
-    await share(sharingEngine({}, held([], [], { links: null })));
-
-    expect(screen.getByTestId('share-links-unavailable')).toBeTruthy();
-    expect(screen.queryByTestId('share-mint-link')).toBeNull();
-  });
-
   it('draws no link section at all for a scope root the engine could not reach', async () => {
     await share(sharingEngine({}, held([], null)));
 
     expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
-    expect(screen.queryByTestId('share-links-unavailable')).toBeNull();
+    expect(screen.queryByTestId('share-live-link')).toBeNull();
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
   });
 });

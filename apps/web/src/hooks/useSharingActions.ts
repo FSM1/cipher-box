@@ -21,7 +21,6 @@ export type SharingCommand =
   | 'downgrade'
   | 'createInviteLink'
   | 'revokeInviteLink'
-  | 'pruneInviteLinks'
   | 'convertInviteClaims';
 
 export interface SharingActions {
@@ -39,15 +38,13 @@ export interface SharingActions {
   /**
    * Mints a link over this scope, resolving with the engine's fragment
    * (`MintedInviteLink`) or `null` where the engine refused. An omitted
-   * `expiresAt` mints one that never expires. The fragment is the link's whole
+   * `expiresAt` takes the engine's default lifetime. The fragment is the link's whole
    * capability and the engine hands it over once, so a caller that drops it
    * cannot ask for it again.
    */
   createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
   /** Cuts this scope's live link: its future claims end, converted grants stand. */
   revokeInviteLink(): Promise<boolean>;
-  /** Drops the records this scope's own commitment no longer carries. */
-  pruneInviteLinks(): Promise<boolean>;
   /** Converts the claims waiting on this scope's link into grants. */
   convertInviteClaims(): Promise<boolean>;
 }
@@ -117,14 +114,6 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       () =>
         run('revokeInviteLink', async (facade) => {
           await facade.revokeInviteLink(target);
-          await read(facade);
-        }),
-      [run, read, target]
-    ),
-    pruneInviteLinks: useCallback(
-      () =>
-        run('pruneInviteLinks', async (facade) => {
-          await facade.pruneInviteLinks(target);
           await read(facade);
         }),
       [run, read, target]

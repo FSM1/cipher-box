@@ -19,6 +19,7 @@ function share(
     displayName,
     permission: 'read',
     resolution,
+    viaLink: false,
   };
 }
 
@@ -68,6 +69,25 @@ describe('the shared route', () => {
     await renderShared(() => Promise.resolve([share(1, 'revocation-signal')]));
 
     expect(standings()).toEqual([{ resolution: 'revocation-signal', tone: 'warning' }]);
+    expect(screen.getByTestId('shared-standing').textContent).toBe(
+      'the owner removed you from this folder'
+    );
+  });
+
+  it('reads a revocation signal on a link-held share as the link revoked', async () => {
+    await renderShared(() =>
+      Promise.resolve([{ ...share(1, 'revocation-signal'), viaLink: true }])
+    );
+
+    expect(standings()).toEqual([{ resolution: 'revocation-signal', tone: 'warning' }]);
+    expect(screen.getByTestId('shared-standing').textContent).toBe('the owner revoked this link');
+  });
+
+  it('paints an expired link in the warning class', async () => {
+    await renderShared(() => Promise.resolve([{ ...share(1, 'expired'), viaLink: true }]));
+
+    expect(standings()).toEqual([{ resolution: 'expired', tone: 'warning' }]);
+    expect(screen.getByTestId('shared-standing').textContent).toBe('this link expired');
   });
 
   it('keeps epoch lag and an unresolvable name out of the warning class', async () => {

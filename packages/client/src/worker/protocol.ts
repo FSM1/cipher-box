@@ -243,9 +243,7 @@ export interface SharingInviteLinksDescriptor {
    * where there is no live link.
    */
   expiresAt: bigint | null;
-  /** The owner's records here that the scope's commitment no longer carries — what a prune drops. */
-  spent: number;
-  /** Invite claims that wait for `convertInviteClaims` here, as this device's link records count them. */
+  /** Invite claims that wait for `convertInviteClaims` here. */
   pendingClaims: number;
 }
 
@@ -262,8 +260,8 @@ export interface ScopeSharingDescriptor {
   grantRefusal: string | null;
   /** The refusal an invite-link mint here would report, or `null`. */
   inviteLinkRefusal: string | null;
-  /** `null` where the engine reached the scope but not the owner's link records. */
-  inviteLinks: SharingInviteLinksDescriptor | null;
+  /** This owner's invite links here, read off the scope's own record. */
+  inviteLinks: SharingInviteLinksDescriptor;
 }
 
 /**
@@ -288,6 +286,7 @@ export interface SharingDescriptor {
 export type ReceivedShareResolution =
   | 'granted'
   | 'revocation-signal'
+  | 'expired'
   | 'unresolvable'
   | 'epoch-lag';
 
@@ -305,6 +304,8 @@ export interface ReceivedShareDescriptor {
   permission: Permission;
   /** `null` when no pass has resolved this share yet — never "still granted". */
   resolution: ReceivedShareResolution | null;
+  /** The share reads through the link it was joined by, so a revocation signal is the link's revoke. */
+  viaLink: boolean;
 }
 
 /**
@@ -558,11 +559,12 @@ export type CommandDescriptor =
       kind: 'createInviteLink';
       node: Uint8Array;
       permission: Permission;
-      /** Unix-millis deadline; `null` mints a link that never expires. */
+      /** Unix-millis deadline; `null` takes the engine's default lifetime. */
       expiresAt: bigint | null;
+      /** Shown to the holder, signed by the owner; the engine bounds it, empty is allowed. */
+      ownerName: string;
     }
   | { kind: 'revokeInviteLink'; node: Uint8Array }
-  | { kind: 'pruneInviteLinks'; node: Uint8Array }
   /**
    * The fragment is the whole bearer capability, opaque above the engine: it
    * crosses verbatim, is never parsed, and never reaches a log or any durable

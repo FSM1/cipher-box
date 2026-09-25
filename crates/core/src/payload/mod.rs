@@ -10,12 +10,20 @@
 //! - **Mailbox payload** ([`mailbox`]) — an [`hpke`](crate::suite::hpke)-sealed
 //!   item with the sender's identity signature **inside the seal** (#39 D9),
 //!   verified against the contact-code-anchored key after opening.
+//! - **Invite names** ([`invite`]) — the owner signature over the names an
+//!   invite-link fragment carries (ADR 0027 D5).
 //!
 //! The structure-tag registry (`pointer-payload = 0x07`,
 //! `mailbox-payload = 0x08`) is frozen — consumed here, never redefined.
 
+pub mod invite;
 pub mod mailbox;
 pub mod pointer;
+
+pub use invite::{
+    INVITE_NAMES_SIG_DOMAIN, InviteNames, invite_names_preimage, sign_invite_names,
+    verify_invite_names,
+};
 
 pub use mailbox::{
     MAILBOX_SIG_DOMAIN, MailboxItem, mailbox_sig_preimage, open_mailbox_payload,

@@ -462,13 +462,13 @@ describe('EngineFacade', () => {
     });
   });
 
-  it('spells an omitted invite deadline as a link that never expires', async () => {
+  it('spells an omitted invite deadline as the engine default', async () => {
     const transport = mintingTransport();
     const facade = new EngineFacade(transport);
     const node = new Uint8Array(16);
 
-    await facade.createInviteLink(node, 'read');
-    await facade.createInviteLink(node, 'write', 1_800_000_000_000n);
+    await facade.createInviteLink(node, 'read', undefined, '');
+    await facade.createInviteLink(node, 'write', 1_800_000_000_000n, '');
 
     expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', expiresAt: null });
     expect(transport.commands[1]).toMatchObject({
@@ -477,10 +477,25 @@ describe('EngineFacade', () => {
     });
   });
 
+  it('carries the owner name the link shows its holder', async () => {
+    const transport = mintingTransport();
+
+    await new EngineFacade(transport).createInviteLink(
+      new Uint8Array(16),
+      'read',
+      undefined,
+      'Ada'
+    );
+
+    expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', ownerName: 'Ada' });
+  });
+
   it('hands the minted link back to its caller', async () => {
     const minted = await new EngineFacade(mintingTransport()).createInviteLink(
       new Uint8Array(16),
-      'read'
+      'read',
+      undefined,
+      ''
     );
 
     expect(minted.fragment).toBe(MINTED_FRAGMENT);
@@ -499,9 +514,9 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await expect(facade.createInviteLink(new Uint8Array(16), 'read')).rejects.toThrow(
-      'create invite link answered done'
-    );
+    await expect(
+      facade.createInviteLink(new Uint8Array(16), 'read', undefined, '')
+    ).rejects.toThrow('create invite link answered done');
   });
 
   it('delegates the stream trio to the transport, window intact', async () => {

@@ -22,7 +22,7 @@ interface InviteLinkPanelProps {
 /**
  * The link half of the share dialog: the standing of the link a scope carries
  * and the owner's actions on it, or the mint where the engine would take one.
- * Which of the four applies is `inviteLinkState`'s call, not this component's.
+ * Which of the three applies is `inviteLinkState`'s call, not this component's.
  */
 export function InviteLinkPanel({
   scope,
@@ -35,19 +35,12 @@ export function InviteLinkPanel({
   const state = inviteLinkState(scope);
 
   switch (state.kind) {
-    case 'unavailable':
-      return (
-        <p className="sharing-note" data-testid="share-links-unavailable">
-          {'// link standing unavailable'}
-        </p>
-      );
-
     case 'live': {
       const pending = plural(state.links.pendingClaims, 'claim');
       return (
         <div className="dialog-content" data-testid="share-live-link">
           <p className="sharing-note" data-testid="share-live-link-expiry">
-            {`// a link stands here — ${expiryLabel(state.links)}`}
+            {`// a link stands here — ${expiryLabel(state.links.expired, state.expiresAt)}`}
           </p>
           {pending !== null && (
             <p className="sharing-note" data-testid="share-pending-claims">
@@ -79,7 +72,6 @@ export function InviteLinkPanel({
     case 'mintable':
       return (
         <div className="dialog-content">
-          <NoLocalLink />
           <label className="dialog-label" htmlFor="share-link-lifetime">
             link expires
           </label>
@@ -110,48 +102,9 @@ export function InviteLinkPanel({
 
     case 'refused':
       return (
-        <div className="dialog-content">
-          <p className="sharing-note" data-testid="share-no-mint" data-check={state.check}>
-            {`// ${refusalLabel(state.check)}`}
-          </p>
-          <NoLocalLink />
-        </div>
+        <p className="sharing-note" data-testid="share-no-mint" data-check={state.check}>
+          {`// ${refusalLabel(state.check)}`}
+        </p>
       );
   }
-}
-
-/**
- * The link records are local to the browser that minted the link, so a scope
- * another browser shared reads here as one with no live link.
- */
-function NoLocalLink() {
-  return (
-    <p className="sharing-note" data-testid="share-no-local-link">
-      {'// no link on this browser - claims convert on the browser that made the link'}
-    </p>
-  );
-}
-
-/** Offers the prune the engine's spent count says there is something to drop. */
-export function SpentLinkRecords({
-  scope,
-  actions,
-  busy,
-}: Pick<InviteLinkPanelProps, 'scope' | 'actions' | 'busy'>) {
-  const spent = scope.inviteLinks?.spent ?? 0;
-  if (spent === 0) return null;
-
-  return (
-    <button
-      type="button"
-      className="dialog-button"
-      onClick={() => void actions.pruneInviteLinks()}
-      disabled={busy}
-      data-testid="share-prune-links"
-    >
-      {actions.busy === 'pruneInviteLinks'
-        ? 'pruning...'
-        : `forget ${spent} spent link record${spent === 1 ? '' : 's'}`}
-    </button>
-  );
 }

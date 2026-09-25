@@ -9,7 +9,8 @@
  * removal never reads as "behind".
  */
 
-import type { ReceivedShareResolution } from '@cipherbox/client';
+import type { ReceivedShareDescriptor, ReceivedShareResolution } from '@cipherbox/client';
+import { displayName } from '../vault/displayName';
 
 type StandingTone = 'ok' | 'pending' | 'warning';
 
@@ -26,6 +27,7 @@ export interface ReceivedShareStanding {
 const CLASSES: Record<ReceivedShareResolution, ReceivedShareStanding> = {
   granted: { tone: 'ok', label: 'granted' },
   'revocation-signal': { tone: 'warning', label: 'the owner removed you from this folder' },
+  expired: { tone: 'warning', label: 'this link expired' },
   unresolvable: {
     tone: 'pending',
     label: 'the owner record did not resolve — absent, not a removal',
@@ -45,8 +47,28 @@ const UNRECOGNISED: ReceivedShareStanding = {
   label: 'this build does not recognise the standing the engine reported',
 };
 
-export function shareStanding(resolution: ReceivedShareResolution | null): ReceivedShareStanding {
+const LINK_REVOKED: ReceivedShareStanding = {
+  tone: 'warning',
+  label: 'the owner revoked this link',
+};
+
+export function shareStanding({
+  resolution,
+  viaLink,
+}: Pick<ReceivedShareDescriptor, 'resolution' | 'viaLink'>): ReceivedShareStanding {
   if (resolution === null) return UNREAD;
+  if (resolution === 'revocation-signal' && viaLink) return LINK_REVOKED;
   // `hasOwn`, so any key this build does not name fails closed.
   return Object.hasOwn(CLASSES, resolution) ? CLASSES[resolution] : UNRECOGNISED;
+}
+
+/** The engine sends an empty name for a link-held share whose owner-signed names did not verify. */
+const VIA_LINK = 'shared via link';
+
+/** The name a received-share row shows. */
+export function shareName({
+  displayName: name,
+  viaLink,
+}: Pick<ReceivedShareDescriptor, 'displayName' | 'viaLink'>): string {
+  return viaLink && name === '' ? VIA_LINK : displayName(name);
 }

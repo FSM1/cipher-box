@@ -9,6 +9,7 @@
 
 use std::sync::OnceLock;
 
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     ChildScopeRef, GrantSetCommitment, Permission, PreservedFields, sign_grant_set,
 };
@@ -18,27 +19,24 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::grants::{
-    CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, ConvertedClaimRecord,
-    EphemeralInvitee, InviteClaim, InviteRecords, InviteStore, OwnerAuthority, RecordedInvite,
-    StagingInviteStore, convert_invite_claim, import_contact, locate_invite_link,
+    CLAIM_ID_LEN, ClaimOutcome, CommittedScope, ConvertedClaim, EphemeralInvitee, InviteClaim,
+    InviteError, LinkTerms, OwnerAuthority, convert_invite_claim, import_contact,
     mint_invite_grant, post_invite_claim,
 };
-use cipherbox_engine::mailbox::poll_verified;
+use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified};
 use cipherbox_engine::rotation::derive_write_name;
-use cipherbox_engine::seams::{Mailbox, Scheduler, UnixMillis};
-use cipherbox_engine::testkit::fakes::{
-    InMemoryMailboxHub, InMemoryStagingStore, VirtualScheduler,
-};
+use cipherbox_engine::seams::{Mailbox, UnixMillis};
+use cipherbox_engine::sync::pointer::scope_pointer_name;
+use cipherbox_engine::testkit::fakes::InMemoryMailboxHub;
 use cipherbox_engine::testkit::{SeededEntropy, block_on};
-
-use core::cell::RefCell;
-use core::time::Duration;
 
 const V: u64 = 2;
 const SCOPE: [u8; 16] = [0x5c; 16];
 const WRITE_SCOPE_SEED: [u8; 32] = [0x55; 32];
 /// The scope pointer read key every fixture masks its recipients under.
 const POINTER_READ_KEY: [u8; 32] = [0x66; 32];
+const POINTER_SEED: [u8; 32] = [0x67; 32];
+const DEADLINE: UnixMillis = UnixMillis(10_000);
 const EPH_MAILBOX: [u8; 32] = [0x71; 32];
 const EPH_FORGED: [u8; 32] = [0x72; 32];
 const EPH_TRANSPORT: [u8; 32] = [0x73; 32];
@@ -64,27 +62,21 @@ fn scope_name() -> Vec<u8> {
         .to_vec()
 }
 
+fn pointer_name() -> IpnsName {
+    scope_pointer_name(&POINTER_SEED, &SCOPE)
+}
+
 /// The owner's contact bundle, exactly as an invite URL carries it.
 fn owner_contact_code() -> Vec<u8> {
     ContactCode::create(&owner_identity(), owner_enc().public()).encode()
 }
 
-/// The store's unit of persistence, spelled out at each call site so a test
-/// says what it recorded.
-fn records(links: &[RecordedInvite], claims: &[ConvertedClaimRecord]) -> InviteRecords {
-    InviteRecords {
-        links: links.to_vec(),
-        claims: claims.to_vec(),
-    }
-}
-
-/// The published set committing one invite link, the owner's record of it, and
-/// the ephemeral identity a fragment holder reconstructs.
+/// The published set committing one link entry, and the ephemeral identity a
+/// link holder reconstructs. The set is the owner's only record of it.
 struct Link {
     commitment: GrantSetCommitment,
     commitment_sig: cipherbox_core::suite::ecdsa::EcdsaSignature,
     ledger: Vec<cipherbox_core::seal::GrantLedgerEntry>,
-    recorded: RecordedInvite,
     invitee: EphemeralInvitee,
 }
 
@@ -123,20 +115,19 @@ impl Owner {
 }
 
 fn link(permission: Permission) -> Link {
-    link_until(permission, None)
-}
-
-fn link_until(permission: Permission, expires_at: Option<UnixMillis>) -> Link {
     let invitee = EphemeralInvitee::from_secret(&[0x4e; 32]).expect("valid");
-    let minted = mint_invite_grant(
+    let row = mint_invite_grant(
         &owner_identity(),
         &owner_enc(),
         &POINTER_READ_KEY,
         &invitee,
         &SCOPE,
         &WRITE_SCOPE_SEED,
-        permission,
-        expires_at,
+        &LinkTerms {
+            deadline: DEADLINE,
+            conversion_permission: permission,
+            admission_cap: 5,
+        },
     )
     .expect("mints");
     let commitment = GrantSetCommitment {
@@ -145,15 +136,14 @@ fn link_until(permission: Permission, expires_at: Option<UnixMillis>) -> Link {
             .verifying_key()
             .to_bytes(),
         cut_epoch: 0,
-        entries: vec![minted.row.commitment_entry.clone()],
+        entries: vec![row.commitment_entry.clone()],
         unknown: PreservedFields::new(),
     };
     let commitment_sig = sign_grant_set(&owner_identity(), &commitment).expect("signs");
     Link {
         commitment,
         commitment_sig,
-        ledger: vec![minted.row.ledger_entry],
-        recorded: minted.link,
+        ledger: vec![row.ledger_entry],
         invitee,
     }
 }
@@ -178,7 +168,7 @@ fn a_link_holder_claims_over_the_mailbox_and_the_owner_converts_it() {
         V,
         &InviteClaim {
             claim_id: [0x01; CLAIM_ID_LEN],
-            scope_root_name: scope_name(),
+            scope_pointer_name: pointer_name(),
             contact_code: ContactCode::create(&claimant_identity, claimant_enc.public()).encode(),
         },
         "claim-1",
@@ -197,11 +187,10 @@ fn a_link_holder_claims_over_the_mailbox_and_the_owner_converts_it() {
     let converted = convert_invite_claim(
         &keys.authority(),
         &l.scope(),
+        &pointer_name(),
         &POINTER_READ_KEY,
-        &[l.recorded],
-        &[],
         &items[0],
-        cipherbox_engine::seams::UnixMillis(0),
+        UnixMillis(0),
     )
     .expect("converts");
 
@@ -234,7 +223,7 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
         V,
         &InviteClaim {
             claim_id: [0x01; CLAIM_ID_LEN],
-            scope_root_name: scope_name(),
+            scope_pointer_name: pointer_name(),
             contact_code: ContactCode::create(&claimant_identity, claimant_enc.public()).encode(),
         },
         "forged-1",
@@ -251,11 +240,10 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
         convert_invite_claim(
             &keys.authority(),
             &l.scope(),
+            &pointer_name(),
             &POINTER_READ_KEY,
-            &[l.recorded],
-            &[],
             &items[0],
-            cipherbox_engine::seams::UnixMillis(0),
+            UnixMillis(0),
         )
         .unwrap_err()
         .check(),
@@ -276,7 +264,7 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
     let owner_contact = import_contact(&owner_contact_code()).expect("valid bundle");
     let claim_id = InviteClaim::mint(
         &mut SeededEntropy::new(4),
-        scope_name(),
+        pointer_name(),
         contact_code.clone(),
     )
     .expect("mints")
@@ -290,7 +278,7 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
         V,
         &InviteClaim {
             claim_id,
-            scope_root_name: scope_name(),
+            scope_pointer_name: pointer_name(),
             contact_code: contact_code.clone(),
         },
         "claim-1",
@@ -303,7 +291,7 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
     for secret in [
         contact_code.as_slice(),
         &claimant_identity.verifying_key().to_sec1(),
-        scope_name().as_slice(),
+        pointer_name().as_str().as_bytes(),
         &claim_id,
     ] {
         // `windows` yields nothing when the payload is shorter than the needle,
@@ -319,17 +307,14 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
     }
 }
 
-/// A claim from `link`'s fragment holder, delivered over the real mailbox and
-/// handed back sender-verified — the item conversion actually consumes.
-///
-/// Deterministic in its arguments, so calling it twice with one `claim_id` is
-/// the redelivery the transport is free to make. The HPKE ephemeral varies with
-/// them for the same reason a real one is fresh per seal.
+/// A claim from `l`'s link holder, delivered over the real mailbox and
+/// handed back sender-verified: the item conversion consumes.
 fn delivered_claim(
     l: &Link,
     claimant_seed: u8,
     claim_id: [u8; CLAIM_ID_LEN],
-) -> cipherbox_engine::mailbox::VerifiedMailboxItem {
+    scope_pointer: IpnsName,
+) -> VerifiedMailboxItem {
     let hub = InMemoryMailboxHub::default();
     let claimant_identity = EcdsaSigner::from_scalar(&[claimant_seed; 32]).expect("valid scalar");
     let claimant_enc = X25519Secret::from_scalar([claimant_seed ^ 0xff; 32]);
@@ -344,7 +329,7 @@ fn delivered_claim(
         V,
         &InviteClaim {
             claim_id,
-            scope_root_name: scope_name(),
+            scope_pointer_name: scope_pointer,
             contact_code: ContactCode::create(&claimant_identity, claimant_enc.public()).encode(),
         },
         "claim-1",
@@ -357,261 +342,93 @@ fn delivered_claim(
         .expect("the claim was delivered")
 }
 
-/// The gap the invite store closes: a link minted in one session is converted
-/// and revoked in the next, against the record the owner recovered rather than
-/// against the published row.
-#[test]
-fn a_link_minted_in_one_session_converts_and_revokes_in_the_next() {
-    let staging = InMemoryStagingStore::default();
-    let enc = owner_enc();
-    let l = link(Permission::Read);
-    {
-        let entropy = RefCell::new(SeededEntropy::new(5));
-        let minting_session = StagingInviteStore::new(&staging, &enc, &entropy);
-        block_on(minting_session.persist(&records(&[l.recorded], &[])))
-            .expect("the mint records its link");
-    }
-
-    // A later session: a fresh handle over the same durable backing, nothing
-    // carried over in memory.
-    let entropy = RefCell::new(SeededEntropy::new(6));
-    let recovered = block_on(StagingInviteStore::new(&staging, &enc, &entropy).load())
-        .expect("the records load");
-    assert_eq!(recovered, records(&[l.recorded], &[]));
-
-    let keys = Owner::new();
-    let converted = convert_invite_claim(
-        &keys.authority(),
-        &l.scope(),
-        &POINTER_READ_KEY,
-        &recovered.links,
-        &recovered.claims,
-        &delivered_claim(&l, 0x67, [0x11; CLAIM_ID_LEN]),
-        UnixMillis(0),
-    )
-    .expect("the recovered record converts the claim");
-    assert_eq!(converted.outcome, ClaimOutcome::Granted);
-
-    let located = locate_invite_link(&keys.authority(), &l.scope(), &recovered.links)
-        .expect("the recovered record names its link");
-    assert_eq!(
-        located.tag, l.recorded.tag,
-        "the link a later session revokes is the one the earlier session minted",
-    );
-}
-
-/// The recorded deadline is what conversion judges expiry on, so it has to
-/// survive the round trip — an expired link must stay expired after a restart.
-#[test]
-fn a_recovered_record_carries_the_deadline_conversion_judges_expiry_on() {
-    let staging = InMemoryStagingStore::default();
-    let deadline = UnixMillis(1_700_000_000_000);
-    let l = link_until(Permission::Read, Some(deadline));
-    let enc = owner_enc();
-    let entropy = RefCell::new(SeededEntropy::new(7));
-    block_on(
-        StagingInviteStore::new(&staging, &enc, &entropy).persist(&records(&[l.recorded], &[])),
-    )
-    .expect("persist");
-    let recovered =
-        block_on(StagingInviteStore::new(&staging, &enc, &entropy).load()).expect("load");
-    assert_eq!(recovered.links[0].expires_at, Some(deadline));
-
-    let keys = Owner::new();
-    assert_eq!(
-        convert_invite_claim(
-            &keys.authority(),
-            &l.scope(),
-            &POINTER_READ_KEY,
-            &recovered.links,
-            &recovered.claims,
-            &delivered_claim(&l, 0x69, [0x12; CLAIM_ID_LEN]),
-            deadline,
-        )
-        .unwrap_err()
-        .check(),
-        "link-expired",
-    );
-}
-
-/// The owner's session as a simulation drives it: the durable store it recovers
-/// its invite state from, and the deterministic clock every instant comes from.
-struct OwnerSession {
-    staging: InMemoryStagingStore,
-    entropy: RefCell<SeededEntropy>,
-    clock: VirtualScheduler,
-    enc: X25519Secret,
-}
-
-impl OwnerSession {
-    fn new(seed: u64) -> Self {
-        Self {
-            staging: InMemoryStagingStore::default(),
-            entropy: RefCell::new(SeededEntropy::new(seed)),
-            clock: VirtualScheduler::starting_at(UnixMillis(1_700_000_000_000)),
-            enc: owner_enc(),
-        }
-    }
-
-    fn store(&self) -> StagingInviteStore<'_, InMemoryStagingStore, SeededEntropy> {
-        StagingInviteStore::new(&self.staging, &self.enc, &self.entropy)
-    }
-
-    fn load(&self) -> InviteRecords {
-        block_on(self.store().load()).expect("the recorded state loads")
-    }
-
-    fn persist(&self, state: &InviteRecords) {
-        block_on(self.store().persist(state)).expect("the state records");
-    }
-}
-
-/// A link whose deadline outlasts the whole simulation, so `now` is genuinely
-/// consulted at every conversion rather than ignored for want of a deadline.
-fn dated_link() -> Link {
-    link_until(Permission::Read, Some(UnixMillis(1_900_000_000_000)))
-}
-
-/// The state a simulation starts from: the link recorded, nothing spent.
-fn recorded(session: &OwnerSession, l: &Link) {
-    session.persist(&records(&[l.recorded], &[]));
-}
-
-/// Convert one claim from `l`'s holder and record what it spent, exactly as the
-/// caller contract requires before it acks.
-fn convert_and_record(
-    session: &OwnerSession,
-    keys: &Owner,
+fn convert(
     scope: &CommittedScope<'_>,
-    l: &Link,
-    claimant_seed: u8,
-    claim_id: [u8; CLAIM_ID_LEN],
-) -> ConvertedClaim {
-    let held = session.load();
-    let converted = convert_invite_claim(
-        &keys.authority(),
-        scope,
-        &POINTER_READ_KEY,
-        &held.links,
-        &held.claims,
-        &delivered_claim(l, claimant_seed, claim_id),
-        session.clock.now(),
-    )
-    .expect("the claim converts");
-    let mut claims = held.claims;
-    claims.extend(converted.record);
-    session.persist(&records(&held.links, &claims));
-    converted
-}
-
-/// The scope a set reads as once the owner has signed and published it.
-fn published<'a>(
-    commitment: &'a GrantSetCommitment,
-    sig: &'a cipherbox_core::suite::ecdsa::EcdsaSignature,
-    ledger: &'a [cipherbox_core::seal::GrantLedgerEntry],
-) -> CommittedScope<'a> {
-    CommittedScope::bind(scope_ref(), commitment, sig, ledger)
-        .expect("the gated reference names the scope root the set carries")
-}
-
-/// Convert one claim and refuse it, returning the refusal's stable name.
-fn refuse(
-    session: &OwnerSession,
-    keys: &Owner,
-    scope: &CommittedScope<'_>,
-    item: &cipherbox_engine::mailbox::VerifiedMailboxItem,
-) -> &'static str {
-    let held = session.load();
+    item: &VerifiedMailboxItem,
+    now: UnixMillis,
+) -> Result<ConvertedClaim, InviteError> {
+    let keys = Owner::new();
     convert_invite_claim(
         &keys.authority(),
         scope,
+        &pointer_name(),
         &POINTER_READ_KEY,
-        &held.links,
-        &held.claims,
         item,
-        session.clock.now(),
+        now,
     )
-    .expect_err("the claim is not convertible")
-    .check()
 }
 
-/// A claim the server re-serves after the owner cut the grant it made.
-/// Re-converting it would have the owner re-sign a set that undoes its own
-/// revocation.
+/// ADR 0023 D3: a claimant the published set already grants is a no-op. The
+/// set comes back unchanged, so the owner publishes nothing.
 #[test]
-fn a_claim_redelivered_after_its_grant_was_cut_does_not_resurrect_it() {
-    let session = OwnerSession::new(11);
-    let keys = Owner::new();
-    let l = dated_link();
-    recorded(&session, &l);
+fn a_claim_from_a_committed_grantee_changes_nothing() {
+    let l = link(Permission::Read);
+    let first = convert(
+        &l.scope(),
+        &delivered_claim(&l, 0x68, [0xb1; CLAIM_ID_LEN], pointer_name()),
+        UnixMillis(0),
+    )
+    .expect("converts");
+    assert_eq!(first.outcome, ClaimOutcome::Granted);
 
-    let claim = delivered_claim(&l, 0x67, [0xa1; CLAIM_ID_LEN]);
-    let converted = convert_and_record(&session, &keys, &l.scope(), &l, 0x67, [0xa1; CLAIM_ID_LEN]);
-    assert_eq!(converted.outcome, ClaimOutcome::Granted);
-    let granted_tag = converted.row.tag;
-
-    // The owner publishes the conversion, then cuts that grantee: absence from
-    // the committed set is the revocation.
-    let mut after_cut = converted.commitment.clone();
-    after_cut.entries.retain(|e| e.tag != granted_tag);
-    let after_cut_sig = sign_grant_set(&owner_identity(), &after_cut).expect("signs");
-    let after_cut_ledger: Vec<_> = converted
-        .ledger
-        .iter()
-        .filter(|e| e.tag != granted_tag)
-        .cloned()
-        .collect();
-    let cut_scope = published(&after_cut, &after_cut_sig, &after_cut_ledger);
-
-    session.clock.advance(Duration::from_secs(3_600));
-    let redelivered = delivered_claim(&l, 0x67, [0xa1; CLAIM_ID_LEN]);
-    assert_eq!(
-        redelivered.payload, claim.payload,
-        "the transport re-serves the same claim, so this is a redelivery and not a second claim"
-    );
-    assert_eq!(
-        refuse(&session, &keys, &cut_scope, &redelivered),
-        "claim-already-converted",
-    );
-
-    // Nor may a fresh claim through the same link undo the cut while the link is
-    // still live: the record is per link, and this is that link.
-    let fresh = delivered_claim(&l, 0x67, [0xa2; CLAIM_ID_LEN]);
-    assert_eq!(refuse(&session, &keys, &cut_scope, &fresh), "grant-was-cut");
-}
-
-/// The same redelivery before any cut. The committed set already carries the
-/// grant, so the answer is a refusal that changes nothing — the caller acks and
-/// publishes nothing.
-#[test]
-fn a_claim_redelivered_before_any_cut_is_an_idempotent_no_op() {
-    let session = OwnerSession::new(12);
-    let keys = Owner::new();
-    let l = dated_link();
-    recorded(&session, &l);
-
-    let converted = convert_and_record(&session, &keys, &l.scope(), &l, 0x68, [0xb1; CLAIM_ID_LEN]);
-    assert_eq!(converted.outcome, ClaimOutcome::Granted);
-    let sig = sign_grant_set(&owner_identity(), &converted.commitment).expect("signs");
-    let live = published(&converted.commitment, &sig, &converted.ledger);
-    let spent = session.load();
-
-    session.clock.advance(Duration::from_secs(60));
-    assert_eq!(
-        refuse(
-            &session,
-            &keys,
+    let sig = sign_grant_set(&owner_identity(), &first.commitment).expect("signs");
+    let live =
+        CommittedScope::bind(scope_ref(), &first.commitment, &sig, &first.ledger).expect("binds");
+    for claim_id in [[0xb1; CLAIM_ID_LEN], [0xb2; CLAIM_ID_LEN]] {
+        let again = convert(
             &live,
-            &delivered_claim(&l, 0x68, [0xb1; CLAIM_ID_LEN]),
-        ),
-        "claim-already-converted",
-    );
+            &delivered_claim(&l, 0x68, claim_id, pointer_name()),
+            UnixMillis(1),
+        )
+        .expect("a known identity converts to a no-op");
+        assert_eq!(again.outcome, ClaimOutcome::Unchanged);
+        assert_eq!(again.commitment, first.commitment);
+        assert_eq!(again.ledger, first.ledger);
+    }
+}
 
-    // A second claim from a grantee already committed is the reachable
-    // `Unchanged` path, and it must not grow the spent set — one record per
-    // grantee per link is what keeps a link holder from filling it.
-    let again = convert_and_record(&session, &keys, &live, &l, 0x68, [0xb2; CLAIM_ID_LEN]);
-    assert_eq!(again.outcome, ClaimOutcome::Unchanged);
-    assert_eq!(again.record, None, "the grantee is already recorded");
-    assert_eq!(session.load(), spent, "the spent set did not grow");
+/// A write link converts at read, because a write grant needs a write cut that
+/// conversion does not run.
+#[test]
+fn a_write_link_converts_to_a_read_grant() {
+    let l = link(Permission::Write);
+    let converted = convert(
+        &l.scope(),
+        &delivered_claim(&l, 0x69, [0xc1; CLAIM_ID_LEN], pointer_name()),
+        UnixMillis(0),
+    )
+    .expect("converts");
+    assert_eq!(converted.outcome, ClaimOutcome::Granted);
+    assert_eq!(converted.row.ledger_entry.permission, Permission::Read);
+}
+
+/// ADR 0023 D3: the deadline must be later than now.
+#[test]
+fn a_claim_at_the_link_deadline_is_refused() {
+    let l = link(Permission::Read);
+    let item = delivered_claim(&l, 0x6a, [0xd1; CLAIM_ID_LEN], pointer_name());
+    assert!(convert(&l.scope(), &item, UnixMillis(DEADLINE.0 - 1)).is_ok());
+    assert_eq!(
+        convert(&l.scope(), &item, DEADLINE).unwrap_err().check(),
+        "link-expired"
+    );
+}
+
+/// The claim names the scope pointer. A claim that names the pointer of another
+/// scope is refused, whatever link signed it.
+#[test]
+fn a_claim_naming_another_scope_pointer_is_refused() {
+    let l = link(Permission::Read);
+    let item = delivered_claim(
+        &l,
+        0x6b,
+        [0xe1; CLAIM_ID_LEN],
+        scope_pointer_name(&POINTER_SEED, &[0x5d; 16]),
+    );
+    assert_eq!(
+        convert(&l.scope(), &item, UnixMillis(0))
+            .unwrap_err()
+            .check(),
+        "claim-scope-mismatch"
+    );
 }

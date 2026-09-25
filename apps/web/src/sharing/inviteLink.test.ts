@@ -7,12 +7,11 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   live: false,
   expired: false,
   expiresAt: null,
-  spent: 0,
   pendingClaims: 0,
 };
 
 const scope = (
-  inviteLinks: SharingInviteLinksDescriptor | null,
+  inviteLinks: SharingInviteLinksDescriptor,
   inviteLinkRefusal: string | null = null
 ): ScopeSharing => ({ grants: [], grantRefusal: null, inviteLinkRefusal, inviteLinks });
 
@@ -27,42 +26,31 @@ describe('the link URL', () => {
 });
 
 describe('the deadline a mint sends', () => {
-  it('is the engine bigint for a bounded lifetime, and absent for none', () => {
+  it('is the engine bigint for each lifetime', () => {
     expect(expiryAt('7 days', 1_000)).toBe(BigInt(1_000 + 7 * 86_400_000));
-    expect(expiryAt('never', 1_000)).toBeUndefined();
+    expect(expiryAt('30 days', 1_000)).toBe(BigInt(1_000 + 30 * 86_400_000));
   });
 });
 
 describe('the deadline label', () => {
   it('takes the engine verdict rather than re-deciding it against a browser clock', () => {
     // A deadline far in the future, which a clock comparison would draw as live.
-    const links = { ...NO_LINKS, live: true, expired: true, expiresAt: 4_000_000_000_000n };
-
-    expect(expiryLabel(links)).toBe('expired');
-  });
-
-  it('names a link that never expires rather than showing a date', () => {
-    expect(expiryLabel({ ...NO_LINKS, live: true })).toBe('never expires');
+    expect(expiryLabel(true, 4_000_000_000_000n)).toBe('expired');
   });
 
   it('refuses a deadline no date can hold rather than rendering an invalid one', () => {
-    const beyond = { ...NO_LINKS, live: true, expiresAt: 2n ** 63n };
-
-    expect(expiryLabel(beyond)).toBe('expires beyond any date');
+    expect(expiryLabel(false, 2n ** 63n)).toBe('expires beyond any date');
   });
 });
 
 describe('which link situation a scope is in', () => {
-  it('withholds a verdict where the owner’s records would not open', () => {
-    expect(inviteLinkState(scope(null))).toEqual({ kind: 'unavailable' });
-  });
-
   it('reports the link a scope carries over any mint verdict', () => {
-    const links = { ...NO_LINKS, live: true };
+    const links = { ...NO_LINKS, live: true, expiresAt: 1_000n };
 
     expect(inviteLinkState(scope(links, 'invite-target-already-names-a-scope'))).toEqual({
       kind: 'live',
       links,
+      expiresAt: 1_000n,
     });
   });
 

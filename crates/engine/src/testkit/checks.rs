@@ -22,7 +22,7 @@ use cipherbox_core::suite::ecdsa::{
     EcdsaSignature, EcdsaSigner, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
 };
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::content::provider::place_block;
@@ -40,10 +40,10 @@ use crate::grants::contact::import_contact;
 use crate::grants::ledger::enforce_committed_ledger;
 use crate::grants::owner_entry::{AbuseEvent, OwnerEntry, cross_check};
 use crate::grants::{
-    AuthorityViolation, CLAIM_ID_LEN, CommittedScope, ConvertedClaimRecord, CreateGrantError,
-    EphemeralInvitee, GrantRecipient, GrantRow, GranteeScopePlan, InviteClaim, InviteError,
-    InviteFragment, MAX_INVITE_FRAGMENT_BYTES, MintedInvite, OwnerAuthority, OwnerGrantKeys,
-    RecordedInvite, convert_invite_claim, mint_invite_grant, post_share_pointer,
+    AuthorityViolation, CLAIM_ID_LEN, CommittedScope, CreateGrantError, EphemeralInvitee,
+    GrantRecipient, GrantRow, GranteeScopePlan, InviteClaim, InviteError, InviteFragment,
+    LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority, OwnerGrantKeys,
+    convert_invite_claim, mint_invite_grant, post_share_pointer,
 };
 use crate::mailbox::VerifiedMailboxItem;
 use crate::name::MAX_NODE_NAME_BYTES;
@@ -423,22 +423,25 @@ const INVITE_DEADLINE: UnixMillis = UnixMillis(1_700_000_000_000);
 const INVITE_WRITE_SCOPE_SEED: [u8; SECRET_LEN] = [0x55; SECRET_LEN];
 const INVITE_LINK_SECRET: u8 = 0x4e;
 
+/// The scope pointer name a claim on the fixture's link names.
+fn invite_pointer_name() -> IpnsName {
+    IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key())
+}
+
 /// One owner, one minted link, one committed set: the state a conversion runs
 /// against, so each vector mutates exactly one input away from it.
 struct InviteFixture {
     identity: EcdsaSigner,
     enc: X25519Secret,
-    name: Vec<u8>,
     scope: ChildScopeRef,
-    minted: MintedInvite,
+    link_row: GrantRow,
     commitment: GrantSetCommitment,
     commitment_sig: EcdsaSignature,
     ledger: Vec<GrantLedgerEntry>,
 }
 
 impl InviteFixture {
-    /// `expires_at` is the deadline the owner minted the link under.
-    fn new(expires_at: Option<UnixMillis>) -> Self {
+    fn new() -> Self {
         let identity = EcdsaSigner::from_scalar(&[0x33; 32]).expect("a valid owner scalar");
         let enc = X25519Secret::from_scalar([0x11; 32]);
         let pseudonym = Ed25519Signer::from_seed([0x22; 32]);
@@ -446,7 +449,7 @@ impl InviteFixture {
             .as_str()
             .as_bytes()
             .to_vec();
-        let minted = mint_invite_grant(
+        let link_row = mint_invite_grant(
             &identity,
             &enc,
             &POINTER_READ_KEY,
@@ -454,18 +457,20 @@ impl InviteFixture {
                 .expect("a valid invite secret"),
             &INVITE_SCOPE,
             &INVITE_WRITE_SCOPE_SEED,
-            Permission::Read,
-            expires_at,
+            &LinkTerms {
+                deadline: INVITE_DEADLINE,
+                conversion_permission: Permission::Read,
+                admission_cap: 5,
+            },
         )
         .expect("the owner mints its own link");
         let (commitment, commitment_sig, ledger) =
-            owner_signed_set(&identity, &pseudonym, name.clone(), &[&minted.row]);
+            owner_signed_set(&identity, &pseudonym, name.clone(), &[&link_row]);
         Self {
             identity,
             enc,
-            scope: ChildScopeRef::new(INVITE_SCOPE, name.clone()),
-            name,
-            minted,
+            scope: ChildScopeRef::new(INVITE_SCOPE, name),
+            link_row,
             commitment,
             commitment_sig,
             ledger,
@@ -512,15 +517,14 @@ fn owner_signed_set(
 fn claim_item(
     sender: &EcdsaSigner,
     contact_code: Vec<u8>,
-    scope_root_name: Vec<u8>,
-    claim_id: [u8; CLAIM_ID_LEN],
+    scope_pointer_name: IpnsName,
 ) -> VerifiedMailboxItem {
     VerifiedMailboxItem {
         item_id: "claim-1".to_owned(),
         sender_identity: sender.verifying_key(),
         payload: InviteClaim {
-            claim_id,
-            scope_root_name,
+            claim_id: [0x99; CLAIM_ID_LEN],
+            scope_pointer_name,
             contact_code,
         }
         .encode(),
@@ -531,38 +535,117 @@ fn contact_code(identity: &EcdsaSigner, enc: &X25519Secret) -> Vec<u8> {
     ContactCode::create(identity, enc.public()).encode()
 }
 
+/// A fragment the owner signed, one field away from a bound.
+fn invite_fragment(owner: &EcdsaSigner, folder_name: String) -> InviteFragment {
+    let mut fragment = InviteFragment {
+        invite_secret: SecretBytes::new([INVITE_LINK_SECRET; SECRET_LEN]),
+        owner_contact_code: contact_code(owner, &X25519Secret::from_scalar([0x11; 32])),
+        scope_id: INVITE_SCOPE,
+        scope_pointer_name: invite_pointer_name(),
+        pointer_read_key: SecretBytes::new(POINTER_READ_KEY),
+        owner_name: "Ada".to_owned(),
+        folder_name,
+        names_sig: [0; ECDSA_SIG_LEN],
+    };
+    fragment.sign_names(owner);
+    fragment
+}
+
+/// An invite fragment the live encoder produced, beside the fields it carries,
+/// hex where they are bytes. The owner is the fixture's.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InviteFragmentVector {
+    /// The vector's name.
+    pub name: String,
+    /// The fragment text, as a URL carries it.
+    pub fragment: String,
+    /// The invite secret.
+    pub invite_secret: String,
+    /// The owner contact code.
+    pub owner_contact_code: String,
+    /// The scope id.
+    pub scope_id: String,
+    /// The scope pointer name.
+    pub scope_pointer_name: String,
+    /// The pointer read key.
+    pub pointer_read_key: String,
+    /// The owner name.
+    pub owner_name: String,
+    /// The folder name.
+    pub folder_name: String,
+    /// The owner signature over the names.
+    pub names_sig: String,
+    /// Whether the names verify under the owner identity.
+    pub names_verify: bool,
+}
+
+/// The owner identity every [`invite_fragment_accept`] vector is signed under.
+pub fn invite_fragment_owner() -> EcdsaSigner {
+    InviteFixture::new().identity
+}
+
+/// The invite fragments whose bytes the KAT pins: a signed fragment, one with
+/// no owner name, and one whose names a forwarder changed under the signature.
+/// A changed name still decodes; only its signature fails.
+pub fn invite_fragment_accept() -> Vec<InviteFragmentVector> {
+    let owner = invite_fragment_owner();
+    let signed = invite_fragment(&owner, "Photos".to_owned());
+    let mut unnamed = signed.clone();
+    unnamed.owner_name = String::new();
+    unnamed.sign_names(&owner);
+    let mut relabelled = signed.clone();
+    relabelled.owner_name = "Eve".to_owned();
+    [
+        ("signed-names", signed),
+        ("no-owner-name", unnamed),
+        ("names-a-forwarder-changed", relabelled),
+    ]
+    .into_iter()
+    .map(|(name, fragment)| InviteFragmentVector {
+        name: name.to_owned(),
+        fragment: fragment
+            .encode()
+            .expect("a fixture fragment is inside its bound")
+            .to_string(),
+        invite_secret: hex_lower(fragment.invite_secret.as_bytes()),
+        owner_contact_code: hex_lower(&fragment.owner_contact_code),
+        scope_id: hex_lower(&fragment.scope_id),
+        scope_pointer_name: fragment.scope_pointer_name.as_str().to_owned(),
+        pointer_read_key: hex_lower(fragment.pointer_read_key.as_bytes()),
+        owner_name: fragment.owner_name.clone(),
+        folder_name: fragment.folder_name.clone(),
+        names_sig: hex_lower(&fragment.names_sig),
+        names_verify: fragment.verified_names(&owner.verifying_key()).is_some(),
+    })
+    .collect()
+}
+
 fn invite_family() -> RejectFamily {
-    let fx = InviteFixture::new(None);
+    let fx = InviteFixture::new();
     let link_signer =
         EcdsaSigner::from_scalar(&[INVITE_LINK_SECRET; 32]).expect("a valid ephemeral scalar");
     let claimant_identity = EcdsaSigner::from_scalar(&[0x67; 32]).expect("a valid claimant scalar");
     let claimant_enc = X25519Secret::from_scalar([0x98; 32]);
     let claimant = contact_code(&claimant_identity, &claimant_enc);
-    const CLAIM_ID: [u8; CLAIM_ID_LEN] = [0x99; CLAIM_ID_LEN];
 
     // One honest conversion, varied one input at a time.
-    let convert = |name: &'static str,
-                   links: &[RecordedInvite],
-                   converted: &[ConvertedClaimRecord],
-                   item: &VerifiedMailboxItem,
-                   now: UnixMillis| {
+    let convert = |name: &'static str, scope: &CommittedScope<'_>, item: &VerifiedMailboxItem| {
         refusal!(
             name,
             convert_invite_claim(
                 &fx.authority(),
-                &fx.committed(),
+                scope,
+                &invite_pointer_name(),
                 &POINTER_READ_KEY,
-                links,
-                converted,
                 item,
-                now,
+                UnixMillis(0),
             )
             .err()
             .unwrap_or_else(|| panic!("{name}: the conversion must fail closed")),
         )
     };
-    let honest_item = claim_item(&link_signer, claimant.clone(), fx.name.clone(), CLAIM_ID);
-    let links = [fx.minted.link];
+    let honest_item = claim_item(&link_signer, claimant.clone(), invite_pointer_name());
 
     let mut vectors = vec![
         refusal!(
@@ -579,6 +662,12 @@ fn invite_family() -> RejectFamily {
             "fragment-past-the-invite-link-bound",
             InviteFragment::decode(&"A".repeat(MAX_INVITE_FRAGMENT_BYTES * 2))
                 .expect_err("an oversized fragment is refused"),
+        ),
+        refusal!(
+            "fragment-folder-name-past-its-bound",
+            invite_fragment(&fx.identity, "n".repeat(MAX_INVITE_NAME_BYTES + 1))
+                .encode()
+                .expect_err("a name past its bound is refused at encode"),
         ),
         refusal!(
             "gated-reference-to-a-scope-the-set-does-not-name",
@@ -603,9 +692,8 @@ fn invite_family() -> RejectFamily {
                 enc_secret: &stranger_enc,
             },
             &fx.committed(),
+            &invite_pointer_name(),
             &POINTER_READ_KEY,
-            &links,
-            &[],
             &honest_item,
             UnixMillis(0),
         )
@@ -614,131 +702,77 @@ fn invite_family() -> RejectFamily {
 
     vectors.push(convert(
         "claim-payload-that-did-not-decode",
-        &links,
-        &[],
+        &fx.committed(),
         &VerifiedMailboxItem {
             item_id: "claim-1".to_owned(),
             sender_identity: link_signer.verifying_key(),
             payload: b"not det-cbor".to_vec(),
         },
-        UnixMillis(0),
     ));
     vectors.push(convert(
-        "claim-naming-another-scope-root",
-        &links,
-        &[],
+        "claim-naming-another-scope-pointer",
+        &fx.committed(),
         &claim_item(
             &link_signer,
             claimant.clone(),
-            b"k51qzi5uqu5delsewhere".to_vec(),
-            CLAIM_ID,
+            IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5e; 32]).verifying_key()),
         ),
-        UnixMillis(0),
     ));
     vectors.push(convert(
-        "claim-on-a-link-the-owner-records-no-more",
-        &[],
-        &[],
-        &honest_item,
-        UnixMillis(0),
+        "claim-signed-by-no-link-on-the-set",
+        &fx.committed(),
+        &claim_item(&stranger, claimant.clone(), invite_pointer_name()),
     ));
 
-    let expiring = InviteFixture::new(Some(INVITE_DEADLINE));
     vectors.push(refusal!(
         "claim-on-a-link-past-its-deadline",
         convert_invite_claim(
-            &expiring.authority(),
-            &expiring.committed(),
+            &fx.authority(),
+            &fx.committed(),
+            &invite_pointer_name(),
             &POINTER_READ_KEY,
-            &[expiring.minted.link],
-            &[],
-            &claim_item(
-                &link_signer,
-                claimant.clone(),
-                expiring.name.clone(),
-                CLAIM_ID,
-            ),
+            &honest_item,
             INVITE_DEADLINE,
         )
-        .expect_err("a link past its deadline grants nothing"),
-    ));
-
-    vectors.push(convert(
-        "claim-id-already-in-the-spent-set",
-        &links,
-        &[ConvertedClaimRecord {
-            claim_id: CLAIM_ID,
-            link_tag: fx.minted.link.tag,
-            tag: [0x5a; 32],
-        }],
-        &honest_item,
-        UnixMillis(0),
-    ));
-    vectors.push(convert(
-        "claim-carrying-the-id-a-broken-entropy-seam-emits",
-        &links,
-        &[],
-        &claim_item(
-            &link_signer,
-            claimant.clone(),
-            fx.name.clone(),
-            [0; CLAIM_ID_LEN],
-        ),
-        UnixMillis(0),
+        .expect_err("a link past its deadline admits nobody"),
     ));
 
     let mut torn = claimant.clone();
     *torn.last_mut().expect("a contact code has bytes") ^= 0xff;
     vectors.push(convert(
         "claimant-contact-code-that-fails-its-binding-verify",
-        &links,
-        &[],
-        &claim_item(&link_signer, torn, fx.name.clone(), CLAIM_ID),
-        UnixMillis(0),
+        &fx.committed(),
+        &claim_item(&link_signer, torn, invite_pointer_name()),
     ));
     vectors.push(convert(
         "claimant-anchored-back-to-the-links-own-identity",
-        &links,
-        &[],
+        &fx.committed(),
         &claim_item(
             &link_signer,
             contact_code(&link_signer, &claimant_enc),
-            fx.name.clone(),
-            CLAIM_ID,
+            invite_pointer_name(),
         ),
-        UnixMillis(0),
     ));
     vectors.push(convert(
         "claimant-handing-back-the-owners-own-contact",
-        &links,
-        &[],
+        &fx.committed(),
         &claim_item(
             &link_signer,
             contact_code(&claimant_identity, &fx.enc),
-            fx.name.clone(),
-            CLAIM_ID,
+            invite_pointer_name(),
         ),
-        UnixMillis(0),
     ));
 
     // The produced set would file two rows under one tag — the shape core's own
     // decoder refuses, so the conversion refuses before it is signed.
-    let doubled = vec![fx.minted.row.ledger_entry.clone(); 2];
+    let doubled = vec![fx.link_row.ledger_entry.clone(); 2];
     let doubled_scope =
         CommittedScope::bind(&fx.scope, &fx.commitment, &fx.commitment_sig, &doubled)
             .expect("the reference still names the scope root");
-    vectors.push(refusal!(
+    vectors.push(convert(
         "ledger-filing-two-rows-under-one-tag",
-        convert_invite_claim(
-            &fx.authority(),
-            &doubled_scope,
-            &POINTER_READ_KEY,
-            &links,
-            &[],
-            &honest_item,
-            UnixMillis(0),
-        )
-        .expect_err("a duplicate tag is refused before signing"),
+        &doubled_scope,
+        &honest_item,
     ));
 
     family("invite", InviteError::CHECKS, vectors)

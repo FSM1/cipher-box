@@ -16,9 +16,8 @@
 //!   committed, but its epoch is below your durable read-epoch floor: a
 //!   sweep-pending staleness, not a revocation.
 
-/// The three discovered outcomes plus the still-granted baseline. Only the three
-/// non-`Granted` variants are surfaced as distinct host signals; `Granted` means
-/// nothing changed.
+/// The discovered outcomes plus the still-granted baseline. Every non-`Granted`
+/// variant is a distinct host signal; `Granted` means nothing changed.
 ///
 /// A host renders one of these; it never computes one. Absence of a class is not
 /// a class: a share no resolve has reached yet is "not yet known", and painting
@@ -39,6 +38,9 @@ pub enum ResolutionClass {
     /// A fresh owner-signed record whose epoch is below your durable read-epoch
     /// floor — sweep-pending staleness, not a revocation.
     EpochLag,
+    /// A share held through a link whose link entry deadline is not later than
+    /// now (ADR 0025 D5). The holder stops reading through the link.
+    Expired,
 }
 
 impl ResolutionClass {
@@ -49,6 +51,7 @@ impl ResolutionClass {
             ResolutionClass::RevocationSignal => "revocation-signal",
             ResolutionClass::Unresolvable => "unresolvable",
             ResolutionClass::EpochLag => "epoch-lag",
+            ResolutionClass::Expired => "expired",
         }
     }
 }
@@ -158,5 +161,6 @@ mod tests {
         );
         assert_eq!(ResolutionClass::Unresolvable.name(), "unresolvable");
         assert_eq!(ResolutionClass::EpochLag.name(), "epoch-lag");
+        assert_eq!(ResolutionClass::Expired.name(), "expired");
     }
 }

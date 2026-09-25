@@ -154,7 +154,6 @@ export interface WasmSharingInviteLinks {
   readonly live: boolean;
   readonly expired: boolean;
   readonly expiresAt?: bigint;
-  readonly spent: number;
   readonly pendingClaims: number;
 }
 
@@ -163,7 +162,7 @@ export interface WasmScopeSharing {
   readonly grants: readonly WasmSharingGrant[];
   readonly grantRefusal?: string;
   readonly inviteLinkRefusal?: string;
-  readonly inviteLinks?: WasmSharingInviteLinks;
+  readonly inviteLinks: WasmSharingInviteLinks;
 }
 
 /** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */
@@ -181,6 +180,7 @@ export interface WasmReceivedShareRow {
   readonly displayName: string;
   readonly permission: number;
   readonly resolution?: string;
+  readonly viaLink: boolean;
 }
 
 /** wasm-bindgen `BinRow` — one soft-deleted node, key-free by construction. */
@@ -352,9 +352,13 @@ export interface EngineWasm {
     ): WasmCommand;
     revoke(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
     downgrade(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
-    createInviteLink(node: WasmNodeId, permission: number, expiresAt?: bigint): WasmCommand;
+    createInviteLink(
+      node: WasmNodeId,
+      permission: number,
+      expiresAt: bigint | undefined,
+      ownerName: string
+    ): WasmCommand;
     revokeInviteLink(node: WasmNodeId): WasmCommand;
-    pruneInviteLinks(node: WasmNodeId): WasmCommand;
     claimInviteLink(fragment: string): WasmCommand;
     convertInviteClaims(node: WasmNodeId): WasmCommand;
     rotateNow(node: WasmNodeId): WasmCommand;

@@ -353,6 +353,17 @@
         "hpke-open-failed",
         "identity-signature-invalid"
       ]
+    },
+    "inviteNamesAccept": {
+      "file": "vectors/payload/invite_names_accept.json",
+      "count": 2
+    },
+    "inviteNamesReject": {
+      "file": "vectors/payload/invite_names_reject.json",
+      "count": 4,
+      "checks": [
+        "identity-signature-invalid"
+      ]
     }
   },
   "grant": {
@@ -643,11 +654,6 @@
         "hpkeInfo": "cipherbox/v2/owner-local/contact-book"
       },
       {
-        "name": "invite-records",
-        "discriminator": 3,
-        "hpkeInfo": "cipherbox/v2/owner-local/invite-records"
-      },
-      {
         "name": "retire-ledger",
         "discriminator": 4,
         "hpkeInfo": "cipherbox/v2/owner-local/retire-ledger"
@@ -663,13 +669,19 @@
         "hpkeInfo": "cipherbox/v2/owner-local/scope-exit-debt"
       }
     ],
+    "reserved": [
+      {
+        "discriminator": 3,
+        "name": "invite-records"
+      }
+    ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 7
+      "count": 6
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 40,
+      "count": 30,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

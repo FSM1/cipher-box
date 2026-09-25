@@ -19,15 +19,15 @@ pub(crate) mod grafted;
 pub(crate) mod inbox;
 pub mod invite;
 pub mod invite_mint;
-pub mod invite_store;
 pub mod ledger;
+pub(crate) mod link_read;
 pub mod owner_entry;
 pub mod received_share_store;
 pub(crate) mod received_status;
 pub mod revocation;
 
 pub use accept::{
-    AcceptError, AcceptOutcome, BookmarkKey, MAX_RECEIVED_SHARES, ReceivedShare,
+    AcceptError, AcceptOutcome, BookmarkKey, LinkHold, MAX_RECEIVED_SHARES, ReceivedShare,
     ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList,
     SentIndex, SentShare, SharePointer, TooLong, accept_share,
 };
@@ -51,17 +51,13 @@ pub use create::{
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedLink, CommittedScope, ConvertedClaim,
-    ConvertedClaimRecord, EphemeralInvitee, InviteClaim, InviteError, InviteFragment,
-    MAX_INVITE_FRAGMENT_BYTES, MintedInvite, OwnerAuthority, RecordedInvite, ScopeLinks,
-    convert_invite_claim, locate_invite_link, mint_invite_grant, partition_scope_links,
-    pending_claim_scope, post_invite_claim,
+    DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, InviteClaim, InviteError,
+    InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority,
+    committed_links, convert_invite_claim, locate_invite_link, mint_invite_grant,
+    post_invite_claim, sole_link,
 };
 pub use invite_mint::{
-    InviteMintError, InviteMintPlan, MintedInviteLink, PendingInviteLink, mint_invite_link,
-};
-pub use invite_store::{
-    INVITE_RECORDS_PREFIX, InviteRecords, InviteRecordsCodecError, InviteStore, InviteStoreError,
-    MAX_CONVERTED_CLAIMS, MAX_INVITE_RECORDS, StagingInviteStore,
+    InviteMintError, InviteMintOutcome, InviteMintPlan, MintedInviteLink, mint_invite_link,
 };
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, UNATTESTED_IDENTITY_PK,
