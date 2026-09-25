@@ -34,7 +34,6 @@ test('a grant reaches the second client on one nocache refresh', async ({ page, 
   // poll cadence, and nothing sleeps.
   const grantee = new VaultPage(claimant);
   const shared = new SharedPage(claimant);
-  await claimant.getByRole('link', { name: 'go to your files' }).click();
   await grantee.refresh();
 
   await shared.open();

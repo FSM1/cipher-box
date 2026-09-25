@@ -54,7 +54,7 @@ export async function grantOneFolder(context: ScenarioContext): Promise<Granted>
   await owner.share.close();
 
   await owner.vault.settled();
-  await grantee.leaveClaim();
+  await grantee.openFiles();
   await standing(context, grantee, scope, 'granted');
   context.log('the grantee accepted the share');
 
