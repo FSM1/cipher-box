@@ -188,7 +188,7 @@ function nextTempName(): string {
   return `.cbtmp.${uuid}`;
 }
 
-/** Lets every timer and microtask already queued run. */
+/** Long enough for a clear that does not wait for a held write to settle before the release. */
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
