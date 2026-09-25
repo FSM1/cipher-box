@@ -162,7 +162,7 @@ function gateOpen(dir: FakeDirectory, name: Uint8Array): () => void {
   return release;
 }
 
-/** An IndexedDB whose op store accepts a clear and commits. */
+/** `clear()` also clears the op queue, and Node has no IndexedDB. */
 function stubOpQueue(): void {
   const opened: { result?: unknown; onsuccess?: () => void } = {};
   opened.result = {
