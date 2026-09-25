@@ -7924,6 +7924,7 @@ fn a_preview_past_the_link_deadline_is_expired() {
             permission: Permission::Read,
             expires_at: Some(deadline),
             owner_name: String::new(),
+            admission_cap: None,
         }))
         .expect("the link mints")
     else {
