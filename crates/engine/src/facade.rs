@@ -8945,15 +8945,23 @@ where {
             Some(granted_read_scope.epoch),
         );
 
-        if let ScopeShare::Contact { contact, .. } = &share {
+        if let ScopeShare::Contact {
+            contact,
+            grantee_name,
+        } = &share
+        {
             // The grant this mint published is one no claim conversion recorded,
             // so a later cut must not collect the recipient's book entry and
             // leave that grant with no resolvable recipient. An owner grant is a
             // vouch, and it outranks whatever a claim wrote.
+            let identity_pk = contact.identity_pk().to_sec1();
             self.contact_store(session)
-                .vouch(&contact.identity_pk().to_sec1())
+                .vouch(&identity_pk)
                 .await
                 .map_err(EngineError::from_contact_store)?;
+            if let Some(name) = grantee_name {
+                let _ = self.name_cache(session).remember(&identity_pk, name).await;
+            }
         }
         let scope_root_name = match mint_permission {
             Permission::Read => scope_root_name,
@@ -9207,7 +9215,7 @@ where {
                             .map(|()| CommandOutcome::Done);
                     }
                     None => {
-                        let grantee_name = grantee_name.map(owner_grantee_name).transpose()?;
+                        let row_name = grantee_name.map(owner_grantee_name).transpose()?;
                         if matches!(permission, Permission::Write)
                             && !gated.target.is_write_scope(&gated.current)
                         {
@@ -9226,7 +9234,7 @@ where {
                         .ok_or(EngineError::MalformedInput {
                             check: CreateGrantError::UnusableRecipientKey.check(),
                         })?;
-                        if let Some(name) = grantee_name {
+                        if let Some(name) = row_name {
                             name_row(
                                 session.identity(),
                                 &gated.target.scope.ipns_name,
@@ -9250,6 +9258,9 @@ where {
                             .vouch(&identity_pk)
                             .await
                             .map_err(EngineError::from_contact_store)?;
+                        if let Some(name) = grantee_name {
+                            let _ = self.name_cache(session).remember(&identity_pk, name).await;
+                        }
                         gated.target
                     }
                 };

@@ -6724,6 +6724,47 @@ fn a_grant_names_its_grantee_on_the_row_it_mints_or_appends() {
     );
 }
 
+/// A name a grant gives goes into this device's name cache, on a fresh scope
+/// and on an append alike, so the sharing read of another folder pre-fills it
+/// (ADR 0027 D4).
+#[test]
+fn a_named_grant_pre_fills_the_name_on_another_folder() {
+    let mut fx = GrantScenario::new();
+    let other = create_published_folder(&fx.world, &mut fx.engine, &mut fx._tasks, ROOT, "other");
+    assert_eq!(
+        fx.grant_named(Permission::Read, "Alice"),
+        Ok(CommandOutcome::Done)
+    );
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&BYSTANDER_SECRET),
+    }))
+    .expect("the second recipient's code imports");
+    assert_eq!(
+        block_on(fx.engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: Some("Bob".to_owned()),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let contacts = block_on(fx.engine.sharing(other))
+        .expect("a sharing read")
+        .contacts;
+    let cached = |identity: &[u8]| {
+        contacts
+            .iter()
+            .find(|contact| contact.identity_public_key == identity)
+            .expect("an imported contact")
+            .cached_name
+            .clone()
+    };
+    let recipient = recipient_identity().verifying_key().to_sec1();
+    assert_eq!(cached(&recipient).as_deref(), Some("Alice"));
+    assert_eq!(cached(&bystander_identity()).as_deref(), Some("Bob"));
+}
+
 /// A committed writer authors the ledger, so it can relabel a row. A row whose
 /// owner binding no longer verifies names nobody, so a permission change and a
 /// rename of it are refused and nothing publishes (ADR 0027 D6).
