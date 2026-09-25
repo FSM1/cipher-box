@@ -6,9 +6,10 @@
  * a reload.
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toHex } from '@cipherbox/client';
 import type { EngineFacade, Permission, SharingDescriptor } from '@cipherbox/client';
+import { useEngine } from '../providers/EngineProvider';
 import { sharingStore, type VerifiedContact } from '../stores/sharing.store';
 import { useCommandRunner } from './useCommandRunner';
 
@@ -22,7 +23,11 @@ export type SharingCommand =
   | 'renameGrantee'
   | 'createInviteLink'
   | 'revokeInviteLink'
-  | 'convertInviteClaims';
+  | 'convertInviteClaims'
+  | 'dismissRefusedClaims';
+
+/** How long the "joined" notice stays up. */
+export const JOINED_NOTICE_MS = 8_000;
 
 export interface RevokeLinkOptions {
   /** Also cut the people who joined through the link (ADR 0025 D1). */
@@ -34,6 +39,8 @@ export interface SharingActions {
   /** The last refusal, in the engine's own words; cleared by the next dispatch. */
   error: string | null;
   clearError(): void;
+  /** Who joined this scope through a link while the dialog was open, until the notice lapses. */
+  joined: string | null;
   /**
    * Reads this scope into the store and, where it carries a link, converts the
    * claims that wait on it (ADR 0023 D4).
@@ -63,6 +70,17 @@ export interface SharingActions {
    * carries no such option.
    */
   revokeInviteLink(linkTag: Uint8Array, options: RevokeLinkOptions): Promise<boolean>;
+  /** Drops the claims this scope's links refused at a cap from this device's record. */
+  dismissRefusedClaims(): Promise<boolean>;
+}
+
+/**
+ * How a joiner reads in the notice. The name is the claimant's own suggestion,
+ * so it never shows without the fingerprint prefix beside it.
+ */
+export function joinedLabel(name: string, fingerprint: string): string {
+  const prefix = fingerprint.split(' ').slice(0, 2).join(' ');
+  return name === '' ? prefix : `${name} (${prefix})`;
 }
 
 /**
@@ -102,10 +120,28 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
     [target]
   );
 
+  const client = useEngine();
+  const [joined, setJoined] = useState<string | null>(null);
+  useEffect(() => {
+    if (client === null) return;
+    return client.facade.subscribe((event) => {
+      if (event.kind !== 'granteeJoined' || toHex(event.scopeRoot) !== scopeKey) return;
+      setJoined(joinedLabel(event.name, event.fingerprint));
+      // The notice stands on the event alone; a failed re-read leaves the last one drawn.
+      read(client.facade).catch(() => undefined);
+    });
+  }, [client, read, scopeKey]);
+  useEffect(() => {
+    if (joined === null) return;
+    const lapse = setTimeout(() => setJoined(null), JOINED_NOTICE_MS);
+    return () => clearTimeout(lapse);
+  }, [joined]);
+
   return {
     busy,
     error,
     clearError,
+    joined,
     open: useCallback(async () => {
       let linked = false;
       const reached = await run('read', async (facade) => {
@@ -177,6 +213,14 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
             throw new Error('removing the people who joined is not in this build');
           }
           await facade.revokeInviteLink(target, linkTag);
+          await read(facade);
+        }),
+      [run, read, target]
+    ),
+    dismissRefusedClaims: useCallback(
+      () =>
+        run('dismissRefusedClaims', async (facade) => {
+          await facade.dismissRefusedClaims(target);
           await read(facade);
         }),
       [run, read, target]

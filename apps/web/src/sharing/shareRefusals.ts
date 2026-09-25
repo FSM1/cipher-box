@@ -53,4 +53,10 @@ const SHARE_REFUSALS: Record<string, string> = {
   'revoke-target-is-not-a-scope-root': 'this folder is not shared, so it has no one to revoke',
   'revoke-link-target-is-not-a-scope-root': 'this folder carries no link to revoke',
   'convert-target-is-not-a-scope-root': 'this folder carries no link, so no one can join it',
+  'a-conversion-pass-is-running':
+    'the claims on this folder are converting in another pass — they show here when it ends',
+  'the-conversion-record-is-full':
+    'this device holds all the claims it can — the rest wait on the mailbox for a later pass',
+  'a-claim-could-not-be-held':
+    'this device could not keep a claim, so it waits on the mailbox for a later pass',
 };

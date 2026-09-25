@@ -69,6 +69,7 @@ export function LinkSection({ scope, actions, busy, fresh, onMinted }: LinkSecti
   };
 
   const refused = scope.inviteLinkRefusal;
+  const capRefused = scope.inviteLinks.some((link) => link.refusedClaims > 0);
   const chosen = scope.inviteLinks.find((link) => tagKey(link) === confirming) ?? null;
 
   return (
@@ -172,6 +173,19 @@ export function LinkSection({ scope, actions, busy, fresh, onMinted }: LinkSecti
             }}
           />
         ))}
+        {capRefused && (
+          <button
+            type="button"
+            className="dialog-button"
+            // The engine drops the refused claims of every link on the folder at once.
+            aria-label="dismiss the refused claims on this folder"
+            onClick={() => void actions.dismissRefusedClaims()}
+            disabled={busy}
+            data-testid="share-dismiss-refused"
+          >
+            {actions.busy === 'dismissRefusedClaims' ? 'dismissing...' : 'dismiss refused'}
+          </button>
+        )}
       </div>
 
       {chosen !== null && (
@@ -201,6 +215,7 @@ function LinkChip({
   onRevoke: () => void;
 }) {
   const pending = plural(link.pendingClaims, 'claim');
+  const refused = plural(link.refusedClaims, 'claim');
   const classes = ['sharing-chip'];
   if (link.expired) classes.push('sharing-chip--expired');
   if (link.permission === 'write') classes.push('sharing-chip--write');
@@ -212,6 +227,15 @@ function LinkChip({
       {pending !== null && (
         <span className="sharing-dim" data-testid="share-pending-claims">
           {`· ${pending} waiting`}
+        </span>
+      )}
+      {refused !== null && (
+        <span
+          className="sharing-warn"
+          title="claims this link turned away at its admission cap or a full folder"
+          data-testid="share-refused-claims"
+        >
+          {`· ${refused} refused`}
         </span>
       )}
       {link.contactBudgetFull && (

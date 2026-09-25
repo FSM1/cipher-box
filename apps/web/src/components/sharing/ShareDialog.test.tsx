@@ -9,6 +9,7 @@ import type {
 } from '@cipherbox/client';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { JOINED_NOTICE_MS } from '../../hooks/useSharingActions';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { storedOwnerName, storeOwnerName } from '../../sharing/ownerName';
 import { sharingStore } from '../../stores/sharing.store';
@@ -132,8 +133,12 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
       rowsOf(scope).map((row) => (row.seed === seedOf(recipient) ? { ...row, ...change } : row))
     );
 
+  const listeners = new Set<(event: EventDescriptor) => void>();
   const facade = {
-    subscribe: (_listener: (event: EventDescriptor) => void) => () => undefined,
+    subscribe: (listener: (event: EventDescriptor) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     snapshot: () => new Promise<never>(() => undefined),
     setFocus: () => Promise.resolve(),
     sharing: vi.fn(
@@ -218,6 +223,12 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
         return outcome;
       })
     ),
+    dismissRefusedClaims: vi.fn(() =>
+      answer('dismissRefusedClaims', { kind: 'done' as const }).then((outcome) => {
+        state.links = state.links.map((link) => ({ ...link, refusedClaims: 0 }));
+        return outcome;
+      })
+    ),
     changePermission: vi.fn((scope: Uint8Array, recipient: Uint8Array, to: Permission) =>
       answer('changePermission', { kind: 'done' as const }).then((outcome) => {
         edit(scope, recipient, { permission: to });
@@ -238,7 +249,8 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
     dispose: () => Promise.resolve(),
   } as unknown as EngineClient;
 
-  return { client, facade };
+  const emit = (event: EventDescriptor) => listeners.forEach((listener) => listener(event));
+  return { client, facade, emit };
 }
 
 /** Renders the dialog and lets its opening read land. */
@@ -814,6 +826,110 @@ describe('the links a scope carries', () => {
     expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
     expect(screen.queryByTestId('share-links')).toBeNull();
     expect(screen.queryByTestId('share-mint-link')).toBeNull();
+  });
+
+  it.each([
+    ['a-conversion-pass-is-running', 'converting in another pass'],
+    ['the-conversion-record-is-full', 'holds all the claims it can'],
+  ])(
+    'says in words that the open-time conversion refused on %s, and still offers the dialog',
+    async (check, words) => {
+      const refusal = new EngineRequestError(`seam error: ${check}`, 'seam');
+      await share(
+        sharingEngine(
+          { convertInviteClaims: refusal },
+          held([], [], { links: [{ ...LIVE, pendingClaims: 1 }] })
+        )
+      );
+
+      expect(screen.getByTestId('dialog-error').textContent).toContain(words);
+      expect(screen.getAllByTestId('share-link-chip')).toHaveLength(1);
+      expect(screen.getByTestId('share-mint-link').hasAttribute('disabled')).toBe(false);
+    }
+  );
+
+  it('counts the claims a link refused at a cap, and dismisses them for the folder', async () => {
+    const engine = await share(
+      sharingEngine({}, held([], [], { links: [{ ...LIVE, refusedClaims: 3 }] }))
+    );
+
+    expect(screen.getByTestId('share-refused-claims').textContent).toBe('· 3 claims refused');
+    await click('share-dismiss-refused');
+
+    expect(engine.facade.dismissRefusedClaims).toHaveBeenCalledWith(DOCS);
+    expect(screen.queryByTestId('share-refused-claims')).toBeNull();
+    expect(screen.queryByTestId('share-dismiss-refused')).toBeNull();
+  });
+
+  it('offers no dismiss where no link refused a claim', async () => {
+    await share(sharingEngine({}, held([], [], { links: [LIVE] })));
+
+    expect(screen.queryByTestId('share-refused-claims')).toBeNull();
+    expect(screen.queryByTestId('share-dismiss-refused')).toBeNull();
+  });
+});
+
+describe('the joined notice', () => {
+  const FINGERPRINT = 'abcd ef01 2345 6789 abcd';
+  const joined = (scopeRoot: Uint8Array, name: string): EventDescriptor => ({
+    kind: 'granteeJoined',
+    scopeRoot,
+    name,
+    fingerprint: FINGERPRINT,
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('names the joiner with the fingerprint prefix beside the name they chose', async () => {
+    const engine = await share();
+
+    await act(async () => engine.emit(joined(DOCS, 'Ada')));
+
+    expect(screen.getByTestId('share-joined').textContent).toBe(
+      '// Ada (abcd ef01) joined through a link'
+    );
+  });
+
+  it('names a joiner who chose no name by the fingerprint prefix alone', async () => {
+    const engine = await share();
+
+    await act(async () => engine.emit(joined(DOCS, '')));
+
+    expect(screen.getByTestId('share-joined').textContent).toBe(
+      '// abcd ef01 joined through a link'
+    );
+  });
+
+  it('re-reads the folder so the joiner shows in the table', async () => {
+    const engine = await share();
+    const reads = engine.facade.sharing.mock.calls.length;
+
+    await act(async () => engine.emit(joined(DOCS, 'Ada')));
+
+    expect(engine.facade.sharing.mock.calls.length).toBe(reads + 1);
+  });
+
+  it('says nothing for a join on another folder', async () => {
+    const engine = await share();
+
+    await act(async () => engine.emit(joined(new Uint8Array(16).fill(9), 'Ada')));
+
+    expect(screen.queryByTestId('share-joined')).toBeNull();
+  });
+
+  it('lapses on its own', async () => {
+    const engine = await share();
+    vi.useFakeTimers();
+
+    await act(async () => engine.emit(joined(DOCS, 'Ada')));
+    expect(screen.getByTestId('share-joined')).toBeTruthy();
+    await act(async () => {
+      vi.advanceTimersByTime(JOINED_NOTICE_MS);
+    });
+
+    expect(screen.queryByTestId('share-joined')).toBeNull();
   });
 });
 

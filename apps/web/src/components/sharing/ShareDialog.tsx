@@ -84,6 +84,11 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
               : `people with access · ${scope.grants.length + 1}`}
           </p>
           <PeopleTable grants={scope?.grants ?? null} actions={actions} busy={busy} />
+          {actions.joined !== null && (
+            <p className="sharing-note" role="status" data-testid="share-joined">
+              {`// ${actions.joined} joined through a link`}
+            </p>
+          )}
 
           {scope !== null && (
             <LinkSection
