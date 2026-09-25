@@ -2519,6 +2519,8 @@ fn a_refused_root_authoring_names_the_check_that_fired_on_the_pass_it_fired() {
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
     cache_a_root_committed_to_another_name(&alice, &blocks);
+    // An unreachable plane leaves the pass building on the cached copy.
+    world.record_store.fail_get_for(write_name(ROOT).as_str());
     create(&mut engine, "photos");
     let _ = events_so_far(&mut events);
     tick(&world, &engine, &mut tasks);
@@ -3714,6 +3716,540 @@ fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
         .map(|child| child.name)
         .collect();
     assert_eq!(names, ["photos"], "device B resolves the delete");
+}
+
+// ---------------------------------------------------------------------------
+// Two devices of one owner publishing one folder (blueprint/engine.md
+// "Publish").
+// ---------------------------------------------------------------------------
+
+/// Two devices of one account, booted on one scope root. The first has landed
+/// its create of `photos` at the next sequence; the plane is then rewound to
+/// the shared base, so the second device's read leg still sees the base and the
+/// first device's root can reach it only while its own pass is in flight.
+struct SiblingRoot {
+    world: FakeWorld,
+    blocks: Blocks,
+    second: FakeDevice,
+    engine: Engine<FakeSeamTypes>,
+    events: EventStream,
+    tasks: Vec<BoxedTask>,
+    /// The root sequence both devices booted on.
+    base: u64,
+    /// The first device's root record at `base + 1`.
+    sibling: Vec<u8>,
+    /// The create the second device has queued and not yet drained.
+    notes: NodeId,
+}
+
+fn sibling_root() -> SiblingRoot {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine, events, tasks) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, ROOT);
+    let base_record = root_record(&world, 0);
+
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    assert_eq!(published(&world.record_store, ROOT).0, base + 1);
+    let sibling = root_record(&world, 0);
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    let notes = child_id(&engine, ROOT, "notes");
+    SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        events,
+        tasks,
+        base,
+        sibling,
+        notes,
+    }
+}
+
+/// The scope root's record as one endpoint serves it.
+fn root_record(world: &FakeWorld, endpoint: usize) -> Vec<u8> {
+    world
+        .record_store
+        .record_at(
+            &world.record_store.endpoints()[endpoint],
+            write_name(ROOT).as_str(),
+        )
+        .expect("the scope root has a record")
+}
+
+/// The sequence of the scope root's record at one endpoint.
+fn root_sequence(world: &FakeWorld, endpoint: usize) -> u64 {
+    IpnsRecord::unmarshal(&root_record(world, endpoint))
+        .and_then(|record| record.verify(&write_name(ROOT)))
+        .expect("the root record verifies under its own name")
+        .sequence
+}
+
+fn queued(device: &FakeDevice) -> usize {
+    block_on(StagingStore::queued_ops(&device.staging_store))
+        .unwrap()
+        .len()
+}
+
+/// The sibling's root lands after this pass read the base and before it signs.
+/// Signing its own cache's next sequence would overwrite the sibling's create at
+/// the sibling's own sequence, so the pass re-resolves first, halts on the newer
+/// root, and the next pass rebases onto it and signs above it.
+#[test]
+fn a_sibling_root_that_lands_mid_pass_is_rebased_on_and_signed_above() {
+    let SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        mut tasks,
+        base,
+        sibling,
+        notes,
+        ..
+    } = sibling_root();
+    world.record_store.seed_record_after_put(
+        write_name(notes).as_str(),
+        write_name(ROOT).as_str(),
+        sibling.clone(),
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(
+            root_record(&world, endpoint),
+            sibling,
+            "nothing is signed over the sibling's root at its sequence"
+        );
+    }
+    assert_eq!(
+        queued(&second),
+        1,
+        "the create stays at the head of the queue"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(
+            root_sequence(&world, endpoint),
+            base + 2,
+            "the rebased root signs above the sibling's"
+        );
+    }
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes", "photos"],
+        "both devices' creates survive"
+    );
+    assert_eq!(queued(&second), 0);
+}
+
+/// The sibling's root lands at this device's own sequence after its PUT, so the
+/// endpoints split between the two records. The confirm reads the sibling's
+/// record and not ours: a lost race. The op stays at the head, and the next
+/// pass heals the split above both records.
+#[test]
+fn a_sibling_root_at_the_same_sequence_is_a_lost_race_the_next_pass_heals() {
+    let SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        mut tasks,
+        base,
+        sibling,
+        ..
+    } = sibling_root();
+    world.record_store.seed_record_after_put(
+        write_name(ROOT).as_str(),
+        write_name(ROOT).as_str(),
+        sibling.clone(),
+    );
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(root_record(&world, 0), sibling);
+    assert_ne!(
+        root_record(&world, 1),
+        sibling,
+        "the endpoints split at one sequence"
+    );
+    assert_eq!(root_sequence(&world, 1), base + 1);
+    assert_eq!(
+        queued(&second),
+        1,
+        "the create stays at the head of the queue"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(
+            root_sequence(&world, endpoint),
+            base + 2,
+            "every endpoint holds the record above the split"
+        );
+    }
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes", "photos"]
+    );
+    assert_eq!(queued(&second), 0);
+}
+
+/// The record the pre-signature re-resolve observes passes the gate like every
+/// other resolved record. One the gate refuses is a trust violation: reported,
+/// and never signed over.
+#[test]
+fn a_root_the_gate_refuses_at_the_pre_signature_re_resolve_is_a_trust_violation() {
+    let SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        mut events,
+        mut tasks,
+        base,
+        notes,
+        ..
+    } = sibling_root();
+    // A child envelope carries no owner grant section, which a scope root's gate
+    // requires.
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: ROOT.0,
+        scope_id: SCOPE,
+        epoch: EPOCH,
+        read_key: &read_key_of(ROOT),
+        nonce: &[0x5A; 24],
+        body: &planted_body(),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
+    })
+    .expect("a well-formed child record");
+    blocks.put(head.block.clone());
+    let refused = IpnsRecord::create_v2(
+        &write_signer(ROOT),
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        base + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    world.record_store.seed_record_after_put(
+        write_name(notes).as_str(),
+        write_name(ROOT).as_str(),
+        refused.clone(),
+    );
+    let _ = events_so_far(&mut events);
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(
+            root_record(&world, endpoint),
+            refused,
+            "nothing is signed over a record the gate refused"
+        );
+    }
+    assert_eq!(
+        events_so_far(&mut events)
+            .into_iter()
+            .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+            .count(),
+        1,
+        "the refusal is reported"
+    );
+    assert_eq!(queued(&second), 1, "the create stays queued");
+}
+
+/// Our root lands on the first endpoint and the sibling's on the second, at one
+/// sequence. The first endpoint wins a tie on every read, so the retry must
+/// rebase onto the sibling's record, which the confirm adopted, and not onto
+/// ours: ours already holds the op, which would then read as applied and leave
+/// the split for good.
+#[test]
+fn a_split_where_our_root_holds_the_first_endpoint_heals_above_both_records() {
+    let SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        mut tasks,
+        base,
+        sibling,
+        ..
+    } = sibling_root();
+    let endpoints = world.record_store.endpoints();
+    world.record_store.seed_record_after_put_at(
+        &endpoints[1],
+        write_name(ROOT).as_str(),
+        write_name(ROOT).as_str(),
+        sibling.clone(),
+    );
+    world.record_store.fail_put_endpoint(&endpoints[1]);
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(root_record(&world, 1), sibling);
+    assert_ne!(root_record(&world, 0), sibling);
+    assert_eq!(
+        root_sequence(&world, 0),
+        base + 1,
+        "the endpoints split at one sequence, ours first"
+    );
+    assert_eq!(
+        queued(&second),
+        1,
+        "the create stays at the head of the queue"
+    );
+
+    world.record_store.heal_put_endpoint(&endpoints[1]);
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..endpoints.len() {
+        assert_eq!(root_sequence(&world, endpoint), base + 2);
+    }
+    assert_eq!(
+        root_record(&world, 0),
+        root_record(&world, 1),
+        "one record on every endpoint"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes", "photos"],
+        "both devices' creates survive"
+    );
+    assert_eq!(queued(&second), 0);
+}
+
+/// The plane comes to serve another record at the very sequence this pass
+/// built on. Signing above the pass's own copy would erase that record's
+/// change, so the pass halts, and the next pass builds on the served record and
+/// signs above it with the op applied.
+#[test]
+fn a_different_root_at_the_built_on_sequence_is_rebased_on_and_signed_above() {
+    let SiblingRoot {
+        world,
+        blocks,
+        second,
+        engine,
+        mut tasks,
+        base,
+        sibling,
+        notes,
+        ..
+    } = sibling_root();
+    // The sibling's body, signed at the base sequence.
+    let value = IpnsRecord::unmarshal(&sibling)
+        .and_then(|record| record.verify(&write_name(ROOT)))
+        .expect("the sibling's root verifies")
+        .value;
+    let rival = IpnsRecord::create_v2(&write_signer(ROOT), &value, base, TTL_NANOS, EOL).marshal();
+    world.record_store.seed_record_after_put(
+        write_name(notes).as_str(),
+        write_name(ROOT).as_str(),
+        rival.clone(),
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(
+            root_record(&world, endpoint),
+            rival,
+            "nothing is signed over the rival record"
+        );
+    }
+    assert_eq!(
+        queued(&second),
+        1,
+        "the create stays at the head of the queue"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in 0..world.record_store.endpoints().len() {
+        assert_eq!(root_sequence(&world, endpoint), base + 1);
+    }
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes", "photos"],
+        "the signature sits over the rival's body with the op applied"
+    );
+    assert_eq!(queued(&second), 0);
+}
+
+/// A lost race before the signature put nothing on the plane and the retry
+/// signs higher, so it never spends the attempt budget: six losses in a row
+/// leave the op queued, not dead-lettered, and the next pass lands it.
+#[test]
+fn a_run_of_lost_races_before_the_signature_never_dead_letters_the_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let second = world.device(b"alice-second-device");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, ROOT);
+    let base_record = root_record(&world, 0);
+
+    let names: Vec<String> = (1..=6).map(|index| format!("a{index}")).collect();
+    let mut siblings = Vec::new();
+    for name in &names {
+        block_on(engine_a.command(Command::Create {
+            parent: ROOT,
+            name: name.clone(),
+            kind: NodeKind::Folder,
+        }))
+        .unwrap();
+        tick(&world, &engine_a, &mut tasks_a);
+        siblings.push(root_record(&world, 0));
+    }
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(ROOT).as_str(), base_record.clone());
+    }
+
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    let notes = child_id(&engine, ROOT, "notes");
+    for sibling in siblings {
+        world.record_store.seed_record_after_put(
+            write_name(notes).as_str(),
+            write_name(ROOT).as_str(),
+            sibling,
+        );
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(queued(&second), 1, "the create stays queued");
+    }
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "no lost race spent the attempt budget"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(published(&world.record_store, ROOT).0, base + 7);
+    let mut expected = names;
+    expected.push("notes".to_owned());
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        expected
+    );
+    assert_eq!(queued(&second), 0);
+}
+
+/// An interior folder shares the scope root's name derivation and the same
+/// window between the pass's load and its signature. A sibling's record that
+/// lands in that window is never signed over at its own sequence.
+#[test]
+fn a_sibling_interior_folder_that_lands_mid_pass_is_rebased_on_and_signed_above() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let first = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &first, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    let second = world.device(b"alice-second-device");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &second, 7);
+    let (base, _) = published(&world.record_store, photos);
+    let base_record = world
+        .record_store
+        .record_at(
+            &world.record_store.endpoints()[0],
+            write_name(photos).as_str(),
+        )
+        .expect("photos has a record");
+
+    block_on(engine_a.command(Command::Create {
+        parent: photos,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    assert_eq!(published(&world.record_store, photos).0, base + 1);
+    let sibling = world
+        .record_store
+        .record_at(
+            &world.record_store.endpoints()[0],
+            write_name(photos).as_str(),
+        )
+        .expect("photos has a record");
+    for endpoint in world.record_store.endpoints() {
+        world
+            .record_store
+            .seed_record(&endpoint, write_name(photos).as_str(), base_record.clone());
+    }
+
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "2027".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    let created = child_id(&engine, photos, "2027");
+    world.record_store.seed_record_after_put(
+        write_name(created).as_str(),
+        write_name(photos).as_str(),
+        sibling.clone(),
+    );
+
+    tick(&world, &engine, &mut tasks);
+    for endpoint in world.record_store.endpoints() {
+        assert_eq!(
+            world
+                .record_store
+                .record_at(&endpoint, write_name(photos).as_str()),
+            Some(sibling.clone()),
+            "nothing is signed over the sibling's folder at its sequence"
+        );
+    }
+    assert_eq!(queued(&second), 1, "the create stays queued");
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published(&world.record_store, photos).0,
+        base + 2,
+        "the rebased folder signs above the sibling's"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["2026", "2027"],
+        "both devices' creates survive"
+    );
+    assert_eq!(queued(&second), 0);
 }
 
 /// Seed a zero bin retention, so this session's deletes take the hard path —

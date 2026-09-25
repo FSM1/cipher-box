@@ -47,7 +47,8 @@ fn publish_verdict(error: PublishError) -> WritePublishError {
         PublishError::EmptyHeadCid
         | PublishError::EmptyInlineValue
         | PublishError::EpochBelowFloor { .. }
-        | PublishError::RecordTooLarge { .. } => WritePublishError::Rejected,
+        | PublishError::RecordTooLarge { .. }
+        | PublishError::SequenceExhausted => WritePublishError::Rejected,
         PublishError::AllEndpointsFailed | PublishError::FloorRead(_) => {
             WritePublishError::NotLanded
         }

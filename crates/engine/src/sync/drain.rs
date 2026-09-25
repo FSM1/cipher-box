@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::content::{
     decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid, verify_cid,
 };
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     BinEntry, BinIndex, ChildRef, Envelope, NodeKind, PreservedFields, ReadBody, SignedSealed,
@@ -395,6 +395,12 @@ enum Halt {
     /// hands nothing back — cutting a name a live record carries would leave a
     /// reference outliving its referent.
     Attempt,
+    /// A folder moved past the record this pass built on before the pass signed
+    /// over it: a lost CAS race. Nothing was PUT, and the next pass builds on
+    /// what the endpoints serve, so the retry signs higher. Charged like
+    /// [`Halt::Unclassified`] and never against the attempt budget, which a
+    /// busy sibling device would otherwise spend on a valid op.
+    LostRace,
     /// A refusal this pass cannot attribute, raised before the record it was
     /// authoring reached the transport: an upload, a registration, or a
     /// produce-side trust refusal. Charged like [`Halt::Attempt`], and a spent
@@ -560,6 +566,37 @@ impl PublishHalt {
 impl From<PublishHalt> for Halt {
     fn from(failure: PublishHalt) -> Self {
         failure.halt
+    }
+}
+
+/// One head publish that reached the transport.
+enum HeadPublish {
+    /// Our record confirmed at its name.
+    Confirmed(Vec<u8>),
+    /// A lost CAS race, with the winning record when the confirm read one.
+    Lost { winner: Option<Vec<u8>> },
+}
+
+/// What a name serves at its freshest sequence: that sequence, and every
+/// distinct record the endpoints serve at it.
+struct Served {
+    sequence: u64,
+    records: Vec<Vec<u8>>,
+}
+
+impl Served {
+    fn new(sequence: u64, freshest: Vec<u8>, mut tied: Vec<Vec<u8>>) -> Self {
+        tied.push(freshest);
+        Self {
+            sequence,
+            records: tied,
+        }
+    }
+
+    /// Whether the name moved past the record a pass built on: a higher
+    /// sequence, or that record's sequence served only with other bytes.
+    fn moved_past(&self, (sequence, record): &(u64, Vec<u8>)) -> bool {
+        self.sequence > *sequence || (self.sequence == *sequence && !self.records.contains(record))
     }
 }
 
@@ -1185,6 +1222,9 @@ struct FolderState {
     plane_root: NodeId,
     /// The write-plane name this folder publishes under.
     name: IpnsName,
+    /// The record bytes this folder was last loaded or published from, which
+    /// the pre-signature re-resolve holds the endpoints to.
+    record: Vec<u8>,
     /// The scope root carries the grant section and authors through a different
     /// envelope path; every other folder is a plain child record.
     is_scope_root: bool,
@@ -1422,6 +1462,7 @@ impl LoadedRoot {
 /// republish must carry forward byte-stable (#27 D10) plus the opened body.
 struct LoadedNode {
     name: IpnsName,
+    record: Vec<u8>,
     sequence: u64,
     envelope_unknown: PreservedFields,
     epoch_tag_unknown: PreservedFields,
@@ -1886,7 +1927,7 @@ where
             // Its own budget, its own count: an outage must not spend the
             // attempt budget, and a spent attempt is what tells
             // [`Self::create_replays_a_publish`] this device already published.
-            Halt::Unclassified => {
+            Halt::Unclassified | Halt::LostRace => {
                 if attempts.charge_unattributed(op_id) < UNATTRIBUTED_BUDGET {
                     return;
                 }
@@ -2111,15 +2152,9 @@ where
     /// Open a pass anchored on the scope root, whose epoch every record this
     /// pass seals is bound to.
     async fn open_pass(&self, scope: &DrainScope<'_>) -> Result<Pass, Halt> {
-        // A grafted root's own read leg runs after the drain in a tick, so the
-        // pass resolves the root itself rather than read a cache that leg
-        // never fills.
-        let root = if scope.is_grafted() {
-            let record_bytes = self.resolve_scope_root(scope, &scope.source).await?;
-            self.open_root_record(&scope.source, &record_bytes).await?
-        } else {
-            self.load_scope_root(&scope.source).await?
-        };
+        let root = self
+            .resolve_and_open_scope_root(scope, &scope.source)
+            .await?;
         let mut pass = Pass {
             root: scope.source.root,
             epoch: root.epoch,
@@ -2140,6 +2175,17 @@ where
         Ok(pass)
     }
 
+    /// One end's scope root as the record plane serves it ([`resolved_bytes`]),
+    /// opened.
+    async fn resolve_and_open_scope_root(
+        &self,
+        scope: &DrainScope<'_>,
+        source: &ScopeEnd<'_>,
+    ) -> Result<LoadedRoot, Halt> {
+        let record_bytes = self.resolve_scope_root(scope, source).await?;
+        self.open_root_record(source, &record_bytes).await
+    }
+
     /// The scope root as this device last held it: the cached record, opened.
     async fn load_scope_root(&self, source: &ScopeEnd<'_>) -> Result<LoadedRoot, Halt> {
         let record_bytes = self
@@ -2154,10 +2200,6 @@ where
     /// One scope root's record as currently published: its envelope's carried
     /// fields, its unsealed folder body, the scope epoch and the ratchet its
     /// grant section carries.
-    ///
-    /// Split from the cache read so a second end opens the bytes its own resolve
-    /// returned: a root this device published through a grant mint or a rotation
-    /// is current on the plane and stale in the cache.
     async fn open_root_record(
         &self,
         source: &ScopeEnd<'_>,
@@ -2217,6 +2259,7 @@ where
             state: FolderState {
                 plane_root: source.root,
                 name: source.root_name.clone(),
+                record: record_bytes.to_vec(),
                 is_scope_root: true,
                 envelope_unknown: envelope.unknown,
                 epoch_tag_unknown: envelope.epoch_tag_unknown,
@@ -2276,18 +2319,30 @@ where
         scope: &DrainScope<'_>,
         end: &ScopeEnd<'_>,
     ) -> Result<Vec<u8>, Halt> {
+        let resolved = self
+            .gated_scope_root(scope, end, ResolveMode::CacheFirst)
+            .await?;
+        resolved_bytes(resolved, end.root_name, self.events)
+    }
+
+    /// One end's scope root through its own gate, under `mode`.
+    async fn gated_scope_root(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        mode: ResolveMode,
+    ) -> Result<GatedResolve, Halt> {
         let floors = end.floors(self.floors);
         let adopter = self.root_adopter(scope, &floors, end);
-        let resolved = resolve_gated(
+        resolve_gated(
             self.transport,
             self.snapshot_cache,
             &adopter,
             end.root_name,
-            ResolveMode::CacheFirst,
+            mode,
         )
         .await
-        .map_err(seam)?;
-        resolved_bytes(resolved, end.root_name, self.events)
+        .map_err(seam)
     }
 
     /// Resolve one non-root node's own record through the child pipeline and
@@ -2343,6 +2398,7 @@ where
         }
         Ok(LoadedNode {
             name,
+            record: record_bytes,
             sequence: adopted.sequence,
             envelope_unknown: envelope.unknown,
             epoch_tag_unknown: envelope.epoch_tag_unknown,
@@ -2465,8 +2521,7 @@ where
         pass: &mut Pass,
         plane: &SealPlane<'_>,
     ) -> Result<FolderState, Halt> {
-        let record_bytes = self.resolve_scope_root(scope, &plane.end).await?;
-        let root = self.open_root_record(&plane.end, &record_bytes).await?;
+        let root = self.resolve_and_open_scope_root(scope, &plane.end).await?;
         if root.epoch != plane.epoch {
             return Err(epoch_skew(scope, plane));
         }
@@ -2499,6 +2554,7 @@ where
         Ok(FolderState {
             plane_root: plane.end.root,
             name: loaded.name,
+            record: loaded.record,
             is_scope_root: false,
             envelope_unknown: loaded.envelope_unknown,
             epoch_tag_unknown: loaded.epoch_tag_unknown,
@@ -5730,11 +5786,12 @@ where
         modified_at: u64,
         completes: Option<OpId>,
     ) -> Result<u64, PublishHalt> {
-        let (name, is_scope_root, body, envelope_unknown, epoch_tag_unknown) = {
+        let (name, is_scope_root, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
                 state.name.clone(),
                 state.is_scope_root,
+                (state.sequence, state.record.clone()),
                 ReadBody::Folder {
                     created_at: state.created_at,
                     modified_at,
@@ -5747,6 +5804,9 @@ where
         };
         let plane = scope
             .folder_plane(pass, folder)
+            .map_err(PublishHalt::before_the_put)?;
+        self.reresolve_before_signing(scope, &plane, folder, &name, is_scope_root, &built_on)
+            .await
             .map_err(PublishHalt::before_the_put)?;
         let published = self
             .publish_node(
@@ -5765,11 +5825,94 @@ where
 
         let state = pass.folder_mut(folder).map_err(PublishHalt::past_the_put)?;
         state.sequence = published.sequence;
+        state.record.clone_from(&published.held.record_bytes);
         state.modified_at = modified_at;
         let children = state.children.clone();
         self.repaint_folder(scope, folder, &children, published.sequence, modified_at);
         self.hold(folder.0, published.held);
         Ok(published.sequence)
+    }
+
+    /// Re-resolve a folder just before signing over it, so the signature is
+    /// minted above what the endpoints serve and not above this device's cache
+    /// (blueprint/engine.md "Publish"). The adopt raises the durable floor the
+    /// publish mints above. A record above `built_on`, or a sequence the
+    /// endpoints serve only with other bytes, halts this attempt so the next
+    /// pass rebases onto what they serve.
+    async fn reresolve_before_signing(
+        &self,
+        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
+        folder: NodeId,
+        name: &IpnsName,
+        is_scope_root: bool,
+        built_on: &(u64, Vec<u8>),
+    ) -> Result<(), Halt> {
+        let served = if is_scope_root {
+            let resolved = self
+                .gated_scope_root(scope, &plane.end, ResolveMode::NoCache)
+                .await?;
+            if let ResolveOutcome::TrustViolation(rejection) = &resolved.resolved.outcome {
+                return Err(refuse_record(self.events, name, rejection));
+            }
+            resolved
+                .held_record
+                .map(|(record, bytes)| Served::new(record.sequence, bytes, resolved.tied))
+        } else {
+            self.served_child(plane, folder, name).await?
+        };
+        match served {
+            Some(served) if served.moved_past(built_on) => Err(Halt::LostRace),
+            _ => Ok(()),
+        }
+    }
+
+    /// What an interior folder's name now serves, through the child gate. A
+    /// record the epoch floor refuses is the lazy wave's to re-seal, as in
+    /// [`Self::load_child_node`], so it counts; every other refusal is a trust
+    /// violation.
+    async fn served_child(
+        &self,
+        plane: &SealPlane<'_>,
+        folder: NodeId,
+        name: &IpnsName,
+    ) -> Result<Option<Served>, Halt> {
+        let floors = plane.end.floors(self.floors);
+        let adopter = ChildAdopter::new(
+            self.gateway,
+            self.http,
+            &floors,
+            plane.end.root.0,
+            plane.end.read_scope_seed.clone(),
+            folder.0,
+        );
+        let resolved = resolve_gated(
+            self.transport,
+            self.snapshot_cache,
+            &adopter,
+            name,
+            ResolveMode::NoCache,
+        )
+        .await
+        .map_err(seam)?;
+        let tied = resolved.tied;
+        match &resolved.resolved.outcome {
+            ResolveOutcome::TrustViolation(rejection) => match rejection.reason {
+                RejectionReason::EpochBelowFloor { .. } => {
+                    let bytes = adopter
+                        .assembled_record_bytes(name)
+                        .ok_or(Halt::EpochLagged)?;
+                    let lagging = IpnsRecord::unmarshal(&bytes)
+                        .and_then(|record| record.verify(name))
+                        .map_err(|_| Halt::Unclassified)?;
+                    Ok(Some(Served::new(lagging.sequence, bytes, tied)))
+                }
+                _ => Err(refuse_record(self.events, name, rejection)),
+            },
+            _ => Ok(resolved
+                .held_record
+                .map(|(record, bytes)| Served::new(record.sequence, bytes, tied))),
+        }
     }
 
     /// Author, publish and self-adopt one node's record. Only a confirmed
@@ -5820,51 +5963,43 @@ where
         .map_err(|error| PublishHalt::before_the_put(self.report_author_refusal(name, error)))?;
         report_carried_cut(self.events, name, &head.cut);
 
-        let record_bytes = self
+        let record_bytes = match self
             .publish_head(plane, name, &node.0, &head, content_cids.clone())
             .await
-            .map_err(PublishHalt::before_the_put)?;
+            .map_err(PublishHalt::before_the_put)?
+        {
+            HeadPublish::Confirmed(record_bytes) => record_bytes,
+            HeadPublish::Lost { winner } => {
+                // The retry must rebase onto the winner: the first-endpoint tie
+                // can keep serving our own record, which already holds this op.
+                // Our PUT was acked either way, so the halt stays an attempt.
+                if let Some(winner) = winner {
+                    let adopted = self
+                        .adopt_node_record(scope, plane, node, name, is_scope_root, &winner, None)
+                        .await;
+                    if let Err(GateError::Rejected(rejection)) = adopted {
+                        refuse_record(self.events, name, &rejection);
+                    }
+                }
+                return Err(PublishHalt::before_the_put(Halt::Attempt));
+            }
+        };
         if let Some(op_id) = completes {
             self.mark_published(scope, op_id).await;
         }
         // The record is live from here: everything below is a local step.
-        let local = local_head(&head);
-        let floors = plane.end.floors(self.floors);
-        let pass = if is_scope_root {
-            let adopter = self.root_adopter(scope, &floors, &plane.end);
-            adopter.hold_local_head(local);
-            adopter
-                .adopt(name, &record_bytes)
-                .await
-                .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?
-        } else {
-            let adopter = ChildAdopter::new(
-                self.gateway,
-                self.http,
-                &floors,
-                plane.end.root.0,
-                plane.end.read_scope_seed.clone(),
-                node.0,
-            );
-            adopter.hold_local_head(local);
-            adopter
-                .adopt(name, &record_bytes)
-                .await
-                .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?
-        }
-        .pass;
-
-        // Cached implies gate-passing: these bytes just cleared the gate.
-        keep_newest_last_known_good(self.snapshot_cache, name, &record_bytes)
+        let sequence = self
+            .adopt_node_record(
+                scope,
+                plane,
+                node,
+                name,
+                is_scope_root,
+                &record_bytes,
+                Some(local_head(&head)),
+            )
             .await
-            .map_err(|e| PublishHalt::past_the_put(seam(e)))?;
-        // Durable-first: the floor moves on the self-adopt that also left these
-        // bytes as last-known-good.
-        let sequence = pass
-            .commit(&floors)
-            .await
-            .map_err(|e| PublishHalt::past_the_put(seam(e)))?
-            .sequence;
+            .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?;
         Ok(Published {
             sequence,
             held: HeldRecord {
@@ -5879,9 +6014,55 @@ where
         })
     }
 
-    /// Dry-run, publish, and return the signed bytes. `Ok` means the record
-    /// confirmed at its name: an unconfirmed or race-losing publish is `Err`,
-    /// because its bytes may never have landed.
+    /// Gate one record at a node's name, leave it last-known-good, then move
+    /// the floor (durable-first), and answer the adopted sequence. `local` is
+    /// the head this device just authored, so the gate need not fetch it back.
+    #[expect(clippy::too_many_arguments, reason = "one node's full gate context")]
+    async fn adopt_node_record(
+        &self,
+        scope: &DrainScope<'_>,
+        plane: &SealPlane<'_>,
+        node: NodeId,
+        name: &IpnsName,
+        is_scope_root: bool,
+        record_bytes: &[u8],
+        local: Option<LocalHead>,
+    ) -> Result<u64, GateError> {
+        let floors = plane.end.floors(self.floors);
+        let adopted = if is_scope_root {
+            let adopter = self.root_adopter(scope, &floors, &plane.end);
+            if let Some(local) = local {
+                adopter.hold_local_head(local);
+            }
+            adopter.adopt(name, record_bytes).await?
+        } else {
+            let adopter = ChildAdopter::new(
+                self.gateway,
+                self.http,
+                &floors,
+                plane.end.root.0,
+                plane.end.read_scope_seed.clone(),
+                node.0,
+            );
+            if let Some(local) = local {
+                adopter.hold_local_head(local);
+            }
+            adopter.adopt(name, record_bytes).await?
+        };
+        keep_newest_last_known_good(self.snapshot_cache, name, record_bytes)
+            .await
+            .map_err(GateError::Seam)?;
+        Ok(adopted
+            .pass
+            .commit(&floors)
+            .await
+            .map_err(GateError::Seam)?
+            .sequence)
+    }
+
+    /// Dry-run and publish one head. Only [`HeadPublish::Confirmed`] bytes
+    /// landed as ours; an unconfirmed publish is `Err`, because its bytes may
+    /// never have landed.
     async fn publish_head(
         &self,
         plane: &SealPlane<'_>,
@@ -5889,7 +6070,7 @@ where
         node_id: &[u8; 16],
         head: &AuthoredHead,
         content_cids: Vec<String>,
-    ) -> Result<Vec<u8>, Halt> {
+    ) -> Result<HeadPublish, Halt> {
         let binding = plane.head_binding(node_id);
         let preflighted = preflight(&binding, &plane.end.read_key(node_id), head)
             .map_err(|_| Halt::UploadAttempt)?;
@@ -5897,6 +6078,7 @@ where
         let PublishReceipt {
             outcome,
             record_bytes,
+            winner,
         } = publish_record(
             self.transport,
             self.api,
@@ -5919,12 +6101,11 @@ where
             classify_publish(error, head.block.len() as u64)
         })?;
         match outcome {
-            PublishOutcome::Published { .. } => Ok(record_bytes),
-            // Both burned a CAS sequence at this name without a record we could
-            // adopt, so both are charged against the attempt budget.
-            PublishOutcome::Unconfirmed { .. } | PublishOutcome::LostRace { .. } => {
-                Err(Halt::Attempt)
-            }
+            PublishOutcome::Published { .. } => Ok(HeadPublish::Confirmed(record_bytes)),
+            PublishOutcome::LostRace { .. } => Ok(HeadPublish::Lost { winner }),
+            // It burned a CAS sequence at this name without a record we could
+            // adopt, so it is charged against the attempt budget.
+            PublishOutcome::Unconfirmed { .. } => Err(Halt::Attempt),
         }
     }
 
@@ -6585,7 +6766,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
         Halt::EpochLagged => Some("this folder is still being re-keyed after a key change"),
-        Halt::Attempt | Halt::UploadAttempt => {
+        Halt::Attempt | Halt::UploadAttempt | Halt::LostRace => {
             Some("the network refused it without a classification")
         }
         Halt::RecordRefused => Some("a record this change builds on failed verification"),
@@ -6664,6 +6845,10 @@ fn checked_content_cid(cid: &[u8]) -> Result<&[u8], Halt> {
 /// of last-known-good while the record plane serves a rejected record is
 /// exactly the fail-open rule 6 forbids. An adopt carries the bytes this pass
 /// gated, never the cache, which keeps a newer copy this pass did not gate.
+///
+/// At the floor, the cached copy wins while the endpoints still serve it: after
+/// a lost tie it holds the winner, and the first endpoint can keep serving our
+/// own losing record, which already carries the op being rebased.
 fn resolved_bytes(
     gated: GatedResolve,
     name: &IpnsName,
@@ -6674,7 +6859,11 @@ fn resolved_bytes(
             .held_record
             .map(|(_, bytes)| bytes)
             .ok_or(Halt::Unclassified),
-        ResolveOutcome::Current { record_bytes } => Ok(record_bytes),
+        ResolveOutcome::Current { record_bytes } => Ok(gated
+            .resolved
+            .last_known_good
+            .filter(|cached| gated.tied.contains(cached))
+            .unwrap_or(record_bytes)),
         ResolveOutcome::NoUpdate => gated.resolved.last_known_good.ok_or(Halt::Unclassified),
         ResolveOutcome::TrustViolation(rejection) => Err(refuse_record(events, name, &rejection)),
     }
@@ -6804,6 +6993,7 @@ mod tests {
                 FolderState {
                     plane_root,
                     name: derive_write_name(&Zeroizing::new([4; 32]), &folder.0),
+                    record: Vec::new(),
                     is_scope_root: false,
                     envelope_unknown: PreservedFields::new(),
                     epoch_tag_unknown: PreservedFields::new(),
@@ -6849,11 +7039,42 @@ mod tests {
                 gated.clone(),
             )),
             read_scope_seed: None,
+            tied: Vec::new(),
         };
         let (events, _rx) = mpsc::unbounded();
         assert_eq!(
             resolved_bytes(resolved, &refused_name(), &events),
             Ok(gated)
+        );
+    }
+
+    /// At the floor, the cached copy is the base while an endpoint still serves
+    /// it beside the freshest pick, and the freshest pick is the base once none
+    /// does.
+    #[test]
+    fn at_the_floor_the_cached_copy_is_the_base_only_while_it_is_still_served() {
+        let (first, cached) = (b"first endpoint".to_vec(), b"cached".to_vec());
+        let at_floor = |tied: Vec<Vec<u8>>| GatedResolve {
+            resolved: crate::net::Resolved {
+                last_known_good: Some(cached.clone()),
+                outcome: ResolveOutcome::Current {
+                    record_bytes: first.clone(),
+                },
+                current_at_floor: None,
+            },
+            hold: None,
+            held_record: None,
+            read_scope_seed: None,
+            tied,
+        };
+        let (events, _rx) = mpsc::unbounded();
+        assert_eq!(
+            resolved_bytes(at_floor(vec![cached.clone()]), &refused_name(), &events),
+            Ok(cached.clone())
+        );
+        assert_eq!(
+            resolved_bytes(at_floor(Vec::new()), &refused_name(), &events),
+            Ok(first.clone())
         );
     }
 
@@ -6875,6 +7096,7 @@ mod tests {
                 hold: None,
                 held_record: None,
                 read_scope_seed: None,
+                tied: Vec::new(),
             },
             &refused_name(),
             &events,

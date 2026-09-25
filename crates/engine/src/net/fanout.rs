@@ -215,46 +215,12 @@ pub async fn fanout_get_under<T: RecordTransport>(
     name: &IpnsName,
     rule: VacancyRule,
 ) -> FanoutRecord {
-    let key = name.as_str();
-    let mut best: Option<(VerifiedRecord, Vec<u8>)> = None;
-    let mut vacant = 0usize;
-    let mut failures = Vec::new();
-    for endpoint in transport.endpoints() {
-        let bytes = match transport
-            .get_record(&endpoint, key, MAX_RECORD_BYTES, None)
-            .await
-        {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => {
-                vacant += 1;
-                continue;
-            }
-            Err(_) => {
-                failures.push((endpoint, EndpointFailure::Transport));
-                continue;
-            }
-        };
-        // Release-active backstop: a transport that ignores its cap must not
-        // talk the engine past it (mirrors the WASM bridge's `send_capped`).
-        if bytes.len() > MAX_RECORD_BYTES {
-            failures.push((endpoint, EndpointFailure::OverCap));
-            continue;
-        }
-        let Ok(record) = IpnsRecord::unmarshal(&bytes) else {
-            failures.push((endpoint, EndpointFailure::Malformed));
-            continue;
-        };
-        let Ok(verified) = record.verify(name) else {
-            failures.push((endpoint, EndpointFailure::Unverified));
-            continue;
-        };
-        if best
-            .as_ref()
-            .is_none_or(|(current, _)| verified.sequence > current.sequence)
-        {
-            best = Some((verified, bytes));
-        }
-    }
+    let Scan {
+        best,
+        vacant,
+        failures,
+        ..
+    } = scan(transport, name).await;
     if let Some((verified, bytes)) = best {
         return FanoutRecord::Found(verified, bytes);
     }
@@ -263,6 +229,83 @@ pub async fn fanout_get_under<T: RecordTransport>(
     } else {
         FanoutRecord::Unavailable(EndpointFailures(failures))
     }
+}
+
+/// The freshest verified record, and every other record another endpoint
+/// served at its sequence. The freshest pick keeps the first endpoint on a tie,
+/// so without the ties a sibling's record on a later endpoint hides behind it.
+/// The ties are record-verified only; a caller gates one before it builds on
+/// it.
+pub(crate) async fn fanout_get_tied<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> Option<(VerifiedRecord, Vec<u8>, Vec<Vec<u8>>)> {
+    let Scan { best, tied, .. } = scan(transport, name).await;
+    best.map(|(verified, bytes)| (verified, bytes, tied))
+}
+
+/// Every endpoint's answer to one fan-out GET, before a caller reads it.
+struct Scan {
+    /// The freshest verifiable record, the first endpoint winning a tie.
+    best: Option<(VerifiedRecord, Vec<u8>)>,
+    /// The other distinct verifiable records at `best`'s sequence, one per
+    /// endpoint at most.
+    tied: Vec<Vec<u8>>,
+    vacant: usize,
+    failures: Vec<(EndpointId, EndpointFailure)>,
+}
+
+async fn scan<T: RecordTransport>(transport: &T, name: &IpnsName) -> Scan {
+    let key = name.as_str();
+    let mut scan = Scan {
+        best: None,
+        tied: Vec::new(),
+        vacant: 0,
+        failures: Vec::new(),
+    };
+    for endpoint in transport.endpoints() {
+        let bytes = match transport
+            .get_record(&endpoint, key, MAX_RECORD_BYTES, None)
+            .await
+        {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                scan.vacant += 1;
+                continue;
+            }
+            Err(_) => {
+                scan.failures.push((endpoint, EndpointFailure::Transport));
+                continue;
+            }
+        };
+        // Release-active backstop: a transport that ignores its cap must not
+        // talk the engine past it (mirrors the WASM bridge's `send_capped`).
+        if bytes.len() > MAX_RECORD_BYTES {
+            scan.failures.push((endpoint, EndpointFailure::OverCap));
+            continue;
+        }
+        let Ok(record) = IpnsRecord::unmarshal(&bytes) else {
+            scan.failures.push((endpoint, EndpointFailure::Malformed));
+            continue;
+        };
+        let Ok(verified) = record.verify(name) else {
+            scan.failures.push((endpoint, EndpointFailure::Unverified));
+            continue;
+        };
+        match &scan.best {
+            Some((current, held)) if verified.sequence == current.sequence => {
+                if bytes != *held && !scan.tied.contains(&bytes) {
+                    scan.tied.push(bytes);
+                }
+            }
+            Some((current, _)) if verified.sequence < current.sequence => {}
+            _ => {
+                scan.best = Some((verified, bytes));
+                scan.tied.clear();
+            }
+        }
+    }
+    scan
 }
 
 #[cfg(test)]

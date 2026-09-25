@@ -15,8 +15,9 @@ use crate::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
 type EndpointRecords = HashMap<String, Vec<u8>>;
 
 /// Records waiting on a PUT at the routing key they are filed under, each with
-/// the routing key it is to be served at.
-type DeferredRecords = HashMap<String, Vec<(String, Vec<u8>)>>;
+/// the routing key it is to be served at and the one endpoint that serves it
+/// (`None` for every endpoint).
+type DeferredRecords = HashMap<String, Vec<(String, Vec<u8>, Option<EndpointId>)>>;
 
 /// In-memory fake of the `/routing/v1` endpoint set: one map of opaque
 /// record bytes per configured endpoint, holding the **highest sequence** at
@@ -104,21 +105,45 @@ impl InMemoryRecordStore {
     /// `after_put_at`, and not before — another device that published while the
     /// pass under test was mid-flight, staged without a wall clock.
     pub fn seed_record_after_put(&self, after_put_at: &str, routing_key: &str, record: Vec<u8>) {
+        self.defer(after_put_at, routing_key, record, None);
+    }
+
+    /// [`seed_record_after_put`](Self::seed_record_after_put) at `endpoint`
+    /// alone: the endpoint set split between two records.
+    pub fn seed_record_after_put_at(
+        &self,
+        endpoint: &EndpointId,
+        after_put_at: &str,
+        routing_key: &str,
+        record: Vec<u8>,
+    ) {
+        self.defer(after_put_at, routing_key, record, Some(endpoint.clone()));
+    }
+
+    fn defer(
+        &self,
+        after_put_at: &str,
+        routing_key: &str,
+        record: Vec<u8>,
+        endpoint: Option<EndpointId>,
+    ) {
         self.deferred
             .lock()
             .expect("lock")
             .entry(after_put_at.to_owned())
             .or_default()
-            .push((routing_key.to_owned(), record));
+            .push((routing_key.to_owned(), record, endpoint));
     }
 
     /// Install whatever [`seed_record_after_put`](Self::seed_record_after_put)
-    /// filed under `routing_key`, at every endpoint.
+    /// filed under `routing_key`.
     fn release_deferred(&self, routing_key: &str) {
         let released = self.deferred.lock().expect("lock").remove(routing_key);
-        for (key, record) in released.unwrap_or_default() {
+        for (key, record, only) in released.unwrap_or_default() {
             for endpoint in &self.endpoints {
-                self.seed_record(endpoint, &key, record.clone());
+                if only.as_ref().is_none_or(|only| only == endpoint) {
+                    self.seed_record(endpoint, &key, record.clone());
+                }
             }
         }
     }

@@ -582,7 +582,9 @@ fn record_publish_verdict(error: RecordPublishError) -> RotationPublishError {
     match error {
         RecordPublishError::HeadCidMismatch { .. }
         | RecordPublishError::Publish(
-            PublishError::EmptyHeadCid | PublishError::EpochBelowFloor { .. },
+            PublishError::EmptyHeadCid
+            | PublishError::EpochBelowFloor { .. }
+            | PublishError::SequenceExhausted,
         ) => RotationPublishError::Rejected,
         _ => RotationPublishError::NotPublished,
     }
@@ -1159,7 +1161,8 @@ where
         PublishError::Register(_) => PointerPublishFailure::RegistryFull,
         PublishError::EmptyHeadCid
         | PublishError::EmptyInlineValue
-        | PublishError::RecordTooLarge { .. } => PointerPublishFailure::Rejected,
+        | PublishError::RecordTooLarge { .. }
+        | PublishError::SequenceExhausted => PointerPublishFailure::Rejected,
         _ => PointerPublishFailure::NotLanded,
     })?;
     match receipt.outcome {
@@ -3858,7 +3861,8 @@ fn publish_record_verdict(error: RecordPublishError) -> WritePublishError {
         RecordPublishError::Publish(
             PublishError::EmptyHeadCid
             | PublishError::EpochBelowFloor { .. }
-            | PublishError::RecordTooLarge { .. },
+            | PublishError::RecordTooLarge { .. }
+            | PublishError::SequenceExhausted,
         ) => WritePublishError::Rejected,
         _ => WritePublishError::NotLanded,
     }

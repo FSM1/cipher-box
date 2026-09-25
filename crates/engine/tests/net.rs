@@ -654,6 +654,181 @@ fn publish_confirm_detects_a_lost_cas_race() {
     );
 }
 
+/// A sibling device's record at our sequence, served first, is a
+/// [`PublishOutcome::LostRace`].
+#[test]
+fn publish_confirm_reads_a_sibling_at_our_sequence_as_a_lost_race() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(24);
+    let name = name_of(&s);
+    let api = api_for(&device);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(name.as_str().as_bytes(), 1),
+    )
+    .unwrap();
+    // The sibling built on the same floor and lands right after our first PUT.
+    let sibling = record(&s, b"/ipfs/bafysibling", 2, 0);
+    world
+        .record_store
+        .seed_record_after_put(name.as_str(), name.as_str(), sibling.clone());
+    device.http.enqueue_response(ok_200());
+
+    let request = PublishRequest {
+        name: &name,
+        signer: &s,
+        head_cid: "bafyhead".into(),
+        content_cids: Vec::new(),
+        min_current_sequence: None,
+        epoch_bar: None,
+    };
+    let receipt = block_on(publish(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        &request,
+    ))
+    .expect("publish");
+
+    assert_eq!(
+        world.record_store.record_at(&endpoints[0], name.as_str()),
+        Some(sibling.clone()),
+        "the first endpoint kept the sibling's record"
+    );
+    assert_eq!(
+        world.record_store.record_at(&endpoints[1], name.as_str()),
+        Some(receipt.record_bytes),
+        "the second endpoint kept ours, at the same sequence"
+    );
+    assert_eq!(
+        receipt.outcome,
+        PublishOutcome::LostRace {
+            published_sequence: 2,
+            observed_sequence: 2,
+        }
+    );
+    assert_eq!(receipt.winner, Some(sibling), "the sibling's record won");
+}
+
+/// The freshest pick keeps the first endpoint on a tie, so our own record there
+/// must not hide a sibling's record at our sequence on a later endpoint.
+#[test]
+fn publish_confirm_reads_a_sibling_on_a_later_endpoint_as_a_lost_race() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(25);
+    let name = name_of(&s);
+    let api = api_for(&device);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(name.as_str().as_bytes(), 1),
+    )
+    .unwrap();
+    let sibling = record(&s, b"/ipfs/bafysibling", 2, 0);
+    world
+        .record_store
+        .seed_record(&endpoints[1], name.as_str(), sibling.clone());
+    world.record_store.fail_put_endpoint(&endpoints[1]);
+    device.http.enqueue_response(ok_200());
+
+    let request = PublishRequest {
+        name: &name,
+        signer: &s,
+        head_cid: "bafyhead".into(),
+        content_cids: Vec::new(),
+        min_current_sequence: None,
+        epoch_bar: None,
+    };
+    let receipt = block_on(publish(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        &request,
+    ))
+    .expect("publish");
+
+    assert_eq!(
+        world.record_store.record_at(&endpoints[0], name.as_str()),
+        Some(receipt.record_bytes),
+        "the first endpoint serves ours"
+    );
+    assert_eq!(
+        world.record_store.record_at(&endpoints[1], name.as_str()),
+        Some(sibling.clone()),
+        "a later endpoint serves the sibling's, at the same sequence"
+    );
+    assert_eq!(
+        receipt.outcome,
+        PublishOutcome::LostRace {
+            published_sequence: 2,
+            observed_sequence: 2,
+        }
+    );
+    assert_eq!(
+        receipt.winner,
+        Some(sibling),
+        "the winner is the sibling's record, never our own on the first endpoint"
+    );
+}
+
+/// A floor at `u64::MAX` leaves no sequence to sign above it. The publish
+/// refuses before it signs, and nothing reaches an endpoint.
+#[test]
+fn publish_at_an_exhausted_sequence_floor_refuses_before_it_signs() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(26);
+    let name = name_of(&s);
+    let api = api_for(&device);
+
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(name.as_str().as_bytes(), u64::MAX),
+    )
+    .unwrap();
+    device.http.enqueue_response(ok_200());
+
+    let request = PublishRequest {
+        name: &name,
+        signer: &s,
+        head_cid: "bafyhead".into(),
+        content_cids: Vec::new(),
+        min_current_sequence: None,
+        epoch_bar: None,
+    };
+    let error = block_on(publish(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        &request,
+    ))
+    .expect_err("no sequence above the floor");
+
+    assert_eq!(error, PublishError::SequenceExhausted);
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Liveness — the keyless re-PUT Scheduler job and the sub-EOL seq+1 renewal.
 // ---------------------------------------------------------------------------

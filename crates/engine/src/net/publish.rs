@@ -17,7 +17,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol;
-use super::fanout::{MAX_RECORD_BYTES, fanout_get_verify, fanout_put};
+use super::fanout::{MAX_RECORD_BYTES, fanout_get_tied, fanout_put};
 use super::register::register;
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::gate::floor;
@@ -105,11 +105,9 @@ pub enum PublishOutcome {
         /// The sequence embedded in the published record.
         sequence: u64,
     },
-    /// The PUT was acknowledged but confirm-by-re-resolve did not read **our**
-    /// bytes back at our sequence: nothing resolvable, a stale lower sequence,
-    /// or different bytes at the same sequence (a fork from a retry that
-    /// re-authored after an earlier unconfirmed PUT). Availability, never a
-    /// trust verdict.
+    /// The PUT was acknowledged but confirm-by-re-resolve read nothing at or
+    /// above our sequence: nothing resolvable, or a stale lower sequence.
+    /// Availability, never a trust verdict.
     /// Retrying is idempotent-in-sequence — the caller must not adopt these
     /// bytes, so the sequence floor stays put and a re-publish re-mints the
     /// same sequence.
@@ -117,13 +115,14 @@ pub enum PublishOutcome {
         /// The sequence embedded in the published record.
         sequence: u64,
     },
-    /// A concurrent writer's record at a strictly higher sequence was observed
-    /// on the confirm re-resolve: a lost CAS race. The caller re-resolves and
-    /// rebases (rebase is a later slice; this slice only reports the race).
+    /// The confirm re-resolve read another record at our sequence or above it:
+    /// a lost CAS race. The endpoints cannot order two records at one sequence,
+    /// so a tie is lost too, and the caller re-resolves, rebases, and signs
+    /// above what it observed.
     LostRace {
         /// The sequence this publish embedded.
         published_sequence: u64,
-        /// The higher sequence a concurrent writer landed first.
+        /// The sequence of the record the confirm read instead of ours.
         observed_sequence: u64,
     },
 }
@@ -137,6 +136,11 @@ pub struct PublishReceipt {
     pub outcome: PublishOutcome,
     /// The signed record bytes this publish PUT.
     pub record_bytes: Vec<u8>,
+    /// On a [`PublishOutcome::LostRace`], the record that won: the higher one,
+    /// or at a tie a record other than ours. Record-verified only. A caller
+    /// that rebases gates it first, so its retry builds on the winner and not
+    /// on our own record, which the first-endpoint tie can still serve.
+    pub winner: Option<Vec<u8>>,
 }
 
 /// A fail-closed publish failure.
@@ -184,6 +188,8 @@ pub enum PublishError {
         /// The read epoch the record binds.
         epoch: u64,
     },
+    /// The durable floor sits at `u64::MAX`, so no sequence above it exists.
+    SequenceExhausted,
 }
 
 /// One record the pipeline is about to sign: the name it publishes under, its
@@ -331,7 +337,10 @@ where
         .await
         .map_err(PublishError::FloorRead)?
         .unwrap_or(0);
-    let sequence = durable.max(request.min_current_sequence.unwrap_or(0)) + 1;
+    let sequence = durable
+        .max(request.min_current_sequence.unwrap_or(0))
+        .checked_add(1)
+        .ok_or(PublishError::SequenceExhausted)?;
 
     // The read-epoch bar ([`EpochBar`]), read last so no await separates it from
     // the signature below.
@@ -378,33 +387,31 @@ where
         );
     }
 
-    // Confirm by re-resolve: a strictly higher record means a concurrent writer
-    // won the CAS race; observing nothing at all confirms nothing, so it must
-    // not report success (that arm is how an acked-but-unresolvable publish used
-    // to pass for `Published`).
-    let observed = fanout_get_verify(transport, request.name).await;
-    let outcome = match observed {
-        // `fanout_get_verify` reports the freshest record across the endpoint
-        // set. Only our own bytes prove a readable endpoint holds *our* record:
-        // a different record at the same sequence is a fork — a retry that
-        // re-authored after an unconfirmed PUT — and adopting it would advance
-        // the floor past bytes the network may never serve.
-        Some((observed, bytes)) if observed.sequence == sequence => {
-            if bytes == record_bytes {
-                PublishOutcome::Published { sequence }
-            } else {
-                PublishOutcome::Unconfirmed { sequence }
-            }
+    // Only our own bytes, uncontested at their sequence, confirm the publish.
+    let (outcome, winner) = match fanout_get_tied(transport, request.name).await {
+        Some((_, bytes, tied)) if bytes == record_bytes && tied.is_empty() => {
+            (PublishOutcome::Published { sequence }, None)
         }
-        Some((observed, _)) if observed.sequence > sequence => PublishOutcome::LostRace {
-            published_sequence: sequence,
-            observed_sequence: observed.sequence,
-        },
-        _ => PublishOutcome::Unconfirmed { sequence },
+        Some((observed, bytes, tied)) if observed.sequence >= sequence => {
+            let winner = if bytes == record_bytes {
+                tied.into_iter().next()
+            } else {
+                Some(bytes)
+            };
+            (
+                PublishOutcome::LostRace {
+                    published_sequence: sequence,
+                    observed_sequence: observed.sequence,
+                },
+                winner,
+            )
+        }
+        _ => (PublishOutcome::Unconfirmed { sequence }, None),
     };
     Ok(PublishReceipt {
         outcome,
         record_bytes,
+        winner,
     })
 }
 

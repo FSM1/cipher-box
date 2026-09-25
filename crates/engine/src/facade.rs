@@ -3896,6 +3896,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::EpochBelowFloor { floor, epoch }) => {
                 format!("read epoch {epoch} below the durable floor {floor} (never published)")
             }
+            Err(PublishError::SequenceExhausted) => {
+                "no sequence above the durable floor (never published)".to_owned()
+            }
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
             Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,
