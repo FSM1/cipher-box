@@ -275,7 +275,7 @@ navigation (FSM1/cipher-box-next#33 D2):
   collector and its own start facade — `LoginFacade` is `{ start, logout }`, over
   Tauri IPC here. It does **not** take `packages/client` — the worker, leadership
   and Service Worker machinery has no place here.
-- **The auth surfaces are shared through `packages/auth-ui`** (ADR 0008 D3): the
+- **The auth surfaces are shared through `packages/auth-ui`**: the
   login form, the phrase prompt and the error banner are React components both
   hosts mount, parameterised over the host's own actions. Each host keeps its
   own theme and its own wiring; neither keeps a second implementation of a
