@@ -105,11 +105,9 @@ pub enum PublishOutcome {
         /// The sequence embedded in the published record.
         sequence: u64,
     },
-    /// The PUT was acknowledged but confirm-by-re-resolve did not read **our**
-    /// bytes back at our sequence: nothing resolvable, a stale lower sequence,
-    /// or different bytes at the same sequence (a fork from a retry that
-    /// re-authored after an earlier unconfirmed PUT). Availability, never a
-    /// trust verdict.
+    /// The PUT was acknowledged but confirm-by-re-resolve read nothing at or
+    /// above our sequence: nothing resolvable, or a stale lower sequence.
+    /// Availability, never a trust verdict.
     /// Retrying is idempotent-in-sequence — the caller must not adopt these
     /// bytes, so the sequence floor stays put and a re-publish re-mints the
     /// same sequence.
@@ -117,13 +115,14 @@ pub enum PublishOutcome {
         /// The sequence embedded in the published record.
         sequence: u64,
     },
-    /// A concurrent writer's record at a strictly higher sequence was observed
-    /// on the confirm re-resolve: a lost CAS race. The caller re-resolves and
-    /// rebases (rebase is a later slice; this slice only reports the race).
+    /// The confirm re-resolve read another record at our sequence or above it:
+    /// a lost CAS race. The endpoints cannot order two records at one sequence,
+    /// so a tie is lost too, and the caller re-resolves, rebases, and signs
+    /// above what it observed.
     LostRace {
         /// The sequence this publish embedded.
         published_sequence: u64,
-        /// The higher sequence a concurrent writer landed first.
+        /// The sequence of the record the confirm read instead of ours.
         observed_sequence: u64,
     },
 }
@@ -378,25 +377,13 @@ where
         );
     }
 
-    // Confirm by re-resolve: a strictly higher record means a concurrent writer
-    // won the CAS race; observing nothing at all confirms nothing, so it must
-    // not report success (that arm is how an acked-but-unresolvable publish used
-    // to pass for `Published`).
+    // Confirm by re-resolve over the freshest record across the endpoint set.
+    // Only our own bytes prove an endpoint holds *our* record; observing nothing
+    // at all confirms nothing, so it must not report success.
     let observed = fanout_get_verify(transport, request.name).await;
     let outcome = match observed {
-        // `fanout_get_verify` reports the freshest record across the endpoint
-        // set. Only our own bytes prove a readable endpoint holds *our* record:
-        // a different record at the same sequence is a fork — a retry that
-        // re-authored after an unconfirmed PUT — and adopting it would advance
-        // the floor past bytes the network may never serve.
-        Some((observed, bytes)) if observed.sequence == sequence => {
-            if bytes == record_bytes {
-                PublishOutcome::Published { sequence }
-            } else {
-                PublishOutcome::Unconfirmed { sequence }
-            }
-        }
-        Some((observed, _)) if observed.sequence > sequence => PublishOutcome::LostRace {
+        Some((_, bytes)) if bytes == record_bytes => PublishOutcome::Published { sequence },
+        Some((observed, _)) if observed.sequence >= sequence => PublishOutcome::LostRace {
             published_sequence: sequence,
             observed_sequence: observed.sequence,
         },

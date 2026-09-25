@@ -654,6 +654,69 @@ fn publish_confirm_detects_a_lost_cas_race() {
     );
 }
 
+/// Two devices of one owner derive one name key, so a sibling can sign the same
+/// sequence over a different value. The endpoints cannot order two records at
+/// one sequence: a confirm that reads the sibling's record at ours is a lost
+/// race, never an unconfirmed publish that a retry re-mints at that sequence.
+#[test]
+fn publish_confirm_reads_a_sibling_at_our_sequence_as_a_lost_race() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(24);
+    let name = name_of(&s);
+    let api = api_for(&device);
+    let endpoints = world.record_store.endpoints();
+
+    block_on(
+        device
+            .floor_store
+            .raise_sequence_floor(name.as_str().as_bytes(), 1),
+    )
+    .unwrap();
+    // The sibling built on the same floor and lands right after our first PUT.
+    let sibling = record(&s, b"/ipfs/bafysibling", 2, 0);
+    world
+        .record_store
+        .seed_record_after_put(name.as_str(), name.as_str(), sibling.clone());
+    device.http.enqueue_response(ok_200());
+
+    let request = PublishRequest {
+        name: &name,
+        signer: &s,
+        head_cid: "bafyhead".into(),
+        content_cids: Vec::new(),
+        min_current_sequence: None,
+        epoch_bar: None,
+    };
+    let receipt = block_on(publish(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        &request,
+    ))
+    .expect("publish");
+
+    assert_eq!(
+        world.record_store.record_at(&endpoints[0], name.as_str()),
+        Some(sibling),
+        "the first endpoint kept the sibling's record"
+    );
+    assert_eq!(
+        world.record_store.record_at(&endpoints[1], name.as_str()),
+        Some(receipt.record_bytes),
+        "the second endpoint kept ours, at the same sequence"
+    );
+    assert_eq!(
+        receipt.outcome,
+        PublishOutcome::LostRace {
+            published_sequence: 2,
+            observed_sequence: 2,
+        }
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Liveness — the keyless re-PUT Scheduler job and the sub-EOL seq+1 renewal.
 // ---------------------------------------------------------------------------

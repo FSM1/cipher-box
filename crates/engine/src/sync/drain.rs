@@ -388,11 +388,12 @@ enum Halt {
     /// (CONTEXT.md "Epoch lag"). Charged nothing, and re-driven at the pass that
     /// reaches the node ([`halt_for_unreachable_epoch`]).
     EpochLagged,
-    /// The op's record reached the record plane and did not confirm. Charged
-    /// against the attempt budget, because a retry re-signs at the same
-    /// sequence and a jammed name would otherwise retry forever. The PUT was
-    /// acked, so a record may be resolvable at the name and a spent budget
-    /// hands nothing back — cutting a name a live record carries would leave a
+    /// The op's record reached the record plane and did not confirm, or the
+    /// scope root moved above the base this pass built on before it signed (a
+    /// lost CAS race). Charged against the attempt budget, because a retry
+    /// re-signs at the same sequence and a jammed name would otherwise retry
+    /// forever. A record of this op may be resolvable, so a spent budget hands
+    /// nothing back — cutting a name a live record carries would leave a
     /// reference outliving its referent.
     Attempt,
     /// A refusal this pass cannot attribute, raised before the record it was
@@ -5730,11 +5731,12 @@ where
         modified_at: u64,
         completes: Option<OpId>,
     ) -> Result<u64, PublishHalt> {
-        let (name, is_scope_root, body, envelope_unknown, epoch_tag_unknown) = {
+        let (name, is_scope_root, built_on, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
                 state.name.clone(),
                 state.is_scope_root,
+                state.sequence,
                 ReadBody::Folder {
                     created_at: state.created_at,
                     modified_at,
@@ -5748,6 +5750,11 @@ where
         let plane = scope
             .folder_plane(pass, folder)
             .map_err(PublishHalt::before_the_put)?;
+        if is_scope_root {
+            self.reresolve_scope_root(scope, &plane.end, &name, built_on)
+                .await
+                .map_err(PublishHalt::before_the_put)?;
+        }
         let published = self
             .publish_node(
                 scope,
@@ -5770,6 +5777,43 @@ where
         self.repaint_folder(scope, folder, &children, published.sequence, modified_at);
         self.hold(folder.0, published.held);
         Ok(published.sequence)
+    }
+
+    /// Re-resolve a scope root just before this pass signs over it, so the
+    /// record it signs sits strictly above every sequence the endpoints serve.
+    /// Two devices of one owner derive one name key, and the CAS law holds only
+    /// if each signs above what the network holds rather than above its own
+    /// cache (blueprint/engine.md "Publish").
+    ///
+    /// The freshest record passes the gate first, and the gate raises the
+    /// durable floor the signature is minted above. A record above `built_on`
+    /// is a sibling's: its adopt re-bases the next pass, and this attempt halts
+    /// as a lost race.
+    async fn reresolve_scope_root(
+        &self,
+        scope: &DrainScope<'_>,
+        end: &ScopeEnd<'_>,
+        name: &IpnsName,
+        built_on: u64,
+    ) -> Result<(), Halt> {
+        let floors = end.floors(self.floors);
+        let adopter = self.root_adopter(scope, &floors, end);
+        let resolved = resolve_gated(
+            self.transport,
+            self.snapshot_cache,
+            &adopter,
+            name,
+            ResolveMode::NoCache,
+        )
+        .await
+        .map_err(seam)?;
+        if let ResolveOutcome::TrustViolation(rejection) = &resolved.resolved.outcome {
+            return Err(refuse_record(self.events, name, rejection));
+        }
+        match resolved.held_record {
+            Some((observed, _)) if observed.sequence > built_on => Err(Halt::Attempt),
+            _ => Ok(()),
+        }
     }
 
     /// Author, publish and self-adopt one node's record. Only a confirmed
