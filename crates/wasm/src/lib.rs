@@ -1120,6 +1120,13 @@ impl SharingInviteLink {
     pub fn pending_claims(&self) -> u32 {
         self.inner.pending_claims
     }
+
+    /// The contacts this link sourced hold its whole share of the contact
+    /// book, so its claims do not convert until the owner revokes it.
+    #[wasm_bindgen(getter, js_name = contactBudgetFull)]
+    pub fn contact_budget_full(&self) -> bool {
+        self.inner.contact_budget_full
+    }
 }
 
 impl SharingInviteLink {

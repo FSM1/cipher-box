@@ -927,6 +927,7 @@ mod tests {
                     expired: true,
                     admission_cap: 5,
                     pending_claims: 2,
+                    contact_budget_full: true,
                 }],
             ),
             "state",
@@ -945,6 +946,7 @@ mod tests {
         let link = links.get(0);
         assert_eq!(field(&link, "expired"), JsValue::from_bool(true));
         assert_eq!(field(&link, "pendingClaims"), JsValue::from_f64(2.0));
+        assert_eq!(field(&link, "contactBudgetFull"), JsValue::from_bool(true));
         assert_eq!(
             field(&link, "tag")
                 .unchecked_into::<js_sys::Uint8Array>()

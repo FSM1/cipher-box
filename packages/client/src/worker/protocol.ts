@@ -254,6 +254,8 @@ export interface SharingInviteLinkDescriptor {
   admissionCap: number;
   /** Invite claims this link signed that wait for `convertInviteClaims`. */
   pendingClaims: number;
+  /** This link's claims hold its whole contact share, so none converts until a revoke. */
+  contactBudgetFull: boolean;
 }
 
 /** What one scope's own record says, as data (mirrors `ScopeSharing`). */

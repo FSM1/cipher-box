@@ -568,6 +568,10 @@ pub struct SharingInviteLink {
     /// The claims [`SnapshotChild::pending_invite_claims`] counts that this
     /// link's ephemeral identity signed.
     pub pending_claims: u32,
+    /// The contacts this link sourced hold its whole share of the contact book
+    /// ([`MAX_LINK_CONTACTS`](crate::grants::MAX_LINK_CONTACTS)), so a claim
+    /// on it cannot convert until the owner revokes it.
+    pub contact_budget_full: bool,
 }
 
 /// What one scope's own record says about sharing, when this read reached it.
@@ -2188,8 +2192,8 @@ impl EngineError {
                 check: "contact-book-full",
             },
             // The scope's own sharing read names the link this refuses for
-            // ([`ScopeSharing::invite_link_refusal`]), which is where the owner
-            // revokes it.
+            // ([`SharingInviteLink::contact_budget_full`]), which is where the
+            // owner revokes it.
             ContactStoreError::LinkBookFull { .. } => EngineError::MalformedInput {
                 check: LINK_CONTACT_BUDGET_FULL,
             },
@@ -3569,9 +3573,9 @@ enum UnindexedScope {
 /// link-sourced share of the contact book
 /// ([`MAX_LINK_CONTACTS`](crate::grants::MAX_LINK_CONTACTS)).
 ///
-/// The sharing read reports it as the scope's `invite_link_refusal` while a
-/// link there holds its whole share, which names the scope where the owner
-/// revokes it.
+/// It refuses a conversion, never a mint: a fresh link carries its own share
+/// (ADR 0026 D3). The sharing read flags the full link itself
+/// ([`SharingInviteLink::contact_budget_full`]).
 const LINK_CONTACT_BUDGET_FULL: &str = "invite-link-contact-budget-full";
 
 /// The name [`Engine::enclosing_scope`] reports when an ancestor of the target
@@ -11284,18 +11288,6 @@ where {
         // A set this owner's identity did not sign reads as unreachable rather
         // than as a scope with no links.
         let links = committed_links(&owner_authority(session), &scope).ok()?;
-        // Reported at the scope whose link took the headroom, which is where
-        // the owner finds the link to revoke. It outranks the standing ground
-        // because that one is permanent and needs no action, while this one
-        // does.
-        let invite_link_refusal = if links
-            .iter()
-            .any(|link| link_budget_full(sources, &link.tag))
-        {
-            Some(LINK_CONTACT_BUDGET_FULL)
-        } else {
-            invite_link_refusal
-        };
         let now = self.seams.scheduler.now();
         let invite_links = links
             .iter()
@@ -11306,6 +11298,7 @@ where {
                 expired: link.is_expired(now),
                 admission_cap: link.admission_cap,
                 pending_claims: self.pending_link_claims(scope_root, &link.ephemeral_identity_pk),
+                contact_budget_full: link_budget_full(sources, &link.tag),
             })
             .collect();
 

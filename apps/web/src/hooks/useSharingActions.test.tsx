@@ -30,6 +30,7 @@ const MINTED: SharingInviteLinkDescriptor = {
   expired: false,
   admissionCap: 5,
   pendingClaims: 0,
+  contactBudgetFull: false,
 };
 
 function grantsFor(scopeKey: string): readonly GrantRow[] | null {

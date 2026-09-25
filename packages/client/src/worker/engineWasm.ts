@@ -166,6 +166,7 @@ export interface WasmSharingInviteLink {
   readonly expired: boolean;
   readonly admissionCap: bigint;
   readonly pendingClaims: number;
+  readonly contactBudgetFull: boolean;
 }
 
 /** wasm-bindgen `ScopeSharing` — what one scope's own record says. */

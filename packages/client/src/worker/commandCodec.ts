@@ -944,6 +944,7 @@ function readInviteLink(
     expired: link.expired,
     admissionCap: Number(link.admissionCap),
     pendingClaims: link.pendingClaims,
+    contactBudgetFull: link.contactBudgetFull,
   };
 }
 

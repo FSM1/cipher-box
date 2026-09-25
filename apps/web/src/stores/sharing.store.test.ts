@@ -165,6 +165,7 @@ describe('invite links', () => {
       expired: false,
       admissionCap: 5,
       pendingClaims: 0,
+      contactBudgetFull: false,
     },
   ];
   const linked = () =>

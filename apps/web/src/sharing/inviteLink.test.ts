@@ -11,6 +11,7 @@ const LINK: SharingInviteLinkDescriptor = {
   expired: false,
   admissionCap: 5,
   pendingClaims: 0,
+  contactBudgetFull: false,
 };
 
 const scope = (

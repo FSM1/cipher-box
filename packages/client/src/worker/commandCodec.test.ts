@@ -1512,6 +1512,7 @@ describe('readSharing', () => {
     expired: false,
     admissionCap: 5n,
     pendingClaims: 1,
+    contactBudgetFull: true,
   };
   const view = {
     scope: new Uint8Array(16).fill(3),
@@ -1554,6 +1555,7 @@ describe('readSharing', () => {
             expired: false,
             admissionCap: 5,
             pendingClaims: 1,
+            contactBudgetFull: true,
           },
         ],
       },

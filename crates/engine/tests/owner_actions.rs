@@ -29,11 +29,11 @@ use zeroize::Zeroizing;
 
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
-    CLAIM_ID_LEN, Contact, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee,
-    GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms, ReceivedShareStore,
-    ResolutionClass, StagingGranteeNameCache, StagingReceivedShareStore, import_contact,
-    mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
-    row_is_owner_attested,
+    CLAIM_ID_LEN, Contact, ContactStore, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
+    EphemeralInvitee, GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms,
+    MAX_LINK_CONTACTS, ReceivedShareStore, ResolutionClass, StagingContactStore,
+    StagingGranteeNameCache, StagingReceivedShareStore, import_contact, mint_grant_row,
+    mint_invite_grant, post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::rotation::{
@@ -4128,6 +4128,7 @@ fn listed_link(link: &GrantRow, expires_at: UnixMillis, expired: bool) -> Vec<Sh
         expired,
         admission_cap: DEFAULT_ADMISSION_CAP,
         pending_claims: 0,
+        contact_budget_full: false,
     }]
 }
 
@@ -4207,6 +4208,42 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
         .state
         .expect("the scope root resolved");
     assert_eq!(after.invite_links, listed_link(&link, deadline, true));
+}
+
+/// ADR 0026 D3: the contact share is charged per link, and a fresh link carries
+/// its own. A full share refuses that link's conversions, never a mint, so the
+/// read flags the link and leaves the scope's mint open.
+#[test]
+fn an_expired_link_with_a_full_contact_share_flags_the_link_and_refuses_no_mint() {
+    let mut fx = GrantScenario::new();
+    fx.mint_link();
+    let [link] = <[SharingInviteLink; 1]>::try_from(folder_links(&fx)).expect("one link");
+    let tag = <[u8; 32]>::try_from(link.tag.as_slice()).expect("a 32-byte tag");
+
+    let enc_subkey = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(7));
+    let book = StagingContactStore::new(&fx.owner_device.staging_store, &enc_subkey, &entropy);
+    for claimant in 0..u8::try_from(MAX_LINK_CONTACTS).expect("in range") {
+        let mut scalar = [0x11; 32];
+        scalar[31] = claimant;
+        block_on(book.record_from_link(&contact_code(&scalar), &tag, &fx.folder.0))
+            .expect("a claim under the share records");
+    }
+    fx.world.scheduler.advance_to(link.expires_at);
+
+    let state = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved");
+    assert_eq!(state.invite_link_refusal, None);
+    assert_eq!(
+        state.invite_links,
+        vec![SharingInviteLink {
+            expired: true,
+            contact_budget_full: true,
+            ..link
+        }]
+    );
 }
 
 /// The mailbox post is the last step of the mint and nothing compensates it, so
@@ -5986,9 +6023,18 @@ fn a_write_grant_to_a_read_grantee_upgrades_it_after_one_write_scope_cut() {
     let inherited = write_name(fx.folder);
 
     assert_eq!(
-        fx.grant_folder_at(Permission::Write),
+        fx.grant_named(Permission::Write, "Carol"),
         Ok(CommandOutcome::Done)
     );
+    let names: Vec<Option<(String, NameSource)>> = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved")
+        .grants
+        .into_iter()
+        .map(|grant| grant.grantee_name)
+        .collect();
+    assert_eq!(names, vec![None], "a permission change applies no name");
 
     let repoint = fx.granted_scope_repoint();
     assert_eq!(repoint.write_epoch, 2, "one write-scope cut ran");
