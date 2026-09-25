@@ -64,6 +64,10 @@ export class PollResponseDto {
 }
 
 export class AckResponseDto {
-  @ApiProperty()
-  success!: boolean;
+  @ApiProperty({
+    description:
+      'True only when this call deleted the item. False for an id that is already gone, ' +
+      'that belongs to another mailbox, or that is malformed.',
+  })
+  removed!: boolean;
 }

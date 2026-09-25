@@ -39,6 +39,10 @@ export interface PostMessageResult {
   id: string;
 }
 
+export interface AckResult {
+  removed: boolean;
+}
+
 export interface PolledMessage {
   id: string;
   receivedAt: string;
@@ -235,19 +239,21 @@ export class MailboxService {
 
   /**
    * Ack = hard delete by id, scoped to the caller mailbox (AGENTS.md: never
-   * persist crypto-bearing rows past their consumer). Idempotent and
-   * leak-free: acking a gone or foreign id succeeds without side effects.
+   * persist crypto-bearing rows past their consumer). `removed` is true only
+   * for the one call whose delete took the row: a gone, foreign, or malformed
+   * id answers false, with no side effect. Postgres row locking makes the
+   * answer exclusive, because a concurrent delete of the same row waits and
+   * then affects nothing. The owner engine converts a claim only on true
+   * (ADR 0023 D5).
    */
-  async ack(recipientPublicKey: string, id: string): Promise<{ success: boolean }> {
-    // A malformed (non-uuid) id can never name a server-minted row, so short
-    // out to the documented idempotent success WITHOUT querying Postgres —
-    // otherwise the `uuid`-typed id column raises 22P02 (invalid input syntax
-    // for uuid) and turns a well-behaved no-op into a 500.
+  async ack(recipientPublicKey: string, id: string): Promise<AckResult> {
+    // A non-uuid id names no server-minted row, and the `uuid`-typed column
+    // would raise 22P02 (a 500) on it.
     if (!UUID_RE.test(id)) {
-      return { success: true };
+      return { removed: false };
     }
-    await this.messageRepository.delete({ id, recipientPublicKey });
-    return { success: true };
+    const { affected } = await this.messageRepository.delete({ id, recipientPublicKey });
+    return { removed: (affected ?? 0) > 0 };
   }
 
   private async purgeExpired(

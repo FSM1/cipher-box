@@ -164,8 +164,11 @@ impl InMemoryMailbox {
     }
 
     fn serve_ack(&self, item_id: &str) -> SeamResult<HttpResponse> {
-        self.remove(item_id)?;
-        Ok(json(200, br#"{"success":true}"#.to_vec()))
+        let removed = self.remove(item_id)?;
+        Ok(json(
+            200,
+            serde_json::to_vec(&json!({ "removed": removed })).expect("serializes"),
+        ))
     }
 
     fn items(&self) -> Vec<MailboxItem> {
@@ -179,21 +182,18 @@ impl InMemoryMailbox {
             .unwrap_or_default()
     }
 
-    fn remove(&self, item_id: &str) -> SeamResult<()> {
+    /// Deletes one item; `true` when it was pending.
+    fn remove(&self, item_id: &str) -> SeamResult<bool> {
         if *self.ack_failing.lock().expect("lock") {
             return Err(SeamError::new("mailbox ack transient outage"));
         }
-        if let Some(queue) = self
-            .hub
-            .inner
-            .lock()
-            .expect("lock")
-            .queues
-            .get_mut(&self.address)
-        {
-            queue.retain(|item| item.item_id != item_id);
-        }
-        Ok(())
+        let mut inner = self.hub.inner.lock().expect("lock");
+        let Some(queue) = inner.queues.get_mut(&self.address) else {
+            return Ok(false);
+        };
+        let before = queue.len();
+        queue.retain(|item| item.item_id != item_id);
+        Ok(queue.len() < before)
     }
 }
 
@@ -217,7 +217,7 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn ack(&self, item_id: &str) -> SeamResult<()> {
-        self.remove(item_id)
+        self.remove(item_id).map(drop)
     }
 }
 

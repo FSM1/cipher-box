@@ -40,6 +40,9 @@ export class MailboxController {
   @ApiOperation({
     summary:
       'Post an HPKE-sealed blob to a recipient identity publicKey; unknown recipients are rejected (rate-limited existence oracle)',
+    description:
+      'A post that reuses an idempotency key while its item is pending returns that item id. ' +
+      'After the ack deletes the item, the same key creates a new item.',
   })
   @ApiCreatedResponse({ type: PostMessageResponseDto })
   @ApiResponse({ status: 400, description: 'Malformed body (invalid publicKey, blob, or key)' })
@@ -47,7 +50,10 @@ export class MailboxController {
   @ApiResponse({ status: 404, description: 'Unknown recipient (rate-limited existence oracle)' })
   @ApiResponse({
     status: 409,
-    description: 'Recipient mailbox is full (per-recipient pending cap)',
+    description:
+      'Recipient mailbox is full: it holds the pending cap of unacked items (1000 by default). ' +
+      'The API refuses new items until an ack or the 90-day TTL frees a slot; a replay of a ' +
+      'pending item still succeeds.',
   })
   @ApiResponse({ status: 413, description: 'Sealed blob exceeds 8 KiB' })
   @ApiResponse({ status: 429, description: 'Per-sender post rate limit exceeded' })
@@ -75,7 +81,12 @@ export class MailboxController {
 
   @Delete('messages/:id')
   @Throttle(THROTTLE_SURFACES.mailboxAck)
-  @ApiOperation({ summary: 'Ack a message: hard delete by id, scoped to the caller mailbox' })
+  @ApiOperation({
+    summary: 'Ack a message: hard delete by id, scoped to the caller mailbox',
+    description:
+      'Answers `removed: true` only to the call that deleted the item. A gone, foreign, or ' +
+      'malformed id answers `removed: false` with status 200.',
+  })
   @ApiOkResponse({ type: AckResponseDto })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   @ApiResponse({ status: 429, description: 'Per-recipient ack rate limit exceeded' })

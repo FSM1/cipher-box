@@ -365,6 +365,12 @@ pub(crate) struct MailboxPostWire {
     pub id: String,
 }
 
+/// The ack response: whether this call deleted the item.
+#[derive(Deserialize)]
+pub(crate) struct MailboxAckWire {
+    pub removed: bool,
+}
+
 // --- device registry and approval rendezvous (ADR 0009) ---
 
 /// The registration body for

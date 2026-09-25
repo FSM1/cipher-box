@@ -22,7 +22,7 @@ import { MailboxService } from './services/mailbox.service';
 /**
  * The mailbox HTTP surface re-homed onto a REAL Postgres: the
  * post→poll→ack lifecycle and idempotent replay against real `mailbox_messages`
- * rows, the existence-oracle 404, the per-recipient pending-cap 409, the blob
+ * rows, the ack `removed` answer, the existence-oracle 404, the per-recipient pending-cap 409, the blob
  * 413, the fail-closed validation 400s, ack ownership scoping, the real
  * per-account 429s (including the rate-limited existence oracle), and the
  * Prometheus route metric. The pending-cap serialization proof stays in the
@@ -103,10 +103,11 @@ describe('mailbox HTTP surface (real Postgres)', () => {
         blob,
       });
 
-      await request(http())
+      const acked = await request(http())
         .delete(`/mailbox/messages/${posted.body.id}`)
         .set('Authorization', `Bearer ${recipient.token}`)
         .expect(200);
+      expect(acked.body).toEqual({ removed: true });
 
       const afterAck = await request(http())
         .get('/mailbox/messages')
@@ -140,6 +141,71 @@ describe('mailbox HTTP surface (real Postgres)', () => {
         .set('Authorization', `Bearer ${recipient.token}`)
         .expect(200);
       expect(polled.body.messages).toHaveLength(1);
+    });
+  });
+
+  describe('ack answer', () => {
+    async function postOne(
+      sender: { token: string },
+      recipient: { publicKey: string },
+      idempotencyKey: string
+    ): Promise<string> {
+      const res = await request(http())
+        .post('/mailbox/messages')
+        .set('Authorization', `Bearer ${sender.token}`)
+        .send({ recipientPublicKey: recipient.publicKey, blob: base64Blob(32), idempotencyKey })
+        .expect(201);
+      return res.body.id;
+    }
+
+    function ack(token: string, id: string) {
+      return request(http())
+        .delete(`/mailbox/messages/${id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+    }
+
+    it('answers removed: false to a second DELETE of one id', async () => {
+      const sender = await account();
+      const recipient = await account();
+      const id = await postOne(sender, recipient, 'twice');
+
+      expect((await ack(recipient.token, id)).body).toEqual({ removed: true });
+      expect((await ack(recipient.token, id)).body).toEqual({ removed: false });
+    });
+
+    it('answers removed: false to a missing or malformed id', async () => {
+      const recipient = await account();
+      expect((await ack(recipient.token, '00000000-0000-4000-8000-000000000000')).body).toEqual({
+        removed: false,
+      });
+      expect((await ack(recipient.token, 'not-a-uuid')).body).toEqual({ removed: false });
+    });
+
+    it('answers removed: true to exactly one of concurrent DELETEs of one id', async () => {
+      const sender = await account();
+      const recipient = await account();
+      const id = await postOne(sender, recipient, 'race');
+
+      const answers = await Promise.all(Array.from({ length: 6 }, () => ack(recipient.token, id)));
+      expect(answers.filter((res) => res.body.removed === true)).toHaveLength(1);
+    });
+
+    it('returns the live item to a reused key, and a new item after the ack', async () => {
+      const sender = await account();
+      const recipient = await account();
+      const first = await postOne(sender, recipient, 'claim-key');
+      expect(await postOne(sender, recipient, 'claim-key')).toBe(first);
+
+      await ack(recipient.token, first);
+      const second = await postOne(sender, recipient, 'claim-key');
+      expect(second).not.toBe(first);
+
+      const polled = await request(http())
+        .get('/mailbox/messages')
+        .set('Authorization', `Bearer ${recipient.token}`)
+        .expect(200);
+      expect(polled.body.messages.map((m: { id: string }) => m.id)).toEqual([second]);
     });
   });
 
@@ -255,11 +321,12 @@ describe('mailbox HTTP surface (real Postgres)', () => {
         })
         .expect(201);
 
-      // The attacker ack is idempotent-success but must not delete the row.
-      await request(http())
+      // The attacker ack answers 200 like a missing id, and deletes nothing.
+      const foreign = await request(http())
         .delete(`/mailbox/messages/${posted.body.id}`)
         .set('Authorization', `Bearer ${attacker.token}`)
         .expect(200);
+      expect(foreign.body).toEqual({ removed: false });
 
       const stillThere = await request(http())
         .get('/mailbox/messages')
