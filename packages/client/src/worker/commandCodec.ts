@@ -35,6 +35,7 @@ import type {
   VersionEntryDescriptor,
   SettingsOrigin,
   SharingDescriptor,
+  SharingInviteLinksDescriptor,
   QueueHoldDescriptor,
   SnapshotDescriptor,
   Staleness,
@@ -54,6 +55,7 @@ import type {
   WasmReceivedShareRow,
   WasmRegisteredDevice,
   WasmVersionEntry,
+  WasmSharingInviteLinks,
   WasmSharingView,
   WasmSnapshotView,
   WasmVaultSettings,
@@ -905,6 +907,15 @@ export function readReceivedShare(
   };
 }
 
+function readInviteLinks(links: WasmSharingInviteLinks): SharingInviteLinksDescriptor {
+  return {
+    live: links.live,
+    expired: links.expired,
+    expiresAt: links.expiresAt ?? null,
+    pendingClaims: links.pendingClaims,
+  };
+}
+
 /**
  * Reads a wasm-bindgen `SharingView`'s key-free getters into a descriptor.
  *
@@ -913,7 +924,6 @@ export function readReceivedShare(
  */
 export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDescriptor {
   const state = view.state;
-  const links = state?.inviteLinks;
   return {
     scope: view.scope,
     contacts: view.contacts.map((contact) => ({
@@ -930,15 +940,7 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
             })),
             grantRefusal: state.grantRefusal ?? null,
             inviteLinkRefusal: state.inviteLinkRefusal ?? null,
-            inviteLinks:
-              links === undefined
-                ? null
-                : {
-                    live: links.live,
-                    expired: links.expired,
-                    expiresAt: links.expiresAt ?? null,
-                    pendingClaims: links.pendingClaims,
-                  },
+            inviteLinks: readInviteLinks(state.inviteLinks),
           },
   };
 }

@@ -10,6 +10,7 @@
  */
 
 import type { ReceivedShareDescriptor, ReceivedShareResolution } from '@cipherbox/client';
+import { displayName } from '../vault/displayName';
 
 type StandingTone = 'ok' | 'pending' | 'warning';
 
@@ -46,7 +47,6 @@ const UNRECOGNISED: ReceivedShareStanding = {
   label: 'this build does not recognise the standing the engine reported',
 };
 
-/** On a link-held share the signal is the link's revoke, not a personal removal (ADR 0025 D5). */
 const LINK_REVOKED: ReceivedShareStanding = {
   tone: 'warning',
   label: 'the owner revoked this link',
@@ -60,4 +60,15 @@ export function shareStanding({
   if (resolution === 'revocation-signal' && viaLink) return LINK_REVOKED;
   // `hasOwn`, so any key this build does not name fails closed.
   return Object.hasOwn(CLASSES, resolution) ? CLASSES[resolution] : UNRECOGNISED;
+}
+
+/** The engine sends an empty name for a link-held share whose owner-signed names did not verify. */
+const VIA_LINK = 'shared via link';
+
+/** The name a received-share row shows. */
+export function shareName({
+  displayName: name,
+  viaLink,
+}: Pick<ReceivedShareDescriptor, 'displayName' | 'viaLink'>): string {
+  return viaLink && name === '' ? VIA_LINK : displayName(name);
 }

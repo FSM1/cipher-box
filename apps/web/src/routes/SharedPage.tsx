@@ -4,8 +4,7 @@ import { toHex } from '@cipherbox/client';
 import { AppShell } from '../components/layout/AppShell';
 import { useReceivedShares } from '../hooks/useReceivedShares';
 import { folderPath } from '../lib/nodeId';
-import { shareStanding, type ReceivedShareStanding } from '../sharing/receivedShares';
-import { displayName } from '../vault/displayName';
+import { shareName, shareStanding, type ReceivedShareStanding } from '../sharing/receivedShares';
 
 interface Row {
   scope: string;
@@ -33,7 +32,7 @@ export function SharedPage() {
         scope: toHex(share.scope),
         path: folderPath(share.scope),
         sharer: toHex(share.sharerIdentityPublicKey),
-        displayName: displayName(share.displayName),
+        displayName: shareName(share),
         permission: share.permission,
         resolution: share.resolution ?? 'none',
         standing: shareStanding(share),

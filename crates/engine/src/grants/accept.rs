@@ -24,7 +24,7 @@ use cipherbox_core::seal::{AadContext, Permission, STRUCT_TAG_GRANT_BLOB, open_g
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::entropy::EntropyError;
 use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
@@ -196,8 +196,8 @@ impl fmt::Debug for ReceivedShare {
 }
 
 /// The link keys a bookmark reads through until a personal blob lands
-/// (ADR 0024 D1, D2). Redacted `Debug`.
-#[derive(Clone, PartialEq, Eq)]
+/// (ADR 0024 D1, D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkHold {
     /// The invite secret, which re-derives both ephemeral halves.
     pub(crate) invite_secret: SecretBytes,
@@ -220,19 +220,9 @@ impl LinkHold {
         }
     }
 
-    /// Whether the last verified deadline is past at `now` (ADR 0025 D5).
+    /// Whether `now` has reached the last verified deadline (ADR 0025 D5).
     pub fn is_expired(&self, now: UnixMillis) -> bool {
-        self.deadline.is_some_and(|deadline| now.0 >= deadline.0)
-    }
-}
-
-impl fmt::Debug for LinkHold {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LinkHold")
-            .field("invite_secret", &self.invite_secret)
-            .field("scope_pointer_name", &self.scope_pointer_name)
-            .field("deadline", &self.deadline)
-            .finish()
+        now.reached(self.deadline)
     }
 }
 
@@ -275,6 +265,14 @@ impl ReceivedSharesList {
     /// Drop the link keys of the bookmark under `key`, returning them.
     pub(crate) fn drop_link(&mut self, key: &BookmarkKey) -> Option<LinkHold> {
         self.links.remove(key)
+    }
+
+    /// Record the deadline the link entry of the bookmark under `key` carried
+    /// on its last verified read.
+    pub(crate) fn set_link_deadline(&mut self, key: &BookmarkKey, deadline: Option<UnixMillis>) {
+        if let Some(hold) = self.links.get_mut(key) {
+            hold.deadline = deadline;
+        }
     }
 
     /// Point the bookmark under `key` at the scope root its scope pointer
@@ -593,28 +591,22 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
 /// bookmark without `linkSecret` is a personal one.
 fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, CodecError> {
     let Some(secret) = share.get("linkSecret") else {
-        return match ["scopePointerName", "linkDeadline"]
-            .into_iter()
-            .find(|field| share.get(field).is_some())
-        {
-            Some(_) => Err(Malformed::MissingField {
+        if share.get("scopePointerName").is_some() || share.get("linkDeadline").is_some() {
+            return Err(Malformed::MissingField {
                 field: "linkSecret",
             }
-            .into()),
-            None => Ok(None),
-        };
+            .into());
+        }
+        return Ok(None);
     };
     let scope_pointer_name = IpnsName::parse(req(share, "scopePointerName")?.as_text()?)?;
-    let deadline = match share.get("linkDeadline") {
-        Some(value) => Some(UnixMillis(value.as_unsigned()?)),
-        None => None,
-    };
-    let mut bytes = fixed::<32>(secret, "linkSecret")?;
-    let invite_secret = SecretBytes::new(bytes);
-    // `fixed` hands back a plain array; this frame is its terminal owner.
-    bytes.zeroize();
+    let deadline = share
+        .get("linkDeadline")
+        .map(|value| value.as_unsigned().map(UnixMillis))
+        .transpose()?;
+    let bytes = Zeroizing::new(fixed::<32>(secret, "linkSecret")?);
     Ok(Some(LinkHold {
-        invite_secret,
+        invite_secret: SecretBytes::new(*bytes),
         scope_pointer_name,
         deadline,
     }))

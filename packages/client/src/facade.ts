@@ -369,14 +369,16 @@ export class EngineFacade {
   }
 
   /**
-   * Mints an invite link; an `undefined` `expiresAt` mints one that never expires.
-   * `ownerName` is what the fragment shows the holder, signed by the owner.
+   * Mints an invite link; an `undefined` `expiresAt` takes the engine's default
+   * lifetime. `ownerName` is what the fragment shows the holder, signed by the owner.
    */
   async createInviteLink(
     node: Uint8Array,
     permission: Permission,
-    expiresAt: bigint | undefined,
-    ownerName: string
+    expiresAt?: bigint,
+    // ADR 0027 D5 puts the owner name in the fragment but names no source for
+    // it. The ADR 0027 D1 never-email rule applies by analogy, so it is empty.
+    ownerName = ''
   ): Promise<MintedInviteLink> {
     const outcome = await this.command({
       kind: 'createInviteLink',

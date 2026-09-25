@@ -2,9 +2,7 @@ use core::cell::RefCell;
 
 use super::super::rotate_write::derive_write_name;
 use super::*;
-use crate::seams::Scheduler;
 use crate::testkit::block_on;
-use crate::testkit::fakes::VirtualScheduler;
 use cipherbox_core::seal::{PreservedFields, sign_recipient_binding, verify_grant_set};
 use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
@@ -88,7 +86,6 @@ fn a_failed_rotation_surfaces_and_the_rest_still_cut() {
     );
 }
 
-const DEADLINE: UnixMillis = UnixMillis(1_000);
 const NO_SIG: [u8; ECDSA_SIG_LEN] = [0u8; ECDSA_SIG_LEN];
 
 /// The three recipients the fixture commits, by their X25519 scalar seed.
@@ -214,11 +211,6 @@ impl Fixture {
         verify_grant_set(&self.owner.verifying_key(), &cut.commitment, &sig)
             .expect("the owner's fresh signature covers the cut set");
     }
-}
-
-/// The owner's own record of what it minted with a deadline.
-fn owner_deadlines(rows: &[([u8; 32], UnixMillis)]) -> BTreeMap<[u8; 32], UnixMillis> {
-    rows.iter().copied().collect()
 }
 
 fn stranger() -> EcdsaSigner {
@@ -478,8 +470,6 @@ fn a_cut_against_another_scope_fails_closed() {
     for err in [
         revoke_read_grant(&plan, &link_tag()).expect_err("read revoke"),
         revoke_write_grant(&plan, &write_tag(), WriteRevokeKind::Full).expect_err("write revoke"),
-        prune_expired_grants(&plan, &owner_deadlines(&[(link_tag(), DEADLINE)]), DEADLINE)
-            .expect_err("expiry prune"),
     ] {
         assert_eq!(err.check(), "rot-revoke-commitment-scope-mismatch");
     }
@@ -581,130 +571,6 @@ fn a_write_revoke_of_a_read_grant_fails_closed() {
             .expect_err("no write grant");
         assert_eq!(err.check(), check);
     }
-}
-
-#[test]
-fn nothing_expired_yields_no_cut_and_no_rotation() {
-    let fx = Fixture::new();
-    let clock = VirtualScheduler::starting_at(UnixMillis(DEADLINE.0 - 1));
-    assert!(
-        prune_expired_grants(
-            &fx.plan(),
-            &owner_deadlines(&[(link_tag(), DEADLINE)]),
-            clock.now()
-        )
-        .expect("owner prune")
-        .is_none(),
-        "an unexpired grant gives the owner session nothing to act on"
-    );
-}
-
-#[test]
-fn a_link_expires_at_its_deadline_instant_not_a_tick_later() {
-    let fx = Fixture::new();
-    let deadlines = owner_deadlines(&[(link_tag(), DEADLINE)]);
-    let clock = VirtualScheduler::starting_at(UnixMillis(DEADLINE.0 - 1));
-    assert!(
-        prune_expired_grants(&fx.plan(), &deadlines, clock.now())
-            .expect("owner prune")
-            .is_none()
-    );
-
-    clock.advance(core::time::Duration::from_millis(1));
-    let cut = prune_expired_grants(&fx.plan(), &deadlines, clock.now())
-        .expect("owner prune")
-        .expect("the deadline instant expires the link");
-    assert!(!cut.commitment.entries.iter().any(|e| e.tag == link_tag()));
-}
-
-#[test]
-fn an_expired_read_link_is_pruned_from_both_and_rotates_the_read_plane_only() {
-    let fx = Fixture::new();
-    let cut = prune_expired_grants(
-        &fx.plan(),
-        &owner_deadlines(&[(link_tag(), DEADLINE)]),
-        DEADLINE,
-    )
-    .expect("owner prune")
-    .expect("the read link expired");
-
-    assert!(!cut.commitment.entries.iter().any(|e| e.tag == link_tag()));
-    assert!(!cut.grant_ledger.iter().any(|e| e.tag == link_tag()));
-    assert!(cut.commitment.entries.iter().any(|e| e.tag == read_tag()));
-    fx.verify(&cut);
-
-    assert_eq!(
-        cut.planes,
-        RotationPlanes {
-            read: true,
-            write: false
-        }
-    );
-}
-
-#[test]
-fn an_expired_write_link_additionally_rotates_the_write_plane() {
-    // Pruning the committed entry does not expire a write link: its holder
-    // keeps the subtree signing keys until the names move.
-    let fx = Fixture::new();
-    let cut = prune_expired_grants(
-        &fx.plan(),
-        &owner_deadlines(&[(link_tag(), DEADLINE), (write_tag(), DEADLINE)]),
-        DEADLINE,
-    )
-    .expect("owner prune")
-    .expect("both links expired");
-
-    assert!(!cut.commitment.entries.iter().any(|e| e.tag == write_tag()));
-    assert_eq!(
-        cut.planes,
-        RotationPlanes {
-            read: true,
-            write: true
-        }
-    );
-}
-
-/// The permission a prune acts on comes from the owner-signed commitment,
-/// never the write-grantee-authored ledger row — otherwise a writer demotes
-/// its own row to `read`, the write plane never rotates, and it keeps the
-/// subtree signing keys the expiry was supposed to end.
-#[test]
-fn a_ledger_row_demoted_by_its_writer_still_rotates_the_write_plane() {
-    let fx = Fixture::new();
-    let mut forged = fx.ledger.clone();
-    forged[2].permission = Permission::Read;
-    let plan = GrantCutPlan {
-        grant_ledger: &forged,
-        ..fx.plan()
-    };
-
-    let cut = prune_expired_grants(
-        &plan,
-        &owner_deadlines(&[(write_tag(), DEADLINE)]),
-        DEADLINE,
-    )
-    .expect("owner prune")
-    .expect("the write link expired");
-    assert!(
-        cut.planes.write,
-        "the plane set is read off the owner-signed commitment"
-    );
-}
-
-#[test]
-fn a_non_owner_session_cuts_nothing_on_a_discovered_expiry() {
-    // A grantee can neither extend nor shrink the committed set, so its
-    // observation of the same expired grant changes nothing.
-    let fx = Fixture::new();
-    let grantee = stranger();
-    let err = prune_expired_grants(
-        &fx.plan_signed_by(&grantee),
-        &owner_deadlines(&[(link_tag(), DEADLINE)]),
-        DEADLINE,
-    )
-    .expect_err("a grantee cannot prune");
-    assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
 }
 
 /// Records which arms fired, in call order, failing the ones named. Each

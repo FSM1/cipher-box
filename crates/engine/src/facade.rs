@@ -63,20 +63,21 @@ use crate::grants::grafted::{
     floor_view, is_own_scope,
 };
 use crate::grants::inbox::{PendingInviteClaims, ShareInbox};
-use crate::grants::link_read::pending_link_bookmark;
+use crate::grants::link_read::{JoinRead, JoinSeams, join_read, pending_link_bookmark};
 use crate::grants::received_status::{
     ReceivedShareStatus, ReceivedVerdicts, ScopeRender, grafted_root_name, live_permission,
 };
 use crate::grants::{
     ClaimOutcome, CommittedScope, Contact, ContactStore, ContactStoreError, ConvertedClaim,
-    CreateGrantError, DEFAULT_ADMISSION_CAP, EphemeralInvitee, GrantRecipient, GrantedReadScope,
-    GranteeScopePlan, InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan,
-    LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys, ParentScopePlan,
-    PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError, ResolutionClass, SharePointer,
-    StagingContactStore, StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, commits_write_grant,
-    committed_links, convert_invite_claim, create_grant, enforce_committed_ledger, import_contact,
-    insert_child, link_budget_full, locate_invite_link, mint_invite_link, post_invite_claim,
-    post_share_pointer, recipient_blinded_tag, resolve_recipient, row_is_owner_attested,
+    CreateGrantError, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee,
+    GrantRecipient, GrantedReadScope, GranteeScopePlan, InviteClaim, InviteError, InviteFragment,
+    InviteMintError, InviteMintPlan, LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
+    ParentScopePlan, PublishedGrantBlob, ReceivedShareStore, ReceivedShareStoreError,
+    ResolutionClass, SharePointer, StagingContactStore, StagingReceivedShareStore,
+    UNATTESTED_IDENTITY_PK, commits_write_grant, committed_links, convert_invite_claim,
+    create_grant, enforce_committed_ledger, import_contact, insert_child, link_budget_full,
+    locate_invite_link, mint_invite_link, post_invite_claim, post_share_pointer,
+    recipient_blinded_tag, resolve_recipient, row_is_owner_attested, sole_link,
 };
 use crate::mailbox::{poll_verified, post_sealed};
 use crate::name::{NameError, is_emittable, validate_name};
@@ -115,9 +116,10 @@ use crate::rotation::{
     revoke_write_grant, rotate_on_cut, rotate_scope, run_sweep, run_sweep_job,
 };
 use crate::seams::{
-    BoxedTask, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId, OwnerScopedFloorStore,
-    QueueGeneration, QueueGenerationStore, RecordTransport, Scheduler, SeamError, SeamResult,
-    SeamSet, SeamTypes, SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, ContactLabel, CredentialStore, FloorStore, Http, LiveSeam, Mailbox, OpId,
+    OwnerScopedFloorStore, QueueGeneration, QueueGenerationStore, RecordTransport, Scheduler,
+    SeamError, SeamResult, SeamSet, SeamTypes, SharerScopedFloorStore, SnapshotCache, StagingStore,
+    UnixMillis,
 };
 use crate::session::SessionIdentity;
 use crate::settings::{
@@ -366,8 +368,8 @@ pub struct SnapshotChild {
     /// caller hands back on [`WriteTarget::Version::expected_version`].
     pub content_cid: Option<Vec<u8>>,
     /// Invite claims on this owner's inbox that wait for
-    /// [`Command::ConvertInviteClaims`] at this scope root. Zero on a device
-    /// that holds no record of the link they claim.
+    /// [`Command::ConvertInviteClaims`] at this scope root, counted by the
+    /// scope pointer each claim names.
     pub pending_invite_claims: u32,
 }
 
@@ -556,7 +558,7 @@ pub struct ScopeSharing {
     /// The refusal an invite-link mint at this scope would report, or `None`.
     pub invite_link_refusal: Option<&'static str>,
     /// This owner's invite links there, read off the scope's own record.
-    pub invite_links: Option<SharingInviteLinks>,
+    pub invite_links: SharingInviteLinks,
 }
 
 /// A key-free read of the sharing state a host renders for one scope: this
@@ -599,7 +601,8 @@ pub struct ReceivedShareRow {
     /// The sharer's identity key as the accepted bookmark holds it, which the
     /// accept flow bound to a verified contact before writing.
     pub sharer_identity_public_key: Vec<u8>,
-    /// The display label the share was accepted under.
+    /// The display label the share was accepted under. Empty for a link-held
+    /// share whose names did not verify, which the host labels itself.
     pub display_name: String,
     /// The owner's committed permission as of the last resolve, or the
     /// accept-time copy before the first one.
@@ -1188,15 +1191,15 @@ pub enum Command {
     /// carries the ephemeral secret. `node` is a folder inside the vault root's
     /// scope: the link mints that folder's scope, so its bearer starts at the
     /// scope's first epoch and reaches nothing the owner sealed before the link
-    /// existed. The link entry is committed at `read` whatever `permission`
-    /// is, and the mint runs no write-scope cut (ADR 0024 D4).
+    /// existed.
     CreateInviteLink {
         /// Node to invite to.
         node: NodeId,
         /// The permission conversion grants a claimant.
         permission: Permission,
-        /// The link's owner-signed deadline, or `None` for a link that never
-        /// expires. A claim past it converts nothing.
+        /// The link's owner-signed deadline, or `None` for
+        /// [`DEFAULT_LINK_LIFETIME`] from now. A claim past it converts
+        /// nothing.
         expires_at: Option<UnixMillis>,
         /// The owner's name, which the fragment carries under the owner
         /// signature (ADR 0027 D5). May be empty.
@@ -3354,8 +3357,8 @@ fn parsed_commitment_sig(compact: &[u8; 64]) -> Result<EcdsaSignature, EngineErr
     })
 }
 
-/// This session's authority over a scope's grant set — the pair every
-/// invite-store path acts under ([`OwnerAuthority`]).
+/// This session's authority over a scope's grant set — the pair every link
+/// path acts under ([`OwnerAuthority`]).
 fn owner_authority(session: &SessionIdentity) -> OwnerAuthority<'_> {
     OwnerAuthority {
         identity_signer: session.identity(),
@@ -3412,8 +3415,8 @@ enum UnindexedScope {
     Derive,
 }
 
-/// The name a claim conversion reports once the links this owner records hold
-/// the whole link-sourced share of the contact book
+/// The name a claim conversion reports once this owner's links hold the whole
+/// link-sourced share of the contact book
 /// ([`MAX_LINK_CONTACTS`](crate::grants::MAX_LINK_CONTACTS)).
 ///
 /// The sharing read reports it as the scope's `invite_link_refusal` while the
@@ -3481,7 +3484,7 @@ enum ScopeShare<'a> {
     /// A bearer link: the recipient is a throwaway keypair the engine draws,
     /// and its secret is the whole capability.
     InviteLink {
-        /// The link's deadline, or `None` for a link that never expires.
+        /// The link's deadline, or `None` for [`DEFAULT_LINK_LIFETIME`] from the mint.
         expires_at: Option<UnixMillis>,
         /// The owner's name the fragment carries.
         owner_name: &'a str,
@@ -8438,8 +8441,8 @@ where {
     /// A `Permission::Write` contact share adds the write-scope cut between the
     /// mint and the delivery: the mint seals a freshly drawn `writeScopeSeed`,
     /// and the name wave then moves the subtree onto the names that seed's
-    /// successor derives ([`Self::cut_granted_write_scope`]). A link mints at
-    /// `read` whatever it converts to, so it runs neither (ADR 0024 D4).
+    /// successor derives ([`Self::cut_granted_write_scope`]). A link runs
+    /// neither ([`mint_invite_grant`](crate::grants::mint_invite_grant)).
     ///
     /// Owner-only by construction: the parent's re-seal is signed under the
     /// owner's writer pseudonym and its commitment under the owner identity, so
@@ -8477,7 +8480,6 @@ where {
         let parent = &parent_scope.scope;
 
         let standing = record_share_standing(node, current.v, &current.direct_child_scope_index);
-        // The permission the mint commits and seals at.
         let mint_permission = match share {
             ScopeShare::Contact(_) => permission,
             ScopeShare::InviteLink { .. } => Permission::Read,
@@ -8631,7 +8633,12 @@ where {
                         grantee: &grantee,
                         parent: &parent_plan,
                         terms: LinkTerms {
-                            deadline: *expires_at,
+                            deadline: expires_at.unwrap_or_else(|| {
+                                self.seams
+                                    .scheduler
+                                    .now()
+                                    .saturating_add(DEFAULT_LINK_LIFETIME)
+                            }),
                             conversion_permission: permission.into(),
                             admission_cap: DEFAULT_ADMISSION_CAP,
                         },
@@ -8998,16 +9005,16 @@ where {
         .map(|_| ())
     }
 
-    /// Claim an invite link from the fragment its URL carries: post a sealed
-    /// claim to the owner the fragment names, record that owner as a contact,
-    /// and bookmark the folder with the link keys (blueprint/engine.md "Grants
-    /// and ledger: Invites", ADR 0024 D1).
+    /// Claim an invite link from the fragment its URL carries: read the link
+    /// through the scope pointer, post a sealed claim to the owner the fragment
+    /// names, record that owner as a contact, and bookmark the folder with the
+    /// link keys (blueprint/engine.md "Grants and ledger: Invites", ADR 0024
+    /// D1, D5).
     ///
     /// The engine does the parsing so the host never has to ([`InviteFragment`]).
     ///
-    /// The command then brings the next pass forward, which reads the folder
-    /// through the link. That read is best effort: the claim stands once the
-    /// bookmark is durable, and a read that fails here retries on the tick.
+    /// A read that does not answer never fails the claim: the command files a
+    /// pass, and the tick reads the folder through the link.
     ///
     /// Residual: nothing anchors the fragment's owner code (ADR 0024 E2), so it
     /// names whoever minted the *link*. Recording that bundle is what anchors
@@ -9027,6 +9034,46 @@ where {
             return Err(EngineError::UnsupportedTarget {
                 check: "invite-names-the-own-vault-root",
             });
+        }
+
+        // Ahead of every write: a refused re-point object, an expired link and
+        // a revoked one post no claim and record nothing.
+        let (mut share, hold) = pending_link_bookmark(&fragment, &owner);
+        let floors = SharerScopedFloorStore::granted_by(
+            &self.seams.floor_store,
+            ContactLabel::of(session.contact_label_seed(), &share.sharer_identity_pk),
+        );
+        let seams = JoinSeams {
+            transport: &self.record_transport,
+            gateway: &self.gateway,
+            http: &self.seams.http,
+            floors: &floors,
+        };
+        match join_read(
+            &seams,
+            &share,
+            &hold,
+            &owner,
+            &invitee,
+            self.seams.scheduler.now(),
+        )
+        .await
+        {
+            Ok(JoinRead::Live { root }) => {
+                share.scope_root_name = root.as_str().as_bytes().to_vec()
+            }
+            Ok(JoinRead::Unavailable) => {}
+            Ok(JoinRead::Expired) => {
+                return Err(EngineError::from_invite(InviteError::LinkExpired));
+            }
+            Ok(JoinRead::Revoked) => {
+                return Err(EngineError::from_invite(InviteError::LinkNotCommitted));
+            }
+            Err(_) => {
+                return Err(EngineError::TrustViolation {
+                    message: "the scope pointer's re-point object was refused".to_owned(),
+                });
+            }
         }
 
         let mut entropy = SharedEntropy(&self.entropy);
@@ -9064,12 +9111,15 @@ where {
             .load()
             .await
             .map_err(EngineError::from_received_share_store)?;
-        let (share, hold) = pending_link_bookmark(&fragment, &owner);
         let key = share.key();
-        // A personal bookmark already reads the folder; the link adds nothing.
-        let personal = received.find(&key).is_some() && received.link_hold(&key).is_none();
-        if !personal {
-            if received.find(&key).is_none() {
+        let bookmarked = received.find(&key).is_some();
+        let held = received.link_hold(&key);
+        // A personal bookmark already reads the folder, and a second join of
+        // one link keeps the hold and the deadline it verified.
+        let unchanged = (bookmarked && held.is_none())
+            || held.is_some_and(|held| held.invite_secret == hold.invite_secret);
+        if !unchanged {
+            if !bookmarked {
                 received.reconcile(share);
             }
             received.hold_link(key, hold);
@@ -9078,9 +9128,8 @@ where {
                 .await
                 .map_err(EngineError::from_received_share_store)?;
         }
-        if let Ok(Some(pass)) = self.file_forced_pass() {
-            let _ = pass.landed().await;
-        }
+        // The bookmark is durable, so the read waits for no pass.
+        let _ = self.file_forced_pass();
         Ok(())
     }
 
@@ -10515,14 +10564,20 @@ where {
         let verdicts = self.received_verdicts.borrow();
         Ok(received
             .iter()
-            .map(|share| ReceivedShareRow {
-                scope: NodeId(share.scope_id),
-                sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
-                display_name: grafted_root_name(&share.display_name, NodeId(share.scope_id))
-                    .to_string(),
-                permission: live_permission(&verdicts, share).into(),
-                resolution: verdicts.get(&share.key()).map(|v| v.class),
-                via_link: received.link_hold(&share.key()).is_some(),
+            .map(|share| {
+                let via_link = received.link_hold(&share.key()).is_some();
+                ReceivedShareRow {
+                    scope: NodeId(share.scope_id),
+                    sharer_identity_public_key: share.sharer_identity_pk.to_vec(),
+                    display_name: if via_link && share.display_name.is_empty() {
+                        String::new()
+                    } else {
+                        grafted_root_name(&share.display_name, NodeId(share.scope_id)).to_string()
+                    },
+                    permission: live_permission(&verdicts, share).into(),
+                    resolution: verdicts.get(&share.key()).map(|v| v.class),
+                    via_link,
+                }
             })
             .collect())
     }
@@ -10667,7 +10722,7 @@ where {
                 grants: Vec::new(),
                 grant_refusal,
                 invite_link_refusal,
-                invite_links: Some(SharingInviteLinks::default()),
+                invite_links: SharingInviteLinks::default(),
             });
         };
         let current = self
@@ -10686,12 +10741,7 @@ where {
         // A set this owner's identity did not sign reads as unreachable rather
         // than as a scope with no links.
         let links = committed_links(&owner_authority(session), &scope).ok()?;
-        // One link entry is the live link; two have no defined cut, so the read
-        // reports none — the same rule `locate_invite_link` revokes under.
-        let live = match links.as_slice() {
-            [link] => Some(link),
-            _ => None,
-        };
+        let live = sole_link(&links);
         // Reported at the scope whose link took the headroom, which is what
         // names the link: one scope carries at most one live link, and revoking
         // it is the remedy. It outranks the standing ground because that one is
@@ -10702,7 +10752,7 @@ where {
             _ => invite_link_refusal,
         };
         let now = self.seams.scheduler.now();
-        let invite_links = Some(SharingInviteLinks {
+        let invite_links = SharingInviteLinks {
             live: live.is_some(),
             expires_at: live.and_then(|link| link.deadline),
             expired: live.is_some_and(|link| link.is_expired(now)),
@@ -10711,7 +10761,7 @@ where {
                 .get(&scope_root)
                 .copied()
                 .unwrap_or(0),
-        });
+        };
 
         let projected = project_grant_ledger(
             &GrantLabels {
@@ -10722,7 +10772,7 @@ where {
                 contacts,
             },
             // A link renders as a link, never as a grant row keyed by the
-            // ephemeral identity only the fragment holder answers for.
+            // ephemeral identity only the link holder answers for.
             current
                 .grant_ledger
                 .iter()

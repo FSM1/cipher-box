@@ -11,10 +11,8 @@
 //!
 //! The commitment entry is what marks the row as a link (ADR 0023 D2): the
 //! kind, the deadline, the conversion permission and the admission cap, all
-//! under the owner's commitment signature. The entry is committed at `read`
-//! whatever it converts to (ADR 0024 D4), so the blob of a write link carries
-//! read material only. The owner device keeps no record of a link: conversion
-//! and revoke read it off the owner-signed record.
+//! under the owner's commitment signature. The owner device keeps no record of
+//! a link: conversion and revoke read it off the owner-signed record.
 //!
 //! The invite secret is the whole capability. It rides the link's URL fragment
 //! ([`InviteFragment`]) with the scope pointer and its read key, so a holder
@@ -27,8 +25,8 @@ use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::payload::{InviteNames, sign_invite_names, verify_invite_names};
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantSetEntryKind, GrantLedgerEntry, GrantSetCommitment, MAX_GRANT_BLOBS, Permission,
-    verify_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntryKind, MAX_GRANT_BLOBS,
+    Permission, verify_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
@@ -39,7 +37,7 @@ use cipherbox_core::{ipns::IpnsName, kdf};
 use core::fmt;
 use core::num::NonZeroU64;
 use std::collections::BTreeSet;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_seed};
 use crate::grants::accept::{fixed, req};
@@ -169,7 +167,6 @@ impl InviteError {
         match self {
             Self::InvalidSecret
             | Self::UnusableInviteeKey
-            | Self::MalformedFragment
             | Self::ScopeMismatch
             | Self::ScopeUnbound
             | Self::NotOwner
@@ -182,6 +179,7 @@ impl InviteError {
             Self::Entropy(error) => error.class(),
             Self::InvalidExpiry => CodecError::from(Malformed::InvalidDeadline).class(),
             Self::MalformedClaim(error) | Self::ClaimantContact(error) => error.class(),
+            Self::MalformedFragment => "malformed",
             Self::FragmentTooLarge | Self::NameTooLong | Self::GrantSetFull => "over-cap",
             Self::Authority(violation) => violation.class(),
         }
@@ -277,22 +275,29 @@ impl EphemeralInvitee {
 /// The admission cap a link carries when the owner sets none (ADR 0023 D9).
 pub const DEFAULT_ADMISSION_CAP: u64 = 25;
 
+/// The lifetime of a link whose owner sets no deadline. A link entry must
+/// carry one.
+pub const DEFAULT_LINK_LIFETIME: core::time::Duration =
+    core::time::Duration::from_secs(7 * 24 * 60 * 60);
+
 /// The owner-signed terms of one link: the fields its commitment entry carries
 /// beside the kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkTerms {
     /// The time by which an owner device must convert a claim through this
-    /// link, or `None` for a link with no deadline.
-    pub deadline: Option<UnixMillis>,
-    /// The permission conversion grants a claimant (ADR 0024 D4). The link
-    /// entry itself is committed at `read`.
+    /// link.
+    pub deadline: UnixMillis,
+    /// The permission conversion grants a claimant.
     pub conversion_permission: Permission,
     /// How many people this link may admit.
     pub admission_cap: u64,
 }
 
 /// Mint a link row over the scope root at `scope_id`: a `read` row to
-/// `invitee` whose commitment entry carries the link kind and `terms`.
+/// `invitee` whose commitment entry carries the link kind and `terms`. The
+/// entry is committed at `read` whatever it converts to, so the blob of a
+/// write link carries read material only and the mint runs no write-scope cut
+/// (ADR 0024 D4).
 ///
 /// Owner-only by construction: it takes the owner's encryption subkey secret for
 /// the pairwise ECDH, and only the owner's identity signature over the resulting
@@ -309,10 +314,7 @@ pub fn mint_invite_grant(
     write_scope_seed: &[u8; SECRET_LEN],
     terms: &LinkTerms,
 ) -> Result<GrantRow, InviteError> {
-    let deadline = terms
-        .deadline
-        .map(|at| NonZeroU64::new(at.0).ok_or(InviteError::InvalidExpiry))
-        .transpose()?;
+    let deadline = NonZeroU64::new(terms.deadline.0).ok_or(InviteError::InvalidExpiry)?;
     let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
     let mut row = mint_grant_row(
         owner_identity_signer,
@@ -327,7 +329,7 @@ pub fn mint_invite_grant(
     .ok_or(InviteError::UnusableInviteeKey)?;
     let entry = &mut row.commitment_entry;
     entry.kind = GrantSetEntryKind::Link;
-    entry.deadline = deadline;
+    entry.deadline = Some(deadline);
     entry.conversion_permission = Some(terms.conversion_permission);
     entry.admission_cap = Some(terms.admission_cap);
     Ok(row)
@@ -504,31 +506,24 @@ impl InviteFragment {
         let scope_id = fixed::<16>(field("scopeId")?, "scopeId").map_err(malformed_fragment)?;
         let names_sig =
             fixed::<ECDSA_SIG_LEN>(field("namesSig")?, "namesSig").map_err(malformed_fragment)?;
-        // `fixed` hands back plain arrays; this frame is their terminal owner.
-        let mut secret =
-            fixed::<SECRET_LEN>(field("inviteSecret")?, "inviteSecret").map_err(malformed_fragment);
-        let mut read_key = fixed::<SECRET_LEN>(field("pointerReadKey")?, "pointerReadKey")
-            .map_err(malformed_fragment);
-        let fragment = match (&secret, &read_key) {
-            (Ok(secret), Ok(read_key)) => Ok(Self {
-                invite_secret: SecretBytes::new(*secret),
-                owner_contact_code,
-                scope_id,
-                scope_pointer_name,
-                pointer_read_key: SecretBytes::new(*read_key),
-                owner_name,
-                folder_name,
-                names_sig,
-            }),
-            _ => Err(InviteError::MalformedFragment),
-        };
-        if let Ok(bytes) = secret.as_mut() {
-            bytes.zeroize();
-        }
-        if let Ok(bytes) = read_key.as_mut() {
-            bytes.zeroize();
-        }
-        fragment
+        let secret = Zeroizing::new(
+            fixed::<SECRET_LEN>(field("inviteSecret")?, "inviteSecret")
+                .map_err(malformed_fragment)?,
+        );
+        let read_key = Zeroizing::new(
+            fixed::<SECRET_LEN>(field("pointerReadKey")?, "pointerReadKey")
+                .map_err(malformed_fragment)?,
+        );
+        Ok(Self {
+            invite_secret: SecretBytes::new(*secret),
+            owner_contact_code,
+            scope_id,
+            scope_pointer_name,
+            pointer_read_key: SecretBytes::new(*read_key),
+            owner_name,
+            folder_name,
+            names_sig,
+        })
     }
 }
 
@@ -607,7 +602,7 @@ impl InviteClaim {
 /// Post a claim to the owner's mailbox, sealed to the owner's encryption subkey
 /// and signed — as the mailbox sender — with the link's ephemeral identity key.
 /// That signature is what [`convert_invite_claim`] binds to the owner-attested
-/// link row, so only a fragment holder can claim.
+/// link row, so only a link holder can claim.
 ///
 /// `owner` is the contact bundle the invite URL carries; `ephemeral_scalar` is
 /// fresh-per-call HPKE entropy from the injected seam.
@@ -715,7 +710,7 @@ impl OwnerAuthority<'_> {
 pub struct CommittedLink {
     /// The tag the current commitment carries for the link — what a cut names.
     pub tag: [u8; 32],
-    /// The ephemeral identity a fragment holder signs its claim with, from the
+    /// The ephemeral identity a link holder signs its claim with, from the
     /// owner-attested ledger row.
     pub ephemeral_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     /// The ephemeral encryption subkey the link's blob is sealed to.
@@ -727,9 +722,9 @@ pub struct CommittedLink {
 }
 
 impl CommittedLink {
-    /// Whether the deadline is past at `now`: not later than it.
+    /// Whether `now` has reached the deadline.
     pub fn is_expired(&self, now: UnixMillis) -> bool {
-        self.deadline.is_some_and(|deadline| now.0 >= deadline.0)
+        now.reached(self.deadline)
     }
 }
 
@@ -764,16 +759,23 @@ pub fn committed_links(
         .collect())
 }
 
-/// The one live link on `scope` — the link a revoke cuts and the sharing read
-/// shows. Ambiguity is refused rather than resolved to the first match.
+/// The one link among `links` — the link a revoke cuts and the sharing read
+/// shows. Ambiguity gives `None` rather than the first match.
+pub fn sole_link(links: &[CommittedLink]) -> Option<&CommittedLink> {
+    match links {
+        [link] => Some(link),
+        _ => None,
+    }
+}
+
+/// The one live link on `scope` ([`sole_link`]).
 pub fn locate_invite_link(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
 ) -> Result<CommittedLink, InviteError> {
-    match committed_links(owner, scope)?.as_slice() {
-        [link] => Ok(*link),
-        _ => Err(InviteError::LinkNotCommitted),
-    }
+    sole_link(&committed_links(owner, scope)?)
+        .copied()
+        .ok_or(InviteError::LinkNotCommitted)
 }
 
 /// What converting a claim did to the owner-signed set.
@@ -821,8 +823,7 @@ pub struct ConvertedClaim {
 /// scope `scope` binds, which the claim must name. `now` is the injected
 /// [`Scheduler::now`](crate::seams::Scheduler::now) instant.
 ///
-/// The grant is minted at `read`. A write grant needs the write material and a
-/// write-scope cut that this function does not run.
+/// The grant is minted at `read`.
 ///
 /// The caller signs and publishes the returned set, and acks the mailbox item
 /// only once that is durable.
@@ -995,7 +996,7 @@ mod tests {
         IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key())
     }
 
-    fn terms(deadline: Option<UnixMillis>, conversion_permission: Permission) -> LinkTerms {
+    fn terms(deadline: UnixMillis, conversion_permission: Permission) -> LinkTerms {
         LinkTerms {
             deadline,
             conversion_permission,
@@ -1003,7 +1004,7 @@ mod tests {
         }
     }
 
-    fn link_row(invitee: &EphemeralInvitee, deadline: Option<UnixMillis>) -> GrantRow {
+    fn link_row(invitee: &EphemeralInvitee) -> GrantRow {
         mint_invite_grant(
             &owner_identity(),
             &owner_enc(),
@@ -1011,7 +1012,7 @@ mod tests {
             invitee,
             &SCOPE,
             &WRITE_SCOPE_SEED,
-            &terms(deadline, Permission::Write),
+            &terms(DEADLINE, Permission::Write),
         )
         .expect("mints")
     }
@@ -1208,7 +1209,7 @@ mod tests {
     /// under the commitment signature, and is committed at `read`.
     #[test]
     fn a_minted_link_entry_is_a_read_link_entry_carrying_its_terms() {
-        let row = link_row(&invitee(), Some(DEADLINE));
+        let row = link_row(&invitee());
         let entry = &row.commitment_entry;
         assert_eq!(entry.kind, GrantSetEntryKind::Link);
         assert_eq!(entry.permission, Permission::Read);
@@ -1216,7 +1217,6 @@ mod tests {
         assert_eq!(entry.deadline.map(NonZeroU64::get), Some(DEADLINE.0));
         assert_eq!(entry.conversion_permission, Some(Permission::Write));
         assert_eq!(entry.admission_cap, Some(4));
-        assert!(entry.validate().is_ok());
     }
 
     #[test]
@@ -1229,7 +1229,7 @@ mod tests {
                 &invitee(),
                 &SCOPE,
                 &WRITE_SCOPE_SEED,
-                &terms(Some(UnixMillis(0)), Permission::Read),
+                &terms(UnixMillis(0), Permission::Read),
             )
             .unwrap_err(),
             InviteError::InvalidExpiry,
@@ -1241,7 +1241,7 @@ mod tests {
     #[test]
     fn the_blob_of_a_write_link_opens_no_write_seed() {
         let holder = invitee();
-        let row = link_row(&holder, None);
+        let row = link_row(&holder);
         let section = scope_root(&[row.clone()]);
         let blob = section
             .grant_blobs
@@ -1269,7 +1269,7 @@ mod tests {
     fn a_link_blob_is_byte_shaped_like_a_personal_grant_blob() {
         let (identity, enc) = claimant(0x77);
         let personal = personal_row(&identity, &enc);
-        let link = link_row(&invitee(), Some(DEADLINE));
+        let link = link_row(&invitee());
         let section = scope_root(&[personal.clone(), link.clone()]);
         let len = |tag: [u8; 32]| {
             section
@@ -1414,7 +1414,7 @@ mod tests {
     #[test]
     fn a_claim_converts_against_the_link_row_on_the_record() {
         let link = invitee();
-        let link_row = link_row(&link, Some(DEADLINE));
+        let link_row = link_row(&link);
         let scope = Scope::of(&[&link_row]);
         let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
         let (identity, enc) = claimant(0x40);
@@ -1429,7 +1429,10 @@ mod tests {
 
         assert_eq!(converted.outcome, ClaimOutcome::Granted);
         assert_eq!(converted.link_tag, link_row.tag);
-        assert_eq!(converted.row.commitment_entry.kind, GrantSetEntryKind::Personal);
+        assert_eq!(
+            converted.row.commitment_entry.kind,
+            GrantSetEntryKind::Personal
+        );
         assert_eq!(converted.row.commitment_entry.permission, Permission::Read);
         assert_eq!(
             converted.row.ledger_entry.recipient_identity_pk,
@@ -1451,7 +1454,7 @@ mod tests {
     #[test]
     fn a_claim_from_a_committed_grantee_changes_nothing() {
         let link = invitee();
-        let link_row = link_row(&link, None);
+        let link_row = link_row(&link);
         let (identity, enc) = claimant(0x40);
         let scope = Scope::of(&[&link_row, &personal_row(&identity, &enc)]);
         let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
@@ -1471,7 +1474,7 @@ mod tests {
     #[test]
     fn a_claim_past_the_link_deadline_is_refused() {
         let link = invitee();
-        let link_row = link_row(&link, Some(DEADLINE));
+        let link_row = link_row(&link);
         let scope = Scope::of(&[&link_row]);
         let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
         let (identity, enc) = claimant(0x40);
@@ -1500,7 +1503,7 @@ mod tests {
         );
 
         let link = invitee();
-        let mut forged = link_row(&link, None);
+        let mut forged = link_row(&link);
         forged.ledger_entry.owner_sig = [0x01; ECDSA_SIG_LEN];
         let scope = Scope::of(&[&forged]);
         let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
@@ -1514,7 +1517,7 @@ mod tests {
     #[test]
     fn a_claim_naming_another_scope_pointer_is_refused() {
         let link = invitee();
-        let link_row = link_row(&link, None);
+        let link_row = link_row(&link);
         let scope = Scope::of(&[&link_row]);
         let sender = EcdsaSigner::from_scalar(link.secret().as_bytes()).expect("valid");
         let (identity, enc) = claimant(0x40);
@@ -1542,7 +1545,7 @@ mod tests {
     #[test]
     fn a_non_owner_can_neither_convert_nor_locate() {
         let link = invitee();
-        let link_row = link_row(&link, None);
+        let link_row = link_row(&link);
         let scope = Scope::of(&[&link_row]);
         let (stranger, stranger_enc) = claimant(0x60);
         assert_eq!(
@@ -1559,11 +1562,8 @@ mod tests {
     /// Two link entries have no defined cut, so locate names neither.
     #[test]
     fn two_links_locate_neither() {
-        let first = link_row(&invitee(), None);
-        let second = link_row(
-            &EphemeralInvitee::from_secret(&[0x4f; 32]).expect("valid"),
-            None,
-        );
+        let first = link_row(&invitee());
+        let second = link_row(&EphemeralInvitee::from_secret(&[0x4f; 32]).expect("valid"));
         let scope = Scope::of(&[&first, &second]);
         let (identity, enc) = (owner_identity(), owner_enc());
         assert_eq!(

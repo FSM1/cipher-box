@@ -15,10 +15,12 @@ mod reject_corpus;
 use std::collections::BTreeMap;
 
 use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
+use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_engine::RelayedAnswerRefused;
 use cipherbox_engine::content::{ByoKind, DagError, ProviderError};
 use cipherbox_engine::entropy::EntropyError;
 use cipherbox_engine::gate::{GateRejection, GateStage, RejectionReason};
+use cipherbox_engine::grants::InviteFragment;
 use cipherbox_engine::grants::accept::TooLong;
 use cipherbox_engine::grants::{AbuseEvent, AuthorityViolation, CreateGrantError, InviteError};
 use cipherbox_engine::net::author::AuthorError;
@@ -29,7 +31,9 @@ use cipherbox_engine::rotation::{
 };
 use cipherbox_engine::seams::SeamError;
 use cipherbox_engine::settings::{PlacementRefusal, SettingsRefusal};
-use cipherbox_engine::testkit::checks::reject_families;
+use cipherbox_engine::testkit::checks::{
+    InviteFragmentVector, invite_fragment_accept, invite_fragment_owner, reject_families,
+};
 use reject_corpus::Corpus;
 
 const MANIFEST: &str = include_str!("../kat/checks/manifest.json");
@@ -443,4 +447,71 @@ fn the_create_check_surface_matches_the_variants_in_order() {
     let (owned, delegated) = split(&named, CreateGrantError::CHECKS);
     assert_eq!(owned, CreateGrantError::CHECKS);
     assert_eq!(delegated, [EntropyError::CHECKS[0]]);
+}
+
+// --- invite fragment bytes ---------------------------------------------------
+
+const INVITE_FRAGMENT_ACCEPT: &str =
+    include_str!("../kat/checks/vectors/invite_fragment_accept.json");
+
+/// The fragment bytes an invite link carries are pinned: each committed
+/// fragment decodes to the fields beside it, re-encodes to the same text, and
+/// its names verify under the owner exactly when the vector says so.
+#[test]
+fn every_pinned_invite_fragment_decodes_to_its_fields_and_re_encodes() {
+    let vectors: Vec<InviteFragmentVector> =
+        serde_json::from_str(INVITE_FRAGMENT_ACCEPT).expect("the fragment vectors parse");
+    assert!(
+        vectors == invite_fragment_accept(),
+        "the live encoder drifted from the pinned fragment bytes"
+    );
+    let owner = invite_fragment_owner().verifying_key();
+    for v in &vectors {
+        let fragment = InviteFragment::decode(&v.fragment)
+            .unwrap_or_else(|e| panic!("{}: the pinned fragment decodes ({e})", v.name));
+        let fields = [
+            (
+                "inviteSecret",
+                hex_lower(fragment.invite_secret.as_bytes()),
+                &v.invite_secret,
+            ),
+            (
+                "ownerContactCode",
+                hex_lower(&fragment.owner_contact_code),
+                &v.owner_contact_code,
+            ),
+            ("scopeId", hex_lower(&fragment.scope_id), &v.scope_id),
+            (
+                "scopePointerName",
+                fragment.scope_pointer_name.as_str().to_owned(),
+                &v.scope_pointer_name,
+            ),
+            (
+                "pointerReadKey",
+                hex_lower(fragment.pointer_read_key.as_bytes()),
+                &v.pointer_read_key,
+            ),
+            ("ownerName", fragment.owner_name.clone(), &v.owner_name),
+            ("folderName", fragment.folder_name.clone(), &v.folder_name),
+            ("namesSig", hex_lower(&fragment.names_sig), &v.names_sig),
+        ];
+        for (field, decoded, pinned) in fields {
+            assert!(decoded == *pinned, "{}: {field} drifted", v.name);
+        }
+        assert!(
+            fragment
+                .encode()
+                .expect("a pinned fragment re-encodes")
+                .as_str()
+                == v.fragment,
+            "{}: the fragment does not re-encode to its own bytes",
+            v.name
+        );
+        assert_eq!(
+            fragment.verified_names(&owner).is_some(),
+            v.names_verify,
+            "{}: names verdict",
+            v.name
+        );
+    }
 }

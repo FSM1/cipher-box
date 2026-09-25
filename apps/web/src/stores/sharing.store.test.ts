@@ -43,7 +43,7 @@ function view(
   scopeState: Partial<{
     grantRefusal: string | null;
     inviteLinkRefusal: string | null;
-    inviteLinks: SharingInviteLinksDescriptor | null;
+    inviteLinks: SharingInviteLinksDescriptor;
   }> = {}
 ): SharingDescriptor {
   return {
@@ -198,16 +198,6 @@ describe('invite links', () => {
     sharingStore.reported(linked());
 
     expect(sharingFor(sharingStore.getState(), PHOTOS_KEY)).toBeNull();
-  });
-
-  it('takes fresh grants from a read whose link records the engine could not open', () => {
-    sharingStore.reported(linked());
-    sharingStore.reported(view(DOCS, [1], [], { inviteLinks: null }));
-
-    const docs = sharingFor(sharingStore.getState(), DOCS_KEY);
-    expect(docs?.grants).toEqual([]);
-    // The standing is unknown now, which a render must not draw as "no link".
-    expect(docs?.inviteLinks).toBeNull();
   });
 });
 

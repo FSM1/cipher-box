@@ -34,7 +34,7 @@ use cipherbox_engine::testkit::account::{
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, poll_tasks_until_parked,
+    SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, Command, CommandOutcome, CommittedSet, ContentProfile, DeadLetterReason, Engine,
@@ -227,24 +227,6 @@ fn tick(world: &FakeWorld, engine: &Engine<FakeSeamTypes>, tasks: &mut [BoxedTas
     poll_tasks_until_parked(tasks);
 }
 
-/// Drive one command to completion with the spawned loops running beside it —
-/// what a manual refresh needs, since it parks on the pass the tick loop runs.
-fn command_while_ticking(
-    engine: &mut Engine<FakeSeamTypes>,
-    command: Command,
-    tasks: &mut [BoxedTask],
-) -> Result<CommandOutcome, EngineError> {
-    let mut pending = Box::pin(engine.command(command));
-    let mut cx = Context::from_waker(Waker::noop());
-    for _ in 0..64 {
-        if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
-            return outcome;
-        }
-        poll_tasks_until_parked(tasks);
-    }
-    panic!("the command never settled against the running loops");
-}
-
 /// Create `name` under `parent` and drive it to the record plane.
 fn create_published_folder(
     world: &FakeWorld,
@@ -278,7 +260,7 @@ fn mounted_reader(
     let (mut engine, events, mut tasks) = boot(world, blocks, device, 7);
     block_on(engine.command(Command::SetFocus { node: Some(scope) }))
         .expect("focus moves to the granted folder");
-    let refreshed = command_while_ticking(&mut engine, Command::ManualRefresh, &mut tasks);
+    let refreshed = block_on_while_ticking(engine.command(Command::ManualRefresh), &mut tasks);
     assert!(
         refreshed.is_ok(),
         "the focus refresh reads the granted folder's own record: {refreshed:?}"
@@ -1455,7 +1437,7 @@ fn the_focus_refresh_lists_a_lagging_folder_after_a_cut() {
         node: Some(reports),
     }))
     .expect("focus moves to the lagging folder");
-    let refreshed = command_while_ticking(&mut engine_m, Command::ManualRefresh, &mut tasks_m);
+    let refreshed = block_on_while_ticking(engine_m.command(Command::ManualRefresh), &mut tasks_m);
     assert!(
         refreshed.is_ok(),
         "the refresh reads the lagging folder: {refreshed:?}"

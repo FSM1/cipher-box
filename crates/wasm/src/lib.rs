@@ -730,8 +730,7 @@ impl SnapshotChild {
         self.inner.content_cid.clone()
     }
 
-    /// Invite claims that wait for a conversion at this scope root, as this
-    /// device's link records count them.
+    /// Invite claims that wait for a conversion at this scope root.
     #[wasm_bindgen(getter, js_name = pendingInviteClaims)]
     pub fn pending_invite_claims(&self) -> u32 {
         self.inner.pending_invite_claims
@@ -1110,14 +1109,10 @@ impl ScopeSharing {
         self.inner.invite_link_refusal.map(str::to_owned)
     }
 
-    /// This owner's invite links at the scope, or `undefined` when the read could
-    /// not open those records.
+    /// This owner's invite links at the scope, read off its own record.
     #[wasm_bindgen(getter, js_name = inviteLinks)]
-    pub fn invite_links(&self) -> Option<SharingInviteLinks> {
-        self.inner
-            .invite_links
-            .clone()
-            .map(SharingInviteLinks::from_facade)
+    pub fn invite_links(&self) -> SharingInviteLinks {
+        SharingInviteLinks::from_facade(self.inner.invite_links.clone())
     }
 }
 
@@ -1223,9 +1218,7 @@ impl ReceivedShareRow {
         self.inner.resolution.map(|class| class.name().to_owned())
     }
 
-    /// Whether the share still reads through the link it was joined by. A
-    /// `revocation-signal` on such a row is the link's revoke, not the
-    /// person's removal (ADR 0025 D5).
+    /// Whether the share still reads through the link it was joined by.
     #[wasm_bindgen(getter, js_name = viaLink)]
     pub fn via_link(&self) -> bool {
         self.inner.via_link
@@ -1949,7 +1942,7 @@ impl Command {
     }
 
     /// Mint an invite link for a node. `expires_at` is the link's deadline in
-    /// Unix milliseconds, or `undefined` for a link that never expires.
+    /// Unix milliseconds, or `undefined` for the engine's default lifetime.
     /// `owner_name` is the name the fragment shows the holder, signed by the
     /// owner.
     #[wasm_bindgen(js_name = createInviteLink)]

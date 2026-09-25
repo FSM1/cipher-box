@@ -357,8 +357,17 @@ struct OwnerLocalSection {
     hpke_mode: u8,
     hpke_info_prefix: String,
     kinds: Vec<OwnerLocalKindSpec>,
+    reserved: Vec<ReservedKindSpec>,
     accept: FileCount,
     reject: RejectSection,
+}
+
+/// A retired store kind: its discriminator and name stay reserved.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReservedKindSpec {
+    discriminator: u8,
+    name: String,
 }
 
 /// One frozen store kind: its name, its AAD discriminator, and the full HPKE
@@ -369,10 +378,6 @@ struct OwnerLocalKindSpec {
     name: String,
     discriminator: u8,
     hpke_info: String,
-    /// A retired kind: its discriminator stays reserved, and a seal or an
-    /// open under it is refused.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    retired: bool,
 }
 
 /// An owner-local accept vector: the fixed owner enc keypair, the store kind and
@@ -2720,7 +2725,13 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                     discriminator: k.discriminator(),
                     hpke_info: String::from_utf8(k.hpke_info())
                         .expect("an owner-local info string is ASCII"),
-                    retired: k.is_retired(),
+                })
+                .collect(),
+            reserved: OwnerLocalKind::RESERVED
+                .iter()
+                .map(|(discriminator, name)| ReservedKindSpec {
+                    discriminator: *discriminator,
+                    name: (*name).to_string(),
                 })
                 .collect(),
             accept: FileCount {
@@ -9176,13 +9187,13 @@ fn build_owner_local_accept() -> Vec<OwnerLocalAcceptVector> {
     )];
     // Every kind carries a populated body, so the manifest pins one blob per
     // frozen info string rather than one for the family.
-    for (i, kind) in OwnerLocalKind::ALL.iter().enumerate() {
-        if kind.is_retired() {
-            continue;
-        }
+    // Seeded by discriminator, so a retired kind leaves every other blob as it
+    // was.
+    for kind in OwnerLocalKind::ALL {
+        let i = usize::from(kind.discriminator()) - 1;
         vectors.push(owner_local_accept_vector(
             &format!("{}-body", kind.name()),
-            *kind,
+            kind,
             scalar,
             &owner,
             std::array::from_fn(|j| (0xa1 + i * 8 + j) as u8),
@@ -9360,28 +9371,13 @@ fn build_owner_local_reject() -> Vec<OwnerLocalRejectVector> {
             "trust",
         ),
     ];
-    // A retired kind stays reserved: an open under it is refused before the
-    // AEAD, whatever the blob.
-    for retired in OwnerLocalKind::ALL.into_iter().filter(|k| k.is_retired()) {
-        vectors.push(owner_local_reject_vector(
-            &format!("retired-kind-{}", retired.name()),
-            retired,
-            scalar,
-            &blob,
-            "retired-owner-local-kind",
-            "malformed",
-        ));
-    }
 
     // The cross-kind negatives, one per ordered pair. A distinct ephemeral per
     // probe: sharing one across kinds is safe only while the kind is in the
     // `info`, and a corpus must not model a pattern whose safety is the very
     // thing under test.
-    for (i, sealed_as) in OwnerLocalKind::ALL.iter().enumerate() {
-        let sealed_as = *sealed_as;
-        if sealed_as.is_retired() {
-            continue;
-        }
+    for sealed_as in OwnerLocalKind::ALL {
+        let i = usize::from(sealed_as.discriminator()) - 1;
         let blob = seal_owner_local(
             &owner,
             sealed_as,
@@ -9390,7 +9386,7 @@ fn build_owner_local_reject() -> Vec<OwnerLocalRejectVector> {
         )
         .unwrap();
         for opened_as in OwnerLocalKind::ALL {
-            if opened_as == sealed_as || opened_as.is_retired() {
+            if opened_as == sealed_as {
                 continue;
             }
             vectors.push(owner_local_reject_vector(

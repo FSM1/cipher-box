@@ -72,7 +72,7 @@ fn owner_contact_code() -> Vec<u8> {
 }
 
 /// The published set committing one link entry, and the ephemeral identity a
-/// fragment holder reconstructs. The set is the owner's only record of it.
+/// link holder reconstructs. The set is the owner's only record of it.
 struct Link {
     commitment: GrantSetCommitment,
     commitment_sig: cipherbox_core::suite::ecdsa::EcdsaSignature,
@@ -124,7 +124,7 @@ fn link(permission: Permission) -> Link {
         &SCOPE,
         &WRITE_SCOPE_SEED,
         &LinkTerms {
-            deadline: Some(DEADLINE),
+            deadline: DEADLINE,
             conversion_permission: permission,
             admission_cap: 5,
         },
@@ -307,7 +307,7 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
     }
 }
 
-/// A claim from `l`'s fragment holder, delivered over the real mailbox and
+/// A claim from `l`'s link holder, delivered over the real mailbox and
 /// handed back sender-verified: the item conversion consumes.
 fn delivered_claim(
     l: &Link,

@@ -7,7 +7,7 @@
 //! inbox — what another device would see — never on a command's return alone.
 
 use core::cell::RefCell;
-use core::task::{Context, Poll, Waker};
+use core::time::Duration;
 
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -29,7 +29,8 @@ use zeroize::Zeroizing;
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
     CLAIM_ID_LEN, Contact, DEFAULT_ADMISSION_CAP, EphemeralInvitee, GrantRow, InviteClaim,
-    InviteFragment, LinkTerms, ResolutionClass, import_contact, mint_grant_row, mint_invite_grant,
+    InviteFragment, LinkHold, LinkTerms, ReceivedShareStore, ResolutionClass,
+    StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
     post_invite_claim, recipient_blinded_tag,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
@@ -52,7 +53,7 @@ use cipherbox_engine::testkit::account::{
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    SeededEntropy, block_on, poll_tasks_until_parked,
+    SeededEntropy, block_on, block_on_while_ticking, poll_tasks_until_parked,
 };
 use cipherbox_engine::{
     ApiBaseUrl, BinIndexKeys, BinIndexLoad, Command, CommandOutcome, ContentProfile,
@@ -413,11 +414,11 @@ fn bystander_row_with_corrupt_sig() -> GrantRow {
 /// A link entry over the vault root's scope. The committed row is the owner's
 /// only record of the link.
 fn invite_link_at_root(secret_byte: u8) -> GrantRow {
-    expiring_invite_link_at_root(secret_byte, None)
+    expiring_invite_link_at_root(secret_byte, UnixMillis(u64::MAX))
 }
 
-/// [`invite_link_at_root`] carrying a deadline.
-fn expiring_invite_link_at_root(secret_byte: u8, deadline: Option<UnixMillis>) -> GrantRow {
+/// [`invite_link_at_root`] under the deadline `deadline`.
+fn expiring_invite_link_at_root(secret_byte: u8, deadline: UnixMillis) -> GrantRow {
     let invitee = EphemeralInvitee::from_secret(&[secret_byte; 32]).expect("a valid scalar");
     mint_invite_grant(
         &owner_identity(),
@@ -3975,7 +3976,7 @@ fn the_sharing_read_offers_a_mint_only_at_a_node_that_names_no_scope() {
     assert_eq!(plain.grant_refusal, None);
     assert_eq!(plain.invite_link_refusal, None);
     assert_eq!(plain.grants, Vec::new());
-    assert_eq!(plain.invite_links, Some(SharingInviteLinks::default()));
+    assert_eq!(plain.invite_links, SharingInviteLinks::default());
 
     let scope = block_on(engine.sharing(ROOT))
         .expect("a sharing read")
@@ -4082,14 +4083,14 @@ fn a_second_share_of_a_scope_is_refused_with_the_names_its_read_reports() {
 
 /// The link half of a share dialog: the deadline the owner-signed link entry
 /// carries. The link's row is not a grant, because its recipient is a throwaway
-/// identity only the fragment holder answers for, so it renders as the link it
+/// identity only the link holder answers for, so it renders as the link it
 /// is and nowhere else.
 #[test]
 fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     let deadline = UnixMillis(1_800_000_000_000);
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let link = expiring_invite_link_at_root(0x4e, Some(deadline));
+    let link = expiring_invite_link_at_root(0x4e, deadline);
     let grantee = recipient_row_at_root(CorePermission::Read);
     seed_vault(&world, &blocks, vec![link, grantee.clone()]);
     let alice = world.device(b"alice");
@@ -4101,12 +4102,12 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
         .expect("the scope root resolved");
     assert_eq!(
         view.invite_links,
-        Some(SharingInviteLinks {
+        SharingInviteLinks {
             live: true,
             expires_at: Some(deadline),
             expired: false,
             pending_claims: 0,
-        })
+        }
     );
 
     let named: Vec<Vec<u8>> = view
@@ -4130,7 +4131,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
         .expect("the scope root resolved");
     assert_eq!(
         revoked.invite_links,
-        Some(SharingInviteLinks::default()),
+        SharingInviteLinks::default(),
         "the cut landed, so the set commits no link"
     );
 }
@@ -4143,7 +4144,7 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
     let deadline = UnixMillis(60_000);
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    let link = expiring_invite_link_at_root(0x6a, Some(deadline));
+    let link = expiring_invite_link_at_root(0x6a, deadline);
     seed_vault(&world, &blocks, vec![link]);
     let alice = world.device(b"alice");
     let (engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
@@ -4154,12 +4155,12 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
         .expect("the scope root resolved");
     assert_eq!(
         before.invite_links,
-        Some(SharingInviteLinks {
+        SharingInviteLinks {
             live: true,
             expires_at: Some(deadline),
             expired: false,
             pending_claims: 0,
-        })
+        }
     );
 
     // The claim path refuses at the deadline, so the read reports it there too.
@@ -4170,12 +4171,12 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
         .expect("the scope root resolved");
     assert_eq!(
         after.invite_links,
-        Some(SharingInviteLinks {
+        SharingInviteLinks {
             live: true,
             expires_at: Some(deadline),
             expired: true,
             pending_claims: 0,
-        })
+        }
     );
 }
 
@@ -4556,8 +4557,8 @@ fn a_waiting_claim_shows_on_the_folder_row_until_the_owner_converts_it() {
         let links = block_on(fx.engine.sharing(fx.folder))
             .expect("a sharing read")
             .state
-            .and_then(|state| state.invite_links)
             .expect("the link standing reads")
+            .invite_links
             .pending_claims;
         (row, links)
     };
@@ -4996,24 +4997,6 @@ fn a_converted_claimant_stays_in_the_book_for_the_next_session() {
     );
 }
 
-/// Poll `command` together with the running loops, so a command that awaits a
-/// forced pass settles.
-fn command_while_ticking(
-    engine: &mut Engine<FakeSeamTypes>,
-    command: Command,
-    tasks: &mut [BoxedTask],
-) -> Result<CommandOutcome, EngineError> {
-    let mut pending = Box::pin(engine.command(command));
-    let mut cx = Context::from_waker(Waker::noop());
-    for _ in 0..64 {
-        if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
-            return outcome;
-        }
-        poll_tasks_until_parked(tasks);
-    }
-    panic!("the command never settled against the running loops");
-}
-
 /// ADR 0024 D1: a holder reads at once. The join bookmarks the share with the
 /// link keys, and the pass it forces reads the folder through the scope
 /// pointer before the owner converts anything. The row names the folder the
@@ -5025,13 +5008,14 @@ fn a_link_holder_reads_the_folder_before_any_conversion() {
     let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
 
     assert_eq!(
-        command_while_ticking(
-            &mut holder,
-            Command::ClaimInviteLink { fragment },
-            &mut holder_tasks,
+        block_on_while_ticking(
+            holder.command(Command::ClaimInviteLink { fragment }),
+            &mut holder_tasks
         ),
         Ok(CommandOutcome::Done),
     );
+    // The claim files the pass and does not wait for it.
+    poll_tasks_until_parked(&mut holder_tasks);
 
     let shares = block_on(holder.received_shares()).expect("the list reads");
     assert_eq!(shares.len(), 1, "the join bookmarked the share");
@@ -5045,6 +5029,186 @@ fn a_link_holder_reads_the_folder_before_any_conversion() {
         1,
         "the claim waits for the owner"
     );
+}
+
+/// Claim `fragment` on `holder` and let the pass it files run.
+fn join_link(
+    holder: &mut Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    fragment: Zeroizing<String>,
+) -> Result<CommandOutcome, EngineError> {
+    let outcome = block_on(holder.command(Command::ClaimInviteLink { fragment }));
+    poll_tasks_until_parked(tasks);
+    outcome
+}
+
+/// The link hold the recipient's durable list keeps for the owner's folder.
+fn stored_link_hold(fx: &GrantScenario) -> Option<LinkHold> {
+    let entropy = RefCell::new(SeededEntropy::new(41));
+    let enc = kdf::enc_subkey(&RECIPIENT_SECRET);
+    let list = block_on(
+        StagingReceivedShareStore::new(&fx.recipient_device.staging_store, &enc, &entropy).load(),
+    )
+    .expect("the list loads");
+    list.link_hold(&(owner_identity().verifying_key().to_sec1(), fx.folder.0))
+        .cloned()
+}
+
+/// ADR 0024 D5: the pointer consult runs ahead of every write. A fragment
+/// whose owner code names another identity fails the re-point object's
+/// verify, so the join posts no claim, records no contact and bookmarks
+/// nothing.
+#[test]
+fn a_fragment_with_a_forged_owner_code_posts_and_records_nothing() {
+    let mut fx = GrantScenario::new();
+    let mut forged = InviteFragment::decode(&fx.mint_link()).expect("the mint's own fragment");
+    forged.owner_contact_code = contact_code(&BYSTANDER_SECRET);
+    let forger = fx.device_for(&BYSTANDER_SECRET);
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+
+    assert!(matches!(
+        join_link(
+            &mut holder,
+            &mut holder_tasks,
+            forged.encode().expect("inside the bound"),
+        ),
+        Err(EngineError::TrustViolation { .. })
+    ));
+    assert!(inbox(&forger).is_empty(), "no claim posts");
+    assert!(inbox(&fx.owner_device).is_empty());
+    let forger_pk = EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec();
+    assert!(
+        !block_on(holder.sharing(holder.root()))
+            .expect("a sharing read")
+            .contacts
+            .into_iter()
+            .any(|contact| contact.identity_public_key == forger_pk),
+        "no contact is recorded"
+    );
+    assert!(
+        block_on(holder.received_shares())
+            .expect("the list reads")
+            .is_empty(),
+        "nothing is bookmarked"
+    );
+}
+
+/// ADR 0025 D5: a join past the link's deadline answers that state and
+/// posts no claim.
+#[test]
+fn a_join_past_the_link_deadline_is_refused_and_posts_nothing() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx
+        .world
+        .scheduler
+        .now()
+        .saturating_add(Duration::from_secs(60));
+    let outcome = block_on(fx.engine.command(Command::CreateInviteLink {
+        node: fx.folder,
+        permission: Permission::Read,
+        expires_at: Some(deadline),
+        owner_name: String::new(),
+    }))
+    .expect("the link mints");
+    let CommandOutcome::InviteLinkMinted(link) = outcome else {
+        panic!("minting a link answers with the link");
+    };
+    fx.world.scheduler.advance_to(deadline);
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, link.fragment),
+        Err(EngineError::MalformedInput {
+            check: "link-expired"
+        }),
+    );
+    assert!(inbox(&fx.owner_device).is_empty(), "no claim posts");
+    assert!(
+        block_on(holder.received_shares())
+            .expect("the list reads")
+            .is_empty()
+    );
+}
+
+/// A pointer no endpoint answers never fails the join: the claim posts, the
+/// bookmark holds the link keys, and a later pass reads the folder.
+#[test]
+fn a_join_whose_pointer_does_not_answer_posts_and_a_later_pass_reads() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let pointer = InviteFragment::decode(&fragment)
+        .expect("the mint's own fragment")
+        .scope_pointer_name;
+    fx.world.record_store.fail_get_for(pointer.as_str());
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 1, "the claim posts");
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1, "the join bookmarked the share");
+    assert!(shares[0].via_link);
+    assert_ne!(shares[0].resolution, Some(ResolutionClass::Granted));
+
+    fx.world.record_store.heal_get_for(pointer.as_str());
+    block_on_while_ticking(holder.command(Command::ManualRefresh), &mut holder_tasks)
+        .expect("the refresh runs");
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
+}
+
+/// A second join of one link keeps the deadline the first one's pass
+/// verified.
+#[test]
+fn a_second_join_of_one_link_keeps_the_verified_deadline() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment.clone()),
+        Ok(CommandOutcome::Done)
+    );
+    let verified = stored_link_hold(&fx)
+        .expect("the join holds the link keys")
+        .deadline;
+    assert!(verified.is_some(), "the pass verified the link's deadline");
+
+    assert_eq!(
+        block_on(holder.command(Command::ClaimInviteLink { fragment })),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        stored_link_hold(&fx).expect("the link keys stay").deadline,
+        verified
+    );
+}
+
+/// ADR 0027 D5: names the owner signature does not cover bookmark no name,
+/// and the host renders its own label for a link-held share.
+#[test]
+fn a_join_whose_names_do_not_verify_bookmarks_no_name() {
+    let mut fx = GrantScenario::new();
+    let mut relabelled = InviteFragment::decode(&fx.mint_link()).expect("the mint's own fragment");
+    relabelled.folder_name = "Taxes".to_owned();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+
+    assert_eq!(
+        join_link(
+            &mut holder,
+            &mut holder_tasks,
+            relabelled.encode().expect("inside the bound"),
+        ),
+        Ok(CommandOutcome::Done)
+    );
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares[0].display_name, "");
+    assert!(shares[0].via_link);
 }
 
 /// A fragment is bearer key material a host hands over unread, so anything that

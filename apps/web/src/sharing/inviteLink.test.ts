@@ -11,7 +11,7 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
 };
 
 const scope = (
-  inviteLinks: SharingInviteLinksDescriptor | null,
+  inviteLinks: SharingInviteLinksDescriptor,
   inviteLinkRefusal: string | null = null
 ): ScopeSharing => ({ grants: [], grantRefusal: null, inviteLinkRefusal, inviteLinks });
 
@@ -26,9 +26,9 @@ describe('the link URL', () => {
 });
 
 describe('the deadline a mint sends', () => {
-  it('is the engine bigint for a bounded lifetime, and absent for none', () => {
+  it('is the engine bigint for each lifetime', () => {
     expect(expiryAt('7 days', 1_000)).toBe(BigInt(1_000 + 7 * 86_400_000));
-    expect(expiryAt('never', 1_000)).toBeUndefined();
+    expect(expiryAt('30 days', 1_000)).toBe(BigInt(1_000 + 30 * 86_400_000));
   });
 });
 
@@ -52,10 +52,6 @@ describe('the deadline label', () => {
 });
 
 describe('which link situation a scope is in', () => {
-  it('withholds a verdict where the owner’s records would not open', () => {
-    expect(inviteLinkState(scope(null))).toEqual({ kind: 'unavailable' });
-  });
-
   it('reports the link a scope carries over any mint verdict', () => {
     const links = { ...NO_LINKS, live: true };
 

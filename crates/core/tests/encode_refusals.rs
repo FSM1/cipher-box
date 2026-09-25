@@ -132,17 +132,3 @@ fn a_signed_row_field_smuggled_through_preserved_fields_is_refused() {
         "unknown-field-collision"
     );
 }
-
-#[test]
-fn a_seal_under_the_retired_store_kind_is_refused() {
-    use cipherbox_core::seal::{OwnerLocalKind, seal_owner_local};
-    use cipherbox_core::suite::x25519::X25519Secret;
-
-    let owner = X25519Secret::from_scalar([0x31; 32]);
-    assert_eq!(
-        seal_owner_local(&owner, OwnerLocalKind::InviteRecords, &[0x32; 32], b"links")
-            .unwrap_err()
-            .check(),
-        "retired-owner-local-kind"
-    );
-}

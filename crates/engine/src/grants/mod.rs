@@ -51,9 +51,10 @@ pub use create::{
 };
 pub use invite::{
     CLAIM_ID_LEN, ClaimOutcome, CommittedLink, CommittedScope, ConvertedClaim,
-    DEFAULT_ADMISSION_CAP, EphemeralInvitee, InviteClaim, InviteError, InviteFragment, LinkTerms,
-    MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority, committed_links,
-    convert_invite_claim, locate_invite_link, mint_invite_grant, post_invite_claim,
+    DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, InviteClaim, InviteError,
+    InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority,
+    committed_links, convert_invite_claim, locate_invite_link, mint_invite_grant,
+    post_invite_claim, sole_link,
 };
 pub use invite_mint::{InviteMintError, InviteMintPlan, MintedInviteLink, mint_invite_link};
 pub use ledger::{

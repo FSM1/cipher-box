@@ -442,8 +442,16 @@ struct OwnerLocalManifest {
     hpke_mode: u8,
     hpke_info_prefix: String,
     kinds: Vec<OwnerLocalKindSpec>,
+    reserved: Vec<ReservedKindSpec>,
     accept: FileCount,
     reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReservedKindSpec {
+    discriminator: u8,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -452,8 +460,6 @@ struct OwnerLocalKindSpec {
     name: String,
     discriminator: u8,
     hpke_info: String,
-    #[serde(default)]
-    retired: bool,
 }
 
 #[derive(Deserialize)]
@@ -6639,13 +6645,18 @@ fn owner_local_kind_registry_is_frozen() {
             "owner-local {}: info string drift",
             spec.name
         );
-        assert_eq!(
-            spec.retired,
-            kind.is_retired(),
-            "owner-local {}: retired flag drift",
-            spec.name
-        );
     }
+    let reserved: Vec<(u8, &str)> = m
+        .owner_local
+        .reserved
+        .iter()
+        .map(|spec| (spec.discriminator, spec.name.as_str()))
+        .collect();
+    assert_eq!(
+        reserved,
+        OwnerLocalKind::RESERVED,
+        "owner-local reserved kind drift"
+    );
 }
 
 /// The enc-subkey structures are only non-transplantable while their key
@@ -6683,10 +6694,9 @@ fn owner_local_accept_vectors_seal_reproduce_and_open() {
     );
     let covered_kinds: BTreeSet<&str> = vectors.iter().map(|v| v.kind.as_str()).collect();
     for kind in OwnerLocalKind::ALL {
-        assert_eq!(
+        assert!(
             covered_kinds.contains(kind.name()),
-            !kind.is_retired(),
-            "owner-local accept must pin a blob for each live kind, and none for the retired {} kind",
+            "owner-local accept must pin a blob for the {} kind",
             kind.name()
         );
     }
@@ -6826,24 +6836,14 @@ fn owner_local_reject_vectors_fire_the_named_check() {
 }
 
 /// The vector the kind discriminator exists to justify: the failure must land at
-/// the AEAD rather than at a comparison. A retired kind takes no part: nothing
-/// seals under it, and an open under it is refused before the AEAD.
+/// the AEAD rather than at a comparison.
 #[test]
 fn owner_local_cross_kind_vectors_cover_every_ordered_pair() {
     let m = manifest();
     let vectors = owner_local_reject_vectors(&m);
-    let live = || OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired());
 
-    for kind in OwnerLocalKind::ALL.into_iter().filter(|k| k.is_retired()) {
-        let name = format!("retired-kind-{}", kind.name());
-        let v = vectors
-            .iter()
-            .find(|v| v.name == name)
-            .unwrap_or_else(|| panic!("owner-local reject must pin {name}"));
-        assert_eq!(v.check, "retired-owner-local-kind", "{name}");
-    }
-    for sealed_as in live() {
-        for opened_as in live() {
+    for sealed_as in OwnerLocalKind::ALL {
+        for opened_as in OwnerLocalKind::ALL {
             if sealed_as == opened_as {
                 continue;
             }

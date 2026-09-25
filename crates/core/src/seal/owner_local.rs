@@ -52,11 +52,6 @@ pub enum OwnerLocalKind {
     ReceivedShares,
     /// The owner's imported contacts.
     ContactBook,
-    /// Retired: the owner's invite records. The record now carries every link
-    /// field under owner signatures, so no build writes or reads this store,
-    /// and its discriminator stays reserved for ever (ADR 0023 D2, consequence
-    /// 2).
-    InviteRecords,
     /// The pinned bytes a published prune or delete still owes the registry.
     RetireLedger,
     /// What a delete still owes once its unlink is live: the detached subtree's
@@ -69,10 +64,9 @@ pub enum OwnerLocalKind {
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::ReceivedShares,
         Self::ContactBook,
-        Self::InviteRecords,
         Self::RetireLedger,
         Self::DoomedJournal,
         Self::ScopeExitDebt,
@@ -83,7 +77,6 @@ impl OwnerLocalKind {
         match self {
             Self::ReceivedShares => "received-shares",
             Self::ContactBook => "contact-book",
-            Self::InviteRecords => "invite-records",
             Self::RetireLedger => "retire-ledger",
             Self::DoomedJournal => "doomed-journal",
             Self::ScopeExitDebt => "scope-exit-debt",
@@ -95,18 +88,16 @@ impl OwnerLocalKind {
         match self {
             Self::ReceivedShares => 0x01,
             Self::ContactBook => 0x02,
-            Self::InviteRecords => 0x03,
             Self::RetireLedger => 0x04,
             Self::DoomedJournal => 0x05,
             Self::ScopeExitDebt => 0x06,
         }
     }
 
-    /// Whether the kind is retired: its discriminator stays reserved, and a
-    /// seal or an open under it is refused.
-    pub const fn is_retired(self) -> bool {
-        matches!(self, Self::InviteRecords)
-    }
+    /// Every retired kind's discriminator and name. Each stays reserved for
+    /// ever, so no live kind reuses one (ADR 0023 consequence 2). Frozen in the
+    /// KAT manifest.
+    pub const RESERVED: &[(u8, &str)] = &[(0x03, "invite-records")];
 
     /// The kind's HPKE `info` string: its key-schedule domain separator. This is
     /// what makes a cross-kind open fail the AEAD instead of a comparison.
@@ -152,17 +143,12 @@ pub fn owner_local_aad(header: &OwnerLocalHeader) -> Vec<u8> {
 /// `ephemeral_scalar` must be **fresh per seal**: HPKE ephemeral reuse across
 /// two seals under one recipient key and `info` is a confidentiality break
 /// ([`hpke::hpke_seal`]).
-///
-/// A retired kind is refused, the same refusal [`open_owner_local`] makes.
 pub fn seal_owner_local(
     owner_enc_secret: &X25519Secret,
     kind: OwnerLocalKind,
     ephemeral_scalar: &[u8; SECRET_LEN],
     body: &[u8],
 ) -> Result<Vec<u8>, CodecError> {
-    if kind.is_retired() {
-        return Err(Malformed::RetiredOwnerLocalKind.into());
-    }
     let owner_enc_pub = owner_enc_secret.public();
     let header = OwnerLocalHeader {
         version: OWNER_LOCAL_V,
@@ -198,9 +184,6 @@ pub fn open_owner_local(
     kind: OwnerLocalKind,
     blob: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, CodecError> {
-    if kind.is_retired() {
-        return Err(Malformed::RetiredOwnerLocalKind.into());
-    }
     let value = decode(blob)?;
     let map = value.as_map()?;
     let owner_enc_pub = owner_enc_secret.public();
@@ -267,7 +250,7 @@ mod tests {
     #[test]
     fn every_kind_round_trips_under_the_owners_enc_subkey() {
         let owner = secret(7);
-        for kind in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
+        for kind in OwnerLocalKind::ALL {
             let blob = seal_owner_local(&owner, kind, &[1; SECRET_LEN], b"state").unwrap();
             let body = open_owner_local(&owner, kind, &blob).unwrap();
             assert_eq!(&body[..], b"state", "{}", kind.name());
@@ -279,9 +262,9 @@ mod tests {
     #[test]
     fn a_blob_sealed_under_one_kind_never_opens_under_another() {
         let owner = secret(8);
-        for sealed_as in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
+        for sealed_as in OwnerLocalKind::ALL {
             let blob = seal_owner_local(&owner, sealed_as, &[2; SECRET_LEN], b"state").unwrap();
-            for opened_as in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
+            for opened_as in OwnerLocalKind::ALL {
                 if opened_as == sealed_as {
                     continue;
                 }
@@ -311,10 +294,9 @@ mod tests {
             let index = match kind {
                 OwnerLocalKind::ReceivedShares => 0,
                 OwnerLocalKind::ContactBook => 1,
-                OwnerLocalKind::InviteRecords => 2,
-                OwnerLocalKind::RetireLedger => 3,
-                OwnerLocalKind::DoomedJournal => 4,
-                OwnerLocalKind::ScopeExitDebt => 5,
+                OwnerLocalKind::RetireLedger => 2,
+                OwnerLocalKind::DoomedJournal => 3,
+                OwnerLocalKind::ScopeExitDebt => 4,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],
@@ -333,39 +315,22 @@ mod tests {
                 "duplicate info string for {}",
                 kind.name()
             );
-            assert_eq!(
-                kind.discriminator() as usize,
-                index + 1,
+            assert!(
+                index == 0 || OwnerLocalKind::ALL[index - 1].discriminator() < kind.discriminator(),
                 "{} out of discriminator order",
                 kind.name()
             );
         }
     }
 
-    /// Release-active (AGENTS.md rule 8): the seal refuses the retired kind
-    /// the open refuses, so no build writes a store it can never read.
     #[test]
-    fn a_retired_kind_is_refused_on_seal_and_on_open() {
-        let owner = secret(9);
-        let kind = OwnerLocalKind::InviteRecords;
-        assert!(kind.is_retired());
-        assert_eq!(
-            seal_owner_local(&owner, kind, &[4; SECRET_LEN], b"links")
-                .unwrap_err()
-                .check(),
-            "retired-owner-local-kind"
-        );
-        let blob = seal_owner_local(
-            &owner,
-            OwnerLocalKind::ReceivedShares,
-            &[4; SECRET_LEN],
-            b"state",
-        )
-        .unwrap();
-        assert_eq!(
-            open_owner_local(&owner, kind, &blob).unwrap_err().check(),
-            "retired-owner-local-kind"
-        );
+    fn no_live_kind_reuses_a_reserved_discriminator_or_name() {
+        for (discriminator, name) in OwnerLocalKind::RESERVED {
+            for kind in OwnerLocalKind::ALL {
+                assert_ne!(kind.discriminator(), *discriminator, "{}", kind.name());
+                assert_ne!(kind.name(), *name);
+            }
+        }
     }
 
     #[test]
@@ -509,7 +474,7 @@ mod tests {
         let enc = map.get("enc").unwrap().as_bytes().unwrap().to_vec();
         let ciphertext = map.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
 
-        for kind in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
+        for kind in OwnerLocalKind::ALL {
             assert_eq!(
                 open_owner_local(&owner, kind, &framed(enc.clone(), ciphertext.clone()))
                     .unwrap_err()

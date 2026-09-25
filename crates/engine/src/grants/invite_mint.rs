@@ -7,15 +7,14 @@
 //! scope's first epoch and walks back through no history the owner cut before
 //! the link existed.
 //!
-//! The mint runs no write-scope cut and no name wave, whatever the link
-//! converts to, so the scope root keeps the name it is published under. The
-//! fragment is sealed and its bound checked before anything publishes, and the
-//! owner device records nothing: the link lives in the record alone.
+//! The fragment is sealed and its bound checked before anything publishes, and
+//! the owner device records nothing: the link lives in the record alone.
 
 use core::fmt;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::contact::ContactCode;
+use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 use zeroize::Zeroizing;
 
@@ -136,7 +135,7 @@ where
         pointer_read_key: SecretBytes::new(*plan.grantee.pointer_read_key),
         owner_name: plan.owner_name.to_owned(),
         folder_name: plan.folder_name.to_owned(),
-        names_sig: [0u8; 64],
+        names_sig: [0u8; ECDSA_SIG_LEN],
     };
     fragment.sign_names(owner.identity_signer);
     // Ahead of every publish, so a fragment past its bound leaves no live link
@@ -201,7 +200,7 @@ mod tests {
     use cipherbox_core::suite::secret::ct_eq;
 
     use crate::grants::invite::MAX_INVITE_NAME_BYTES;
-    use crate::grants::recipient_blinded_tag;
+    use crate::grants::{recipient_blinded_tag, self_locate_signed};
     use crate::rotation::{
         CascadeTarget, LaggingNode, NodeRef, ResealSeeds, ResealedScopeRoot, ResolveFailure,
         RotationPublishError, ScopeRootIdentity, SweepResolveFailure, SweptChild, SweptNode,
@@ -599,7 +598,7 @@ mod tests {
 
     fn read_link() -> LinkTerms {
         LinkTerms {
-            deadline: None,
+            deadline: DEADLINE,
             conversion_permission: Permission::Read,
             admission_cap: 3,
         }
@@ -607,7 +606,7 @@ mod tests {
 
     fn write_link() -> LinkTerms {
         LinkTerms {
-            deadline: Some(DEADLINE),
+            deadline: DEADLINE,
             conversion_permission: Permission::Write,
             admission_cap: 3,
         }
@@ -663,11 +662,7 @@ mod tests {
         let tag = recipient_blinded_tag(invitee.enc_secret(), &f.enc.public(), &folder_name())
             .expect("contributory");
         let scope_root = f.scope_root();
-        let blob = scope_root
-            .section
-            .grant_blobs
-            .iter()
-            .find(|blob| blob.tag == tag)
+        let blob = self_locate_signed(&scope_root.section.grant_blobs, &tag)
             .expect("a blob at the link tag");
         let grant = open_grant_blob(
             invitee.enc_secret(),
@@ -740,7 +735,7 @@ mod tests {
 
         let refused = f
             .mint(LinkTerms {
-                deadline: Some(UnixMillis(0)),
+                deadline: UnixMillis(0),
                 ..read_link()
             })
             .expect_err("a zero deadline is refused");

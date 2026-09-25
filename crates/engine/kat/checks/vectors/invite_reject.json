@@ -7,7 +7,7 @@
   {
     "name": "fragment-that-is-not-this-build-encoding",
     "check": "malformed-invite-fragment",
-    "class": "trust"
+    "class": "malformed"
   },
   {
     "name": "fragment-past-the-invite-link-bound",

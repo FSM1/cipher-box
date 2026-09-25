@@ -13,7 +13,6 @@ use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::error::TrustViolation;
-use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildRef, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB, open_grant_blob,
@@ -272,40 +271,82 @@ fn merge_grafted(open: &Opened<'_>, contested: &ContestedNodes, render: &ScopeRe
 }
 
 /// What one pass decided about a share: the verdict, the record a browse of it
-/// opens, and — for a share read through its link hold — the ephemeral key it
-/// read with and the deadline it verified.
+/// opens, the ephemeral key a link-held read used, and the change that read
+/// owes the bookmark's link hold.
 struct Classified {
     class: ResolutionClass,
     resolved: Option<(Candidate, SharedScopeFloors)>,
     /// The link key this pass read with. `None` on the personal path.
     link: Option<EphemeralInvitee>,
-    /// The link entry's deadline as this pass verified it, when it read one.
-    link_deadline: Option<Option<UnixMillis>>,
+    hold_change: Option<HoldChange>,
 }
 
 impl Classified {
-    /// A pass that reached no verdict on the record. A hold whose last verified
-    /// deadline is past reads as expired, never as merely unresolvable.
-    fn unresolvable(hold: Option<&LinkHold>, now: UnixMillis) -> Self {
+    /// A pass that reached no verdict on the record.
+    fn unresolvable() -> Self {
         Self {
-            class: match hold {
-                Some(hold) if hold.is_expired(now) => ResolutionClass::Expired,
-                _ => ResolutionClass::Unresolvable,
-            },
+            class: ResolutionClass::Unresolvable,
             resolved: None,
             link: None,
-            link_deadline: None,
+            hold_change: None,
+        }
+    }
+
+    /// Whether the pass read the personal tag of a resolved record.
+    fn personal(&self) -> bool {
+        self.resolved.is_some() && self.link.is_none()
+    }
+}
+
+/// The class of a link-held read whose link entry has `deadline`. The owner's
+/// sweep cuts a link at its deadline, so a link gone after it reads as expired
+/// too (ADR 0025 D5).
+fn link_class(
+    class: ResolutionClass,
+    deadline: Option<UnixMillis>,
+    now: UnixMillis,
+) -> ResolutionClass {
+    if now.reached(deadline) {
+        ResolutionClass::Expired
+    } else {
+        class
+    }
+}
+
+/// A change a pass makes to a bookmark, applied by key to the list as stored
+/// when the pass ends.
+enum HoldChange {
+    /// A personal blob opened, so the link keys go (ADR 0024 D2).
+    Drop(BookmarkKey),
+    /// The link entry's deadline differs from the last verified one.
+    Deadline(BookmarkKey, Option<UnixMillis>),
+    /// The scope pointer vouched for another scope root.
+    Heal(BookmarkKey, Vec<u8>),
+}
+
+impl HoldChange {
+    fn apply(self, list: &mut ReceivedSharesList) {
+        match self {
+            Self::Drop(key) => {
+                list.drop_link(&key);
+            }
+            Self::Deadline(key, deadline) => list.set_link_deadline(&key, deadline),
+            Self::Heal(key, root) => list.heal_root_name(&key, root),
         }
     }
 }
 
-/// A change a pass makes to a bookmark's link hold, applied once every borrow
-/// of the list has ended.
-enum HoldChange {
-    /// A personal blob opened, so the link keys go (ADR 0024 D2).
-    Drop(BookmarkKey),
-    /// The link entry's deadline changed since the last verified read.
-    Deadline(BookmarkKey, Option<UnixMillis>),
+/// What a held bookmark's scope pointer vouched for this pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointerVerdict {
+    /// The re-point object opened and verified.
+    Vouched,
+    /// No pointer record stands at the name.
+    Absent,
+    /// No endpoint answered.
+    Unavailable,
+    /// The re-point object was refused, which is reported.
+    Rejected,
 }
 
 /// The pair a grant blob self-locates and opens under: the sharer's contact,
@@ -403,9 +444,27 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                     .get(key)
                     .is_none_or(|held| on_access_refresh_due(now, held.at, profile))
         };
-        let (mut holds_changed, pointer_rejected) = self
-            .follow_held_pointers(&mut received, &by_identity, &due, render.events)
+        // One budget, spent in list order: a held bookmark spends one resolve on
+        // its scope pointer and one on its scope root.
+        let mut budget = MAX_RESOLVES_PER_PASS;
+        let scheduled: BTreeSet<BookmarkKey> = received
+            .iter()
+            .map(ReceivedShare::key)
+            .filter(due)
+            .map_while(|key| {
+                let cost = 1 + usize::from(received.link_hold(&key).is_some());
+                budget = budget.checked_sub(cost)?;
+                Some(key)
+            })
+            .collect();
+        let (pointers, heals) = self
+            .follow_held_pointers(&received, &by_identity, &scheduled, render.events)
             .await;
+        let mut hold_changes: Vec<HoldChange> = Vec::new();
+        for (key, root) in heals {
+            received.heal_root_name(&key, root.clone());
+            hold_changes.push(HoldChange::Heal(key, root));
+        }
 
         // A browse addresses a scope by its id alone, but the id is the sharer's
         // to author: `granted_scope_roots` decides ambiguity over every bookmark,
@@ -428,31 +487,38 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             .collect();
 
         let mut refreshed = BTreeMap::new();
-        let mut budget = MAX_RESOLVES_PER_PASS;
         let mut opened: Vec<Opened<'_>> = Vec::new();
-        let mut hold_changes: Vec<HoldChange> = Vec::new();
         for share in received.iter() {
             let key = share.key();
             let held = verdicts.borrow().get(&key).copied();
-            if !due(&key) || budget == 0 {
+            // A link-held read renders only under a root this pass vouched for
+            // through the pointer (ADR 0024 D5), so an unanswered pointer keeps
+            // the last verdict.
+            let pointer = pointers.get(&key).copied();
+            if !scheduled.contains(&key) || pointer == Some(PointerVerdict::Unavailable) {
                 if let Some(held) = held {
                     refreshed.insert(key, held);
                 }
                 continue;
             }
-            budget -= 1;
             // Both anchors are contact-held, so a forgotten sharer leaves no
             // verified identity to hold the record to.
             let carried = held.map_or(share.permission, |held| held.permission);
             let hold = received.link_hold(&key);
-            let Some(contact) = by_identity
-                .get(&share.sharer_identity_pk)
-                .filter(|_| !pointer_rejected.contains(&key))
-            else {
+            let contact = by_identity.get(&share.sharer_identity_pk);
+            let (Some(contact), None | Some(PointerVerdict::Vouched)) = (contact, pointer) else {
+                let class = match (hold, pointer) {
+                    (_, Some(PointerVerdict::Rejected)) | (None, _) => {
+                        ResolutionClass::Unresolvable
+                    }
+                    (Some(hold), _) => {
+                        link_class(ResolutionClass::Unresolvable, hold.deadline, now)
+                    }
+                };
                 refreshed.insert(
                     key,
                     ReceivedVerdict {
-                        class: Classified::unresolvable(hold, now).class,
+                        class,
                         at: now,
                         permission: carried,
                     },
@@ -461,33 +527,31 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             };
             // One resolve serves both legs: the verdict this row renders, and
             // the subtree a browse of it opens.
+            let classified = self.classified(share, contact, hold, render.events).await;
+            let personal = classified.personal();
             let Classified {
                 mut class,
                 resolved,
                 link,
-                link_deadline,
-            } = self
-                .classified(share, contact, hold, now, render.events)
-                .await;
+                hold_change,
+            } = classified;
+            if let Some(hold) = hold.filter(|_| !personal) {
+                let deadline = match &hold_change {
+                    Some(HoldChange::Deadline(_, fresh)) => *fresh,
+                    _ => hold.deadline,
+                };
+                class = link_class(class, deadline, now);
+            }
+            hold_changes.extend(hold_change);
             let enc_secret = link
                 .as_ref()
                 .map_or(self.enc_secret, EphemeralInvitee::enc_secret);
-            match (hold, &link, link_deadline) {
-                (Some(_), None, _) if class == ResolutionClass::Granted => {
-                    hold_changes.push(HoldChange::Drop(key));
-                }
-                (Some(hold), Some(_), Some(deadline)) if hold.deadline != deadline => {
-                    hold_changes.push(HoldChange::Deadline(key, deadline));
-                }
-                _ => {}
-            }
             let mut permission = carried;
             if class == ResolutionClass::Granted {
                 if let Some((candidate, floors)) = &resolved {
                     // Only a `Granted` verdict has cleared the commitment's
                     // whole of stage 2, so only there is the committed
                     // permission the owner's word rather than the record's.
-                    // A link entry is committed at `read` (ADR 0024 D4).
                     if let Some(committed) =
                         self.committed_permission(candidate, share, contact, enc_secret)
                     {
@@ -508,7 +572,14 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                             )
                             .await
                         {
-                            Ok(Some(open)) => opened.push(open),
+                            Ok(Some(open)) => {
+                                // The personal blob opened, so the link keys go
+                                // (ADR 0024 D2).
+                                if hold.is_some() && personal {
+                                    hold_changes.push(HoldChange::Drop(key));
+                                }
+                                opened.push(open);
+                            }
                             Ok(None) => {}
                             Err(rejection) => {
                                 report_refusal(render.events, share, &rejection);
@@ -570,55 +641,46 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
         }
         drop(opened);
 
-        for change in hold_changes {
-            holds_changed = true;
-            match change {
-                HoldChange::Drop(key) => {
-                    received.drop_link(&key);
-                }
-                HoldChange::Deadline(key, deadline) => {
-                    if let Some(mut hold) = received.link_hold(&key).cloned() {
-                        hold.deadline = deadline;
-                        received.hold_link(key, hold);
-                    }
-                }
+        // The join and the accept write this list across this pass's awaits, so
+        // the changes land by key on the list as stored now. Best effort: a
+        // failed persist leaves the stored list one pass behind, and the next
+        // pass reaches the same changes from the record.
+        if !hold_changes.is_empty()
+            && let Ok(mut stored) = store.load().await
+        {
+            for change in hold_changes {
+                change.apply(&mut stored);
             }
-        }
-        // Best effort: a failed persist leaves the stored list one pass behind,
-        // and the next pass reaches the same verdicts from the record.
-        if holds_changed {
-            let _ = store.persist(&received).await;
+            let _ = store.persist(&stored).await;
         }
     }
 
-    /// Follow the scope pointer of every due bookmark that holds link keys, and
-    /// heal its scope-root name to the root the owner's re-point object names
-    /// (ADR 0024 D5 step 3).
-    ///
-    /// Returns whether a name changed, and the bookmarks whose re-point object
-    /// was refused. A refused re-point is a trust verdict, reported here; an
-    /// unreachable pointer leaves the last name in place.
+    /// Follow the scope pointer of every scheduled bookmark that holds link
+    /// keys (ADR 0024 D5 step 3). Answers each one's verdict, and the scope
+    /// root each vouched-for bookmark must move to. A refused re-point object
+    /// is a trust verdict, reported here.
     async fn follow_held_pointers(
         &self,
-        received: &mut ReceivedSharesList,
+        received: &ReceivedSharesList,
         by_identity: &BTreeMap<[u8; IDENTITY_PUBLIC_LEN], &Contact>,
-        due: &dyn Fn(&BookmarkKey) -> bool,
+        scheduled: &BTreeSet<BookmarkKey>,
         events: &mpsc::UnboundedSender<Event>,
-    ) -> (bool, BTreeSet<BookmarkKey>) {
-        let mut healed: Vec<(BookmarkKey, IpnsName)> = Vec::new();
-        let mut rejected = BTreeSet::new();
+    ) -> (
+        BTreeMap<BookmarkKey, PointerVerdict>,
+        Vec<(BookmarkKey, Vec<u8>)>,
+    ) {
+        let mut verdicts = BTreeMap::new();
+        let mut heals = Vec::new();
         for share in received.iter() {
             let key = share.key();
-            let (Some(hold), Some(contact)) = (
+            let (Some(hold), Some(contact), true) = (
                 received.link_hold(&key),
                 by_identity.get(&share.sharer_identity_pk),
+                scheduled.contains(&key),
             ) else {
                 continue;
             };
-            if !due(&key) {
-                continue;
-            }
-            match held_scope_root(
+            let verdict = match held_scope_root(
                 self.transport,
                 &self.sharer_floors(share),
                 share,
@@ -627,25 +689,27 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             )
             .await
             {
-                Ok(Some(root)) if root.as_str().as_bytes() != share.scope_root_name => {
-                    healed.push((key, root));
+                Ok(Some(root)) => {
+                    let root = root.as_str().as_bytes();
+                    if root != share.scope_root_name {
+                        heals.push((key, root.to_vec()));
+                    }
+                    PointerVerdict::Vouched
                 }
-                Ok(_) | Err(PointerConsultError::Unavailable) => {}
+                Ok(None) => PointerVerdict::Absent,
+                Err(PointerConsultError::Unavailable) => PointerVerdict::Unavailable,
                 Err(PointerConsultError::Rejected) => {
                     emit_trust_violation(
                         events,
                         grafted_root_name(&share.display_name, NodeId(share.scope_id)).as_str(),
                         "the scope pointer's re-point object was refused",
                     );
-                    rejected.insert(key);
+                    PointerVerdict::Rejected
                 }
-            }
+            };
+            verdicts.insert(key, verdict);
         }
-        let changed = !healed.is_empty();
-        for (key, root) in healed {
-            received.heal_root_name(&key, root.as_str().as_bytes().to_vec());
-        }
-        (changed, rejected)
+        (verdicts, heals)
     }
 
     /// What the owner's live commitment permits this vault in `share`'s scope,
@@ -701,23 +765,29 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
     ///
     /// A share that holds link keys reads its personal tag first, and reads the
     /// link tag only while no committed personal blob stands (ADR 0024 D2). On
-    /// the link path the tag must name a link entry whose deadline is later
-    /// than `now` (ADR 0024 D5 step 6).
+    /// the link path the tag must name a link entry; the caller decides its
+    /// deadline (ADR 0024 D5 step 6).
     async fn classified(
         &self,
         share: &ReceivedShare,
         contact: &Contact,
         hold: Option<&LinkHold>,
-        now: UnixMillis,
         events: &mpsc::UnboundedSender<Event>,
     ) -> Classified {
         let Some((candidate, floors)) = self.resolved(share, events).await else {
-            return Classified::unresolvable(hold, now);
+            return Classified::unresolvable();
         };
         let sharer_enc = contact.enc_subkey();
-        let link = hold
-            .filter(|_| !committed_blob_at(&candidate, share, self.enc_secret, &sharer_enc))
-            .and_then(|hold| EphemeralInvitee::from_secret(hold.invite_secret.as_bytes()).ok());
+        let link = match hold {
+            Some(hold) if !committed_blob_at(&candidate, share, self.enc_secret, &sharer_enc) => {
+                // A stored secret that is no scalar reads nothing.
+                match EphemeralInvitee::from_secret(hold.invite_secret.as_bytes()) {
+                    Ok(invitee) => Some(invitee),
+                    Err(_) => return Classified::unresolvable(),
+                }
+            }
+            _ => None,
+        };
         let enc_secret = link
             .as_ref()
             .map_or(self.enc_secret, EphemeralInvitee::enc_secret);
@@ -732,7 +802,7 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             Ok(facts) => facts,
             Err(rejection) => {
                 report_refusal(events, share, &rejection);
-                return Classified::unresolvable(hold, now);
+                return Classified::unresolvable();
             }
         };
         let cut_epoch = candidate.grant_section.commitment.cut_epoch;
@@ -747,10 +817,10 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
                 .await
                 .is_err()
         {
-            return Classified::unresolvable(hold, now);
+            return Classified::unresolvable();
         }
         let mut class = classify(&facts);
-        let mut link_deadline = None;
+        let mut hold_change = None;
         if let (Some(invitee), Some(hold)) = (&link, hold) {
             let entry =
                 recipient_blinded_tag(invitee.enc_secret(), &sharer_enc, &share.scope_root_name)
@@ -758,26 +828,20 @@ impl<T: RecordTransport, H: Http, F: FloorStore> ReceivedShareStatus<'_, T, H, F
             match entry {
                 Some(entry) => {
                     let deadline = entry.deadline.map(|deadline| UnixMillis(deadline.get()));
-                    if deadline.is_some_and(|deadline| now.0 >= deadline.0) {
-                        class = ResolutionClass::Expired;
+                    if deadline != hold.deadline {
+                        hold_change = Some(HoldChange::Deadline(share.key(), deadline));
                     }
-                    link_deadline = Some(deadline);
                 }
                 // A tag the owner committed as anything but a link entry
                 // grants a link holder nothing.
                 None => class = ResolutionClass::RevocationSignal,
-            }
-            // The owner's sweep cuts a link at its deadline, so a link gone
-            // after the deadline this device last verified has expired.
-            if class == ResolutionClass::RevocationSignal && hold.is_expired(now) {
-                class = ResolutionClass::Expired;
             }
         }
         Classified {
             class,
             resolved: Some((candidate, floors)),
             link,
-            link_deadline,
+            hold_change,
         }
     }
 
@@ -1429,7 +1493,6 @@ mod tests {
                     share,
                     &Contact::from(&ContactCode::create(sharer, sharer_enc().public())),
                     None,
-                    UnixMillis(0),
                     &events,
                 ),
             )
@@ -2155,6 +2218,16 @@ mod tests {
         }
 
         fn pass_in(&self, at_millis: u64, mode: ResolveMode) -> ResolutionClass {
+            self.pass_over(&self.records, at_millis, mode)
+        }
+
+        /// One pass whose records come from `transport`.
+        fn pass_over<T: RecordTransport>(
+            &self,
+            transport: &T,
+            at_millis: u64,
+            mode: ResolveMode,
+        ) -> ResolutionClass {
             self.http.enqueue_response(HttpResponse {
                 status: 200,
                 headers: Vec::new(),
@@ -2163,7 +2236,7 @@ mod tests {
             let (events, mut rx) = mpsc::unbounded();
             block_on(
                 ReceivedShareStatus {
-                    transport: &self.records,
+                    transport,
                     gateway: &self.gateway,
                     http: &self.http,
                     floors: &self.floors,
@@ -3536,6 +3609,8 @@ mod tests {
         const POINTER_SEED: [u8; 32] = [0x6a; 32];
         const LINK_SECRET: [u8; 32] = [0x4e; 32];
         const DEADLINE: UnixMillis = UnixMillis(5_000);
+        /// A deadline no test pass reaches.
+        const LATER: UnixMillis = UnixMillis(1_000_000);
 
         fn pointer_name() -> IpnsName {
             scope_pointer_name(&POINTER_SEED, &SCOPE)
@@ -3546,7 +3621,7 @@ mod tests {
             derive_write_name(&[0x78; 32], &SCOPE)
         }
 
-        fn link_row(deadline: Option<UnixMillis>) -> GrantRow {
+        fn link_row(deadline: UnixMillis) -> GrantRow {
             mint_invite_grant(
                 &sharer_signer(),
                 &sharer_enc(),
@@ -3646,6 +3721,10 @@ mod tests {
         /// The bookmark a join leaves: the link keys, and the root name last
         /// seen — here the one a write wave has since moved off.
         fn join(fx: &RenderedScope) {
+            join_with(fx, LINK_SECRET);
+        }
+
+        fn join_with(fx: &RenderedScope, secret: [u8; 32]) {
             let mut list = ReceivedSharesList::new();
             let share = ReceivedShare {
                 scope_root_name: old_root_name().as_str().as_bytes().to_vec(),
@@ -3657,10 +3736,7 @@ mod tests {
             };
             let key = share.key();
             list.reconcile(share);
-            list.hold_link(
-                key,
-                LinkHold::new(SecretBytes::new(LINK_SECRET), pointer_name()),
-            );
+            list.hold_link(key, LinkHold::new(SecretBytes::new(secret), pointer_name()));
             fx.persist(&list).expect("the join persists");
         }
 
@@ -3684,7 +3760,7 @@ mod tests {
             let mut fx = RenderedScope::new(Vec::new());
             join(&fx);
             serve_pointer(&fx, &sharer_signer(), 1);
-            serve_root(&mut fx, vec![link_row(Some(DEADLINE))], 0, 1);
+            serve_root(&mut fx, vec![link_row(DEADLINE)], 0, 1);
 
             assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
             assert_eq!(fx.listing(), vec!["photos".to_owned()]);
@@ -3711,11 +3787,11 @@ mod tests {
             let mut fx = RenderedScope::new(Vec::new());
             join(&fx);
             serve_pointer(&fx, &sharer_signer(), 1);
-            serve_root(&mut fx, vec![link_row(None)], 0, 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
             assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
             assert!(stored(&fx).1.is_some());
 
-            serve_root(&mut fx, vec![link_row(None), personal_row()], 0, 2);
+            serve_root(&mut fx, vec![link_row(LATER), personal_row()], 0, 2);
             assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
             assert!(
                 stored(&fx).1.is_none(),
@@ -3734,7 +3810,7 @@ mod tests {
             let mut fx = RenderedScope::new(Vec::new());
             join(&fx);
             serve_pointer(&fx, &sharer_signer(), 1);
-            serve_root(&mut fx, vec![link_row(Some(DEADLINE))], 0, 1);
+            serve_root(&mut fx, vec![link_row(DEADLINE)], 0, 1);
             assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
             assert!(fx.read_seeds.borrow().contains_key(&SCOPE));
 
@@ -3754,7 +3830,7 @@ mod tests {
             let mut fx = RenderedScope::new(Vec::new());
             join(&fx);
             serve_pointer(&fx, &sharer_signer(), 1);
-            serve_root(&mut fx, vec![link_row(Some(DEADLINE))], 0, 1);
+            serve_root(&mut fx, vec![link_row(DEADLINE)], 0, 1);
             assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
 
             serve_root(&mut fx, vec![other_row()], 1, 2);
@@ -3768,7 +3844,7 @@ mod tests {
             let mut fx = RenderedScope::new(Vec::new());
             join(&fx);
             serve_pointer(&fx, &other_sharer_signer(), 1);
-            serve_root(&mut fx, vec![link_row(None)], 0, 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
 
             assert_eq!(fx.forced_pass(0), ResolutionClass::Unresolvable);
             assert!(fx.reported.get());
@@ -3788,6 +3864,171 @@ mod tests {
                 stored(&fx).1.is_some(),
                 "the link keys wait for the next pass"
             );
+        }
+
+        /// A committed personal blob drops the link keys only once it opens: a
+        /// blob this device cannot open leaves the link as its only way in.
+        #[test]
+        fn a_personal_blob_that_will_not_open_keeps_the_link_keys() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            let mut unopenable = personal_row();
+            unopenable.ledger_entry.recipient_enc_pk = someone_else().to_bytes();
+            serve_root(&mut fx, vec![link_row(LATER), unopenable], 0, 1);
+
+            assert_ne!(fx.forced_pass(0), ResolutionClass::Granted);
+            assert!(
+                stored(&fx).1.is_some(),
+                "the link keys stay until a personal blob opens"
+            );
+        }
+
+        /// A transport that runs `during` once, at the first GET of a pass.
+        struct MidPass<'a> {
+            records: &'a InMemoryRecordStore,
+            during: RefCell<Option<Box<dyn FnOnce() + 'a>>>,
+        }
+
+        impl RecordTransport for MidPass<'_> {
+            fn endpoints(&self) -> Vec<EndpointId> {
+                self.records.endpoints()
+            }
+
+            async fn get_record(
+                &self,
+                endpoint: &EndpointId,
+                routing_key: &str,
+                max_bytes: usize,
+                bearer: Option<&str>,
+            ) -> SeamResult<Option<Vec<u8>>> {
+                let during = self.during.borrow_mut().take();
+                if let Some(during) = during {
+                    during();
+                }
+                self.records
+                    .get_record(endpoint, routing_key, max_bytes, bearer)
+                    .await
+            }
+
+            async fn put_record(
+                &self,
+                endpoint: &EndpointId,
+                routing_key: &str,
+                record: &[u8],
+            ) -> SeamResult<()> {
+                self.records.put_record(endpoint, routing_key, record).await
+            }
+        }
+
+        /// A join that lands while a pass awaits the network survives the
+        /// pass's own write-back of the link hold it changed.
+        #[test]
+        fn a_join_during_a_pass_is_not_lost() {
+            const JOINED: [u8; 16] = [0x6b; 16];
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            let transport = MidPass {
+                records: &fx.records,
+                during: RefCell::new(Some(Box::new(|| {
+                    let enc = my_enc();
+                    let store = StagingReceivedShareStore::new(&fx.staging, &enc, &fx.entropy);
+                    let mut list = block_on(store.load()).expect("the list loads");
+                    list.reconcile(ReceivedShare {
+                        scope_root_name: derive_write_name(&[0x79; 32], &JOINED)
+                            .as_str()
+                            .as_bytes()
+                            .to_vec(),
+                        scope_id: JOINED,
+                        sharer_identity_pk: sharer_signer().verifying_key().to_sec1(),
+                        display_name: String::new(),
+                        permission: Permission::Read,
+                        pointer_read_key: SecretBytes::new(OWNER_ROOT_POINTER_READ_KEY),
+                    });
+                    block_on(store.persist(&list)).expect("the join persists");
+                }))),
+            };
+
+            assert_eq!(
+                fx.pass_over(&transport, 0, ResolveMode::NoCache),
+                ResolutionClass::Granted
+            );
+            let list = block_on(
+                StagingReceivedShareStore::new(&fx.staging, &my_enc(), &fx.entropy).load(),
+            )
+            .expect("the list loads");
+            let scopes: BTreeSet<[u8; 16]> = list.iter().map(|share| share.scope_id).collect();
+            assert_eq!(scopes, BTreeSet::from([SCOPE, JOINED]));
+            let healed = list
+                .iter()
+                .find(|share| share.scope_id == SCOPE)
+                .expect("the held bookmark stays");
+            assert_eq!(
+                healed.scope_root_name,
+                scope_root_name().as_str().as_bytes(),
+                "the pass's own heal lands too"
+            );
+        }
+
+        /// ADR 0024 D5: a link-held read renders only a root the pointer
+        /// vouched for this pass. With the pointer unanswered after a write
+        /// wave, the stored root is not read and the last verdict stands.
+        #[test]
+        fn a_pointer_that_goes_unavailable_does_not_render_the_stored_root() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Granted);
+
+            fx.records.fail_get_for(pointer_name().as_str());
+            let reads = fx.records.get_count(scope_root_name().as_str());
+            assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
+            assert_eq!(
+                fx.records.get_count(scope_root_name().as_str()),
+                reads,
+                "no root the pointer did not vouch for is read"
+            );
+            assert!(!fx.reported.get(), "availability accuses nobody");
+        }
+
+        /// A first read with no pointer answer keeps the link keys, and a later
+        /// pass reads the folder.
+        #[test]
+        fn a_first_read_that_fails_is_retried_by_a_later_pass() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join(&fx);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+            fx.records.fail_get_for(pointer_name().as_str());
+
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Unresolvable);
+            assert!(stored(&fx).1.is_some());
+
+            fx.records.heal_get_for(pointer_name().as_str());
+            assert_eq!(fx.forced_pass(1_000), ResolutionClass::Granted);
+            assert_eq!(fx.listing(), vec!["photos".to_owned()]);
+        }
+
+        /// A stored link secret that is no scalar reads nothing: the verdict is
+        /// unresolvable, not a skipped share.
+        #[test]
+        fn a_stored_secret_that_is_no_scalar_is_unresolvable() {
+            let mut fx = RenderedScope::new(Vec::new());
+            join_with(&fx, [0; 32]);
+            serve_pointer(&fx, &sharer_signer(), 1);
+            serve_root(&mut fx, vec![link_row(LATER)], 0, 1);
+
+            assert_eq!(fx.forced_pass(0), ResolutionClass::Unresolvable);
+            assert!(
+                fx.verdicts
+                    .borrow()
+                    .contains_key(&(sharer_signer().verifying_key().to_sec1(), SCOPE)),
+                "the share carries a verdict"
+            );
+            assert!(fx.listing().is_empty());
         }
     }
 }

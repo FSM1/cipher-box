@@ -162,7 +162,7 @@ export interface WasmScopeSharing {
   readonly grants: readonly WasmSharingGrant[];
   readonly grantRefusal?: string;
   readonly inviteLinkRefusal?: string;
-  readonly inviteLinks?: WasmSharingInviteLinks;
+  readonly inviteLinks: WasmSharingInviteLinks;
 }
 
 /** wasm-bindgen `SharingView` — a key-free read of one scope's sharing state. */

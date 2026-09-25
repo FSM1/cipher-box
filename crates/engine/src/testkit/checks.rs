@@ -441,8 +441,7 @@ struct InviteFixture {
 }
 
 impl InviteFixture {
-    /// `deadline` is the deadline the owner minted the link under.
-    fn new(deadline: Option<UnixMillis>) -> Self {
+    fn new() -> Self {
         let identity = EcdsaSigner::from_scalar(&[0x33; 32]).expect("a valid owner scalar");
         let enc = X25519Secret::from_scalar([0x11; 32]);
         let pseudonym = Ed25519Signer::from_seed([0x22; 32]);
@@ -459,7 +458,7 @@ impl InviteFixture {
             &INVITE_SCOPE,
             &INVITE_WRITE_SCOPE_SEED,
             &LinkTerms {
-                deadline,
+                deadline: INVITE_DEADLINE,
                 conversion_permission: Permission::Read,
                 admission_cap: 5,
             },
@@ -546,14 +545,84 @@ fn invite_fragment(owner: &EcdsaSigner, folder_name: String) -> InviteFragment {
         pointer_read_key: SecretBytes::new(POINTER_READ_KEY),
         owner_name: "Ada".to_owned(),
         folder_name,
-        names_sig: [0; 64],
+        names_sig: [0; ECDSA_SIG_LEN],
     };
     fragment.sign_names(owner);
     fragment
 }
 
+/// An invite fragment the live encoder produced, beside the fields it carries,
+/// hex where they are bytes. The owner is the fixture's.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InviteFragmentVector {
+    /// The vector's name.
+    pub name: String,
+    /// The fragment text, as a URL carries it.
+    pub fragment: String,
+    /// The invite secret.
+    pub invite_secret: String,
+    /// The owner contact code.
+    pub owner_contact_code: String,
+    /// The scope id.
+    pub scope_id: String,
+    /// The scope pointer name.
+    pub scope_pointer_name: String,
+    /// The pointer read key.
+    pub pointer_read_key: String,
+    /// The owner name.
+    pub owner_name: String,
+    /// The folder name.
+    pub folder_name: String,
+    /// The owner signature over the names.
+    pub names_sig: String,
+    /// Whether the names verify under the owner identity.
+    pub names_verify: bool,
+}
+
+/// The owner identity every [`invite_fragment_accept`] vector is signed under.
+pub fn invite_fragment_owner() -> EcdsaSigner {
+    InviteFixture::new().identity
+}
+
+/// The invite fragments whose bytes the KAT pins: a signed fragment, one with
+/// no owner name, and one whose names a forwarder changed under the signature.
+/// A changed name still decodes; only its signature fails.
+pub fn invite_fragment_accept() -> Vec<InviteFragmentVector> {
+    let owner = invite_fragment_owner();
+    let signed = invite_fragment(&owner, "Photos".to_owned());
+    let mut unnamed = signed.clone();
+    unnamed.owner_name = String::new();
+    unnamed.sign_names(&owner);
+    let mut relabelled = signed.clone();
+    relabelled.owner_name = "Eve".to_owned();
+    [
+        ("signed-names", signed),
+        ("no-owner-name", unnamed),
+        ("names-a-forwarder-changed", relabelled),
+    ]
+    .into_iter()
+    .map(|(name, fragment)| InviteFragmentVector {
+        name: name.to_owned(),
+        fragment: fragment
+            .encode()
+            .expect("a fixture fragment is inside its bound")
+            .to_string(),
+        invite_secret: hex_lower(fragment.invite_secret.as_bytes()),
+        owner_contact_code: hex_lower(&fragment.owner_contact_code),
+        scope_id: hex_lower(&fragment.scope_id),
+        scope_pointer_name: fragment.scope_pointer_name.as_str().to_owned(),
+        pointer_read_key: hex_lower(fragment.pointer_read_key.as_bytes()),
+        owner_name: fragment.owner_name.clone(),
+        folder_name: fragment.folder_name.clone(),
+        names_sig: hex_lower(&fragment.names_sig),
+        names_verify: fragment.verified_names(&owner.verifying_key()).is_some(),
+    })
+    .collect()
+}
+
 fn invite_family() -> RejectFamily {
-    let fx = InviteFixture::new(None);
+    let fx = InviteFixture::new();
     let link_signer =
         EcdsaSigner::from_scalar(&[INVITE_LINK_SECRET; 32]).expect("a valid ephemeral scalar");
     let claimant_identity = EcdsaSigner::from_scalar(&[0x67; 32]).expect("a valid claimant scalar");
@@ -655,12 +724,11 @@ fn invite_family() -> RejectFamily {
         &claim_item(&stranger, claimant.clone(), invite_pointer_name()),
     ));
 
-    let expiring = InviteFixture::new(Some(INVITE_DEADLINE));
     vectors.push(refusal!(
         "claim-on-a-link-past-its-deadline",
         convert_invite_claim(
-            &expiring.authority(),
-            &expiring.committed(),
+            &fx.authority(),
+            &fx.committed(),
             &invite_pointer_name(),
             &POINTER_READ_KEY,
             &honest_item,

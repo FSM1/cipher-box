@@ -12,7 +12,7 @@
 //! a read revoke, never the sweep (rationale on [`super::cascade`]), and only a
 //! write rotation ends a write grant (rationale on [`WriteRevokeKind`]).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
@@ -28,7 +28,6 @@ use super::rotate::{RotateError, RotationOutcome};
 use super::rotate_write::{WriteRotateError, WriteRotationOutcome};
 use crate::facade::NodeId;
 use crate::grants::ledger::{AuthorityViolation, enforce_committed_ledger};
-use crate::seams::UnixMillis;
 
 /// Which trigger fired a rotation — a host-facing classifier carrying no key
 /// material.
@@ -598,52 +597,6 @@ pub fn cut_for_write_grant(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSe
             write: true,
         },
     })
-}
-
-/// Prune every grant the owner's own record puts past its deadline at `now`,
-/// from both the commitment and the ledger, and owner-re-sign.
-///
-/// `owner_deadlines` maps a blinded tag to the deadline **as the owner minted
-/// it**.
-///
-/// `Ok(None)` when nothing has expired — the common case, and the reason this
-/// trigger needs no scheduler: it costs an owner session one lookup per recorded
-/// deadline on a read it was making anyway. `now` is the injected
-/// [`Scheduler::now`](crate::seams::Scheduler::now) instant, never a clock this
-/// layer reads, and a grant dies **at** its deadline, not a tick later.
-///
-/// Owner-only by construction, exactly as [`revoke_read_grant`] is.
-pub fn prune_expired_grants(
-    plan: &GrantCutPlan<'_>,
-    owner_deadlines: &BTreeMap<[u8; 32], UnixMillis>,
-    now: UnixMillis,
-) -> Result<Option<RevokedCommittedSet>, RevokeError> {
-    authorize_cut(plan)?;
-
-    let mut expired: BTreeSet<[u8; 32]> = BTreeSet::new();
-    let mut pruned_write_link = false;
-    for entry in &plan.commitment.entries {
-        match owner_deadlines.get(&entry.tag) {
-            Some(deadline) if now.0 >= deadline.0 => {
-                expired.insert(entry.tag);
-                pruned_write_link |= entry.permission == Permission::Write;
-            }
-            _ => {}
-        }
-    }
-    if expired.is_empty() {
-        return Ok(None);
-    }
-
-    resign(
-        drop_tags(plan, &expired)?,
-        RotationPlanes {
-            read: true,
-            write: pruned_write_link,
-        },
-        plan.owner_signer,
-    )
-    .map(Some)
 }
 
 /// The rotation edge a committed-set cut is driven over: one arm per plane.

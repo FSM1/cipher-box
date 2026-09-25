@@ -99,6 +99,22 @@ pub fn poll_tasks_until_parked(tasks: &mut [BoxedTask]) {
     panic!("tasks kept self-waking after {MAX_POLL_PASSES} polling passes");
 }
 
+/// Drive `future` together with the spawned loops, so a future that waits on
+/// one of them settles. Panics when it does not settle within a bounded number
+/// of rounds.
+pub fn block_on_while_ticking<F: IntoFuture>(future: F, tasks: &mut [BoxedTask]) -> F::Output {
+    const MAX_ROUNDS: usize = 64;
+    let mut future = pin!(future.into_future());
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..MAX_ROUNDS {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+            return output;
+        }
+        poll_tasks_until_parked(tasks);
+    }
+    panic!("the future never settled against the running loops");
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BoxedTask, Poll, block_on, poll_tasks_until_parked};

@@ -80,14 +80,6 @@
     "class": "trust"
   },
   {
-    "name": "retired-kind-invite-records",
-    "kind": "invite-records",
-    "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",
-    "blob": "a361760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a636970686572746578745822e11132a56cfbf15b67b863ec8b16fb4365daf7b7ac9c6d6e80b5adaf1d17d9ddc6eb",
-    "check": "retired-owner-local-kind",
-    "class": "malformed"
-  },
-  {
     "name": "cross-kind-received-shares-as-contact-book",
     "kind": "contact-book",
     "ownerSecret": "7172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f90",

@@ -251,7 +251,7 @@ describe('invite link commands', () => {
 
     await expect(result.current.createInviteLink('read', DEADLINE)).resolves.toBe(FRAGMENT);
 
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE, '');
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE);
     expect(linksNow()).toEqual({ ...NO_LINKS, live: true, expiresAt: DEADLINE });
   });
 

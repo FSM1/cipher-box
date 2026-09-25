@@ -1423,15 +1423,7 @@ describe('readSharing', () => {
       state: { ...view.state, inviteLinks: { ...links, expiresAt: undefined } },
     };
 
-    expect(readSharing(fakeWasm, open).state?.inviteLinks?.expiresAt).toBeNull();
-  });
-
-  it('reads unreadable link records as absent while the grants still stand', () => {
-    const unreadable = { ...view, state: { ...view.state, inviteLinks: undefined } };
-
-    const state = readSharing(fakeWasm, unreadable).state;
-    expect(state?.grants).toHaveLength(1);
-    expect(state?.inviteLinks).toBeNull();
+    expect(readSharing(fakeWasm, open).state?.inviteLinks.expiresAt).toBeNull();
   });
 
   it('reads an unreachable scope as absent, never as one granting nothing', () => {

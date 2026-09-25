@@ -243,7 +243,7 @@ export interface SharingInviteLinksDescriptor {
    * where there is no live link.
    */
   expiresAt: bigint | null;
-  /** Invite claims that wait for `convertInviteClaims` here, as this device's link records count them. */
+  /** Invite claims that wait for `convertInviteClaims` here. */
   pendingClaims: number;
 }
 
@@ -260,8 +260,8 @@ export interface ScopeSharingDescriptor {
   grantRefusal: string | null;
   /** The refusal an invite-link mint here would report, or `null`. */
   inviteLinkRefusal: string | null;
-  /** `null` where the engine reached the scope but not the owner's link records. */
-  inviteLinks: SharingInviteLinksDescriptor | null;
+  /** This owner's invite links here, read off the scope's own record. */
+  inviteLinks: SharingInviteLinksDescriptor;
 }
 
 /**
@@ -559,7 +559,7 @@ export type CommandDescriptor =
       kind: 'createInviteLink';
       node: Uint8Array;
       permission: Permission;
-      /** Unix-millis deadline; `null` mints a link that never expires. */
+      /** Unix-millis deadline; `null` takes the engine's default lifetime. */
       expiresAt: bigint | null;
       /** Shown to the holder, signed by the owner; the engine bounds it, empty is allowed. */
       ownerName: string;

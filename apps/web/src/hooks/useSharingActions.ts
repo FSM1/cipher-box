@@ -38,7 +38,7 @@ export interface SharingActions {
   /**
    * Mints a link over this scope, resolving with the engine's fragment
    * (`MintedInviteLink`) or `null` where the engine refused. An omitted
-   * `expiresAt` mints one that never expires. The fragment is the link's whole
+   * `expiresAt` takes the engine's default lifetime. The fragment is the link's whole
    * capability and the engine hands it over once, so a caller that drops it
    * cannot ask for it again.
    */
@@ -103,8 +103,7 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       async (permission, expiresAt) => {
         let fragment: string | null = null;
         await run('createInviteLink', async (facade) => {
-          // No display name exists at sign-in, and an email is never a name (ADR 0027 D1).
-          fragment = (await facade.createInviteLink(target, permission, expiresAt, '')).fragment;
+          fragment = (await facade.createInviteLink(target, permission, expiresAt)).fragment;
           await read(facade);
         });
         return fragment;

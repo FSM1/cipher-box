@@ -462,7 +462,7 @@ describe('EngineFacade', () => {
     });
   });
 
-  it('spells an omitted invite deadline as a link that never expires', async () => {
+  it('spells an omitted invite deadline as the engine default', async () => {
     const transport = mintingTransport();
     const facade = new EngineFacade(transport);
     const node = new Uint8Array(16);
