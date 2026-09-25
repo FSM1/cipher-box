@@ -81,6 +81,10 @@ export class OpfsStagingStore implements StagingStoreSeam {
   private readonly dirName: string;
   private readonly open: () => Promise<IDBDatabase>;
   private stagedDirectory: Promise<FileSystemDirectoryHandle> | undefined;
+  /** The settle point of the last task queued on each staged file name. */
+  private readonly fileQueues = new Map<string, Promise<void>>();
+  /** The temps of the writes in flight, which `clear()` must not sweep. */
+  private readonly liveTemps = new Set<string>();
 
   constructor(name = 'cipherbox-staging') {
     this.dirName = `${name}${STAGED_DIR_SUFFIX}`;
@@ -111,6 +115,24 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // still holds open must not fail the open; the next one reclaims it.
     await Promise.all(debris.map((name) => removeIfPresent(dir, name).catch(() => undefined)));
     return dir;
+  }
+
+  /**
+   * Runs `task` after every earlier task on `fileName` settles. An OPFS sync
+   * access handle is exclusive, and a move or remove onto a file with an open
+   * handle fails, so every access to one staged file takes its turn.
+   */
+  private serialized<T>(fileName: string, task: () => Promise<T>): Promise<T> {
+    const run = (this.fileQueues.get(fileName) ?? Promise.resolve()).then(task);
+    const settled = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.fileQueues.set(fileName, settled);
+    void settled.then(() => {
+      if (this.fileQueues.get(fileName) === settled) this.fileQueues.delete(fileName);
+    });
+    return run;
   }
 
   /** The staged record names in `dir`; an in-flight temp is not a record. */
@@ -156,11 +178,29 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // detached value truncates or throws on `handle.write`.
     const fileName = toHex(stagingKey);
     const staged = bytes.slice();
+    return this.serialized(fileName, () => this.writeStaged(fileName, staged));
+  }
+
+  private async writeStaged(fileName: string, staged: Uint8Array): Promise<void> {
     const dir = await this.stagedDir();
     // Every byte lands in a temp the engine cannot see, and the rename is the
     // commit point: a constrained write (a short count, or the throw the spec
     // names QuotaExceededError) leaves the key's previous bytes untouched.
     const tempName = `${TEMP_PREFIX}${globalThis.crypto.randomUUID()}`;
+    this.liveTemps.add(tempName);
+    try {
+      await this.commitStaged(dir, tempName, fileName, staged);
+    } finally {
+      this.liveTemps.delete(tempName);
+    }
+  }
+
+  private async commitStaged(
+    dir: FileSystemDirectoryHandle,
+    tempName: string,
+    fileName: string,
+    staged: Uint8Array
+  ): Promise<void> {
     const tempHandle = await dir.getFileHandle(tempName, { create: true });
     const handle = await tempHandle.createSyncAccessHandle();
     let failure: { message: string; cause?: unknown } | undefined;
@@ -196,6 +236,10 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // Hex the key before the first await: a WASM-backed view detached by a
     // concurrent `Memory.grow()` across the await would hex to ''.
     const fileName = toHex(stagingKey);
+    return this.serialized(fileName, () => this.readStaged(fileName));
+  }
+
+  private async readStaged(fileName: string): Promise<Uint8Array | null> {
     const dir = await this.stagedDir();
     let fileHandle: FileSystemFileHandle;
     try {
@@ -224,8 +268,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // Hex the key before the first await: a WASM-backed view detached by a
     // concurrent `Memory.grow()` across the await would hex to ''.
     const fileName = toHex(stagingKey);
-    const dir = await this.stagedDir();
-    await removeIfPresent(dir, fileName);
+    return this.serialized(fileName, async () => removeIfPresent(await this.stagedDir(), fileName));
   }
 
   async stagedKeys(): Promise<Uint8Array[]> {
@@ -238,12 +281,15 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   /**
-   * Sweeps in-flight temps too, which enumeration hides: a temp holds the bytes
-   * a killed write was staging, so an erase that stepped over it would leave
-   * that record behind. IndexedDB resets a key generator only when its store is
-   * deleted, so clearing leaves op ids strictly increasing and unreused.
+   * Waits for every access in flight when the wipe starts, so a write that
+   * started earlier commits before the wipe and not after it. Sweeps the temps
+   * a failed or killed write left, which enumeration hides, but not the temp of
+   * a write that started later. IndexedDB resets a key generator only when
+   * its store is deleted, so clearing leaves op ids strictly increasing and
+   * unreused.
    */
   async clear(): Promise<void> {
+    const inFlight = Promise.all(this.fileQueues.values());
     const queue = await refusalOf(async () => {
       const db = await this.open();
       const tx = db.transaction(STAGING_OPS_STORE, 'readwrite');
@@ -251,9 +297,11 @@ export class OpfsStagingStore implements StagingStoreSeam {
       await transactionDone(tx);
     });
     const staged = await refusalOf(async () => {
+      await inFlight;
       const dir = await this.stagedDir();
+      const names = (await namesIn(dir)).filter((name) => !this.liveTemps.has(name));
       const removals = await Promise.allSettled(
-        (await namesIn(dir)).map((name) => removeIfPresent(dir, name))
+        names.map((name) => this.serialized(name, () => removeIfPresent(dir, name)))
       );
       const refused = removals.find((removal) => removal.status === 'rejected');
       if (refused) throw refused.reason as Error;
@@ -267,8 +315,10 @@ export class OpfsStagingStore implements StagingStoreSeam {
     let total = 0;
     for await (const name of this.recordNames(dir)) {
       try {
-        const fileHandle = await dir.getFileHandle(name);
-        total += (await fileHandle.getFile()).size;
+        total += await this.serialized(name, async () => {
+          const fileHandle = await dir.getFileHandle(name);
+          return (await fileHandle.getFile()).size;
+        });
       } catch (error) {
         // A record removed between the walk and the stat contributes zero,
         // matching the desktop host rather than failing the budget read.
