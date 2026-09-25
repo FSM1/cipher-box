@@ -2367,8 +2367,8 @@ mod tests {
         async fn poll(&self) -> crate::seams::SeamResult<Vec<crate::seams::MailboxItem>> {
             Ok(Vec::new())
         }
-        async fn ack(&self, _item_id: &str) -> crate::seams::SeamResult<()> {
-            Ok(())
+        async fn ack(&self, _item_id: &str) -> crate::seams::SeamResult<bool> {
+            Ok(false)
         }
     }
 

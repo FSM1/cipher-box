@@ -42,6 +42,8 @@ export interface WasmEvent {
   readonly retryable?: boolean;
   readonly deadLetterReason?: number;
   readonly scopeRoot?: Uint8Array;
+  readonly name?: string;
+  readonly fingerprint?: string;
 }
 
 /**
@@ -167,6 +169,7 @@ export interface WasmSharingInviteLink {
   readonly admissionCap: bigint;
   readonly pendingClaims: number;
   readonly contactBudgetFull: boolean;
+  readonly refusedClaims: number;
 }
 
 /** wasm-bindgen `ScopeSharing` — what one scope's own record says. */
@@ -398,8 +401,9 @@ export interface EngineWasm {
       ownerName: string
     ): WasmCommand;
     revokeInviteLink(node: WasmNodeId, linkTag: Uint8Array | undefined): WasmCommand;
-    claimInviteLink(fragment: string): WasmCommand;
+    claimInviteLink(fragment: string, name: string): WasmCommand;
     convertInviteClaims(node: WasmNodeId): WasmCommand;
+    dismissRefusedClaims(node: WasmNodeId): WasmCommand;
     rotateNow(node: WasmNodeId): WasmCommand;
     saveVaultSettings(settings: WasmVaultSettings): WasmCommand;
     siweLink(message: string, signature: Uint8Array): WasmCommand;

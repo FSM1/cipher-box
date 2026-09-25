@@ -20,9 +20,8 @@
 //!   [`MAX_ACCEPTS_PER_SENDER`] of the pass's slots, so one contact's
 //!   never-retired pointers cannot starve every other contact's share.
 //!
-//! The same poll also counts the invite claims that name one of the owner's own
-//! scope pointers. Only a conversion acks a claim, so the count is a read, not a
-//! retirement.
+//! The same poll also hands on the invite claims that name one of the owner's
+//! own scope pointers. Conversion acks them (ADR 0023 D5); this leg does not.
 
 use core::cell::RefCell;
 use std::collections::BTreeMap;
@@ -59,17 +58,13 @@ const MAX_ACCEPTS_PER_PASS: usize = 8;
 /// otherwise hold every slot for good.
 const MAX_ACCEPTS_PER_SENDER: usize = 2;
 
-/// The invite claims an owner's inbox holds that name one of this owner's scope
-/// pointers, keyed by the mailbox item that carries each.
-pub(crate) type PendingInviteClaims = BTreeMap<String, PendingClaim>;
-
-/// One counted claim: the scope root its pointer names, and the identity that
-/// signed it — a link's ephemeral identity, which is what splits the count
-/// per link.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PendingClaim {
-    pub scope: NodeId,
-    pub sender: [u8; IDENTITY_PUBLIC_LEN],
+/// A claim item on the owner's inbox that names one of this owner's scope
+/// pointers, and the scope root it names.
+pub(crate) struct OwnedClaim {
+    /// The verified item. Its sender is the link's ephemeral identity.
+    pub item: VerifiedMailboxItem,
+    /// The scope root whose pointer the claim names.
+    pub scope_root: NodeId,
 }
 
 /// The seams one mailbox pull reads, plus this device's own encryption subkey —
@@ -99,38 +94,32 @@ pub(crate) struct ShareInbox<'a, M, T, H, F> {
 }
 
 /// The claims on `items` that name one of this owner's scope pointers. The
-/// link checks run only at conversion, so a claim this counts can still be
+/// link checks run only at conversion, so a claim handed on here can still be
 /// refused there.
-fn pending_claims(
-    items: &[VerifiedMailboxItem],
+pub(crate) fn owned_claims(
+    items: Vec<VerifiedMailboxItem>,
     scope_of_pointer: &dyn Fn(&IpnsName) -> Option<NodeId>,
-) -> PendingInviteClaims {
+) -> Vec<OwnedClaim> {
     items
-        .iter()
+        .into_iter()
         .filter_map(|item| {
             let claim = InviteClaim::decode(&item.payload).ok()?;
-            Some((
-                item.item_id.clone(),
-                PendingClaim {
-                    scope: scope_of_pointer(&claim.scope_pointer_name)?,
-                    sender: item.sender_identity.to_sec1(),
-                },
-            ))
+            let scope_root = scope_of_pointer(&claim.scope_pointer_name)?;
+            Some(OwnedClaim { item, scope_root })
         })
         .collect()
 }
 
 impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T, H, F> {
     /// Accept every share pointer on the inbox that a contact this vault
-    /// imported sent, and count the invite claims that wait for the owner to
+    /// imported sent, and hand on the invite claims that wait for the owner to
     /// convert them. The render tree moves on the received-share leg that
     /// follows, so this emits no repaint of its own.
     ///
     /// `v` is the envelope version the pointer was sealed under; a payload from
     /// any other does not open and never reaches this arm. `scope_of_pointer`
     /// answers which of this owner's scopes a scope pointer name belongs to.
-    /// `None` where the inbox did not answer, so the caller keeps the count it
-    /// holds.
+    /// `None` where the inbox did not answer.
     pub(crate) async fn pull<St, E>(
         &self,
         staging: &St,
@@ -138,14 +127,14 @@ impl<M: Mailbox, T: RecordTransport, H: Http, F: FloorStore> ShareInbox<'_, M, T
         v: u64,
         scope_of_pointer: &dyn Fn(&IpnsName) -> Option<NodeId>,
         events: &mpsc::UnboundedSender<Event>,
-    ) -> Option<PendingInviteClaims>
+    ) -> Option<Vec<OwnedClaim>>
     where
         St: StagingStore,
         E: Entropy,
     {
         let items = poll_verified(self.mailbox, self.enc_secret, v).await.ok()?;
         self.accept_pointers(&items, staging, entropy, events).await;
-        Some(pending_claims(&items, scope_of_pointer))
+        Some(owned_claims(items, scope_of_pointer))
     }
 
     async fn accept_pointers<St, E>(
@@ -489,8 +478,8 @@ mod tests {
             self.pass().0
         }
 
-        /// One pull pass: the events it emitted and the claims it counted.
-        fn pass(&self) -> (Vec<Event>, Option<PendingInviteClaims>) {
+        /// One pull pass: the events it emitted and the claims it handed on.
+        fn pass(&self) -> (Vec<Event>, Option<Vec<OwnedClaim>>) {
             let (sender, mut events) = mpsc::unbounded();
             let claims = block_on(
                 ShareInbox {
@@ -544,15 +533,16 @@ mod tests {
                 claim_id: [0x71; CLAIM_ID_LEN],
                 scope_pointer_name: pointer,
                 contact_code: ContactCode::create(&stranger(), stranger_enc().public()).encode(),
+                name: String::new(),
             };
-            self.post(link, &claim.encode(), idempotency_key);
+            self.post(link, &claim.encode().expect("encodes"), idempotency_key);
         }
 
-        /// The claims one pass counts, per scope.
+        /// The claims one pass hands on, per scope.
         fn pending(&self) -> Option<BTreeMap<NodeId, usize>> {
             let mut counts = BTreeMap::new();
-            for claim in self.pass().1?.values() {
-                *counts.entry(claim.scope).or_default() += 1;
+            for claim in self.pass().1? {
+                *counts.entry(claim.scope_root).or_default() += 1;
             }
             Some(counts)
         }
@@ -757,24 +747,24 @@ mod tests {
         assert_eq!(fx.inbox_len(), 1, "and the item is never acked");
     }
 
-    /// A link holder's claim sits on the owner's inbox until a conversion. The
-    /// pass counts it at the scope whose pointer it names, and leaves it there.
+    /// A link holder's claim sits on the owner's inbox until a conversion acks
+    /// it. The pull hands it on at the scope whose pointer it names, and leaves
+    /// it there.
     #[test]
-    fn a_claim_naming_an_owned_pointer_counts_at_its_scope_and_stays_on_the_inbox() {
+    fn a_claim_naming_an_owned_pointer_is_handed_on_at_its_scope_and_stays_on_the_inbox() {
         let fx = Inbox::new();
         let link = stranger();
         fx.claim(&link, owned_pointer(), "claim-1");
         fx.claim(&link, owned_pointer(), "claim-2");
 
         assert_eq!(fx.pending(), Some(BTreeMap::from([(NodeId(SCOPE), 2)])));
-        assert_eq!(fx.inbox_len(), 2, "counting acks nothing");
+        assert_eq!(fx.inbox_len(), 2, "the pull acks no claim");
     }
 
     /// A claim naming a pointer this owner does not hold, and an item that is
-    /// no claim, stay out of the count and on the inbox for the conversion to
-    /// judge.
+    /// no claim, are not handed on and stay on the inbox.
     #[test]
-    fn a_claim_naming_another_pointer_is_not_counted() {
+    fn a_claim_naming_another_pointer_is_not_handed_on() {
         let fx = Inbox::new();
         let link = stranger();
         let elsewhere =

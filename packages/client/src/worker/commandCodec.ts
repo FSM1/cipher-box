@@ -385,9 +385,14 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'), tag);
     }
     case 'claimInviteLink':
-      return wasm.Command.claimInviteLink(fragment(descriptor.fragment, 'fragment'));
+      return wasm.Command.claimInviteLink(
+        fragment(descriptor.fragment, 'fragment'),
+        text(descriptor.name, 'name')
+      );
     case 'convertInviteClaims':
       return wasm.Command.convertInviteClaims(nodeId(wasm, descriptor.node, 'node'));
+    case 'dismissRefusedClaims':
+      return wasm.Command.dismissRefusedClaims(nodeId(wasm, descriptor.node, 'node'));
     case 'rotateNow':
       return wasm.Command.rotateNow(nodeId(wasm, descriptor.node, 'node'));
     case 'saveVaultSettings':
@@ -595,6 +600,10 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
       return { kind: 'parkedWritesUnreadable' };
     case 'granteeNamesCleared':
       return { kind: 'granteeNamesCleared' };
+    case 'conversionRecordUnreadable':
+      return { kind: 'conversionRecordUnreadable' };
+    case 'refusedClaimDropped':
+      return { kind: 'refusedClaimDropped' };
     case 'vaultSettingsChanged':
       return { kind: 'vaultSettingsChanged' };
     case 'attributableAbuse':
@@ -616,6 +625,13 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
         kind: 'scopeExitCutOwed',
         scopeRoot: event.scopeRoot ?? new Uint8Array(),
         detail: event.detail ?? '',
+      };
+    case 'granteeJoined':
+      return {
+        kind: 'granteeJoined',
+        scopeRoot: event.scopeRoot ?? new Uint8Array(),
+        name: event.name ?? '',
+        fingerprint: event.fingerprint ?? '',
       };
     case 'opProgress':
       return {
@@ -989,6 +1005,7 @@ function readInviteLink(
     admissionCap: Number(link.admissionCap),
     pendingClaims: link.pendingClaims,
     contactBudgetFull: link.contactBudgetFull,
+    refusedClaims: link.refusedClaims,
   };
 }
 

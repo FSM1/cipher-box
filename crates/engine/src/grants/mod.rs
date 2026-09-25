@@ -15,6 +15,7 @@ pub mod append;
 pub mod child_index;
 pub mod contact;
 pub mod contact_store;
+pub mod conversion;
 pub mod create;
 pub(crate) mod grafted;
 pub(crate) mod inbox;
@@ -29,7 +30,8 @@ pub(crate) mod received_status;
 pub mod revocation;
 
 pub use accept::{
-    AcceptError, AcceptOutcome, BookmarkKey, LinkHold, MAX_RECEIVED_SHARES, ReceivedShare,
+    AcceptError, AcceptOutcome, BookmarkKey, CLAIM_KEY_LEN, CLAIM_REPOST_FIRST_WAIT,
+    CLAIM_REPOST_MAX_WAIT, HeldClaim, LinkHold, MAX_RECEIVED_SHARES, ReceivedShare,
     ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList,
     SentIndex, SentShare, SharePointer, TooLong, accept_share,
 };
@@ -55,11 +57,11 @@ pub use create::{
     mint_grantee_scope, post_share_pointer, post_share_pointer_at, resume_grantee_scope,
 };
 pub use invite::{
-    CLAIM_ID_LEN, ClaimOutcome, CommittedLink, CommittedScope, ConvertedClaim,
-    DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, InviteClaim, InviteError,
-    InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES, OwnerAuthority,
-    committed_links, convert_invite_claim, locate_invite_link, mint_invite_grant, mint_invite_row,
-    post_invite_claim,
+    AckedClaim, CLAIM_ID_LEN, ClaimDisposition, ClaimOutcome, CommittedLink, CommittedScope,
+    ConvertedClaim, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, InviteClaim,
+    InviteError, InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES,
+    OwnerAuthority, committed_links, convert_invite_claim, link_of_sender, locate_invite_link,
+    mint_invite_grant, mint_invite_row, post_invite_claim,
 };
 pub use invite_mint::{
     FragmentNames, InviteMintError, InviteMintOutcome, InviteMintPlan, MintedInviteLink,

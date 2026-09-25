@@ -551,7 +551,7 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
 
     await expect(
-      new EngineFacade(transport).claimInviteLink('x'.repeat(MAX_FRAGMENT_CHARS + 1))
+      new EngineFacade(transport).claimInviteLink('x'.repeat(MAX_FRAGMENT_CHARS + 1), '')
     ).rejects.toThrow('that is not an invite link');
     expect(transport.commands).toEqual([]);
   });

@@ -26,7 +26,7 @@ function claimEngine(
   let routerHash = '';
   const listeners = new Set<() => void>();
   let account: string | null = signedIn ? 'acct01' : null;
-  const claimInviteLink = vi.fn((_fragment: string) => {
+  const claimInviteLink = vi.fn((_fragment: string, _name: string) => {
     addressAtDispatch.push(window.location.hash);
     return refusal === null ? Promise.resolve({ kind: 'done' as const }) : Promise.reject(refusal);
   });
@@ -113,7 +113,7 @@ describe('the invite claim route', () => {
 
     await claim();
 
-    expect(claimInviteLink.mock.calls).toEqual([[FRAGMENT]]);
+    expect(claimInviteLink.mock.calls).toEqual([[FRAGMENT, '']]);
     // Nothing rendered it, so nothing screenshots, logs, or restores it.
     expect(document.body.innerHTML).not.toContain(FRAGMENT);
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('claimed');
@@ -174,7 +174,7 @@ describe('the invite claim route', () => {
 
     await claim();
 
-    expect(engine.claimInviteLink.mock.calls).toEqual([[FRAGMENT]]);
+    expect(engine.claimInviteLink.mock.calls).toEqual([[FRAGMENT, '']]);
     expect(screen.getByTestId('invite-claim').dataset.state).toBe('claimed');
   });
 

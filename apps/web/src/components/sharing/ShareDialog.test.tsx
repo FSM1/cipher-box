@@ -37,6 +37,7 @@ function inviteLink(seed: number, expiresAt: bigint): SharingInviteLinkDescripto
     admissionCap: 5,
     pendingClaims: 0,
     contactBudgetFull: false,
+    refusedClaims: 0,
   };
 }
 

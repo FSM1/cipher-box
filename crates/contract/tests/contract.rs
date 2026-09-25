@@ -1631,10 +1631,13 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         owner_identity.verifying_key().to_sec1()
     );
 
-    recipient_client
-        .ack(&items[0].item_id)
-        .await
-        .expect("ack the delivered pointer");
+    assert!(
+        recipient_client
+            .ack(&items[0].item_id)
+            .await
+            .expect("ack the delivered pointer"),
+        "the ack removes the delivered pointer"
+    );
 }
 
 // --- device approval (blueprint/api.md, Identity and auth) ------------------

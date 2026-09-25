@@ -788,6 +788,34 @@ fn a_write_grant_cut_refuses_a_set_the_owner_did_not_sign() {
     assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
 }
 
+/// A write conversion cuts a scope whose set commits no write row yet: the
+/// claimant's write row is appended at the moved name after the wave.
+#[test]
+fn a_write_conversion_cut_drives_a_read_only_set_through_the_write_plane() {
+    let fx = Fixture::new();
+    let read_only = revoke_write_grant(&fx.plan(), &write_tag(), WriteRevokeKind::Full)
+        .expect("the write row leaves the set");
+    let sig = read_only.commitment_sig;
+    let plan = GrantCutPlan {
+        commitment: &read_only.commitment,
+        commitment_sig: &sig,
+        grant_ledger: &read_only.grant_ledger,
+        ..fx.plan()
+    };
+    let cut = cut_for_write_scope(&plan).expect("a read-only set cuts");
+    assert!(!cut.planes().read());
+    assert!(cut.planes().write());
+    assert_eq!(cut.commitment, read_only.commitment);
+
+    let rotator = FakeCutRotator::new();
+    block_on(rotate_on_cut(&rotator, node(1), &cut)).expect("the write plane");
+    assert_eq!(*rotator.seen.borrow(), ["publish-cut", "write"]);
+
+    let err = cut_for_write_scope(&fx.plan_signed_by(&stranger()))
+        .expect_err("a set this signer never authorized");
+    assert_eq!(err.check(), "rot-revoke-unauthorized-signer");
+}
+
 #[test]
 fn a_read_revoke_leaves_the_write_plane_alone() {
     let fx = Fixture::new();

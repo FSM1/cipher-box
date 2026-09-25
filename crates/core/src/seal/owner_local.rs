@@ -60,18 +60,22 @@ pub enum OwnerLocalKind {
     /// The scope roots a move out of a granted scope owes a scope-exit cut for,
     /// until each cut lands.
     ScopeExitDebt,
+    /// The invite claims an owner device acked and has not converted yet, and
+    /// the conversions it refused (ADR 0023 D5).
+    PendingConversions,
     /// The owner device's last-seen grantee name per identity (ADR 0027 D4).
     GranteeNames,
 }
 
 impl OwnerLocalKind {
     /// Every kind, in discriminator order. Frozen in the KAT manifest.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ReceivedShares,
         Self::ContactBook,
         Self::RetireLedger,
         Self::DoomedJournal,
         Self::ScopeExitDebt,
+        Self::PendingConversions,
         Self::GranteeNames,
     ];
 
@@ -83,6 +87,7 @@ impl OwnerLocalKind {
             Self::RetireLedger => "retire-ledger",
             Self::DoomedJournal => "doomed-journal",
             Self::ScopeExitDebt => "scope-exit-debt",
+            Self::PendingConversions => "pending-conversions",
             Self::GranteeNames => "grantee-names",
         }
     }
@@ -95,6 +100,7 @@ impl OwnerLocalKind {
             Self::RetireLedger => 0x04,
             Self::DoomedJournal => 0x05,
             Self::ScopeExitDebt => 0x06,
+            Self::PendingConversions => 0x07,
             Self::GranteeNames => 0x08,
         }
     }
@@ -302,7 +308,8 @@ mod tests {
                 OwnerLocalKind::RetireLedger => 2,
                 OwnerLocalKind::DoomedJournal => 3,
                 OwnerLocalKind::ScopeExitDebt => 4,
-                OwnerLocalKind::GranteeNames => 5,
+                OwnerLocalKind::PendingConversions => 5,
+                OwnerLocalKind::GranteeNames => 6,
             };
             assert_eq!(
                 OwnerLocalKind::ALL[index],

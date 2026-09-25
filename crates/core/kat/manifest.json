@@ -669,6 +669,11 @@
         "hpkeInfo": "cipherbox/v2/owner-local/scope-exit-debt"
       },
       {
+        "name": "pending-conversions",
+        "discriminator": 7,
+        "hpkeInfo": "cipherbox/v2/owner-local/pending-conversions"
+      },
+      {
         "name": "grantee-names",
         "discriminator": 8,
         "hpkeInfo": "cipherbox/v2/owner-local/grantee-names"
@@ -682,11 +687,11 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 7
+      "count": 8
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 40,
+      "count": 52,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",

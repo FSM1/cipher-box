@@ -26,6 +26,7 @@ use crate::content::chunk::SEALED_LEAF_OVERHEAD;
 use crate::content::dag::{LeafCid, RootManifest};
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
+use crate::grants::conversion::CONVERSION_RECORD_PREFIX;
 use crate::grants::{CONTACTS_PREFIX, RECEIVED_SHARES_PREFIX};
 use crate::net::{NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX};
 use crate::profile::SyncTimingProfile;
@@ -46,8 +47,8 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// retired node's tombstone, a
 /// doomed-name journal entry, a
 /// received-shares list, a contact book, or the
-/// notices of its versionless dead letters, or the scope roots that still owe a
-/// scope-exit cut. All are per-owner, so their whole prefixes are
+/// notices of its versionless dead letters, the scope roots that still owe a
+/// scope-exit cut, or the conversion record. All are per-owner, so their whole prefixes are
 /// referenced — an entry this session cannot read belongs to the identity that
 /// still needs it.
 ///
@@ -63,6 +64,7 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(CONTACTS_PREFIX)
         || key.starts_with(DEAD_LETTER_NOTICES_PREFIX)
         || key.starts_with(SCOPE_EXIT_DEBT_PREFIX)
+        || key.starts_with(CONVERSION_RECORD_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.
@@ -1288,6 +1290,7 @@ mod tests {
                 RECEIVED_SHARES_PREFIX,
                 CONTACTS_PREFIX,
                 SCOPE_EXIT_DEBT_PREFIX,
+                CONVERSION_RECORD_PREFIX,
             ] {
                 store
                     .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())

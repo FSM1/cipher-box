@@ -256,6 +256,8 @@ export interface SharingInviteLinkDescriptor {
   pendingClaims: number;
   /** This link's claims hold its whole contact share, so none converts until a revoke. */
   contactBudgetFull: boolean;
+  /** Invite claims this link refused at a cap: its admission cap or the grant set was full. */
+  refusedClaims: number;
 }
 
 /** What one scope's own record says, as data (mirrors `ScopeSharing`). */
@@ -620,8 +622,9 @@ export type CommandDescriptor =
    * crosses verbatim, is never parsed, and never reaches a log or any durable
    * store on the way. Length-bounded by [`MAX_FRAGMENT_CHARS`].
    */
-  | { kind: 'claimInviteLink'; fragment: string }
+  | { kind: 'claimInviteLink'; fragment: string; name: string }
   | { kind: 'convertInviteClaims'; node: Uint8Array }
+  | { kind: 'dismissRefusedClaims'; node: Uint8Array }
   | { kind: 'rotateNow'; node: Uint8Array }
   | { kind: 'saveVaultSettings'; settings: VaultSettingsDescriptor }
   /** Links a host-collected wallet signature to the account already signed in. */
@@ -771,6 +774,13 @@ export type EventDescriptor =
   | { kind: 'parkedWritesUnreadable' }
   /** This device's grantee-name cache did not open and was cleared; names on the rows stand. */
   | { kind: 'granteeNamesCleared' }
+  /**
+   * This device's conversion record did not open. It is set aside and the
+   * record starts empty; each claimant posts its claim again.
+   */
+  | { kind: 'conversionRecordUnreadable' }
+  /** The conversion record held its bound of refused claims, so the oldest went. */
+  | { kind: 'refusedClaimDropped' }
   | { kind: 'attributableAbuse'; description: string }
   | { kind: 'renewalFailed'; routingKey: string; detail: string }
   | { kind: 'vaultUnprovisioned'; retryable: boolean; detail: string }
@@ -778,6 +788,11 @@ export type EventDescriptor =
   | { kind: 'vaultSettingsChanged' }
   /** A scope-exit cut this device owes did not land, so the scope is uncut. */
   | { kind: 'scopeExitCutOwed'; scopeRoot: Uint8Array; detail: string }
+  /**
+   * A claimant joined the scope through a link. `name` is the name it
+   * suggested, or empty: show it as a suggestion next to `fingerprint`.
+   */
+  | { kind: 'granteeJoined'; scopeRoot: Uint8Array; name: string; fingerprint: string }
   | {
       kind: 'opProgress';
       opId: bigint | null;

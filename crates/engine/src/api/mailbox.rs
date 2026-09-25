@@ -39,10 +39,9 @@ impl<H: Http, C: CredentialStore> Mailbox for ApiClient<H, C> {
             .collect())
     }
 
-    async fn ack(&self, item_id: &str) -> SeamResult<()> {
+    async fn ack(&self, item_id: &str) -> SeamResult<bool> {
         self.mailbox_ack(item_id)
             .await
-            .map(drop)
             .map_err(|error| SeamError::new(format!("mailbox ack: {error}")))
     }
 }

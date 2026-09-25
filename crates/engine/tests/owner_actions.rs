@@ -28,12 +28,17 @@ use cipherbox_core::suite::secret::ct_eq;
 use zeroize::Zeroizing;
 
 use cipherbox_engine::gate::{floor, record_cut_epoch_floor};
+use cipherbox_engine::grants::conversion::{
+    CONVERSION_RECORD_PREFIX, ConversionRecord, MAX_CONVERSION_ENTRIES, POINTER_RETRY_WINDOW,
+    load_conversions, persist_conversions,
+};
 use cipherbox_engine::grants::{
-    CLAIM_ID_LEN, Contact, ContactStore, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME,
-    EphemeralInvitee, GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms,
-    MAX_LINK_CONTACTS, ReceivedShareStore, ResolutionClass, StagingContactStore,
-    StagingGranteeNameCache, StagingReceivedShareStore, import_contact, mint_grant_row,
-    mint_invite_grant, post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
+    AckedClaim, CLAIM_ID_LEN, CLAIM_REPOST_FIRST_WAIT, Contact, ContactStore,
+    DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRow, InviteClaim,
+    InviteFragment, LinkHold, LinkTerms, MAX_LINK_CONTACTS, ReceivedShareStore, ResolutionClass,
+    StagingContactStore, StagingGranteeNameCache, StagingReceivedShareStore, import_contact,
+    mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
+    row_is_owner_attested,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::rotation::{
@@ -44,9 +49,9 @@ use cipherbox_engine::seams::{
     SharerScopedFloorStore, SnapshotCache, StagingStore, UnixMillis,
 };
 use cipherbox_engine::settings::VaultSettings;
-use cipherbox_engine::sync::MAX_QUARANTINE_ATTEMPTS;
 use cipherbox_engine::sync::op::ScopeCrossing;
 use cipherbox_engine::sync::pointer::{open_repoint, scope_pointer_name};
+use cipherbox_engine::sync::{BookkeepingSeal, MAX_QUARANTINE_ATTEMPTS};
 use cipherbox_engine::testkit::account::{
     Blocks, EOL, POINTER_PAYLOAD_VERSION, ROOT, SCOPE, SECRET, TTL_NANOS, owner_identity,
     owner_pointer_read_key, owner_pseudonym, retire_targets, seed_account_with,
@@ -787,29 +792,43 @@ impl GrantScenario {
     /// owner's conversion pass reads the same items either way, and a session
     /// per claimant would price the pass out of the suite.
     fn post_claims(&self, fragment: &str, count: usize) -> Vec<Vec<u8>> {
+        (0..count)
+            .map(|i| {
+                let index = u8::try_from(i).expect("the fixture stays under 256 claimants");
+                self.post_claimant(fragment, index, index)
+            })
+            .collect()
+    }
+
+    /// Post the claim of throwaway claimant `index` under HPKE ephemeral
+    /// `ephemeral`, and answer its identity key. The claim bytes turn on
+    /// `index` alone, so a second call with a fresh `ephemeral` is a re-post.
+    fn post_claimant(&self, fragment: &str, index: u8, ephemeral: u8) -> Vec<u8> {
         let opened = InviteFragment::decode(fragment).expect("the mint's own fragment");
         let invitee =
             EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
         let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
-        (0..count)
-            .map(|i| {
-                let index = u8::try_from(i).expect("the fixture stays under 256 claimants");
-                let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
-                let mut claim_id = [1u8; CLAIM_ID_LEN];
-                claim_id[0] = index;
-                let claim = InviteClaim {
-                    claim_id,
-                    scope_pointer_name: opened.scope_pointer_name.clone(),
-                    contact_code: contact_code(&scalar),
-                };
-                self.post_claim(&owner, &invitee, index, &claim, &format!("claim-{i}"));
-                EcdsaSigner::from_scalar(&scalar)
-                    .expect("valid identity scalar")
-                    .verifying_key()
-                    .to_sec1()
-                    .to_vec()
-            })
-            .collect()
+        let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
+        let mut claim_id = [1u8; CLAIM_ID_LEN];
+        claim_id[0] = index;
+        let claim = InviteClaim {
+            claim_id,
+            scope_pointer_name: opened.scope_pointer_name.clone(),
+            contact_code: contact_code(&scalar),
+            name: String::new(),
+        };
+        self.post_claim(
+            &owner,
+            &invitee,
+            ephemeral,
+            &claim,
+            &format!("claim-{index}"),
+        );
+        EcdsaSigner::from_scalar(&scalar)
+            .expect("valid identity scalar")
+            .verifying_key()
+            .to_sec1()
+            .to_vec()
     }
 
     /// Post one claim under `idempotency_key`. `index` picks this post's own
@@ -829,7 +848,7 @@ impl GrantScenario {
             invitee,
             &[CLAIM_EPHEMERAL_BASE + index; 32],
             ENVELOPE_V,
-            claim,
+            &claim.encode().expect("the claim encodes"),
             idempotency_key,
         ))
         .expect("the claim posts");
@@ -4130,6 +4149,7 @@ fn listed_link(link: &GrantRow, expires_at: UnixMillis, expired: bool) -> Vec<Sh
         admission_cap: DEFAULT_ADMISSION_CAP,
         pending_claims: 0,
         contact_budget_full: false,
+        refused_claims: 0,
     }]
 }
 
@@ -4562,14 +4582,19 @@ fn folder_links(fx: &GrantScenario) -> Vec<SharingInviteLink> {
 
 /// A folder carries any number of links (ADR 0026 D2), so the sharing read
 /// lists each, with the claims its own ephemeral identity signed. A revoke that
-/// names a link by its tag cuts that link alone.
+/// names a link by its tag cuts that link alone. The revoke first converts the
+/// waiting write claim, whose write-scope cut moves the root and every tag with
+/// it, and still cuts the link the host named.
 #[test]
 fn two_links_are_both_listed_and_a_revoke_by_tag_cuts_only_that_one() {
     let mut fx = GrantScenario::new();
     fx.mint_link();
     let write_fragment = fx.mint_link_at(Permission::Write);
-    fx.post_claims(&write_fragment, 1);
+    let claimants = fx.post_claims(&write_fragment, 1);
+    // A delete that gives no answer keeps the acked claim waiting.
+    fx.owner_device.mailbox.set_ack_failing(true);
     tick(&fx.world, &fx.engine, &mut fx._tasks);
+    fx.owner_device.mailbox.set_ack_failing(false);
 
     let listed = folder_links(&fx);
     assert_eq!(listed.len(), 2, "both links are live");
@@ -4599,23 +4624,27 @@ fn two_links_are_both_listed_and_a_revoke_by_tag_cuts_only_that_one() {
         Ok(CommandOutcome::Done)
     );
 
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the claim converted"
+    );
+    let [left] = <[SharingInviteLink; 1]>::try_from(folder_links(&fx)).expect("one link");
     assert_eq!(
-        folder_links(&fx)
-            .into_iter()
-            .map(|link| link.tag)
-            .collect::<Vec<_>>(),
-        vec![write.tag.clone()],
+        left.permission,
+        Permission::Write,
         "the other link stays listed"
     );
-    let committed: Vec<Vec<u8>> = published_grant_section(&fx.world, &fx.blocks, fx.folder)
-        .expect("the scope root republished")
+    assert_ne!(left.tag, write.tag, "the conversion's cut moved its tag");
+    let moved = fx.granted_scope_repoint().current_root;
+    let committed: Vec<Vec<u8>> = published_grant_section_at(&fx.world, &fx.blocks, &moved)
+        .expect("the moved scope root republished")
         .commitment
         .entries
         .iter()
+        .filter(|entry| entry.kind == GrantSetEntryKind::Link)
         .map(|entry| entry.tag.to_vec())
         .collect();
-    assert!(committed.contains(&write.tag), "and stays committed");
-    assert!(!committed.contains(&read.tag), "the named link is cut");
+    assert_eq!(committed, vec![left.tag], "the named link is cut");
 }
 
 /// With two links and no tag, a revoke has no defined cut, so it refuses and
@@ -4673,7 +4702,10 @@ fn a_claim_from_the_fragment_alone_becomes_a_personal_grant_on_the_scope() {
 
     let (mut bearer, _bearer_events) = fx.bearer();
     assert_eq!(
-        block_on(bearer.command(Command::ClaimInviteLink { fragment })),
+        block_on(bearer.command(Command::ClaimInviteLink {
+            fragment,
+            name: String::new(),
+        })),
         Ok(CommandOutcome::Done),
     );
     assert_eq!(
@@ -4717,46 +4749,143 @@ fn a_claim_from_the_fragment_alone_becomes_a_personal_grant_on_the_scope() {
     );
 }
 
-/// A claim waits for the owner's press, so the owner must see it without the
-/// share dialog open: the tick's mailbox pull counts it on the folder's row and
-/// in the link standing, and the conversion that acks it clears both.
+/// The claims waiting at `fx.folder`, as the folder's row and the link standing
+/// each report them.
+fn waiting_claims(fx: &GrantScenario) -> (u32, u32) {
+    let row = block_on(fx.engine.snapshot(ROOT))
+        .expect("the root lists")
+        .children
+        .into_iter()
+        .find(|child| child.id == fx.folder)
+        .expect("the shared folder is listed")
+        .pending_invite_claims;
+    let links = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the link standing reads")
+        .invite_links[0]
+        .pending_claims;
+    (row, links)
+}
+
+/// The claims the link at `fx.folder` refused for good.
+fn refused_claims(fx: &GrantScenario) -> u32 {
+    block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the link standing reads")
+        .invite_links[0]
+        .refused_claims
+}
+
+/// ADR 0023 D3: every tick acks and converts, so a claim needs no press, and
+/// the owner sees a transient "joined" notice for each new grantee.
 #[test]
-fn a_waiting_claim_shows_on_the_folder_row_until_the_owner_converts_it() {
+fn the_tick_converts_a_claim_with_no_command() {
     let mut fx = GrantScenario::new();
     let fragment = fx.mint_link();
-    fx.post_claims(&fragment, 2);
-    let waiting = |fx: &GrantScenario| {
-        let row = block_on(fx.engine.snapshot(ROOT))
-            .expect("the root lists")
-            .children
-            .into_iter()
-            .find(|child| child.id == fx.folder)
-            .expect("the shared folder is listed")
-            .pending_invite_claims;
-        let links = block_on(fx.engine.sharing(fx.folder))
-            .expect("a sharing read")
-            .state
-            .expect("the link standing reads")
-            .invite_links[0]
-            .pending_claims;
-        (row, links)
-    };
-    assert_eq!(waiting(&fx), (0, 0), "nothing counts before a pass polls");
+    let claimants = fx.post_claims(&fragment, 2);
+    assert_eq!(
+        waiting_claims(&fx),
+        (0, 0),
+        "nothing counts before a pass polls"
+    );
+    events_so_far(&mut fx._events);
 
     tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(waiting(&fx), (2, 2));
-    assert_eq!(inbox(&fx.owner_device).len(), 2, "counting acks nothing");
 
-    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the tick acked each claim"
+    );
+    let granted = fx.granted_to();
+    for claimant in &claimants {
+        assert!(granted.contains(claimant), "and converted each one");
+    }
+    assert_eq!(waiting_claims(&fx), (0, 0));
+    let joined = events_so_far(&mut fx._events)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::GranteeJoined { scope_root, fingerprint, .. }
+                    if *scope_root == fx.folder && !fingerprint.is_empty()
+            )
+        })
+        .count();
+    assert_eq!(joined, 2, "one notice per new grantee");
+}
+
+/// ADR 0023 D3, ADR 0024 D4: any owner device converts on its tick, and the
+/// tick holds the same cut authority as the command. A write claim on a
+/// folder with no write scope converts on the other device's tick after
+/// exactly one write-scope cut, and the parent's index names the moved root.
+#[test]
+fn a_write_claim_converts_on_the_other_owner_devices_tick_with_one_cut() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let minted = fx.granted_scope_repoint();
+    let claimants = fx.post_claims(&fragment, 1);
+    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
+    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+
+    assert!(inbox(&fx.owner_device).is_empty(), "the phone acked it");
+    let moved = fx.granted_scope_repoint();
     assert_eq!(
-        waiting(&fx),
-        (0, 0),
-        "the conversion clears what it acked without waiting a pass"
+        moved.write_epoch,
+        minted.write_epoch + 1,
+        "exactly one write-scope cut ran"
+    );
+    let state = block_on(phone_engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the phone reads the moved root through the parent's index");
+    let row = state
+        .grants
+        .iter()
+        .find(|grant| grant.recipient_identity_public_key == claimants[0])
+        .expect("the claimant holds a row");
+    assert_eq!(row.permission, Permission::Write);
+    assert_eq!(state.invite_links[0].pending_claims, 0, "nothing waits");
+}
+
+/// A command pass before this session's first walk knows no scope root, so
+/// it cannot place a pending entry. It keeps the entry, and the first tick
+/// after the walk converts it. The record is durable, so a fresh engine on
+/// the same device reads the entry the last one acked.
+#[test]
+fn a_command_pass_before_the_first_walk_keeps_a_pending_entry_it_cannot_place() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the publish fails");
+    fx.world.record_store.heal_put_for(name.as_str());
+    assert!(inbox(&fx.owner_device).is_empty(), "the claim was acked");
+
+    serve_http(&fx.owner_device, &fx.blocks, 600);
+    let (mut restarted, _restarted_events) = engine_on_api(&fx.owner_device, 43);
+    block_on(restarted.start(secret())).expect("the restart adopts the owner root");
+    let mut tasks = fx.world.scheduler.take_spawned_tasks();
+    assert_eq!(
+        block_on(restarted.command(Command::ConvertInviteClaims { node: fx.folder })),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(!fx.granted_to().contains(&claimants[0]));
+
+    poll_tasks_until_parked(&mut tasks);
+    tick(&fx.world, &restarted, &mut tasks);
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the tick after the walk converts the entry the restart kept"
     );
 }
 
-/// A claim on a link past its owner-signed deadline can never convert, so the
-/// conversion acks it and it stops counting as waiting.
+/// A claim acked past its link's owner-signed deadline can never convert, so
+/// the conversion acks it, settles it, and grants nothing.
 #[test]
 fn a_claim_on_an_expired_link_is_acked_and_stops_counting() {
     let mut fx = GrantScenario::new();
@@ -4770,9 +4899,6 @@ fn a_claim_on_an_expired_link_is_acked_and_stops_counting() {
             .invite_links[0]
             .pending_claims
     };
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(waiting(&fx), 1);
-
     fx.world
         .scheduler
         .advance(DEFAULT_LINK_LIFETIME + Duration::from_secs(1));
@@ -4782,18 +4908,18 @@ fn a_claim_on_an_expired_link_is_acked_and_stops_counting() {
     assert!(fx.granted_to().is_empty(), "and it granted nothing");
 }
 
-/// ADR 0024 D4: a write link mints a read link entry and runs no write cut, so
-/// the scope root stays where the mint published it. The fragment names the
-/// scope pointer, and the claim converts at read.
+/// ADR 0024 D4: a write link mints a read link entry and runs no write cut. Its
+/// conversion on a folder with no write scope runs one write-scope cut first,
+/// and then mints the personal row at write.
 #[test]
-fn a_write_link_mints_at_read_and_runs_no_name_wave() {
+fn a_write_link_mints_at_read_and_its_conversion_runs_one_write_cut() {
     let mut fx = GrantScenario::new();
     let inherited_name = write_name(fx.folder);
     let fragment = fx.mint_link_at(Permission::Write);
 
+    let minted = fx.granted_scope_repoint();
     assert_eq!(
-        fx.granted_scope_repoint().current_root,
-        inherited_name,
+        minted.current_root, inherited_name,
         "no write cut moved the scope root"
     );
     let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
@@ -4821,59 +4947,63 @@ fn a_write_link_mints_at_read_and_runs_no_name_wave() {
     let bearer_pk = recipient_identity().verifying_key().to_sec1().to_vec();
     let (mut bearer, _bearer_events) = fx.bearer();
     assert_eq!(
-        block_on(bearer.command(Command::ClaimInviteLink { fragment })),
+        block_on(bearer.command(Command::ClaimInviteLink {
+            fragment,
+            name: String::new(),
+        })),
         Ok(CommandOutcome::Done),
     );
     assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    let moved = fx.granted_scope_repoint();
+    assert_eq!(
+        moved.write_epoch,
+        minted.write_epoch + 1,
+        "exactly one write-scope cut ran"
+    );
+    assert_ne!(moved.current_root, inherited_name);
     assert!(fx.granted_to().contains(&bearer_pk));
     assert_eq!(
-        fx.committed_permission(&inherited_name),
-        Some(CorePermission::Read),
-        "the conversion grants read until a write cut runs"
+        fx.committed_permission(&moved.current_root),
+        Some(CorePermission::Write),
+        "the claimant holds write at the root the cut moved to"
     );
 }
 
-/// The mailbox chooses what to redeliver, so the second delivery of one claim
-/// must not have the owner re-sign anything: the claimant already holds a row,
-/// so the conversion is a no-op (ADR 0023 D3).
+/// ADR 0023 D3: a second claim by an identity the set already names is a
+/// no-op, so the owner re-signs nothing and appends no row.
 #[test]
-fn a_redelivered_claim_converts_once() {
+fn a_second_claim_by_one_identity_appends_no_row() {
     let mut fx = GrantScenario::new();
     let fragment = fx.mint_link();
-    let (mut bearer, _bearer_events) = fx.bearer();
-    block_on(bearer.command(Command::ClaimInviteLink {
-        fragment: fragment.clone(),
-    }))
-    .expect("the first claim posts");
-    block_on(
-        fx.engine
-            .command(Command::ConvertInviteClaims { node: fx.folder }),
-    )
-    .expect("the first conversion lands");
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    let claim = |id: u8| InviteClaim {
+        claim_id: [id; CLAIM_ID_LEN],
+        scope_pointer_name: opened.scope_pointer_name.clone(),
+        contact_code: contact_code(&RECIPIENT_SECRET),
+        name: String::new(),
+    };
+    fx.post_claim(&owner, &invitee, 0, &claim(0x51), "first");
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
     let sequence_after_first = sequence_at(&fx.world, &write_name(fx.folder));
     let granted_after_first = fx.granted_to();
 
-    // The same holder claiming again is what a redelivery looks like from the
-    // owner's side: a fresh item carrying a claim for a grant already made.
-    block_on(bearer.command(Command::ClaimInviteLink { fragment })).expect("a second claim posts");
-    assert_eq!(
-        block_on(
-            fx.engine
-                .command(Command::ConvertInviteClaims { node: fx.folder })
-        ),
-        Ok(CommandOutcome::Done),
-    );
+    fx.post_claim(&owner, &invitee, 1, &claim(0x52), "second");
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
 
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the second claim is acked"
+    );
     assert_eq!(
         sequence_at(&fx.world, &write_name(fx.folder)),
         sequence_after_first,
         "a claim that grants nothing new republishes nothing"
     );
-    assert_eq!(
-        fx.granted_to(),
-        granted_after_first,
-        "and files one grant for the claimant, not a second"
-    );
+    assert_eq!(fx.granted_to(), granted_after_first);
 }
 
 /// One conversion pass, one publish. Each claim converts against the set the
@@ -4923,6 +5053,7 @@ fn one_claim_delivered_twice_in_one_pass_grants_once() {
         claim_id: [0x33; CLAIM_ID_LEN],
         scope_pointer_name: opened.scope_pointer_name.clone(),
         contact_code: contact_code(&RECIPIENT_SECRET),
+        name: String::new(),
     };
     fx.post_claim(&owner, &invitee, 0, &claim, "twice-a");
     fx.post_claim(&owner, &invitee, 1, &claim, "twice-b");
@@ -4945,11 +5076,10 @@ fn one_claim_delivered_twice_in_one_pass_grants_once() {
     assert!(inbox(&fx.owner_device).is_empty());
 }
 
-/// Ack-after-durable, at the batch scale: nothing this pass converted reached
-/// the record plane, so no claim may be acked. Every item redelivers, and the
-/// next press converts them all.
+/// ADR 0023 D5: the ack comes first, so a failed publish leaves every acked
+/// claim in the conversion record, and the next pass converts them all.
 #[test]
-fn a_conversion_pass_that_cannot_publish_acks_no_claim() {
+fn a_conversion_that_cannot_publish_keeps_every_acked_claim_for_the_retry() {
     let mut fx = GrantScenario::new();
     let fragment = fx.mint_link();
     let claimants = fx.post_claims(&fragment, 3);
@@ -4961,30 +5091,34 @@ fn a_conversion_pass_that_cannot_publish_acks_no_claim() {
         fx.convert().is_err(),
         "a publish nothing accepted is reported, never swallowed"
     );
-
-    assert_eq!(inbox(&fx.owner_device).len(), 3, "no claim is acked");
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "each claim was acked first"
+    );
     assert_eq!(
         fx.granted_to(),
         committed,
-        "and no grant reached the record plane"
+        "no grant reached the record plane"
+    );
+    assert_eq!(
+        waiting_claims(&fx),
+        (3, 3),
+        "the conversion record holds all three"
     );
 
     fx.world.record_store.heal_put_for(name.as_str());
     assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
     let granted = fx.granted_to();
     for claimant in &claimants {
-        assert!(
-            granted.contains(claimant),
-            "the next press converts every claim the failed one left"
-        );
+        assert!(granted.contains(claimant), "the retry converts every claim");
     }
+    assert_eq!(waiting_claims(&fx), (0, 0));
 }
 
-/// A terminal claim is acked before the publish, so a publish that fails does
-/// not bring it back: the count drops it at the ack, and keeps only the claim
-/// the failed pass left on the inbox.
+/// A claim that can never convert settles in the pass that reads it, so a
+/// publish that fails keeps only the claims the retry can still grant.
 #[test]
-fn a_claim_acked_before_a_failed_publish_leaves_the_count() {
+fn a_terminal_claim_leaves_the_count_when_the_publish_fails() {
     let mut fx = GrantScenario::new();
     let fragment = fx.mint_link();
     fx.post_claims(&fragment, 1);
@@ -4992,61 +5126,784 @@ fn a_claim_acked_before_a_failed_publish_leaves_the_count() {
     let invitee =
         EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
     let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
-    // The owner's own code: a conversion refuses it for good and acks it.
+    // The owner's own code: a conversion refuses it for good.
     let terminal = InviteClaim {
         claim_id: [0x44; CLAIM_ID_LEN],
         scope_pointer_name: opened.scope_pointer_name.clone(),
         contact_code: contact_code(&SECRET),
+        name: String::new(),
     };
     fx.post_claim(&owner, &invitee, 9, &terminal, "terminal");
-    let waiting = |fx: &GrantScenario| {
-        block_on(fx.engine.snapshot(ROOT))
-            .expect("the root lists")
-            .children
-            .into_iter()
-            .find(|child| child.id == fx.folder)
-            .expect("the shared folder is listed")
-            .pending_invite_claims
-    };
-    tick(&fx.world, &fx.engine, &mut fx._tasks);
-    assert_eq!(waiting(&fx), 2);
 
     let name = write_name(fx.folder);
     fx.world.record_store.fail_put_for(name.as_str());
     assert!(fx.convert().is_err(), "the publish fails");
     fx.world.record_store.heal_put_for(name.as_str());
 
+    assert!(inbox(&fx.owner_device).is_empty(), "both claims were acked");
     assert_eq!(
-        inbox(&fx.owner_device).len(),
-        1,
-        "only the terminal claim was acked"
+        waiting_claims(&fx),
+        (1, 1),
+        "only the claim the retry can grant waits"
     );
-    assert_eq!(waiting(&fx), 1, "and the count dropped it at the ack");
 }
 
-/// A press past the API's per-account content throttle
-/// (`apps/api/src/ops/throttling.ts`): a publish per claim would trip it
-/// mid-pass and strand the rest. One publish for the whole pass cannot.
+/// ADR 0023 D9: a link admits at most its cap of claimants. The claim past the
+/// cap is refused and counted, and the pass still publishes once.
 #[test]
-fn a_pass_of_more_claims_than_the_content_throttle_admits_makes_one_publish() {
+fn a_link_at_its_admission_cap_refuses_the_next_claim() {
     let mut fx = GrantScenario::new();
     let fragment = fx.mint_link();
-    let claimants = fx.post_claims(&fragment, 61);
+    let cap = usize::try_from(DEFAULT_ADMISSION_CAP).expect("a small cap");
+    let claimants = fx.post_claims(&fragment, cap + 1);
     let name = write_name(fx.folder);
     let before = sequence_at(&fx.world, &name);
 
     assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
 
+    assert_eq!(sequence_at(&fx.world, &name), before + 1, "one publish");
+    let granted = fx.granted_to();
+    assert_eq!(
+        claimants.iter().filter(|c| granted.contains(c)).count(),
+        cap,
+        "the link admits its cap and no more"
+    );
+    assert!(!granted.contains(&claimants[cap]));
+    assert_eq!(refused_claims(&fx), 1, "the refusal shows on the link");
+    assert_eq!(waiting_claims(&fx), (0, 0));
+    assert!(inbox(&fx.owner_device).is_empty());
+}
+
+/// Fill the link at `fx.folder` to its admission cap and one past it. Answers
+/// the claimants and the index of the refused one.
+fn a_link_past_its_cap(fx: &mut GrantScenario) -> (Zeroizing<String>, Vec<Vec<u8>>, u8) {
+    let fragment = fx.mint_link();
+    let cap = usize::try_from(DEFAULT_ADMISSION_CAP).expect("a small cap");
+    let claimants = fx.post_claims(&fragment, cap + 1);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(refused_claims(fx), 1);
+    (fragment, claimants, u8::try_from(cap).expect("a small cap"))
+}
+
+/// ADR 0023 D9: a revoke frees a slot, so the refused claimant's re-post is
+/// acked, held as pending again, and converts.
+#[test]
+fn a_refused_claim_converts_once_a_revoke_frees_its_slot() {
+    let mut fx = GrantScenario::new();
+    let (fragment, claimants, refused) = a_link_past_its_cap(&mut fx);
+    assert_eq!(
+        block_on(fx.engine.command(Command::Revoke {
+            node: fx.folder,
+            recipient_identity_public_key: claimants[0].clone(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
+
+    fx.post_claimant(&fragment, refused, 0x60);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    assert!(fx.granted_to().contains(&claimants[usize::from(refused)]));
+    assert_eq!(
+        refused_claims(&fx),
+        0,
+        "the fresh copy replaced the refusal"
+    );
+    assert_eq!(waiting_claims(&fx), (0, 0));
+}
+
+/// The owner can dismiss a refusal, and the count leaves the link.
+#[test]
+fn a_dismissed_refusal_leaves_the_link() {
+    let mut fx = GrantScenario::new();
+    a_link_past_its_cap(&mut fx);
+
+    assert_eq!(
+        block_on(
+            fx.engine
+                .command(Command::DismissRefusedClaims { node: fx.folder })
+        ),
+        Ok(CommandOutcome::Done),
+    );
+    assert_eq!(refused_claims(&fx), 0);
+}
+
+/// The cut of a link retires the claims it refused: none of them can convert
+/// through a link the set no longer carries.
+#[test]
+fn the_cut_of_a_link_retires_the_claims_it_refused() {
+    let mut fx = GrantScenario::new();
+    a_link_past_its_cap(&mut fx);
+    assert_eq!(recorded_refusals(&fx), 1);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(folder_links(&fx).is_empty(), "the link is cut");
+    assert_eq!(recorded_refusals(&fx), 0, "and its refusals are retired");
+}
+
+/// The refused entries the owner device's conversion record holds.
+fn recorded_refusals(fx: &GrantScenario) -> usize {
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    let (events, _) = futures_channel::mpsc::unbounded();
+    block_on(load_conversions(
+        &fx.owner_device.staging_store,
+        BookkeepingSeal::new(&enc, &entropy),
+        &enc,
+        &events,
+    ))
+    .expect("the record reads")
+    .entries()
+    .iter()
+    .filter(|entry| entry.refused().is_some())
+    .count()
+}
+
+/// ADR 0023 D5, E1: both owner devices read the same claims, and the other
+/// device's acks land first. This device's acks remove nothing, so it
+/// converts nothing: each claimant holds one grant, from one publish.
+#[test]
+fn an_ack_that_lost_the_race_converts_nothing() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 2);
+    fx.owner_device.mailbox.answer_next_poll_as_of_now();
+    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
+    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+    let name = write_name(fx.folder);
+    let after_the_winner = sequence_at(&fx.world, &name);
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
     assert_eq!(
         sequence_at(&fx.world, &name),
-        before + 1,
-        "one publish, whatever the claim count"
+        after_the_winner,
+        "the loser publishes nothing"
     );
     let granted = fx.granted_to();
     for claimant in &claimants {
-        assert!(granted.contains(claimant));
+        assert_eq!(
+            granted.iter().filter(|pk| *pk == claimant).count(),
+            1,
+            "the winner granted each claimant once"
+        );
     }
+    assert_eq!(waiting_claims(&fx), (0, 0), "and nothing waits here");
+}
+
+/// ADR 0023 D3: conversion runs on any owner device. A claim the first device
+/// never reads converts on the tick of the second.
+#[test]
+fn a_claim_converts_on_the_owners_other_device() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
+    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+
+    assert!(
+        inbox(&fx.owner_device).is_empty(),
+        "the other device acked it"
+    );
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "and its grant reads back on the first device"
+    );
+}
+
+/// ADR 0023 D5: the retry runs the whole conversion again, checks included. An
+/// identity another owner device granted in the meantime is a no-op, and a
+/// deadline that passed after the ack does not refuse the claim.
+#[test]
+fn a_retry_after_a_failed_publish_runs_the_checks_again() {
+    let mut fx = GrantScenario::new();
+    let deadline = UnixMillis(fx.world.scheduler.now().0 + 3_600_000);
+    let CommandOutcome::InviteLinkMinted(link) =
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: fx.folder,
+            permission: Permission::Read,
+            expires_at: Some(deadline),
+            owner_name: "owner".to_owned(),
+        }))
+        .expect("the link mints")
+    else {
+        panic!("minting a link answers with the link");
+    };
+    let opened = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    let known = |id: u8| InviteClaim {
+        claim_id: [id; CLAIM_ID_LEN],
+        scope_pointer_name: opened.scope_pointer_name.clone(),
+        contact_code: contact_code(&RECIPIENT_SECRET),
+        name: String::new(),
+    };
+    fx.post_claim(&owner, &invitee, 30, &known(0x61), "known-a");
+    let late = fx.post_claims(&link.fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the publish fails");
+    fx.world.record_store.heal_put_for(name.as_str());
+
+    fx.post_claim(&owner, &invitee, 31, &known(0x62), "known-b");
+    let phone = fx.world.device(&owner_identity().verifying_key().to_sec1());
+    let (phone_engine, _phone_events, mut phone_tasks) = boot_owner(&fx.world, &fx.blocks, &phone);
+    tick(&fx.world, &phone_engine, &mut phone_tasks);
+    assert!(
+        fx.granted_to()
+            .contains(&recipient_identity().verifying_key().to_sec1().to_vec()),
+        "the other device granted the recipient"
+    );
+    fx.world.scheduler.advance_to(deadline);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    let granted = fx.granted_to();
+    assert_eq!(
+        granted.iter().filter(|pk| **pk == recipient).count(),
+        1,
+        "the retry found the grant and appended no row"
+    );
+    assert!(
+        granted.contains(&late[0]),
+        "the deadline verdict is the one at the ack"
+    );
+    assert_eq!(waiting_claims(&fx), (0, 0));
+}
+
+/// A revoke with no tag over two links refuses before it reads the inbox, so
+/// a waiting claim is not acked or converted and the root does not publish.
+#[test]
+fn a_revoke_with_no_tag_over_two_links_leaves_a_waiting_claim_on_the_inbox() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "link-ambiguous"
+        }),
+    );
+
+    assert_eq!(sequence_at(&fx.world, &name), before, "nothing publishes");
+    assert!(!fx.granted_to().contains(&claimants[0]), "nothing converts");
+    assert_eq!(waiting_claims(&fx), (0, 0), "nothing is acked");
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the claim stayed on the inbox"
+    );
+}
+
+/// ADR 0023 D7: a link with a pending conversion is not cut, so no acked claim
+/// loses the link it converts through.
+#[test]
+fn a_link_with_a_pending_conversion_refuses_the_revoke() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the publish fails");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Err(EngineError::Seam {
+            message: "link-has-a-pending-conversion".to_owned()
+        }),
+    );
+
+    fx.world.record_store.heal_put_for(name.as_str());
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Ok(CommandOutcome::Done),
+        "the revoke converts the pending claim first, then cuts"
+    );
+    assert!(fx.granted_to().contains(&claimants[0]));
+}
+
+/// A claimant the API holds no account for can never receive its share
+/// pointer. The record carries its row once the set publishes, so its entry
+/// waits only for the pointer, and a revoke of the link still runs.
+#[test]
+fn a_claimant_the_api_does_not_know_does_not_block_the_revoke() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    fx.world.mailbox_hub.forget_recipient(&claimants[0]);
+
+    assert!(fx.convert().is_err(), "the share pointer does not land");
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the grant published"
+    );
+    assert_eq!(waiting_claims(&fx), (0, 0), "and no conversion waits");
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Ok(CommandOutcome::Done),
+    );
+}
+
+/// A share pointer that does not land is posted again on each pass, and the
+/// entry settles only when it lands, so a claimant converted near the link
+/// deadline still gets its pointer.
+#[test]
+fn a_pointer_that_does_not_land_is_posted_again_until_it_does() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    fx.world.mailbox_hub.forget_recipient(&claimants[0]);
+
+    assert!(fx.convert().is_err(), "the share pointer does not land");
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert!(fx.world.mailbox_hub.posted_keys(&claimants[0]).is_empty());
+
+    fx.world.mailbox_hub.remember_recipient(&claimants[0]);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.world.mailbox_hub.posted_keys(&claimants[0]).len(),
+        1,
+        "the next pass posts the pointer"
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.world.mailbox_hub.posted_keys(&claimants[0]).len(),
+        1,
+        "and the entry settled"
+    );
+}
+
+/// The retry window of a share pointer runs from the conversion, not the ack.
+/// A claim that converts past the window after its ack still gets the posts
+/// of a whole window, and past that window a post that still fails settles
+/// the entry.
+#[test]
+fn a_pointer_is_posted_again_for_the_window_after_its_conversion() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    let window = Duration::from_millis(POINTER_RETRY_WINDOW + 1);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the publish fails");
+    fx.world.record_store.heal_put_for(name.as_str());
+    fx.world.scheduler.advance(window);
+    fx.world.mailbox_hub.forget_recipient(&claimants[0]);
+
+    assert!(fx.convert().is_err(), "the share pointer does not land");
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert!(
+        fx.convert().is_err(),
+        "the post runs again inside the window"
+    );
+
+    fx.world.scheduler.advance(window);
+    assert_eq!(
+        fx.convert(),
+        Ok(CommandOutcome::Done),
+        "past the window the failed post settles the entry"
+    );
+    fx.world.mailbox_hub.remember_recipient(&claimants[0]);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(
+        fx.world.mailbox_hub.posted_keys(&claimants[0]).is_empty(),
+        "no entry is left to post the pointer"
+    );
+}
+
+/// A claim whose delete gave no answer is not converted in the pass that
+/// acked it. The next pass sees the item again, deletes it, and converts it
+/// once.
+#[test]
+fn a_claim_whose_delete_errored_converts_on_the_next_pass() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    fx.owner_device.mailbox.set_ack_failing(true);
+
+    assert!(fx.convert().is_err(), "the delete fails");
+    assert!(fx.granted_to().is_empty(), "nothing is granted");
+    assert_eq!(waiting_claims(&fx), (1, 1), "one acked entry waits");
+
+    fx.owner_device.mailbox.set_ack_failing(false);
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
     assert!(inbox(&fx.owner_device).is_empty());
+    assert_eq!(
+        fx.granted_to()
+            .iter()
+            .filter(|pk| **pk == claimants[0])
+            .count(),
+        1
+    );
+    assert_eq!(fx.world.mailbox_hub.posted_keys(&claimants[0]).len(), 1);
+}
+
+/// An intake whose record write fails leaves the claim on the inbox, and a
+/// claim left there could never convert after the cut, so the link revoke is
+/// refused. The next revoke holds the claim, converts it and cuts.
+#[test]
+fn a_record_write_that_fails_at_intake_refuses_the_link_revoke() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_write_family_after(CONVERSION_RECORD_PREFIX, 0);
+    let revoke = |fx: &mut GrantScenario| {
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None,
+        }))
+    };
+
+    assert_eq!(
+        revoke(&mut fx),
+        Err(EngineError::Seam {
+            message: "a-claim-could-not-be-held".to_owned()
+        }),
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 1, "the claim waits");
+    assert_eq!(folder_links(&fx).len(), 1, "the link stays committed");
+
+    assert_eq!(revoke(&mut fx), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert!(folder_links(&fx).is_empty(), "the link is cut");
+}
+
+/// A conversion record with no room leaves a claim on the inbox, and a claim
+/// left there could never convert after the cut, so the link revoke is
+/// refused. The same pass settles the entries that can never convert, so the
+/// next revoke converts the claim and cuts.
+#[test]
+fn a_full_conversion_record_refuses_the_link_revoke() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let mut full = ConversionRecord::default();
+    for i in 0..MAX_CONVERSION_ENTRIES {
+        let [high, low] = u16::try_from(i).expect("fits").to_be_bytes();
+        let mut sender = [0u8; IDENTITY_PUBLIC_LEN];
+        sender[..2].copy_from_slice(&[high, low]);
+        let claim = AckedClaim {
+            sender,
+            payload: vec![0xEE; 8],
+            acked_at: fx.world.scheduler.now(),
+        };
+        full.hold_for_ack(claim.clone());
+        full.settle_ack(&claim, true);
+    }
+    let enc = kdf::enc_subkey(&SECRET);
+    let entropy = RefCell::new(SeededEntropy::new(9));
+    block_on(persist_conversions(
+        &fx.owner_device.staging_store,
+        BookkeepingSeal::new(&enc, &entropy),
+        &enc,
+        &full,
+    ))
+    .expect("the full record stages");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Err(EngineError::Seam {
+            message: "the-conversion-record-is-full".to_owned()
+        }),
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 1, "the claim waits");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(fx.granted_to().contains(&claimants[0]));
+}
+
+/// An ack that fails stops the intake, so a claim behind it stays on the inbox
+/// with no entry. A claim left there could never convert after the cut, so
+/// the revoke of its link is refused and publishes nothing. The next revoke
+/// holds the claim, converts it and cuts.
+#[test]
+fn an_ack_that_fails_refuses_the_revoke_of_a_link_whose_claim_it_left_on_the_inbox() {
+    let mut fx = GrantScenario::new();
+    let revoked_fragment = fx.mint_link();
+    let [revoked] = <[SharingInviteLink; 1]>::try_from(folder_links(&fx)).expect("one link");
+    let other_fragment = fx.mint_link();
+    let ahead = fx.post_claimant(&other_fragment, 0, 0);
+    let behind = fx.post_claimant(&revoked_fragment, 1, 1);
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+    fx.owner_device.mailbox.set_ack_failing(true);
+    let revoke = |fx: &mut GrantScenario| {
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: Some(revoked.tag.clone()),
+        }))
+    };
+
+    assert!(
+        matches!(
+            revoke(&mut fx),
+            Err(EngineError::Seam { message }) if message.starts_with("mailbox ack")
+        ),
+        "the failed ack refuses the revoke"
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 2, "both claims wait");
+    assert_eq!(folder_links(&fx).len(), 2, "the link stays committed");
+    assert_eq!(sequence_at(&fx.world, &name), before, "nothing publishes");
+
+    fx.owner_device.mailbox.set_ack_failing(false);
+    assert_eq!(revoke(&mut fx), Ok(CommandOutcome::Done));
+    let granted = fx.granted_to();
+    assert!(granted.contains(&ahead) && granted.contains(&behind));
+    let [left] = <[SharingInviteLink; 1]>::try_from(folder_links(&fx)).expect("one link");
+    assert_ne!(left.tag, revoked.tag, "the named link is cut");
+}
+
+/// The entry is written before the delete of its item. A crash after the
+/// delete and before the next write keeps the claim, and a fresh engine on the
+/// same store converts it, whatever that delete answered.
+#[test]
+fn a_crash_between_the_ack_and_the_record_write_keeps_the_claim() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    fx.owner_device
+        .staging_store
+        .inner()
+        .interrupt_staged_write_family_after(CONVERSION_RECORD_PREFIX, 1);
+
+    assert!(fx.convert().is_err(), "the write after the ack fails");
+    assert!(inbox(&fx.owner_device).is_empty(), "the delete ran");
+    fx.world.record_store.heal_put_for(name.as_str());
+
+    serve_http(&fx.owner_device, &fx.blocks, 600);
+    let (mut restarted, _restarted_events) = engine_on_api(&fx.owner_device, 43);
+    block_on(restarted.start(secret())).expect("the restart adopts the owner root");
+    let mut tasks = fx.world.scheduler.take_spawned_tasks();
+    poll_tasks_until_parked(&mut tasks);
+    tick(&fx.world, &restarted, &mut tasks);
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the restart converts the claim the first write kept"
+    );
+}
+
+/// ADR 0024 D4: the write-scope cut moves the folder before the parent's
+/// index names the moved root. When that parent publish fails, the next pass
+/// finds the moved root through the owner-signed scope pointer, repairs the
+/// index, and converts the claim with no second cut.
+#[test]
+fn a_failed_repoint_after_a_write_cut_is_repaired_by_the_next_pass() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let minted = fx.granted_scope_repoint();
+    let claimants = fx.post_claims(&fragment, 1);
+    let parent = write_name(ROOT);
+    fx.world.record_store.fail_put_for(parent.as_str());
+
+    assert!(fx.convert().is_err(), "the parent publish fails");
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        minted.write_epoch + 1,
+        "the write-scope cut moved the folder"
+    );
+    fx.world.record_store.heal_put_for(parent.as_str());
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        minted.write_epoch + 1,
+        "exactly one write-scope cut ran"
+    );
+    let moved = fx.granted_scope_repoint().current_root;
+    assert!(
+        published_write_body(&fx.world, &fx.blocks, ROOT, EPOCH)
+            .direct_child_scope_index
+            .iter()
+            .any(|child| child.scope_id == fx.folder.0
+                && child.ipns_name == moved.as_str().as_bytes()),
+        "the parent's index names the moved root"
+    );
+}
+
+/// An inbox that does not answer refuses the link revoke: a claim it holds
+/// could never convert after the cut. The link stays committed.
+#[test]
+fn a_mailbox_outage_refuses_the_link_revoke() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    fx.owner_device.mailbox.set_poll_failing(true);
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Err(EngineError::Seam {
+            message: "mailbox-unavailable".to_owned()
+        }),
+    );
+    assert!(
+        block_on(fx.engine.sharing(fx.folder))
+            .expect("a sharing read")
+            .state
+            .expect("the link standing reads")
+            .invite_links
+            .len()
+            == 1,
+        "the link stays committed"
+    );
+
+    fx.owner_device.mailbox.set_poll_failing(false);
+    assert_eq!(
+        block_on(fx.engine.command(Command::RevokeInviteLink {
+            node: fx.folder,
+            link_tag: None
+        })),
+        Ok(CommandOutcome::Done),
+    );
+    assert!(fx.granted_to().contains(&claimants[0]));
+}
+
+/// A failed inbox poll still runs the tick's conversion pass, so the claims
+/// already acked convert during a mailbox outage.
+#[test]
+fn a_failed_poll_still_converts_the_claims_already_acked() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the publish fails");
+    fx.world.record_store.heal_put_for(name.as_str());
+    assert_eq!(waiting_claims(&fx), (1, 1), "one acked entry waits");
+
+    fx.owner_device.mailbox.set_poll_failing(true);
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert_eq!(waiting_claims(&fx), (0, 0));
+}
+
+/// A payload the conversion record cannot store leaves the mailbox and is
+/// dropped, and the other claims of the pass convert.
+#[test]
+fn an_oversized_claim_leaves_the_mailbox_and_the_rest_convert() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let claimants = fx.post_claims(&fragment, 1);
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    let invitee =
+        EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
+    let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
+    let oversized = InviteClaim {
+        claim_id: [0x77; CLAIM_ID_LEN],
+        scope_pointer_name: opened.scope_pointer_name.clone(),
+        contact_code: vec![0x02; 4096],
+        name: String::new(),
+    };
+    fx.post_claim(&owner, &invitee, 40, &oversized, "oversized");
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(inbox(&fx.owner_device).is_empty());
+    assert!(fx.granted_to().contains(&claimants[0]));
+    assert_eq!(waiting_claims(&fx), (0, 0));
+}
+
+/// Only a claim that passes every check asks for a write-scope cut. A claim
+/// through a write link past its deadline runs none.
+#[test]
+fn a_write_claim_the_link_refuses_runs_no_write_cut() {
+    let mut fx = GrantScenario::new();
+    let deadline = UnixMillis(fx.world.scheduler.now().0 + 60_000);
+    let CommandOutcome::InviteLinkMinted(link) =
+        block_on(fx.engine.command(Command::CreateInviteLink {
+            node: fx.folder,
+            permission: Permission::Write,
+            expires_at: Some(deadline),
+            owner_name: "owner".to_owned(),
+        }))
+        .expect("the link mints")
+    else {
+        panic!("minting a link answers with the link");
+    };
+    let claimants = fx.post_claims(&link.fragment, 1);
+    let minted = fx.granted_scope_repoint();
+    fx.world.scheduler.advance_to(deadline);
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.granted_scope_repoint().write_epoch,
+        minted.write_epoch,
+        "no cut ran"
+    );
+    assert!(!fx.granted_to().contains(&claimants[0]));
+    assert_eq!(waiting_claims(&fx), (0, 0), "the refused claim settled");
+}
+
+/// A second claim command on one link returns the claim already held and posts
+/// nothing new.
+#[test]
+fn a_second_claim_command_returns_the_held_claim() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut bearer, _bearer_events) = fx.bearer();
+    claim(&mut bearer, &fragment);
+    claim(&mut bearer, &fragment);
+
+    assert_eq!(
+        fx.world
+            .mailbox_hub
+            .posted_keys(&owner_identity().verifying_key().to_sec1())
+            .len(),
+        1
+    );
+    assert_eq!(inbox(&fx.owner_device).len(), 1);
+}
+
+fn claim(bearer: &mut Engine<FakeSeamTypes>, fragment: &str) {
+    assert_eq!(
+        block_on(bearer.command(Command::ClaimInviteLink {
+            fragment: Zeroizing::new(fragment.to_owned()),
+            name: "Grace".to_owned(),
+        })),
+        Ok(CommandOutcome::Done),
+    );
 }
 
 /// Revocation is the immediate-cut control, and `revoke` resolves its recipient
@@ -5073,7 +5930,11 @@ fn the_cut_of_a_converted_grant_returns_the_room_the_claim_took() {
         .to_sec1()
         .to_vec();
     let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 33);
-    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    block_on(claimant.command(Command::ClaimInviteLink {
+        fragment,
+        name: String::new(),
+    }))
+    .expect("the claim posts");
     fx.convert().expect("the conversion lands");
     assert!(
         book_holds(&fx, &claimant_pk),
@@ -5113,7 +5974,11 @@ fn a_cut_after_an_owner_grant_leaves_the_claimant_revokable() {
         .to_sec1()
         .to_vec();
     let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 35);
-    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    block_on(claimant.command(Command::ClaimInviteLink {
+        fragment,
+        name: String::new(),
+    }))
+    .expect("the claim posts");
     fx.convert().expect("the conversion lands");
 
     assert_eq!(
@@ -5156,7 +6021,11 @@ fn a_converted_claim_records_the_claimant_so_its_grant_can_be_cut() {
         .to_sec1()
         .to_vec();
     let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 31);
-    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    block_on(claimant.command(Command::ClaimInviteLink {
+        fragment,
+        name: String::new(),
+    }))
+    .expect("the claim posts");
     fx.convert().expect("the conversion lands");
     assert!(
         fx.granted_to().contains(&claimant_pk),
@@ -5190,7 +6059,11 @@ fn a_converted_claimant_stays_in_the_book_for_the_next_session() {
         .to_sec1()
         .to_vec();
     let (mut claimant, _claimant_events) = fx.bearer_on(&claimant_device, &BYSTANDER_SECRET, 32);
-    block_on(claimant.command(Command::ClaimInviteLink { fragment })).expect("the claim posts");
+    block_on(claimant.command(Command::ClaimInviteLink {
+        fragment,
+        name: String::new(),
+    }))
+    .expect("the claim posts");
     fx.convert().expect("the conversion lands");
 
     let (next, _next_events, _next_tasks) = boot_owner(&fx.world, &fx.blocks, &fx.owner_device);
@@ -5216,7 +6089,10 @@ fn a_link_holder_reads_the_folder_before_any_conversion() {
 
     assert_eq!(
         block_on_while_ticking(
-            holder.command(Command::ClaimInviteLink { fragment }),
+            holder.command(Command::ClaimInviteLink {
+                fragment,
+                name: String::new(),
+            }),
             &mut holder_tasks
         ),
         Ok(CommandOutcome::Done),
@@ -5238,13 +6114,97 @@ fn a_link_holder_reads_the_folder_before_any_conversion() {
     );
 }
 
+/// ADR 0024 D2, D4: a write conversion runs a real write wave that moves the
+/// scope root. A holder that still reads through the link follows the scope
+/// pointer to the moved root, and the converted claimant holds write there.
+#[test]
+fn a_link_holder_reads_through_the_root_a_write_conversion_moved() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link_at(Permission::Write);
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment.clone()),
+        Ok(CommandOutcome::Done)
+    );
+    // The holder's claim is lost on the way, so it stays a link holder.
+    for item in block_on(fx.owner_device.mailbox.poll()).expect("the inbox answers") {
+        block_on(fx.owner_device.mailbox.ack(&item.item_id)).expect("the ack lands");
+    }
+    let minted = fx.granted_scope_repoint();
+    let writer = fx.post_claims(&fragment, 1);
+
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    let moved = fx.granted_scope_repoint();
+    assert_eq!(
+        moved.write_epoch,
+        minted.write_epoch + 1,
+        "one write wave ran"
+    );
+    assert_ne!(
+        moved.current_root, minted.current_root,
+        "and moved the root"
+    );
+    let writer_row = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved")
+        .grants
+        .into_iter()
+        .find(|grant| grant.recipient_identity_public_key == writer[0])
+        .expect("the claimant holds a row");
+    assert_eq!(writer_row.permission, Permission::Write);
+
+    tick(&fx.world, &holder, &mut holder_tasks);
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1);
+    assert!(
+        shares[0].via_link,
+        "the holder still reads through the link"
+    );
+    assert_eq!(
+        shares[0].resolution,
+        Some(ResolutionClass::Granted),
+        "at the root the wave moved to"
+    );
+}
+
+/// ADR 0023 D4: the holder's own tick posts the claim again when it falls
+/// due, under the key of the first post.
+#[test]
+fn a_link_holders_tick_posts_the_claim_again_under_one_key() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+    assert_eq!(
+        join_link(&mut holder, &mut holder_tasks, fragment),
+        Ok(CommandOutcome::Done)
+    );
+
+    fx.world
+        .scheduler
+        .advance(core::time::Duration::from_millis(CLAIM_REPOST_FIRST_WAIT));
+    poll_tasks_until_parked(&mut holder_tasks);
+
+    let keys = fx
+        .world
+        .mailbox_hub
+        .posted_keys(&owner_identity().verifying_key().to_sec1());
+    assert_eq!(keys.len(), 2, "the tick posted the claim again");
+    assert_eq!(keys[0], keys[1], "under the key of the first post");
+    assert_eq!(inbox(&fx.owner_device).len(), 1, "the owner holds it once");
+}
+
 /// Claim `fragment` on `holder` and let the pass it files run.
 fn join_link(
     holder: &mut Engine<FakeSeamTypes>,
     tasks: &mut [BoxedTask],
     fragment: Zeroizing<String>,
 ) -> Result<CommandOutcome, EngineError> {
-    let outcome = block_on(holder.command(Command::ClaimInviteLink { fragment }));
+    let outcome = block_on(holder.command(Command::ClaimInviteLink {
+        fragment,
+        name: String::new(),
+    }));
     poll_tasks_until_parked(tasks);
     outcome
 }
@@ -5387,7 +6347,10 @@ fn a_second_join_of_one_link_keeps_the_verified_deadline() {
     assert!(verified.is_some(), "the pass verified the link's deadline");
 
     assert_eq!(
-        block_on(holder.command(Command::ClaimInviteLink { fragment })),
+        block_on(holder.command(Command::ClaimInviteLink {
+            fragment,
+            name: String::new(),
+        })),
         Ok(CommandOutcome::Done)
     );
     assert_eq!(
@@ -5811,7 +6774,8 @@ fn a_fragment_that_is_not_one_claims_nothing() {
     for fragment in ["", "not a fragment", "Zm9vYmFy"] {
         assert_eq!(
             block_on(bearer.command(Command::ClaimInviteLink {
-                fragment: Zeroizing::new(fragment.to_owned())
+                fragment: Zeroizing::new(fragment.to_owned()),
+                name: String::new(),
             })),
             Err(EngineError::MalformedInput {
                 check: "malformed-invite-fragment"
@@ -5848,7 +6812,10 @@ fn a_claim_that_can_never_convert_is_acked_rather_than_left_to_redeliver() {
             claim_id: [0x7e; CLAIM_ID_LEN],
             scope_pointer_name: opened.scope_pointer_name.clone(),
             contact_code: contact_code(&SECRET),
-        },
+            name: String::new(),
+        }
+        .encode()
+        .expect("the claim encodes"),
         "dead-claim",
     ))
     .expect("the claim posts");

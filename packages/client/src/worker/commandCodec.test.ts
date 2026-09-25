@@ -443,13 +443,16 @@ describe('buildCommand', () => {
       ]);
     });
 
-    it('builds a conversion from the node alone', () => {
-      const { wasm, calls } = spyWasm();
+    it.each(['convertInviteClaims', 'dismissRefusedClaims'] as const)(
+      'builds a %s from the node alone',
+      (kind) => {
+        const { wasm, calls } = spyWasm();
 
-      buildCommand(wasm, { kind: 'convertInviteClaims', node });
+        buildCommand(wasm, { kind, node });
 
-      expect(calls.convertInviteClaims).toEqual([[{ bytes: node }]]);
-    });
+        expect(calls[kind]).toEqual([[{ bytes: node }]]);
+      }
+    );
 
     it('hands a revoke the tag of the link it names', () => {
       const { wasm, calls } = spyWasm();
@@ -482,12 +485,18 @@ describe('buildCommand', () => {
       expect(calls.revokeInviteLink).toBeUndefined();
     });
 
-    it('hands the claim its URL fragment verbatim, as the one argument', () => {
+    it('hands the claim its URL fragment verbatim, and the claimant name', () => {
       const { wasm, calls } = spyWasm();
 
-      buildCommand(wasm, { kind: 'claimInviteLink', fragment: FRAGMENT });
+      buildCommand(wasm, { kind: 'claimInviteLink', fragment: FRAGMENT, name: 'Grace' });
 
-      expect(calls.claimInviteLink).toEqual([[FRAGMENT]]);
+      expect(calls.claimInviteLink).toEqual([[FRAGMENT, 'Grace']]);
+    });
+
+    it('rejects a claimant name that is not a string', () => {
+      expect(refuses({ kind: 'claimInviteLink', fragment: FRAGMENT, name: 7 })).toThrow(
+        'invalid request field name: number'
+      );
     });
 
     it('rejects a link deadline that is not the engine bigint', () => {
@@ -528,7 +537,7 @@ describe('buildCommand', () => {
       const { wasm, calls } = spyWasm();
 
       expect(() =>
-        buildCommand(wasm, { kind: 'claimInviteLink', fragment: 'A'.repeat(4097) })
+        buildCommand(wasm, { kind: 'claimInviteLink', fragment: 'A'.repeat(4097), name: '' })
       ).toThrow('invalid request field fragment: string');
       expect(calls.claimInviteLink).toBeUndefined();
     });
@@ -542,7 +551,7 @@ describe('buildCommand', () => {
       );
     });
 
-    it.each(['revokeInviteLink', 'convertInviteClaims'] as const)(
+    it.each(['revokeInviteLink', 'convertInviteClaims', 'dismissRefusedClaims'] as const)(
       'rejects a %s whose node is not bytes',
       (kind) => {
         expect(refuses({ kind, node: 'sixteen bytes!!!', linkTag: null })).toThrow(
@@ -1143,6 +1152,29 @@ describe('readEvent', () => {
     });
   });
 
+  it('maps granteeJoined so the owner sees who joined which scope', () => {
+    const scopeRoot = new Uint8Array(16).fill(0x5a);
+    const event: WasmEvent = {
+      kind: 'granteeJoined',
+      scopeRoot,
+      name: 'Grace',
+      fingerprint: 'ab12-cd34',
+    };
+    expect(readEvent(fakeWasm, event)).toEqual({
+      kind: 'granteeJoined',
+      scopeRoot,
+      name: 'Grace',
+      fingerprint: 'ab12-cd34',
+    });
+  });
+
+  it.each(['conversionRecordUnreadable', 'refusedClaimDropped'] as const)(
+    'maps the payload-free %s notice',
+    (kind) => {
+      expect(readEvent(fakeWasm, { kind })).toEqual({ kind });
+    }
+  );
+
   it('maps the payload-free parked-writes refusal', () => {
     expect(readEvent(fakeWasm, { kind: 'parkedWritesUnreadable' })).toEqual({
       kind: 'parkedWritesUnreadable',
@@ -1514,6 +1546,7 @@ describe('readSharing', () => {
     admissionCap: 5n,
     pendingClaims: 1,
     contactBudgetFull: true,
+    refusedClaims: 2,
   };
   const view = {
     scope: new Uint8Array(16).fill(3),
@@ -1557,6 +1590,7 @@ describe('readSharing', () => {
             admissionCap: 5,
             pendingClaims: 1,
             contactBudgetFull: true,
+            refusedClaims: 2,
           },
         ],
       },

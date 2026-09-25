@@ -3,10 +3,21 @@
 //! a refusal that leans on one fails there.
 
 use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SecretBytes;
-use cipherbox_engine::grants::{InviteError, InviteFragment, MAX_INVITE_FRAGMENT_BYTES};
+use cipherbox_engine::grants::conversion::{
+    ConversionRecord, MAX_CLAIM_PAYLOAD_BYTES, encode_conversions,
+};
+use cipherbox_engine::grants::{
+    AckedClaim, CLAIM_ID_LEN, InviteClaim, InviteError, InviteFragment, MAX_INVITE_FRAGMENT_BYTES,
+};
+use cipherbox_engine::seams::UnixMillis;
+
+fn pointer_name() -> IpnsName {
+    IpnsName::from_public_key(&Ed25519Signer::from_seed([0x5d; 32]).verifying_key())
+}
 
 /// The decoder refuses a fragment past its bound, so the encoder refuses to
 /// produce one: an owner contact code of the whole bound leaves no room.
@@ -28,4 +39,30 @@ fn a_fragment_whose_contact_code_fills_the_bound_is_refused_at_encode() {
         fragment.encode().map(|_| ()),
         Err(InviteError::FragmentTooLarge)
     );
+}
+
+/// The decoder refuses a claim whose name no ledger row can carry, so the
+/// encoder refuses to produce one.
+#[test]
+fn a_claim_with_an_unusable_name_is_refused_at_encode() {
+    let claim = InviteClaim {
+        claim_id: [0x71; CLAIM_ID_LEN],
+        scope_pointer_name: pointer_name(),
+        contact_code: vec![0x02; 40],
+        name: "a\u{7}b".to_owned(),
+    };
+    assert_eq!(claim.encode(), Err(InviteError::InvalidClaimName));
+}
+
+/// The conversion record's decoder refuses a claim payload past its bound, so
+/// its encoder refuses to write one.
+#[test]
+fn a_conversion_record_holding_a_payload_past_its_bound_is_refused_at_encode() {
+    let mut record = ConversionRecord::default();
+    record.hold_for_ack(AckedClaim {
+        sender: [0x02; IDENTITY_PUBLIC_LEN],
+        payload: vec![0; MAX_CLAIM_PAYLOAD_BYTES + 1],
+        acked_at: UnixMillis(1),
+    });
+    assert!(encode_conversions(&record).is_err());
 }
