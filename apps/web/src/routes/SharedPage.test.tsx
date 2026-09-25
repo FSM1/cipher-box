@@ -65,6 +65,17 @@ describe('the shared route', () => {
     expect(screen.getAllByTestId('shared-sharer')[0].textContent).toBe(SHARER_HEX);
   });
 
+  it('marks a share held through a link apart from a granted one', async () => {
+    await renderShared(() =>
+      Promise.resolve([{ ...share(1, 'granted'), viaLink: true }, share(2, 'granted')])
+    );
+
+    expect(screen.getAllByTestId('shared-row').map((node) => node.dataset.viaLink)).toEqual([
+      'true',
+      'false',
+    ]);
+  });
+
   it('paints a revocation signal as a removal in the warning class', async () => {
     await renderShared(() => Promise.resolve([share(1, 'revocation-signal')]));
 

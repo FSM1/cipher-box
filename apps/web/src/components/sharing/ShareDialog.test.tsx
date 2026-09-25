@@ -7,7 +7,7 @@ import type {
   SharingDescriptor,
   SharingInviteLinkDescriptor,
 } from '@cipherbox/client';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { storedOwnerName, storeOwnerName } from '../../sharing/ownerName';
@@ -295,6 +295,8 @@ describe('the people table', () => {
   it('does not draw a scope the engine could not reach as one shared with nobody', async () => {
     await share(sharingEngine({}, held([1], null)));
 
+    expect(screen.getByText('people with access')).toBeTruthy();
+    expect(screen.queryByText(/people with access ·/)).toBeNull();
     expect(screen.getByTestId('share-grants-unavailable')).toBeTruthy();
     expect(screen.queryByTestId('share-no-grants')).toBeNull();
     expect(screen.queryByTestId('share-people')).toBeNull();
@@ -532,8 +534,43 @@ describe('creating a link', () => {
       DOCS,
       'write',
       BigInt(MINTED_AT + 30 * 86_400_000),
-      'Mia'
+      'Mia',
+      25
     );
+  });
+
+  it('mints under the admission cap the owner sets', async () => {
+    const engine = await share();
+
+    fireEvent.change(screen.getByLabelText('link admits up to'), { target: { value: '3' } });
+    await click('share-mint-link');
+
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', SEVEN_DAYS_ON, '', 3);
+  });
+
+  it('offers no mint while the cap field holds no whole number', async () => {
+    const engine = await share();
+
+    for (const value of ['', '2.5']) {
+      fireEvent.change(screen.getByLabelText('link admits up to'), { target: { value } });
+      expect(screen.getByTestId('share-mint-link').hasAttribute('disabled')).toBe(true);
+    }
+    await click('share-mint-link');
+
+    expect(engine.facade.createInviteLink).not.toHaveBeenCalled();
+  });
+
+  it("says the engine's refusal of a cap out of its range in words", async () => {
+    const refusal = new EngineRequestError(
+      'malformed input: invite-admission-cap-out-of-range',
+      'malformedInput'
+    );
+    await share(sharingEngine({ createInviteLink: refusal }));
+
+    fireEvent.change(screen.getByLabelText('link admits up to'), { target: { value: '0' } });
+    await click('share-mint-link');
+
+    expect(screen.getByTestId('dialog-error').textContent).toContain('a link admits from 1 to');
   });
 
   it('keeps the owner name for the next mint, and mints with none when it is empty', async () => {
@@ -544,8 +581,35 @@ describe('creating a link', () => {
     fireEvent.change(screen.getByLabelText('your name on the link'), { target: { value: '' } });
     await click('share-mint-link');
 
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', SEVEN_DAYS_ON, '');
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(
+      DOCS,
+      'read',
+      SEVEN_DAYS_ON,
+      '',
+      25
+    );
     expect(storedOwnerName()).toBe('');
+  });
+
+  it('keeps the name in this tab only, and only once a mint lands', async () => {
+    const refusal = new EngineRequestError('malformed input: invite-name-too-long');
+    await share(sharingEngine({ createInviteLink: refusal }));
+
+    fireEvent.change(screen.getByLabelText('your name on the link'), {
+      target: { value: 'Mia' },
+    });
+    await click('share-mint-link');
+    expect(storedOwnerName()).toBe('');
+
+    cleanup();
+    await share();
+    fireEvent.change(screen.getByLabelText('your name on the link'), {
+      target: { value: 'Mia' },
+    });
+    await click('share-mint-link');
+
+    expect(sessionStorage.getItem('cipherbox.share.ownerName')).toBe('Mia');
+    expect(localStorage.getItem('cipherbox.share.ownerName')).toBeNull();
   });
 
   it('flags a write link as one that makes every holder a writer', async () => {
@@ -611,6 +675,15 @@ describe('creating a link', () => {
     });
 
     expect(engine.facade.createInviteLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no second mint while a link is shown, so the shown link stays the live one', async () => {
+    await share();
+
+    await click('share-mint-link');
+
+    expect(shownLink()).toContain(MINTED_FRAGMENT);
+    expect(screen.getByTestId('share-mint-link').hasAttribute('disabled')).toBe(true);
   });
 
   it('holds a shown link against a dismissal that would discard it', async () => {
@@ -703,7 +776,7 @@ describe('the links a scope carries', () => {
       { seed: 2, permission: 'read', viaLink: 0x7a, name: { name: 'Ada', source: 'owner' } },
       { seed: 3, permission: 'read' },
     ];
-    const engine = await share(sharingEngine({}, held([], rows, { links: [LIVE] })));
+    await share(sharingEngine({}, held([], rows, { links: [LIVE] })));
 
     await click('share-revoke-link');
 
@@ -716,11 +789,23 @@ describe('the links a scope carries', () => {
 
     await click(remove);
     expect(keepers.textContent).toContain('these lose access');
+  });
 
+  it('refuses a revoke that also removes the people who joined, and keeps the link', async () => {
+    const rows: HeldGrant[] = [{ seed: 2, permission: 'read', viaLink: 0x7a }];
+    const engine = await share(sharingEngine({}, held([], rows, { links: [LIVE] })));
+
+    await click('share-revoke-link');
+    await click('share-link-remove-grantees');
     await click('share-link-revoke-confirm');
 
-    expect(engine.facade.revokeInviteLink).toHaveBeenCalledWith(DOCS, LIVE.tag);
-    expect(screen.getAllByTestId('share-grant-row')).toHaveLength(2);
+    expect(engine.facade.revokeInviteLink).not.toHaveBeenCalled();
+    expect(screen.getByTestId('dialog-error').textContent).toContain(
+      'removing the people who joined is not in this build'
+    );
+    expect(screen.getAllByTestId('share-link-chip')).toHaveLength(1);
+    expect(screen.getAllByTestId('share-grant-row')).toHaveLength(1);
+    expect(screen.getByTestId('share-link-revoke-prompt')).toBeTruthy();
   });
 
   it('draws no link section at all for a scope root the engine could not reach', async () => {

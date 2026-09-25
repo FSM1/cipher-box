@@ -1,3 +1,5 @@
+import { MAX_ADMISSION_CAP } from './inviteLink';
+
 /** How a sharing check name reads to the member; an unlisted one reaches them verbatim. */
 export function refusalLabel(check: string): string {
   // `hasOwn`, so a name that collides with a prototype key reads as itself
@@ -43,6 +45,7 @@ const SHARE_REFUSALS: Record<string, string> = {
   'recipient-not-imported': 'import this contact before you share with them',
   'invalid-grantee-name': 'a name needs at least one character and no control characters',
   'invite-name-too-long': 'your name on the link is too long',
+  'invite-admission-cap-out-of-range': `a link admits from 1 to ${MAX_ADMISSION_CAP} people`,
   'grant-display-name-too-long': 'the folder name is too long to share — rename it first',
   'invite-link-contact-budget-full':
     'the links on this vault hold all the people they can — revoke a link to free room',

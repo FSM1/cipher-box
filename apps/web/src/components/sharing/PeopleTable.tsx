@@ -3,6 +3,7 @@ import type { Permission } from '@cipherbox/client';
 import type { SharingActions } from '../../hooks/useSharingActions';
 import { accessLabel } from '../../sharing/inviteLink';
 import type { GrantRow } from '../../stores/sharing.store';
+import { Confirm } from './Confirm';
 
 /** Who a row names: the name on it, else its fingerprint. */
 export function granteeLabel(grant: GrantRow): string {
@@ -119,42 +120,25 @@ export function PeopleTable({ grants, actions, busy }: PeopleTableProps) {
               {confirming === key && (
                 <tr>
                   <td colSpan={4}>
-                    <div
-                      className="sharing-confirm"
-                      role="alertdialog"
-                      data-testid="share-revoke-prompt"
+                    <Confirm
+                      title={`remove ${who}?`}
+                      confirmLabel={actions.busy === 'revoke' ? 'revoking...' : 'revoke'}
+                      busy={busy}
+                      onKeep={() => setConfirming(null)}
+                      onConfirm={() =>
+                        void actions.revoke(grant.contact).then((revoked) => {
+                          if (revoked) setConfirming(null);
+                        })
+                      }
+                      testId="share-revoke"
                     >
-                      <p className="sharing-confirm-title">{`remove ${who}?`}</p>
                       <p className="sharing-note">
                         {`// fingerprint ${grant.fingerprint ?? 'unavailable'}`}
                       </p>
                       <p className="sharing-note">
                         {'// they lose access to this folder and everything in it'}
                       </p>
-                      <div className="dialog-actions">
-                        <button
-                          type="button"
-                          className="dialog-button"
-                          onClick={() => setConfirming(null)}
-                          disabled={busy}
-                        >
-                          keep
-                        </button>
-                        <button
-                          type="button"
-                          className="dialog-button dialog-button--danger"
-                          onClick={() =>
-                            void actions.revoke(grant.contact).then((revoked) => {
-                              if (revoked) setConfirming(null);
-                            })
-                          }
-                          disabled={busy}
-                          data-testid="share-revoke-confirm"
-                        >
-                          {actions.busy === 'revoke' ? 'revoking...' : 'revoke'}
-                        </button>
-                      </div>
-                    </div>
+                    </Confirm>
                   </td>
                 </tr>
               )}

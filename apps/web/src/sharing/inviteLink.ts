@@ -25,6 +25,13 @@ export const LINK_LIFETIMES = {
 
 export type LinkLifetime = keyof typeof LINK_LIFETIMES;
 
+/**
+ * The engine's admission cap default and ceiling (ADR 0023 D9). The engine
+ * refuses a cap outside `1..=MAX_ADMISSION_CAP`; these only shape the field.
+ */
+export const DEFAULT_ADMISSION_CAP = 25;
+export const MAX_ADMISSION_CAP = 1023;
+
 /** The unix-millis deadline the engine takes. */
 export function expiryAt(lifetime: LinkLifetime, now: number): bigint {
   return BigInt(now + LINK_LIFETIMES[lifetime] * 86_400_000);

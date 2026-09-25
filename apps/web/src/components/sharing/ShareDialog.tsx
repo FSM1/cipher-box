@@ -78,7 +78,11 @@ export function ShareDialog({ row, onClose }: ShareDialogProps) {
         />
       ) : (
         <div className="dialog-content sharing-dialog" data-testid="share-dialog">
-          <p className="dialog-label">{`people with access · ${(scope?.grants.length ?? 0) + 1}`}</p>
+          <p className="dialog-label">
+            {scope === null
+              ? 'people with access'
+              : `people with access · ${scope.grants.length + 1}`}
+          </p>
           <PeopleTable grants={scope?.grants ?? null} actions={actions} busy={busy} />
 
           {scope !== null && (

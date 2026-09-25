@@ -54,9 +54,14 @@ export interface SharingActions {
   createInviteLink(
     permission: Permission,
     expiresAt: bigint,
-    ownerName: string
+    ownerName: string,
+    admissionCap: number
   ): Promise<string | null>;
-  /** Cuts the link `linkTag` names at this scope: its future claims end. */
+  /**
+   * Cuts the link `linkTag` names at this scope: its future claims end. A cut
+   * that asks to remove the people who joined is refused, since the client
+   * carries no such option.
+   */
   revokeInviteLink(linkTag: Uint8Array, options: RevokeLinkOptions): Promise<boolean>;
 }
 
@@ -153,11 +158,12 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       [run, read, target]
     ),
     createInviteLink: useCallback(
-      async (permission, expiresAt, ownerName) => {
+      async (permission, expiresAt, ownerName, admissionCap) => {
         let fragment: string | null = null;
         await run('createInviteLink', async (facade) => {
-          fragment = (await facade.createInviteLink(target, permission, expiresAt, ownerName))
-            .fragment;
+          fragment = (
+            await facade.createInviteLink(target, permission, expiresAt, ownerName, admissionCap)
+          ).fragment;
           await read(facade);
         });
         return fragment;
@@ -165,9 +171,11 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       [run, read, target]
     ),
     revokeInviteLink: useCallback(
-      (linkTag, _options) =>
+      (linkTag, options) =>
         run('revokeInviteLink', async (facade) => {
-          // The client takes no `removeGrantees` yet, so the options stop here.
+          if (options.removeGrantees) {
+            throw new Error('removing the people who joined is not in this build');
+          }
           await facade.revokeInviteLink(target, linkTag);
           await read(facade);
         }),

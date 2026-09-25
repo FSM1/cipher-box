@@ -4,6 +4,7 @@ import type { Permission, SharingInviteLinkDescriptor } from '@cipherbox/client'
 import type { SharingActions } from '../../hooks/useSharingActions';
 import {
   accessLabel,
+  DEFAULT_ADMISSION_CAP,
   expiryAt,
   expiryLabel,
   inviteUrl,
@@ -11,12 +12,14 @@ import {
   LINK_LIFETIMES,
   linkLabel,
   type LinkLifetime,
+  MAX_ADMISSION_CAP,
 } from '../../sharing/inviteLink';
 import { storedOwnerName, storeOwnerName } from '../../sharing/ownerName';
 import { refusalLabel } from '../../sharing/shareRefusals';
 import type { ScopeSharing } from '../../stores/sharing.store';
 import { plural } from '../../vault/selection';
 import { CopyableValue } from '../file-browser/details/DetailsPrimitives';
+import { Confirm } from './Confirm';
 import { granteeLabel } from './PeopleTable';
 
 interface LinkSectionProps {
@@ -36,6 +39,7 @@ interface LinkSectionProps {
 export function LinkSection({ scope, actions, busy, fresh, onMinted }: LinkSectionProps) {
   const [permission, setPermission] = useState<Permission>('read');
   const [lifetime, setLifetime] = useState<LinkLifetime>('7 days');
+  const [admissionCap, setAdmissionCap] = useState(String(DEFAULT_ADMISSION_CAP));
   const [ownerName, setOwnerName] = useState(storedOwnerName);
   const [confirming, setConfirming] = useState<string | null>(null);
   // Closed before the dispatch rather than by a render: two activations in one
@@ -43,15 +47,21 @@ export function LinkSection({ scope, actions, busy, fresh, onMinted }: LinkSecti
   // can name again — and `busy` is itself the render-late value that misses it.
   const minting = useRef(false);
 
+  // The range is the engine's to refuse; a field that holds no whole number
+  // has nothing to send.
+  const cap = Number(admissionCap);
+  const capIsWhole = admissionCap.trim() !== '' && Number.isSafeInteger(cap);
+
   const mint = () => {
-    if (busy || minting.current) return;
+    if (busy || minting.current || !capIsWhole) return;
     minting.current = true;
     const name = ownerName.trim();
-    storeOwnerName(name);
     void actions
-      .createInviteLink(permission, expiryAt(lifetime, Date.now()), name)
+      .createInviteLink(permission, expiryAt(lifetime, Date.now()), name, cap)
       .then((fragment) => {
-        if (fragment !== null) onMinted(inviteUrl(fragment));
+        if (fragment === null) return;
+        storeOwnerName(name);
+        onMinted(inviteUrl(fragment));
       })
       .finally(() => {
         minting.current = false;
@@ -98,12 +108,30 @@ export function LinkSection({ scope, actions, busy, fresh, onMinted }: LinkSecti
               type="button"
               className="dialog-button dialog-button--primary sharing-nowrap"
               onClick={mint}
-              disabled={busy}
+              // One link at a time: a second mint would replace the shown-once
+              // link while the first stays live and can no longer be copied.
+              disabled={busy || fresh !== null || !capIsWhole}
               data-testid="share-mint-link"
             >
               {actions.busy === 'createInviteLink' ? 'creating...' : 'create link'}
             </button>
           </div>
+          <label className="sharing-inline sharing-dim">
+            admits up to
+            <input
+              className="dialog-input sharing-cap"
+              type="number"
+              min={1}
+              max={MAX_ADMISSION_CAP}
+              step={1}
+              aria-label="link admits up to"
+              value={admissionCap}
+              onChange={(event) => setAdmissionCap(event.target.value)}
+              disabled={busy}
+              data-testid="share-admission-cap"
+            />
+            people
+          </label>
           <input
             className="dialog-input"
             aria-label="your name on the link"
@@ -231,8 +259,14 @@ function RevokeLinkPrompt({
     });
 
   return (
-    <div className="sharing-confirm" role="alertdialog" data-testid="share-link-revoke-prompt">
-      <p className="sharing-confirm-title">{`revoke the ${linkLabel(link)}?`}</p>
+    <Confirm
+      title={`revoke the ${linkLabel(link)}?`}
+      confirmLabel={actions.busy === 'revokeInviteLink' ? 'revoking...' : 'revoke link'}
+      busy={busy}
+      onKeep={onDone}
+      onConfirm={revoke}
+      testId="share-link-revoke"
+    >
       <p className="sharing-note">{'// no one can join through it after this'}</p>
       {joined.length > 0 && (
         <>
@@ -253,26 +287,6 @@ function RevokeLinkPrompt({
           </label>
         </>
       )}
-      <div className="dialog-actions">
-        <button
-          type="button"
-          className="dialog-button"
-          onClick={onDone}
-          disabled={busy}
-          data-testid="share-link-revoke-cancel"
-        >
-          keep
-        </button>
-        <button
-          type="button"
-          className="dialog-button dialog-button--danger"
-          onClick={revoke}
-          disabled={busy}
-          data-testid="share-link-revoke-confirm"
-        >
-          {actions.busy === 'revokeInviteLink' ? 'revoking...' : 'revoke link'}
-        </button>
-      </div>
-    </div>
+    </Confirm>
   );
 }

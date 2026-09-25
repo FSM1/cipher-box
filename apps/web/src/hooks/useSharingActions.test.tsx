@@ -334,9 +334,11 @@ describe('invite link commands', () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
 
-    await expect(result.current.createInviteLink('read', DEADLINE, 'Ada')).resolves.toBe(FRAGMENT);
+    await expect(result.current.createInviteLink('read', DEADLINE, 'Ada', 5)).resolves.toBe(
+      FRAGMENT
+    );
 
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE, 'Ada');
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE, 'Ada', 5);
     expect(linksNow()).toEqual([MINTED]);
   });
 
@@ -345,14 +347,14 @@ describe('invite link commands', () => {
     const engine = sharingEngine({ createInviteLink: refusal });
     const { result } = mount(engine.client);
 
-    await expect(result.current.createInviteLink('read', DEADLINE, '')).resolves.toBeNull();
+    await expect(result.current.createInviteLink('read', DEADLINE, '', 25)).resolves.toBeNull();
     await waitFor(() => expect(result.current.error).toBe(refusal.message));
   });
 
   it('shows the link gone once the engine cut it', async () => {
     const engine = sharingEngine();
     const { result } = mount(engine.client);
-    await result.current.createInviteLink('read', DEADLINE, '');
+    await result.current.createInviteLink('read', DEADLINE, '', 25);
 
     await expect(
       result.current.revokeInviteLink(MINTED.tag, { removeGrantees: false })
@@ -365,12 +367,28 @@ describe('invite link commands', () => {
   it('keeps the link standing when the engine refused to cut it', async () => {
     const engine = sharingEngine({ revokeInviteLink: new EngineRequestError('publish refused') });
     const { result } = mount(engine.client);
-    await result.current.createInviteLink('read', DEADLINE, '');
+    await result.current.createInviteLink('read', DEADLINE, '', 25);
 
     await expect(
       result.current.revokeInviteLink(MINTED.tag, { removeGrantees: false })
     ).resolves.toBe(false);
 
+    expect(linksNow()).toEqual([MINTED]);
+  });
+
+  it('refuses a cut that asks to remove the people who joined, and keeps the link', async () => {
+    const engine = sharingEngine();
+    const { result } = mount(engine.client);
+    await result.current.createInviteLink('read', DEADLINE, '', 25);
+
+    await expect(
+      result.current.revokeInviteLink(MINTED.tag, { removeGrantees: true })
+    ).resolves.toBe(false);
+
+    await waitFor(() =>
+      expect(result.current.error).toBe('removing the people who joined is not in this build')
+    );
+    expect(engine.facade.revokeInviteLink).not.toHaveBeenCalled();
     expect(linksNow()).toEqual([MINTED]);
   });
 });

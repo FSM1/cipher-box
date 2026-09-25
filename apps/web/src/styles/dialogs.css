@@ -496,6 +496,15 @@
   white-space: nowrap;
 }
 
+label.sharing-inline {
+  align-items: center;
+  font-size: var(--font-size-sm);
+}
+
+.sharing-cap {
+  width: 6em;
+}
+
 .sharing-dim {
   color: var(--color-text-secondary);
 }
