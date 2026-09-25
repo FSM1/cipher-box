@@ -142,7 +142,7 @@ liveness and refcounted physical unpin; quota (hosted authoritative, BYO
 `advisory: true`); hosted upload — including that the pinned address **equals**
 the caller-computed one under both content-plane codecs, and that a declared
 address the bytes do not hash to is refused and compensated;
-the mailbox lifecycle (post/poll/ack,
+the mailbox lifecycle (post/poll/ack, the ack's "removed" answer,
 idempotency keys, pending-cap reject-new, unknown-recipient rejection);
 the recovery endpoint (auth + rate limit); account hard-delete cascade;
 the republisher module's inventory walk and resolve-failure alerting; and
@@ -215,8 +215,9 @@ is not the contract gate.
   merge: its verdict is on a deploy.
 - **Cross-client e2e** — the marquee v2 addition: web and desktop hosts (or
   two instances of one host) on a single vault, exercising share
-  grant/accept, the revocation immediate cut, write rotation with surviving
-  grantees, offline/reconnect convergence, and leader failover mid-flow
+  grant/accept, an invite-link join converted by an owner device other than
+  the one that minted the link, the revocation immediate cut, write rotation
+  with surviving grantees, offline/reconnect convergence, and leader failover mid-flow
   (web-client.md). Runnable at all only because of the DX hook below.
 
 ## CI gates
