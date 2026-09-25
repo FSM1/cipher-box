@@ -14,6 +14,12 @@ describe('how a share refusal reads to the member', () => {
     expect(refusalLabel('resume-not-this-grant')).toContain('no second one');
   });
 
+  it('names an edit of a standing grant the engine refused', () => {
+    expect(refusalLabel('grant-recipient-already-has-access')).toContain('already has');
+    expect(refusalLabel('grant-recipient-not-granted')).toContain('no grant');
+    expect(refusalLabel('grant-row-is-a-link')).toContain('mint a new one');
+  });
+
   it('falls back to the engine’s own name for a refusal it has no phrasing for', () => {
     expect(refusalLabel('some-rule-a-later-build-added')).toBe('some-rule-a-later-build-added');
   });

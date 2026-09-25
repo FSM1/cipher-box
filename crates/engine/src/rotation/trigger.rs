@@ -558,32 +558,22 @@ pub fn revoke_write_grant(
     )
 }
 
-/// The write-scope cut a **write grant** owes: drive the scope's already-minted
-/// committed set through the write plane alone (blueprint/engine.md "Grant
-/// creation" — "for write grants, the write-scope cut").
+/// The write-scope cut a scope root owes before a write row stands on it: drive
+/// its committed set unchanged through the write plane alone (ADR 0025 D6,
+/// blueprint/engine.md "Grant creation" — "for write grants, the write-scope
+/// cut").
 ///
-/// No row is cut. The granted scope root is minted at a name the scope it is
-/// leaving derives, so until the wave runs, the seed in the grantee's blob
-/// derives nothing and the owner still holds every name. The wave is what moves
-/// the subtree onto names the granted scope's own `writeScopeSeed` derives — the
-/// property that lets the owner later cut this grantee without re-keying the
-/// scope above.
+/// A scope that is not a write scope yet sits at names the scope above
+/// derives, so a seed sealed there would derive every name in that scope. The
+/// wave moves the subtree onto names only the scope's own `writeScopeSeed`
+/// derives, which lets the owner later cut a write grantee without re-keying
+/// the scope above. A write mint seals its row before the wave; an upgrade or an
+/// appended write row is committed only on the root the wave moved to.
 ///
 /// Owner-only and scope-bound exactly as [`revoke_read_grant`] is: the set is
-/// re-used as the owner signed it, so it is verified rather than re-signed. A
-/// set committing no write row is refused on the same rule
-/// [`revoke_write_grant`] follows: the wave would move every name in the scope
-/// and hand nobody a seed they did not already hold.
-pub fn cut_for_write_grant(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSet, RevokeError> {
+/// re-used as the owner signed it, so it is verified rather than re-signed.
+pub fn cut_for_write_scope(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSet, RevokeError> {
     authorize_cut(plan)?;
-    if !plan
-        .commitment
-        .entries
-        .iter()
-        .any(|e| e.permission == Permission::Write)
-    {
-        return Err(RevokeError::NotWriteGranted);
-    }
     enforce_committed_ledger(plan.commitment, plan.grant_ledger)
         .map_err(RevokeError::LedgerDiverges)?;
     Ok(RevokedCommittedSet {

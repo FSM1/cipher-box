@@ -263,6 +263,97 @@ describe('buildCommand', () => {
     ).toThrow('invalid request field permission: string');
   });
 
+  it('carries a permission change and a grantee rename to their own builders', () => {
+    const { wasm, calls } = lastArgsSpy();
+    const withNodes = {
+      ...wasm,
+      NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+    } as unknown as EngineWasm;
+    const node = new Uint8Array(16).fill(4);
+    const recipient = new Uint8Array([7, 7]);
+
+    buildCommand(withNodes, {
+      kind: 'changePermission',
+      node,
+      recipientIdentityPublicKey: recipient,
+      permission: 'write',
+    });
+    buildCommand(withNodes, {
+      kind: 'renameGrantee',
+      node,
+      recipientIdentityPublicKey: recipient,
+      name: 'Ada',
+    });
+
+    expect(calls.changePermission).toEqual([
+      { bytes: node },
+      recipient,
+      fakeWasmEnums.Permission.Write,
+    ]);
+    expect(calls.renameGrantee).toEqual([{ bytes: node }, recipient, 'Ada']);
+  });
+
+  it('carries the grantee name a grant names to the grant builder', () => {
+    const { wasm, calls } = lastArgsSpy();
+    const withNodes = {
+      ...wasm,
+      NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+    } as unknown as EngineWasm;
+    const grant = {
+      kind: 'grant' as const,
+      node: new Uint8Array(16).fill(4),
+      recipientIdentityPublicKey: new Uint8Array([7, 7]),
+      permission: 'read' as const,
+    };
+
+    buildCommand(withNodes, { ...grant, granteeName: 'Ada' });
+    expect(calls.grant).toEqual([
+      { bytes: grant.node },
+      grant.recipientIdentityPublicKey,
+      fakeWasmEnums.Permission.Read,
+      'Ada',
+    ]);
+
+    buildCommand(withNodes, { ...grant, granteeName: null });
+    expect(calls.grant).toEqual([
+      { bytes: grant.node },
+      grant.recipientIdentityPublicKey,
+      fakeWasmEnums.Permission.Read,
+      undefined,
+    ]);
+  });
+
+  it('refuses a grant whose grantee name is not text', () => {
+    expect(
+      refuses({
+        kind: 'grant',
+        node: new Uint8Array(16),
+        recipientIdentityPublicKey: new Uint8Array(33),
+        permission: 'read',
+        granteeName: 42,
+      })
+    ).toThrow('invalid request field granteeName: number');
+  });
+
+  it('refuses a permission change or a rename whose fields are not what they claim', () => {
+    expect(
+      refuses({
+        kind: 'changePermission',
+        node: new Uint8Array(16),
+        recipientIdentityPublicKey: new Uint8Array(33),
+        permission: 'admin',
+      })
+    ).toThrow('invalid request field permission: string');
+    expect(
+      refuses({
+        kind: 'renameGrantee',
+        node: new Uint8Array(16),
+        recipientIdentityPublicKey: new Uint8Array(33),
+        name: 42,
+      })
+    ).toThrow('invalid request field name: number');
+  });
+
   it('rejects an op id that is not the engine bigint', () => {
     expect(refuses({ kind: 'cancelUpload', opId: 7 })).toThrow(
       'invalid request field opId: number'
@@ -1388,17 +1479,18 @@ describe('readSharing', () => {
   };
   const view = {
     scope: new Uint8Array(16).fill(3),
-    contacts: [{ identityPublicKey: new Uint8Array([1]) }],
+    contacts: [{ identityPublicKey: new Uint8Array([1]), cachedName: 'Ada' }],
     ownContactCode: new Uint8Array([4, 5, 6]),
     state: {
       grants: [
         {
           recipientIdentityPublicKey: new Uint8Array([2]),
           permission: fakeWasmEnums.Permission.Read,
+          granteeName: { name: 'Ada', source: 'claimant' },
         },
       ],
-      grantRefusal: 'grant-target-already-names-a-scope',
-      inviteLinkRefusal: 'invite-target-already-names-a-scope',
+      grantRefusal: 'grant-parent-envelope-version-unsupported',
+      inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
       inviteLinks: links,
     },
   };
@@ -1406,15 +1498,48 @@ describe('readSharing', () => {
   it('carries the scope, its grants and its link standing through unchanged', () => {
     expect(readSharing(fakeWasm, view)).toEqual({
       scope: view.scope,
-      contacts: [{ identityPublicKey: view.contacts[0].identityPublicKey }],
+      contacts: [{ identityPublicKey: view.contacts[0].identityPublicKey, cachedName: 'Ada' }],
       ownContactCode: view.ownContactCode,
       state: {
-        grants: [{ recipientIdentityPublicKey: new Uint8Array([2]), permission: 'read' }],
-        grantRefusal: 'grant-target-already-names-a-scope',
-        inviteLinkRefusal: 'invite-target-already-names-a-scope',
+        grants: [
+          {
+            recipientIdentityPublicKey: new Uint8Array([2]),
+            permission: 'read',
+            granteeName: { name: 'Ada', source: 'claimant' },
+          },
+        ],
+        grantRefusal: 'grant-parent-envelope-version-unsupported',
+        inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
         inviteLinks: links,
       },
     });
+  });
+
+  it('reads an unnamed row and an uncached contact as null', () => {
+    const unnamed = {
+      ...view,
+      contacts: [{ identityPublicKey: new Uint8Array([1]), cachedName: undefined }],
+      state: {
+        ...view.state,
+        grants: [{ ...view.state.grants[0], granteeName: undefined }],
+      },
+    };
+
+    const read = readSharing(fakeWasm, unnamed);
+    expect(read.contacts[0].cachedName).toBeNull();
+    expect(read.state?.grants[0].granteeName).toBeNull();
+  });
+
+  it('refuses a grantee name whose source this build does not know', () => {
+    const drifted = {
+      ...view,
+      state: {
+        ...view.state,
+        grants: [{ ...view.state.grants[0], granteeName: { name: 'Ada', source: 'admin' } }],
+      },
+    };
+
+    expect(() => readSharing(fakeWasm, drifted)).toThrow('unknown WASM grantee name source: admin');
   });
 
   it('reads a link with no deadline as null, never as a deadline', () => {

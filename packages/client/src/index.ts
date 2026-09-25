@@ -80,6 +80,7 @@ export type {
   SharingDescriptor,
   SharingContactDescriptor,
   SharingGrantDescriptor,
+  GranteeNameSource,
   SharingInviteLinksDescriptor,
   ScopeSharingDescriptor,
   BinOriginDescriptor,

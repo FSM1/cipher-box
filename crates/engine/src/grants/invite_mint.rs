@@ -15,7 +15,7 @@ use core::fmt;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
-use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
 use crate::entropy::Entropy;
@@ -140,21 +140,20 @@ where
     )
     .map_err(InviteMintError::Mint)?;
 
-    let mut fragment = InviteFragment {
-        invite_secret: invitee.secret().clone(),
-        owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
-            .encode(),
-        scope_id: plan.grantee.scope_id,
-        scope_pointer_name: plan.scope_pointer_name.clone(),
-        pointer_read_key: SecretBytes::new(*plan.grantee.pointer_read_key),
-        owner_name: plan.owner_name.to_owned(),
-        folder_name: plan.folder_name.to_owned(),
-        names_sig: [0u8; ECDSA_SIG_LEN],
-    };
-    fragment.sign_names(owner.identity_signer);
     // Ahead of every publish, so a fragment past its bound leaves no live link
     // that nobody holds.
-    let fragment = fragment.encode().map_err(InviteMintError::Mint)?;
+    let fragment = seal_fragment(
+        owner,
+        &invitee,
+        &FragmentNames {
+            scope_id: plan.grantee.scope_id,
+            scope_pointer_name: plan.scope_pointer_name,
+            pointer_read_key: plan.grantee.pointer_read_key,
+            owner_name: plan.owner_name,
+            folder_name: plan.folder_name,
+        },
+    )
+    .map_err(InviteMintError::Mint)?;
 
     let subtree = converge_grant_subtree(net, net, plan.grantee, plan.parent)
         .await
@@ -162,7 +161,8 @@ where
     let converged = match subtree {
         GrantSubtree::Converged(converged) => converged,
         // The link a stalled mint committed is still the one its fragment
-        // holder reads, so the handover finishes and no second link mints.
+        // holder reads, so the handover finishes and this mint adds no link.
+        // The index names the root again, so a later mint appends.
         GrantSubtree::Promoted(promoted) => {
             let Some(link) = promoted.sole_link_entry() else {
                 return Err(InviteMintError::Create(
@@ -173,7 +173,7 @@ where
                 .await
                 .map_err(InviteMintError::Create)?;
             return Err(InviteMintError::Create(
-                CreateGrantError::TargetAlreadyNamesAScope,
+                CreateGrantError::TargetIndexLostARoot,
             ));
         }
     };
@@ -186,6 +186,42 @@ where
         read_scope: promoted.read_scope,
         stalled: promoted.handover.err(),
     })
+}
+
+/// What a link's fragment names beside its secret.
+pub struct FragmentNames<'a> {
+    /// The scope the link grants.
+    pub scope_id: [u8; 16],
+    /// That scope's pointer name.
+    pub scope_pointer_name: &'a IpnsName,
+    /// That scope's stable pointer read key.
+    pub pointer_read_key: &'a [u8; SECRET_LEN],
+    /// The owner's name, as the owner gave it. May be empty.
+    pub owner_name: &'a str,
+    /// The folder's name.
+    pub folder_name: &'a str,
+}
+
+/// Seal `invitee`'s fragment under the owner's names signature, refusing one
+/// past its bound.
+pub fn seal_fragment(
+    owner: &OwnerGrantKeys<'_>,
+    invitee: &EphemeralInvitee,
+    names: &FragmentNames<'_>,
+) -> Result<Zeroizing<String>, InviteError> {
+    let mut fragment = InviteFragment {
+        invite_secret: invitee.secret().clone(),
+        owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
+            .encode(),
+        scope_id: names.scope_id,
+        scope_pointer_name: names.scope_pointer_name.clone(),
+        pointer_read_key: SecretBytes::new(*names.pointer_read_key),
+        owner_name: names.owner_name.to_owned(),
+        folder_name: names.folder_name.to_owned(),
+        names_sig: [0u8; ECDSA_SIG_LEN],
+    };
+    fragment.sign_names(owner.identity_signer);
+    fragment.encode()
 }
 
 #[cfg(test)]
@@ -821,7 +857,7 @@ mod tests {
 
         assert!(matches!(
             refused,
-            InviteMintError::Create(CreateGrantError::TargetAlreadyNamesAScope)
+            InviteMintError::Create(CreateGrantError::TargetIndexLostARoot)
         ));
         let links = f
             .net
@@ -872,7 +908,7 @@ mod tests {
         assert!(matches!(
             f.mint(read_link()),
             Err(InviteMintError::Create(
-                CreateGrantError::TargetAlreadyNamesAScope
+                CreateGrantError::TargetIndexLostARoot
             ))
         ));
         assert!(

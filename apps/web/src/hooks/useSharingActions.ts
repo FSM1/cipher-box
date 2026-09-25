@@ -94,7 +94,7 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
     downgrade: useCallback(
       (contact) =>
         run('downgrade', async (facade) => {
-          await facade.downgrade(target, contact.identityPublicKey);
+          await facade.changePermission(target, contact.identityPublicKey, 'read');
           await read(facade);
         }),
       [run, read, target]

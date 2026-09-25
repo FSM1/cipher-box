@@ -106,6 +106,7 @@ describe('EngineProvider', () => {
       contacts: [
         {
           identityPublicKey: new Uint8Array(33).fill(1),
+          cachedName: null,
         },
       ],
       ownContactCode: new Uint8Array([0xc0, 0xde]),

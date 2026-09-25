@@ -995,6 +995,13 @@ impl SharingContact {
     pub fn identity_public_key(&self) -> Vec<u8> {
         self.inner.identity_public_key.clone()
     }
+
+    /// The last grantee name this device saw for the peer; a pre-fill, not an
+    /// authority.
+    #[wasm_bindgen(getter, js_name = cachedName)]
+    pub fn cached_name(&self) -> Option<String> {
+        self.inner.cached_name.clone()
+    }
 }
 
 impl SharingContact {
@@ -1023,6 +1030,41 @@ impl SharingGrant {
     #[wasm_bindgen(getter)]
     pub fn permission(&self) -> Permission {
         self.inner.permission.into()
+    }
+
+    /// The grantee name on the owner-attested row.
+    #[wasm_bindgen(getter, js_name = granteeName)]
+    pub fn grantee_name(&self) -> Option<GranteeName> {
+        self.inner
+            .grantee_name
+            .as_ref()
+            .map(|(name, source)| GranteeName {
+                name: name.clone(),
+                source: source.as_wire(),
+            })
+    }
+}
+
+/// A grantee name and who chose it, which cross as one value so neither
+/// reaches JS without the other.
+#[wasm_bindgen]
+pub struct GranteeName {
+    name: String,
+    source: &'static str,
+}
+
+#[wasm_bindgen]
+impl GranteeName {
+    /// The name.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Who chose the name: `"owner"` or `"claimant"`.
+    #[wasm_bindgen(getter)]
+    pub fn source(&self) -> String {
+        self.source.to_owned()
     }
 }
 
@@ -1912,16 +1954,19 @@ impl Command {
         Self::wrap(facade::Command::ImportContact { contact_code })
     }
 
-    /// Grant a node to an imported contact (owner-only).
+    /// Grant a node to an imported contact (owner-only). `grantee_name` is the
+    /// name the owner gives the grantee on the row.
     pub fn grant(
         node: &NodeId,
         recipient_identity_public_key: Vec<u8>,
         permission: Permission,
+        grantee_name: Option<String>,
     ) -> Command {
         Self::wrap(facade::Command::Grant {
             node: node.facade(),
             recipient_identity_public_key,
             permission: permission.into(),
+            grantee_name,
         })
     }
 
@@ -1933,11 +1978,31 @@ impl Command {
         })
     }
 
-    /// Downgrade a write grant to read (owner-only; triggers write rotation).
-    pub fn downgrade(node: &NodeId, recipient_identity_public_key: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::Downgrade {
+    /// Change a grantee's permission (owner-only).
+    #[wasm_bindgen(js_name = changePermission)]
+    pub fn change_permission(
+        node: &NodeId,
+        recipient_identity_public_key: Vec<u8>,
+        permission: Permission,
+    ) -> Command {
+        Self::wrap(facade::Command::ChangePermission {
             node: node.facade(),
             recipient_identity_public_key,
+            permission: permission.into(),
+        })
+    }
+
+    /// Set a grantee's name on the owner-signed row (owner-only).
+    #[wasm_bindgen(js_name = renameGrantee)]
+    pub fn rename_grantee(
+        node: &NodeId,
+        recipient_identity_public_key: Vec<u8>,
+        name: String,
+    ) -> Command {
+        Self::wrap(facade::Command::RenameGrantee {
+            node: node.facade(),
+            recipient_identity_public_key,
+            name,
         })
     }
 
@@ -2499,23 +2564,58 @@ mod tests {
             Command::create(&node, "f".into(), NodeKind::Folder).name(),
             "create"
         );
+        assert_eq!(
+            Command::change_permission(&node, vec![9], Permission::Read).name(),
+            "changePermission"
+        );
+        assert_eq!(
+            Command::rename_grantee(&node, vec![9], "Ada".into()).name(),
+            "renameGrantee"
+        );
     }
 
     #[test]
     fn command_unwraps_to_the_engine_variant() {
         let node = NodeId::from_bytes(&[1u8; 16]).unwrap();
-        let cmd = Command::grant(&node, vec![9, 9, 9], Permission::Write);
+        let cmd = Command::grant(&node, vec![9, 9, 9], Permission::Write, Some("Ada".into()));
         match cmd.into_facade() {
             facade::Command::Grant {
                 permission,
                 recipient_identity_public_key,
+                grantee_name,
                 ..
             } => {
                 assert_eq!(permission, facade::Permission::Write);
                 assert_eq!(recipient_identity_public_key, vec![9, 9, 9]);
+                assert_eq!(grantee_name.as_deref(), Some("Ada"));
             }
             other => panic!("expected Grant, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sharing_rows_expose_the_grantee_name_and_its_source() {
+        let named = SharingGrant::from_facade(facade::SharingGrant {
+            recipient_identity_public_key: vec![2; 33],
+            permission: facade::Permission::Write,
+            grantee_name: Some(("Ada".into(), cipherbox_core::seal::NameSource::Claimant)),
+        });
+        let name = named.grantee_name().expect("a named row");
+        assert_eq!(name.name(), "Ada");
+        assert_eq!(name.source(), "claimant");
+
+        let unnamed = SharingGrant::from_facade(facade::SharingGrant {
+            recipient_identity_public_key: vec![2; 33],
+            permission: facade::Permission::Read,
+            grantee_name: None,
+        });
+        assert!(unnamed.grantee_name().is_none());
+
+        let contact = SharingContact::from_facade(facade::SharingContact {
+            identity_public_key: vec![2; 33],
+            cached_name: Some("Ada".into()),
+        });
+        assert_eq!(contact.cached_name().as_deref(), Some("Ada"));
     }
 
     #[test]

@@ -10374,6 +10374,91 @@ mod tests {
     }
 
     #[test]
+    fn the_re_mint_carries_a_grantee_name_and_re_maps_the_via_link_reference() {
+        // Both fields sit under the owner's row signature (ADR 0027 D3,
+        // ADR 0023 D2) and the tags are name-bound, so the wave re-signs each
+        // row at the new name and points its via-link reference at the link's
+        // own new tag. A permission change runs this wave, and the row keeps
+        // both across it (ADR 0025 D6).
+        use crate::grants::{EphemeralInvitee, LinkTerms, mint_invite_row, row_is_owner_attested};
+
+        let name = old_root_name();
+        let invitee = EphemeralInvitee::from_secret(&[0x95; 32]).expect("a valid scalar");
+        let link = mint_invite_row(
+            &owner_identity(),
+            &owner_enc(),
+            &WaveSeeds.pointer_read_key(&SCOPE),
+            &invitee,
+            &SCOPE,
+            name.as_str().as_bytes(),
+            &LinkTerms {
+                deadline: crate::seams::UnixMillis(1_800_000_000_000),
+                conversion_permission: Permission::Read,
+                admission_cap: 5,
+            },
+        )
+        .expect("a contributory invitee key");
+        let mut rows = granted_rows();
+        let named = &mut rows[0].ledger_entry;
+        named.via_link = Some(link.tag);
+        named.grantee_name =
+            Some(GranteeName::new("Alice".to_owned(), NameSource::Claimant).expect("a name"));
+        named.owner_sig =
+            sign_recipient_binding(&owner_identity(), name.as_str().as_bytes(), named).to_compact();
+        let grantee_name = named.grantee_name.clone();
+        rows.push(link);
+        let root = granted_root_with(rows, Vec::new());
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
+        enumerate_root(&net);
+        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
+        block_on(net.republish(&moved)).expect("the root moves");
+
+        let new_name = moved.new_name.as_str().as_bytes();
+        let (_, envelope) = published_head(&harness, &moved.new_name);
+        let section = published_section(&harness, &moved.new_name);
+        let body = open_write_body(
+            &envelope,
+            &section,
+            &SCOPE,
+            &FRESH_WRITE_SCOPE_SEED,
+            OWNER_ROOT_EPOCH + 1,
+        )
+        .expect("the owner reopens the re-minted write body");
+        let tag_at = |secret: &X25519Secret| {
+            recipient_blinded_tag(secret, &owner_enc().public(), new_name)
+                .expect("a contributory sharer key")
+        };
+        let link_tag = tag_at(invitee.enc_secret());
+        assert!(
+            section
+                .commitment
+                .entries
+                .iter()
+                .any(|e| e.tag == link_tag && e.kind == GrantSetEntryKind::Link),
+            "the link is re-minted at its new tag"
+        );
+        let row = body
+            .grant_ledger
+            .iter()
+            .find(|e| e.tag == tag_at(&read_grantee()))
+            .expect("the named grantee's re-minted row");
+        assert_eq!(row.grantee_name, grantee_name, "the name rides forward");
+        assert_eq!(
+            row.via_link,
+            Some(link_tag),
+            "and names the link at the tag it now carries"
+        );
+        assert!(
+            row_is_owner_attested(&owner.verifying_key(), row, new_name),
+            "under an owner signature at the new name"
+        );
+    }
+
+    #[test]
     fn the_re_mint_reproduces_the_committed_pseudonym_key() {
         // The pseudonym binds the scope and not the name, so the wave must
         // republish the key the owner already committed: it is what authorizes

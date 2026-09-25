@@ -47,7 +47,7 @@ describe('which link situation a scope is in', () => {
   it('reports the link a scope carries over any mint verdict', () => {
     const links = { ...NO_LINKS, live: true, expiresAt: 1_000n };
 
-    expect(inviteLinkState(scope(links, 'invite-target-already-names-a-scope'))).toEqual({
+    expect(inviteLinkState(scope(links, 'invite-parent-envelope-version-unsupported'))).toEqual({
       kind: 'live',
       links,
       expiresAt: 1_000n,
@@ -61,7 +61,6 @@ describe('which link situation a scope is in', () => {
   it('carries the engine’s own ground for a refusal, whichever rule it was', () => {
     for (const check of [
       'invite-target-is-the-vault-root',
-      'invite-target-already-names-a-scope',
       'invite-parent-envelope-version-unsupported',
     ]) {
       expect(inviteLinkState(scope(NO_LINKS, check))).toEqual({ kind: 'refused', check });

@@ -454,10 +454,39 @@ describe('EngineFacade', () => {
     const node = new Uint8Array(16);
     const recipient = new Uint8Array([7, 7]);
     await new EngineFacade(transport).grant(node, recipient, 'write');
+    await new EngineFacade(transport).grant(node, recipient, 'read', 'Ada');
 
     expect(transport.commands[0]).toMatchObject({
       kind: 'grant',
       permission: 'write',
+      recipientIdentityPublicKey: recipient,
+      granteeName: null,
+    });
+    expect(transport.commands[1]).toMatchObject({ permission: 'read', granteeName: 'Ada' });
+  });
+
+  it('carries the target permission on a permission change', async () => {
+    const transport = new FakeTransport();
+    const node = new Uint8Array(16);
+    const recipient = new Uint8Array([7, 7]);
+    await new EngineFacade(transport).changePermission(node, recipient, 'read');
+
+    expect(transport.commands[0]).toMatchObject({
+      kind: 'changePermission',
+      permission: 'read',
+      recipientIdentityPublicKey: recipient,
+    });
+  });
+
+  it('carries the name on a grantee rename', async () => {
+    const transport = new FakeTransport();
+    const node = new Uint8Array(16);
+    const recipient = new Uint8Array([7, 7]);
+    await new EngineFacade(transport).renameGrantee(node, recipient, 'Ada');
+
+    expect(transport.commands[0]).toMatchObject({
+      kind: 'renameGrantee',
+      name: 'Ada',
       recipientIdentityPublicKey: recipient,
     });
   });

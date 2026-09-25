@@ -141,12 +141,21 @@ export interface WasmSnapshotView {
 /** wasm-bindgen `SharingContact` — one contact the vault's book holds. */
 export interface WasmSharingContact {
   readonly identityPublicKey: Uint8Array;
+  readonly cachedName: string | undefined;
+}
+
+/** wasm-bindgen `GranteeName` — a row's grantee name and who chose it. */
+export interface WasmGranteeName {
+  readonly name: string;
+  /** `"owner"` or `"claimant"`. */
+  readonly source: string;
 }
 
 /** wasm-bindgen `SharingGrant` — one grant a scope's ledger commits. */
 export interface WasmSharingGrant {
   readonly recipientIdentityPublicKey: Uint8Array;
   readonly permission: number;
+  readonly granteeName: WasmGranteeName | undefined;
 }
 
 /** wasm-bindgen `SharingInviteLinks` — a scope's invite-link standing. */
@@ -348,10 +357,20 @@ export interface EngineWasm {
     grant(
       node: WasmNodeId,
       recipientIdentityPublicKey: Uint8Array,
-      permission: number
+      permission: number,
+      granteeName: string | undefined
     ): WasmCommand;
     revoke(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
-    downgrade(node: WasmNodeId, recipientIdentityPublicKey: Uint8Array): WasmCommand;
+    changePermission(
+      node: WasmNodeId,
+      recipientIdentityPublicKey: Uint8Array,
+      permission: number
+    ): WasmCommand;
+    renameGrantee(
+      node: WasmNodeId,
+      recipientIdentityPublicKey: Uint8Array,
+      name: string
+    ): WasmCommand;
     createInviteLink(
       node: WasmNodeId,
       permission: number,

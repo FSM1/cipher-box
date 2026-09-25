@@ -947,6 +947,7 @@ fn create_family() -> RejectFamily {
         let recipient = GrantRecipient {
             contact: &contact,
             display_name,
+            grantee_name: None,
         };
         refusal!(
             name_of,

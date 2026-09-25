@@ -50,6 +50,7 @@ function view(
     scope,
     contacts: contacts.map((seed) => ({
       identityPublicKey: identity(seed),
+      cachedName: null,
     })),
     ownContactCode: OWN_CODE,
     state:
@@ -59,6 +60,7 @@ function view(
             grants: grants.map(([seed, permission]) => ({
               recipientIdentityPublicKey: identity(seed),
               permission,
+              granteeName: null,
             })),
             grantRefusal: null,
             inviteLinkRefusal: null,
@@ -172,8 +174,8 @@ describe('invite links', () => {
   };
   const linked = () =>
     view(DOCS, [1], [[1, 'read']], {
-      grantRefusal: 'grant-target-already-names-a-scope',
-      inviteLinkRefusal: 'invite-target-already-names-a-scope',
+      grantRefusal: 'grant-parent-envelope-version-unsupported',
+      inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
       inviteLinks: LIVE,
     });
 
@@ -181,8 +183,8 @@ describe('invite links', () => {
     sharingStore.reported(linked());
 
     expect(sharingFor(sharingStore.getState(), DOCS_KEY)).toMatchObject({
-      grantRefusal: 'grant-target-already-names-a-scope',
-      inviteLinkRefusal: 'invite-target-already-names-a-scope',
+      grantRefusal: 'grant-parent-envelope-version-unsupported',
+      inviteLinkRefusal: 'invite-parent-envelope-version-unsupported',
       inviteLinks: LIVE,
     });
   });

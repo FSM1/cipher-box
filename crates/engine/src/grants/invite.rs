@@ -315,8 +315,30 @@ pub fn mint_invite_grant(
     write_scope_seed: &[u8; SECRET_LEN],
     terms: &LinkTerms,
 ) -> Result<GrantRow, InviteError> {
-    let deadline = NonZeroU64::new(terms.deadline.0).ok_or(InviteError::InvalidExpiry)?;
     let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
+    mint_invite_row(
+        owner_identity_signer,
+        owner_enc_secret,
+        pointer_read_key,
+        invitee,
+        scope_id,
+        ipns_name.as_str().as_bytes(),
+        terms,
+    )
+}
+
+/// [`mint_invite_grant`] at a scope root that already stands, whose name the
+/// caller read off the gated record rather than derived (ADR 0026 D1).
+pub fn mint_invite_row(
+    owner_identity_signer: &EcdsaSigner,
+    owner_enc_secret: &X25519Secret,
+    pointer_read_key: &[u8; SECRET_LEN],
+    invitee: &EphemeralInvitee,
+    scope_id: &[u8; 16],
+    scope_root_ipns_name: &[u8],
+    terms: &LinkTerms,
+) -> Result<GrantRow, InviteError> {
+    let deadline = NonZeroU64::new(terms.deadline.0).ok_or(InviteError::InvalidExpiry)?;
     let mut row = mint_grant_row(
         owner_identity_signer,
         owner_enc_secret,
@@ -324,7 +346,7 @@ pub fn mint_invite_grant(
         invitee.identity_pk().to_sec1(),
         &invitee.enc_public(),
         scope_id,
-        ipns_name.as_str().as_bytes(),
+        scope_root_ipns_name,
         Permission::Read,
     )
     .ok_or(InviteError::UnusableInviteeKey)?;
@@ -661,10 +683,10 @@ pub struct OwnerAuthority<'a> {
 /// commitment for one scope can therefore not be presented under another scope's
 /// id.
 pub struct CommittedScope<'a> {
-    scope_id: &'a [u8; 16],
-    commitment: &'a GrantSetCommitment,
-    commitment_sig: &'a EcdsaSignature,
-    ledger: &'a [GrantLedgerEntry],
+    pub(super) scope_id: &'a [u8; 16],
+    pub(super) commitment: &'a GrantSetCommitment,
+    pub(super) commitment_sig: &'a EcdsaSignature,
+    pub(super) ledger: &'a [GrantLedgerEntry],
 }
 
 impl<'a> CommittedScope<'a> {

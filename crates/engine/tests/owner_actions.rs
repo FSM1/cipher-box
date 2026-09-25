@@ -15,11 +15,11 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, BinEntry, ChildRef, GrantSection, NodeKind as CoreNodeKind,
-    Permission as CorePermission, PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, decode_envelope, decode_grant_section,
-    decode_write_body, grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body,
-    unseal,
+    AadContext, AscentLink, BinEntry, ChildRef, GrantLedgerEntry, GrantSection, GrantSetEntryKind,
+    GranteeName, NameSource, NodeKind as CoreNodeKind, Permission as CorePermission,
+    PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_WRITE_BODY, WriteBody, decode_envelope, decode_grant_section, decode_write_body,
+    grant_section_bytes, open_ascent_link, open_grant_blob, open_read_body, unseal,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, IDENTITY_PUBLIC_LEN};
@@ -32,7 +32,7 @@ use cipherbox_engine::grants::{
     CLAIM_ID_LEN, Contact, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee,
     GrantRow, InviteClaim, InviteFragment, LinkHold, LinkTerms, ReceivedShareStore,
     ResolutionClass, StagingReceivedShareStore, import_contact, mint_grant_row, mint_invite_grant,
-    post_invite_claim, recipient_blinded_tag,
+    post_invite_claim, recipient_blinded_tag, row_is_owner_attested,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::rotation::{
@@ -370,6 +370,15 @@ fn recipient_identity() -> EcdsaSigner {
     EcdsaSigner::from_scalar(&RECIPIENT_SECRET).expect("valid identity scalar")
 }
 
+/// The second grantee's identity key.
+fn bystander_identity() -> Vec<u8> {
+    EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
+        .expect("valid identity scalar")
+        .verifying_key()
+        .to_sec1()
+        .to_vec()
+}
+
 /// A peer's contact code: the self-signed bundle a real import receives out of
 /// band.
 fn contact_code(scalar: &[u8; 32]) -> Vec<u8> {
@@ -440,9 +449,15 @@ fn expiring_invite_link_at_root(secret_byte: u8, deadline: UnixMillis) -> GrantR
 /// The one share pointer waiting on `device`'s inbox, opened under the
 /// recipient's own encryption subkey.
 fn delivered_share_pointer(device: &FakeDevice) -> SharePointer {
+    delivered_share_pointer_for(device, &RECIPIENT_SECRET)
+}
+
+/// The one share pointer waiting on `device`'s inbox, opened under the
+/// encryption subkey `secret` derives.
+fn delivered_share_pointer_for(device: &FakeDevice, secret: &[u8; 32]) -> SharePointer {
     let mut items = block_on(poll_verified(
         &device.mailbox,
-        &kdf::enc_subkey(&RECIPIENT_SECRET),
+        &kdf::enc_subkey(secret),
         ENVELOPE_V,
     ))
     .expect("the inbox answers");
@@ -514,6 +529,34 @@ impl GrantScenario {
             node: self.folder,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission,
+            grantee_name: None,
+        }))
+    }
+
+    fn grant_named(
+        &mut self,
+        permission: Permission,
+        name: &str,
+    ) -> Result<CommandOutcome, EngineError> {
+        block_on(self.engine.command(Command::Grant {
+            node: self.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission,
+            grantee_name: Some(name.to_owned()),
+        }))
+    }
+
+    /// Import the second grantee and grant them the folder.
+    fn grant_bystander(&mut self, permission: Permission) -> Result<CommandOutcome, EngineError> {
+        block_on(self.engine.command(Command::ImportContact {
+            contact_code: contact_code(&BYSTANDER_SECRET),
+        }))
+        .expect("the second recipient's code imports");
+        block_on(self.engine.command(Command::Grant {
+            node: self.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission,
+            grantee_name: None,
         }))
     }
 
@@ -598,10 +641,20 @@ impl GrantScenario {
                 recipient_identity_public_key:
                     recipient_identity().verifying_key().to_sec1().to_vec(),
                 permission: Permission::Read,
+                grantee_name: None,
             })),
             Ok(CommandOutcome::Done),
         );
         inner
+    }
+
+    /// A second device of the same owner, booted and ticked once, holding no
+    /// contact book of its own.
+    fn second_owner_device(&self) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+        let device = self.world.device(b"the owner's second device");
+        let (engine, events, mut tasks) = boot_owner(&self.world, &self.blocks, &device);
+        tick(&self.world, &engine, &mut tasks);
+        (engine, events, tasks)
     }
 
     fn granted_scope_repoint(&self) -> RepointObject {
@@ -871,6 +924,7 @@ fn a_grant_the_engine_refuses_publishes_nothing() {
                 node: fx.folder,
                 recipient_identity_public_key: stranger.clone(),
                 permission,
+                grantee_name: None,
             })),
             Err(EngineError::MalformedInput {
                 check: "recipient-not-imported"
@@ -1003,9 +1057,10 @@ fn a_downgraded_grant_can_still_be_revoked() {
     );
     let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
     assert_eq!(
-        block_on(fx.engine.command(Command::Downgrade {
+        block_on(fx.engine.command(Command::ChangePermission {
             node: fx.folder,
             recipient_identity_public_key: recipient.clone(),
+            permission: Permission::Read,
         })),
         Ok(CommandOutcome::Done)
     );
@@ -1045,9 +1100,10 @@ fn a_downgrade_publishes_the_demoted_commitment_and_moves_the_scope() {
     );
 
     assert_eq!(
-        block_on(fx.engine.command(Command::Downgrade {
+        block_on(fx.engine.command(Command::ChangePermission {
             node: fx.folder,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
         })),
         Ok(CommandOutcome::Done),
         "the downgrade completes rather than refusing permanently at the wave"
@@ -1091,9 +1147,10 @@ fn an_owner_action_refuses_while_the_cached_seed_names_the_superseded_root() {
     import_recipient(&mut engine);
 
     assert_eq!(
-        block_on(engine.command(Command::Downgrade {
+        block_on(engine.command(Command::ChangePermission {
             node: ROOT,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
         })),
         Ok(CommandOutcome::Done)
     );
@@ -1147,9 +1204,10 @@ fn a_cut_whose_floor_raise_fails_still_refuses_the_next_owner_action() {
         .fail_floor_raises_for(&write_epoch_floor_key(&SCOPE));
 
     assert!(
-        block_on(engine.command(Command::Downgrade {
+        block_on(engine.command(Command::ChangePermission {
             node: ROOT,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
         }))
         .is_err(),
         "the cut reports the floor it could not raise"
@@ -2123,6 +2181,27 @@ fn published_child_scope_index(
     node: NodeId,
     write_epoch: u64,
 ) -> Vec<[u8; 16]> {
+    published_write_body(world, blocks, node, write_epoch)
+        .direct_child_scope_index
+        .into_iter()
+        .map(|child| child.scope_id)
+        .collect()
+}
+
+/// The grant ledger the scope root at `node` publishes at its first write
+/// epoch.
+fn published_ledger(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> Vec<GrantLedgerEntry> {
+    published_write_body(world, blocks, node, 1).grant_ledger
+}
+
+/// The write body of the scope root at `node`, opened under the write key the
+/// vault root's own seed derives.
+fn published_write_body(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    node: NodeId,
+    write_epoch: u64,
+) -> WriteBody {
     let section =
         published_grant_section(world, blocks, node).expect("the node is a published scope root");
     let write_key = kdf::write_key(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
@@ -2138,12 +2217,7 @@ fn published_child_scope_index(
         &section.write_body.sealed,
     )
     .expect("the scope's own write key opens its write body");
-    decode_write_body(&plaintext)
-        .expect("the write body decodes")
-        .direct_child_scope_index
-        .into_iter()
-        .map(|child| child.scope_id)
-        .collect()
+    decode_write_body(&plaintext).expect("the write body decodes")
 }
 
 /// The refusal end to end, over what another device would see: the member hears
@@ -2694,6 +2768,7 @@ fn two_granted_folders(fx: &mut GrantScenario) -> (NodeId, NodeId) {
             node: album,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Read,
+            grantee_name: None,
         })),
         Ok(CommandOutcome::Done),
         "the second folder is granted too, so both ends are interior scopes"
@@ -2880,6 +2955,7 @@ fn the_passes_that_cannot_author_a_staged_move_do_not_spend_it() {
                 recipient_identity_public_key:
                     recipient_identity().verifying_key().to_sec1().to_vec(),
                 permission: Permission::Read,
+                grantee_name: None,
             })),
             Ok(CommandOutcome::Done),
             "each bystander is a scope with a pass of its own"
@@ -3293,6 +3369,7 @@ fn a_share_to_another_recipient_over_a_scope_the_index_lost_is_refused() {
                     .to_sec1()
                     .to_vec(),
                 permission: Permission::Read,
+                grantee_name: None,
             })
         ),
         Err(EngineError::UnsupportedTarget {
@@ -3333,6 +3410,7 @@ fn a_share_below_a_scope_root_the_index_lost_is_refused() {
             node: inner,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Read,
+            grantee_name: None,
         })),
         Err(EngineError::UnsupportedTarget {
             check: "enclosing-scope-index-lost-a-root"
@@ -3357,7 +3435,7 @@ fn a_second_share_is_refused_when_the_stranded_root_reads_below_the_floor() {
     assert_eq!(
         fx.grant_folder_to_recipient(),
         Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
+            check: "grant-target-index-lost-a-root"
         }),
     );
 }
@@ -3398,6 +3476,7 @@ fn a_grant_inside_a_granted_scope_anchors_under_that_scope() {
             node: inner,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Read,
+            grantee_name: None,
         })),
         Ok(CommandOutcome::Done),
     );
@@ -3847,9 +3926,10 @@ fn a_name_wave_reports_the_row_it_re_mints_without_an_owner_binding() {
     let _ = events_so_far(&mut events);
 
     assert_eq!(
-        block_on(engine.command(Command::Downgrade {
+        block_on(engine.command(Command::ChangePermission {
             node: ROOT,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Read,
         })),
         Ok(CommandOutcome::Done),
         "the write cut drives the wave that re-mints the set"
@@ -4012,6 +4092,7 @@ fn the_vault_root_refuses_both_shares_with_the_names_its_read_reports() {
             node: ROOT,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Read,
+            grantee_name: None,
         })),
         Err(EngineError::UnsupportedTarget {
             check: state.grant_refusal.expect("the read refuses the grant"),
@@ -4034,51 +4115,6 @@ fn the_vault_root_refuses_both_shares_with_the_names_its_read_reports() {
     assert_eq!(
         state.invite_link_refusal,
         Some("invite-target-is-the-vault-root")
-    );
-}
-
-/// A second share of a folder would mint another scope at epoch 1, replacing the
-/// seed every existing grantee holds. The read and the commands decide that on
-/// one rule, so a host offers nothing the mint would then refuse — and each
-/// command still answers under its own name.
-#[test]
-fn a_second_share_of_a_scope_is_refused_with_the_names_its_read_reports() {
-    let mut fx = GrantScenario::new();
-    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
-
-    let state = block_on(fx.engine.sharing(fx.folder))
-        .expect("a sharing read")
-        .state
-        .expect("the granted scope root resolved");
-    assert_eq!(
-        state.grant_refusal,
-        Some("grant-target-already-names-a-scope")
-    );
-    assert_eq!(
-        state.invite_link_refusal,
-        Some("invite-target-already-names-a-scope")
-    );
-
-    let grant_refusal = state.grant_refusal.expect("the read refuses the grant");
-    assert_eq!(
-        fx.grant_folder_to_recipient(),
-        Err(EngineError::UnsupportedTarget {
-            check: grant_refusal
-        }),
-        "a reported standing and the refusal the command returns cannot disagree"
-    );
-    assert_eq!(
-        block_on(fx.engine.command(Command::CreateInviteLink {
-            node: fx.folder,
-            permission: Permission::Read,
-            expires_at: None,
-            owner_name: String::new(),
-        })),
-        Err(EngineError::UnsupportedTarget {
-            check: state
-                .invite_link_refusal
-                .expect("the read refuses the link"),
-        }),
     );
 }
 
@@ -4417,8 +4453,8 @@ fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violati
     );
 }
 
-/// A revoke and a downgrade are different actions to a user, so an ordinary
-/// folder refuses each under its own name.
+/// A revoke and a permission change are different actions to a user, so an
+/// ordinary folder refuses each under its own name.
 #[test]
 fn a_cut_at_an_ordinary_folder_reports_the_name_of_the_command_it_refused() {
     let mut fx = GrantScenario::new();
@@ -4434,12 +4470,13 @@ fn a_cut_at_an_ordinary_folder_reports_the_name_of_the_command_it_refused() {
         }),
     );
     assert_eq!(
-        block_on(fx.engine.command(Command::Downgrade {
+        block_on(fx.engine.command(Command::ChangePermission {
             node: fx.folder,
             recipient_identity_public_key: recipient,
+            permission: Permission::Read,
         })),
         Err(EngineError::UnsupportedTarget {
-            check: "downgrade-target-is-not-a-scope-root"
+            check: "permission-change-target-is-not-a-scope-root"
         }),
     );
 }
@@ -4943,6 +4980,7 @@ fn a_cut_after_an_owner_grant_leaves_the_claimant_revokable() {
             node: other,
             recipient_identity_public_key: claimant_pk.clone(),
             permission: Permission::Read,
+            grantee_name: None,
         })),
         Ok(CommandOutcome::Done),
         "the owner grants the claimant a second scope"
@@ -5255,7 +5293,8 @@ fn settle_filed_sweeps(fx: &GrantScenario) {
 
 /// The fragment is the only copy of the invite secret. A parent publish that
 /// fails after the scope root landed still hands it over, the holder joins
-/// through it, and a later mint of the folder finishes the handover.
+/// through it. The parent's sweep names the promoted root in its index, so a
+/// further mint appends a link to that root.
 #[test]
 fn a_mint_whose_parent_publish_fails_still_hands_over_a_working_link() {
     let mut fx = GrantScenario::new();
@@ -5276,21 +5315,22 @@ fn a_mint_whose_parent_publish_fails_still_hands_over_a_working_link() {
     let shares = block_on(holder.received_shares()).expect("the list reads");
     assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
 
-    assert_eq!(
-        fx.try_mint_link_at(Permission::Read),
-        Err(EngineError::UnsupportedTarget {
-            check: "invite-target-already-names-a-scope"
-        }),
-        "the folder holds its link, and takes no second one"
-    );
     assert!(
         block_on(fx.engine.sharing(fx.folder))
             .expect("a sharing read")
             .state
-            .expect("the finished handover indexes the scope")
+            .expect("the healed index names the scope")
             .invite_links
             .live,
-        "the sharing read reports the one live link"
+        "the sharing read reports the live link"
+    );
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+    fx.mint_link();
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        before + 1,
+        "a further mint appends a link to the indexed root"
     );
 }
 
@@ -5486,46 +5526,209 @@ fn a_write_share_whose_cut_failed_is_finished_by_the_same_share() {
     );
 }
 
-/// The re-drive is the unfinished share, never a further one. A share whose wave
-/// ran has moved its scope off the name the parent's seed derives, so the index
-/// no longer names it there and the standing refuses as before.
+// ---------------------------------------------------------------------------
+// Appending to a shared scope, and a grantee's permission and name
+// ---------------------------------------------------------------------------
+
+/// A grant on a folder that already names a scope appends one row to that scope
+/// (ADR 0026 D1): the scope root publishes once at its current epoch, under the
+/// seed every grantee already holds, and the parent's index does not move. The
+/// sharing read offers the append, so it reports no refusal there.
 #[test]
-fn a_second_write_share_of_a_finished_scope_is_still_refused() {
+fn a_second_grant_on_a_scope_root_appends_a_row_and_publishes_once() {
     let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let name = write_name(fx.folder);
+    let first = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder is a scope root");
+    let folder_before = sequence_at(&fx.world, &name);
+    let root_before = sequence_at(&fx.world, &write_name(ROOT));
+    let state = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the granted scope root resolved");
+    assert_eq!(state.grant_refusal, None);
+    assert_eq!(state.invite_link_refusal, None);
+
+    let bystander_device = fx.device_for(&BYSTANDER_SECRET);
     assert_eq!(
-        fx.grant_folder_at(Permission::Write),
+        fx.grant_bystander(Permission::Read),
         Ok(CommandOutcome::Done)
     );
-    let moved = fx.granted_scope_repoint().current_root;
 
     assert_eq!(
-        fx.grant_folder_at(Permission::Write),
-        Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
-        }),
+        sequence_at(&fx.world, &name),
+        folder_before + 1,
+        "the scope root publishes once"
     );
     assert_eq!(
-        fx.granted_scope_repoint().current_root,
-        moved,
-        "and the scope stayed where its own wave left it"
+        sequence_at(&fx.world, &write_name(ROOT)),
+        root_before,
+        "and the parent's index does not move"
+    );
+    let after = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the scope root still answers at its name");
+    assert_eq!(after.commitment.entries.len(), 2, "one more row");
+    assert!(
+        first
+            .commitment
+            .entries
+            .iter()
+            .all(|entry| after.commitment.entries.contains(entry)),
+        "and the first grantee's row stands"
+    );
+    assert!(
+        stranded_override_seed(&after, fx.folder) == stranded_override_seed(&first, fx.folder),
+        "under the seed the scope already had"
+    );
+    assert_eq!(
+        delivered_share_pointer_for(&bystander_device, &BYSTANDER_SECRET).scope_root_name,
+        name.as_str().as_bytes(),
+        "and the new grantee is sent to the root that stands"
+    );
+    assert_eq!(
+        fx.granted_to(),
+        vec![
+            recipient_identity().verifying_key().to_sec1().to_vec(),
+            bystander_identity(),
+        ]
     );
 }
 
-/// The pre-wave root lingers at the parent-derived name for ever, and the
-/// write-epoch floor that refuses it is durable and **local**. A second owner
-/// device that never saw the wave holds no such floor, so the parent index is
-/// the only authority that separates an owed wave from a finished one.
+/// A link on a folder that already names a scope is one more link row, and a
+/// folder carries any number of live links beside its direct grants
+/// (ADR 0026 D2, D3). Each mint publishes the scope root once and draws no seed.
 #[test]
-fn a_write_share_of_a_finished_scope_is_refused_on_a_device_that_missed_the_wave() {
+fn links_append_to_a_shared_folder_and_coexist() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let name = write_name(fx.folder);
+    let first = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder is a scope root");
+    let before = sequence_at(&fx.world, &name);
+
+    let read_link = fx.mint_link();
+    let write_link = fx.mint_link_at(Permission::Write);
+
+    assert_ne!(read_link, write_link, "two links, two capabilities");
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        before + 2,
+        "one publish each"
+    );
+    let after = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the scope root still answers at its name");
+    let kinds: Vec<GrantSetEntryKind> = after
+        .commitment
+        .entries
+        .iter()
+        .map(|entry| entry.kind)
+        .collect();
+    assert_eq!(kinds.len(), 3);
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == GrantSetEntryKind::Link)
+            .count(),
+        2
+    );
+    assert!(
+        stranded_override_seed(&after, fx.folder) == stranded_override_seed(&first, fx.folder),
+        "under the seed the scope already had"
+    );
+    for fragment in [&read_link, &write_link] {
+        let opened = InviteFragment::decode(fragment).expect("the mint's own fragment");
+        assert_eq!(
+            opened.scope_id, fx.folder.0,
+            "each link names the one scope"
+        );
+    }
+}
+
+/// A grant at the permission the grantee already holds changes no set and
+/// re-posts their share pointer to the root that stands, so a grant retried
+/// after a failed post still delivers (ADR 0026 D4). A permission change to
+/// that permission is the command that says nothing changes.
+#[test]
+fn a_grant_at_the_held_permission_re_delivers_and_a_change_to_it_is_refused() {
     let mut fx = GrantScenario::new();
     assert_eq!(
         fx.grant_folder_at(Permission::Write),
         Ok(CommandOutcome::Done)
     );
     let moved = fx.granted_scope_repoint().current_root;
+    let before = sequence_at(&fx.world, &moved);
 
-    let second = fx.world.device(b"the owner's second device");
-    let (mut engine, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &second);
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    assert_eq!(
+        block_on(fx.engine.command(Command::ChangePermission {
+            node: fx.folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+        })),
+        Err(EngineError::MalformedInput {
+            check: "grant-recipient-already-has-access"
+        }),
+    );
+
+    assert_eq!(sequence_at(&fx.world, &moved), before, "nothing publishes");
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        moved,
+        "and the scope stays where its own wave left it"
+    );
+    assert_eq!(
+        inbox(&fx.recipient_device).len(),
+        2,
+        "the repeated grant posted its pointer again"
+    );
+}
+
+/// A grant whose share pointer never reached the recipient leaves the row
+/// committed and the inbox empty. The same grant retried delivers one pointer
+/// to the live root and publishes nothing.
+#[test]
+fn a_grant_retried_after_a_failed_pointer_post_delivers_the_pointer() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    for item in block_on(fx.recipient_device.mailbox.poll()).expect("the inbox answers") {
+        block_on(fx.recipient_device.mailbox.ack(&item.item_id)).expect("the ack lands");
+    }
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    assert_eq!(
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        name.as_str().as_bytes(),
+        "one pointer, naming the root that stands"
+    );
+    assert_eq!(
+        sequence_at(&fx.world, &name),
+        before,
+        "and nothing publishes"
+    );
+}
+
+/// The parent index names the moved root, so a second owner device that never
+/// saw the wave still finds the grantee, and re-delivers to the moved root.
+#[test]
+fn a_grant_the_grantee_holds_re_delivers_on_a_device_that_missed_the_wave() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(
+        fx.grant_folder_at(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let moved = fx.granted_scope_repoint().current_root;
+    for item in block_on(fx.recipient_device.mailbox.poll()).expect("the inbox answers") {
+        block_on(fx.recipient_device.mailbox.ack(&item.item_id)).expect("the ack lands");
+    }
+
+    let (mut engine, _events, _tasks) = fx.second_owner_device();
     import_recipient(&mut engine);
 
     assert_eq!(
@@ -5533,100 +5736,420 @@ fn a_write_share_of_a_finished_scope_is_refused_on_a_device_that_missed_the_wave
             node: fx.folder,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission: Permission::Write,
+            grantee_name: None,
         })),
-        Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
-        }),
+        Ok(CommandOutcome::Done),
     );
+    assert_eq!(fx.granted_scope_repoint().current_root, moved);
     assert_eq!(
-        fx.granted_scope_repoint().current_root,
-        moved,
-        "and the scope stayed where its own wave left it"
+        delivered_share_pointer(&fx.recipient_device).scope_root_name,
+        moved.as_str().as_bytes(),
     );
 }
 
-/// A read share cuts no write scope, so its scope root sits at the
-/// parent-derived name for good. Only the write row the stalled scope commits
-/// says a wave is owed there — without that proof a write share over a read
-/// grantee's live scope would re-key the scope they already hold.
+/// A write grant to a read grantee is an upgrade (ADR 0026 D4, ADR 0025 D6).
+/// The folder is not a write scope yet, so one write-scope cut runs first, and
+/// the write row is committed only at the root it moved to: the record left at
+/// the inherited name never hands the grantee the seed the vault's names derive
+/// from.
 #[test]
-fn a_write_share_over_a_read_granted_scope_is_refused() {
+fn a_write_grant_to_a_read_grantee_upgrades_it_after_one_write_scope_cut() {
     let mut fx = GrantScenario::new();
     assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let inherited = write_name(fx.folder);
 
     assert_eq!(
         fx.grant_folder_at(Permission::Write),
-        Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
-        }),
+        Ok(CommandOutcome::Done)
+    );
+
+    let repoint = fx.granted_scope_repoint();
+    assert_eq!(repoint.write_epoch, 2, "one write-scope cut ran");
+    assert_eq!(repoint.prev_root.as_ref(), Some(&inherited));
+    let moved = repoint.current_root;
+    assert_eq!(fx.committed_permission(&moved), Some(CorePermission::Write));
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &moved)
+        .expect("the moved root answers as a scope root");
+    let seed = grantee_write_scope_seed(&section, &moved, &fx.folder.0, 1);
+    assert_eq!(
+        derive_write_name(&seed, &fx.folder.0),
+        moved,
+        "the grantee's seed derives the root they resolve"
     );
     assert_eq!(
-        fx.committed_permission(&write_name(fx.folder)),
-        Some(CorePermission::Read),
-        "and the read grantee's row is untouched"
+        fx.granted_blob_carries_write_seed(&inherited),
+        Some(false),
+        "and the record at the inherited name conveys no write seed"
     );
 }
 
-/// The share that finishes a stalled one is the same share. A read share of a
-/// folder whose stalled scope commits a **write** row is a different grant, and
-/// finishing it would deliver a pointer naming a permission the scope's own
-/// committed set contradicts.
+/// ADR 0025 D3 and D6 from an owner device that never imported the grantee: the
+/// row the owner signed names them, so an upgrade and a downgrade both run. The
+/// downgrade is a write cut, and the grantee still reads.
 #[test]
-fn a_read_share_over_a_stalled_write_scope_is_refused() {
+fn a_permission_change_runs_from_the_owner_signed_row_on_any_owner_device() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    let (mut engine, _events, _tasks) = fx.second_owner_device();
+    let folder = fx.folder;
+    let change = |engine: &mut Engine<FakeSeamTypes>, permission| {
+        block_on(engine.command(Command::ChangePermission {
+            node: folder,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission,
+        }))
+    };
+
+    assert_eq!(
+        change(&mut engine, Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+    let upgraded = fx.granted_scope_repoint();
+    assert_eq!(
+        fx.committed_permission(&upgraded.current_root),
+        Some(CorePermission::Write)
+    );
+    assert_eq!(
+        fx.granted_blob_carries_write_seed(&upgraded.current_root),
+        Some(true)
+    );
+
+    assert_eq!(
+        change(&mut engine, Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let downgraded = fx.granted_scope_repoint();
+    assert_eq!(
+        downgraded.write_epoch,
+        upgraded.write_epoch + 1,
+        "the downgrade ran a write cut"
+    );
+    assert_eq!(
+        fx.committed_permission(&downgraded.current_root),
+        Some(CorePermission::Read)
+    );
+    assert_eq!(
+        fx.granted_blob_carries_write_seed(&downgraded.current_root),
+        Some(false),
+        "and the grantee still holds a read blob"
+    );
+}
+
+/// A link's permission is fixed (ADR 0025 D7), the owner is no grantee, and a
+/// change names a grantee the set commits.
+#[test]
+fn a_permission_change_refuses_a_link_the_owner_and_a_stranger() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    let link_identity = EphemeralInvitee::from_secret(opened.invite_secret.as_bytes())
+        .expect("valid secret")
+        .identity_pk()
+        .to_sec1()
+        .to_vec();
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+
+    for (identity, refusal) in [
+        (
+            link_identity,
+            EngineError::UnsupportedTarget {
+                check: "grant-row-is-a-link",
+            },
+        ),
+        (
+            owner_identity().verifying_key().to_sec1().to_vec(),
+            EngineError::MalformedInput {
+                check: "recipient-is-the-owner",
+            },
+        ),
+        (
+            bystander_identity(),
+            EngineError::MalformedInput {
+                check: "grant-recipient-not-granted",
+            },
+        ),
+    ] {
+        assert_eq!(
+            block_on(fx.engine.command(Command::ChangePermission {
+                node: fx.folder,
+                recipient_identity_public_key: identity,
+                permission: Permission::Write,
+            })),
+            Err(refusal),
+        );
+    }
+    assert_eq!(sequence_at(&fx.world, &name), before, "nothing publishes");
+}
+
+/// A grantee name edit is a row update with the source `owner` and one root
+/// publish (ADR 0027 D3). Only that row's name and signature move, and this
+/// device caches the name to pre-fill it elsewhere (D4).
+#[test]
+fn a_grantee_name_edit_changes_only_that_row_and_publishes_once() {
+    let mut fx = GrantScenario::new();
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+    assert_eq!(
+        fx.grant_bystander(Permission::Read),
+        Ok(CommandOutcome::Done)
+    );
+    let name = write_name(fx.folder);
+    let before = sequence_at(&fx.world, &name);
+    let section_before = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the granted folder is a scope root");
+    let ledger_before = published_ledger(&fx.world, &fx.blocks, fx.folder);
+    let recipient = recipient_identity().verifying_key().to_sec1();
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::RenameGrantee {
+            node: fx.folder,
+            recipient_identity_public_key: recipient.to_vec(),
+            name: "Alice".to_owned(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    assert_eq!(sequence_at(&fx.world, &name), before + 1, "one publish");
+    let section_after = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the scope root still answers");
+    assert_eq!(
+        section_after.commitment, section_before.commitment,
+        "the committed set does not move"
+    );
+    let ledger_after = published_ledger(&fx.world, &fx.blocks, fx.folder);
+    assert_eq!(ledger_after.len(), ledger_before.len());
+    for (before, after) in ledger_before.iter().zip(&ledger_after) {
+        if after.recipient_identity_pk != recipient {
+            assert_eq!(after, before, "no other row moves");
+            continue;
+        }
+        let granted = after
+            .grantee_name
+            .as_ref()
+            .expect("the row carries the name");
+        assert_eq!(granted.name(), "Alice");
+        assert_eq!(granted.source(), NameSource::Owner);
+        let mut unchanged = after.clone();
+        unchanged.grantee_name = None;
+        unchanged.owner_sig = before.owner_sig;
+        assert_eq!(&unchanged, before, "only the name and its signature move");
+        assert!(row_is_owner_attested(
+            &owner_identity().verifying_key(),
+            after,
+            name.as_str().as_bytes(),
+        ));
+    }
+
+    let view = block_on(fx.engine.sharing(fx.folder)).expect("a sharing read");
+    let grant = view
+        .state
+        .expect("the scope root resolved")
+        .grants
+        .into_iter()
+        .find(|grant| grant.recipient_identity_public_key == recipient)
+        .expect("the renamed grantee");
+    assert_eq!(
+        grant.grantee_name,
+        Some(("Alice".to_owned(), NameSource::Owner))
+    );
+    let contact = view
+        .contacts
+        .into_iter()
+        .find(|contact| contact.identity_public_key == recipient)
+        .expect("the imported recipient");
+    assert_eq!(contact.cached_name.as_deref(), Some("Alice"));
+}
+
+/// The row the stalled write share committed names the grantee, so a read
+/// share over it is a downgrade (ADR 0026 D4). It runs the owed wave and then
+/// its own: two write-epoch steps.
+#[test]
+fn a_read_share_over_a_stalled_write_scope_is_a_downgrade() {
     let mut fx = GrantScenario::new();
     fx.strand_the_owed_wave();
     let stalled = write_name(fx.folder);
 
-    assert_eq!(
-        fx.grant_folder_to_recipient(),
-        Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
-        }),
+    assert_eq!(fx.grant_folder_to_recipient(), Ok(CommandOutcome::Done));
+
+    let repoint = fx.granted_scope_repoint();
+    assert_ne!(
+        repoint.current_root, stalled,
+        "the downgrade ran the write cut"
     );
-    assert!(
-        inbox(&fx.recipient_device).is_empty(),
-        "so no pointer was delivered"
-    );
+    assert_eq!(repoint.write_epoch, 3, "after the wave the mint owed");
     assert_eq!(
-        fx.granted_scope_repoint().current_root,
-        stalled,
-        "and the owed wave is still owed"
+        fx.committed_permission(&repoint.current_root),
+        Some(CorePermission::Read)
     );
 }
 
-/// The row the stalled scope commits names one recipient. A share of that folder
-/// to anyone else is a share of a scope whose committed set holds nothing for
-/// them, which is refused rather than resumed.
+/// A write share to another recipient over a stalled write scope appends a
+/// row. The one wave it runs is the one the stalled share owed.
 #[test]
-fn a_write_share_to_another_recipient_over_a_stalled_scope_is_refused() {
+fn a_write_share_to_another_recipient_over_a_stalled_scope_appends_after_one_wave() {
     let mut fx = GrantScenario::new();
     fx.strand_the_owed_wave();
     let stalled = write_name(fx.folder);
+    let bystander_device = fx.device_for(&BYSTANDER_SECRET);
 
+    assert_eq!(
+        fx.grant_bystander(Permission::Write),
+        Ok(CommandOutcome::Done)
+    );
+
+    let repoint = fx.granted_scope_repoint();
+    assert_eq!(repoint.prev_root.as_ref(), Some(&stalled));
+    assert_eq!(repoint.write_epoch, 2, "one wave");
+    assert_eq!(
+        fx.committed_permission(&repoint.current_root),
+        Some(CorePermission::Write),
+        "the first grantee's row survives the wave"
+    );
+    assert_eq!(
+        delivered_share_pointer_for(&bystander_device, &BYSTANDER_SECRET).scope_root_name,
+        repoint.current_root.as_str().as_bytes(),
+        "and the new grantee is sent to the moved root"
+    );
+}
+
+/// ADR 0027 D2: a grant names its grantee on the row it mints, with the source
+/// `owner`, on a fresh scope and on an append alike, and the owner's binding
+/// signature covers the name. A name the row cannot carry is refused before
+/// anything publishes.
+#[test]
+fn a_grant_names_its_grantee_on_the_row_it_mints_or_appends() {
+    let mut fx = GrantScenario::new();
+    let refused = GranteeName::new(String::new(), NameSource::Owner)
+        .expect_err("an empty name is no name")
+        .check();
+    assert_eq!(
+        fx.grant_named(Permission::Read, ""),
+        Err(EngineError::MalformedInput { check: refused }),
+    );
+    assert_eq!(
+        published_grant_section(&fx.world, &fx.blocks, fx.folder),
+        None,
+        "and nothing is minted"
+    );
+
+    assert_eq!(
+        fx.grant_named(Permission::Read, "Alice"),
+        Ok(CommandOutcome::Done)
+    );
     block_on(fx.engine.command(Command::ImportContact {
         contact_code: contact_code(&BYSTANDER_SECRET),
     }))
     .expect("the second recipient's code imports");
     assert_eq!(
-        block_on(
-            fx.engine.command(Command::Grant {
-                node: fx.folder,
-                recipient_identity_public_key: EcdsaSigner::from_scalar(&BYSTANDER_SECRET)
-                    .expect("valid identity scalar")
-                    .verifying_key()
-                    .to_sec1()
-                    .to_vec(),
-                permission: Permission::Write,
-            })
-        ),
-        Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
-        }),
+        block_on(fx.engine.command(Command::Grant {
+            node: fx.folder,
+            recipient_identity_public_key: bystander_identity(),
+            permission: Permission::Read,
+            grantee_name: Some("Bob".to_owned()),
+        })),
+        Ok(CommandOutcome::Done)
     );
+
+    let name = write_name(fx.folder);
+    let recipient = recipient_identity().verifying_key().to_sec1().to_vec();
+    for row in published_ledger(&fx.world, &fx.blocks, fx.folder) {
+        let expected = if row.recipient_identity_pk.to_vec() == recipient {
+            "Alice"
+        } else {
+            "Bob"
+        };
+        let granted = row.grantee_name.as_ref().expect("the row carries a name");
+        assert_eq!(granted.name(), expected);
+        assert_eq!(granted.source(), NameSource::Owner);
+        assert!(row_is_owner_attested(
+            &owner_identity().verifying_key(),
+            &row,
+            name.as_str().as_bytes(),
+        ));
+    }
+    let names: Vec<Option<(String, NameSource)>> = block_on(fx.engine.sharing(fx.folder))
+        .expect("a sharing read")
+        .state
+        .expect("the scope root resolved")
+        .grants
+        .into_iter()
+        .map(|grant| grant.grantee_name)
+        .collect();
     assert_eq!(
-        fx.granted_scope_repoint().current_root,
-        stalled,
-        "and the owed wave is still owed"
+        names,
+        vec![
+            Some(("Alice".to_owned(), NameSource::Owner)),
+            Some(("Bob".to_owned(), NameSource::Owner)),
+        ]
+    );
+}
+
+/// A committed writer authors the ledger, so it can relabel a row. A row whose
+/// owner binding no longer verifies names nobody, so a permission change and a
+/// rename of it are refused and nothing publishes (ADR 0027 D6).
+#[test]
+fn a_row_a_co_writer_relabelled_is_refused_for_a_change_and_a_rename() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let mut relabelled = recipient_row_at_root(CorePermission::Write);
+    let honest = relabelled.ledger_entry.recipient_identity_pk;
+    relabelled.ledger_entry.recipient_identity_pk = [0x11; IDENTITY_PUBLIC_LEN];
+    let root = seed_vault(&world, &blocks, vec![relabelled]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
+    let before = sequence_at(&world, &root);
+
+    for identity in [honest, [0x11; IDENTITY_PUBLIC_LEN]] {
+        for command in [
+            Command::ChangePermission {
+                node: ROOT,
+                recipient_identity_public_key: identity.to_vec(),
+                permission: Permission::Read,
+            },
+            Command::RenameGrantee {
+                node: ROOT,
+                recipient_identity_public_key: identity.to_vec(),
+                name: "Mallory".to_owned(),
+            },
+        ] {
+            assert_eq!(
+                block_on(engine.command(command)),
+                Err(EngineError::MalformedInput {
+                    check: "grant-recipient-not-granted"
+                }),
+            );
+        }
+    }
+    assert_eq!(sequence_at(&world, &root), before, "nothing publishes");
+}
+
+/// An upgrade of a folder granted inside a granted folder cuts that folder's
+/// own write scope: the seed its grantee receives derives the name the nested
+/// root moved to, and is not the enclosing scope's.
+#[test]
+fn a_nested_root_upgrade_seals_its_own_write_scope_seed() {
+    let mut fx = GrantScenario::new();
+    let inner = fx.grant_nested_folder("inner");
+
+    assert_eq!(
+        block_on(fx.engine.command(Command::ChangePermission {
+            node: inner,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+            permission: Permission::Write,
+        })),
+        Ok(CommandOutcome::Done)
+    );
+
+    let repoint = scope_repoint(&fx.world, &inner.0);
+    assert_eq!(repoint.write_epoch, 2, "one write-scope cut ran");
+    let moved = repoint.current_root;
+    let section = published_grant_section_at(&fx.world, &fx.blocks, &moved)
+        .expect("the moved nested root answers as a scope root");
+    let seed = grantee_write_scope_seed(&section, &moved, &inner.0, 1);
+    assert_eq!(derive_write_name(&seed, &inner.0), moved);
+    assert!(
+        seed != WRITE_SCOPE_SEED,
+        "the nested grantee never holds the enclosing scope's seed"
     );
 }
 

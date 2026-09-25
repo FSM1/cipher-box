@@ -94,7 +94,7 @@ fn command_builders_expose_stable_names() {
         "create"
     );
     assert_eq!(
-        Command::grant(&node, vec![0xAB; 32], Permission::Write).name(),
+        Command::grant(&node, vec![0xAB; 32], Permission::Write, None).name(),
         "grant"
     );
     assert_eq!(Command::manual_refresh().name(), "manualRefresh");

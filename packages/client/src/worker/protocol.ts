@@ -220,13 +220,20 @@ export interface SnapshotDescriptor {
 /** One contact the vault's book holds, as data (mirrors `SharingContact`). */
 export interface SharingContactDescriptor {
   identityPublicKey: Uint8Array;
+  /** The last grantee name this device saw for the peer: a pre-fill, never an authority. */
+  cachedName: string | null;
 }
+
+/** Who chose a grantee name on the owner-signed row. */
+export type GranteeNameSource = 'owner' | 'claimant';
 
 /** One grant a scope's ledger commits, as data (mirrors `SharingGrant`). */
 export interface SharingGrantDescriptor {
   /** Joins the row to a contact by identity key. */
   recipientIdentityPublicKey: Uint8Array;
   permission: Permission;
+  /** The name on the owner-attested row; `null` where the row carries none. */
+  granteeName: { name: string; source: GranteeNameSource } | null;
 }
 
 /**
@@ -552,9 +559,22 @@ export type CommandDescriptor =
       node: Uint8Array;
       recipientIdentityPublicKey: Uint8Array;
       permission: Permission;
+      /** The name the owner gives the grantee on the row; `null` leaves it unnamed. */
+      granteeName: string | null;
     }
   | { kind: 'revoke'; node: Uint8Array; recipientIdentityPublicKey: Uint8Array }
-  | { kind: 'downgrade'; node: Uint8Array; recipientIdentityPublicKey: Uint8Array }
+  | {
+      kind: 'changePermission';
+      node: Uint8Array;
+      recipientIdentityPublicKey: Uint8Array;
+      permission: Permission;
+    }
+  | {
+      kind: 'renameGrantee';
+      node: Uint8Array;
+      recipientIdentityPublicKey: Uint8Array;
+      name: string;
+    }
   | {
       kind: 'createInviteLink';
       node: Uint8Array;

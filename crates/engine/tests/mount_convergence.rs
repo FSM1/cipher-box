@@ -448,6 +448,7 @@ fn grant_to_recipient_at(engine: &mut Engine<FakeSeamTypes>, node: NodeId, permi
             node,
             recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
             permission,
+            grantee_name: None,
         })),
         Ok(CommandOutcome::Done),
         "the grant cuts the folder into a scope root of its own"
@@ -880,14 +881,16 @@ fn no_other_owner_action_moves_the_vault_roots_read_epoch() {
             node: ROOT,
             recipient_identity_public_key: recipient.clone(),
             permission: Permission::Write,
+            grantee_name: None,
         },
         Command::Revoke {
             node: ROOT,
             recipient_identity_public_key: recipient.clone(),
         },
-        Command::Downgrade {
+        Command::ChangePermission {
             node: ROOT,
             recipient_identity_public_key: recipient.clone(),
+            permission: Permission::Read,
         },
     ] {
         let name = command.name();
@@ -1772,6 +1775,7 @@ fn file_under_a_write_share(
         node: shared,
         recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
         permission: Permission::Write,
+        grantee_name: None,
     }));
     assert!(outcome.is_ok(), "the write share lands: {outcome:?}");
     (engine, shared, file)

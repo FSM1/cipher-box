@@ -34,19 +34,18 @@ function grantsFor(scopeKey: string): readonly GrantRow[] | null {
 
 /** One engine sharing read: the book always holds the one contact under test. */
 function view(grants: Permission[], links: SharingInviteLinksDescriptor): SharingDescriptor {
-  // A share of the folder mints a scope at it, which a second share cannot.
-  const shared = grants.length > 0 || links.live;
   return {
     scope: DOCS,
-    contacts: [{ identityPublicKey: IDENTITY }],
+    contacts: [{ identityPublicKey: IDENTITY, cachedName: null }],
     ownContactCode: new Uint8Array([0xc0, 0xde]),
     state: {
       grants: grants.map((permission) => ({
         recipientIdentityPublicKey: IDENTITY,
         permission,
+        granteeName: null,
       })),
-      grantRefusal: shared ? 'grant-target-already-names-a-scope' : null,
-      inviteLinkRefusal: shared ? 'invite-target-already-names-a-scope' : null,
+      grantRefusal: null,
+      inviteLinkRefusal: null,
       inviteLinks: links,
     },
   };
@@ -86,8 +85,8 @@ function sharingEngine(
       if (refusals.revoke === undefined) ledger.length = 0;
       return answer('revoke', { kind: 'done' as const });
     }),
-    downgrade: vi.fn(() => {
-      if (refusals.downgrade === undefined) ledger.splice(0, ledger.length, 'read');
+    changePermission: vi.fn((_scope: Uint8Array, _key: Uint8Array, permission: Permission) => {
+      if (refusals.downgrade === undefined) ledger.splice(0, ledger.length, permission);
       return answer('downgrade', { kind: 'done' as const });
     }),
     createInviteLink: vi.fn(() => {
@@ -227,7 +226,7 @@ describe('grant commands', () => {
 
     await expect(result.current.downgrade(CONTACT)).resolves.toBe(true);
 
-    expect(engine.facade.downgrade).toHaveBeenCalledWith(DOCS, IDENTITY);
+    expect(engine.facade.changePermission).toHaveBeenCalledWith(DOCS, IDENTITY, 'read');
     expect(grantsFor(DOCS_KEY)).toEqual([{ contact: CONTACT, permission: 'read' }]);
   });
 
@@ -256,9 +255,7 @@ describe('invite link commands', () => {
   });
 
   it('hands back no fragment for a mint the engine refused', async () => {
-    const refusal = new EngineRequestError(
-      'unsupported target: invite-target-already-names-a-scope'
-    );
+    const refusal = new EngineRequestError('unsupported target: invite-target-index-lost-a-root');
     const engine = sharingEngine({ createInviteLink: refusal });
     const { result } = mount(engine.client);
 

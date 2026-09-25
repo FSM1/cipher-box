@@ -918,8 +918,8 @@ mod tests {
 
         let live = field(
             &shared(
-                Some("grant-target-already-names-a-scope"),
-                Some("invite-target-already-names-a-scope"),
+                Some("grant-parent-envelope-version-unsupported"),
+                Some("invite-parent-envelope-version-unsupported"),
                 facade::SharingInviteLinks {
                     live: true,
                     expires_at: Some(UnixMillis(u64::MAX)),
@@ -931,11 +931,11 @@ mod tests {
         );
         assert_eq!(
             field(&live, "grantRefusal"),
-            JsValue::from_str("grant-target-already-names-a-scope")
+            JsValue::from_str("grant-parent-envelope-version-unsupported")
         );
         assert_eq!(
             field(&live, "inviteLinkRefusal"),
-            JsValue::from_str("invite-target-already-names-a-scope")
+            JsValue::from_str("invite-parent-envelope-version-unsupported")
         );
         assert_eq!(field(&live, "grants").unchecked_into::<Array>().length(), 0);
         let links = field(&live, "inviteLinks");
