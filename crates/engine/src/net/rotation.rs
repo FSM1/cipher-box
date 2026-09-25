@@ -4244,8 +4244,8 @@ where
     /// entry carries is either derived here or copied from what the owner already
     /// signed. The re-mint walks the commitment, not the ledger: `recipientEncPk`
     /// is owner-signed there, while a committed write grantee authors the row.
-    /// The row still carries forward `expiresAt` and `recipientIdentityPk`,
-    /// which no commitment field covers.
+    /// The row still carries forward `recipientIdentityPk`, which no commitment
+    /// field covers.
     fn remint_grants(
         &self,
         node: &RepublishedNode,
@@ -4317,17 +4317,8 @@ where
                 return Err(WritePublishError::Rejected);
             }
             commitment_entry.unknown = committed_entry.unknown.clone();
-            let mut ledger_entry = minted.ledger_entry;
-            // The deadline is the discovered-expiry trigger's input and the
-            // invite claim path's restriction; dropping it at a re-mint erases
-            // both. The row's unknown map is not carried, unlike the commitment
-            // entry's above: `reseal_scope_root` rebuilds every ledger row
-            // without one, so the ledger half adds no unbounded bytes to the
-            // re-seal budget.
-            ledger_entry.expires_at = row.expires_at;
-
             reminted.entries.push(commitment_entry);
-            reminted.ledger.push(ledger_entry);
+            reminted.ledger.push(minted.ledger_entry);
         }
         // Tag order, never the ledger order a write-grantee authored: the owner
         // signs these entries (`reseal_scope_root` sorts its blobs on the same
@@ -5148,8 +5139,6 @@ mod tests {
     use core::cell::Cell;
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
-
-    use core::num::NonZeroU64;
 
     use crate::content::dag::root_block_cid;
     use crate::entropy::EntropyError;
@@ -8522,7 +8511,7 @@ mod tests {
     /// scope write seed and re-signed under the pseudonym the commitment names —
     /// what a committed co-writer can put on the wire, since the commitment binds
     /// `(tag, maskedRecipientEncPk, permission, pseudonymPk)` and never
-    /// `recipientIdentityPk` or `expiresAt`.
+    /// `recipientIdentityPk`.
     fn republish_ledger<T: RecordTransport + Clone>(
         harness: &Harness<T>,
         root: &OwnerRootFixture,
@@ -10011,10 +10000,6 @@ mod tests {
 
     // --- The wave's grant re-mint ---
 
-    /// The deadline the write grant carries, so a re-mint that drops it is
-    /// visible.
-    const GRANT_DEADLINE: u64 = 1_800_000_000_000;
-
     fn read_grantee() -> X25519Secret {
         X25519Secret::from_scalar([0x91; 32])
     }
@@ -10042,8 +10027,7 @@ mod tests {
             .expect("a contributory recipient key")
         };
         let read = mint([0x93; 32], &read_grantee(), Permission::Read);
-        let mut write = mint([0x94; 32], &write_grantee(), Permission::Write);
-        write.ledger_entry.expires_at = NonZeroU64::new(GRANT_DEADLINE);
+        let write = mint([0x94; 32], &write_grantee(), Permission::Write);
         vec![read, write]
     }
 
@@ -10183,60 +10167,6 @@ mod tests {
             section.commitment.entries.len(),
             2,
             "the re-minted commitment commits the whole set, no more and no less"
-        );
-    }
-
-    #[test]
-    fn the_re_mint_carries_each_grants_deadline_forward() {
-        let harness = Harness::plain();
-        let root = granted_root(Vec::new());
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-
-        let owner = owner_identity();
-        let net = wave(&harness, &owner, &root.name, &root.grant_section.commitment);
-        enumerate_root(&net);
-        let moved = order(SCOPE, &root.name, BTreeMap::new(), true);
-        block_on(net.republish(&moved)).expect("the root moves");
-
-        let (_, envelope) = published_head(&harness, &moved.new_name);
-        let section = published_section(&harness, &moved.new_name);
-        let body = open_write_body(
-            &envelope,
-            &section,
-            &SCOPE,
-            &FRESH_WRITE_SCOPE_SEED,
-            OWNER_ROOT_EPOCH + 1,
-        )
-        .expect("the owner reopens the re-minted write body");
-
-        let row = |grantee: &X25519Secret| {
-            let tag = recipient_blinded_tag(
-                grantee,
-                &owner_enc().public(),
-                moved.new_name.as_str().as_bytes(),
-            )
-            .expect("a contributory sharer key");
-            body.grant_ledger
-                .iter()
-                .find(|e| e.tag == tag)
-                .expect("the grantee's re-minted ledger row")
-                .clone()
-        };
-        let write_row = row(&write_grantee());
-        assert_eq!(
-            write_row.expires_at,
-            NonZeroU64::new(GRANT_DEADLINE),
-            "a deadline dropped by the re-mint silently un-expires the grant"
-        );
-        assert_eq!(write_row.permission, Permission::Write);
-        assert_eq!(
-            write_row.recipient_enc_pk,
-            write_grantee().public().to_bytes()
-        );
-        assert_eq!(
-            row(&read_grantee()).expires_at,
-            None,
-            "and a row that never expired stays that way"
         );
     }
 

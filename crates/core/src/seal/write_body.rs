@@ -17,11 +17,11 @@
 //! fields.
 
 use core::fmt;
-use core::num::NonZeroU64;
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{
-    Map, RedactedBytes, Value, decode, encode, encode_fixed_depth, encoded_len, head_len,
+    Map, RedactedBytes, RedactedText, Value, decode, encode, encode_fixed_depth, encoded_len,
+    head_len,
 };
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::MAX_IPNS_NAME_BYTES;
@@ -70,24 +70,88 @@ pub struct GrantLedgerEntry {
     /// (CONTEXT.md "Grant ledger"); the ledger is sealed, so the residual is
     /// bounded to the writer set.
     pub owner_sig: [u8; ECDSA_SIG_LEN],
-    /// The deadline past which this grant is inert, in Unix milliseconds;
-    /// `None` for a grant that does not expire. Carried for invite links
-    /// (blueprint/engine.md "Invites": expiry is a ledger field, lazily pruned).
-    ///
-    /// **Not a capability boundary.** Neither owner signature covers it: the
-    /// grant-set commitment covers
-    /// `(tag, maskedRecipientEncPk, permission, pseudonymPk)`, and
-    /// [`owner_sig`](Self::owner_sig) covers the recipient binding, so a
-    /// write-grantee re-authoring this body can alter or drop the deadline
-    /// undetectably. It is a deadline cooperating readers honour and the input
-    /// to the discovered-expiry prune trigger; cutting a grantee off is the
-    /// owner's re-signed commitment plus a rotation.
-    ///
-    /// `NonZeroU64` so zero is unrepresentable rather than checked, and no encode
-    /// path can emit the [`Malformed::InvalidExpiry`] bytes the decoder rejects.
-    pub expires_at: Option<NonZeroU64>,
+    /// The via-link reference: the tag of the link row that admitted this
+    /// grantee (ADR 0023 D2). Under [`owner_sig`](Self::owner_sig) when present.
+    pub via_link: Option<[u8; SECRET_LEN]>,
+    /// The grantee name and its source (ADR 0027 D3). Under
+    /// [`owner_sig`](Self::owner_sig) when present.
+    pub grantee_name: Option<GranteeName>,
     /// Preserved unknown fields (never any of the known keys).
     pub unknown: PreservedFields,
+}
+
+/// Who chose a [`GranteeName`]. On the wire it is the text `"claimant"` or
+/// `"owner"`. The flag makes the owner's row signature attest "the claimant
+/// asked for this name" until the owner edits it (ADR 0027 D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameSource {
+    Claimant,
+    Owner,
+}
+
+impl NameSource {
+    /// The frozen wire string.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Claimant => "claimant",
+            Self::Owner => "owner",
+        }
+    }
+
+    fn from_value(v: &Value) -> Result<Self, CodecError> {
+        match v.as_text()? {
+            "claimant" => Ok(Self::Claimant),
+            "owner" => Ok(Self::Owner),
+            _ => Err(Malformed::InvalidNameSource.into()),
+        }
+    }
+}
+
+/// The longest grantee name, in bytes: the bound a share display name carries.
+pub const MAX_GRANTEE_NAME_BYTES: usize = 255;
+
+/// A grantee name with its source: a label on a ledger row, never an identity
+/// (CONTEXT.md "Grantee name"). [`Self::new`] is the only constructor and runs
+/// the check the decoder runs, so no encode path can emit a name the decoder
+/// refuses.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GranteeName {
+    name: String,
+    source: NameSource,
+}
+
+/// The name labels one grantee, so it renders redacted like the row's keys.
+impl fmt::Debug for GranteeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GranteeName")
+            .field("name", &RedactedText::of(&self.name))
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl GranteeName {
+    /// Refuses with [`Malformed::InvalidGranteeName`] a name that is empty,
+    /// longer than [`MAX_GRANTEE_NAME_BYTES`], or carries a control character.
+    pub fn new(name: String, source: NameSource) -> Result<Self, CodecError> {
+        if name.is_empty()
+            || name.len() > MAX_GRANTEE_NAME_BYTES
+            || name.chars().any(char::is_control)
+        {
+            return Err(Malformed::InvalidGranteeName.into());
+        }
+        Ok(Self { name, source })
+    }
+
+    /// The name text.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Who chose the name.
+    pub fn source(&self) -> NameSource {
+        self.source
+    }
 }
 
 /// Each recipient field names one grantee, and the subkey names that party at
@@ -109,23 +173,30 @@ impl fmt::Debug for GrantLedgerEntry {
             .field("permission", &self.permission)
             .field("tag", &RedactedBytes::of(&self.tag))
             .field("owner_sig", &RedactedBytes::of(&self.owner_sig))
-            .field("expires_at", &self.expires_at)
+            .field(
+                "via_link",
+                &self.via_link.as_ref().map(|t| RedactedBytes::of(t)),
+            )
+            .field("grantee_name", &self.grantee_name)
             .field("unknown", &self.unknown)
             .finish()
     }
 }
 
 const LEDGER_ENTRY_KNOWN: &[&str] = &[
-    "expiresAt",
+    "granteeName",
+    "nameSource",
     "ownerSig",
     "permission",
     "recipientEncPk",
     "recipientIdentityPk",
     "tag",
+    "viaLink",
 ];
 
 impl GrantLedgerEntry {
-    /// A ledger entry that never expires and preserves no unknown fields.
+    /// A ledger entry with no via-link reference, no grantee name, and no
+    /// preserved unknown fields.
     pub fn new(
         recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
         recipient_enc_pk: [u8; SECRET_LEN],
@@ -139,7 +210,8 @@ impl GrantLedgerEntry {
             permission,
             tag,
             owner_sig,
-            expires_at: None,
+            via_link: None,
+            grantee_name: None,
             unknown: PreservedFields::new(),
         }
     }
@@ -155,28 +227,56 @@ impl GrantLedgerEntry {
         let permission = Permission::from_value(req(map, "permission")?)?;
         let tag = bytes_fixed::<SECRET_LEN>(req(map, "tag")?, "tag")?;
         let owner_sig = bytes_fixed::<ECDSA_SIG_LEN>(req(map, "ownerSig")?, "ownerSig")?;
-        let expires_at = map
-            .get("expiresAt")
-            .map(|v| -> Result<NonZeroU64, CodecError> {
-                NonZeroU64::new(v.as_unsigned()?).ok_or_else(|| Malformed::InvalidExpiry.into())
-            })
+        let via_link = map
+            .get("viaLink")
+            .map(|v| bytes_fixed::<SECRET_LEN>(v, "viaLink"))
             .transpose()?;
+        let grantee_name = match (map.get("granteeName"), map.get("nameSource")) {
+            (None, None) => None,
+            (Some(name), Some(source)) => Some(GranteeName::new(
+                name.as_text()?.to_owned(),
+                NameSource::from_value(source)?,
+            )?),
+            (Some(_), None) => {
+                return Err(Malformed::MissingField {
+                    field: "nameSource",
+                }
+                .into());
+            }
+            (None, Some(_)) => {
+                return Err(Malformed::MissingField {
+                    field: "granteeName",
+                }
+                .into());
+            }
+        };
         Ok(Self {
             recipient_identity_pk,
             recipient_enc_pk,
             permission,
             tag,
             owner_sig,
-            expires_at,
+            via_link,
+            grantee_name,
             unknown: collect_unknown(map, LEDGER_ENTRY_KNOWN),
         })
     }
 
+    /// The optional fields that enter the owner-signature preimage, each only
+    /// when present, so a row minted before they existed keeps its bytes.
+    fn insert_optional_signed(&self, m: &mut Map) {
+        if let Some(via_link) = self.via_link {
+            m.insert("viaLink", Value::Bytes(via_link.to_vec()));
+        }
+        if let Some(name) = &self.grantee_name {
+            m.insert("granteeName", Value::Text(name.name.clone()));
+            m.insert("nameSource", Value::Text(name.source.as_wire().to_string()));
+        }
+    }
+
     fn to_value(&self) -> Value {
         let mut m = Map::new();
-        if let Some(expires_at) = self.expires_at {
-            m.insert("expiresAt", Value::Unsigned(expires_at.get()));
-        }
+        self.insert_optional_signed(&mut m);
         m.insert("ownerSig", Value::Bytes(self.owner_sig.to_vec()));
         m.insert(
             "permission",
@@ -204,13 +304,16 @@ impl GrantLedgerEntry {
 /// the exact preimage the owner ECDSA-signs into
 /// [`GrantLedgerEntry::owner_sig`] and a re-sealer verifies.
 ///
-/// The preimage is `{ipnsName, recipientEncPk, recipientIdentityPk, tag}`,
-/// bound to the scope root's `ipnsName` so a row cannot be replayed into
-/// another root's ledger. It deliberately excludes `permission` (already
-/// owner-signed in the grant-set commitment) and `expiresAt` (writer-mutable by
-/// design, see [`GrantLedgerEntry::expires_at`]), along with preserved unknowns.
+/// The preimage is `{ipnsName, recipientEncPk, recipientIdentityPk, tag}` plus
+/// `viaLink`, `granteeName` and `nameSource` when present, bound to the scope
+/// root's `ipnsName` so a row cannot be replayed into another root's ledger. A
+/// row without the optional fields keeps the preimage it had before they
+/// existed, and a removed field changes the preimage, so verify fails. It
+/// excludes `permission` (already owner-signed in the grant-set commitment) and
+/// preserved unknowns.
 pub fn encode_recipient_binding(ipns_name: &[u8], entry: &GrantLedgerEntry) -> Vec<u8> {
     let mut m = Map::new();
+    entry.insert_optional_signed(&mut m);
     m.insert("ipnsName", Value::Bytes(ipns_name.to_vec()));
     m.insert(
         "recipientEncPk",
@@ -493,10 +596,9 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 /// past [`MAX_DIRECT_CHILD_SCOPES`] entries or carrying an `ipnsName` past
 /// [`MAX_IPNS_NAME_BYTES`], or a plaintext past [`MAX_WRITE_BODY_BYTES`], fails
 /// here with the same verdict [`decode_write_body`] raises, so it never hands
-/// back bytes its own decoder rejects. The decoder's other reject,
-/// `invalid-expiry`, needs no guard —
-/// [`GrantLedgerEntry::expires_at`] is `NonZeroU64`, so those bytes are
-/// unrepresentable rather than checked. Its key is optional, though, so each
+/// back bytes its own decoder rejects. The decoder's grantee-name rejects need
+/// no guard here: [`GranteeName::new`] refuses what the decoder refuses, so
+/// those bytes are unrepresentable. The optional keys are free, though, so each
 /// row's preserved fields must not smuggle one in. Every level's preserved list
 /// is held to the same rule, so the encoder never silently drops a caller's
 /// field where it errors on the equivalent one a level up.
@@ -638,13 +740,15 @@ mod tests {
             core::array::from_fn(|i| (i as u8).wrapping_mul(17).wrapping_add(109));
 
         let mut row = GrantLedgerEntry::new(identity, enc, Permission::Read, tag, owner_sig);
-        row.expires_at = NonZeroU64::new(7);
+        row.via_link = Some(tag);
+        row.grantee_name = Some(GranteeName::new("Alice".to_owned(), NameSource::Owner).unwrap());
         assert_eq!(
             format!("{row:?}"),
             "GrantLedgerEntry { recipient_identity_pk: <33 bytes redacted>, \
              recipient_enc_pk: <32 bytes redacted>, permission: Read, \
              tag: <32 bytes redacted>, owner_sig: <64 bytes redacted>, \
-             expires_at: Some(7), unknown: {} }"
+             via_link: Some(<32 bytes redacted>), grantee_name: Some(GranteeName { \
+             name: <5 chars redacted>, source: Owner }), unknown: {} }"
         );
 
         let body = WriteBody {
@@ -1110,16 +1214,18 @@ mod tests {
         );
     }
 
-    /// Wire bytes for a one-row ledger carrying `expiresAt: expiry`, hand-built
-    /// the way a hostile peer's arrive.
-    fn body_with_raw_expiry(expiry: Value) -> Vec<u8> {
+    /// Wire bytes for a one-row ledger with `extra` added to a well-formed
+    /// row, hand-built the way a hostile peer's arrive.
+    fn body_with_row_fields(extra: Vec<(&str, Value)>) -> Vec<u8> {
         let mut entry = Map::new();
-        entry.insert("expiresAt", expiry);
         entry.insert("ownerSig", Value::Bytes(vec![0x77; ECDSA_SIG_LEN]));
         entry.insert("permission", Value::Text("read".into()));
         entry.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
         entry.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 33]));
         entry.insert("tag", Value::Bytes(vec![0x21; 32]));
+        for (key, value) in extra {
+            entry.insert(key, value);
+        }
         let mut m = Map::new();
         m.insert("directChildScopeIndex", Value::Array(vec![]));
         m.insert("grantLedger", Value::Array(vec![Value::Map(entry)]));
@@ -1127,52 +1233,170 @@ mod tests {
         encode(&Value::Map(m)).unwrap()
     }
 
+    /// A row signed with a via-link reference and a claimant-suggested name.
+    fn named_row() -> GrantLedgerEntry {
+        let mut row = GrantLedgerEntry::new(
+            [0x02; 33],
+            [0x11; 32],
+            Permission::Read,
+            [0x21; 32],
+            [0u8; ECDSA_SIG_LEN],
+        );
+        row.via_link = Some([0x31; 32]);
+        row.grantee_name =
+            Some(GranteeName::new("Alice".to_owned(), NameSource::Claimant).unwrap());
+        row.owner_sig = sign_recipient_binding(&owner(), SCOPE_ROOT_IPNS, &row).to_compact();
+        row
+    }
+
+    /// A row minted while `expiresAt` was a typed field keeps its bytes and its
+    /// signature: the retired key is now a preserved unknown field.
     #[test]
-    fn expiring_ledger_entry_round_trips_byte_stable() {
+    fn a_row_with_the_retired_expiry_key_keeps_its_bytes_and_signature() {
         let mut body = sample();
-        body.grant_ledger[0].expires_at = NonZeroU64::new(1_700_000_000_000);
+        body.grant_ledger[0].unknown =
+            PreservedFields::from_iter([("expiresAt".to_string(), Value::Unsigned(1_700))]);
         let bytes = encode_write_body(&body).expect("encodes");
         let decoded = decode_write_body(&bytes).expect("decodes");
         assert_eq!(decoded, body);
-        assert_eq!(decoded.grant_ledger[1].expires_at, None, "absence survives");
         assert_eq!(encode_write_body(&decoded).unwrap(), bytes, "byte-stable");
-    }
-
-    #[test]
-    fn zero_expiry_rejects_at_decode() {
-        assert_eq!(
-            decode_write_body(&body_with_raw_expiry(Value::Unsigned(0)))
-                .unwrap_err()
-                .check(),
-            "invalid-expiry"
+        assert!(
+            verify_recipient_binding(
+                &owner().verifying_key(),
+                SCOPE_ROOT_IPNS,
+                &decoded.grant_ledger[0]
+            )
+            .is_ok()
         );
     }
 
     #[test]
-    fn non_unsigned_expiry_rejects() {
-        // Fail-closed, not fail-open: a wrong-typed deadline is a hard reject,
-        // never silently read as absent-and-therefore-live.
-        assert_eq!(
-            decode_write_body(&body_with_raw_expiry(Value::Text("soon".into())))
-                .unwrap_err()
-                .check(),
-            "unexpected-type"
+    fn a_named_row_round_trips_byte_stable_and_verifies() {
+        let body = WriteBody {
+            grant_ledger: vec![named_row()],
+            ..sample()
+        };
+        let bytes = encode_write_body(&body).expect("encodes");
+        let decoded = decode_write_body(&bytes).expect("decodes");
+        assert_eq!(decoded, body);
+        assert_eq!(encode_write_body(&decoded).unwrap(), bytes, "byte-stable");
+        assert!(
+            verify_recipient_binding(
+                &owner().verifying_key(),
+                SCOPE_ROOT_IPNS,
+                &decoded.grant_ledger[0]
+            )
+            .is_ok()
         );
     }
 
+    /// Each optional field is in the preimage when present, so dropping or
+    /// editing one detaches the owner signature.
     #[test]
-    fn encode_rejects_an_expiry_smuggled_through_preserved_fields() {
-        // Release-active guard: with `expires_at: None` the `expiresAt` key is
-        // free, so a caller-built `unknown` could otherwise encode a deadline the
-        // typed value denies. Exercised without relying on a `debug_assert`.
-        let mut body = sample();
-        body.grant_ledger[0].unknown =
-            PreservedFields::from_iter([("expiresAt".to_string(), Value::Unsigned(0))]);
-        assert_eq!(body.grant_ledger[0].expires_at, None);
-        assert_eq!(
-            encode_write_body(&body).unwrap_err().check(),
-            "unknown-field-collision"
-        );
+    fn a_removed_or_edited_signed_field_fails_the_verify() {
+        let verifier = owner().verifying_key();
+        let row = named_row();
+
+        let mut no_link = row.clone();
+        no_link.via_link = None;
+        let mut no_name = row.clone();
+        no_name.grantee_name = None;
+        let mut owner_named = row.clone();
+        owner_named.grantee_name =
+            Some(GranteeName::new("Alice".to_owned(), NameSource::Owner).unwrap());
+        let mut renamed = row.clone();
+        renamed.grantee_name =
+            Some(GranteeName::new("Mallory".to_owned(), NameSource::Claimant).unwrap());
+
+        for (what, tampered) in [
+            ("viaLink removed", no_link),
+            ("granteeName removed", no_name),
+            ("nameSource changed", owner_named),
+            ("granteeName changed", renamed),
+        ] {
+            assert_eq!(
+                verify_recipient_binding(&verifier, SCOPE_ROOT_IPNS, &tampered)
+                    .unwrap_err()
+                    .check(),
+                "identity-signature-invalid",
+                "{what} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_grantee_name_is_refused_at_decode() {
+        let named = |name: Value, source: &str| {
+            body_with_row_fields(vec![
+                ("granteeName", name),
+                ("nameSource", Value::Text(source.into())),
+            ])
+        };
+        let over = "a".repeat(MAX_GRANTEE_NAME_BYTES + 1);
+        for (what, bytes, check) in [
+            (
+                "empty",
+                named(Value::Text(String::new()), "owner"),
+                "invalid-grantee-name",
+            ),
+            (
+                "over the bound",
+                named(Value::Text(over), "owner"),
+                "invalid-grantee-name",
+            ),
+            (
+                "a newline",
+                named(Value::Text("A\nB".into()), "owner"),
+                "invalid-grantee-name",
+            ),
+            (
+                "not text",
+                named(Value::Unsigned(1), "owner"),
+                "unexpected-type",
+            ),
+            (
+                "unknown source",
+                named(Value::Text("A".into()), "server"),
+                "invalid-name-source",
+            ),
+            (
+                "a name with no source",
+                body_with_row_fields(vec![("granteeName", Value::Text("A".into()))]),
+                "missing-field",
+            ),
+            (
+                "a source with no name",
+                body_with_row_fields(vec![("nameSource", Value::Text("owner".into()))]),
+                "missing-field",
+            ),
+            (
+                "a short via-link",
+                body_with_row_fields(vec![("viaLink", Value::Bytes(vec![0x31; 31]))]),
+                "invalid-field-length",
+            ),
+        ] {
+            assert_eq!(
+                decode_write_body(&bytes).unwrap_err().check(),
+                check,
+                "{what}"
+            );
+        }
+        let at_bound = "a".repeat(MAX_GRANTEE_NAME_BYTES);
+        assert!(decode_write_body(&named(Value::Text(at_bound), "owner")).is_ok());
+    }
+
+    #[test]
+    fn encode_rejects_a_signed_field_smuggled_through_preserved_fields() {
+        for key in ["viaLink", "granteeName", "nameSource"] {
+            let mut body = sample();
+            body.grant_ledger[0].unknown =
+                PreservedFields::from_iter([(key.to_string(), Value::Text("x".into()))]);
+            assert_eq!(
+                encode_write_body(&body).unwrap_err().check(),
+                "unknown-field-collision",
+                "{key}"
+            );
+        }
     }
 
     #[test]
@@ -1261,14 +1485,14 @@ mod tests {
         );
     }
 
-    /// `permission` and `expiresAt` are outside the preimage, so a re-sealer's
-    /// deadline prune never invalidates the binding it must verify.
+    /// `permission` and preserved unknowns are outside the preimage.
     #[test]
-    fn the_recipient_binding_preimage_excludes_permission_and_expiry() {
+    fn the_recipient_binding_preimage_excludes_permission_and_unknowns() {
         let read = signed_row([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]);
         let mut write = read.clone();
         write.permission = Permission::Write;
-        write.expires_at = NonZeroU64::new(1_700_000_000_000);
+        write.unknown =
+            PreservedFields::from_iter([("expiresAt".to_string(), Value::Unsigned(1_700))]);
         assert_eq!(
             encode_recipient_binding(SCOPE_ROOT_IPNS, &read),
             encode_recipient_binding(SCOPE_ROOT_IPNS, &write)

@@ -11,7 +11,7 @@
 //! trust an unverified identity by construction.
 
 use cipherbox_core::error::CodecError;
-use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
+use cipherbox_core::suite::contact::{ContactCode, identity_fingerprint, import_contact_code};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Public;
 
@@ -71,9 +71,25 @@ pub fn import_contact(bytes: &[u8]) -> Result<Contact, CodecError> {
     Ok(Contact::from(&import_contact_code(bytes)?))
 }
 
+/// Core's [`identity_fingerprint`] of a 33-byte compressed identity key, for a
+/// host that holds the key as bytes. `None` when the bytes are not a valid key.
+pub fn fingerprint_identity_key(identity_public_key: &[u8]) -> Option<String> {
+    EcdsaVerifier::from_sec1(identity_public_key).map(|key| identity_fingerprint(&key))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fingerprint_needs_a_valid_identity_key() {
+        let key = identity().verifying_key();
+        assert_eq!(
+            fingerprint_identity_key(&key.to_sec1()),
+            Some(identity_fingerprint(&key))
+        );
+        assert_eq!(fingerprint_identity_key(&[0x02; 32]), None);
+    }
     use cipherbox_core::suite::contact::{ContactCode, sign_subkey_binding};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::x25519::X25519Secret;

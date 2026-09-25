@@ -188,6 +188,11 @@ export class EngineFacade {
     return this.transport.read({ kind: 'deviceRendezvous', step });
   }
 
+  /** The short fingerprint the UI shows beside a grantee name (ADR 0027 D7). */
+  identityFingerprint(identityPublicKey: Uint8Array): Promise<string> {
+    return this.transport.read({ kind: 'identityFingerprint', identityPublicKey });
+  }
+
   /** Downloads one file node's plaintext through the verified read pipeline. */
   download(node: Uint8Array): Promise<ArrayBuffer> {
     return this.transport.read({ kind: 'download', node });

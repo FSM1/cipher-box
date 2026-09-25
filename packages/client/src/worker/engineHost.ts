@@ -406,6 +406,8 @@ export class EngineHost implements EngineHostLike {
         return readPendingApprovals(await this.handle.pendingApprovals());
       case 'deviceRendezvous':
         return runRendezvous(this.wasm, read.step);
+      case 'identityFingerprint':
+        return this.wasm.identityFingerprint(bytes(read.identityPublicKey, 'identityPublicKey'));
       case 'siweChallenge':
         return this.handle.siweChallenge(read.intent);
       case 'download':

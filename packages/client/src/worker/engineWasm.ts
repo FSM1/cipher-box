@@ -405,6 +405,8 @@ export interface EngineWasm {
     responseSignature: string,
     rendezvousScalar: Uint8Array
   ): Uint8Array;
+  /** Throws on bytes that are not a compressed secp256k1 identity key. */
+  identityFingerprint(identityPublicKey: Uint8Array): string;
   ByoIpfsConfig: new (
     endpoint: string,
     kind: number,

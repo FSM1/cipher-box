@@ -157,9 +157,47 @@ fn field_bytes<'a>(map: &'a Map, field: &'static str) -> Result<&'a [u8], CodecE
     Ok(value.as_bytes()?)
 }
 
+/// The domain the identity fingerprint hashes under, frozen in the KAT
+/// manifest.
+pub const FINGERPRINT_DOMAIN: &str = "cipherbox/v2/identity-fingerprint";
+
+/// The digest bytes an identity fingerprint shows: 80 bits. Contact codes are
+/// self-made, so a targeted match costs about 2^80 key generations (ADR 0027
+/// D7).
+pub const FINGERPRINT_BYTES: usize = 10;
+
+/// The short form of an identity key both hosts show beside a grantee name:
+/// the first [`FINGERPRINT_BYTES`] of `BLAKE3(FINGERPRINT_DOMAIN || sec1)` in
+/// lowercase hex, in groups of four joined by a space
+/// (`"xxxx xxxx xxxx xxxx xxxx"`). A public digest, not a key derivation.
+pub fn identity_fingerprint(identity_pk: &EcdsaVerifier) -> String {
+    let mut transcript = FINGERPRINT_DOMAIN.as_bytes().to_vec();
+    transcript.extend_from_slice(&identity_pk.to_sec1());
+    let digest = super::hash::hash(&transcript);
+    let hex = crate::hex::lower(&digest[..FINGERPRINT_BYTES]);
+    hex.as_bytes()
+        .chunks(4)
+        .map(|group| core::str::from_utf8(group).expect("hex is ASCII"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fingerprint_is_80_bits_in_five_groups_and_separates_keys() {
+        let a = identity_fingerprint(&identity().verifying_key());
+        assert_eq!(a.len(), 24);
+        assert_eq!(a.split(' ').count(), 5);
+        assert!(
+            a.split(' ')
+                .all(|g| g.len() == 4 && g.bytes().all(|b| b.is_ascii_hexdigit()))
+        );
+        let other = EcdsaSigner::from_scalar(&[0x23; 32]).unwrap();
+        assert_ne!(a, identity_fingerprint(&other.verifying_key()));
+    }
 
     fn identity() -> EcdsaSigner {
         EcdsaSigner::from_scalar(&[0x22; 32]).expect("valid scalar")

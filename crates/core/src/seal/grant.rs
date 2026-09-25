@@ -33,6 +33,7 @@
 use zeroize::{Zeroize, Zeroizing};
 
 use core::fmt;
+use core::num::NonZeroU64;
 
 use crate::codec::{Map, RedactedBytes, Value, decode, encode};
 use crate::error::{CodecError, Malformed, TrustViolation};
@@ -91,6 +92,18 @@ impl Permission {
     pub(super) fn from_value(v: &Value) -> Result<Self, CodecError> {
         Self::from_wire(v.as_text()?).ok_or_else(|| Malformed::InvalidPermission.into())
     }
+}
+
+/// A grant-set commitment entry's kind. On the wire a personal entry has no
+/// `kind` key and a link entry carries the text `"link"`, so a commitment
+/// signed before the field existed keeps its bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EntryKind {
+    /// A grant to one person.
+    #[default]
+    Personal,
+    /// An invite link's entry (CONTEXT.md "Link entry").
+    Link,
 }
 
 // ---------------------------------------------------------------------------
@@ -804,6 +817,19 @@ pub struct GrantSetEntry {
     pub permission: Permission,
     /// The writer pseudonym public key (Ed25519).
     pub pseudonym_pk: [u8; 32],
+    /// The entry's kind. The three fields after it are link fields: a personal
+    /// entry carries none of them, and a link entry is committed at `read`
+    /// ([`Self::validate`]).
+    pub kind: EntryKind,
+    /// The time, in Unix milliseconds, by which an owner device must convert
+    /// a claim through this link. `NonZeroU64`, so the zero the decoder
+    /// refuses is unrepresentable.
+    pub deadline: Option<NonZeroU64>,
+    /// The permission conversion grants a claimant (ADR 0024 D4).
+    pub conversion_permission: Option<Permission>,
+    /// The limit on live ledger rows whose via-link reference names this link
+    /// (ADR 0023 D9).
+    pub admission_cap: Option<u64>,
     /// Preserved unknown fields (never any of the known keys).
     pub unknown: PreservedFields,
 }
@@ -821,13 +847,28 @@ impl fmt::Debug for GrantSetEntry {
             )
             .field("permission", &self.permission)
             .field("pseudonym_pk", &RedactedBytes::of(&self.pseudonym_pk))
+            .field("kind", &self.kind)
+            .field("deadline", &self.deadline)
+            .field("conversion_permission", &self.conversion_permission)
+            .field("admission_cap", &self.admission_cap)
             .field("unknown", &self.unknown)
             .finish()
     }
 }
 
-const GRANT_SET_ENTRY_KNOWN: &[&str] =
-    &["maskedRecipientEncPk", "permission", "pseudonymPk", "tag"];
+const GRANT_SET_ENTRY_KNOWN: &[&str] = &[
+    "admissionCap",
+    "conversionPermission",
+    "deadline",
+    "kind",
+    "maskedRecipientEncPk",
+    "permission",
+    "pseudonymPk",
+    "tag",
+];
+
+/// The wire text of [`EntryKind::Link`]. [`EntryKind::Personal`] has none.
+const LINK_KIND: &str = "link";
 
 impl GrantSetEntry {
     /// A committed grant with no preserved unknown fields, masking `recipient`
@@ -845,8 +886,34 @@ impl GrantSetEntry {
             masked_recipient_enc_pk: xor_mask(pointer_read_key, &tag, &recipient),
             permission,
             pseudonym_pk,
+            kind: EntryKind::Personal,
+            deadline: None,
+            conversion_permission: None,
+            admission_cap: None,
             unknown: PreservedFields::new(),
         }
+    }
+
+    /// The entry's field invariants, which decode and every encode path
+    /// enforce identically (AGENTS.md rule 8): a personal entry carries no
+    /// link field, and a link entry is committed at `read`.
+    pub fn validate(&self) -> Result<(), CodecError> {
+        match self.kind {
+            EntryKind::Personal => {
+                if self.deadline.is_some()
+                    || self.conversion_permission.is_some()
+                    || self.admission_cap.is_some()
+                {
+                    return Err(Malformed::LinkFieldOnPersonalEntry.into());
+                }
+            }
+            EntryKind::Link => {
+                if self.permission != Permission::Read {
+                    return Err(Malformed::LinkPermissionNotRead.into());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The recipient encryption subkey this entry commits, unmasked under the
@@ -888,13 +955,38 @@ impl GrantSetEntry {
             bytes_fixed::<SECRET_LEN>(req(map, "maskedRecipientEncPk")?, "maskedRecipientEncPk")?;
         let permission = Permission::from_value(req(map, "permission")?)?;
         let pseudonym_pk = bytes_fixed::<32>(req(map, "pseudonymPk")?, "pseudonymPk")?;
-        Ok(Self {
+        let kind = match map.get("kind") {
+            None => EntryKind::Personal,
+            Some(v) if v.as_text()? == LINK_KIND => EntryKind::Link,
+            Some(_) => return Err(Malformed::InvalidEntryKind.into()),
+        };
+        let deadline = map
+            .get("deadline")
+            .map(|v| -> Result<NonZeroU64, CodecError> {
+                NonZeroU64::new(v.as_unsigned()?).ok_or_else(|| Malformed::InvalidExpiry.into())
+            })
+            .transpose()?;
+        let conversion_permission = map
+            .get("conversionPermission")
+            .map(Permission::from_value)
+            .transpose()?;
+        let admission_cap = map
+            .get("admissionCap")
+            .map(Value::as_unsigned)
+            .transpose()?;
+        let entry = Self {
             tag,
             masked_recipient_enc_pk,
             permission,
             pseudonym_pk,
+            kind,
+            deadline,
+            conversion_permission,
+            admission_cap,
             unknown: collect_unknown(map, GRANT_SET_ENTRY_KNOWN),
-        })
+        };
+        entry.validate()?;
+        Ok(entry)
     }
 
     fn to_value(&self) -> Value {
@@ -909,6 +1001,18 @@ impl GrantSetEntry {
         );
         m.insert("pseudonymPk", Value::Bytes(self.pseudonym_pk.to_vec()));
         m.insert("tag", Value::Bytes(self.tag.to_vec()));
+        if self.kind == EntryKind::Link {
+            m.insert("kind", Value::Text(LINK_KIND.to_string()));
+        }
+        if let Some(deadline) = self.deadline {
+            m.insert("deadline", Value::Unsigned(deadline.get()));
+        }
+        if let Some(p) = self.conversion_permission {
+            m.insert("conversionPermission", Value::Text(p.as_wire().to_string()));
+        }
+        if let Some(cap) = self.admission_cap {
+            m.insert("admissionCap", Value::Unsigned(cap));
+        }
         merge_unknown(&mut m, &self.unknown);
         Value::Map(m)
     }
@@ -1000,13 +1104,18 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
 /// preimage the owner ECDSA-signs and a recipient verifies.
 ///
 /// Fails closed on a duplicate-tag commitment, on an entry set past
-/// [`MAX_GRANT_BLOBS`], or on a preserved-unknown map that carries a schema key,
-/// with the same verdict `decode_grant_set_commitment` raises, so the sign path
-/// never attests bytes every recipient rejects.
+/// [`MAX_GRANT_BLOBS`], on an entry [`GrantSetEntry::validate`] refuses, or on a
+/// preserved-unknown map that carries a schema key, with the same verdict
+/// `decode_grant_set_commitment` raises, so the sign path never attests bytes
+/// every recipient rejects.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
-    // Bound first, the order the decoder checks them in, so a value violating
-    // both invariants gets the same verdict from either side.
+    // Bound, then each entry, then uniqueness: the order the decoder checks
+    // them in, so a value violating two invariants gets one verdict from
+    // either side.
     assert_within_bound("entries", c.entries.len(), MAX_GRANT_BLOBS)?;
+    for e in &c.entries {
+        e.validate()?;
+    }
     assert_grant_ids_unique(
         c.entries.iter().map(|e| e.tag),
         TrustViolation::DuplicateGrantTag,
@@ -2014,5 +2123,177 @@ mod tests {
                 .check(),
             "invalid-field-length"
         );
+    }
+
+    /// A link entry carrying every link field, committed at `read`.
+    fn link_entry() -> GrantSetEntry {
+        GrantSetEntry {
+            kind: EntryKind::Link,
+            deadline: NonZeroU64::new(1_800_000_000_000),
+            conversion_permission: Some(Permission::Write),
+            admission_cap: Some(5),
+            ..GrantSetEntry::new(&PRK, [0x05; 32], [0x45; 32], Permission::Read, [0x06; 32])
+        }
+    }
+
+    /// An entry map with `extra` added to a well-formed read entry.
+    fn entry_with(extra: Vec<(&str, Value)>) -> Value {
+        let Value::Map(mut m) = entry_value(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32])
+        else {
+            unreachable!("entry_value builds a map")
+        };
+        for (key, value) in extra {
+            m.insert(key, value);
+        }
+        Value::Map(m)
+    }
+
+    #[test]
+    fn a_link_entry_round_trips_byte_stable_and_its_fields_are_signed() {
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"scope-root".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            cut_epoch: 0,
+            entries: vec![
+                GrantSetEntry::new(&PRK, [0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]),
+                link_entry(),
+            ],
+            unknown: PreservedFields::new(),
+        };
+        let bytes = encode_grant_set_commitment(&c).unwrap();
+        let decoded = decode_grant_set_commitment(&bytes).unwrap();
+        assert_eq!(decoded, c);
+        assert_eq!(encode_grant_set_commitment(&decoded).unwrap(), bytes);
+        let sig = sign_grant_set(&owner, &c).unwrap();
+        assert!(verify_grant_set(&owner.verifying_key(), &decoded, &sig).is_ok());
+
+        type Edit = fn(&mut GrantSetEntry);
+        let edits: [(&str, Edit); 4] = [
+            ("deadline", |e| e.deadline = NonZeroU64::new(1)),
+            ("conversionPermission", |e| {
+                e.conversion_permission = Some(Permission::Read)
+            }),
+            ("admissionCap", |e| e.admission_cap = None),
+            ("kind", |e| {
+                *e = GrantSetEntry::new(&PRK, e.tag, [0x45; 32], Permission::Read, e.pseudonym_pk)
+            }),
+        ];
+        for (what, edit) in edits {
+            let mut tampered = decoded.clone();
+            edit(&mut tampered.entries[1]);
+            assert_eq!(
+                verify_grant_set(&owner.verifying_key(), &tampered, &sig)
+                    .unwrap_err()
+                    .check(),
+                "commitment-invalid",
+                "{what} must be under the owner signature"
+            );
+        }
+    }
+
+    #[test]
+    fn a_personal_entry_keeps_the_bytes_it_had_before_the_link_fields() {
+        let entry = entry_value(vec![0x01; 32], vec![0x41; 32], "read", vec![0x02; 32]);
+        let bytes = commitment_value(vec![entry]);
+        let decoded = decode_grant_set_commitment(&bytes).unwrap();
+        assert_eq!(decoded.entries[0].kind, EntryKind::Personal);
+        assert_eq!(encode_grant_set_commitment(&decoded).unwrap(), bytes);
+    }
+
+    #[test]
+    fn the_decoder_refuses_the_invalid_link_field_combinations() {
+        let link = || ("kind", Value::Text("link".into()));
+        for (what, entry, check) in [
+            (
+                "a deadline on a personal entry",
+                entry_with(vec![("deadline", Value::Unsigned(1))]),
+                "link-field-on-personal-entry",
+            ),
+            (
+                "a cap on a personal entry",
+                entry_with(vec![("admissionCap", Value::Unsigned(1))]),
+                "link-field-on-personal-entry",
+            ),
+            (
+                "a conversion permission on a personal entry",
+                entry_with(vec![("conversionPermission", Value::Text("read".into()))]),
+                "link-field-on-personal-entry",
+            ),
+            (
+                "a link committed at write",
+                entry_with(vec![link(), ("permission", Value::Text("write".into()))]),
+                "link-permission-not-read",
+            ),
+            (
+                "an explicit personal kind",
+                entry_with(vec![("kind", Value::Text("personal".into()))]),
+                "invalid-entry-kind",
+            ),
+            (
+                "an unknown kind",
+                entry_with(vec![("kind", Value::Text("group".into()))]),
+                "invalid-entry-kind",
+            ),
+            (
+                "a zero deadline",
+                entry_with(vec![link(), ("deadline", Value::Unsigned(0))]),
+                "invalid-expiry",
+            ),
+            (
+                "an unknown conversion permission",
+                entry_with(vec![
+                    link(),
+                    ("conversionPermission", Value::Text("admin".into())),
+                ]),
+                "invalid-permission",
+            ),
+            (
+                "a text cap",
+                entry_with(vec![link(), ("admissionCap", Value::Text("5".into()))]),
+                "unexpected-type",
+            ),
+        ] {
+            assert_eq!(
+                decode_grant_set_commitment(&commitment_value(vec![entry]))
+                    .unwrap_err()
+                    .check(),
+                check,
+                "{what}"
+            );
+        }
+    }
+
+    /// Release-active (AGENTS.md rule 8): the encode and sign paths refuse
+    /// what the decoder refuses, so no build signs an unopenable commitment.
+    #[test]
+    fn encode_and_sign_refuse_the_invalid_link_field_combinations() {
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let mut personal_with_deadline =
+            GrantSetEntry::new(&PRK, [0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]);
+        personal_with_deadline.deadline = NonZeroU64::new(1);
+        let write_link = GrantSetEntry {
+            permission: Permission::Write,
+            ..link_entry()
+        };
+        let mut smuggled =
+            GrantSetEntry::new(&PRK, [0x01; 32], [0x41; 32], Permission::Read, [0x02; 32]);
+        smuggled.unknown =
+            PreservedFields::from_iter([("deadline".to_owned(), Value::Unsigned(1))]);
+        for (entry, check) in [
+            (personal_with_deadline, "link-field-on-personal-entry"),
+            (write_link, "link-permission-not-read"),
+            (smuggled, "unknown-field-collision"),
+        ] {
+            let c = GrantSetCommitment {
+                ipns_name: b"scope-root".to_vec(),
+                owner_pseudonym_pk: [0x88; 32],
+                cut_epoch: 0,
+                entries: vec![entry],
+                unknown: PreservedFields::new(),
+            };
+            assert_eq!(encode_grant_set_commitment(&c).unwrap_err().check(), check);
+            assert_eq!(sign_grant_set(&owner, &c).unwrap_err().check(), check);
+        }
     }
 }

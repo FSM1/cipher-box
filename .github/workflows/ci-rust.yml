@@ -179,6 +179,11 @@ jobs:
       - name: Core suite (native)
         run: cargo test -p cipherbox-core
 
+      # A release build compiles `debug_assert!` out, so an encode-side refusal
+      # that leans on one passes above and fails here (AGENTS.md rule 8).
+      - name: Encode-side refusals (native, release build)
+        run: cargo test -p cipherbox-core --release --test encode_refusals
+
       - name: Core suite (WASM, wasm32-wasip1 under wasmtime)
         run: cargo test -p cipherbox-core --target wasm32-wasip1
 

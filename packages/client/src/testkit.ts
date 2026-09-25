@@ -529,6 +529,7 @@ export class FakeEngineTransport implements EngineTransport {
    * nothing.
    */
   readonly rendezvousSteps: DeviceRendezvousStep[] = [];
+  readonly fingerprintKeys: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
   readonly versionLists: Uint8Array[] = [];
   readonly versionDownloads: Array<{ node: Uint8Array; contentCid: Uint8Array }> = [];
@@ -567,6 +568,8 @@ export class FakeEngineTransport implements EngineTransport {
     Promise.resolve(new Uint8Array(0));
   respondRendezvous: (step: DeviceRendezvousStep) => Promise<DeviceRendezvousResult> = () =>
     Promise.resolve({ kind: 'factor', factorKey: new Uint8Array(0) });
+  respondIdentityFingerprint: (identityPublicKey: Uint8Array) => Promise<string> = () =>
+    Promise.resolve('0000 0000 0000 0000 0000');
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondFileVersions: (node: Uint8Array) => Promise<VersionEntryDescriptor[]> = () =>
@@ -660,6 +663,9 @@ export class FakeEngineTransport implements EngineTransport {
       case 'deviceRendezvous':
         this.rendezvousSteps.push(snapshotStep(read.step));
         return this.respondRendezvous(read.step);
+      case 'identityFingerprint':
+        this.fingerprintKeys.push(read.identityPublicKey);
+        return this.respondIdentityFingerprint(read.identityPublicKey);
       case 'siweChallenge':
         this.siweChallenges += 1;
         this.siweChallengeIntents.push(read.intent);

@@ -138,6 +138,12 @@ test.describe('engine worker host', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  test('the identity fingerprint export matches the core KAT', async ({ page }) => {
+    const outcome = await runBoundary(page, 'identityFingerprint');
+    expect(outcome.error ?? '', 'identity fingerprint failure').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
+
   test('a WASM-backed seam view is copied before await, surviving detachment', async ({ page }) => {
     const outcome = await runBoundary(page, 'stagingDetachment');
     expect(outcome.error ?? '', 'staging detachment failure').toBe('');

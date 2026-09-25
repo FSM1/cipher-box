@@ -17,9 +17,8 @@
 //! behind it" still tells the API which folders were shared by link.
 //!
 //! The invite secret is the whole capability — it rides the link's URL fragment,
-//! so the link is honestly bearer and multi-claim. Its deadline lives on
-//! [`GrantLedgerEntry::expires_at`], which states what a deadline does and does
-//! not guarantee.
+//! so the link is honestly bearer and multi-claim. Its deadline lives on the
+//! owner's [`RecordedInvite::expires_at`].
 //!
 //! A holder claims by posting an [`InviteClaim`] to the owner's mailbox signed
 //! with the ephemeral identity; [`convert_invite_claim`] re-anchors it to the
@@ -49,7 +48,6 @@ use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use cipherbox_core::{ipns::IpnsName, kdf};
 use core::fmt;
-use core::num::NonZeroU64;
 use std::collections::BTreeSet;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -57,7 +55,7 @@ use crate::entropy::{Entropy, EntropyError, fresh_bytes, fresh_seed};
 use crate::grants::accept::{fixed, req};
 use crate::grants::contact::import_contact;
 use crate::grants::{
-    AuthorityViolation, Contact, GrantRow, enforce_committed_ledger, entry_is_live, mint_grant_row,
+    AuthorityViolation, Contact, GrantRow, enforce_committed_ledger, mint_grant_row,
     recipient_blinded_tag,
 };
 use crate::mailbox::{VerifiedMailboxItem, post_sealed};
@@ -306,12 +304,9 @@ impl EphemeralInvitee {
 /// One invite link as the owner recorded it at mint — **owner-local state, never
 /// network bytes**.
 ///
-/// A published ledger row is deliberately byte-shaped like a personal grantee's,
-/// so nothing in a resolved record says "this row is an invite", and the fields
-/// that would say so (`recipientIdentityPk`, `expiresAt`) sit outside the owner's
-/// signature and are re-authorable by any write-grantee. Conversion therefore
-/// decides *what may be claimed* from this record and never from the record it
-/// converts against.
+/// A published ledger row is byte-shaped like a personal grantee's, so
+/// conversion decides *what may be claimed* from this record and never from
+/// the record it converts against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordedInvite {
     /// The scope the link was minted over. Written at mint so attributing a
@@ -324,9 +319,7 @@ pub struct RecordedInvite {
     pub ephemeral_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
     /// The ephemeral encryption subkey the link's blob is sealed to.
     pub ephemeral_enc_pk: [u8; SECRET_LEN],
-    /// The deadline as minted. This copy is the authority: the published
-    /// `expiresAt` is a cooperating-reader hint a write-grantee can strip or
-    /// forge ([`GrantLedgerEntry::expires_at`]).
+    /// The deadline as minted, and the one conversion honours.
     pub expires_at: Option<UnixMillis>,
 }
 
@@ -360,12 +353,11 @@ pub fn mint_invite_grant(
     permission: Permission,
     expires_at: Option<UnixMillis>,
 ) -> Result<MintedInvite, InviteError> {
-    let deadline = match expires_at {
-        Some(deadline) => Some(NonZeroU64::new(deadline.0).ok_or(InviteError::InvalidExpiry)?),
-        None => None,
-    };
+    if expires_at.is_some_and(|deadline| deadline.0 == 0) {
+        return Err(InviteError::InvalidExpiry);
+    }
     let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
-    let mut row = mint_grant_row(
+    let row = mint_grant_row(
         owner_identity_signer,
         owner_enc_secret,
         pointer_read_key,
@@ -376,7 +368,6 @@ pub fn mint_invite_grant(
         permission,
     )
     .ok_or(InviteError::UnusableInviteeKey)?;
-    row.ledger_entry.expires_at = deadline;
     Ok(MintedInvite {
         link: RecordedInvite {
             scope_id: *scope_id,
@@ -759,9 +750,8 @@ pub struct ConvertedClaim {
 ///
 /// `links` is the owner's own record of the live links on this scope
 /// ([`RecordedInvite`]); a claim converts only against one of those. Nothing in a
-/// resolved record marks a row as an invite, and the row fields that could
-/// (`recipientIdentityPk`, `expiresAt`) sit outside the owner's signature, so
-/// deciding claimability from the record would let any committed grantee — or any
+/// resolved record this build mints marks a row as an invite, so deciding
+/// claimability from the record would let any committed grantee — or any
 /// write-grantee re-authoring the ledger — drive the owner into signing a grant
 /// for an identity the owner never approved.
 ///
@@ -769,9 +759,7 @@ pub struct ConvertedClaim {
 /// than a contact-anchored one; re-anchoring is the whole point of conversion, so
 /// the minted grant binds the claimant's imported contact and never the ephemeral
 /// half. `now` is the injected [`Scheduler::now`](crate::seams::Scheduler::now)
-/// instant. The owner's recorded deadline is the authority — the published one is
-/// honoured as well, but only ever to shorten a link, since a write-grantee can
-/// re-author that field.
+/// instant. The owner's recorded deadline is the authority.
 ///
 /// The caller signs and publishes the returned set, and records
 /// [`ConvertedClaim::record`] and acks the mailbox item only once that is durable
@@ -808,17 +796,6 @@ pub fn convert_invite_claim(
         .find(|e| e.tag == link_tag)
         .map(|e| e.permission)
         .ok_or(InviteError::LinkNotCommitted)?;
-    // The published deadline is honoured too, so an expired row is inert here
-    // before any prune reaches it. Only ever an additional restriction: a
-    // write-grantee re-authoring this field can shorten a link, never extend one.
-    if scope
-        .ledger
-        .iter()
-        .any(|e| e.tag == link_tag && !entry_is_live(e, now))
-    {
-        return Err(InviteError::LinkExpired);
-    }
-
     let contact = import_contact(&claim.contact_code).map_err(InviteError::ClaimantContact)?;
     if contact.identity_pk().to_sec1() == link.ephemeral_identity_pk
         || contact.enc_subkey().to_bytes() == link.ephemeral_enc_pk
@@ -1108,7 +1085,7 @@ fn ids_are_unique(ids: impl Iterator<Item = [u8; 32]>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grants::{PublishedGrantBlob, enforce_committed_ledger, self_locate};
+    use crate::grants::{PublishedGrantBlob, self_locate};
     use crate::rotation::{
         CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, WriteHistory, reseal_scope_root,
     };
@@ -1431,17 +1408,24 @@ mod tests {
     }
 
     #[test]
-    fn the_minted_row_carries_the_deadline_the_caller_asked_for() {
-        let expiring = invite(Permission::Write, Some(EXPIRES_AT));
-        assert_eq!(
-            expiring.ledger_entry.expires_at,
-            NonZeroU64::new(EXPIRES_AT.0)
-        );
-        assert_eq!(expiring.ledger_entry.permission, Permission::Write);
-        assert!(!entry_is_live(&expiring.ledger_entry, EXPIRES_AT));
-
-        let perpetual = invite(Permission::Read, None);
-        assert_eq!(perpetual.ledger_entry.expires_at, None);
+    fn the_minted_record_carries_the_deadline_the_caller_asked_for() {
+        let mint = |expires_at| {
+            mint_invite_grant(
+                &owner_identity(),
+                &owner_enc(),
+                &POINTER_READ_KEY,
+                &invitee(),
+                &SCOPE,
+                &WRITE_SCOPE_SEED,
+                Permission::Write,
+                expires_at,
+            )
+            .expect("mints")
+        };
+        let expiring = mint(Some(EXPIRES_AT));
+        assert_eq!(expiring.link.expires_at, Some(EXPIRES_AT));
+        assert_eq!(expiring.row.ledger_entry.permission, Permission::Write);
+        assert_eq!(mint(None).link.expires_at, None);
     }
 
     #[test]
@@ -1565,25 +1549,6 @@ mod tests {
             .check(),
             "hpke-open-failed",
         );
-    }
-
-    #[test]
-    fn a_write_grantee_may_strip_a_deadline_without_failing_owner_authority() {
-        // The honest bound on `expires_at`: it sits outside the owner-signed
-        // commitment, so a write-grantee re-authoring the write-body can drop or
-        // forge one and `enforce_committed_ledger` still passes. Pins the residual
-        // this slice ships with, so tightening it has to update this test.
-        let row = invite(Permission::Write, Some(EXPIRES_AT));
-        let commitment = GrantSetCommitment {
-            ipns_name: scope_name(),
-            owner_pseudonym_pk: owner_pseudonym().verifying_key().to_bytes(),
-            cut_epoch: 0,
-            entries: vec![row.commitment_entry.clone()],
-            unknown: PreservedFields::new(),
-        };
-        let mut stripped = row.ledger_entry.clone();
-        stripped.expires_at = None;
-        assert!(enforce_committed_ledger(&commitment, &[stripped]).is_ok());
     }
 
     #[test]
@@ -1837,10 +1802,6 @@ mod tests {
             Permission::Write,
             "the converted grant inherits the link's committed permission",
         );
-        assert_eq!(
-            converted.row.ledger_entry.expires_at, None,
-            "the link expires; the grants it produced do not",
-        );
         // The claimant may not hand back the link's own throwaway identity: it
         // self-signs a perfectly valid contact code, and re-anchoring is the
         // whole point of conversion.
@@ -2041,42 +2002,6 @@ mod tests {
             "link-expired",
         );
         assert_eq!(ledger.len(), 1, "the expired row is inert, not pruned");
-
-        // A stripped published deadline does not extend the link: the owner's own
-        // record is the authority.
-        let mut stripped = ledger.clone();
-        stripped[0].expires_at = None;
-        assert_eq!(
-            convert_invite_claim(
-                &owner,
-                &committed_scope(&commitment, &sig, &stripped),
-                &POINTER_READ_KEY,
-                &[l.link],
-                &[],
-                &item,
-                EXPIRES_AT,
-            )
-            .unwrap_err()
-            .check(),
-            "link-expired",
-        );
-
-        // And a published deadline alone makes the row inert before any prune.
-        let unrecorded = link(0x4e, Permission::Read, None);
-        assert_eq!(
-            convert_invite_claim(
-                &owner,
-                &scope,
-                &POINTER_READ_KEY,
-                &[unrecorded.link],
-                &[],
-                &item,
-                EXPIRES_AT
-            )
-            .unwrap_err()
-            .check(),
-            "link-expired",
-        );
     }
 
     #[test]

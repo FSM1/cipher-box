@@ -108,8 +108,8 @@ pub use grants::{
     MintedInviteLink, OwnerEntry, OwnerSeedCache, PublishedGrantBlob, ReceivedShare,
     ReceivedShareStore, ReceivedShareStoreError, ReceivedSharesCodecError, ReceivedSharesList,
     ResolutionClass, ResolutionFacts, SentIndex, SentShare, SharePointer,
-    StagingReceivedShareStore, accept_share, cross_check, enforce_committed_ledger, import_contact,
-    recipient_blinded_tag, self_locate,
+    StagingReceivedShareStore, accept_share, cross_check, enforce_committed_ledger,
+    fingerprint_identity_key, import_contact, recipient_blinded_tag, self_locate,
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use name::{NameError, is_emittable, validate_name};

@@ -77,6 +77,8 @@ function answerRead(read: ReadDescriptor): ReadResultValue {
       return [];
     case 'deviceRendezvous':
       return { kind: 'factor', factorKey: Uint8Array.of(7, 7) };
+    case 'identityFingerprint':
+      return 'e686 bdd6 b44e 05c4 4db0';
     case 'siweChallenge':
       return FAKE_SIWE_NONCE;
     case 'download':
@@ -647,6 +649,16 @@ describe('EngineFacade', () => {
     expect(transport.readIntents).toEqual([
       { kind: 'deviceRendezvous', step: { kind: 'open', devicePublicKey: 'ed25519hex', scalar } },
     ]);
+  });
+
+  it('reads the fingerprint of the identity key it was handed', async () => {
+    const transport = new FakeTransport();
+    const identityPublicKey = new Uint8Array(33).fill(2);
+
+    await expect(new EngineFacade(transport).identityFingerprint(identityPublicKey)).resolves.toBe(
+      'e686 bdd6 b44e 05c4 4db0'
+    );
+    expect(transport.readIntents).toEqual([{ kind: 'identityFingerprint', identityPublicKey }]);
   });
 
   it('sends a device registration carrying its label', async () => {

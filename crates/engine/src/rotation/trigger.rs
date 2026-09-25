@@ -606,18 +606,13 @@ pub fn cut_for_write_grant(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSe
 /// from both the commitment and the ledger, and owner-re-sign.
 ///
 /// `owner_deadlines` maps a blinded tag to the deadline **as the owner minted
-/// it** (`RecordedInvite::expires_at`). The published `expiresAt` on a ledger row
-/// is deliberately not consulted: a write-grantee authors the write body, so
-/// trusting that copy would let one forge an early deadline on a peer's row and
-/// have the owner revoke a grantee it never chose to, or strip its own and never
-/// expire ([`GrantLedgerEntry::expires_at`] — "not a capability boundary").
+/// it** (`RecordedInvite::expires_at`).
 ///
 /// `Ok(None)` when nothing has expired — the common case, and the reason this
 /// trigger needs no scheduler: it costs an owner session one lookup per recorded
 /// deadline on a read it was making anyway. `now` is the injected
 /// [`Scheduler::now`](crate::seams::Scheduler::now) instant, never a clock this
-/// layer reads, and a grant dies **at** its deadline, not a tick later
-/// ([`entry_is_live`](crate::grants::ledger::entry_is_live)).
+/// layer reads, and a grant dies **at** its deadline, not a tick later.
 ///
 /// Owner-only by construction, exactly as [`revoke_read_grant`] is.
 pub fn prune_expired_grants(
