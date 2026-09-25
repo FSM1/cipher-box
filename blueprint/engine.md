@@ -55,8 +55,8 @@ Functional decomposition, not final file layout:
 - **gate** — the adoption pipeline, durable floors, trust-violation policy.
 - **sync** — focus-window scheduler, staleness ladder, op queue, rebase.
 - **rotation** — the three primitives and the sweep work-list.
-- **grants** — ledger, commitment, pseudonyms, invites, share lists, contact
-  import.
+- **grants** — ledger, commitment, pseudonyms, invite links and conversion,
+  share lists, contact import.
 - **pointer** — scope pointers and the vault pointer chain.
 - **mailbox** — sealed-pointer traffic, over the `Mailbox` the API client
   implements.
@@ -906,17 +906,28 @@ closes (FSM1/cipher-box-next#34 D4).
 
 Per FSM1/cipher-box-next#26 D7:
 
-| Trigger                                                                                                                                                    | Action                                                                                                                            |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (FSM1/cipher-box-next#26 D1) | `rotateScope` (grantee-triggered, flat)                                                                                           |
-| Read revoke                                                                                                                                                | Immediate revoking rekey: blob + ledger + commitment entry removed, `rotateScope` with the full cascade — one atomic owner action |
-| Write revoke / downgrade                                                                                                                                   | `rotateScopeWrite`; plus read rotation on full revoke                                                                             |
-| Discovered link expiry                                                                                                                                     | Expiry is a ledger field; the next owner session observing it acts — no scheduler                                                 |
-| Manual hygiene rotate-now                                                                                                                                  | Per scope, same primitives                                                                                                        |
+| Trigger                                                                                                                                                    | Action                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (FSM1/cipher-box-next#26 D1) | `rotateScope` (grantee-triggered, flat)                                                                                                                                  |
+| Read revoke                                                                                                                                                | Immediate revoking rekey: every blob, ledger row and commitment entry of the revoke's one cut set removed, `rotateScope` with the full cascade — one atomic owner action |
+| Write revoke / downgrade                                                                                                                                   | `rotateScopeWrite`; plus read rotation on full revoke                                                                                                                    |
+| Expired link                                                                                                                                               | The owner's expired-link sweep (below) cuts it — a read revoke of the link row                                                                                           |
+| Manual hygiene rotate-now                                                                                                                                  | Per scope, same primitives                                                                                                                                               |
 
 Non-triggers: intra-scope rename/move, content writes, adding a grant to an
 existing scope root. Scheduled hygiene is deferred, designed-for — the same
 primitive on a timer.
+
+The **expired-link sweep**
+([ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
+D2) runs in owner sessions on a cadence slower than the 30 s tick. It walks
+`directChildScopeIndex` from the vault root, with one resolve and one unseal per
+scope root, and cuts every link entry whose `deadline` is not later than the
+injected `now`. It first converts the pending claims, and it keeps the
+pending-op rule of "Invites" (ADR 0023 D4). The sweep depends on the two-device
+publish fix — re-resolve, then sign above the highest sequence seen — which is
+not landed; without it two owner devices that cut one link in one window publish
+two records at one sequence.
 
 ### Residuals (as amended by FSM1/cipher-box-next#38)
 
@@ -987,18 +998,43 @@ separate step — every rekey re-seals surviving committed grants uniformly in
 the republish it already does.
 
 - **Authority** (FSM1/cipher-box-next#25 D7, FSM1/cipher-box-next#26 D5): sharing, revoking, and every commitment
-  change are owner-only. Write-grantees write content and re-wrap blobs for
+  change are owner-only. Any owner device converts claims and runs a revoke
+  from owner-signed record fields alone; the contact book is no input
+  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  D1–D4, ADR 0025 D3). Write-grantees write content and re-wrap blobs for
   committed tags during re-seals but cannot change the set — tags are
   name-bound, so read rotation leaves the commitment untouched.
-- **Contact import** (FSM1/cipher-box-next#34 D6): the engine verifies a contact code's binding
-  signature against the carried identity key at import — mandatory,
-  fail-closed. Identity keys only ever arrive out-of-band; there is no
-  directory. Fingerprint comparison stays optional host UX.
-- **Grant creation**: converge the subtree (sweep) → mint the scope (fresh
-  random seed, epoch 1, subtree swept in — the new grantee needs no history) →
-  for write grants, the write-scope cut (fresh write scope seed + name wave
-  over the subtree) → update the parent scope's direct-child-scope index →
-  publish → post the sealed share pointer to the recipient's mailbox.
+- **Contact import** (FSM1/cipher-box-next#34 D6): the contact-code grant is the advanced sharing
+  path; the invite link is the primary one (ADR 0023 D1). The engine verifies
+  a contact code's binding signature against the carried identity key at
+  import — mandatory, fail-closed. Identity keys only ever arrive
+  out-of-band; there is no directory. The import takes a grantee name from the
+  owner. The device-local contact book caches the last grantee name seen for
+  each identity and pre-fills it on another folder; it is no authority
+  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  D2, D4). A grantee name is not an identity: every owner act binds to the
+  identity key from the owner-signed row, and hosts show the core fingerprint
+  beside the name on hover and in every confirmation (ADR 0027 D6, D7).
+- **Grant creation** has two shapes
+  ([ADR 0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)).
+  A **fresh mint**, on a folder that is not a scope root yet: converge the
+  subtree (sweep) → mint the scope (fresh random seed, epoch 1, subtree swept
+  in — a fresh mint needs no history) → for write grants, the write-scope cut
+  (fresh write scope seed + name wave over the subtree) → update the parent
+  scope's direct-child-scope index → publish → post the sealed share pointer
+  to the recipient's mailbox. An **append**, on an existing scope root: one
+  more row and grant blob, the commitment re-signed, and the root published
+  once at the current epoch — no new seed, no re-seal of the subtree, no
+  converge step; the new grantee reads the whole history of the scope (D6). A
+  direct grant, a link mint and a conversion each append, so links and direct
+  grants coexist and a folder holds any number of live links, each with its
+  own permission and lifetime. A direct grant to an existing grantee is a
+  permission change when the permission differs, and nothing otherwise
+  ("already has access"). A write grant on a folder that is not a write
+  scope yet runs the write-scope cut first (ADR 0025 D6).
+  `grant-target-already-names-a-scope` and
+  `invite-target-already-names-a-scope` retire for the append; D7 lists the
+  refusals that stay.
 - **Accept flow**: mailbox pointer (sender-signature verified inside the seal,
   FSM1/cipher-box-next#39 D9) → resolve the name → gate (commitment verified against the
   contact-anchored owner identity) → self-locate the blob by blinded tag →
@@ -1006,6 +1042,32 @@ the republish it already does.
   sealed received-shares list in the recipient's own vault, persisting the
   `pointerReadKey`; the owner keeps a denormalized sent-index in theirs. Both
   lists are self-healing bookmarks — the metadata is the authority (FSM1/cipher-box-next#25 D3).
+- **Link-held arm**
+  ([ADR 0024](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
+  D1, D2, D5): a link holder reads at once. At join the engine posts the
+  claim, then reads the scope through the link's grant blob; the read is
+  best-effort and the tick retries it. The received-shares bookmark keeps the
+  invite secret in the optional `linkSecret` key, and the list stays at
+  version 2 (ADR 0020 D3). The join runs these checks in order: the fragment
+  decodes inside its 2048-byte bound → the fragment's owner contact code
+  passes its binding verify → the engine resolves the scope pointer the
+  fragment names, opens the re-point object under the fragment's
+  `pointerReadKey`, verifies its owner-identity signature against that code,
+  and verifies the record at `currentRootName` at that name, with the
+  old-name tombstone and the mailbox mirror as accelerators only → the record is
+  not this vault's own root scope → a blob sits at the link tag, derived
+  again at each `currentRootName` → the owner-signed commitment names that tag
+  with kind `link` and a `deadline` later than the injected `now`, and the
+  holder reads at the committed `read` → the blob opens under the ephemeral
+  subkey, AAD bound to version, id, scope and epoch → the full adoption gate
+  runs against the fragment owner's identity, with floors keyed under the
+  owner's contact label → the bookmark persists before the floor advance
+  commits. Each refresh pass runs the checks of a personal share with the
+  ephemeral subkey, plus the link deadline; a second join on one device takes
+  the equal-floor short-circuit of the personal accept. The refresh prefers
+  the personal tag and reads the link tag only while no personal blob opens
+  and `linkSecret` is held; the persist that records the first personal open
+  deletes `linkSecret`, and the link holder is then a grantee.
 - **Revocation is discovered, not delivered** (FSM1/cipher-box-next#25 D3/D4): a fresh
   owner-signed record with no blob at your tag is the definitive revocation
   signal; an unresolvable name is merely unknown/stale. The engine classifies
@@ -1013,17 +1075,97 @@ the republish it already does.
   to hosts. Read revoke = the immediate-cut trigger above; the promise is
   "they keep what they saw; they lose everything new, now." Write
   revoke/downgrade = write rotation; old names are hijackable by the revokee
-  and therefore dead to survivors — tombstones advisory only.
-- **Invites** (FSM1/cipher-box-next#25 D6): a grant blob wrapped to an ephemeral keypair, placed
-  in the envelope and ledger-tracked; the URL fragment carries the ephemeral
-  private key and the owner's contact bundle. Links are honestly bearer and
-  multi-claim; claim = a sealed, ephemeral-key-signed mailbox request the
-  owner converts to a personal grant (upgradeable to write). Expiry is a
-  ledger field, lazily pruned via the discovered-expiry trigger. Write links
-  carry extractable subtree signing keys: revoking or expiring one is only
-  real via write rotation — which is why cheap, routinely-runnable write
-  rotation is a hard requirement the primitives above satisfy — and the
-  engine flags write links as bearer capabilities for host UI.
+  and therefore dead to survivors — tombstones advisory only. Every
+  write-grantee revoke, downgrade and D1 checkbox on a write grantee runs a
+  name wave, so cheap, routinely-runnable write rotation stays a hard
+  requirement (ADR 0025 D6). Under the link-first model (ADR 0025):
+  - **Revoke link** cuts the link row, and every holder of that link loses
+    access at once. A grantee who came through the link keeps access unless
+    the owner ticks the confirmation's one checkbox, "also remove the N people
+    who joined through this link", which finds them by their via-link
+    reference (D1).
+  - **Revoke person** also cuts the link that admitted the person, found by
+    the via-link reference (ADR 0024 D3).
+  - **One revoke is one cut**: every row it removes leaves in one cut set,
+    with one cut-epoch step and one rotation (D4).
+  - **Any owner device** revokes: it reads the person's encryption key from
+    the owner-signed ledger row after the row signature verifies. An
+    owner-signed commitment that commits the person again, at a cut epoch not
+    below the cut this device recorded, clears this device's local cut for
+    that person (D3).
+  - The removed side sees one of three messages, chosen by whether its
+    bookmark reads as a link holder or as a grantee (D5): "The owner removed
+    you" (a grantee finds no blob at the personal tag), "The link expired"
+    (the deadline of the link entry it last verified is not after `now`), and
+    "The link was revoked" (a link holder finds no blob at the link tag before
+    the deadline).
+  - **Permission change** (D6): an upgrade mints write material for the
+    person, after a write-scope cut when the folder is not a write scope yet;
+    a downgrade is a write revoke, and the person keeps read through a read
+    row minted at the new name. A link's permission is fixed at creation; to
+    change it, the owner revokes the link and creates a new one (D7).
+- **Invites** (FSM1/cipher-box-next#25 D6, ADR 0023): the invite link is the primary sharing
+  path, and there is no approve step. A link is a grant blob wrapped to an
+  ephemeral keypair, with its own link entry and ledger row. The URL fragment
+  carries the invite secret, the owner contact code, the scope pointer name,
+  the scope's stable `pointerReadKey`, and the owner-signed owner and folder
+  names (core.md). No owner device stores the invite secret, so a link shows
+  only at its creation. Links are honestly bearer and multi-claim.
+  - **Committed at `read`** (ADR 0024 D4): a link entry and its ledger row
+    carry `read` whatever the link grants, and the conversion permission is a
+    separate owner-signed entry field. A write-link holder reads and cannot
+    write. Creating a write link runs no write-scope cut and no name wave;
+    conversion mints the write material.
+  - **Claim** (ADR 0023 D2, D6, ADR 0027 D1): join posts a sealed,
+    ephemeral-key-signed mailbox claim that carries the claimant contact code,
+    the scope pointer name and the claimant's suggested grantee name. Every
+    re-post of one claim reuses the idempotency key of its first post; the
+    claimant re-posts with exponential backoff while no personal blob lands,
+    and stops at the deadline.
+  - **Conversion** (ADR 0023 D3, D4, D9): any owner device converts on every
+    tick, with one root publish per folder per tick, and when the owner opens
+    the share dialog of a folder. It converts a claim only when the claim opens
+    and its sender signature verifies; the claim's scope pointer names a scope
+    this owner holds, matched by the re-point object's `scopeId`, and the record
+    at `currentRootName` passes the adoption gate; the sender is the
+    owner-attested `recipientIdentityPk` of a ledger row whose commitment entry
+    has kind `link`; that entry's deadline is later than the injected `now`,
+    checked once at the ack and stored in the op entry; the claimant contact
+    code passes its binding verify; and the live rows that carry this link's
+    via-link reference are below its admission cap. A row for the claimant
+    identity already in the scope makes conversion a no-op, so conversion never
+    changes an existing row (ADR 0026 consequence 5). Otherwise the device
+    appends a personal row at the conversion permission, with the via-link
+    reference, the claimant's name as the grantee name under the flag
+    `claimant`, and, for a write link, the write material, after a write-scope
+    cut when the folder is not a write scope yet (ADR 0024 D4); it re-signs the
+    commitment, publishes the root, and posts the share pointer. A write wave
+    re-maps each via-link reference (core.md "Write-body"). The pending
+    conversion is a durable op record under ADR 0020, and a failed one retries
+    whole on later ticks. The engine never cuts a link while an op entry for
+    that link is pending (ADR 0023 D4). A conversion refused at the 1024-row cap
+    dead-letters without blocking the queue, and the people list shows the
+    refusal (ADR 0026 E1). The converting device shows one transient
+    `X joined <folder>` notice; the people list updates from the record on
+    every owner device (D7). A revoked person may join again through another
+    live link, as a fresh admission (D8).
+  - **Grantee names** (ADR 0027 D3): the owner can overwrite any grantee
+    name; the edit re-signs the row with the flag `owner` and publishes the
+    root. The name syncs with the record, and the same person in two folders
+    has one grantee name per row.
+  - **Preview**
+    ([ADR 0028](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0028-the-invite-page-previews-before-join.md)
+    D2–D5): a read-only mode of the link-held read, in the signed-in session
+    engine. It runs the link-path checks up to the open and the gate against
+    the floors the session holds. It posts no claim or mailbox item,
+    persists nothing, deposits no seed, and drops its state when the page
+    navigates away. It returns the owner and folder names from a verified
+    fragment signature, the link's conversion permission, and a one-level
+    listing of the direct children's names and kinds from one read of the
+    scope root, with no sizes or counts and no browse into a subfolder. A
+    link with a bad name signature shows no names, and the link still works
+    (ADR 0027 D5). It reports an expired link, a revoked link, and a link
+    this account already joined.
 - **Files are first-class grant targets** (FSM1/cipher-box-next#25 D5): envelope blobs +
   write-body ledger like any node; ancestor rotations re-seal
   independently-shared descendants' grants as part of republishing them.
@@ -1053,9 +1195,51 @@ the republish it already does.
   gate-verifies the blob; the owner read/consume that opens it into
   `HeldMaterial.write_scope_seed` rides a later facade slice.
 
+### Sharing residuals
+
+Accepted by ADRs 0023 to 0028:
+
+- A link holder, or anyone with the URL, unmasks every committed recipient key
+  (`CONTEXT.md` "Grant ledger", ADR 0024 E4).
+- One key per link: the owner cannot cut one unconverted holder alone, and a
+  leak of one holder's bookmark leaks the link (ADR 0024 E3).
+- A person revoke ends the link for every holder not yet converted, so the
+  owner must issue a group link again (ADR 0025 E7).
+- A write revoke moves the scope root, and every live link on the scope
+  survives only through the scope pointer path (ADR 0025 E6).
+- An API that answers "removed" to two owner devices makes both mint the same
+  row; no extra grant results (ADR 0023 E1).
+- The API can replay an acked claim through a live link and re-admit a person
+  who could rejoin through it anyway (ADR 0023 E2).
+- More than 1000 pending claimants fill the owner's mailbox pending cap and
+  block other mail until the owner converts (ADR 0023 E6).
+- A public observer sees which commitment entries are links and when each
+  expires, and each deadline causes a rotation (ADR 0023 consequence 3,
+  ADR 0025 E8).
+- A cut or expired link, like a person revoke, still opens every record the
+  holder already has (ADR 0024 E5, ADR 0025 E2).
+- A cut person who holds the URL of another live link on the scope rejoins
+  with no owner step; a person revoke is complete only when every such link
+  is cut (ADR 0023 E5).
+- An owner who stays offline past a deadline loses every claim that no owner
+  device acked before it, and a hostile link holder reads past the deadline
+  until the owner's sweep runs (ADR 0023 E4, ADR 0025 E1).
+- A committed write grantee of an enclosing scope can remove a nested scope
+  from the writer-authored `directChildScopeIndex` and so hide its expired
+  links from the sweep (ADR 0025 E3).
+- A URL holder can enrol a third-party identity with no proof that it holds
+  that contact code; the admission cap bounds the count, not the consent
+  (ADR 0023 E3).
+- The link path's owner anchor is the unsigned fragment code, so a forged
+  fragment renders the forger's scope and signed names at the join (ADR 0024
+  E2, ADR 0027 E1).
+- The invite secret rests in the grantee's received-shares list until the
+  personal blob lands, or for the link lifetime when conversion refuses
+  (ADR 0024 E1).
+
 ## Mailbox logic
 
-The mailbox carries discovery and courtesy traffic only — share pointers, invite
+The mailbox carries discovery and courtesy traffic only — share pointers,
 claims, courtesy notifications. Nothing on it is load-bearing for safety: root
 migration has the pointer plane, revocation is discovered in metadata
 (FSM1/cipher-box-next#34 D5, FSM1/cipher-box-next#38 D3).
@@ -1067,6 +1251,10 @@ migration has the pointer plane, revocation is discovered in metadata
   key (≤ ~8 KB); poll rides the sync tick; ack = delete. The engine acks only
   after the pointed-at fact is durably recorded (the share appended to the vault
   list) — an engineering judgment consistent with until-acked retention.
+  A claim item reverses the order (ADR 0023 D5): ack first, and convert only
+  when the delete answers that this call removed the item; then write the
+  durable conversion op entry, convert, and publish. The claimant's re-post
+  covers a stop between the ack and the op write.
 - Server-side caps, the 90-day unacked TTL, and rate limits are API territory
   (api.md); the engine surfaces a reject-new mailbox as a sender-visible
   failure.
@@ -1254,15 +1442,16 @@ contract-test suite owned by the testing-strategy blueprint (FSM1/cipher-box-nex
 
 ## Facade
 
-The engine exposes one async command-and-event surface, designed to be
-wrapped, not extended: commands (the intent ops, grant/rotation/share actions,
-auth, manual refresh) and an event stream out (snapshot updates, staleness
-transitions, withheld-update escalations, dead-letters, attributable abuse
-events). Desktop calls it directly in the Tauri process; web wraps it via
-`crates/wasm` bindings inside a dedicated worker, with the RPC facade and tab
-leadership owned by `packages/client` (FSM1/cipher-box-next#28 D3/D4). The engine's contract is
-only this: one live instance is the single writer, and every trust decision
-already happened below the facade — hosts render, they never decide.
+The engine exposes one async command-and-event surface, designed to be wrapped,
+not extended: commands (the intent ops, grant/rotation/share actions, the invite
+preview of ADR 0028 D2, auth, manual refresh) and an event stream out (snapshot
+updates, staleness transitions, withheld-update escalations, dead-letters,
+attributable abuse events). Desktop calls it directly in the Tauri process; web
+wraps it via `crates/wasm` bindings inside a dedicated worker, with the RPC
+facade and tab leadership owned by `packages/client` (FSM1/cipher-box-next#28
+D3/D4). The engine's contract is only this: one live instance is the single
+writer, and every trust decision already happened below the facade — hosts
+render, they never decide.
 
 ## Open edges
 

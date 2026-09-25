@@ -79,14 +79,19 @@ Functional decomposition, not final file layout:
 | Sealing to a person         | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305)                      | Base mode: grant blobs, owner blob, owner-write-blob, ascent links, mailbox payloads; auth mode (owner to owner): op record, settings record, content key, owner-local, write-plane history link |
 | Sealing to a rendezvous key | In-repo ECIES on secp256k1 (ECDH + BLAKE3 key schedule + XChaCha20-Poly1305) | The device-approval factor seal, and nothing else; full-envelope KAT under a fixed ephemeral scalar (FSM1/cipher-box-next ADR 0015)                                                              |
 | Pairwise secrets            | X25519 ECDH                                                                  | Blinded tags, grantee pseudonym derivation                                                                                                                                                       |
-| Identity signing            | secp256k1 ECDSA (RFC 6979) over det-CBOR                                     | Grant-set commitment, subkey binding, re-point object, mailbox sender signature                                                                                                                  |
+| Identity signing            | secp256k1 ECDSA (RFC 6979) over det-CBOR                                     | Grant-set commitment, subkey binding, re-point object, mailbox sender signature, invite-fragment names                                                                                           |
 | Pseudonym + record signing  | Ed25519                                                                      | Structure signatures; IPNS records                                                                                                                                                               |
 
 - Every user derives an **X25519 encryption subkey** from their login secret;
   the identity key only signs, the subkey only seals. The **subkey binding**
   (ECDSA over det-CBOR `{identityPk, encSubkey}`) and the **contact code**
   codec (`{identityPk, encSubkey, bindingSig}`, ~130 bytes, QR/URL-encodable,
-  binding verify mandatory and fail-closed at import) are core exports.
+  binding verify mandatory and fail-closed at import) are core exports. So is
+  the **fingerprint**, a named function of the identity key with its own KAT
+  that shows at least 80 bits, so both hosts show one value and no TypeScript
+  hashes a key
+  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  D7).
 - An **X25519 public key** is adopted only as the **canonical encoding of a
   prime-order point** — the u-coordinate is lifted to Edwards, tested for
   torsion, and re-encoded back to the input. Both halves close one attack: ECDH
@@ -229,7 +234,18 @@ node UUID.
   as a head-size refusal rather than an encoder fault.
 - **Write-body** (scope roots only, FSM1/cipher-box-next#27 D6): `{grant ledger, write-plane
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
-  ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
+  ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)` plus the
+  optional via-link reference (the tag of the link row that admitted the
+  grantee), grantee name and name source flag (`claimant` or `owner`). The
+  row's owner signature covers `{ipnsName, recipientEncPk, recipientIdentityPk,
+tag}` and each optional field only when it is present, so a row minted
+  before those fields keeps its bytes and its signature, and a removed field
+  still fails the verify. A row carries no deadline. The codec refuses a
+  malformed grantee name on decode and, release-active, on encode. A write
+  wave re-mints every row at a new tag and re-maps each via-link reference in
+  the same pass
+  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  D2 and consequence 1, ADR 0027 D3). The
   child-scope index enumerates directly-descendant scope roots for the F-4
   rotation cascade (FSM1/cipher-box-next#38 D6). That index is writer-authored
   and owner-signature-free like the history link, so it is bounded fail-closed at
@@ -287,8 +303,16 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
   grant-set commitment (ECDSA over det-CBOR `{cutEpoch, ipnsName,
-ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`),
-  owner blob, the optional
+ownerPseudonymPk, [(tag, maskedRecipientEncPk, permission, pseudonymPk)]}`,
+  where each entry may also carry the optional `kind`, `deadline`, conversion
+  permission and admission cap). An absent `kind` means `personal`; the
+  `deadline`, the cap and the conversion permission are link fields. The codec
+  refuses a `deadline` on a `personal` entry and a `link` entry whose
+  `permission` is not `read`, on decode and, release-active, on encode: every
+  re-sealer selects blob material by the committed permission (ADR 0023 D2,
+  D9;
+  [ADR 0024](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0024-a-link-holder-reads-at-once-from-the-link-blob.md)
+  D4). The section also carries the owner blob, the optional
   owner-write-blob (below), ascent link (public half plaintext,
   derive-and-verified by ancestor readers), per-epoch history links, and a
   detached **structure signature** per seed-bearing structure. On the wire the
@@ -399,6 +423,16 @@ writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   (`[domain, v, recipientEncPk, senderIdentityPk, payload]`) so a relayed item
   fails verification for any other recipient (#712); core owns their codecs and
   verify functions.
+- **Invite fragment and claim**: the invite-link fragment is det-CBOR inside a
+  2048-byte bound, carrying the invite secret, the owner contact code, the
+  scope pointer name, the scope's `pointerReadKey`, `ownerName`, `folderName`,
+  and the owner's identity signature over `{scopePointerName, ownerName,
+folderName}`. The claim payload carries `{claimId, scopePointerName,
+contactCode}` and the claimant's suggested grantee name, bounded like a share
+  display name (ADR 0023 D2, ADR 0027 D1, D5). New KAT vectors pin the
+  fragment, the claim, and the new commitment-entry and ledger-row fields;
+  the vectors that predate them stay valid (ADR 0023 consequence 1, ADR 0027
+  consequence 1).
 
 ### Structure-tag registry
 
@@ -471,27 +505,28 @@ malformed `contentCid` release-actively (AGENTS.md rule 8): a blob whose CID the
 open path would refuse is a version whose key is gone.
 
 The `owner-local` structure carries **every durable store the owner alone
-authors and reads** — received shares, the contact book, the invite records, and
-the engine's per-owner staging bookkeeping (the retire ledger and the
-doomed-name journal) — under one format rather than one module per store
-(FSM1/cipher-box-next ADR 0006). It seals HPKE **auth mode** to the owner's own
-enc subkey over the same three-key clear header as the settings record (`v`,
-`enc`, `ciphertext`), with the owner tag bound into the AAD and never
-serialized. What is new is the **store kind**: a frozen registry of
-`(name, discriminator)` pairs — `received-shares` (`0x01`), `contact-book`
-(`0x02`), `invite-records` (`0x03`), `retire-ledger` (`0x04`), `doomed-journal`
-(`0x05`) — whose discriminator rides the AAD and whose name completes the HPKE
-`info` string `cipherbox/v2/owner-local/<name>`. The kind is a key-schedule input and
-**never a wire field**, so a blob offered as the wrong store is refused by the
-AEAD rather than by a comparison: a decryption failure, not a parse failure. The
-KAT set is `owner_local_accept` (an empty body, plus one populated body per kind,
-each reproducing its exact bytes from a fixed enc + ephemeral, then opening) and
+authors and reads** — received shares, the contact book, and the engine's
+per-owner staging bookkeeping (the retire ledger and the doomed-name journal) —
+under one format rather than one module per store (FSM1/cipher-box-next ADR
+0006). It seals HPKE **auth mode** to the owner's own enc subkey over the same
+three-key clear header as the settings record (`v`, `enc`, `ciphertext`), with
+the owner tag bound into the AAD and never serialized. What is new is the
+**store kind**: a frozen registry of `(name, discriminator)` pairs —
+`received-shares` (`0x01`), `contact-book` (`0x02`), `retire-ledger` (`0x04`),
+`doomed-journal` (`0x05`) — whose discriminator rides the AAD and whose name
+completes the HPKE `info` string `cipherbox/v2/owner-local/<name>`. Kind `0x03`,
+the retired `invite-records` store, stays reserved for ever (ADR 0023 D2,
+consequence 2). The kind is a key-schedule input and **never a wire field**, so
+a blob offered as the wrong store is refused by the AEAD rather than by a
+comparison: a decryption failure, not a parse failure. The KAT set is
+`owner_local_accept` (an empty body, plus one populated body per kind, each
+reproducing its exact bytes from a fixed enc + ephemeral, then opening) and
 `owner_local_reject` (the settings record's reject family — tampered ciphertext,
 a foreign recipient, a cross-family transplant, a short and a low-order `enc`, a
 missing `enc` and a missing `ciphertext`, a forward `v`, an unknown clear-header
 field, and a base-mode forgery — plus a **cross-kind negative for every ordered
-pair of kinds**, which is what proves the discriminator earns the separation that
-distinct per-store `info` strings used to give for free).
+pair of kinds**, which is what proves the discriminator earns the separation
+that distinct per-store `info` strings used to give for free).
 
 ### Bin index
 

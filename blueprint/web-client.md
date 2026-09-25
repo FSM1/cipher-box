@@ -139,6 +139,12 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   `postMessage`, transferables allowed) on the leader and the broadcast
   transport on followers. Leadership changes swap the transport without the
   UI noticing.
+- **The invite preview runs in the session engine**
+  ([ADR 0028](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0028-the-invite-page-previews-before-join.md)
+  D3, D7): it is a facade command like any other, on the signed-in person's
+  own engine, and it holds no state across a navigation. A preview before
+  sign-in is deferred: it needs a throwaway engine mode with an in-memory
+  floor store, public routing and a public content gateway.
 
 The RPC protocol is a hand-written, promise-correlated command/response layer
 plus the one-way event stream — request ids, no codegen, wasm-bindgen types
@@ -181,13 +187,16 @@ all living in `packages/client` and running inside the engine worker realm:
   class, never as staleness; dead-letters get a persistent, actionable
   notice. Manual refresh is a facade command with nocache semantics, and a
   refresh it could not land reports back as a failure rather than a repaint.
-- **Sharing UI is facade commands end to end**: contact-code import (QR /
-  paste, verified in the engine), grant issue/revoke/downgrade, invite links
-  (the URL fragment carries the ephemeral secret; the page hands it to the
-  facade unread), received-shares list from the vault share list in the
-  snapshot, revocation states from the engine's
-  revocation-signal/unresolvable/epoch-lag classification. The UI renders the
-  engine's flag that a write link is a bearer capability.
+- **Sharing UI is facade commands end to end**: invite links (the URL
+  fragment carries the invite secret; the page hands it to the facade
+  unread), contact-code import (QR / paste, verified in the engine), grant
+  issue, revoke and permission change, received-shares list from the vault
+  share list in the snapshot, revocation states from the engine's
+  revocation-signal/unresolvable/epoch-lag classification and its three
+  removed-side messages (engine.md "Grants and ledger"). Every grantee
+  fingerprint comes from the engine; the UI hashes no key. The UI renders the
+  engine's flag that a write link makes each URL holder a writer after
+  conversion, with no owner step (ADR 0023 D9, E3).
 
 ## Login and identity
 
@@ -261,14 +270,42 @@ all living in `packages/client` and running inside the engine worker realm:
 
 ## Composition (apps/web)
 
-| Route             | View                                                                                                                                                                                |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI                                                                                                                               |
-| `/files/:nodeId?` | Vault browser (absent id = current root)                                                                                                                                            |
-| `/shared`         | Received shares; browsing shared scopes is the same browser over the same snapshot                                                                                                  |
-| `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                                                                                         |
-| `/settings`       | Auth methods, MFA enrollment and recovery phrase (Core Kit UX), authorized devices and approval (ADR 0009), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export |
-| `/invite#…`       | Invite claim — fragment secret handed to the facade unread                                                                                                                          |
+| Route             | View                                                                                                                                                                                                        |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`               | Login (Core Kit methods + SIWE), recovery/approval UI                                                                                                                                                       |
+| `/files/:nodeId?` | Vault browser (absent id = current root)                                                                                                                                                                    |
+| `/shared`         | Received shares, each shown with its folder name and `from <owner name>`; a link-held share shows its link-holder state until conversion; browsing shared scopes is the same browser over the same snapshot |
+| `/bin`            | Recycle bin (kept per FSM1/cipher-box-next#5), restore/purge ops via facade                                                                                                                                 |
+| `/settings`       | Auth methods, MFA enrollment and recovery phrase (Core Kit UX), authorized devices and approval (ADR 0009), BYO pinning (sealed `ByoIpfsConfig` via facade), vault settings, export                         |
+| `/invite#…`       | Invite page — sign-in, then the preview, then "join" as its own press; fragment secret handed to the facade unread                                                                                          |
+
+- **Invite page** (ADR 0028 D1, D4–D6): sign-in comes first and never spends a
+  link. The preview then runs with no press and shows one card:
+  `<owner name> shared <folder> with you` when the fragment's name signature
+  verifies (a link with a bad name signature shows no names, and the link still
+  works; ADR 0027 D5), the permission badge, the one-level listing of names and
+  kinds, and a grantee-name field that starts at the sign-in display name, or
+  empty when the sign-in supplies none, never the email
+  ([ADR 0027](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0027-a-grantee-name-is-not-an-identity.md)
+  D1). "Join" posts the claim, starts the link read and opens the shared folder.
+  An expired or revoked link shows its state; a link this account already joined
+  shows "open folder" and no "join". A write-link preview says "can edit" before
+  the holder can write.
+- **Share dialog**
+  ([ADR 0023](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0023-the-invite-link-is-the-primary-sharing-path-and-conversion-runs-by-itself.md)
+  D7, [ADR 0025](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0025-revocation-under-the-link-first-model.md)
+  D1, D5–D7, [ADR 0026](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0026-a-scope-root-takes-many-grants.md)
+  D2–D4): a people table with each grantee name, editable, the fingerprint on
+  hover, and a "can" control with view and edit; an inline "create link" row
+  that sets permission, deadline and admission cap, with a small default cap
+  that the build chooses (ADR 0023 D9), and shows the new link once; one chip
+  per live link, with no permission control; and the contact-code path collapsed
+  under "advanced". Opening the dialog runs conversion, and the device that
+  converts shows one transient `X joined <folder>` notice. A revoke confirms
+  inline with the fingerprint, and names the link and the other people who keep
+  access; a link revoke carries the checkbox "also remove the N people who
+  joined through this link". A grant to an existing grantee with the same
+  permission says "already has access".
 
 Cross-cutting chrome renders event-stream state only: sync/staleness
 indicator, quota (advisory-aware for BYO), dead-letter and escalation
