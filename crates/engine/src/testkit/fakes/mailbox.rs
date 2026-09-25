@@ -164,8 +164,11 @@ impl InMemoryMailbox {
     }
 
     fn serve_ack(&self, item_id: &str) -> SeamResult<HttpResponse> {
-        self.remove(item_id)?;
-        Ok(json(200, br#"{"success":true}"#.to_vec()))
+        let removed = self.remove(item_id)?;
+        Ok(json(
+            200,
+            serde_json::to_vec(&json!({ "removed": removed })).expect("serializes"),
+        ))
     }
 
     fn items(&self) -> Vec<MailboxItem> {
@@ -179,21 +182,24 @@ impl InMemoryMailbox {
             .unwrap_or_default()
     }
 
-    fn remove(&self, item_id: &str) -> SeamResult<()> {
+    fn remove(&self, item_id: &str) -> SeamResult<bool> {
         if *self.ack_failing.lock().expect("lock") {
             return Err(SeamError::new("mailbox ack transient outage"));
         }
-        if let Some(queue) = self
-            .hub
-            .inner
-            .lock()
-            .expect("lock")
-            .queues
-            .get_mut(&self.address)
-        {
-            queue.retain(|item| item.item_id != item_id);
+        let mut inner = self.hub.inner.lock().expect("lock");
+        let Some(queue) = inner.queues.get_mut(&self.address) else {
+            return Ok(false);
+        };
+        let before = queue.len();
+        queue.retain(|item| item.item_id != item_id);
+        if queue.len() == before {
+            return Ok(false);
         }
-        Ok(())
+        // After the ack the API treats the same key as new.
+        inner
+            .seen_idempotency_keys
+            .retain(|(address, _), id| !(address == &self.address && id == item_id));
+        Ok(true)
     }
 }
 
@@ -217,7 +223,7 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn ack(&self, item_id: &str) -> SeamResult<()> {
-        self.remove(item_id)
+        self.remove(item_id).map(drop)
     }
 }
 
@@ -254,5 +260,32 @@ mod tests {
         assert_eq!(bob_items.len(), 1);
         assert_eq!(bob_items[0].sealed_payload, b"sealed-for-bob");
         assert!(block_on(alice.poll()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_key_replays_while_its_item_is_pending_and_posts_anew_after_the_ack() {
+        let hub = InMemoryMailboxHub::default();
+        let bob = hub.mailbox_for(b"bob-pk");
+        let address = hex_lower(b"bob-pk");
+
+        let first = hub.post_item(&address, b"claim", "k1");
+        assert_eq!(hub.post_item(&address, b"claim", "k1"), first);
+        assert!(!bob.remove("item-unknown").unwrap());
+        assert_eq!(
+            hub.post_item(&address, b"claim", "k1"),
+            first,
+            "an ack that removed nothing keeps the key"
+        );
+
+        assert!(bob.remove(&first).unwrap());
+        assert!(!bob.remove(&first).unwrap(), "a second ack removes nothing");
+        let second = hub.post_item(&address, b"claim", "k1");
+        assert_ne!(second, first, "the key of an acked item posts a new item");
+        let pending: Vec<_> = block_on(bob.poll())
+            .unwrap()
+            .into_iter()
+            .map(|item| item.item_id)
+            .collect();
+        assert_eq!(pending, [second]);
     }
 }

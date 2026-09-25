@@ -1234,7 +1234,10 @@ async fn mailbox_post_poll_ack_round_trips() {
         "the replay delivered no second copy"
     );
 
-    recipient.mailbox_ack(&posted).await.expect("ack");
+    assert!(
+        recipient.mailbox_ack(&posted).await.expect("ack"),
+        "the ack reports that it removed the item"
+    );
     assert!(
         recipient
             .mailbox_poll()
@@ -1243,10 +1246,66 @@ async fn mailbox_post_poll_ack_round_trips() {
             .is_empty(),
         "ack removes the item"
     );
-    recipient
-        .mailbox_ack(&posted)
+    assert!(
+        !recipient
+            .mailbox_ack(&posted)
+            .await
+            .expect("acking a gone id is a no-op"),
+        "a second ack of one id reports no removal"
+    );
+}
+
+/// The ack answer and the idempotency key lifetime (ADR 0023 D5, D6): only
+/// the recipient's own ack removes an item, and the key of an acked item
+/// creates a new item.
+#[tokio::test]
+async fn mailbox_ack_reports_removal_and_releases_the_idempotency_key() {
+    let base = require_stack!("mailbox_ack_reports_removal_and_releases_the_idempotency_key");
+    let (sender, _) = addressable_account(&base, "contract-mailbox-ack-sender").await;
+    let (recipient, recipient_key) =
+        addressable_account(&base, "contract-mailbox-ack-recipient").await;
+    let key = "contract-mailbox-ack-idem";
+
+    let first = sender
+        .mailbox_post(&recipient_key, b"claim", key)
         .await
-        .expect("acking a gone id is a no-op");
+        .expect("post");
+    assert!(
+        !sender.mailbox_ack(&first).await.expect("foreign ack"),
+        "an ack from another account reports no removal"
+    );
+    assert_eq!(
+        sender
+            .mailbox_post(&recipient_key, b"claim", key)
+            .await
+            .expect("repost while live"),
+        first,
+        "a reused key returns the live item"
+    );
+
+    assert!(
+        recipient.mailbox_ack(&first).await.expect("ack"),
+        "the recipient's ack removes the item"
+    );
+    let second = sender
+        .mailbox_post(&recipient_key, b"claim", key)
+        .await
+        .expect("repost after the ack");
+    assert_ne!(second, first, "the key of an acked item creates a new item");
+
+    let items = recipient.mailbox_poll().await.expect("poll");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        [second.as_str()],
+        "only the new item is pending"
+    );
+    assert!(
+        recipient.mailbox_ack(&second).await.expect("clean-up ack"),
+        "the new item is removable"
+    );
 }
 
 /// The mailbox's two fail-closed post bounds (blueprint/api.md, Mailbox): the

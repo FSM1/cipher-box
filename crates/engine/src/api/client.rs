@@ -21,11 +21,12 @@ use super::error::ApiError;
 use super::signer::ChallengeSigner;
 use super::types::{
     AuthMethod, ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest,
-    MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration, PendingApproval,
-    PendingApprovalList, Quota, RefreshRequest, RegisterDeviceRequest, RegisteredDevice,
-    RegisteredDeviceList, RespondApprovalRequest, RetireEntry, RetireResult, SiweChallengeResponse,
-    SiweLinkRequest, SiweNonce, StepUpChallengeRequest, StepUpOperation, TestLoginOutcome,
-    TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest, UploadResult,
+    MailboxAckWire, MailboxItem, MailboxPollWire, MailboxPostWire, NameRegistration,
+    PendingApproval, PendingApprovalList, Quota, RefreshRequest, RegisterDeviceRequest,
+    RegisteredDevice, RegisteredDeviceList, RespondApprovalRequest, RetireEntry, RetireResult,
+    SiweChallengeResponse, SiweLinkRequest, SiweNonce, StepUpChallengeRequest, StepUpOperation,
+    TestLoginOutcome, TestLoginRequest, TestLoginResponse, TokenResponse, UnlinkMethodRequest,
+    UploadResult,
 };
 use crate::content::{DAG_ROOT_CODEC, SessionBearer};
 use crate::deadlines::DeadlinePolicy;
@@ -639,19 +640,23 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         ok_or_err(response).map(drop)
     }
 
-    /// Ack (delete) a mailbox item by id.
+    /// Ack (delete) a mailbox item by id. Returns `true` only when this call
+    /// deleted the item; a gone or foreign id answers `false`
+    /// (ADR 0023 D5).
     ///
     /// The id comes from an integrity-untrusted transport and lands in this
     /// authenticated request's path, so an id the seam contract does not admit
     /// ([`item_id_is_legal`]) is refused before a request is built.
-    pub async fn mailbox_ack(&self, id: &str) -> Result<(), ApiError> {
+    pub async fn mailbox_ack(&self, id: &str) -> Result<bool, ApiError> {
         if !item_id_is_legal(id) {
             return Err(ApiError::Decode("illegal mailbox item id".into()));
         }
         let response = self
             .request_authed(HttpMethod::Delete, &format!("/mailbox/messages/{id}"))
             .await?;
-        ok_or_err(response).map(drop)
+        let response = ok_or_err(response)?;
+        let wire: MailboxAckWire = decode(&response)?;
+        Ok(wire.removed)
     }
 
     /// Fetch cached (possibly expired) record bytes for a name — the revival
@@ -1681,7 +1686,7 @@ mod tests {
         login(&http, &client);
         http.enqueue_response(json_response(201, json!({ "id": "m1" })));
         http.enqueue_response(json_response(200, json!({ "messages": [] })));
-        http.enqueue_response(json_response(200, json!({ "success": true })));
+        http.enqueue_response(json_response(200, json!({ "removed": true })));
 
         block_on(Mailbox::post(&client, &[0x02; 33], b"sealed", "idem")).expect("post");
         block_on(Mailbox::poll(&client)).expect("poll");
@@ -1738,6 +1743,24 @@ mod tests {
         let body = body_json(&http.requests()[2]);
         assert_eq!(body["recipientPublicKey"], "02".repeat(33));
         assert_eq!(body["blob"], BASE64.encode(b"sealed"));
+    }
+
+    /// The ack answer reaches the caller as the API gave it, and an answer
+    /// without `removed` never reads as a removal.
+    #[test]
+    fn the_ack_reports_whether_this_call_removed_the_item() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        http.enqueue_response(json_response(200, json!({ "removed": true })));
+        http.enqueue_response(json_response(200, json!({ "removed": false })));
+        http.enqueue_response(json_response(200, json!({ "success": true })));
+
+        assert!(block_on(client.mailbox_ack("m1")).expect("first ack"));
+        assert!(!block_on(client.mailbox_ack("m1")).expect("second ack"));
+        assert!(matches!(
+            block_on(client.mailbox_ack("m1")),
+            Err(ApiError::Decode(_))
+        ));
     }
 
     /// The item id is transport-supplied and lands in this request's path, so

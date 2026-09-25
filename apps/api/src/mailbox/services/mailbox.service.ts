@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { DataSource, LessThan, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, LessThan, MoreThanOrEqual, QueryFailedError, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
 import {
@@ -27,7 +27,11 @@ import { MailboxMessage } from '../entities/mailbox-message.entity';
 const MAX_BLOB_BYTES = 8192;
 
 /** 90-day unacked TTL, aligned with record EOLs (blueprint/api.md, Mailbox). */
-const TTL_MS = 90 * 24 * 60 * 60 * 1000;
+export const TTL_DAYS = 90;
+const TTL_MS = TTL_DAYS * 24 * 60 * 60 * 1000;
+
+/** Per-recipient pending cap when `MAILBOX_PENDING_CAP` is unset. */
+export const DEFAULT_PENDING_CAP = 1000;
 
 export interface PostMessageInput {
   recipientPublicKey: string;
@@ -37,6 +41,10 @@ export interface PostMessageInput {
 
 export interface PostMessageResult {
   id: string;
+}
+
+export interface AckResult {
+  removed: boolean;
 }
 
 export interface PolledMessage {
@@ -74,7 +82,10 @@ export class MailboxService {
     configService: ConfigService
   ) {
     this.metricsService.sampleMailboxPendingDepth(() => this.messageRepository.count());
-    this.pendingCap = positiveIntConfig(configService.get('MAILBOX_PENDING_CAP'), 1000);
+    this.pendingCap = positiveIntConfig(
+      configService.get('MAILBOX_PENDING_CAP'),
+      DEFAULT_PENDING_CAP
+    );
     this.pollLimit = positiveIntConfig(configService.get('MAILBOX_POLL_LIMIT'), 100);
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
     this.sweepBatchSize = positiveIntConfig(
@@ -116,9 +127,11 @@ export class MailboxService {
     // Fast path: an idempotent replay wins even when the mailbox is full, and
     // takes no lock — the common repost case never contends on the per-recipient
     // serialization below.
-    const existing = await this.messageRepository.findOne({
-      where: { recipientPublicKey, idempotencyScope },
-    });
+    const existing = await this.findLiveReplay(
+      this.messageRepository,
+      recipientPublicKey,
+      idempotencyScope
+    );
     if (existing) {
       return { id: existing.id };
     }
@@ -131,9 +144,11 @@ export class MailboxService {
       // past the in-transaction replay check aborts the transaction, so re-read
       // the committed winner on a fresh statement (outside the rolled-back txn).
       if (error instanceof QueryFailedError) {
-        const winner = await this.messageRepository.findOne({
-          where: { recipientPublicKey, idempotencyScope },
-        });
+        const winner = await this.findLiveReplay(
+          this.messageRepository,
+          recipientPublicKey,
+          idempotencyScope
+        );
         if (winner) {
           return { id: winner.id };
         }
@@ -173,7 +188,7 @@ export class MailboxService {
       // Re-check idempotency now that we hold the lock: a same-scope writer that
       // committed just ahead of us is visible here, so we return its row instead
       // of racing it to a unique-index violation.
-      const replay = await repo.findOne({ where: { recipientPublicKey, idempotencyScope } });
+      const replay = await this.findLiveReplay(repo, recipientPublicKey, idempotencyScope);
       if (replay) {
         return { id: replay.id };
       }
@@ -235,27 +250,44 @@ export class MailboxService {
 
   /**
    * Ack = hard delete by id, scoped to the caller mailbox (AGENTS.md: never
-   * persist crypto-bearing rows past their consumer). Idempotent and
-   * leak-free: acking a gone or foreign id succeeds without side effects.
+   * persist crypto-bearing rows past their consumer). `removed` is true only
+   * for the one call whose delete took the row; a concurrent delete waits on
+   * the row lock and then affects nothing (blueprint/api.md, Mailbox).
    */
-  async ack(recipientPublicKey: string, id: string): Promise<{ success: boolean }> {
-    // A malformed (non-uuid) id can never name a server-minted row, so short
-    // out to the documented idempotent success WITHOUT querying Postgres —
-    // otherwise the `uuid`-typed id column raises 22P02 (invalid input syntax
-    // for uuid) and turns a well-behaved no-op into a 500.
+  async ack(recipientPublicKey: string, id: string): Promise<AckResult> {
+    // A non-uuid id names no server-minted row, and the `uuid`-typed column
+    // would raise 22P02 (a 500) on it.
     if (!UUID_RE.test(id)) {
-      return { success: true };
+      return { removed: false };
     }
-    await this.messageRepository.delete({ id, recipientPublicKey });
-    return { success: true };
+    const { affected } = await this.messageRepository.delete({ id, recipientPublicKey });
+    return { removed: (affected ?? 0) > 0 };
+  }
+
+  /** A row past the TTL is dead even before a purge removes it, so it never replays. */
+  private findLiveReplay(
+    repo: Repository<MailboxMessage>,
+    recipientPublicKey: string,
+    idempotencyScope: string
+  ): Promise<MailboxMessage | null> {
+    return repo.findOne({
+      where: {
+        recipientPublicKey,
+        idempotencyScope,
+        receivedAt: MoreThanOrEqual(this.ttlCutoff()),
+      },
+    });
+  }
+
+  private ttlCutoff(): Date {
+    return new Date(this.clock.now().getTime() - TTL_MS);
   }
 
   private async purgeExpired(
     recipientPublicKey: string,
     repo: Repository<MailboxMessage>
   ): Promise<void> {
-    const cutoff = new Date(this.clock.now().getTime() - TTL_MS);
-    await repo.delete({ recipientPublicKey, receivedAt: LessThan(cutoff) });
+    await repo.delete({ recipientPublicKey, receivedAt: LessThan(this.ttlCutoff()) });
   }
 
   /**
@@ -276,7 +308,7 @@ export class MailboxService {
    * rows deleted.
    */
   async sweepExpired(): Promise<number> {
-    const cutoff = new Date(this.clock.now().getTime() - TTL_MS);
+    const cutoff = this.ttlCutoff();
     return drainBatches(this.sweepBatchSize, () => this.deleteExpiredBatch(cutoff));
   }
 

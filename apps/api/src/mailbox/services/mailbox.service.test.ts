@@ -215,6 +215,21 @@ describe('MailboxService', () => {
       expect(messages.rows).toHaveLength(3);
     });
 
+    it('never replays a row past the 90-day TTL that the purge has not removed yet', async () => {
+      const post = () =>
+        service.post(sender, {
+          recipientPublicKey: recipient,
+          blob: base64Blob(64),
+          idempotencyKey: 'stale',
+        });
+      const first = await post();
+      clock.advanceMs(NINETY_DAYS_MS + 1);
+
+      const second = await post();
+      expect(second.id).not.toBe(first.id);
+      expect(messages.rows.map((row) => row.id)).toEqual([second.id]);
+    });
+
     it('frees cap room by purging entries past the 90-day TTL before counting', async () => {
       for (let i = 0; i < 3; i += 1) {
         await service.post(sender, {
@@ -328,40 +343,49 @@ describe('MailboxService', () => {
   });
 
   describe('ack', () => {
-    it('hard-deletes the message by id for its recipient', async () => {
-      const { id } = await service.post(sender, {
-        recipientPublicKey: recipient,
-        blob: base64Blob(10),
-        idempotencyKey: 'a',
-      });
-      await service.ack(recipient, id);
+    const post = (idempotencyKey: string) =>
+      service.post(sender, { recipientPublicKey: recipient, blob: base64Blob(10), idempotencyKey });
+
+    it('hard-deletes the message by id for its recipient and reports the removal', async () => {
+      const { id } = await post('a');
+      await expect(service.ack(recipient, id)).resolves.toEqual({ removed: true });
       expect(messages.rows).toHaveLength(0);
+    });
+
+    it('reports no removal on a second ack of the same id', async () => {
+      const { id } = await post('a');
+      await service.ack(recipient, id);
+      await expect(service.ack(recipient, id)).resolves.toEqual({ removed: false });
     });
 
     it('will not let one account ack another account message', async () => {
       const attacker = newPublicKey();
-      const { id } = await service.post(sender, {
-        recipientPublicKey: recipient,
-        blob: base64Blob(10),
-        idempotencyKey: 'a',
-      });
-      await service.ack(attacker, id);
+      const { id } = await post('a');
+      await expect(service.ack(attacker, id)).resolves.toEqual({ removed: false });
       // The row survives: ack is scoped to the caller mailbox.
       expect(messages.rows).toHaveLength(1);
     });
 
-    it('is idempotent: acking a well-formed but already-gone id succeeds', async () => {
+    it('reports no removal for a well-formed but unknown id', async () => {
       await expect(service.ack(recipient, '00000000-0000-4000-8000-000000000000')).resolves.toEqual(
-        { success: true }
+        { removed: false }
       );
     });
 
-    it('returns idempotent success for a malformed id without touching the repo', async () => {
-      // A non-uuid id would make the `uuid`-typed column raise 22P02 → a 500;
-      // the guard short-circuits to success and never issues the delete.
+    it('reports no removal for a malformed id without touching the repo', async () => {
       const deleteSpy = vi.spyOn(messages, 'delete');
-      await expect(service.ack(recipient, 'not-a-uuid')).resolves.toEqual({ success: true });
+      await expect(service.ack(recipient, 'not-a-uuid')).resolves.toEqual({ removed: false });
       expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('frees the idempotency key: a post after the ack creates a new item', async () => {
+      const first = await post('a');
+      await expect(post('a')).resolves.toEqual(first);
+      await service.ack(recipient, first.id);
+
+      const second = await post('a');
+      expect(second.id).not.toBe(first.id);
+      expect(messages.rows.map((row) => row.id)).toEqual([second.id]);
     });
   });
 });

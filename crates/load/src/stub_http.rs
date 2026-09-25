@@ -162,7 +162,9 @@ fn route(method: HttpMethod, path: &str, body: &[u8]) -> HttpResponse {
         (HttpMethod::Patch, "/account/byo") => empty(200),
         (HttpMethod::Post, "/mailbox/messages") => json(201, r#"{"id":"msg-1"}"#),
         (HttpMethod::Get, "/mailbox/messages") => json(200, r#"{"messages":[]}"#),
-        (HttpMethod::Delete, path) if path.starts_with("/mailbox/messages/") => empty(200),
+        (HttpMethod::Delete, path) if path.starts_with("/mailbox/messages/") => {
+            json(200, r#"{"removed":true}"#)
+        }
         (HttpMethod::Get, path) if path.starts_with("/ipfs/") => HttpResponse {
             status: 200,
             headers: Vec::new(),

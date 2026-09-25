@@ -1782,7 +1782,7 @@ fn mailbox_lifecycle_through_the_api_client() {
     http.enqueue_response(json_ok(
         br#"{"messages":[{"id":"m1","receivedAt":"2026-01-01T00:00:00Z","blob":"aGk="}]}"#,
     ));
-    http.enqueue_response(json_ok(br#"{"success":true}"#));
+    http.enqueue_response(json_ok(br#"{"removed":true}"#));
 
     let posted = block_on(client.mailbox_post("02abc-recipient", b"hi", "idem-1")).expect("post");
     assert_eq!(posted, "m1", "post returns the server-assigned id");
@@ -1790,7 +1790,10 @@ fn mailbox_lifecycle_through_the_api_client() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, "m1");
     assert_eq!(items[0].blob, b"hi", "blob decodes from base64");
-    block_on(client.mailbox_ack("m1")).expect("ack");
+    assert!(
+        block_on(client.mailbox_ack("m1")).expect("ack"),
+        "the ack reports the removal"
+    );
 
     let requests = http.requests();
     assert_eq!(requests.len(), 3);

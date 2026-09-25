@@ -569,6 +569,7 @@
     },
     "/mailbox/messages": {
       "post": {
+        "description": "A post that reuses an idempotency key while its item is pending returns that item id. After the ack deletes the item, the same key creates a new item.",
         "operationId": "MailboxController_post",
         "parameters": [],
         "requestBody": {
@@ -602,7 +603,7 @@
             "description": "Unknown recipient (rate-limited existence oracle)"
           },
           "409": {
-            "description": "Recipient mailbox is full (per-recipient pending cap)"
+            "description": "Recipient mailbox is full: it holds the pending cap of unacked items (1000 by default). The API refuses new items until an ack or the 90-day TTL frees a slot; a replay of a pending item still succeeds."
           },
           "413": {
             "description": "Sealed blob exceeds 8 KiB"
@@ -658,6 +659,7 @@
     },
     "/mailbox/messages/{id}": {
       "delete": {
+        "description": "Answers status 200 whether or not this call removed the item.",
         "operationId": "MailboxController_ack",
         "parameters": [
           {
@@ -2028,12 +2030,13 @@
       "AckResponseDto": {
         "type": "object",
         "properties": {
-          "success": {
-            "type": "boolean"
+          "removed": {
+            "type": "boolean",
+            "description": "True only when this call deleted the item. False for an id that is already gone, that belongs to another mailbox, or that is malformed."
           }
         },
         "required": [
-          "success"
+          "removed"
         ]
       },
       "RegisterEntryDto": {
