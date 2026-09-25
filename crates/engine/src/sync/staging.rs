@@ -26,7 +26,7 @@ use crate::content::chunk::SEALED_LEAF_OVERHEAD;
 use crate::content::dag::{LeafCid, RootManifest};
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
-use crate::grants::{CONTACTS_PREFIX, INVITE_RECORDS_PREFIX, RECEIVED_SHARES_PREFIX};
+use crate::grants::{CONTACTS_PREFIX, RECEIVED_SHARES_PREFIX};
 use crate::net::{NODE_TOMBSTONE_PREFIX, RETIRE_LEDGER_PREFIX};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore, UnixMillis};
@@ -45,7 +45,7 @@ use crate::sync::upload_mark::{marked_leaves, upload_mark_key};
 /// ([`owner_scoped_key`](crate::sync::drain::owner_scoped_key)), a retire-ledger entry, a
 /// retired node's tombstone, a
 /// doomed-name journal entry, a
-/// received-shares list, a contact book, the owner's invite records, or the
+/// received-shares list, a contact book, or the
 /// notices of its versionless dead letters, or the scope roots that still owe a
 /// scope-exit cut. All are per-owner, so their whole prefixes are
 /// referenced — an entry this session cannot read belongs to the identity that
@@ -61,7 +61,6 @@ fn is_bookkeeping(key: &[u8]) -> bool {
         || key.starts_with(DOOMED_JOURNAL_PREFIX)
         || key.starts_with(RECEIVED_SHARES_PREFIX)
         || key.starts_with(CONTACTS_PREFIX)
-        || key.starts_with(INVITE_RECORDS_PREFIX)
         || key.starts_with(DEAD_LETTER_NOTICES_PREFIX)
         || key.starts_with(SCOPE_EXIT_DEBT_PREFIX)
 }
@@ -1288,7 +1287,6 @@ mod tests {
                 DOOMED_JOURNAL_PREFIX,
                 RECEIVED_SHARES_PREFIX,
                 CONTACTS_PREFIX,
-                INVITE_RECORDS_PREFIX,
                 SCOPE_EXIT_DEBT_PREFIX,
             ] {
                 store

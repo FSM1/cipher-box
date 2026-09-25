@@ -503,9 +503,7 @@ pub enum WriteRevokeKind {
     Full,
     /// Downgrade to read — the entry stays, demoted to [`Permission::Read`]. The
     /// downgraded recipient keeps a live read grant, so only the write plane
-    /// rotates. A claim on any still-live bearer write link in the scope restores
-    /// that same tag to write (`grants::invite`'s upgrade branch), so the owner
-    /// must revoke those links alongside the downgrade.
+    /// rotates.
     DowngradeToRead,
 }
 
@@ -606,7 +604,7 @@ pub fn cut_for_write_grant(plan: &GrantCutPlan<'_>) -> Result<RevokedCommittedSe
 /// from both the commitment and the ledger, and owner-re-sign.
 ///
 /// `owner_deadlines` maps a blinded tag to the deadline **as the owner minted
-/// it** (`RecordedInvite::expires_at`).
+/// it**.
 ///
 /// `Ok(None)` when nothing has expired — the common case, and the reason this
 /// trigger needs no scheduler: it costs an owner session one lookup per recorded

@@ -1063,13 +1063,6 @@ impl SharingInviteLinks {
         self.inner.expired
     }
 
-    /// The records at this scope its commitment no longer carries — what a prune
-    /// drops.
-    #[wasm_bindgen(getter)]
-    pub fn spent(&self) -> u32 {
-        self.inner.spent
-    }
-
     /// Invite claims that wait for a conversion at this scope.
     #[wasm_bindgen(getter, js_name = pendingClaims)]
     pub fn pending_claims(&self) -> u32 {
@@ -1222,12 +1215,20 @@ impl ReceivedShareRow {
     }
 
     /// The engine's classification of this share's latest resolve — one of
-    /// `granted`, `revocation-signal`, `unresolvable`, `epoch-lag` — or
-    /// `undefined` when no pass has resolved it yet. A host renders the
+    /// `granted`, `revocation-signal`, `expired`, `unresolvable`, `epoch-lag` —
+    /// or `undefined` when no pass has resolved it yet. A host renders the
     /// engine's verdict; it never computes one.
     #[wasm_bindgen(getter)]
     pub fn resolution(&self) -> Option<String> {
         self.inner.resolution.map(|class| class.name().to_owned())
+    }
+
+    /// Whether the share still reads through the link it was joined by. A
+    /// `revocation-signal` on such a row is the link's revoke, not the
+    /// person's removal (ADR 0025 D5).
+    #[wasm_bindgen(getter, js_name = viaLink)]
+    pub fn via_link(&self) -> bool {
+        self.inner.via_link
     }
 }
 
@@ -1949,16 +1950,20 @@ impl Command {
 
     /// Mint an invite link for a node. `expires_at` is the link's deadline in
     /// Unix milliseconds, or `undefined` for a link that never expires.
+    /// `owner_name` is the name the fragment shows the holder, signed by the
+    /// owner.
     #[wasm_bindgen(js_name = createInviteLink)]
     pub fn create_invite_link(
         node: &NodeId,
         permission: Permission,
         expires_at: Option<u64>,
+        owner_name: String,
     ) -> Command {
         Self::wrap(facade::Command::CreateInviteLink {
             node: node.facade(),
             permission: permission.into(),
             expires_at: expires_at.map(UnixMillis),
+            owner_name,
         })
     }
 
@@ -1966,15 +1971,6 @@ impl Command {
     #[wasm_bindgen(js_name = revokeInviteLink)]
     pub fn revoke_invite_link(node: &NodeId) -> Command {
         Self::wrap(facade::Command::RevokeInviteLink {
-            node: node.facade(),
-        })
-    }
-
-    /// Drop the invite records at a node whose row the scope's own owner-signed
-    /// commitment no longer carries.
-    #[wasm_bindgen(js_name = pruneInviteLinks)]
-    pub fn prune_invite_links(node: &NodeId) -> Command {
-        Self::wrap(facade::Command::PruneInviteLinks {
             node: node.facade(),
         })
     }

@@ -7,6 +7,7 @@
 //! inbox — what another device would see — never on a command's return alone.
 
 use core::cell::RefCell;
+use core::task::{Context, Poll, Waker};
 
 use cipherbox_core::hex::lower as hex_lower;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -27,9 +28,9 @@ use zeroize::Zeroizing;
 
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::grants::{
-    CLAIM_ID_LEN, Contact, ConvertedClaimRecord, EphemeralInvitee, GrantRow, InviteClaim,
-    InviteFragment, InviteRecords, InviteStore, MintedInvite, RecordedInvite, StagingInviteStore,
-    import_contact, mint_grant_row, mint_invite_grant, post_invite_claim, recipient_blinded_tag,
+    CLAIM_ID_LEN, Contact, DEFAULT_ADMISSION_CAP, EphemeralInvitee, GrantRow, InviteClaim,
+    InviteFragment, LinkTerms, ResolutionClass, import_contact, mint_grant_row, mint_invite_grant,
+    post_invite_claim, recipient_blinded_tag,
 };
 use cipherbox_engine::net::author::{ENVELOPE_V, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::rotation::{
@@ -409,14 +410,14 @@ fn bystander_row_with_corrupt_sig() -> GrantRow {
     row
 }
 
-/// An invite link over the vault root's scope: the row the owner commits, and
-/// the record that is the owner's only authority for calling that row a link.
-fn invite_link_at_root(secret_byte: u8) -> MintedInvite {
+/// A link entry over the vault root's scope. The committed row is the owner's
+/// only record of the link.
+fn invite_link_at_root(secret_byte: u8) -> GrantRow {
     expiring_invite_link_at_root(secret_byte, None)
 }
 
 /// [`invite_link_at_root`] carrying a deadline.
-fn expiring_invite_link_at_root(secret_byte: u8, expires_at: Option<UnixMillis>) -> MintedInvite {
+fn expiring_invite_link_at_root(secret_byte: u8, deadline: Option<UnixMillis>) -> GrantRow {
     let invitee = EphemeralInvitee::from_secret(&[secret_byte; 32]).expect("a valid scalar");
     mint_invite_grant(
         &owner_identity(),
@@ -425,52 +426,13 @@ fn expiring_invite_link_at_root(secret_byte: u8, expires_at: Option<UnixMillis>)
         &invitee,
         &SCOPE,
         &WRITE_SCOPE_SEED,
-        CorePermission::Read,
-        expires_at,
+        &LinkTerms {
+            deadline,
+            conversion_permission: CorePermission::Read,
+            admission_cap: DEFAULT_ADMISSION_CAP,
+        },
     )
     .expect("a contributory invitee key")
-}
-
-/// Put `links` in the owner's durable invite records, as a mint would have.
-fn record_links(device: &FakeDevice, links: &[RecordedInvite]) {
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(11));
-    block_on(
-        StagingInviteStore::new(&device.staging_store, &enc, &entropy).persist(&InviteRecords {
-            links: links.to_vec(),
-            claims: Vec::new(),
-        }),
-    )
-    .expect("the records persist");
-}
-
-/// The links the owner still records.
-fn recorded_links(device: &FakeDevice) -> Vec<RecordedInvite> {
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(12));
-    block_on(StagingInviteStore::new(&device.staging_store, &enc, &entropy).load())
-        .expect("the records load")
-        .links
-}
-
-/// The spent claims the owner records, which is what keeps a claim single-use
-/// against a transport that chooses what to redeliver.
-fn recorded_claims(device: &FakeDevice) -> Vec<ConvertedClaimRecord> {
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(12));
-    block_on(StagingInviteStore::new(&device.staging_store, &enc, &entropy).load())
-        .expect("the records load")
-        .claims
-}
-
-/// The staging key the owner's invite records live under — the write a
-/// conversion makes durable before it acks the claim.
-fn invite_staging_key(device: &FakeDevice) -> Vec<u8> {
-    let enc = kdf::enc_subkey(&SECRET);
-    let entropy = RefCell::new(SeededEntropy::new(12));
-    StagingInviteStore::new(&device.staging_store, &enc, &entropy)
-        .staging_key()
-        .to_vec()
 }
 
 /// The one share pointer waiting on `device`'s inbox, opened under the
@@ -583,18 +545,6 @@ impl GrantScenario {
             assert!(
                 fx.grant_folder_at(Permission::Write).is_err(),
                 "the write-scope cut fails, so the share never reaches its delivery"
-            );
-        });
-    }
-
-    /// The same stranded state on the invite-link path: the link's scope is
-    /// live at the parent-derived name, its row is recorded, and no bearer
-    /// capability ever reached the host.
-    fn strand_the_owed_link_wave(&mut self) {
-        self.with_a_failing_cut(|fx| {
-            assert!(
-                fx.try_mint_link_at(Permission::Write).is_err(),
-                "the write-scope cut fails, so the mint hands out no capability"
             );
         });
     }
@@ -723,6 +673,7 @@ impl GrantScenario {
             node: self.folder,
             permission,
             expires_at: None,
+            owner_name: "owner".to_owned(),
         }))
     }
 
@@ -787,12 +738,11 @@ impl GrantScenario {
             .map(|i| {
                 let index = u8::try_from(i).expect("the fixture stays under 256 claimants");
                 let scalar = [CLAIMANT_SCALAR_BASE + index; 32];
-                // Never all-zero, which the conversion refuses outright.
                 let mut claim_id = [1u8; CLAIM_ID_LEN];
                 claim_id[0] = index;
                 let claim = InviteClaim {
                     claim_id,
-                    scope_root_name: opened.scope_root_name.clone(),
+                    scope_pointer_name: opened.scope_pointer_name.clone(),
                     contact_code: contact_code(&scalar),
                 };
                 self.post_claim(&owner, &invitee, index, &claim, &format!("claim-{i}"));
@@ -4070,6 +4020,7 @@ fn the_vault_root_refuses_both_shares_with_the_names_its_read_reports() {
             node: ROOT,
             permission: Permission::Read,
             expires_at: None,
+            owner_name: String::new(),
         })),
         Err(EngineError::UnsupportedTarget {
             check: state
@@ -4119,6 +4070,7 @@ fn a_second_share_of_a_scope_is_refused_with_the_names_its_read_reports() {
             node: fx.folder,
             permission: Permission::Read,
             expires_at: None,
+            owner_name: String::new(),
         })),
         Err(EngineError::UnsupportedTarget {
             check: state
@@ -4128,11 +4080,10 @@ fn a_second_share_of_a_scope_is_refused_with_the_names_its_read_reports() {
     );
 }
 
-/// The link half of a share dialog: the deadline the owner minted, read back
-/// from the owner's own record rather than the ledger's forgeable hint. The
-/// link's row is not a grant — its recipient is a throwaway identity only the
-/// fragment holder answers for — so it renders as the link it is and nowhere
-/// else.
+/// The link half of a share dialog: the deadline the owner-signed link entry
+/// carries. The link's row is not a grant, because its recipient is a throwaway
+/// identity only the fragment holder answers for, so it renders as the link it
+/// is and nowhere else.
 #[test]
 fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     let deadline = UnixMillis(1_800_000_000_000);
@@ -4140,9 +4091,8 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     let blocks = Blocks::default();
     let link = expiring_invite_link_at_root(0x4e, Some(deadline));
     let grantee = recipient_row_at_root(CorePermission::Read);
-    seed_vault(&world, &blocks, vec![link.row.clone(), grantee.clone()]);
+    seed_vault(&world, &blocks, vec![link, grantee.clone()]);
     let alice = world.device(b"alice");
-    record_links(&alice, &[link.link]);
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
 
     let view = block_on(engine.sharing(ROOT))
@@ -4155,7 +4105,6 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
             live: true,
             expires_at: Some(deadline),
             expired: false,
-            spent: 0,
             pending_claims: 0,
         })
     );
@@ -4182,7 +4131,7 @@ fn the_sharing_read_reports_the_live_link_apart_from_the_grants() {
     assert_eq!(
         revoked.invite_links,
         Some(SharingInviteLinks::default()),
-        "the cut landed and took the record with it, so there is nothing left to prune"
+        "the cut landed, so the set commits no link"
     );
 }
 
@@ -4195,9 +4144,8 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let link = expiring_invite_link_at_root(0x6a, Some(deadline));
-    seed_vault(&world, &blocks, vec![link.row.clone()]);
+    seed_vault(&world, &blocks, vec![link]);
     let alice = world.device(b"alice");
-    record_links(&alice, &[link.link]);
     let (engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
 
     let before = block_on(engine.sharing(ROOT))
@@ -4210,7 +4158,6 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
             live: true,
             expires_at: Some(deadline),
             expired: false,
-            spent: 0,
             pending_claims: 0,
         })
     );
@@ -4227,55 +4174,8 @@ fn the_sharing_read_calls_a_live_link_past_its_deadline_expired() {
             live: true,
             expires_at: Some(deadline),
             expired: true,
-            spent: 0,
             pending_claims: 0,
         })
-    );
-}
-
-/// A record the scope's own commitment no longer carries is spent: a mint whose
-/// publish failed, or a cut whose record outlived it. The read reports exactly
-/// what a prune would drop, so a host can offer the reclaim without guessing.
-#[test]
-fn the_sharing_read_counts_the_records_a_prune_would_drop() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    let grantee = recipient_row_at_root(CorePermission::Read);
-    seed_vault(&world, &blocks, vec![grantee]);
-    let alice = world.device(b"alice");
-    record_links(&alice, &[invite_link_at_root(0x5f).link]);
-    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
-
-    let view = block_on(engine.sharing(ROOT))
-        .expect("a sharing read")
-        .state
-        .expect("the scope root resolved");
-    assert_eq!(
-        view.invite_links,
-        Some(SharingInviteLinks {
-            live: false,
-            expires_at: None,
-            expired: false,
-            spent: 1,
-            pending_claims: 0,
-        })
-    );
-
-    assert_eq!(
-        block_on(engine.command(Command::PruneInviteLinks { node: ROOT })),
-        Ok(CommandOutcome::Done)
-    );
-    assert!(
-        recorded_links(&alice).is_empty(),
-        "the count the read reported is the count the prune dropped"
-    );
-    assert_eq!(
-        block_on(engine.sharing(ROOT))
-            .expect("a sharing read")
-            .state
-            .expect("the scope root resolved")
-            .invite_links,
-        Some(SharingInviteLinks::default())
     );
 }
 
@@ -4448,26 +4348,21 @@ fn a_stalled_cut_re_drives_the_read_cascade_under_one_bound() {
 // ---------------------------------------------------------------------------
 
 /// Revoking a link is the read revoke it is made of: the row leaves the
-/// owner-signed set, the read plane cuts so the bearer's blob is gone from
-/// everything published after it, and only then does the owner forget the
-/// record.
+/// owner-signed set, and the read plane cuts so the bearer's blob is gone from
+/// everything published after it.
 #[test]
-fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() {
+fn revoking_an_invite_link_cuts_its_row_and_rotates_the_read_plane() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let bystander = recipient_row_at_root(CorePermission::Read);
     let link = invite_link_at_root(0x4e);
-    seed_vault(&world, &blocks, vec![link.row.clone(), bystander.clone()]);
+    seed_vault(&world, &blocks, vec![link.clone(), bystander.clone()]);
     let alice = world.device(b"alice");
-    record_links(&alice, &[link.link]);
     let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
 
     let before = published_grant_section(&world, &blocks, ROOT).expect("the root is a scope root");
     assert!(
-        before
-            .grant_blobs
-            .iter()
-            .any(|blob| blob.tag == link.row.tag),
+        before.grant_blobs.iter().any(|blob| blob.tag == link.tag),
         "the bearer starts out able to self-locate a blob"
     );
 
@@ -4483,18 +4378,11 @@ fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() 
     );
     let after = published_grant_section(&world, &blocks, ROOT).expect("the root republished");
     assert!(
-        !after
-            .commitment
-            .entries
-            .iter()
-            .any(|e| e.tag == link.row.tag),
+        !after.commitment.entries.iter().any(|e| e.tag == link.tag),
         "the link's row is no longer committed, so a claim on it is refused"
     );
     assert!(
-        !after
-            .grant_blobs
-            .iter()
-            .any(|blob| blob.tag == link.row.tag),
+        !after.grant_blobs.iter().any(|blob| blob.tag == link.tag),
         "and the bearer has no blob in the re-sealed set"
     );
     assert!(
@@ -4503,10 +4391,6 @@ fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() 
             .iter()
             .any(|blob| blob.tag == bystander.tag),
         "revoking a link ends future claims, not the grants it already produced"
-    );
-    assert!(
-        recorded_links(&alice).is_empty(),
-        "the cut landed, so the record it was derived from is spent"
     );
 }
 
@@ -4518,9 +4402,8 @@ fn revoking_an_invite_link_cuts_its_row_rotates_the_read_plane_and_forgets_it() 
 fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violation() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
-    seed_vault(&world, &blocks, Vec::new());
+    seed_vault(&world, &blocks, vec![invite_link_at_root(0x4e)]);
     let alice = world.device(b"alice");
-    record_links(&alice, &[invite_link_at_root(0x4e).link]);
     let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
     let folder = create_published_folder(&world, &mut engine, &mut tasks, ROOT, "plain");
 
@@ -4529,11 +4412,6 @@ fn revoking_a_link_at_an_ordinary_folder_is_a_target_refusal_not_a_trust_violati
         Err(EngineError::UnsupportedTarget {
             check: "revoke-link-target-is-not-a-scope-root"
         }),
-    );
-    assert_eq!(
-        recorded_links(&alice).len(),
-        1,
-        "a refused revoke forgets nothing"
     );
 }
 
@@ -4564,11 +4442,10 @@ fn a_cut_at_an_ordinary_folder_reports_the_name_of_the_command_it_refused() {
     );
 }
 
-/// A tag the owner does not record as a link belongs to some grantee, so a
-/// revoke that could reach it would cut an ordinary grant. It publishes nothing
-/// instead.
+/// A revoke cuts only a committed link entry. A row of any other kind belongs to
+/// a grantee, so a scope that commits no link entry publishes nothing.
 #[test]
-fn revoking_a_link_the_owner_never_recorded_publishes_nothing() {
+fn revoking_a_link_on_a_scope_with_no_link_entry_publishes_nothing() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     let grantee = recipient_row_at_root(CorePermission::Read);
@@ -4593,34 +4470,6 @@ fn revoking_a_link_the_owner_never_recorded_publishes_nothing() {
             .iter()
             .any(|e| e.tag == grantee.tag),
         "the grantee's row is untouched"
-    );
-}
-
-/// The reclaim a failed publish owes: a record the scope's own commitment does
-/// not carry names a row that is not live, so its slot comes back — while a
-/// record the commitment does carry stays, because forgetting it would leave a
-/// live link nothing can revoke.
-#[test]
-fn pruning_drops_the_records_the_commitment_does_not_carry_and_keeps_the_rest() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    let live = invite_link_at_root(0x4e);
-    let never_published = invite_link_at_root(0x5f);
-    seed_vault(&world, &blocks, vec![live.row.clone()]);
-    let alice = world.device(b"alice");
-    record_links(&alice, &[live.link, never_published.link]);
-    let (mut engine, _events, _tasks) = boot_owner(&world, &blocks, &alice);
-
-    assert_eq!(
-        block_on(engine.command(Command::PruneInviteLinks { node: ROOT })),
-        Ok(CommandOutcome::Done)
-    );
-
-    let kept = recorded_links(&alice);
-    assert_eq!(
-        kept,
-        vec![live.link],
-        "only the record the owner-signed commitment still carries survives"
     );
 }
 
@@ -4726,26 +4575,40 @@ fn a_waiting_claim_shows_on_the_folder_row_until_the_owner_converts_it() {
     );
 }
 
-/// The write link end to end. Its scope's cut moves the root the fragment and
-/// the recorded tag both bind, so the fragment seals at the moved name and the
-/// record is located by the tag the moved set carries.
+/// ADR 0024 D4: a write link mints a read link entry and runs no write cut, so
+/// the scope root stays where the mint published it. The fragment names the
+/// scope pointer, and the claim converts at read.
 #[test]
-fn a_write_invite_link_claims_and_converts_across_its_own_cut() {
+fn a_write_link_mints_at_read_and_runs_no_name_wave() {
     let mut fx = GrantScenario::new();
     let inherited_name = write_name(fx.folder);
     let fragment = fx.mint_link_at(Permission::Write);
 
-    let moved_name = fx.granted_scope_repoint().current_root;
-    assert_ne!(
-        moved_name, inherited_name,
-        "the write link's own cut moved the scope root"
+    assert_eq!(
+        fx.granted_scope_repoint().current_root,
+        inherited_name,
+        "no write cut moved the scope root"
+    );
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    assert_eq!(
+        opened.scope_pointer_name,
+        scope_pointer_name(kdf::owner_pointer_seed(&SECRET).as_bytes(), &fx.folder.0),
+        "the bearer follows the scope pointer, not a root name"
     );
     assert_eq!(
-        InviteFragment::decode(&fragment)
-            .expect("the mint's own fragment")
-            .scope_root_name,
-        moved_name.as_str().as_bytes(),
-        "the bearer is sent to the root the wave moved to"
+        opened.verified_names(&owner_identity().verifying_key()),
+        Some(("owner", "shared")),
+        "the names verify under the owner signature"
+    );
+    let link_row = published_grant_section(&fx.world, &fx.blocks, fx.folder)
+        .expect("the link's scope root answers")
+        .commitment
+        .entries;
+    assert_eq!(link_row.len(), 1);
+    assert_eq!(link_row[0].permission, CorePermission::Read);
+    assert_eq!(
+        link_row[0].conversion_permission,
+        Some(CorePermission::Write)
     );
 
     let bearer_pk = recipient_identity().verifying_key().to_sec1().to_vec();
@@ -4754,165 +4617,18 @@ fn a_write_invite_link_claims_and_converts_across_its_own_cut() {
         block_on(bearer.command(Command::ClaimInviteLink { fragment })),
         Ok(CommandOutcome::Done),
     );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+    assert!(fx.granted_to().contains(&bearer_pk));
     assert_eq!(
-        block_on(
-            fx.engine
-                .command(Command::ConvertInviteClaims { node: fx.folder })
-        ),
-        Ok(CommandOutcome::Done),
-    );
-    assert!(
-        fx.granted_to().contains(&bearer_pk),
-        "the claim converted into a personal grant on the moved scope"
-    );
-}
-
-/// The owner half of the same rule: the record holds the tag the mint made, and
-/// the cut re-minted the row under another one. A revoke names the tag the set
-/// carries now, and forgets the record it was derived from.
-#[test]
-fn a_write_invite_link_is_revoked_after_its_cut() {
-    let mut fx = GrantScenario::new();
-    fx.mint_link_at(Permission::Write);
-    assert_eq!(recorded_links(&fx.owner_device).len(), 1);
-
-    assert_eq!(
-        block_on(
-            fx.engine
-                .command(Command::RevokeInviteLink { node: fx.folder })
-        ),
-        Ok(CommandOutcome::Done),
-    );
-
-    assert!(
-        recorded_links(&fx.owner_device).is_empty(),
-        "the cut landed, so the record it was derived from is spent"
-    );
-    let after = fx.granted_scope_repoint().current_root;
-    assert!(
-        published_grant_section_at(&fx.world, &fx.blocks, &after)
-            .expect("the moved root answers")
-            .commitment
-            .entries
-            .is_empty(),
-        "and the link's row is no longer committed, so a claim on it is refused"
-    );
-}
-
-/// A write link runs the same owed name wave a write grant does. A cut that
-/// fails there leaves the link's scope published at the name the parent's own
-/// write seed derives, the link's row recorded, and no bearer capability in any
-/// hand. The same command re-driven finishes that wave and hands out the link,
-/// rather than making the owner revoke a link nobody holds.
-#[test]
-fn a_write_invite_link_whose_cut_failed_is_finished_by_the_same_command() {
-    let mut fx = GrantScenario::new();
-    fx.strand_the_owed_link_wave();
-    let stalled = write_name(fx.folder);
-    let minted = published_grant_section(&fx.world, &fx.blocks, fx.folder)
-        .expect("the link's scope is live at the parent-derived name");
-    assert_eq!(recorded_links(&fx.owner_device).len(), 1);
-
-    let fragment = fx.mint_link_at(Permission::Write);
-
-    let moved = fx.granted_scope_repoint().current_root;
-    assert_ne!(moved, stalled, "the re-drive ran the owed wave");
-    assert_eq!(
-        InviteFragment::decode(&fragment)
-            .expect("the mint's own fragment")
-            .scope_root_name,
-        moved.as_str().as_bytes(),
-        "and the capability names the root the wave moved to"
-    );
-    let resumed = published_grant_section_at(&fx.world, &fx.blocks, &moved)
-        .expect("the moved root answers as a scope root");
-    // A write cut leaves the read plane alone, so the seed the mint sealed is
-    // the same one at the moved root.
-    assert!(
-        stranded_override_seed(&resumed, fx.folder) == stranded_override_seed(&minted, fx.folder),
-        "against the scope the first attempt minted, not a second one"
-    );
-    assert_eq!(
-        recorded_links(&fx.owner_device).len(),
-        1,
-        "and the re-drive recorded no second link at one node"
-    );
-
-    let bearer_pk = recipient_identity().verifying_key().to_sec1().to_vec();
-    let (mut bearer, _bearer_events) = fx.bearer();
-    assert_eq!(
-        block_on(bearer.command(Command::ClaimInviteLink { fragment })),
-        Ok(CommandOutcome::Done),
-    );
-    assert_eq!(
-        block_on(
-            fx.engine
-                .command(Command::ConvertInviteClaims { node: fx.folder })
-        ),
-        Ok(CommandOutcome::Done),
-    );
-    assert!(
-        fx.granted_to().contains(&bearer_pk),
-        "and the re-driven link converts a claim on the moved scope"
-    );
-}
-
-/// The invitee a link commits its row to is drawn fresh per mint and nothing
-/// durable keeps it — the record holds only its public halves, because the
-/// secret is the whole bearer capability. A device that did not run the stalled
-/// mint therefore has no row to prove and refuses, which leaves the revoke the
-/// remedy there.
-#[test]
-fn a_write_invite_link_whose_cut_failed_is_refused_on_a_device_that_missed_the_mint() {
-    let mut fx = GrantScenario::new();
-    fx.strand_the_owed_link_wave();
-    let stalled = write_name(fx.folder);
-
-    let second = fx.world.device(b"the owner's second device");
-    let (mut engine, _events, _tasks) = boot_owner(&fx.world, &fx.blocks, &second);
-
-    assert_eq!(
-        block_on(engine.command(Command::CreateInviteLink {
-            node: fx.folder,
-            permission: Permission::Write,
-            expires_at: None,
-        })),
-        Err(EngineError::UnsupportedTarget {
-            check: "invite-target-already-names-a-scope"
-        }),
-    );
-    assert_eq!(
-        fx.granted_scope_repoint().current_root,
-        stalled,
-        "and the owed wave is still owed"
-    );
-}
-
-/// The re-drive is the unfinished share, never another share of the same
-/// folder. A stalled link's scope commits one throwaway invitee's row, so a
-/// write grant to a contact over it is refused rather than resumed.
-#[test]
-fn a_write_grant_over_a_stalled_invite_link_scope_is_refused() {
-    let mut fx = GrantScenario::new();
-    fx.strand_the_owed_link_wave();
-    let stalled = write_name(fx.folder);
-
-    assert_eq!(
-        fx.grant_folder_at(Permission::Write),
-        Err(EngineError::UnsupportedTarget {
-            check: "grant-target-already-names-a-scope"
-        }),
-    );
-    assert_eq!(
-        fx.granted_scope_repoint().current_root,
-        stalled,
-        "and the owed wave is still owed"
+        fx.committed_permission(&inherited_name),
+        Some(CorePermission::Read),
+        "the conversion grants read until a write cut runs"
     );
 }
 
 /// The mailbox chooses what to redeliver, so the second delivery of one claim
-/// must not have the owner re-sign anything: the spent record refuses it, and
-/// the item is acked rather than left to redeliver forever.
+/// must not have the owner re-sign anything: the claimant already holds a row,
+/// so the conversion is a no-op (ADR 0023 D3).
 #[test]
 fn a_redelivered_claim_converts_once() {
     let mut fx = GrantScenario::new();
@@ -4986,11 +4702,10 @@ fn a_conversion_pass_publishes_the_scope_root_once_for_every_claim_it_converts()
 }
 
 /// A claimant that claims twice before the owner presses convert puts two items
-/// carrying one claim id in one pass. The pass converts against the records it
-/// has already made in memory, so the second item mints no second spent record
-/// and no second grant.
+/// in one pass. The pass converts against the set it accumulates in memory, so
+/// the second item finds the first item's row and grants nothing more.
 #[test]
-fn one_claim_delivered_twice_in_one_pass_is_recorded_once() {
+fn one_claim_delivered_twice_in_one_pass_grants_once() {
     let mut fx = GrantScenario::new();
     let fragment = fx.mint_link();
     let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
@@ -4999,7 +4714,7 @@ fn one_claim_delivered_twice_in_one_pass_is_recorded_once() {
     let owner = import_contact(&opened.owner_contact_code).expect("the owner bundle verifies");
     let claim = InviteClaim {
         claim_id: [0x33; CLAIM_ID_LEN],
-        scope_root_name: opened.scope_root_name.clone(),
+        scope_pointer_name: opened.scope_pointer_name.clone(),
         contact_code: contact_code(&RECIPIENT_SECRET),
     };
     fx.post_claim(&owner, &invitee, 0, &claim, "twice-a");
@@ -5009,10 +4724,11 @@ fn one_claim_delivered_twice_in_one_pass_is_recorded_once() {
 
     assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
 
+    let claimant = recipient_identity().verifying_key().to_sec1().to_vec();
     assert_eq!(
-        recorded_claims(&fx.owner_device).len(),
+        fx.granted_to().iter().filter(|pk| **pk == claimant).count(),
         1,
-        "one claim id spends one record, whatever the transport delivered"
+        "one claimant holds one grant, whatever the transport delivered"
     );
     assert_eq!(
         sequence_at(&fx.world, &write_name(fx.folder)),
@@ -5023,8 +4739,8 @@ fn one_claim_delivered_twice_in_one_pass_is_recorded_once() {
 }
 
 /// Ack-after-durable, at the batch scale: nothing this pass converted reached
-/// the record plane, so no claim may be acked and no spent record may become
-/// durable. Every item redelivers, and the next press converts them all.
+/// the record plane, so no claim may be acked. Every item redelivers, and the
+/// next press converts them all.
 #[test]
 fn a_conversion_pass_that_cannot_publish_acks_no_claim() {
     let mut fx = GrantScenario::new();
@@ -5072,7 +4788,7 @@ fn a_claim_acked_before_a_failed_publish_leaves_the_count() {
     // The owner's own code: a conversion refuses it for good and acks it.
     let terminal = InviteClaim {
         claim_id: [0x44; CLAIM_ID_LEN],
-        scope_root_name: opened.scope_root_name.clone(),
+        scope_pointer_name: opened.scope_pointer_name.clone(),
         contact_code: contact_code(&SECRET),
     };
     fx.post_claim(&owner, &invitee, 9, &terminal, "terminal");
@@ -5099,54 +4815,6 @@ fn a_claim_acked_before_a_failed_publish_leaves_the_count() {
         "only the terminal claim was acked"
     );
     assert_eq!(waiting(&fx), 1, "and the count dropped it at the ack");
-}
-
-/// Ack-after-durable per item, after the one publish: a spent-record write that
-/// fails leaves its claim un-acked, so the next press converts it again. That
-/// re-conversion changes a set the record plane already carries, so it
-/// publishes nothing more.
-#[test]
-fn a_record_write_that_fails_after_the_publish_leaves_its_claim_convertible() {
-    let mut fx = GrantScenario::new();
-    let fragment = fx.mint_link();
-    let claimants = fx.post_claims(&fragment, 2);
-    let name = write_name(fx.folder);
-    let before = sequence_at(&fx.world, &name);
-    fx.owner_device
-        .staging_store
-        .inner()
-        .interrupt_staged_write_after(&invite_staging_key(&fx.owner_device), 0);
-
-    assert!(
-        fx.convert().is_err(),
-        "the pass reports the record write it could not make durable"
-    );
-
-    assert_eq!(
-        sequence_at(&fx.world, &name),
-        before + 1,
-        "the one publish still landed"
-    );
-    assert_eq!(
-        inbox(&fx.owner_device).len(),
-        1,
-        "only the claim whose record failed is left to redeliver"
-    );
-
-    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
-    assert_eq!(
-        sequence_at(&fx.world, &name),
-        before + 1,
-        "the re-conversion grants nothing new, so it republishes nothing"
-    );
-    assert!(inbox(&fx.owner_device).is_empty());
-    let granted = fx.granted_to();
-    for claimant in &claimants {
-        assert!(
-            granted.contains(claimant),
-            "both claimants hold their grant"
-        );
-    }
 }
 
 /// A press past the API's per-account content throttle
@@ -5328,6 +4996,57 @@ fn a_converted_claimant_stays_in_the_book_for_the_next_session() {
     );
 }
 
+/// Poll `command` together with the running loops, so a command that awaits a
+/// forced pass settles.
+fn command_while_ticking(
+    engine: &mut Engine<FakeSeamTypes>,
+    command: Command,
+    tasks: &mut [BoxedTask],
+) -> Result<CommandOutcome, EngineError> {
+    let mut pending = Box::pin(engine.command(command));
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..64 {
+        if let Poll::Ready(outcome) = pending.as_mut().poll(&mut cx) {
+            return outcome;
+        }
+        poll_tasks_until_parked(tasks);
+    }
+    panic!("the command never settled against the running loops");
+}
+
+/// ADR 0024 D1: a holder reads at once. The join bookmarks the share with the
+/// link keys, and the pass it forces reads the folder through the scope
+/// pointer before the owner converts anything. The row names the folder the
+/// owner signed, and reports that it reads through the link.
+#[test]
+fn a_link_holder_reads_the_folder_before_any_conversion() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let (mut holder, _holder_events, mut holder_tasks) = recipient_session(&fx);
+
+    assert_eq!(
+        command_while_ticking(
+            &mut holder,
+            Command::ClaimInviteLink { fragment },
+            &mut holder_tasks,
+        ),
+        Ok(CommandOutcome::Done),
+    );
+
+    let shares = block_on(holder.received_shares()).expect("the list reads");
+    assert_eq!(shares.len(), 1, "the join bookmarked the share");
+    assert_eq!(shares[0].scope, fx.folder);
+    assert_eq!(shares[0].display_name, "shared");
+    assert_eq!(shares[0].permission, Permission::Read);
+    assert_eq!(shares[0].resolution, Some(ResolutionClass::Granted));
+    assert!(shares[0].via_link, "no personal blob has landed yet");
+    assert_eq!(
+        inbox(&fx.owner_device).len(),
+        1,
+        "the claim waits for the owner"
+    );
+}
+
 /// A fragment is bearer key material a host hands over unread, so anything that
 /// is not one is a fail-closed refusal that reaches no mailbox — never a partial
 /// reconstruction of an identity nobody committed.
@@ -5352,7 +5071,7 @@ fn a_fragment_that_is_not_one_claims_nothing() {
     );
 }
 
-/// A claim that matched a recorded link but can never become convertible is a
+/// A claim that matched a committed link but can never become convertible is a
 /// dead item only this owner can retire: leaving it would hold an inbox slot
 /// until its TTL, and a bearer can post as many as it likes.
 #[test]
@@ -5364,8 +5083,8 @@ fn a_claim_that_can_never_convert_is_acked_rather_than_left_to_redeliver() {
     let invitee =
         EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret");
 
-    // An all-zero id is the one a client with a broken entropy seam emits, and
-    // converting it would spend the id every later claimant would draw.
+    // The owner's own bundle, which the invite URL carries: a self-grant is
+    // refused for good.
     block_on(post_invite_claim(
         &fx.recipient_device.mailbox,
         &import_contact(&opened.owner_contact_code).expect("the owner bundle verifies"),
@@ -5373,9 +5092,9 @@ fn a_claim_that_can_never_convert_is_acked_rather_than_left_to_redeliver() {
         &[0x7d; 32],
         ENVELOPE_V,
         &InviteClaim {
-            claim_id: [0u8; CLAIM_ID_LEN],
-            scope_root_name: opened.scope_root_name.clone(),
-            contact_code: contact_code(&RECIPIENT_SECRET),
+            claim_id: [0x7e; CLAIM_ID_LEN],
+            scope_pointer_name: opened.scope_pointer_name.clone(),
+            contact_code: contact_code(&SECRET),
         },
         "dead-claim",
     ))

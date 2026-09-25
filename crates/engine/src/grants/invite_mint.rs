@@ -1,28 +1,22 @@
 //! The owner-side mint of an invite link, end to end (blueprint/engine.md
-//! "Grants and ledger: Invites").
+//! "Grants and ledger: Invites", ADR 0023 D2, ADR 0024 D4).
 //!
-//! An invite link is a read grant whose recipient is a throwaway keypair rather
-//! than a contact, so it mints the same fresh scope
-//! ([`mint_grantee_scope`](super::mint_grantee_scope)) a personal grant does:
-//! the bearer starts at that scope's first epoch and walks back through no
-//! history the owner cut before the link existed.
+//! An invite link mints the same fresh scope
+//! ([`mint_grantee_scope`](super::mint_grantee_scope)) a personal grant does,
+//! with a link entry at `read` as its committed set. The bearer starts at that
+//! scope's first epoch and walks back through no history the owner cut before
+//! the link existed.
 //!
-//! Recording before publishing is the ack-after-durable rule the accept flow
-//! already follows ([`ConvertedClaim::record`](super::ConvertedClaim::record)):
-//! a committed entry no record names is authority no
-//! [`locate_invite_link`](super::locate_invite_link) call can name
-//! (`invite_store.rs` header), while a record whose row never published is
-//! inert — conversion refuses it as uncommitted.
-//!
-//! The bearer fragment is sealed last, over the name the scope root answers at
-//! once the caller has run any write-scope cut ([`PendingInviteLink::seal`]):
-//! the cut's name wave moves that root, and a fragment naming the pre-wave one
-//! is a claim [`convert_invite_claim`](super::convert_invite_claim) refuses.
+//! The mint runs no write-scope cut and no name wave, whatever the link
+//! converts to, so the scope root keeps the name it is published under. The
+//! fragment is sealed and its bound checked before anything publishes, and the
+//! owner device records nothing: the link lives in the record alone.
 
 use core::fmt;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::suite::contact::ContactCode;
+use cipherbox_core::suite::secret::SecretBytes;
 use zeroize::Zeroizing;
 
 use crate::entropy::Entropy;
@@ -31,71 +25,31 @@ use crate::grants::ScopeRootPromoter;
 use crate::grants::create::{MintNet, ScopePointerVoucher};
 #[cfg(test)]
 use crate::rotation::{CascadeResealResolver, ScopeRootPublisher, SweepPublisher, SweepResolver};
-use crate::seams::UnixMillis;
 
 use super::create::{
     CreateGrantError, GrantSubtree, GrantedReadScope, GranteeScopePlan, OwnerGrantKeys,
     ParentScopePlan, converge_grant_subtree, mint_grantee_scope,
 };
-use super::invite::{EphemeralInvitee, InviteError, InviteFragment, mint_invite_grant};
-use super::invite_store::{InviteStore, InviteStoreError};
+use super::invite::{EphemeralInvitee, InviteError, InviteFragment, LinkTerms, mint_invite_grant};
 
 /// What one mint needs beyond the owner's own key material: the scope the link
-/// grants, the parent that gains it, and the link's terms.
+/// grants, the parent that gains it, the link's terms, and what its fragment
+/// names.
 pub struct InviteMintPlan<'a> {
     /// The fresh scope the link's row is committed at — the invited folder's
-    /// own, minted at read epoch 1.
+    /// own, minted at read epoch 1. It carries no write cut.
     pub grantee: &'a GranteeScopePlan<'a>,
     /// The scope root the invited folder currently lives in, which gains the
     /// new scope in its direct-child-scope index.
     pub parent: &'a ParentScopePlan<'a>,
-    /// The link's deadline, or `None` for a link that never expires. The
-    /// recorded copy is the authority for it
-    /// ([`RecordedInvite::expires_at`](super::RecordedInvite::expires_at)).
-    pub expires_at: Option<UnixMillis>,
-}
-
-/// A link whose scope is published and whose row the owner records, waiting on
-/// the name its bearer capability must carry.
-///
-/// A write link's scope root moves after the mint, so the fragment cannot be
-/// sealed until the caller's cut has run ([`seal`](Self::seal)).
-pub struct PendingInviteLink {
-    invitee: EphemeralInvitee,
-    owner_contact_code: Vec<u8>,
-}
-
-impl fmt::Debug for PendingInviteLink {
-    /// Hand-written like [`MintedInviteLink`]'s: the invitee secret is the
-    /// capability the sealed fragment carries.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("PendingInviteLink(..)")
-    }
-}
-
-impl PendingInviteLink {
-    /// The throwaway recipient this link's committed row was minted to, for a
-    /// caller proving that a published scope root is the one this link's own
-    /// stalled mint left behind
-    /// ([`commits_write_grant`](super::commits_write_grant)).
-    pub fn invitee(&self) -> &EphemeralInvitee {
-        &self.invitee
-    }
-
-    /// Seal the bearer capability over the name the scope root answers at
-    /// **now**: the name wave's own outcome after a cut, and the plan's derived
-    /// name where the mint ran none. A claim compares that name against the
-    /// commitment byte for byte, so any other value mints a link nobody claims.
-    pub fn seal(&self, scope_root_name: &IpnsName) -> Result<MintedInviteLink, InviteMintError> {
-        InviteFragment {
-            invite_secret: self.invitee.secret().clone(),
-            owner_contact_code: self.owner_contact_code.clone(),
-            scope_root_name: scope_root_name.as_str().as_bytes().to_vec(),
-        }
-        .encode()
-        .map(|fragment| MintedInviteLink { fragment })
-        .map_err(InviteMintError::Fragment)
-    }
+    /// The terms the link entry carries.
+    pub terms: LinkTerms,
+    /// The fresh scope's pointer name, which the fragment carries.
+    pub scope_pointer_name: &'a IpnsName,
+    /// The owner's name, as the owner gave it. May be empty.
+    pub owner_name: &'a str,
+    /// The folder's name.
+    pub folder_name: &'a str,
 }
 
 /// A minted link as the host must present it: one opaque URL fragment
@@ -120,111 +74,90 @@ impl fmt::Debug for MintedInviteLink {
 /// capability.
 #[derive(Debug)]
 pub enum InviteMintError {
-    /// Minting the link's row failed.
+    /// Minting the link's row or sealing its fragment failed. Nothing
+    /// published.
     Mint(InviteError),
-    /// The link could not be recorded durably. The row is unpublished, so the
-    /// link exists nowhere.
-    Store(InviteStoreError),
     /// Minting the scope the row is committed at failed. Fail-closed through
-    /// the scope-root publish; past it the record is live and
-    /// [`CreateGrantError`] states what stayed behind.
+    /// the scope-root publish; past it [`CreateGrantError`] states what stayed
+    /// behind.
     Create(CreateGrantError),
-    /// Sealing the bearer fragment failed. [`mint_invite_link`] probes the same
-    /// bound before anything publishes, so this is fail-closed there; a caller
-    /// that seals at a name of its own reaches it past the publish, with a live
-    /// link the owner can revoke and no capability in any hand.
-    Fragment(InviteError),
 }
 
 impl fmt::Display for InviteMintError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InviteMintError::Mint(e) => write!(f, "{e}"),
-            InviteMintError::Store(e) => write!(f, "{e}"),
             InviteMintError::Create(e) => write!(f, "{e}"),
-            InviteMintError::Fragment(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for InviteMintError {}
 
-/// Mint one invite link over the invited folder: converge the subtree, record
-/// the link, and mint and publish the fresh scope its row is the whole committed
-/// set of.
+/// Mint one invite link over the invited folder: seal its fragment, converge
+/// the subtree, and mint and publish the fresh scope its link entry is the
+/// whole committed set of.
 ///
-/// The caller runs any write-scope cut the plan owes and then
-/// [`PendingInviteLink::seal`], which is what hands out the bearer capability.
 /// The minted scope's read material rides alongside, for the owner's own reads.
 ///
 /// Owner-only by construction, exactly as [`create_grant`](super::create_grant)
 /// is: the scope this publishes is signed under the owner's writer pseudonym and
 /// its commitment under the owner identity, so no other session can author it.
-pub async fn mint_invite_link<E, N, S, V>(
+pub async fn mint_invite_link<E, N, V>(
     entropy: &mut E,
     net: &N,
     voucher: &V,
-    store: &S,
     owner: &OwnerGrantKeys<'_>,
     plan: &InviteMintPlan<'_>,
-) -> Result<(PendingInviteLink, GrantedReadScope), InviteMintError>
+) -> Result<(MintedInviteLink, GrantedReadScope), InviteMintError>
 where
     E: Entropy,
     N: MintNet,
-    S: InviteStore,
     V: ScopePointerVoucher,
 {
     let invitee = EphemeralInvitee::mint(entropy).map_err(InviteMintError::Mint)?;
-    let minted = mint_invite_grant(
+    let row = mint_invite_grant(
         owner.identity_signer,
         owner.enc_secret,
         plan.grantee.pointer_read_key,
         &invitee,
         &plan.grantee.scope_id,
         plan.grantee.write_scope_seed,
-        plan.grantee.permission(),
-        plan.expires_at,
+        &plan.terms,
     )
     .map_err(InviteMintError::Mint)?;
 
-    let pending = PendingInviteLink {
-        invitee,
+    let mut fragment = InviteFragment {
+        invite_secret: invitee.secret().clone(),
         owner_contact_code: ContactCode::create(owner.identity_signer, owner.enc_secret.public())
             .encode(),
+        scope_id: plan.grantee.scope_id,
+        scope_pointer_name: plan.scope_pointer_name.clone(),
+        pointer_read_key: SecretBytes::new(*plan.grantee.pointer_read_key),
+        owner_name: plan.owner_name.to_owned(),
+        folder_name: plan.folder_name.to_owned(),
+        names_sig: [0u8; 64],
     };
-    // Every scope root name is one Ed25519 IPNS name, so a probe seal at the
-    // mint's own name settles the bound the post-cut seal will meet. Refused
-    // here, nothing is recorded and nothing publishes.
-    pending.seal(&plan.grantee.ipns_name())?;
+    fragment.sign_names(owner.identity_signer);
+    // Ahead of every publish, so a fragment past its bound leaves no live link
+    // that nobody holds.
+    let fragment = fragment.encode().map_err(InviteMintError::Mint)?;
 
-    // Ahead of the record, so a subtree the gate cannot prove converged costs no
-    // durable slot.
     let subtree = converge_grant_subtree(net, net, plan.grantee, plan.parent)
         .await
         .map_err(InviteMintError::Create)?;
     // An invitee is drawn fresh per call, so its row can never be the one a
-    // promoted root committed. Refused here, ahead of the durable slot the
-    // record below would take.
+    // promoted root committed.
     let GrantSubtree::Converged(converged) = subtree else {
         return Err(InviteMintError::Create(
             CreateGrantError::ResumeNotThisGrant,
         ));
     };
-
-    // Whole-set replacement, so the load is what keeps the links already
-    // recorded.
-    let mut records = store.load().await.map_err(InviteMintError::Store)?;
-    records.links.push(minted.link);
-    store
-        .persist(&records)
-        .await
-        .map_err(InviteMintError::Store)?;
-
-    let outcome = mint_grantee_scope(entropy, net, voucher, converged, &minted.row, owner)
+    let outcome = mint_grantee_scope(entropy, net, voucher, converged, &row, owner)
         .await
         .map_err(InviteMintError::Create)?;
 
-    Ok((pending, outcome.read_scope))
+    Ok((MintedInviteLink { fragment }, outcome.read_scope))
 }
 
 #[cfg(test)]
@@ -234,6 +167,7 @@ mod tests {
     };
     use super::*;
     use crate::rotation::published_override_seed;
+    use crate::seams::UnixMillis;
 
     /// Always accepts.
     struct AcceptingVoucher;
@@ -258,18 +192,21 @@ mod tests {
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::secret::SECRET_LEN;
-    use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
+    use cipherbox_core::suite::x25519::X25519Secret;
     use zeroize::Zeroizing;
 
-    use cipherbox_core::seal::Permission;
+    use cipherbox_core::seal::{
+        AadContext, GrantSetEntryKind, Permission, STRUCT_TAG_GRANT_BLOB, open_grant_blob,
+    };
+    use cipherbox_core::suite::secret::ct_eq;
 
-    use crate::grants::{RecordedInvite, StagingInviteStore, recipient_blinded_tag};
+    use crate::grants::invite::MAX_INVITE_NAME_BYTES;
+    use crate::grants::recipient_blinded_tag;
     use crate::rotation::{
         CascadeTarget, LaggingNode, NodeRef, ResealSeeds, ResealedScopeRoot, ResolveFailure,
         RotationPublishError, ScopeRootIdentity, SweepResolveFailure, SweptChild, SweptNode,
         SweptScope, WriteHistory, derive_write_name,
     };
-    use crate::testkit::fakes::InMemoryStagingStore;
     use crate::testkit::{SeededEntropy, block_on};
 
     const V: u64 = 1;
@@ -527,15 +464,13 @@ mod tests {
         }
     }
 
-    /// One owner, one folder to invite to, and the durable backing its records
-    /// land in.
+    /// One owner and one folder to invite to.
     struct Fixture {
         owner: EcdsaSigner,
         enc: X25519Secret,
         pseudonym: Ed25519Signer,
         parent_commitment: GrantSetCommitment,
         parent_commitment_sig: [u8; 64],
-        staging: InMemoryStagingStore,
         entropy: RefCell<SeededEntropy>,
         net: FakeNet,
     }
@@ -560,7 +495,6 @@ mod tests {
                 pseudonym: owner_pseudonym(),
                 parent_commitment,
                 parent_commitment_sig,
-                staging: InMemoryStagingStore::default(),
                 entropy: RefCell::new(SeededEntropy::new(SEED)),
                 net: FakeNet::new(),
             }
@@ -572,10 +506,6 @@ mod tests {
             self
         }
 
-        fn store(&self) -> StagingInviteStore<'_, InMemoryStagingStore, SeededEntropy> {
-            StagingInviteStore::new(&self.staging, &self.enc, &self.entropy)
-        }
-
         fn keys(&self) -> OwnerGrantKeys<'_> {
             OwnerGrantKeys {
                 enc_secret: &self.enc,
@@ -584,28 +514,15 @@ mod tests {
             }
         }
 
-        fn mint(
-            &self,
-            expires_at: Option<UnixMillis>,
-        ) -> Result<PendingInviteLink, InviteMintError> {
-            self.mint_with(expires_at, None)
+        fn mint(&self, terms: LinkTerms) -> Result<MintedInviteLink, InviteMintError> {
+            self.mint_named(terms, "Photos")
         }
 
-        /// The capability a read link's host receives: the mint runs no cut, so
-        /// the fragment seals at the name the mint published under.
-        fn mint_sealed(
+        fn mint_named(
             &self,
-            expires_at: Option<UnixMillis>,
+            terms: LinkTerms,
+            folder_name: &str,
         ) -> Result<MintedInviteLink, InviteMintError> {
-            self.mint(expires_at)?
-                .seal(&derive_write_name(&WRITE_SCOPE_SEED, &FOLDER))
-        }
-
-        fn mint_with(
-            &self,
-            expires_at: Option<UnixMillis>,
-            write_cut: Option<&[u8; SECRET_LEN]>,
-        ) -> Result<PendingInviteLink, InviteMintError> {
             let owner_enc_pub = self.enc.public();
             let grantee = GranteeScopePlan {
                 v: V,
@@ -613,7 +530,7 @@ mod tests {
                 parent_node_seed: &PARENT_NODE_SEED,
                 owner_enc_pub: &owner_enc_pub,
                 write_scope_seed: &WRITE_SCOPE_SEED,
-                write_cut,
+                write_cut: None,
                 pointer_read_key: &POINTER_READ_KEY,
                 subtree_child_index: &[],
             };
@@ -651,70 +568,140 @@ mod tests {
                 &mut crate::entropy::SharedEntropy(&self.entropy),
                 &self.net,
                 &AcceptingVoucher,
-                &self.store(),
                 &self.keys(),
                 &InviteMintPlan {
                     grantee: &grantee,
                     parent: &parent,
-                    expires_at,
+                    terms,
+                    scope_pointer_name: &pointer_name(),
+                    owner_name: "Ada",
+                    folder_name,
                 },
             ))
-            .map(|(pending, _)| pending)
+            .map(|(minted, _)| minted)
         }
 
-        /// The links a later session recovers: a fresh handle over the same
-        /// durable backing.
-        fn recovered(&self) -> Vec<RecordedInvite> {
-            block_on(self.store().load())
-                .expect("the records load")
-                .links
+        /// The invite scope root the mint published.
+        fn scope_root(&self) -> ResealedScopeRoot {
+            self.net
+                .published
+                .borrow()
+                .iter()
+                .find(|r| r.scope_id == FOLDER)
+                .cloned()
+                .expect("the invite scope was published")
         }
     }
 
-    /// The whole point of the slice: what the mint hands out is claimable
-    /// against a scope minted for this link alone, and what a later session
-    /// recovers is the record the mint made.
+    fn pointer_name() -> IpnsName {
+        IpnsName::from_public_key(&Ed25519Signer::from_seed([0x77; 32]).verifying_key())
+    }
+
+    fn read_link() -> LinkTerms {
+        LinkTerms {
+            deadline: None,
+            conversion_permission: Permission::Read,
+            admission_cap: 3,
+        }
+    }
+
+    fn write_link() -> LinkTerms {
+        LinkTerms {
+            deadline: Some(DEADLINE),
+            conversion_permission: Permission::Write,
+            admission_cap: 3,
+        }
+    }
+
+    /// The fragment names the minted scope's pointer and read key, and the
+    /// scope commits the link entry the fragment's secret derives.
     #[test]
-    fn a_minted_link_is_recorded_and_its_scope_published() {
+    fn a_minted_link_commits_a_link_entry_the_fragment_answers_to() {
         let f = Fixture::new();
 
-        let link = f.mint_sealed(None).expect("the mint lands");
+        let link = f.mint(write_link()).expect("the mint lands");
 
-        let [record] = f.recovered()[..] else {
-            panic!("one link was minted");
-        };
         let fragment = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
+        assert_eq!(fragment.scope_id, FOLDER);
+        assert_eq!(fragment.scope_pointer_name, pointer_name());
+        assert!(ct_eq(
+            fragment.pointer_read_key.as_bytes(),
+            &POINTER_READ_KEY
+        ));
+        assert_eq!(
+            fragment.verified_names(&f.owner.verifying_key()),
+            Some(("Ada", "Photos")),
+        );
         let invitee =
             EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes()).expect("valid secret");
-        assert_eq!(
-            record.ephemeral_identity_pk,
-            invitee.identity_pk().to_sec1(),
-            "the recovered record answers to the fragment holder's identity",
-        );
-        assert_eq!(record.expires_at, None);
-        assert_eq!(fragment.scope_root_name, folder_name());
+        let tag = recipient_blinded_tag(invitee.enc_secret(), &f.enc.public(), &folder_name())
+            .expect("contributory");
 
-        let published = f.net.published.borrow();
-        let scope_root = published
-            .iter()
-            .find(|r| r.scope_id == FOLDER)
-            .expect("the invite scope was published");
-        // The tag conversion re-derives from the record it recovered
-        // (`convert_invite_claim`), so this is the entry a claim reads its
-        // permission out of.
-        assert_eq!(
-            recipient_blinded_tag(
-                &f.enc,
-                &X25519Public::from_bytes(record.ephemeral_enc_pk).expect("valid key"),
-                &folder_name(),
-            ),
-            Some(record.tag),
-        );
+        let scope_root = f.scope_root();
         let [entry] = &scope_root.section.commitment.entries[..] else {
             panic!("the link is the scope's whole grant set");
         };
-        assert_eq!(entry.tag, record.tag);
+        assert_eq!(entry.tag, tag);
+        assert_eq!(entry.kind, GrantSetEntryKind::Link);
         assert_eq!(entry.permission, Permission::Read);
+        assert_eq!(entry.conversion_permission, Some(Permission::Write));
+        assert_eq!(entry.deadline.map(|d| d.get()), Some(DEADLINE.0));
+        assert_eq!(entry.admission_cap, Some(3));
+    }
+
+    /// ADR 0024 D4: the blob of a write link carries read material only, so a
+    /// holder of the fragment gets no write seed.
+    #[test]
+    fn the_blob_of_a_write_link_opens_no_write_seed() {
+        let f = Fixture::new();
+
+        let link = f.mint(write_link()).expect("the mint lands");
+
+        let fragment = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
+        let invitee =
+            EphemeralInvitee::from_secret(fragment.invite_secret.as_bytes()).expect("valid secret");
+        let tag = recipient_blinded_tag(invitee.enc_secret(), &f.enc.public(), &folder_name())
+            .expect("contributory");
+        let scope_root = f.scope_root();
+        let blob = scope_root
+            .section
+            .grant_blobs
+            .iter()
+            .find(|blob| blob.tag == tag)
+            .expect("a blob at the link tag");
+        let grant = open_grant_blob(
+            invitee.enc_secret(),
+            &blob.enc,
+            &AadContext {
+                v: V,
+                id: FOLDER,
+                scope: FOLDER,
+                epoch: scope_root.read_epoch,
+                struct_tag: STRUCT_TAG_GRANT_BLOB,
+            },
+            &blob.ciphertext,
+        )
+        .expect("the holder opens the link blob");
+        assert!(grant.write_scope_seed().is_none());
+    }
+
+    /// The mint runs no write-scope cut and no name wave: the scope root stays
+    /// at the name the parent's write seed derives, at its first write epoch.
+    #[test]
+    fn a_write_link_mint_runs_no_rotation() {
+        let f = Fixture::new();
+
+        f.mint(write_link()).expect("the mint lands");
+
+        let published = f.net.published.borrow();
+        let invite_roots: Vec<_> = published.iter().filter(|r| r.scope_id == FOLDER).collect();
+        let [scope_root] = invite_roots[..] else {
+            panic!("the mint publishes the scope root once");
+        };
+        assert_eq!(scope_root.ipns_name.as_slice(), folder_name().as_slice());
+        assert_eq!(scope_root.read_epoch, 1);
+        assert_eq!(scope_root.write_epoch, 1);
+        assert!(scope_root.section.history_links.is_empty());
     }
 
     /// A bearer reads the folder's interior under the scope the link mints, so
@@ -724,138 +711,75 @@ mod tests {
         const INTERIOR_NODE: [u8; 16] = [0xa1; 16];
         let f = Fixture::new().with_interior(INTERIOR_NODE);
 
-        f.mint(None).expect("the mint lands");
+        f.mint(read_link()).expect("the mint lands");
 
         assert_eq!(*f.net.resealed.borrow(), vec![INTERIOR_NODE]);
     }
 
-    /// The narrowing this slice exists for: a bearer's history walk has nowhere
-    /// to go, because the scope it is granted starts at the link.
+    /// A fragment its own claim path would refuse is refused before anything
+    /// publishes, so no live link stands that nobody holds.
     #[test]
-    fn a_minted_links_scope_starts_at_epoch_one_with_no_history() {
+    fn a_mint_whose_fragment_is_refused_publishes_nothing() {
         let f = Fixture::new();
 
-        f.mint(None).expect("the mint lands");
-
-        let published = f.net.published.borrow();
-        let scope_root = published
-            .iter()
-            .find(|r| r.scope_id == FOLDER)
-            .expect("the invite scope was published");
-        assert_eq!(scope_root.read_epoch, 1);
-        assert!(
-            scope_root.section.history_links.is_empty(),
-            "no epoch predates the link, so the parent's retained history stays behind",
-        );
-    }
-
-    /// The recorded deadline is the authority for expiry, so the mint's term
-    /// must survive into the record a later session converts against.
-    #[test]
-    fn a_links_deadline_is_recorded_as_minted() {
-        let f = Fixture::new();
-
-        f.mint(Some(DEADLINE)).expect("the mint lands");
-
-        let [record] = f.recovered()[..] else {
-            panic!("one link was minted");
-        };
-        assert_eq!(record.expires_at, Some(DEADLINE));
-    }
-
-    /// An unclaimable link is worse than a refused mint: a record that did not
-    /// land refuses the whole mint, and nothing is published.
-    #[test]
-    fn a_mint_whose_record_does_not_land_publishes_nothing() {
-        let f = Fixture::new();
-        f.staging
-            .interrupt_staged_write_after(f.store().staging_key(), 0);
-
-        let refused = f.mint(None).expect_err("an unrecorded link is refused");
+        let refused = f
+            .mint_named(read_link(), &"n".repeat(MAX_INVITE_NAME_BYTES + 1))
+            .expect_err("a name past the bound is refused");
 
         assert!(matches!(
             refused,
-            InviteMintError::Store(InviteStoreError::Seam(_))
+            InviteMintError::Mint(InviteError::NameTooLong)
         ));
-        assert!(
-            f.net.published.borrow().is_empty(),
-            "nothing is published for a link the owner cannot revoke",
-        );
+        assert!(f.net.published.borrow().is_empty());
     }
 
-    /// The record lands first, so a publish that fails leaves an inert record
-    /// rather than a committed entry no `locate_invite_link` call can name.
+    /// A zero deadline is refused at the mint, before any publish.
+    #[test]
+    fn a_zero_deadline_is_refused_before_any_publish() {
+        let f = Fixture::new();
+
+        let refused = f
+            .mint(LinkTerms {
+                deadline: Some(UnixMillis(0)),
+                ..read_link()
+            })
+            .expect_err("a zero deadline is refused");
+
+        assert!(matches!(
+            refused,
+            InviteMintError::Mint(InviteError::InvalidExpiry)
+        ));
+        assert!(f.net.published.borrow().is_empty());
+    }
+
+    /// A publish that fails hands out no capability.
     #[test]
     fn a_publish_that_fails_hands_out_no_capability() {
         let mut f = Fixture::new();
         f.net.refuse_publish = true;
 
-        let refused = f.mint(None).expect_err("an unpublished link is refused");
+        let refused = f
+            .mint(read_link())
+            .expect_err("an unpublished link is refused");
 
         assert!(matches!(refused, InviteMintError::Create(_)));
-        assert_eq!(
-            f.recovered().len(),
-            1,
-            "the record landed before the publish",
-        );
     }
 
     /// An invitee is drawn fresh per call, so a link's row can never be the one
-    /// a promoted root already committed. The mint refuses ahead of the durable
-    /// record, so a retry over an already-promoted folder takes no slot the
-    /// owner then has to revoke.
+    /// a promoted root already committed.
     #[test]
-    fn a_link_over_an_already_promoted_folder_records_nothing() {
+    fn a_link_over_an_already_promoted_folder_is_refused() {
         let mut f = Fixture::new();
-        f.mint(None).expect("the first mint lands");
+        f.mint(read_link()).expect("the first mint lands");
         f.net.promotion_stands = true;
 
         let refused = f
-            .mint(None)
+            .mint(read_link())
             .expect_err("a promoted folder takes no second mint");
 
         assert!(matches!(
             refused,
             InviteMintError::Create(CreateGrantError::ResumeNotThisGrant)
         ));
-        assert_eq!(
-            f.recovered().len(),
-            1,
-            "the refusal ran ahead of the second record",
-        );
-    }
-
-    /// A write link mints a write row, and its bearer capability names the root
-    /// the caller's cut moves the scope to — never the name the mint published
-    /// under, which the wave leaves behind.
-    #[test]
-    fn a_write_link_seals_its_fragment_at_the_name_the_cut_moves_to() {
-        const MOVED_WRITE_SEED: [u8; SECRET_LEN] = [0x5b; SECRET_LEN];
-        let f = Fixture::new();
-        let moved = derive_write_name(&MOVED_WRITE_SEED, &FOLDER);
-
-        let link = f
-            .mint_with(None, Some(&MOVED_WRITE_SEED))
-            .expect("the write mint lands")
-            .seal(&moved)
-            .expect("the fragment seals at the moved name");
-
-        let fragment = InviteFragment::decode(&link.fragment).expect("the mint's own fragment");
-        assert_eq!(fragment.scope_root_name, moved.as_str().as_bytes());
-        assert_ne!(fragment.scope_root_name, folder_name());
-
-        let published = f.net.published.borrow();
-        let scope_root = published
-            .iter()
-            .find(|r| r.scope_id == FOLDER)
-            .expect("the invite scope was published");
-        let [entry] = &scope_root.section.commitment.entries[..] else {
-            panic!("the link is the scope's whole grant set");
-        };
-        assert_eq!(
-            entry.permission,
-            Permission::Write,
-            "the row the cut drives is the link's own write row"
-        );
     }
 }

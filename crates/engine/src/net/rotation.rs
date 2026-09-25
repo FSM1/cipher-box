@@ -4316,15 +4316,10 @@ where
             // The pseudonym binds the scope, not the name, so the mint must
             // reproduce the committed key: it authorizes structure signing, and
             // re-signing a different one would hand that authority elsewhere.
-            let mut commitment_entry = minted.commitment_entry;
-            if commitment_entry.pseudonym_pk != committed_entry.pseudonym_pk {
+            if minted.commitment_entry.pseudonym_pk != committed_entry.pseudonym_pk {
                 return Err(WritePublishError::Rejected);
             }
-            commitment_entry.kind = committed_entry.kind;
-            commitment_entry.deadline = committed_entry.deadline;
-            commitment_entry.conversion_permission = committed_entry.conversion_permission;
-            commitment_entry.admission_cap = committed_entry.admission_cap;
-            commitment_entry.unknown = committed_entry.unknown.clone();
+            let commitment_entry = committed_entry.rebound(&minted.commitment_entry);
             new_tags.insert(committed_entry.tag, commitment_entry.tag);
             if attested {
                 attested_extras.push((reminted.ledger.len(), row.via_link, &row.grantee_name));

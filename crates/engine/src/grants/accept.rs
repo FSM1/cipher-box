@@ -14,6 +14,7 @@
 //! on [`accept_share`]).
 
 use core::fmt;
+use std::collections::BTreeMap;
 
 use cipherbox_core::codec::{Map, RedactedBytes, RedactedText, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
@@ -23,14 +24,16 @@ use cipherbox_core::seal::{AadContext, Permission, STRUCT_TAG_GRANT_BLOB, open_g
 use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::entropy::EntropyError;
 use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
 use crate::name::MAX_NODE_NAME_BYTES;
 use crate::net::GrantedScopeRoot;
-use crate::seams::{ContactLabel, FloorStore, Mailbox, SeamError, SharerScopedFloorStore};
+use crate::seams::{
+    ContactLabel, FloorStore, Mailbox, SeamError, SharerScopedFloorStore, UnixMillis,
+};
 
 use super::contact::Contact;
 use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
@@ -192,6 +195,47 @@ impl fmt::Debug for ReceivedShare {
     }
 }
 
+/// The link keys a bookmark reads through until a personal blob lands
+/// (ADR 0024 D1, D2). Redacted `Debug`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LinkHold {
+    /// The invite secret, which re-derives both ephemeral halves.
+    pub(crate) invite_secret: SecretBytes,
+    /// The scope pointer the fragment named. The holder resolves it on every
+    /// pass, so a write wave that moves the scope root does not strand it.
+    pub scope_pointer_name: IpnsName,
+    /// The deadline of the link entry the holder last verified, or `None`
+    /// before any verified read or for a link with none.
+    pub deadline: Option<UnixMillis>,
+}
+
+impl LinkHold {
+    /// A hold on the link whose invite secret is `invite_secret`, before any
+    /// verified read.
+    pub(crate) fn new(invite_secret: SecretBytes, scope_pointer_name: IpnsName) -> Self {
+        Self {
+            invite_secret,
+            scope_pointer_name,
+            deadline: None,
+        }
+    }
+
+    /// Whether the last verified deadline is past at `now` (ADR 0025 D5).
+    pub fn is_expired(&self, now: UnixMillis) -> bool {
+        self.deadline.is_some_and(|deadline| now.0 >= deadline.0)
+    }
+}
+
+impl fmt::Debug for LinkHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkHold")
+            .field("invite_secret", &self.invite_secret)
+            .field("scope_pointer_name", &self.scope_pointer_name)
+            .field("deadline", &self.deadline)
+            .finish()
+    }
+}
+
 /// The recipient's received-shares list — a self-healing bookmark keyed by
 /// [`ReceivedShare::key`]. The published metadata is the authority; this list
 /// only speeds discovery, so a re-accept heals a drifted entry in place rather
@@ -199,6 +243,7 @@ impl fmt::Debug for ReceivedShare {
 #[derive(Default)]
 pub struct ReceivedSharesList {
     entries: Vec<ReceivedShare>,
+    links: BTreeMap<BookmarkKey, LinkHold>,
 }
 
 impl ReceivedSharesList {
@@ -215,6 +260,29 @@ impl ReceivedSharesList {
     /// The bookmark under `key`, if one is held.
     pub fn find(&self, key: &BookmarkKey) -> Option<&ReceivedShare> {
         self.position(key).map(|i| &self.entries[i])
+    }
+
+    /// The link keys the bookmark under `key` reads through, if it holds any.
+    pub fn link_hold(&self, key: &BookmarkKey) -> Option<&LinkHold> {
+        self.links.get(key)
+    }
+
+    /// Read the bookmark under `key` through `hold`, replacing any hold it had.
+    pub(crate) fn hold_link(&mut self, key: BookmarkKey, hold: LinkHold) {
+        self.links.insert(key, hold);
+    }
+
+    /// Drop the link keys of the bookmark under `key`, returning them.
+    pub(crate) fn drop_link(&mut self, key: &BookmarkKey) -> Option<LinkHold> {
+        self.links.remove(key)
+    }
+
+    /// Point the bookmark under `key` at the scope root its scope pointer
+    /// names now.
+    pub(crate) fn heal_root_name(&mut self, key: &BookmarkKey, scope_root_name: Vec<u8>) {
+        if let Some(at) = self.position(key) {
+            self.entries[at].scope_root_name = scope_root_name;
+        }
     }
 
     /// Reconcile a freshly-verified share into the self-healing bookmark: append
@@ -248,6 +316,7 @@ impl ReceivedSharesList {
         match reconciled {
             Reconciled::Added => {
                 self.entries.remove(at);
+                self.links.remove(key);
             }
             Reconciled::Healed(previous) => self.entries[at] = *previous,
             Reconciled::Unchanged => {}
@@ -402,6 +471,19 @@ pub(crate) fn encode_stored_list(
         .map(|share| {
             let mut m = Map::new();
             m.insert("displayName", Value::Text(share.display_name.clone()));
+            if let Some(hold) = shares.links.get(&share.key()) {
+                if let Some(deadline) = hold.deadline {
+                    m.insert("linkDeadline", Value::Unsigned(deadline.0));
+                }
+                m.insert(
+                    "linkSecret",
+                    Value::Bytes(hold.invite_secret.as_bytes().to_vec()),
+                );
+                m.insert(
+                    "scopePointerName",
+                    Value::Text(hold.scope_pointer_name.as_str().to_owned()),
+                );
+            }
             m.insert(
                 "permission",
                 Value::Text(share.permission.as_wire().to_string()),
@@ -423,7 +505,7 @@ pub(crate) fn encode_stored_list(
     body.insert("shares", Value::Array(encoded_shares));
     body.insert("v", Value::Unsigned(STORED_LIST_V));
     // Terminal owner of the transient tree: it holds a verbatim copy of
-    // every bookmark's pointer read key.
+    // every bookmark's pointer read key and link secret.
     let mut tree = Value::Map(body);
     let encoded = Zeroizing::new(encode_fixed_depth(&tree));
     tree.zeroize_bytes();
@@ -454,15 +536,19 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
     let raw = req(map, "shares")?.as_array()?;
     within("shares", raw.len(), MAX_RECEIVED_SHARES)?;
     let mut entries: Vec<ReceivedShare> = Vec::with_capacity(raw.len());
+    let mut links = BTreeMap::new();
     for item in raw {
         let share = item.as_map()?;
         reject_unknown(
             share,
             &[
                 "displayName",
+                "linkDeadline",
+                "linkSecret",
                 "permission",
                 "pointerReadKey",
                 "scopeId",
+                "scopePointerName",
                 "scopeRootName",
                 "sharerIdentityPk",
             ],
@@ -494,9 +580,44 @@ fn read_stored_list(tree: &Value) -> Result<ReceivedSharesList, ReceivedSharesCo
         if entries.iter().any(|e| e.key() == key) {
             return Err(ReceivedSharesCodecError::DuplicateScope);
         }
+        if let Some(hold) = read_link_hold(share)? {
+            links.insert(key, hold);
+        }
         entries.push(decoded);
     }
-    Ok(ReceivedSharesList { entries })
+    Ok(ReceivedSharesList { entries, links })
+}
+
+/// The optional link keys of one stored bookmark. `linkSecret` and
+/// `scopePointerName` come as a pair, and `linkDeadline` only with them; a
+/// bookmark without `linkSecret` is a personal one.
+fn read_link_hold(share: &Map) -> Result<Option<LinkHold>, CodecError> {
+    let Some(secret) = share.get("linkSecret") else {
+        return match ["scopePointerName", "linkDeadline"]
+            .into_iter()
+            .find(|field| share.get(field).is_some())
+        {
+            Some(_) => Err(Malformed::MissingField {
+                field: "linkSecret",
+            }
+            .into()),
+            None => Ok(None),
+        };
+    };
+    let scope_pointer_name = IpnsName::parse(req(share, "scopePointerName")?.as_text()?)?;
+    let deadline = match share.get("linkDeadline") {
+        Some(value) => Some(UnixMillis(value.as_unsigned()?)),
+        None => None,
+    };
+    let mut bytes = fixed::<32>(secret, "linkSecret")?;
+    let invite_secret = SecretBytes::new(bytes);
+    // `fixed` hands back a plain array; this frame is its terminal owner.
+    bytes.zeroize();
+    Ok(Some(LinkHold {
+        invite_secret,
+        scope_pointer_name,
+        deadline,
+    }))
 }
 
 /// Why encoding or decoding a stored received-shares body failed.
@@ -991,12 +1112,17 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         pointer_read_key: SecretBytes::new(*grant.pointer_read_key()),
     });
     let newly_added = matches!(reconciled, Reconciled::Added);
+    // A personal blob opened, so the link keys go (ADR 0024 D2).
+    let dropped_link = received.drop_link(&bookmark_key);
 
     // Persist durably BEFORE the floor advance and the ack; a failure rolls the
     // in-memory bookmark back and returns un-acked, so the item redelivers.
-    if reconciled.is_durable_change() {
+    if reconciled.is_durable_change() || dropped_link.is_some() {
         if let Err(e) = store.persist(received).await {
             received.revert(&bookmark_key, reconciled);
+            if let Some(hold) = dropped_link {
+                received.hold_link(bookmark_key, hold);
+            }
             return Err(AcceptError::Persist(e));
         }
     }
@@ -1456,6 +1582,78 @@ mod tests {
             decoded.iter().next().unwrap().pointer_read_key(),
             &[0x8A; 32]
         ));
+    }
+
+    fn link_hold() -> LinkHold {
+        use cipherbox_core::suite::ed25519::Ed25519Signer;
+        LinkHold {
+            invite_secret: SecretBytes::new([0x4e; 32]),
+            scope_pointer_name: IpnsName::from_public_key(
+                &Ed25519Signer::from_seed([0x5d; 32]).verifying_key(),
+            ),
+            deadline: Some(UnixMillis(1_700_000_000_000)),
+        }
+    }
+
+    /// ADR 0024 C1: the link keys are optional keys of a version 2 bookmark.
+    /// A bookmark without them is the frozen personal one; a held one round
+    /// trips, keys and deadline included.
+    #[test]
+    fn a_v2_bookmark_without_link_keys_loads_and_a_held_one_round_trips() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"k51scoperoot", 0x8A));
+        let personal = decode_stored_list(&encode_stored_list(&list).expect("encodes"))
+            .expect("a bookmark without link keys loads");
+        let key = personal.iter().next().expect("one bookmark").key();
+        assert!(personal.link_hold(&key).is_none());
+
+        list.hold_link(key, link_hold());
+        let bytes = encode_stored_list(&list).expect("encodes");
+        let held = decode_stored_list(&bytes).expect("a held bookmark loads");
+        assert!(held.link_hold(&key) == Some(&link_hold()));
+        assert_eq!(
+            encode_stored_list(&held).expect("re-encodes"),
+            bytes,
+            "byte-stable"
+        );
+
+        let mut dropped = held;
+        assert!(dropped.drop_link(&key).is_some());
+        assert_eq!(
+            encode_stored_list(&dropped).expect("encodes"),
+            encode_stored_list(&personal).expect("encodes"),
+            "a dropped hold leaves the personal bookmark's bytes"
+        );
+    }
+
+    /// `linkSecret` and `scopePointerName` come as a pair.
+    #[test]
+    fn a_link_hold_missing_half_its_pair_is_refused() {
+        let mut list = ReceivedSharesList::new();
+        list.reconcile(share(b"k51scoperoot", 0x8A));
+        let key = list.iter().next().expect("one bookmark").key();
+        list.hold_link(key, link_hold());
+        let tree = decode(&encode_stored_list(&list).unwrap()).unwrap();
+        for dropped in ["linkSecret", "scopePointerName"] {
+            let mut map = tree.as_map().unwrap().clone();
+            let shares = map.get("shares").unwrap().as_array().unwrap().to_vec();
+            let mut entry = shares[0].as_map().unwrap().clone();
+            let kept: Vec<(String, Value)> = entry
+                .entries()
+                .iter()
+                .filter(|(field, _)| field != dropped)
+                .cloned()
+                .collect();
+            entry = Map::new();
+            for (field, value) in kept {
+                entry.insert(&field, value);
+            }
+            map.insert("shares", Value::Array(vec![Value::Map(entry)]));
+            assert!(
+                decode_stored_list(&encode(&Value::Map(map)).unwrap()).is_err(),
+                "a hold without {dropped} is refused"
+            );
+        }
     }
 
     #[test]
