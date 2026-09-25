@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { InvitePreviewDescriptor } from '@cipherbox/client';
 import { LoginError } from '@cipherbox/auth-ui';
@@ -32,7 +32,10 @@ type Preview = { account: string; fragment: string } & (
   | { outcome: PreviewFailure }
 );
 
-type Joining = { step: 'joining' | 'refused'; read: InvitePreviewDescriptor };
+type Joining = { step: 'joining' | 'refused'; read: InvitePreviewDescriptor; claimed: string };
+
+/** The address names a link other than the one claimed: the member moved on. */
+const movedOn = (claimed: string, fragment: string) => fragment !== '' && fragment !== claimed;
 
 /**
  * The invite route (blueprint/web-client.md "Composition"): sign-in, then the
@@ -57,11 +60,13 @@ export function InvitePage() {
   const fragment = useLocation().hash.slice(1);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [joining, setJoining] = useState<Joining | null>(null);
+  const latestClaim = useRef<string | null>(null);
 
   // Latched, so a sign-in in flight keeps the panel, and the progress it holds.
   const [decided, setDecided] = useState(false);
   if (isSignedOut && !decided) setDecided(true);
   if (account === null && preview !== null) setPreview(null);
+  if (joining !== null && movedOn(joining.claimed, fragment)) setJoining(null);
 
   useEffect(() => {
     if (account === null || client === null || fragment === '') return;
@@ -95,11 +100,15 @@ export function InvitePage() {
     // Before the await, per `EngineFacade.claimInviteLink`.
     navigate(`${window.location.pathname}${window.location.search}`, { replace: true });
     setPreview(null);
-    setJoining({ step: 'joining', read });
+    setJoining({ step: 'joining', read, claimed });
+    latestClaim.current = claimed;
     void run('claimInviteLink', (facade) => facade.claimInviteLink(claimed, name)).then(
       (accepted) => {
+        if (latestClaim.current !== claimed || movedOn(claimed, window.location.hash.slice(1))) {
+          return;
+        }
         if (accepted) openFolder(read.scope);
-        else setJoining({ step: 'refused', read });
+        else setJoining({ step: 'refused', read, claimed });
       }
     );
   };

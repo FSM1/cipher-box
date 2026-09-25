@@ -32,6 +32,7 @@ function livePreview(overrides: Partial<InvitePreviewDescriptor> = {}): InvitePr
 interface EngineOptions {
   preview?: (fragment: string) => Promise<InvitePreviewDescriptor>;
   refusal?: Error | null;
+  claim?: () => Promise<unknown>;
   signedIn?: boolean;
   started?: Promise<void>;
 }
@@ -44,6 +45,8 @@ interface EngineOptions {
 function inviteEngine({
   preview = () => Promise.resolve(livePreview()),
   refusal = null,
+  claim = () =>
+    refusal === null ? Promise.resolve({ kind: 'done' as const }) : Promise.reject(refusal),
   signedIn = true,
   started = Promise.resolve(),
 }: EngineOptions = {}) {
@@ -54,7 +57,7 @@ function inviteEngine({
   const previewInviteLink = vi.fn((fragment: string) => preview(fragment));
   const claimInviteLink = vi.fn((_fragment: string, _name: string) => {
     addressAtDispatch.push(window.location.hash);
-    return refusal === null ? Promise.resolve({ kind: 'done' as const }) : Promise.reject(refusal);
+    return claim();
   });
   const client = {
     subscribeSession(listener: () => void) {
@@ -355,6 +358,29 @@ describe('the join', () => {
     expect(engine.previewInviteLink.mock.calls).toEqual([[FRAGMENT], ['another-link-fragment']]);
     expect(engine.claimInviteLink.mock.calls).toEqual([['another-link-fragment', '']]);
   });
+
+  it.each(['accepted', 'refused'] as const)(
+    'lets a new link take over from a join still in flight that is then %s',
+    async (outcome) => {
+      let settle!: () => void;
+      const claim = () =>
+        new Promise((resolve, reject) => {
+          settle = () =>
+            outcome === 'accepted' ? resolve({ kind: 'done' }) : reject(new Error('link-expired'));
+        });
+      await openAt(`#${FRAGMENT}`, inviteEngine({ claim }));
+      await join();
+      expect(pageState()).toBe('joining');
+
+      await moveTo('#another-link-fragment');
+      await waitFor(() => expect(pageState()).toBe('joinable'));
+      await act(async () => settle());
+
+      expect(pageState()).toBe('joinable');
+      expect(window.location.pathname).toBe('/invite');
+      expect(screen.queryByRole('alert')).toBeNull();
+    }
+  );
 
   it("renders the engine's refusal in its own words and stays on the page", async () => {
     const refusal = new EngineRequestError('link-expired', 'malformedInput');
