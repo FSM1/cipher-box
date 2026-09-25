@@ -66,10 +66,6 @@ export class SharePage {
     return this.page.getByTestId('share-live-link-expiry');
   }
 
-  get convertClaimsButton(): Locator {
-    return this.page.getByTestId('share-convert-claims');
-  }
-
   get revokeLinkButton(): Locator {
     return this.page.getByTestId('share-revoke-link');
   }
@@ -105,6 +101,18 @@ export class SharePage {
   async close(): Promise<void> {
     await this.closeButton.click();
     await expect(this.dialog).toHaveCount(0);
+  }
+
+  /**
+   * Opens the dialog until `count` grant rows show. The owner's tick converts a
+   * claim, and the dialog reads the grants only when it opens.
+   */
+  async openUntilGranted(folder: string, count: number, timeout = 180_000): Promise<void> {
+    await expect(async () => {
+      if ((await this.dialog.count()) > 0) await this.close();
+      await this.open(folder);
+      await expect(this.grantRows).toHaveCount(count);
+    }).toPass({ timeout });
   }
 
   /** The permission badge one grant row carries. */

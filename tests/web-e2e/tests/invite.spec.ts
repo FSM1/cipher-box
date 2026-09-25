@@ -1,6 +1,6 @@
 /**
  * The invite link across two accounts: one vault mints, another claims, and the
- * minter converts that claim into a read grant.
+ * minter's tick converts that claim into a read grant.
  */
 
 import { expect, test } from '../fixtures';
@@ -34,19 +34,16 @@ test('@full a link minted by one vault is claimed by another and converts to a g
 
   const claimant = await claim(browser, link);
 
-  // A claim reaches the minter's inbox and asks for a grant; the grant itself
-  // is the minter's to complete, so nothing is granted until this is pressed.
-  await share.open(FOLDER);
-  await expect(share.noGrants).toBeVisible();
-  await share.convertClaimsButton.click();
+  // A claim reaches the minter's inbox and asks for a grant; the minter's tick
+  // converts it with no owner step.
+  await share.openUntilGranted(FOLDER, 1);
 
-  await expect(share.grantRows).toHaveCount(1);
   await expect(share.permission).toHaveText('read');
   await expect(share.error).toHaveCount(0);
   await claimant.context().close();
 });
 
-test('@full a claim on its own grants nothing, and leaves the claimant on its own vault', async ({
+test('@full a claim lists the folder once, and leaves the claimant on its own vault', async ({
   page,
   browser,
 }) => {
@@ -56,11 +53,13 @@ test('@full a claim on its own grants nothing, and leaves the claimant on its ow
   await claimant.getByRole('link', { name: 'go to your files' }).click();
   await expect(claimant).toHaveURL(/\/files$/);
 
-  // The minter has converted nothing, so the claim has asked for access and
-  // carries none — which is the promise the claimed copy makes.
+  // The claimant holds the folder through the link's keys, so its list carries
+  // one row for it before and after the minter converts the claim.
   const shared = new SharedPage(claimant);
   await shared.open();
-  await expect(shared.empty).toBeVisible();
+  await expect(shared.rows).toHaveCount(1);
+  await expect(shared.rows.getByTestId('shared-name')).toHaveText(FOLDER);
+  await expect(shared.empty).toHaveCount(0);
   await expect(shared.error).toHaveCount(0);
   await claimant.context().close();
 });
