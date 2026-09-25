@@ -35,6 +35,36 @@ function base64Blob(bytes: number): string {
   return Buffer.alloc(bytes, 7).toString('base64');
 }
 
+function buildService(
+  db: IntegrationDatabase,
+  cap: number
+): {
+  service: MailboxService;
+  recipient: string;
+  sender: string;
+} {
+  const clock = new FakeClock();
+  const users = new FakeRepository<User>();
+  const recipient = compressedPublicKey();
+  const sender = compressedPublicKey();
+  // Recipient existence is checked outside the serialized window, so a fake
+  // user repo (seeded with the recipient) is faithful; the mailbox reads and
+  // writes go to the real Postgres via the real repo + DataSource.
+  void users.save({ publicKey: recipient } as never);
+  const service = new MailboxService(
+    db.dataSource.getRepository(MailboxMessage),
+    users as never,
+    db.dataSource,
+    new IdentityService(),
+    clock,
+    new MetricsService(),
+    // Disable the advisory-lock wait bound so a slow CI waiter can't 503 before
+    // the cap check; the timeout has its own dedicated regression test.
+    fakeConfig({ MAILBOX_PENDING_CAP: String(cap), DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
+  );
+  return { service, recipient, sender };
+}
+
 describe('MailboxService pending-cap concurrency (real Postgres)', () => {
   let db: IntegrationDatabase;
   let repo: Repository<MailboxMessage>;
@@ -55,33 +85,6 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
     await db.dataSource.query('TRUNCATE TABLE mailbox_messages');
   });
 
-  function buildService(cap: number): {
-    service: MailboxService;
-    recipient: string;
-    sender: string;
-  } {
-    const clock = new FakeClock();
-    const users = new FakeRepository<User>();
-    const recipient = compressedPublicKey();
-    const sender = compressedPublicKey();
-    // Recipient existence is checked outside the serialized window, so a fake
-    // user repo (seeded with the recipient) is faithful; the mailbox reads and
-    // writes go to the real Postgres via the real repo + DataSource.
-    void users.save({ publicKey: recipient } as never);
-    const service = new MailboxService(
-      repo,
-      users as never,
-      db.dataSource,
-      new IdentityService(),
-      clock,
-      new MetricsService(),
-      // Disable the advisory-lock wait bound so a slow CI waiter can't 503 before
-      // the cap check; the timeout has its own dedicated regression test.
-      fakeConfig({ MAILBOX_PENDING_CAP: String(cap), DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
-    );
-    return { service, recipient, sender };
-  }
-
   async function seedPending(recipient: string, count: number): Promise<void> {
     const now = new Date();
     const rows = Array.from({ length: count }, () => ({
@@ -96,7 +99,7 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
   it('at cap - 1, only ONE of N concurrent distinct-key posts wins; the rest 409, and the cap is never exceeded', async () => {
     const CAP = 100;
     const RACERS = 8;
-    const { service, recipient, sender } = buildService(CAP);
+    const { service, recipient, sender } = buildService(db, CAP);
     await seedPending(recipient, CAP - 1);
 
     const outcomes = await Promise.allSettled(
@@ -130,27 +133,10 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
     expect(finalCount).toBeLessThanOrEqual(CAP);
   });
 
-  it('answers removed: true to exactly one of N concurrent acks of one id', async () => {
-    const RACERS = 8;
-    const { service, recipient, sender } = buildService(10);
-    const { id } = await service.post(sender, {
-      recipientPublicKey: recipient,
-      blob: base64Blob(64),
-      idempotencyKey: 'ack-race',
-    });
-
-    const answers = await Promise.all(
-      Array.from({ length: RACERS }, () => service.ack(recipient, id))
-    );
-
-    expect(answers.filter((answer) => answer.removed)).toHaveLength(1);
-    expect(await repo.count({ where: { recipientPublicKey: recipient } })).toBe(0);
-  });
-
   it('under full saturation, exactly CAP of CAP+extra concurrent posts commit; the surplus 409', async () => {
     const CAP = 10;
     const EXTRA = 8;
-    const { service, recipient, sender } = buildService(CAP);
+    const { service, recipient, sender } = buildService(db, CAP);
 
     const outcomes = await Promise.allSettled(
       Array.from({ length: CAP + EXTRA }, (_, i) =>
@@ -222,5 +208,36 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
       await holder.rollbackTransaction();
       await holder.release();
     }
+  });
+});
+
+describe('MailboxService ack exclusivity (real Postgres)', () => {
+  let db: IntegrationDatabase;
+  let repo: Repository<MailboxMessage>;
+
+  beforeAll(async () => {
+    db = await createIntegrationDatabase({ poolMax: 10 });
+    repo = db.dataSource.getRepository(MailboxMessage);
+  });
+
+  afterAll(async () => {
+    await db?.teardown();
+  });
+
+  it('answers removed: true to exactly one of N concurrent acks of one id', async () => {
+    const RACERS = 8;
+    const { service, recipient, sender } = buildService(db, 10);
+    const { id } = await service.post(sender, {
+      recipientPublicKey: recipient,
+      blob: base64Blob(64),
+      idempotencyKey: 'ack-race',
+    });
+
+    const answers = await Promise.all(
+      Array.from({ length: RACERS }, () => service.ack(recipient, id))
+    );
+
+    expect(answers.filter((answer) => answer.removed)).toHaveLength(1);
+    expect(await repo.count({ where: { recipientPublicKey: recipient } })).toBe(0);
   });
 });

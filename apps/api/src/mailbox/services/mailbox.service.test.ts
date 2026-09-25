@@ -215,6 +215,21 @@ describe('MailboxService', () => {
       expect(messages.rows).toHaveLength(3);
     });
 
+    it('never replays a row past the 90-day TTL that the purge has not removed yet', async () => {
+      const post = () =>
+        service.post(sender, {
+          recipientPublicKey: recipient,
+          blob: base64Blob(64),
+          idempotencyKey: 'stale',
+        });
+      const first = await post();
+      clock.advanceMs(NINETY_DAYS_MS + 1);
+
+      const second = await post();
+      expect(second.id).not.toBe(first.id);
+      expect(messages.rows.map((row) => row.id)).toEqual([second.id]);
+    });
+
     it('frees cap room by purging entries past the 90-day TTL before counting', async () => {
       for (let i = 0; i < 3; i += 1) {
         await service.post(sender, {

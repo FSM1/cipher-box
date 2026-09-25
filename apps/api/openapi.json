@@ -659,7 +659,7 @@
     },
     "/mailbox/messages/{id}": {
       "delete": {
-        "description": "Answers `removed: true` only to the call that deleted the item. A gone, foreign, or malformed id answers `removed: false` with status 200.",
+        "description": "Answers status 200 whether or not this call removed the item.",
         "operationId": "MailboxController_ack",
         "parameters": [
           {

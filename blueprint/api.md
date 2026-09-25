@@ -278,8 +278,8 @@ the `movedTo` record (FSM1/cipher-box-next#38), revocation is discovered in meta
   Clients poll on the sync design's 30 s cadence; no push in v2.0 (push-ready
   seam per FSM1/cipher-box-next#33).
 - **Ack**: delete by id. The answer says whether this call removed the item, and
-  the owner engine converts a claim only on "removed" (ADR 0023 D5). A missing
-  or foreign id answers "not removed". Retention:
+  the owner engine converts a claim only on "removed" (ADR 0023 D5). A missing,
+  foreign, or malformed id answers "not removed". Retention:
   until acked, bounded — per-recipient pending cap of 1000 items (reject-new
   when full; a replay of a pending item still answers) and a
   90-day unacked TTL aligned with record EOLs. Rate limits per sender account

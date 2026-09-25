@@ -21,7 +21,7 @@ import {
   PostMessageDto,
   PostMessageResponseDto,
 } from './dto/mailbox.dto';
-import { MailboxService } from './services/mailbox.service';
+import { DEFAULT_PENDING_CAP, MailboxService, TTL_DAYS } from './services/mailbox.service';
 
 /**
  * The integrity-untrusted mailbox surface (blueprint/api.md, Mailbox): post a
@@ -51,9 +51,9 @@ export class MailboxController {
   @ApiResponse({
     status: 409,
     description:
-      'Recipient mailbox is full: it holds the pending cap of unacked items (1000 by default). ' +
-      'The API refuses new items until an ack or the 90-day TTL frees a slot; a replay of a ' +
-      'pending item still succeeds.',
+      `Recipient mailbox is full: it holds the pending cap of unacked items ` +
+      `(${DEFAULT_PENDING_CAP} by default). The API refuses new items until an ack or the ` +
+      `${TTL_DAYS}-day TTL frees a slot; a replay of a pending item still succeeds.`,
   })
   @ApiResponse({ status: 413, description: 'Sealed blob exceeds 8 KiB' })
   @ApiResponse({ status: 429, description: 'Per-sender post rate limit exceeded' })
@@ -83,9 +83,7 @@ export class MailboxController {
   @Throttle(THROTTLE_SURFACES.mailboxAck)
   @ApiOperation({
     summary: 'Ack a message: hard delete by id, scoped to the caller mailbox',
-    description:
-      'Answers `removed: true` only to the call that deleted the item. A gone, foreign, or ' +
-      'malformed id answers `removed: false` with status 200.',
+    description: 'Answers status 200 whether or not this call removed the item.',
   })
   @ApiOkResponse({ type: AckResponseDto })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
