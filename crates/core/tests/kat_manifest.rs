@@ -24,6 +24,10 @@ use cipherbox_core::content::{
 use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
+use cipherbox_core::payload::invite::{
+    INVITE_NAMES_SIG_DOMAIN, InviteNames, invite_names_preimage, sign_invite_names,
+    verify_invite_names,
+};
 use cipherbox_core::payload::mailbox::{
     MAILBOX_SIG_DOMAIN, mailbox_sig_preimage, open_mailbox_payload, seal_mailbox_payload,
 };
@@ -183,6 +187,14 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/payload/mailbox_reject.json",
         include_str!("../kat/vectors/payload/mailbox_reject.json"),
+    ),
+    (
+        "vectors/payload/invite_names_accept.json",
+        include_str!("../kat/vectors/payload/invite_names_accept.json"),
+    ),
+    (
+        "vectors/payload/invite_names_reject.json",
+        include_str!("../kat/vectors/payload/invite_names_reject.json"),
     ),
     (
         "vectors/grant/write_body_accept.json",
@@ -440,6 +452,8 @@ struct OwnerLocalKindSpec {
     name: String,
     discriminator: u8,
     hpke_info: String,
+    #[serde(default)]
+    retired: bool,
 }
 
 #[derive(Deserialize)]
@@ -647,6 +661,33 @@ struct PayloadManifest {
     pointer_reject: RejectSection,
     mailbox_accept: FileCount,
     mailbox_reject: RejectSection,
+    invite_names_accept: FileCount,
+    invite_names_reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InviteNamesAcceptVector {
+    name: String,
+    owner_scalar: String,
+    scope_pointer_name: String,
+    owner_name: String,
+    folder_name: String,
+    preimage: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InviteNamesRejectVector {
+    name: String,
+    owner_scalar: String,
+    scope_pointer_name: String,
+    owner_name: String,
+    folder_name: String,
+    signature: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -1700,6 +1741,8 @@ fn fixture_table_matches_manifest_files() {
         m.payload.pointer_reject.file.as_str(),
         m.payload.mailbox_accept.file.as_str(),
         m.payload.mailbox_reject.file.as_str(),
+        m.payload.invite_names_accept.file.as_str(),
+        m.payload.invite_names_reject.file.as_str(),
         m.grant.write_body_accept.file.as_str(),
         m.grant.write_body_reject.file.as_str(),
         m.grant.recipient_binding_accept.file.as_str(),
@@ -1815,7 +1858,7 @@ const EPHEMERAL_SCALAR_FAMILIES: &[(&str, usize)] = &[
     ("vectors/grant/owner_write_blob_accept.json", 1),
     ("vectors/hpke/seal.json", 3),
     ("vectors/op_record/op_record_accept.json", 2),
-    ("vectors/owner_local/owner_local_accept.json", 7),
+    ("vectors/owner_local/owner_local_accept.json", 6),
     ("vectors/payload/mailbox_accept.json", 2),
     ("vectors/settings_record/settings_record_accept.json", 2),
     ("vectors/grant/write_history_link_accept.json", 1),
@@ -2000,6 +2043,7 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     covered.extend(record_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(pointer_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(mailbox_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(invite_names_reject_vectors(&m).into_iter().map(|v| v.check));
     // Grant-family reject families.
     covered.extend(write_body_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(
@@ -2783,6 +2827,7 @@ const IDENTITY_SIGNED_PREIMAGES: &[&str] = &[
     "mailbox-sender-sig",
     "grant-set-commitment",
     "recipient-binding",
+    "invite-names",
 ];
 
 /// What a preimage's own bytes say it is. A canonical det-CBOR byte string
@@ -2888,6 +2933,17 @@ fn identity_signed_preimages() -> Vec<(&'static str, Vec<Vec<u8>>)> {
             "recipient-binding",
             vec![encode_recipient_binding(&scope_root, &ledger_entry)],
         ),
+        (
+            "invite-names",
+            vec![invite_names_preimage(&InviteNames {
+                scope_pointer_name: &IpnsName::parse(
+                    "k51qzi5uqu5dgutdk6i1ynyzgkqngpha5xpgia3a5qqp4jsh0u4csozksxel2r",
+                )
+                .expect("pointer name parses"),
+                owner_name: "owner",
+                folder_name: "folder",
+            })],
+        ),
     ]
 }
 
@@ -2966,6 +3022,11 @@ fn identity_signed_preimages_are_pairwise_non_confusable() {
             .any(|(name, shape)| *name == "mailbox-sender-sig"
                 && *shape == PreimageShape::DomainLedArray(MAILBOX_SIG_DOMAIN.to_string())),
         "the mailbox preimage must lead with its frozen domain string"
+    );
+    assert!(
+        shapes.iter().any(|(name, shape)| *name == "invite-names"
+            && *shape == PreimageShape::DomainLedArray(INVITE_NAMES_SIG_DOMAIN.to_string())),
+        "the invite-names preimage must lead with its frozen domain string"
     );
 }
 
@@ -3511,6 +3572,113 @@ fn mailbox_accept_vectors(m: &Manifest) -> Vec<MailboxAcceptVector> {
 fn mailbox_reject_vectors(m: &Manifest) -> Vec<MailboxRejectVector> {
     serde_json::from_str(fixture(&m.payload.mailbox_reject.file))
         .expect("mailbox_reject.json shape")
+}
+
+fn invite_names_accept_vectors(m: &Manifest) -> Vec<InviteNamesAcceptVector> {
+    serde_json::from_str(fixture(&m.payload.invite_names_accept.file))
+        .expect("invite_names_accept.json shape")
+}
+
+fn invite_names_reject_vectors(m: &Manifest) -> Vec<InviteNamesRejectVector> {
+    serde_json::from_str(fixture(&m.payload.invite_names_reject.file))
+        .expect("invite_names_reject.json shape")
+}
+
+fn invite_names_owner(name: &str, scalar: &str) -> EcdsaVerifier {
+    EcdsaSigner::from_scalar(&unhex32(name, scalar))
+        .unwrap_or_else(|| panic!("{name}: owner scalar"))
+        .verifying_key()
+}
+
+/// The names both hosts show on the invite page verify only under the owner
+/// signature this family pins (ADR 0027 D5).
+#[test]
+fn invite_names_accept_vectors_reproduce_and_verify() {
+    let m = manifest();
+    let vectors = invite_names_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.payload.invite_names_accept.count,
+        "invite-names-accept count drift"
+    );
+    for v in &vectors {
+        let pointer = IpnsName::parse(&v.scope_pointer_name)
+            .unwrap_or_else(|e| panic!("{}: pointer name ({e})", v.name));
+        let names = InviteNames {
+            scope_pointer_name: &pointer,
+            owner_name: &v.owner_name,
+            folder_name: &v.folder_name,
+        };
+        assert_eq!(
+            hex::encode(invite_names_preimage(&names)),
+            v.preimage,
+            "invite-names-accept {}: preimage drift",
+            v.name
+        );
+        let owner = EcdsaSigner::from_scalar(&unhex32(&v.name, &v.owner_scalar))
+            .unwrap_or_else(|| panic!("{}: owner scalar", v.name));
+        let signature = sign_invite_names(&owner, &names);
+        assert_eq!(
+            hex::encode(signature.to_compact()),
+            v.signature,
+            "invite-names-accept {}: signature drift",
+            v.name
+        );
+        verify_invite_names(&owner.verifying_key(), &names, &signature)
+            .unwrap_or_else(|e| panic!("invite-names-accept {}: verify ({e})", v.name));
+    }
+}
+
+#[test]
+fn invite_names_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = invite_names_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.payload.invite_names_reject.count,
+        "invite-names-reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .payload
+        .invite_names_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs invite_names_reject.json"
+    );
+    for v in &vectors {
+        let pointer = IpnsName::parse(&v.scope_pointer_name)
+            .unwrap_or_else(|e| panic!("{}: pointer name ({e})", v.name));
+        let names = InviteNames {
+            scope_pointer_name: &pointer,
+            owner_name: &v.owner_name,
+            folder_name: &v.folder_name,
+        };
+        let signature = EcdsaSignature::from_compact(&unhex(&v.name, &v.signature))
+            .unwrap_or_else(|| panic!("{}: signature bytes", v.name));
+        let err = verify_invite_names(
+            &invite_names_owner(&v.name, &v.owner_scalar),
+            &names,
+            &signature,
+        )
+        .expect_err("invite-names-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "invite-names-reject {}: check",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "invite-names-reject {}: class",
+            v.name
+        );
+    }
 }
 
 #[test]
@@ -6471,6 +6639,12 @@ fn owner_local_kind_registry_is_frozen() {
             "owner-local {}: info string drift",
             spec.name
         );
+        assert_eq!(
+            spec.retired,
+            kind.is_retired(),
+            "owner-local {}: retired flag drift",
+            spec.name
+        );
     }
 }
 
@@ -6509,9 +6683,10 @@ fn owner_local_accept_vectors_seal_reproduce_and_open() {
     );
     let covered_kinds: BTreeSet<&str> = vectors.iter().map(|v| v.kind.as_str()).collect();
     for kind in OwnerLocalKind::ALL {
-        assert!(
+        assert_eq!(
             covered_kinds.contains(kind.name()),
-            "owner-local accept must pin a blob for the {} kind",
+            !kind.is_retired(),
+            "owner-local accept must pin a blob for each live kind, and none for the retired {} kind",
             kind.name()
         );
     }
@@ -6651,14 +6826,24 @@ fn owner_local_reject_vectors_fire_the_named_check() {
 }
 
 /// The vector the kind discriminator exists to justify: the failure must land at
-/// the AEAD rather than at a comparison.
+/// the AEAD rather than at a comparison. A retired kind takes no part: nothing
+/// seals under it, and an open under it is refused before the AEAD.
 #[test]
 fn owner_local_cross_kind_vectors_cover_every_ordered_pair() {
     let m = manifest();
     let vectors = owner_local_reject_vectors(&m);
+    let live = || OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired());
 
-    for sealed_as in OwnerLocalKind::ALL {
-        for opened_as in OwnerLocalKind::ALL {
+    for kind in OwnerLocalKind::ALL.into_iter().filter(|k| k.is_retired()) {
+        let name = format!("retired-kind-{}", kind.name());
+        let v = vectors
+            .iter()
+            .find(|v| v.name == name)
+            .unwrap_or_else(|| panic!("owner-local reject must pin {name}"));
+        assert_eq!(v.check, "retired-owner-local-kind", "{name}");
+    }
+    for sealed_as in live() {
+        for opened_as in live() {
             if sealed_as == opened_as {
                 continue;
             }

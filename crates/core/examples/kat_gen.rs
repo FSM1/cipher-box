@@ -31,6 +31,9 @@ use cipherbox_core::content::{
 use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord, MAX_IPNS_NAME_BYTES};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
+use cipherbox_core::payload::invite::{
+    InviteNames, invite_names_preimage, sign_invite_names, verify_invite_names,
+};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
@@ -366,6 +369,10 @@ struct OwnerLocalKindSpec {
     name: String,
     discriminator: u8,
     hpke_info: String,
+    /// A retired kind: its discriminator stays reserved, and a seal or an
+    /// open under it is refused.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    retired: bool,
 }
 
 /// An owner-local accept vector: the fixed owner enc keypair, the store kind and
@@ -1035,6 +1042,36 @@ struct PayloadSection {
     pointer_reject: RejectSection,
     mailbox_accept: FileCount,
     mailbox_reject: RejectSection,
+    invite_names_accept: FileCount,
+    invite_names_reject: RejectSection,
+}
+
+/// The owner signature over an invite fragment's names (ADR 0027 D5): the
+/// preimage and the RFC 6979 signature both hosts verify.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteNamesAcceptVector {
+    name: String,
+    owner_scalar: String,
+    scope_pointer_name: String,
+    owner_name: String,
+    folder_name: String,
+    preimage: String,
+    signature: String,
+}
+
+/// A signature that must not verify over the names under `ownerScalar`'s key.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InviteNamesRejectVector {
+    name: String,
+    owner_scalar: String,
+    scope_pointer_name: String,
+    owner_name: String,
+    folder_name: String,
+    signature: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Serialize)]
@@ -1313,11 +1350,21 @@ fn main() {
     let pointer_reject = build_pointer_reject();
     let mailbox_accept = build_mailbox_accept();
     let mailbox_reject = build_mailbox_reject();
+    let invite_names_accept = build_invite_names_accept();
+    let invite_names_reject = build_invite_names_reject();
 
     write_pretty(&payload_dir.join("pointer_accept.json"), &pointer_accept);
     write_pretty(&payload_dir.join("pointer_reject.json"), &pointer_reject);
     write_pretty(&payload_dir.join("mailbox_accept.json"), &mailbox_accept);
     write_pretty(&payload_dir.join("mailbox_reject.json"), &mailbox_reject);
+    write_pretty(
+        &payload_dir.join("invite_names_accept.json"),
+        &invite_names_accept,
+    );
+    write_pretty(
+        &payload_dir.join("invite_names_reject.json"),
+        &invite_names_reject,
+    );
 
     let g = build_grant_vectors();
 
@@ -1512,6 +1559,8 @@ fn main() {
         pointer_reject: &pointer_reject,
         mailbox_accept: &mailbox_accept,
         mailbox_reject: &mailbox_reject,
+        invite_names_accept: &invite_names_accept,
+        invite_names_reject: &invite_names_reject,
         grant: &g,
         content_seal: &content_seal,
         content_seal_reject: &content_seal_reject,
@@ -1538,6 +1587,7 @@ fn main() {
          {} read-body-accept, {} read-body-reject, {} envelope-accept, {} envelope-reject, \
          {} name-accept, {} name-reject, {} record-accept, {} record-reject, {} record-reput, \
          {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject, \
+         {} invite-names-accept, {} invite-names-reject, \
          {} grant-family, {} content-seal, {} content-seal-reject, {} content-cid, \
          {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject, \
          {} op-record-accept, {} op-record-reject, {} settings-record-accept, \
@@ -1570,6 +1620,8 @@ fn main() {
         pointer_reject.len(),
         mailbox_accept.len(),
         mailbox_reject.len(),
+        invite_names_accept.len(),
+        invite_names_reject.len(),
         g.total(),
         content_seal.len(),
         content_seal_reject.len(),
@@ -2350,6 +2402,8 @@ struct ManifestInputs<'a> {
     pointer_reject: &'a [PointerRejectVector],
     mailbox_accept: &'a [MailboxAcceptVector],
     mailbox_reject: &'a [MailboxRejectVector],
+    invite_names_accept: &'a [InviteNamesAcceptVector],
+    invite_names_reject: &'a [InviteNamesRejectVector],
     grant: &'a GrantVectors,
     content_seal: &'a [ContentSealVector],
     content_seal_reject: &'a [ContentSealRejectVector],
@@ -2573,6 +2627,20 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                     &m.mailbox_reject.iter().map(|v| v.check.as_str()).collect(),
                 ),
             },
+            invite_names_accept: FileCount {
+                file: "vectors/payload/invite_names_accept.json".to_string(),
+                count: m.invite_names_accept.len(),
+            },
+            invite_names_reject: RejectSection {
+                file: "vectors/payload/invite_names_reject.json".to_string(),
+                count: m.invite_names_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.invite_names_reject
+                        .iter()
+                        .map(|v| v.check.as_str())
+                        .collect(),
+                ),
+            },
         },
         grant: build_grant_section(m.grant),
         content: build_content_section(&m),
@@ -2652,6 +2720,7 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                     discriminator: k.discriminator(),
                     hpke_info: String::from_utf8(k.hpke_info())
                         .expect("an owner-local info string is ASCII"),
+                    retired: k.is_retired(),
                 })
                 .collect(),
             accept: FileCount {
@@ -5388,6 +5457,101 @@ fn build_pointer_reject() -> Vec<PointerRejectVector> {
         });
     }
     out
+}
+
+/// The owner and the pointer name every invite-names vector signs under.
+fn invite_names_owner() -> ([u8; 32], EcdsaSigner, IpnsName) {
+    let scalar = [0x27u8; 32];
+    let owner = EcdsaSigner::from_scalar(&scalar).expect("valid owner scalar");
+    let pointer = IpnsName::from_public_key(&Ed25519Signer::from_seed([0x28; 32]).verifying_key());
+    (scalar, owner, pointer)
+}
+
+fn build_invite_names_accept() -> Vec<InviteNamesAcceptVector> {
+    let (scalar, owner, pointer) = invite_names_owner();
+    [("named", "Ada", "Photos"), ("no-owner-name", "", "Photos")]
+        .into_iter()
+        .map(|(name, owner_name, folder_name)| {
+            let names = InviteNames {
+                scope_pointer_name: &pointer,
+                owner_name,
+                folder_name,
+            };
+            let signature = sign_invite_names(&owner, &names);
+            verify_invite_names(&owner.verifying_key(), &names, &signature)
+                .unwrap_or_else(|e| panic!("invite-names-accept {name}: verify ({e})"));
+            InviteNamesAcceptVector {
+                name: name.to_string(),
+                owner_scalar: hexstr(&scalar),
+                scope_pointer_name: pointer.as_str().to_string(),
+                owner_name: owner_name.to_string(),
+                folder_name: folder_name.to_string(),
+                preimage: hexstr(&invite_names_preimage(&names)),
+                signature: hexstr(&signature.to_compact()),
+            }
+        })
+        .collect()
+}
+
+/// A forwarder's edits: each name changed under the owner's signature, and
+/// the signature presented under a stranger's key.
+fn build_invite_names_reject() -> Vec<InviteNamesRejectVector> {
+    let (scalar, owner, pointer) = invite_names_owner();
+    let other_pointer =
+        IpnsName::from_public_key(&Ed25519Signer::from_seed([0x29; 32]).verifying_key());
+    let signed = InviteNames {
+        scope_pointer_name: &pointer,
+        owner_name: "Ada",
+        folder_name: "Photos",
+    };
+    let signature = sign_invite_names(&owner, &signed);
+    let stranger_scalar = [0x2au8; 32];
+    [
+        (
+            "changed-owner-name",
+            scalar,
+            InviteNames {
+                owner_name: "Eve",
+                ..signed
+            },
+        ),
+        (
+            "changed-folder-name",
+            scalar,
+            InviteNames {
+                folder_name: "Taxes",
+                ..signed
+            },
+        ),
+        (
+            "changed-scope-pointer-name",
+            scalar,
+            InviteNames {
+                scope_pointer_name: &other_pointer,
+                ..signed
+            },
+        ),
+        ("stranger-key", stranger_scalar, signed),
+    ]
+    .into_iter()
+    .map(|(name, verifier_scalar, names)| {
+        let verifier = EcdsaSigner::from_scalar(&verifier_scalar)
+            .expect("valid verifier scalar")
+            .verifying_key();
+        let err = verify_invite_names(&verifier, &names, &signature)
+            .expect_err("invite-names-reject must fail");
+        InviteNamesRejectVector {
+            name: name.to_string(),
+            owner_scalar: hexstr(&verifier_scalar),
+            scope_pointer_name: names.scope_pointer_name.as_str().to_string(),
+            owner_name: names.owner_name.to_string(),
+            folder_name: names.folder_name.to_string(),
+            signature: hexstr(&signature.to_compact()),
+            check: err.check().to_string(),
+            class: err.class().to_string(),
+        }
+    })
+    .collect()
 }
 
 fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
@@ -9013,6 +9177,9 @@ fn build_owner_local_accept() -> Vec<OwnerLocalAcceptVector> {
     // Every kind carries a populated body, so the manifest pins one blob per
     // frozen info string rather than one for the family.
     for (i, kind) in OwnerLocalKind::ALL.iter().enumerate() {
+        if kind.is_retired() {
+            continue;
+        }
         vectors.push(owner_local_accept_vector(
             &format!("{}-body", kind.name()),
             *kind,
@@ -9193,6 +9360,18 @@ fn build_owner_local_reject() -> Vec<OwnerLocalRejectVector> {
             "trust",
         ),
     ];
+    // A retired kind stays reserved: an open under it is refused before the
+    // AEAD, whatever the blob.
+    for retired in OwnerLocalKind::ALL.into_iter().filter(|k| k.is_retired()) {
+        vectors.push(owner_local_reject_vector(
+            &format!("retired-kind-{}", retired.name()),
+            retired,
+            scalar,
+            &blob,
+            "retired-owner-local-kind",
+            "malformed",
+        ));
+    }
 
     // The cross-kind negatives, one per ordered pair. A distinct ephemeral per
     // probe: sharing one across kinds is safe only while the kind is in the
@@ -9200,6 +9379,9 @@ fn build_owner_local_reject() -> Vec<OwnerLocalRejectVector> {
     // thing under test.
     for (i, sealed_as) in OwnerLocalKind::ALL.iter().enumerate() {
         let sealed_as = *sealed_as;
+        if sealed_as.is_retired() {
+            continue;
+        }
         let blob = seal_owner_local(
             &owner,
             sealed_as,
@@ -9208,7 +9390,7 @@ fn build_owner_local_reject() -> Vec<OwnerLocalRejectVector> {
         )
         .unwrap();
         for opened_as in OwnerLocalKind::ALL {
-            if opened_as == sealed_as {
+            if opened_as == sealed_as || opened_as.is_retired() {
                 continue;
             }
             vectors.push(owner_local_reject_vector(

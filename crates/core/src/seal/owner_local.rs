@@ -52,8 +52,10 @@ pub enum OwnerLocalKind {
     ReceivedShares,
     /// The owner's imported contacts.
     ContactBook,
-    /// The invite records conversion reads a link's permission and deadline
-    /// from.
+    /// Retired: the owner's invite records. The record now carries every link
+    /// field under owner signatures, so no build writes or reads this store,
+    /// and its discriminator stays reserved for ever (ADR 0023 D2, consequence
+    /// 2).
     InviteRecords,
     /// The pinned bytes a published prune or delete still owes the registry.
     RetireLedger,
@@ -100,6 +102,12 @@ impl OwnerLocalKind {
         }
     }
 
+    /// Whether the kind is retired: its discriminator stays reserved, and a
+    /// seal or an open under it is refused.
+    pub const fn is_retired(self) -> bool {
+        matches!(self, Self::InviteRecords)
+    }
+
     /// The kind's HPKE `info` string: its key-schedule domain separator. This is
     /// what makes a cross-kind open fail the AEAD instead of a comparison.
     pub fn hpke_info(self) -> Vec<u8> {
@@ -144,12 +152,17 @@ pub fn owner_local_aad(header: &OwnerLocalHeader) -> Vec<u8> {
 /// `ephemeral_scalar` must be **fresh per seal**: HPKE ephemeral reuse across
 /// two seals under one recipient key and `info` is a confidentiality break
 /// ([`hpke::hpke_seal`]).
+///
+/// A retired kind is refused, the same refusal [`open_owner_local`] makes.
 pub fn seal_owner_local(
     owner_enc_secret: &X25519Secret,
     kind: OwnerLocalKind,
     ephemeral_scalar: &[u8; SECRET_LEN],
     body: &[u8],
 ) -> Result<Vec<u8>, CodecError> {
+    if kind.is_retired() {
+        return Err(Malformed::RetiredOwnerLocalKind.into());
+    }
     let owner_enc_pub = owner_enc_secret.public();
     let header = OwnerLocalHeader {
         version: OWNER_LOCAL_V,
@@ -185,6 +198,9 @@ pub fn open_owner_local(
     kind: OwnerLocalKind,
     blob: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, CodecError> {
+    if kind.is_retired() {
+        return Err(Malformed::RetiredOwnerLocalKind.into());
+    }
     let value = decode(blob)?;
     let map = value.as_map()?;
     let owner_enc_pub = owner_enc_secret.public();
@@ -251,7 +267,7 @@ mod tests {
     #[test]
     fn every_kind_round_trips_under_the_owners_enc_subkey() {
         let owner = secret(7);
-        for kind in OwnerLocalKind::ALL {
+        for kind in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
             let blob = seal_owner_local(&owner, kind, &[1; SECRET_LEN], b"state").unwrap();
             let body = open_owner_local(&owner, kind, &blob).unwrap();
             assert_eq!(&body[..], b"state", "{}", kind.name());
@@ -263,9 +279,9 @@ mod tests {
     #[test]
     fn a_blob_sealed_under_one_kind_never_opens_under_another() {
         let owner = secret(8);
-        for sealed_as in OwnerLocalKind::ALL {
+        for sealed_as in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
             let blob = seal_owner_local(&owner, sealed_as, &[2; SECRET_LEN], b"state").unwrap();
-            for opened_as in OwnerLocalKind::ALL {
+            for opened_as in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
                 if opened_as == sealed_as {
                     continue;
                 }
@@ -326,6 +342,32 @@ mod tests {
         }
     }
 
+    /// Release-active (AGENTS.md rule 8): the seal refuses the retired kind
+    /// the open refuses, so no build writes a store it can never read.
+    #[test]
+    fn a_retired_kind_is_refused_on_seal_and_on_open() {
+        let owner = secret(9);
+        let kind = OwnerLocalKind::InviteRecords;
+        assert!(kind.is_retired());
+        assert_eq!(
+            seal_owner_local(&owner, kind, &[4; SECRET_LEN], b"links")
+                .unwrap_err()
+                .check(),
+            "retired-owner-local-kind"
+        );
+        let blob = seal_owner_local(
+            &owner,
+            OwnerLocalKind::ReceivedShares,
+            &[4; SECRET_LEN],
+            b"state",
+        )
+        .unwrap();
+        assert_eq!(
+            open_owner_local(&owner, kind, &blob).unwrap_err().check(),
+            "retired-owner-local-kind"
+        );
+    }
+
     #[test]
     fn a_foreign_blob_never_opens() {
         let owner = secret(1);
@@ -369,7 +411,7 @@ mod tests {
     #[test]
     fn the_stored_blob_names_no_key_and_no_kind() {
         let owner = secret(20);
-        let kind = OwnerLocalKind::InviteRecords;
+        let kind = OwnerLocalKind::RetireLedger;
         let blob = seal_owner_local(&owner, kind, &[21; SECRET_LEN], b"invites").unwrap();
         let decoded = decode(&blob).unwrap();
         let mut keys: Vec<&str> = decoded
@@ -467,7 +509,7 @@ mod tests {
         let enc = map.get("enc").unwrap().as_bytes().unwrap().to_vec();
         let ciphertext = map.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
 
-        for kind in OwnerLocalKind::ALL {
+        for kind in OwnerLocalKind::ALL.into_iter().filter(|k| !k.is_retired()) {
             assert_eq!(
                 open_owner_local(&owner, kind, &framed(enc.clone(), ciphertext.clone()))
                     .unwrap_err()

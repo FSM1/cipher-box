@@ -353,6 +353,17 @@
         "hpke-open-failed",
         "identity-signature-invalid"
       ]
+    },
+    "inviteNamesAccept": {
+      "file": "vectors/payload/invite_names_accept.json",
+      "count": 2
+    },
+    "inviteNamesReject": {
+      "file": "vectors/payload/invite_names_reject.json",
+      "count": 4,
+      "checks": [
+        "identity-signature-invalid"
+      ]
     }
   },
   "grant": {
@@ -645,7 +656,8 @@
       {
         "name": "invite-records",
         "discriminator": 3,
-        "hpkeInfo": "cipherbox/v2/owner-local/invite-records"
+        "hpkeInfo": "cipherbox/v2/owner-local/invite-records",
+        "retired": true
       },
       {
         "name": "retire-ledger",
@@ -665,18 +677,19 @@
     ],
     "accept": {
       "file": "vectors/owner_local/owner_local_accept.json",
-      "count": 7
+      "count": 6
     },
     "reject": {
       "file": "vectors/owner_local/owner_local_reject.json",
-      "count": 40,
+      "count": 31,
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",
         "missing-field",
         "invalid-field-length",
         "unknown-record-field",
-        "unsupported-record-version"
+        "unsupported-record-version",
+        "retired-owner-local-kind"
       ]
     }
   },

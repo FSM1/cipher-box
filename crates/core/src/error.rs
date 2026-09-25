@@ -396,6 +396,10 @@ pub enum Malformed {
     /// distinction is load-bearing: the engine **retains** such a record rather
     /// than dead-lettering a queue it cannot yet read.
     UnsupportedRecordVersion { version: u64 },
+    /// An owner-local blob was sealed or opened as a retired store kind. A
+    /// retired discriminator stays reserved for ever, so no build writes or
+    /// reads a store under it (ADR 0023 consequence 2).
+    RetiredOwnerLocalKind,
     /// An IPNS record's protobuf could not be parsed, or it was missing a field
     /// the V2 verify chain requires (`value`, `signatureV2`, or `data`), or its
     /// `data` field was not the frozen det-CBOR shape. *Malformed*: structurally
@@ -441,6 +445,7 @@ impl Malformed {
         "content-cid-str-malformed",
         "unknown-record-field",
         "unsupported-record-version",
+        "retired-owner-local-kind",
         "ipns-record-malformed",
     ];
 
@@ -479,6 +484,7 @@ impl Malformed {
             Self::ContentCidStrMalformed => "content-cid-str-malformed",
             Self::UnknownRecordField { .. } => "unknown-record-field",
             Self::UnsupportedRecordVersion { .. } => "unsupported-record-version",
+            Self::RetiredOwnerLocalKind => "retired-owner-local-kind",
             Self::IpnsRecordMalformed => "ipns-record-malformed",
         }
     }
@@ -532,7 +538,8 @@ impl fmt::Display for Malformed {
             | Self::InvalidNameSource
             | Self::IpnsNameMalformed
             | Self::ContentCidStrMalformed
-            | Self::IpnsRecordMalformed => Ok(()),
+            | Self::IpnsRecordMalformed
+            | Self::RetiredOwnerLocalKind => Ok(()),
         }
     }
 }
