@@ -154,6 +154,7 @@ describe('buildCommand', () => {
       node: new Uint8Array(16),
       permission: 'write',
       expiresAt: null,
+      ownerName: '',
     });
 
     expect(calls[0][2]).toBe(fakeWasmEnums.NodeKind.Folder);
@@ -320,11 +321,18 @@ describe('buildCommand', () => {
         node,
         permission: 'read',
         expiresAt: 1_800_000_000_000n,
+        ownerName: 'Ada',
       });
 
       expect(calls.createInviteLink).toEqual([
-        [{ bytes: node }, fakeWasmEnums.Permission.Read, 1_800_000_000_000n],
+        [{ bytes: node }, fakeWasmEnums.Permission.Read, 1_800_000_000_000n, 'Ada'],
       ]);
+    });
+
+    it('rejects an owner name that is not a string', () => {
+      expect(
+        refuses({ kind: 'createInviteLink', node, permission: 'read', expiresAt: null })
+      ).toThrow('invalid request field ownerName: undefined');
     });
 
     it('spells an absent link deadline as undefined, never as null', () => {
@@ -335,14 +343,15 @@ describe('buildCommand', () => {
         node,
         permission: 'write',
         expiresAt: null,
+        ownerName: '',
       });
 
       expect(calls.createInviteLink).toEqual([
-        [{ bytes: node }, fakeWasmEnums.Permission.Write, undefined],
+        [{ bytes: node }, fakeWasmEnums.Permission.Write, undefined, ''],
       ]);
     });
 
-    it.each(['revokeInviteLink', 'pruneInviteLinks', 'convertInviteClaims'] as const)(
+    it.each(['revokeInviteLink', 'convertInviteClaims'] as const)(
       'builds a %s from the node alone',
       (kind) => {
         const { wasm, calls } = spyWasm();
@@ -381,7 +390,13 @@ describe('buildCommand', () => {
         const { wasm, calls } = spyWasm();
 
         expect(() =>
-          buildCommand(wasm, { kind: 'createInviteLink', node, permission: 'read', expiresAt })
+          buildCommand(wasm, {
+            kind: 'createInviteLink',
+            node,
+            permission: 'read',
+            expiresAt,
+            ownerName: '',
+          })
         ).toThrow('invalid request field expiresAt: bigint');
         // Refused before the node was minted, so no wasm handle is stranded.
         expect(calls.NodeId).toBeUndefined();
@@ -407,7 +422,7 @@ describe('buildCommand', () => {
       );
     });
 
-    it.each(['revokeInviteLink', 'pruneInviteLinks', 'convertInviteClaims'] as const)(
+    it.each(['revokeInviteLink', 'convertInviteClaims'] as const)(
       'rejects a %s whose node is not bytes',
       (kind) => {
         expect(refuses({ kind, node: 'sixteen bytes!!!' })).toThrow(
@@ -1369,7 +1384,6 @@ describe('readSharing', () => {
     live: true,
     expired: false,
     expiresAt: 1_700_000_000_000n,
-    spent: 2,
     pendingClaims: 1,
   };
   const view = {
@@ -1439,16 +1453,25 @@ describe('readReceivedShare', () => {
     displayName: 'shared-folder',
     permission: fakeWasmEnums.Permission.Read,
     resolution: 'revocation-signal',
+    viaLink: true,
   };
 
-  it('carries the row and the engine verdict through unchanged', () => {
+  it('carries the row, the engine verdict and the link it reads through unchanged', () => {
     expect(readReceivedShare(fakeWasm, row)).toEqual({
       scope: row.scope,
       sharerIdentityPublicKey: row.sharerIdentityPublicKey,
       displayName: 'shared-folder',
       permission: 'read',
       resolution: 'revocation-signal',
+      viaLink: true,
     });
+    expect(readReceivedShare(fakeWasm, { ...row, viaLink: false }).viaLink).toBe(false);
+  });
+
+  it('carries an expired link through as the expired verdict', () => {
+    expect(readReceivedShare(fakeWasm, { ...row, resolution: 'expired' }).resolution).toBe(
+      'expired'
+    );
   });
 
   it('reads an absent verdict as null, never as a verdict', () => {

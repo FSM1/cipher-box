@@ -357,12 +357,16 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       const level = permission(wasm, descriptor.permission);
       const at =
         descriptor.expiresAt == null ? undefined : deadline(descriptor.expiresAt, 'expiresAt');
-      return wasm.Command.createInviteLink(nodeId(wasm, descriptor.node, 'node'), level, at);
+      const ownerName = text(descriptor.ownerName, 'ownerName');
+      return wasm.Command.createInviteLink(
+        nodeId(wasm, descriptor.node, 'node'),
+        level,
+        at,
+        ownerName
+      );
     }
     case 'revokeInviteLink':
       return wasm.Command.revokeInviteLink(nodeId(wasm, descriptor.node, 'node'));
-    case 'pruneInviteLinks':
-      return wasm.Command.pruneInviteLinks(nodeId(wasm, descriptor.node, 'node'));
     case 'claimInviteLink':
       return wasm.Command.claimInviteLink(fragment(descriptor.fragment, 'fragment'));
     case 'convertInviteClaims':
@@ -867,7 +871,7 @@ export function permissionFrom(wasm: EngineWasm, permission: number): Permission
 }
 
 /**
- * The four verdicts `ResolutionClass::name` produces, and nothing else: an
+ * The verdicts `ResolutionClass::name` produces, and nothing else: an
  * unmapped string is a JS/WASM version mismatch, and guessing one would paint a
  * revoked share as still granted.
  */
@@ -877,6 +881,7 @@ function resolution(name: string | undefined): ReceivedShareResolution | null {
       return null;
     case 'granted':
     case 'revocation-signal':
+    case 'expired':
     case 'unresolvable':
     case 'epoch-lag':
       return name;
@@ -896,6 +901,7 @@ export function readReceivedShare(
     displayName: row.displayName,
     permission: permissionFrom(wasm, row.permission),
     resolution: resolution(row.resolution),
+    viaLink: row.viaLink,
   };
 }
 
@@ -931,7 +937,6 @@ export function readSharing(wasm: EngineWasm, view: WasmSharingView): SharingDes
                     live: links.live,
                     expired: links.expired,
                     expiresAt: links.expiresAt ?? null,
-                    spent: links.spent,
                     pendingClaims: links.pendingClaims,
                   },
           },

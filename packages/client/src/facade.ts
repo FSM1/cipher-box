@@ -368,17 +368,22 @@ export class EngineFacade {
     return this.command({ kind: 'downgrade', node, recipientIdentityPublicKey });
   }
 
-  /** Mints an invite link; an omitted `expiresAt` mints one that never expires. */
+  /**
+   * Mints an invite link; an `undefined` `expiresAt` mints one that never expires.
+   * `ownerName` is what the fragment shows the holder, signed by the owner.
+   */
   async createInviteLink(
     node: Uint8Array,
     permission: Permission,
-    expiresAt?: bigint
+    expiresAt: bigint | undefined,
+    ownerName: string
   ): Promise<MintedInviteLink> {
     const outcome = await this.command({
       kind: 'createInviteLink',
       node,
       permission,
       expiresAt: expiresAt ?? null,
+      ownerName,
     });
     if (outcome.kind !== 'inviteLinkMinted') {
       throw new Error(`create invite link answered ${outcome.kind}`);
@@ -389,11 +394,6 @@ export class EngineFacade {
   /** Revokes the link minted at `node`: future claims end, converted grants stand. */
   revokeInviteLink(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
     return this.command({ kind: 'revokeInviteLink', node });
-  }
-
-  /** Drops the invite records the scope's owner-signed commitment no longer carries. */
-  pruneInviteLinks(node: Uint8Array): Promise<CommandOutcomeDescriptor> {
-    return this.command({ kind: 'pruneInviteLinks', node });
   }
 
   /**

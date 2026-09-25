@@ -29,7 +29,6 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   live: false,
   expired: false,
   expiresAt: null,
-  spent: 0,
   pendingClaims: 0,
 };
 
@@ -171,12 +170,6 @@ function sharingEngine(refusals: Record<string, Error> = {}, held: Partial<Engin
           expired: false,
           expiresAt: null,
         };
-        return outcome;
-      })
-    ),
-    pruneInviteLinks: vi.fn(() =>
-      answer('pruneInviteLinks', { kind: 'done' as const }).then((outcome) => {
-        state.links = { ...(state.links ?? NO_LINKS), spent: 0 };
         return outcome;
       })
     ),
@@ -426,7 +419,7 @@ describe('the invite link', () => {
     await click('share-mint-link');
 
     // `undefined` is the engine's "no deadline"; the default above is not it.
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', undefined);
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', undefined, '');
   });
 
   it('frames the engine fragment into the claim URL, in the URL fragment', async () => {
@@ -434,7 +427,7 @@ describe('the invite link', () => {
 
     await click('share-mint-link');
 
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', SEVEN_DAYS_ON);
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', SEVEN_DAYS_ON, '');
     const url = new URL(shownLink());
     expect(url.pathname).toBe('/invite');
     expect(url.hash).toBe(`#${MINTED_FRAGMENT}`);
@@ -582,18 +575,6 @@ describe('a link the engine already holds', () => {
     await share(sharingEngine({}, held([], [], { links: live, standing: 'alreadyAScope' })));
 
     expect(screen.queryByTestId('share-pending-claims')).toBeNull();
-  });
-
-  it('offers to forget the records a cut left behind, and stops once pruned', async () => {
-    const engine = await share(
-      sharingEngine({}, held([], [], { links: { ...live, spent: 2 }, standing: 'alreadyAScope' }))
-    );
-
-    expect(screen.getByTestId('share-prune-links').textContent).toContain('2 spent link records');
-    await click('share-prune-links');
-
-    expect(engine.facade.pruneInviteLinks).toHaveBeenCalledWith(DOCS);
-    expect(screen.queryByTestId('share-prune-links')).toBeNull();
   });
 
   it('says the standing is unknown when the owner’s link records would not open', async () => {

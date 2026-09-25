@@ -25,7 +25,6 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   live: false,
   expired: false,
   expiresAt: null,
-  spent: 0,
   pendingClaims: 0,
 };
 
@@ -104,10 +103,6 @@ function sharingEngine(
         links.expiresAt = null;
       }
       return answer('revokeInviteLink', { kind: 'done' as const });
-    }),
-    pruneInviteLinks: vi.fn(() => {
-      if (refusals.pruneInviteLinks === undefined) links.spent = 0;
-      return answer('pruneInviteLinks', { kind: 'done' as const });
     }),
     convertInviteClaims: vi.fn(() => {
       if (refusals.convertInviteClaims === undefined) ledger.push('read');
@@ -256,7 +251,7 @@ describe('invite link commands', () => {
 
     await expect(result.current.createInviteLink('read', DEADLINE)).resolves.toBe(FRAGMENT);
 
-    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE);
+    expect(engine.facade.createInviteLink).toHaveBeenCalledWith(DOCS, 'read', DEADLINE, '');
     expect(linksNow()).toEqual({ ...NO_LINKS, live: true, expiresAt: DEADLINE });
   });
 
@@ -290,16 +285,6 @@ describe('invite link commands', () => {
     await expect(result.current.revokeInviteLink()).resolves.toBe(false);
 
     expect(linksNow()).toEqual({ ...NO_LINKS, live: true, expiresAt: DEADLINE });
-  });
-
-  it('drops the spent records the engine pruned', async () => {
-    const engine = sharingEngine({}, { ...NO_LINKS, spent: 2 });
-    const { result } = mount(engine.client);
-
-    await expect(result.current.pruneInviteLinks()).resolves.toBe(true);
-
-    expect(engine.facade.pruneInviteLinks).toHaveBeenCalledWith(DOCS);
-    expect(linksNow()?.spent).toBe(0);
   });
 
   it('lists the grant a conversion committed, not the claim it was sent', async () => {

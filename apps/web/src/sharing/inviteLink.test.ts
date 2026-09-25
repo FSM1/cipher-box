@@ -7,7 +7,6 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   live: false,
   expired: false,
   expiresAt: null,
-  spent: 0,
   pendingClaims: 0,
 };
 

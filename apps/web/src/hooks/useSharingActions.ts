@@ -21,7 +21,6 @@ export type SharingCommand =
   | 'downgrade'
   | 'createInviteLink'
   | 'revokeInviteLink'
-  | 'pruneInviteLinks'
   | 'convertInviteClaims';
 
 export interface SharingActions {
@@ -46,8 +45,6 @@ export interface SharingActions {
   createInviteLink(permission: Permission, expiresAt?: bigint): Promise<string | null>;
   /** Cuts this scope's live link: its future claims end, converted grants stand. */
   revokeInviteLink(): Promise<boolean>;
-  /** Drops the records this scope's own commitment no longer carries. */
-  pruneInviteLinks(): Promise<boolean>;
   /** Converts the claims waiting on this scope's link into grants. */
   convertInviteClaims(): Promise<boolean>;
 }
@@ -106,7 +103,8 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       async (permission, expiresAt) => {
         let fragment: string | null = null;
         await run('createInviteLink', async (facade) => {
-          fragment = (await facade.createInviteLink(target, permission, expiresAt)).fragment;
+          // No display name exists at sign-in, and an email is never a name (ADR 0027 D1).
+          fragment = (await facade.createInviteLink(target, permission, expiresAt, '')).fragment;
           await read(facade);
         });
         return fragment;
@@ -117,14 +115,6 @@ export function useSharingActions(scope: Uint8Array): SharingActions {
       () =>
         run('revokeInviteLink', async (facade) => {
           await facade.revokeInviteLink(target);
-          await read(facade);
-        }),
-      [run, read, target]
-    ),
-    pruneInviteLinks: useCallback(
-      () =>
-        run('pruneInviteLinks', async (facade) => {
-          await facade.pruneInviteLinks(target);
           await read(facade);
         }),
       [run, read, target]

@@ -36,7 +36,7 @@ export function SharedPage() {
         displayName: displayName(share.displayName),
         permission: share.permission,
         resolution: share.resolution ?? 'none',
-        standing: shareStanding(share.resolution),
+        standing: shareStanding(share),
       })) ?? null,
     [shares]
   );

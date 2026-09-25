@@ -131,27 +131,3 @@ function NoLocalLink() {
     </p>
   );
 }
-
-/** Offers the prune the engine's spent count says there is something to drop. */
-export function SpentLinkRecords({
-  scope,
-  actions,
-  busy,
-}: Pick<InviteLinkPanelProps, 'scope' | 'actions' | 'busy'>) {
-  const spent = scope.inviteLinks?.spent ?? 0;
-  if (spent === 0) return null;
-
-  return (
-    <button
-      type="button"
-      className="dialog-button"
-      onClick={() => void actions.pruneInviteLinks()}
-      disabled={busy}
-      data-testid="share-prune-links"
-    >
-      {actions.busy === 'pruneInviteLinks'
-        ? 'pruning...'
-        : `forget ${spent} spent link record${spent === 1 ? '' : 's'}`}
-    </button>
-  );
-}

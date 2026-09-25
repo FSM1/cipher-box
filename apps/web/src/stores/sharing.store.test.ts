@@ -17,7 +17,6 @@ const NO_LINKS: SharingInviteLinksDescriptor = {
   live: false,
   expired: false,
   expiresAt: null,
-  spent: 0,
   pendingClaims: 0,
 };
 
@@ -169,7 +168,6 @@ describe('invite links', () => {
     live: true,
     expired: false,
     expiresAt: 1_700_000_000_000n,
-    spent: 2,
     pendingClaims: 0,
   };
   const linked = () =>
