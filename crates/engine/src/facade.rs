@@ -2415,6 +2415,9 @@ impl EngineError {
             ContactStoreError::Encode(_) => EngineError::MalformedInput {
                 check: "contact-book-unstorable",
             },
+            ContactStoreError::FormerSubkeysFull => EngineError::MalformedInput {
+                check: "contact-former-subkeys-full",
+            },
             ContactStoreError::Seam(e) => EngineError::from_seam(e),
             ContactStoreError::Entropy(e) => EngineError::from_entropy(e),
             // A seal refusal is deterministic in the book it was handed, so it
@@ -4528,16 +4531,30 @@ fn sole_holder<'a>(
     named.next().is_none().then_some(contact)
 }
 
-/// The encryption subkey `contacts` binds to `identity_pk` and to no other
-/// contact: the key [`GrantLabels::committed_contact`] names that contact by.
-fn sole_enc_subkey(
-    contacts: &[ContactKeys],
+/// Every encryption subkey `book` binds to `identity_pk`, now or before, and
+/// to no other contact, now or before. An ambiguous key names nobody, as in
+/// [`sole_holder`].
+fn sole_enc_subkeys(
+    book: &[(Contact, Vec<[u8; SECRET_LEN]>)],
     identity_pk: &[u8; IDENTITY_PUBLIC_LEN],
-) -> Option<[u8; SECRET_LEN]> {
-    let contact = contacts
+) -> Vec<[u8; SECRET_LEN]> {
+    let bound = |(contact, former): &(Contact, Vec<[u8; SECRET_LEN]>)| {
+        core::iter::once(contact.enc_subkey().to_bytes()).chain(former.clone())
+    };
+    let Some(held) = book
         .iter()
-        .find(|contact| contact.identity_pk == identity_pk)?;
-    sole_holder(contacts, &contact.enc_subkey).map(|contact| contact.enc_subkey)
+        .find(|(contact, _)| contact.identity_pk().to_sec1() == *identity_pk)
+    else {
+        return Vec::new();
+    };
+    bound(held)
+        .filter(|key| {
+            book.iter()
+                .filter(|other| bound(other).any(|bound_key| bound_key == *key))
+                .count()
+                == 1
+        })
+        .collect()
 }
 
 /// The owner-held inputs a grant row's recipient label is resolved from.
@@ -8795,15 +8812,12 @@ where {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let identity_pk = recipient_identity(recipient_identity_public_key)?;
-        let contacts: Vec<ContactKeys> = self
+        let book = self
             .contact_store(session)
-            .contacts()
+            .contacts_with_former_subkeys()
             .await
-            .map_err(EngineError::from_contact_store)?
-            .iter()
-            .map(ContactKeys::of)
-            .collect();
-        let contact_enc_pk = sole_enc_subkey(&contacts, &identity_pk);
+            .map_err(EngineError::from_contact_store)?;
+        let contact_enc_pks = sole_enc_subkeys(&book, &identity_pk);
         let converted = self.convert_before_link_cut(session, api, node).await;
         let keys = self.pass_keys(session)?;
         let pass = self.conversion_pass(session, api, &keys);
@@ -8821,7 +8835,7 @@ where {
                     let authority = owner_authority(session);
                     let person = RevokedPerson {
                         identity_pk: &identity_pk,
-                        contact_enc_pk,
+                        contact_enc_pks: contact_enc_pks.clone(),
                         pointer_read_key: &current.pointer_read_key,
                     };
                     let cut = grantee_cut_set(&authority, &scope, &person)

@@ -61,10 +61,10 @@ pub fn committed_grantee<'a>(
 pub struct RevokedPerson<'a> {
     /// The identity key the revoke names.
     pub identity_pk: &'a [u8; IDENTITY_PUBLIC_LEN],
-    /// The encryption subkey this device's contact book binds to the identity
-    /// and to no other contact. It reaches a row whose label the owner does
-    /// not attest.
-    pub contact_enc_pk: Option<[u8; SECRET_LEN]>,
+    /// Every encryption subkey this device's contact book binds to the
+    /// identity, now or before, and to no other contact. Each reaches a row
+    /// whose label the owner does not attest.
+    pub contact_enc_pks: Vec<[u8; SECRET_LEN]>,
     /// Unmasks each committed entry's `recipientEncPk`.
     pub pointer_read_key: &'a [u8; SECRET_LEN],
 }
@@ -88,8 +88,8 @@ fn revoked_rows<'a>(
                 row.recipient_identity_pk == *person.identity_pk
             } else {
                 person
-                    .contact_enc_pk
-                    .is_some_and(|enc| entry.recipient_enc_pk(person.pointer_read_key) == enc)
+                    .contact_enc_pks
+                    .contains(&entry.recipient_enc_pk(person.pointer_read_key))
             };
             names.then_some((row, attested))
         })
@@ -357,16 +357,21 @@ mod tests {
     fn named(identity_pk: &[u8; IDENTITY_PUBLIC_LEN]) -> RevokedPerson<'_> {
         RevokedPerson {
             identity_pk,
-            contact_enc_pk: None,
+            contact_enc_pks: Vec::new(),
             pointer_read_key: &PRK,
         }
+    }
+
+    /// The encryption subkey [`person`] grants for `seed`.
+    fn enc_pk(seed: u8) -> [u8; SECRET_LEN] {
+        X25519Secret::from_scalar([seed; 32]).public().to_bytes()
     }
 
     /// The person `identity_pk` names, held as a contact under the encryption
     /// subkey [`person`] granted for `seed`.
     fn contact(identity_pk: &[u8; IDENTITY_PUBLIC_LEN], seed: u8) -> RevokedPerson<'_> {
         RevokedPerson {
-            contact_enc_pk: Some(X25519Secret::from_scalar([seed; 32]).public().to_bytes()),
+            contact_enc_pks: vec![enc_pk(seed)],
             ..named(identity_pk)
         }
     }
@@ -476,6 +481,36 @@ mod tests {
                 .is_none(),
             "and the label the writer chose names nobody"
         );
+    }
+
+    /// A person who rotated the encryption subkey holds an attested row under
+    /// the new key and a stripped row under the former key. One revoke takes
+    /// both rows.
+    #[test]
+    fn a_person_revoke_reaches_a_stripped_row_under_a_former_subkey() {
+        let mut fx = Fixture::new();
+        let attested = fx.tag_of(0x13);
+        let mut stripped = person(&fx.owner, &fx.enc, 0x21);
+        stripped.ledger_entry.recipient_identity_pk = [0x13; 33];
+        fx.commitment.entries.push(stripped.commitment_entry);
+        fx.sig = sign_grant_set(&fx.owner, &fx.commitment).unwrap();
+        let stripped_tag = stripped.ledger_entry.tag;
+        fx.ledger.push(stripped.ledger_entry);
+
+        let current_only =
+            grantee_cut_set(&fx.authority(), &fx.scope(), &contact(&[0x13; 33], 0x13))
+                .unwrap()
+                .expect("the attested row names the person");
+        assert_eq!(current_only.tags, BTreeSet::from([attested]));
+
+        let person = RevokedPerson {
+            contact_enc_pks: vec![enc_pk(0x13), enc_pk(0x21)],
+            ..named(&[0x13; 33])
+        };
+        let cut = grantee_cut_set(&fx.authority(), &fx.scope(), &person)
+            .unwrap()
+            .expect("the person holds rows");
+        assert_eq!(cut.tags, BTreeSet::from([attested, stripped_tag]));
     }
 
     /// An unattested row's via-link reference is not the owner's word, so it

@@ -4310,6 +4310,95 @@ fn a_claim_under_a_rotated_key_is_refused_and_the_book_keeps_the_old_key() {
     );
 }
 
+/// A claim that would grant a new row to a known identity under another
+/// encryption subkey is refused with `claim-recipient-key-changed`, and grants
+/// nothing: the book keeps the subkey a revoke reaches the old rows by.
+#[test]
+fn a_claim_that_would_grant_under_a_rotated_key_is_refused() {
+    let mut fx = GrantScenario::new();
+    let fragment = fx.mint_link();
+    let scalar = [CLAIMANT_SCALAR_BASE; 32];
+    block_on(fx.engine.command(Command::ImportContact {
+        contact_code: contact_code(&scalar),
+    }))
+    .expect("the owner imports the person by hand");
+    let identity = EcdsaSigner::from_scalar(&scalar).expect("valid identity scalar");
+    let person = identity.verifying_key().to_sec1().to_vec();
+
+    let opened = InviteFragment::decode(&fragment).expect("the mint's own fragment");
+    fx.post_claim(
+        &import_contact(&opened.owner_contact_code).expect("the owner bundle verifies"),
+        &EphemeralInvitee::from_secret(opened.invite_secret.as_bytes()).expect("valid secret"),
+        0,
+        &InviteClaim {
+            claim_id: [0x2d; CLAIM_ID_LEN],
+            scope_pointer_name: opened.scope_pointer_name.clone(),
+            contact_code: ContactCode::create(&identity, kdf::enc_subkey(&[0x3d; 32]).public())
+                .encode(),
+            name: String::new(),
+        },
+        "claim-rotated",
+    );
+    assert_eq!(fx.convert(), Ok(CommandOutcome::Done));
+
+    assert!(
+        !fx.granted_to().contains(&person),
+        "the claim grants nothing"
+    );
+    let [link] = <[SharingInviteLink; 1]>::try_from(folder_links(&fx)).expect("one link");
+    assert_eq!(link.refused_claims, 1, "the claim shows as refused");
+}
+
+/// A hand import of a rotated code keeps the former subkey, so a person
+/// revoke still reaches a row granted under it whose label the owner does not
+/// attest, and the row under the new subkey in the same cut.
+#[test]
+fn a_person_revoke_after_a_rotated_re_import_cuts_the_row_under_the_former_subkey() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let mut stripped = recipient_row_at_root(CorePermission::Read);
+    stripped.ledger_entry.owner_sig[0] ^= 0xff;
+    let rotated = kdf::enc_subkey(&[0x3d; 32]).public();
+    let current = mint_grant_row(
+        &owner_identity(),
+        &kdf::enc_subkey(&SECRET),
+        &owner_pointer_read_key(),
+        recipient_identity().verifying_key().to_sec1(),
+        &rotated,
+        &SCOPE,
+        write_name(ROOT).as_str().as_bytes(),
+        CorePermission::Read,
+    )
+    .expect("a contributory recipient key");
+    seed_vault(&world, &blocks, vec![stripped, current]);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
+    import_recipient(&mut engine);
+    block_on(engine.command(Command::ImportContact {
+        contact_code: ContactCode::create(&recipient_identity(), rotated).encode(),
+    }))
+    .expect("the rotated code imports");
+
+    assert_eq!(
+        block_on(engine.command(Command::Revoke {
+            node: ROOT,
+            recipient_identity_public_key: recipient_identity().verifying_key().to_sec1().to_vec(),
+        })),
+        Ok(CommandOutcome::Done)
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        block_on(engine.sharing(ROOT))
+            .expect("a sharing read")
+            .state
+            .expect("the vault root resolved")
+            .grants
+            .is_empty(),
+        "both rows leave in one revoke"
+    );
+}
+
 /// The name wave re-mints every committed row, and files the all-zero
 /// placeholder for one whose recipient binding the owner never signed. Doing
 /// that silently would leave the owner a live grant they can neither name nor
@@ -5992,6 +6081,11 @@ impl GrantScenario {
     }
 }
 
+/// The instant `engine`'s sweep first cuts a link with `deadline`.
+fn swept_at(engine: &Engine<FakeSeamTypes>, deadline: UnixMillis) -> UnixMillis {
+    deadline.saturating_add(engine.profile().link_sweep_grace)
+}
+
 /// ADR 0025 D1: a link revoke ends every link holder at once, and the
 /// grantees who joined through the link keep access. A read cut runs no name
 /// wave.
@@ -6230,7 +6324,9 @@ fn a_sweep_past_its_cut_cap_continues_on_the_next_tick() {
     };
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
-    fx.world.scheduler.advance_to(deadline);
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     assert_eq!(live(&fx), 1, "one sweep cuts eight scope roots");
 
@@ -6312,13 +6408,50 @@ fn the_sweep_cuts_an_expired_link_on_a_device_that_never_minted_it() {
     tick(&fx.world, &phone, &mut phone_tasks);
     assert_eq!(fx.link_entries(), 1, "a live link is not cut");
 
-    fx.world.scheduler.advance_to(deadline);
+    fx.world.scheduler.advance_to(swept_at(&phone, deadline));
     tick(&fx.world, &phone, &mut phone_tasks);
 
     assert_eq!(fx.link_entries(), 0, "the expired link is cut");
     assert_eq!(
         published_read_epoch(&fx.world, &fx.blocks, fx.folder),
         read_epoch + 1
+    );
+}
+
+/// A claim that one owner device acked before the deadline is not in the
+/// conversion record of another. The sweep of the other device waits the
+/// grace past the deadline, so the device that holds the claim converts it
+/// first. After the grace, the sweep cuts the link.
+#[test]
+fn a_claim_another_owner_device_acked_converts_inside_the_sweep_grace() {
+    let mut fx = GrantScenario::new();
+    let deadline = fx.an_hour_from_now();
+    let fragment = fx.mint_link_until(Permission::Read, deadline);
+    let (phone, _phone_events, mut phone_tasks) = fx.owner_phone();
+    let claimants = fx.post_claims(&fragment, 1);
+    let name = write_name(fx.folder);
+    fx.world.record_store.fail_put_for(name.as_str());
+    assert!(fx.convert().is_err(), "the conversion cannot publish");
+    fx.world.record_store.heal_put_for(name.as_str());
+    assert_eq!(waiting_claims(&fx), (1, 1), "this device acked the claim");
+
+    fx.world.scheduler.advance_to(deadline);
+    tick(&fx.world, &phone, &mut phone_tasks);
+    assert_eq!(fx.link_entries(), 1, "the other device waits for the grace");
+
+    tick(&fx.world, &fx.engine, &mut fx._tasks);
+    assert!(
+        fx.granted_to().contains(&claimants[0]),
+        "the device that acked the claim converts it inside the grace"
+    );
+    assert_eq!(fx.link_entries(), 1);
+
+    fx.world.scheduler.advance_to(swept_at(&phone, deadline));
+    tick(&fx.world, &phone, &mut phone_tasks);
+    assert_eq!(
+        fx.link_entries(),
+        0,
+        "after the grace the sweep cuts the link"
     );
 }
 
@@ -6336,7 +6469,9 @@ fn a_pending_claim_on_an_expired_link_converts_before_the_cut() {
     fx.world.record_store.heal_put_for(name.as_str());
     assert_eq!(waiting_claims(&fx), (1, 1));
 
-    fx.world.scheduler.advance_to(deadline);
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     assert!(
@@ -6379,7 +6514,9 @@ fn an_expired_write_link_with_a_pending_write_claim_converts_then_the_sweep_cuts
         "and the folder still has no write scope of its own"
     );
 
-    fx.world.scheduler.advance_to(deadline);
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     assert!(
@@ -6530,7 +6667,9 @@ fn the_sweep_cuts_a_link_under_its_real_parent_when_another_index_names_it() {
     };
     assert_eq!(links_at_inner(&fx), 1);
 
-    fx.world.scheduler.advance_to(deadline);
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
 
     assert_eq!(
@@ -6560,7 +6699,7 @@ fn two_expired_links_in_one_folder_cost_one_rotation() {
     let alice = world.device(b"alice");
     let (engine, _events, mut tasks) = boot_owner(&world, &blocks, &alice);
 
-    world.scheduler.advance_to(deadline);
+    world.scheduler.advance_to(swept_at(&engine, deadline));
     tick(&world, &engine, &mut tasks);
 
     let section = published_grant_section(&world, &blocks, ROOT).expect("the root republished");
@@ -6595,7 +6734,9 @@ fn two_owner_devices_sweeping_one_window_publish_one_cut() {
     let name = write_name(fx.folder);
     let sequence = sequence_at(&fx.world, &name);
 
-    fx.world.scheduler.advance_to(deadline);
+    fx.world
+        .scheduler
+        .advance_to(swept_at(&fx.engine, deadline));
     tick(&fx.world, &fx.engine, &mut fx._tasks);
     tick(&fx.world, &phone, &mut phone_tasks);
 

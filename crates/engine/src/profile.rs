@@ -83,6 +83,12 @@ pub struct SyncTimingProfile {
     ///
     /// [`poll_cadence`]: SyncTimingProfile::poll_cadence
     pub link_sweep_cadence: Duration,
+    /// How long past a link's deadline the sweep waits before it cuts the
+    /// link. A claim that another owner device acked before the deadline is
+    /// not in this device's conversion record, so the grace lets an online
+    /// device convert it first. A device offline past the grace loses the
+    /// claim, as it does to a manual link revoke.
+    pub link_sweep_grace: Duration,
 }
 
 impl SyncTimingProfile {
@@ -110,6 +116,7 @@ impl SyncTimingProfile {
         settings_load_budget: Duration::from_secs(10),
         settings_recheck_interval: Duration::from_secs(300),
         link_sweep_cadence: Duration::from_secs(600),
+        link_sweep_grace: Duration::from_secs(1200),
     };
 
     /// CI policy: record TTL 1–5 s (small but nonzero) and compressed
@@ -127,6 +134,7 @@ impl SyncTimingProfile {
         settings_load_budget: Duration::from_secs(1),
         settings_recheck_interval: Duration::from_secs(2),
         link_sweep_cadence: Duration::from_secs(3),
+        link_sweep_grace: Duration::from_secs(6),
     };
 }
 
@@ -183,6 +191,16 @@ mod tests {
             assert!(
                 profile.link_sweep_cadence > profile.poll_cadence,
                 "the expired-link sweep is slower than the tick (ADR 0025 D2)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_link_sweep_grace_outlasts_a_sweep_cadence() {
+        for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
+            assert!(
+                profile.link_sweep_grace > profile.link_sweep_cadence,
+                "an online owner device converts an acked claim before another cuts its link"
             );
         }
     }
