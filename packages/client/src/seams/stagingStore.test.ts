@@ -84,7 +84,6 @@ class FakeDirectory {
   limits: Limits = {};
   removeFails = false;
   moveFails = false;
-  /** Names whose next handle open waits for the gate to settle. */
   readonly openGates = new Map<string, Promise<void>>();
 
   async *keys(): AsyncIterableIterator<string> {
@@ -151,7 +150,7 @@ function mount(): FakeDirectory {
 const key = new Uint8Array([1, 2, 3, 4]);
 const payload = new Uint8Array([9, 8, 7, 6, 5]);
 
-/** Keeps a handle opened on `name` open until the returned release runs. */
+/** Holds an access handle open, so a second access to the file meets an exclusive handle. */
 function gateOpen(dir: FakeDirectory, name: Uint8Array): () => void {
   let release!: () => void;
   dir.openGates.set(
@@ -161,6 +160,25 @@ function gateOpen(dir: FakeDirectory, name: Uint8Array): () => void {
     })
   );
   return release;
+}
+
+/** An IndexedDB whose op store accepts a clear and commits. */
+function stubOpQueue(): void {
+  const opened: { result?: unknown; onsuccess?: () => void } = {};
+  opened.result = {
+    transaction: () => ({
+      objectStore: () => ({ clear: () => undefined }),
+      set oncomplete(done: () => void) {
+        setTimeout(done, 0);
+      },
+    }),
+  };
+  vi.stubGlobal('indexedDB', {
+    open: () => {
+      queueMicrotask(() => opened.onsuccess?.());
+      return opened;
+    },
+  });
 }
 
 afterEach(() => {
@@ -296,6 +314,32 @@ describe('OpfsStagingStore access to one staged file', () => {
     expect(await read).toEqual(payload);
     await remove;
     expect(dir.files.size).toBe(0);
+  });
+
+  it('clears a file that a concurrent read holds open after the read closes', async () => {
+    const dir = mount();
+    stubOpQueue();
+    const store = new OpfsStagingStore('test');
+    await store.putStagedBytes(key, payload);
+    const release = gateOpen(dir, key);
+
+    const read = store.stagedBytes(key);
+    await vi.waitFor(() => expect(dir.files.get(toHex(key))?.openHandle).toBeDefined());
+    const clear = store.clear();
+    release();
+    expect(await read).toEqual(payload);
+    await clear;
+    expect(dir.files.size).toBe(0);
+  });
+
+  it('keeps the new bytes when a remove and then a put start on a cold store', async () => {
+    mount();
+    const store = new OpfsStagingStore('test');
+
+    const remove = store.removeStagedBytes(key);
+    const put = store.putStagedBytes(key, payload);
+    await Promise.all([remove, put]);
+    expect(await store.stagedBytes(key)).toEqual(payload);
   });
 
   it('does not make a read of one file wait for a read of another', async () => {

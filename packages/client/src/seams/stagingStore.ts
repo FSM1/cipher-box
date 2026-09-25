@@ -252,8 +252,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // Hex the key before the first await: a WASM-backed view detached by a
     // concurrent `Memory.grow()` across the await would hex to ''.
     const fileName = toHex(stagingKey);
-    const dir = await this.stagedDir();
-    await this.serialized(fileName, () => removeIfPresent(dir, fileName));
+    return this.serialized(fileName, async () => removeIfPresent(await this.stagedDir(), fileName));
   }
 
   async stagedKeys(): Promise<Uint8Array[]> {
