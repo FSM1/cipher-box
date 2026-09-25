@@ -379,11 +379,16 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       const at =
         descriptor.expiresAt == null ? undefined : deadline(descriptor.expiresAt, 'expiresAt');
       const ownerName = text(descriptor.ownerName, 'ownerName');
+      const cap =
+        descriptor.admissionCap == null
+          ? undefined
+          : BigInt(count(descriptor.admissionCap, 'admissionCap'));
       return wasm.Command.createInviteLink(
         nodeId(wasm, descriptor.node, 'node'),
         level,
         at,
-        ownerName
+        ownerName,
+        cap
       );
     }
     case 'revokeInviteLink': {

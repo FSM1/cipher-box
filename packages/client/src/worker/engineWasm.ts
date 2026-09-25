@@ -400,7 +400,8 @@ export interface EngineWasm {
       node: WasmNodeId,
       permission: number,
       expiresAt: bigint | undefined,
-      ownerName: string
+      ownerName: string,
+      admissionCap: bigint | undefined
     ): WasmCommand;
     revokeInviteLink(
       node: WasmNodeId,

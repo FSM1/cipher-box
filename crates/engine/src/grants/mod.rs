@@ -64,9 +64,9 @@ pub use cut_set::{
 pub use invite::{
     AckedClaim, CLAIM_ID_LEN, ClaimDisposition, ClaimOutcome, CommittedLink, CommittedScope,
     ConvertedClaim, DEFAULT_ADMISSION_CAP, DEFAULT_LINK_LIFETIME, EphemeralInvitee, InviteClaim,
-    InviteError, InviteFragment, LinkTerms, MAX_INVITE_FRAGMENT_BYTES, MAX_INVITE_NAME_BYTES,
-    OwnerAuthority, committed_links, convert_invite_claim, link_of_sender, locate_invite_link,
-    mint_invite_grant, mint_invite_row, post_invite_claim,
+    InviteError, InviteFragment, LinkTerms, MAX_ADMISSION_CAP, MAX_INVITE_FRAGMENT_BYTES,
+    MAX_INVITE_NAME_BYTES, OwnerAuthority, committed_links, convert_invite_claim, link_of_sender,
+    locate_invite_link, mint_invite_grant, mint_invite_row, post_invite_claim,
 };
 pub use invite_mint::{
     FragmentNames, InviteMintError, InviteMintOutcome, InviteMintPlan, MintedInviteLink,

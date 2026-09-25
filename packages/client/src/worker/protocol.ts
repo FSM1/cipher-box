@@ -618,6 +618,8 @@ export type CommandDescriptor =
       expiresAt: bigint | null;
       /** Shown to the holder, signed by the owner; the engine bounds it, empty is allowed. */
       ownerName: string;
+      /** How many people the link may admit; `null` takes the engine's default. The engine bounds it. */
+      admissionCap: number | null;
     }
   /** A `null` tag cuts the scope's only link; the engine refuses it where the scope carries more. */
   | {

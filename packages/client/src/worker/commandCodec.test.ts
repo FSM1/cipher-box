@@ -156,6 +156,7 @@ describe('buildCommand', () => {
       permission: 'write',
       expiresAt: null,
       ownerName: '',
+      admissionCap: null,
     });
 
     expect(calls[0][2]).toBe(fakeWasmEnums.NodeKind.Folder);
@@ -405,7 +406,7 @@ describe('buildCommand', () => {
     const FRAGMENT = 'placeholder-invite-fragment';
     const node = new Uint8Array(16).fill(7);
 
-    it('carries the link deadline through as the engine bigint', () => {
+    it('carries the link deadline and admission cap through as engine bigints', () => {
       const { wasm, calls } = spyWasm();
 
       buildCommand(wasm, {
@@ -414,12 +415,33 @@ describe('buildCommand', () => {
         permission: 'read',
         expiresAt: 1_800_000_000_000n,
         ownerName: 'Ada',
+        admissionCap: 5,
       });
 
       expect(calls.createInviteLink).toEqual([
-        [{ bytes: node }, fakeWasmEnums.Permission.Read, 1_800_000_000_000n, 'Ada'],
+        [{ bytes: node }, fakeWasmEnums.Permission.Read, 1_800_000_000_000n, 'Ada', 5n],
       ]);
     });
+
+    it.each([1.5, -1, Number.MAX_SAFE_INTEGER + 1, '5'])(
+      'refuses the admission cap %s before the node is minted',
+      (admissionCap) => {
+        const { wasm, calls } = spyWasm();
+
+        expect(() =>
+          buildCommand(wasm, {
+            kind: 'createInviteLink',
+            node,
+            permission: 'read',
+            expiresAt: null,
+            ownerName: '',
+            admissionCap: admissionCap as number,
+          })
+        ).toThrow(/invalid request field admissionCap/);
+        expect(calls.NodeId).toBeUndefined();
+        expect(calls.createInviteLink).toBeUndefined();
+      }
+    );
 
     it('rejects an owner name that is not a string', () => {
       expect(
@@ -427,7 +449,7 @@ describe('buildCommand', () => {
       ).toThrow('invalid request field ownerName: undefined');
     });
 
-    it('spells an absent link deadline as undefined, never as null', () => {
+    it('spells an absent link deadline and cap as undefined, never as null', () => {
       const { wasm, calls } = spyWasm();
 
       buildCommand(wasm, {
@@ -436,10 +458,11 @@ describe('buildCommand', () => {
         permission: 'write',
         expiresAt: null,
         ownerName: '',
+        admissionCap: null,
       });
 
       expect(calls.createInviteLink).toEqual([
-        [{ bytes: node }, fakeWasmEnums.Permission.Write, undefined, ''],
+        [{ bytes: node }, fakeWasmEnums.Permission.Write, undefined, '', undefined],
       ]);
     });
 
@@ -543,6 +566,7 @@ describe('buildCommand', () => {
             permission: 'read',
             expiresAt,
             ownerName: '',
+            admissionCap: null,
           })
         ).toThrow('invalid request field expiresAt: bigint');
         // Refused before the node was minted, so no wasm handle is stranded.

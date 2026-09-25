@@ -1249,6 +1249,7 @@ fn the_owner_reads_a_shared_folder_no_walk_has_proved() {
                         permission: Permission::Write,
                         expires_at: None,
                         owner_name: String::new(),
+                        admission_cap: None,
                     })),
                     Ok(CommandOutcome::InviteLinkMinted(_))
                 ),

@@ -545,6 +545,18 @@ describe('EngineFacade', () => {
     expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', ownerName: 'Ada' });
   });
 
+  it('carries a chosen admission cap, and null where the caller sets none', async () => {
+    const transport = mintingTransport();
+    const facade = new EngineFacade(transport);
+    const node = new Uint8Array(16);
+
+    await facade.createInviteLink(node, 'read', undefined, '', 5);
+    await facade.createInviteLink(node, 'read', undefined, '');
+
+    expect(transport.commands[0]).toMatchObject({ kind: 'createInviteLink', admissionCap: 5 });
+    expect(transport.commands[1]).toMatchObject({ kind: 'createInviteLink', admissionCap: null });
+  });
+
   it('hands the minted link back to its caller', async () => {
     const minted = await new EngineFacade(mintingTransport()).createInviteLink(
       new Uint8Array(16),

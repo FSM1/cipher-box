@@ -87,8 +87,8 @@ use crate::grants::{
     ContactStoreError, ConvertedClaim, CreateGrantError, DEFAULT_ADMISSION_CAP,
     DEFAULT_LINK_LIFETIME, EphemeralInvitee, GrantRecipient, GranteeScopePlan, HeldClaim,
     InviteClaim, InviteError, InviteFragment, InviteMintError, InviteMintPlan, LinkHold,
-    LinkSource, LinkSources, LinkTerms, MintedInviteLink, OwnerAuthority, OwnerGrantKeys,
-    ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
+    LinkSource, LinkSources, LinkTerms, MAX_ADMISSION_CAP, MintedInviteLink, OwnerAuthority,
+    OwnerGrantKeys, ParentScopePlan, PublishedGrantBlob, ReceivedShare, ReceivedShareStore,
     ReceivedShareStoreError, ResolutionClass, RevokedPerson, StagingContactStore,
     StagingReceivedShareStore, UNATTESTED_IDENTITY_PK, committed_grantee, committed_links,
     convert_invite_claim, create_grant, enforce_committed_ledger, grantee_cut_set, import_contact,
@@ -1433,6 +1433,10 @@ pub enum Command {
         /// The owner's name, which the fragment carries under the owner
         /// signature (ADR 0027 D5). May be empty.
         owner_name: String,
+        /// How many people the link may admit, or `None` for
+        /// [`DEFAULT_ADMISSION_CAP`]. Zero and a value above
+        /// [`MAX_ADMISSION_CAP`] are refused.
+        admission_cap: Option<u64>,
     },
     /// Revoke an invite link the owner minted at `node` (owner-only). Every
     /// link holder loses access at once. The grants that claims through the
@@ -3909,6 +3913,8 @@ enum ScopeShare<'a> {
         expires_at: Option<UnixMillis>,
         /// The owner's name the fragment carries.
         owner_name: &'a str,
+        /// How many people the link may admit.
+        admission_cap: u64,
     },
 }
 
@@ -8298,8 +8304,9 @@ where {
                 permission,
                 expires_at,
                 owner_name,
+                admission_cap,
             } => {
-                self.create_invite_link(node, permission, expires_at, &owner_name)
+                self.create_invite_link(node, permission, expires_at, &owner_name, admission_cap)
                     .await
             }
             Command::RevokeInviteLink {
@@ -9079,12 +9086,20 @@ where {
         permission: Permission,
         expires_at: Option<UnixMillis>,
         owner_name: &str,
+        admission_cap: Option<u64>,
     ) -> Result<CommandOutcome, EngineError> {
+        let admission_cap = admission_cap.unwrap_or(DEFAULT_ADMISSION_CAP);
+        if !(1..=MAX_ADMISSION_CAP).contains(&admission_cap) {
+            return Err(EngineError::MalformedInput {
+                check: "invite-admission-cap-out-of-range",
+            });
+        }
         self.share_scope(
             node,
             ScopeShare::InviteLink {
                 expires_at,
                 owner_name,
+                admission_cap,
             },
             permission,
         )
@@ -9272,6 +9287,7 @@ where {
             ScopeShare::InviteLink {
                 expires_at,
                 owner_name,
+                admission_cap,
             } => {
                 let minted = mint_invite_link(
                     &mut SharedEntropy(&self.entropy),
@@ -9284,7 +9300,7 @@ where {
                         terms: LinkTerms {
                             deadline: self.link_deadline(*expires_at),
                             conversion_permission: permission.into(),
-                            admission_cap: DEFAULT_ADMISSION_CAP,
+                            admission_cap: *admission_cap,
                         },
                         scope_pointer_name: &session.scope_pointer_name(&node.0),
                         owner_name,
@@ -9623,6 +9639,7 @@ where {
             ScopeShare::InviteLink {
                 expires_at,
                 owner_name,
+                admission_cap,
             } => {
                 let invitee = EphemeralInvitee::mint(&mut SharedEntropy(&self.entropy))
                     .map_err(EngineError::from_invite)?;
@@ -9653,7 +9670,7 @@ where {
                     &LinkTerms {
                         deadline: self.link_deadline(expires_at),
                         conversion_permission: permission.into(),
-                        admission_cap: DEFAULT_ADMISSION_CAP,
+                        admission_cap,
                     },
                 )
                 .map_err(EngineError::from_invite)?;

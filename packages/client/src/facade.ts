@@ -401,7 +401,8 @@ export class EngineFacade {
 
   /**
    * Mints an invite link; an `undefined` `expiresAt` takes the engine's default
-   * lifetime. `ownerName` is what the fragment shows the holder, signed by the owner.
+   * lifetime, and an `undefined` `admissionCap` its default cap. `ownerName` is
+   * what the fragment shows the holder, signed by the owner.
    */
   async createInviteLink(
     node: Uint8Array,
@@ -409,7 +410,8 @@ export class EngineFacade {
     expiresAt?: bigint,
     // ADR 0027 D5 puts the owner name in the fragment but names no source for
     // it. The ADR 0027 D1 never-email rule applies by analogy, so it is empty.
-    ownerName = ''
+    ownerName = '',
+    admissionCap?: number
   ): Promise<MintedInviteLink> {
     const outcome = await this.command({
       kind: 'createInviteLink',
@@ -417,6 +419,7 @@ export class EngineFacade {
       permission,
       expiresAt: expiresAt ?? null,
       ownerName,
+      admissionCap: admissionCap ?? null,
     });
     if (outcome.kind !== 'inviteLinkMinted') {
       throw new Error(`create invite link answered ${outcome.kind}`);

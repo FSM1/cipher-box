@@ -2133,19 +2133,22 @@ impl Command {
     /// Mint an invite link for a node. `expires_at` is the link's deadline in
     /// Unix milliseconds, or `undefined` for the engine's default lifetime.
     /// `owner_name` is the name the fragment shows the holder, signed by the
-    /// owner.
+    /// owner. `admission_cap` is how many people the link may admit, or
+    /// `undefined` for the engine's default.
     #[wasm_bindgen(js_name = createInviteLink)]
     pub fn create_invite_link(
         node: &NodeId,
         permission: Permission,
         expires_at: Option<u64>,
         owner_name: String,
+        admission_cap: Option<u64>,
     ) -> Command {
         Self::wrap(facade::Command::CreateInviteLink {
             node: node.facade(),
             permission: permission.into(),
             expires_at: expires_at.map(UnixMillis),
             owner_name,
+            admission_cap,
         })
     }
 
