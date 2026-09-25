@@ -34,8 +34,6 @@ test('@full a link minted by one vault is claimed by another and converts to a g
 
   const claimant = await claim(browser, link);
 
-  // A claim reaches the minter's inbox and asks for a grant; the minter's tick
-  // converts it with no owner step.
   await share.openUntilGranted(FOLDER, 1);
 
   await expect(share.permission).toHaveText('read');

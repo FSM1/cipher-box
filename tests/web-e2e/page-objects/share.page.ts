@@ -104,10 +104,10 @@ export class SharePage {
   }
 
   /**
-   * Opens the dialog until `count` grant rows show. The owner's tick converts a
-   * claim, and the dialog reads the grants only when it opens.
+   * Reopens the dialog until `count` grant rows show: the owner's tick converts
+   * a claim in the background, and the dialog reads the grants only when it opens.
    */
-  async openUntilGranted(folder: string, count: number, timeout = 180_000): Promise<void> {
+  async openUntilGranted(folder: string, count: number, timeout = 90_000): Promise<void> {
     await expect(async () => {
       if ((await this.dialog.count()) > 0) await this.close();
       await this.open(folder);
